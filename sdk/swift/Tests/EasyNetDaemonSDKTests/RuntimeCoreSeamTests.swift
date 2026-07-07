@@ -695,6 +695,74 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
     }
 
+    func testAdminGatewayProfileDelegatesCarriersAndStatus() async throws {
+        let admin = AdminClient(transport: FixtureAdminTransport())
+
+        let list = try await admin.buildAgentListInvocation(adminAgentListRequest())
+        XCTAssertEqual(try optionalDirectoryJSONString(list["descriptor_ref"], "descriptor_ref"), "easynet:///r/example/ability/device.dev-a.agent.list@1.0.0")
+        let start = try await admin.buildAgentStartInvocation(adminAgentStartRequest())
+        XCTAssertEqual(try optionalDirectoryJSONString(start["descriptor_ref"], "descriptor_ref"), "easynet:///r/example/ability/device.dev-a.agent.start@1.0.0")
+        let stop = try await admin.buildAgentStopInvocation(adminAgentStopRequest())
+        XCTAssertEqual(try optionalDirectoryJSONString(stop["descriptor_ref"], "descriptor_ref"), "easynet:///r/example/ability/device.dev-a.agent.stop@1.0.0")
+        let refresh = try await admin.buildAgentRefreshInvocation(adminAgentRefreshRequest())
+        XCTAssertEqual(try optionalDirectoryJSONString(refresh["descriptor_ref"], "descriptor_ref"), "easynet:///r/example/ability/device.dev-a.agent.refresh@1.0.0")
+        let sessionsCarrier = try await admin.buildSessionListInvocation(adminSessionListRequest())
+        XCTAssertEqual(try optionalDirectoryJSONString(sessionsCarrier["descriptor_ref"], "descriptor_ref"), "easynet:///r/example/ability/device.dev-a.session.list@1.0.0")
+
+        let gateway = try await admin.gatewayStatus()
+        XCTAssertTrue(gateway.ready)
+        XCTAssertTrue(gateway.processLive)
+        XCTAssertFalse(gateway.publicListenerReady)
+        XCTAssertEqual(gateway.listeners.count, 2)
+
+        let agents = try await admin.listAgents(adminAgentListRequest())
+        XCTAssertEqual(agents.items.count, 1)
+        let lifecycle = try await admin.agentStart(adminAgentStartRequest())
+        XCTAssertEqual(lifecycle.operation, "agent.start")
+        XCTAssertEqual(lifecycle.agentURA, "easynet:///r/example/agent/alice.codex")
+
+        let preflight = try await admin.pairingPreflight(pairingPreflightRequest())
+        XCTAssertTrue(preflight.pairingRequired)
+        XCTAssertFalse(preflight.trustReady)
+        let token = try await admin.createPairing(createPairingRequest())
+        XCTAssertEqual(token.tokenID, "pair-token-1")
+        XCTAssertEqual(token.scopes, ["invoke", "events"])
+        let credential = try await admin.validatePairing(validatePairingRequest())
+        XCTAssertEqual(credential.credentialID, "cred-dev-a")
+        let session = try await admin.createDeviceSession(createDeviceSessionRequest())
+        XCTAssertEqual(session.sessionID, "dev-session-1")
+        let sessions = try await admin.listDeviceSessions(adminSessionListRequest())
+        XCTAssertEqual(sessions.items.count, 1)
+        let deleted = try await admin.deleteDeviceSession(deleteDeviceSessionRequest())
+        XCTAssertEqual(deleted.operation, "session.delete")
+        XCTAssertEqual(deleted.ack, true)
+
+        expectSyncSDKError(.invalidArgument) {
+            _ = try AdminAgentStartRequest(
+                base: adminCarrier(requestID: "admin-agent-start-1"),
+                name: "device.system",
+                agentType: "codex",
+                model: "gpt-5",
+                label: "primary"
+            )
+        }
+        expectSyncSDKError(.invalidArgument) {
+            _ = try AdminCarrierBase(
+                callerURA: "",
+                calleeURA: "easynet:///r/example/device/dev-a",
+                subjectURA: "easynet:///r/example/device/dev-a",
+                descriptorVersion: "1.0.0",
+                nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+                causalContext: ["form": .string("none")]
+            )
+        }
+
+        try await admin.close()
+        await expectSDKError(.invalidHandle) {
+            _ = try await admin.listAgents(adminAgentListRequest())
+        }
+    }
+
     func testHostBindingProfileDelegatesCodecHashAndLifecycle() async throws {
         let lifecycleProvider = FixtureHostLifecycleProvider()
         let hostBinding = HostBindingClient(
@@ -1104,6 +1172,89 @@ final class RuntimeCoreSeamTests: XCTestCase {
             missionID: "2026-07-04_010203_weather",
             cursorSequence: 4,
             limit: 100
+        )
+    }
+
+    private func adminCarrier(requestID: String) throws -> AdminCarrierBase {
+        try AdminCarrierBase(
+            callerURA: "easynet:///r/example/agent/alice.sdk",
+            calleeURA: "easynet:///r/example/device/dev-a",
+            subjectURA: "easynet:///r/example/device/dev-a",
+            descriptorVersion: "1.0.0",
+            nonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
+            causalContext: ["form": .string("none")],
+            metadata: ["request_id": .string(requestID)]
+        )
+    }
+
+    private func adminAgentListRequest() throws -> AdminAgentListRequest {
+        try AdminAgentListRequest(base: adminCarrier(requestID: "admin-agent-list-1"))
+    }
+
+    private func adminAgentStartRequest() throws -> AdminAgentStartRequest {
+        try AdminAgentStartRequest(
+            base: adminCarrier(requestID: "admin-agent-start-1"),
+            name: "codex",
+            agentType: "codex",
+            model: "gpt-5",
+            label: "primary"
+        )
+    }
+
+    private func adminAgentStopRequest() throws -> AdminAgentStopRequest {
+        try AdminAgentStopRequest(base: adminCarrier(requestID: "admin-agent-stop-1"), name: "codex")
+    }
+
+    private func adminAgentRefreshRequest() throws -> AdminAgentRefreshRequest {
+        try AdminAgentRefreshRequest(base: adminCarrier(requestID: "admin-agent-refresh-1"), name: "codex")
+    }
+
+    private func adminSessionListRequest() throws -> AdminSessionListRequest {
+        try AdminSessionListRequest(base: adminCarrier(requestID: "admin-session-list-1"), includeTerminated: false)
+    }
+
+    private func pairingPreflightRequest() throws -> PairingPreflightRequest {
+        try PairingPreflightRequest(
+            base: adminCarrier(requestID: "admin-pairing-preflight-1"),
+            hubURA: "easynet:///r/example/hub/main",
+            deviceURA: "easynet:///r/example/device/dev-a",
+            requestedScopes: ["invoke", "events"]
+        )
+    }
+
+    private func createPairingRequest() throws -> CreatePairingRequest {
+        try CreatePairingRequest(
+            base: adminCarrier(requestID: "admin-pairing-create-1"),
+            hubURA: "easynet:///r/example/hub/main",
+            deviceURA: "easynet:///r/example/device/dev-a",
+            expiresUnixMS: 1_893_456_000_000,
+            scopes: ["invoke", "events"]
+        )
+    }
+
+    private func validatePairingRequest() throws -> ValidatePairingRequest {
+        try ValidatePairingRequest(
+            base: adminCarrier(requestID: "admin-pairing-validate-1"),
+            token: "pair-token-value",
+            deviceURA: "easynet:///r/example/device/dev-a"
+        )
+    }
+
+    private func createDeviceSessionRequest() throws -> CreateDeviceSessionRequest {
+        try CreateDeviceSessionRequest(
+            base: adminCarrier(requestID: "admin-device-session-create-1"),
+            deviceURA: "easynet:///r/example/device/dev-a",
+            hubURA: "easynet:///r/example/hub/main",
+            sessionKind: "remote_desktop",
+            expiresUnixMS: 1_893_456_000_000
+        )
+    }
+
+    private func deleteDeviceSessionRequest() throws -> DeleteDeviceSessionRequest {
+        try DeleteDeviceSessionRequest(
+            base: adminCarrier(requestID: "admin-device-session-delete-1"),
+            sessionID: "dev-session-1",
+            reason: "done"
         )
     }
 
@@ -1649,6 +1800,94 @@ final class FixtureEventTransport: EventTransport, @unchecked Sendable {
 
     func projectTerminal(_ terminalJSON: Data) async throws -> Data {
         fixture("event.directory-terminal.v4.json")
+    }
+}
+
+final class FixtureAdminTransport: AdminTransport, @unchecked Sendable {
+    func buildAgentListInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-list-request.v4.json")
+        return fixture("admin-agent-list-invocation.v4.json")
+    }
+
+    func buildAgentStartInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-start-request.v4.json")
+        return fixture("admin-agent-start-invocation.v4.json")
+    }
+
+    func buildAgentStopInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-stop-request.v4.json")
+        return fixture("admin-agent-stop-invocation.v4.json")
+    }
+
+    func buildAgentRefreshInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-refresh-request.v4.json")
+        return fixture("admin-agent-refresh-invocation.v4.json")
+    }
+
+    func buildSessionListInvocation(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-session-list-request.v4.json")
+        return fixture("admin-session-list-invocation.v4.json")
+    }
+
+    func gatewayStatus(_ requestJSON: Data) async throws -> Data {
+        XCTAssertTrue(try decodedObject(requestJSON).isEmpty)
+        return fixture("gateway-status.v4.json")
+    }
+
+    func listAgents(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-list-request.v4.json")
+        return fixture("admin-agent-records.v4.json")
+    }
+
+    func agentStart(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-start-request.v4.json")
+        return fixture("admin-agent-lifecycle-result.v4.json")
+    }
+
+    func agentStop(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-stop-request.v4.json")
+        return fixture("admin-agent-lifecycle-result.v4.json")
+    }
+
+    func agentRefresh(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-agent-refresh-request.v4.json")
+        return fixture("admin-agent-lifecycle-result.v4.json")
+    }
+
+    func pairingPreflight(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-pairing-preflight-request.v4.json")
+        return fixture("admin-pairing-preflight.v4.json")
+    }
+
+    func createPairing(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-pairing-create-request.v4.json")
+        return fixture("admin-pairing-token.v4.json")
+    }
+
+    func validatePairing(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-pairing-validate-request.v4.json")
+        return fixture("admin-device-credential.v4.json")
+    }
+
+    func createDeviceSession(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-device-session-create-request.v4.json")
+        return fixture("admin-device-session.v4.json")
+    }
+
+    func listDeviceSessions(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-session-list-request.v4.json")
+        return fixture("admin-device-session-page.v4.json")
+    }
+
+    func deleteDeviceSession(_ requestJSON: Data) async throws -> Data {
+        try expectJSON(requestJSON, equalsFixture: "admin-device-session-delete-request.v4.json")
+        return fixture("admin-device-session-delete-result.v4.json")
+    }
+
+    private func expectJSON(_ data: Data, equalsFixture fixtureName: String) throws {
+        let request = try decodedObject(data)
+        let expected = try decodedObject(fixture(fixtureName))
+        XCTAssertEqual(request as NSDictionary, expected as NSDictionary)
     }
 }
 

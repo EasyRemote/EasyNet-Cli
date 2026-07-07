@@ -2,7 +2,7 @@
 
 Java/JVM is a P1 facade for enterprise and Android-adjacent integrations.
 
-Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Events plus Surface seam. The package exposes dependency-free Java
+Current status: Runtime Core plus Health plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface seam. The package exposes dependency-free Java
 objects for typed SDK errors, feature discovery, complete Invocation draft
 construction, `PreparedInvocation`/`SigningMaterial`/`SignedInvocation`
 prepare-sign-submit seams over an injected transport, `RuntimeClient` dispatch,
@@ -26,7 +26,10 @@ providers without owning product host process warmth or user-code execution. It
 also exposes Mission request/status/event DTOs and `MissionClient` carrier,
 projection, and Runtime Core stream-adapter methods over injected transports
 without SDK-owned Mission execution, scheduler policy, or receipt fabrication.
-It exposes Events request/filter/cursor/frame/page DTOs and `EventClient`
+It exposes Admin + Gateway request/status/session DTOs and `AdminClient`
+carrier/projection methods over injected transports without owning gateway
+process policy, certificate provisioning, account state, or product session
+policy. It exposes Events request/filter/cursor/frame/page DTOs and `EventClient`
 carrier/projection/stream methods over injected transports without SDK-owned
 event fan-out. Surface DTOs and `SurfaceClient` build page, manifest, and health
 carriers and project daemon page facts without backend rendering or HTTP route

@@ -12,8 +12,8 @@ method spelling.
 | Go | P0 | EasyNet backend/Hub | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Python | P0 | EasyRemote | provider-backed for Runtime Core, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, Wrappers, and the shared conformance runner |
 | Node/TypeScript | P1 | desktop tools and extensions | seam for Runtime Core prepare/sign/submit handles, Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers DTO/client lifecycle over injected transports; daemon providers and local daemon signing unsupported |
-| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
-| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
+| Java/JVM | P1 | enterprise and Android-adjacent integrations | seam as a Maven package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Admin + Gateway carrier/status/session state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
+| Swift | P1 | macOS/iOS-adjacent clients | seam as a Swift Package Manager package for Runtime Core typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client state, Directory + Identity request/projection/subscription state, Receipt request/ref/projection state, Publication carrier/resource-ref state, Host Binding codec/hash/lifecycle state, Mission carrier/status/event state, Admin + Gateway carrier/status/session state, Events carrier/frame/stream state, and Surface page/manifest/health state; provider transports and stable release support unsupported |
 
 ## Capability Matrix
 
@@ -135,8 +135,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   Go/Python C ABI transports now execute device revoke and device-session
   create/delete, hub join/leave, pairing preflight/create/validate, and
   credential verification through Runtime Core invoke. Go/Python facade seams
-  also cover device-session create/list/delete projections. Certificate policy,
-  backend trust policy persistence, and product cutovers remain incomplete.
+  also cover device-session create/list/delete projections, while
+  Node/Java/Swift expose injected-transport Admin + Gateway carrier/status/
+  session seams. Certificate policy, backend trust policy persistence, and
+  product cutovers remain incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
   `pages.list/publish/get/unpublish/health`; Go/Python facades now expose page
   carriers, typed page records, public page refs, manifests, mutation results,

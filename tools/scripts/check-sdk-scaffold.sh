@@ -249,8 +249,30 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/Client.java \
   sdk/java/src/main/java/run/easynet/daemon/DiscoveryTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/AbilityQuery.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminAgentListRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminAgentPage.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminAgentRecord.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminAgentRefreshRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminAgentStartRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminAgentStopRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminCarrierBase.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminClient.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminGatewayResult.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminGatewayStatusRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminJoinHubRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminLeaveHubRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminSessionListRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminSupport.java \
+  sdk/java/src/main/java/run/easynet/daemon/AdminTransport.java \
+  sdk/java/src/main/java/run/easynet/daemon/CreateDeviceSessionRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/CreatePairingRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/DeleteDeviceSessionRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DescriptorRefBuildRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/DescriptorRefRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/DeviceCredential.java \
+  sdk/java/src/main/java/run/easynet/daemon/DeviceCredentialVerification.java \
+  sdk/java/src/main/java/run/easynet/daemon/DeviceSession.java \
+  sdk/java/src/main/java/run/easynet/daemon/DeviceSessionPage.java \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryClient.java \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryIdentitySupport.java \
   sdk/java/src/main/java/run/easynet/daemon/DirectoryListRequest.java \
@@ -281,6 +303,8 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/EventsSubscriptionRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/EventsSupport.java \
   sdk/java/src/main/java/run/easynet/daemon/FeatureSet.java \
+  sdk/java/src/main/java/run/easynet/daemon/GatewayListener.java \
+  sdk/java/src/main/java/run/easynet/daemon/GatewayStatus.java \
   sdk/java/src/main/java/run/easynet/daemon/DiagnosticCheck.java \
   sdk/java/src/main/java/run/easynet/daemon/DiagnosticsReport.java \
   sdk/java/src/main/java/run/easynet/daemon/DiagnosticsTransport.java \
@@ -333,6 +357,9 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/MissionTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/OwnerAbilityRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/PackageValidation.java \
+  sdk/java/src/main/java/run/easynet/daemon/PairingPreflight.java \
+  sdk/java/src/main/java/run/easynet/daemon/PairingPreflightRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/PairingToken.java \
   sdk/java/src/main/java/run/easynet/daemon/PreparedInvocation.java \
   sdk/java/src/main/java/run/easynet/daemon/PublicationClient.java \
   sdk/java/src/main/java/run/easynet/daemon/PublicationSupport.java \
@@ -347,6 +374,7 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/RetryHint.java \
   sdk/java/src/main/java/run/easynet/daemon/ResolveQuery.java \
   sdk/java/src/main/java/run/easynet/daemon/ResourceRef.java \
+  sdk/java/src/main/java/run/easynet/daemon/RevokeDeviceRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeClient.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeHealth.java \
   sdk/java/src/main/java/run/easynet/daemon/RuntimeFuture.java \
@@ -375,10 +403,13 @@ for path in \
   sdk/java/src/main/java/run/easynet/daemon/SurfaceTransport.java \
   sdk/java/src/main/java/run/easynet/daemon/UnpublishAbilityRequest.java \
   sdk/java/src/main/java/run/easynet/daemon/ValidatePackageOptions.java \
+  sdk/java/src/main/java/run/easynet/daemon/ValidatePairingRequest.java \
+  sdk/java/src/main/java/run/easynet/daemon/VerifyDeviceCredentialRequest.java \
   sdk/java/src/test/java/run/easynet/daemon/RuntimeCoreSeamTest.java \
   sdk/swift/.gitignore \
   sdk/swift/Package.swift \
   sdk/swift/README.md \
+  sdk/swift/Sources/EasyNetDaemonSDK/Admin.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Bidi.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/DirectoryIdentity.swift \
   sdk/swift/Sources/EasyNetDaemonSDK/Events.swift \

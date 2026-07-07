@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Iterator;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -35,6 +36,7 @@ public final class RuntimeCoreSeamTest {
     receiptOpaqueRefRequiresExplicitAnchorFacts();
     publicationProfileDelegatesResourceValidationAndCarriers();
     missionProfileDelegatesCarriersStatusAndStreams();
+    adminGatewayProfileDelegatesCarriersAndStatus();
     hostBindingProfileDelegatesCodecHashAndLifecycle();
     eventsProfileDelegatesCarriersProjectionsHistoryAndStreams();
     surfaceProfileDelegatesCarriersAndProjections();
@@ -798,6 +800,56 @@ public final class RuntimeCoreSeamTest {
     expectSDKError(ErrorCode.INVALID_HANDLE, () -> mission.track(missionTrackRequest()));
   }
 
+  private static void adminGatewayProfileDelegatesCarriersAndStatus() throws Exception {
+    var admin = new AdminClient(new FixtureAdminTransport());
+
+    check(
+        admin.buildAgentListInvocation(adminAgentListRequest()).inspectTuple().descriptor().endsWith("agent.list@1.0.0"),
+        "admin agent list descriptor");
+    check(
+        admin.buildAgentStartInvocation(adminAgentStartRequest()).inspectTuple().descriptor().endsWith("agent.start@1.0.0"),
+        "admin agent start descriptor");
+    check(
+        admin.buildAgentStopInvocation(adminAgentStopRequest()).inspectTuple().descriptor().endsWith("agent.stop@1.0.0"),
+        "admin agent stop descriptor");
+    check(
+        admin.buildAgentRefreshInvocation(adminAgentRefreshRequest()).inspectTuple().descriptor().endsWith("agent.refresh@1.0.0"),
+        "admin agent refresh descriptor");
+    check(
+        admin.buildSessionListInvocation(adminSessionListRequest()).inspectTuple().descriptor().endsWith("session.list@1.0.0"),
+        "admin session list descriptor");
+
+    var gateway = admin.gatewayStatus(new AdminGatewayStatusRequest(null, Map.of()));
+    check(gateway.ready() && gateway.processLive() && !gateway.publicListenerReady(), "gateway status readiness facts");
+    check(gateway.listeners().size() == 2, "gateway listeners preserved");
+
+    var agents = admin.listAgents(adminAgentListRequest());
+    check(agents.items().size() == 1 && agents.items().get(0).runtime().equals("codex"), "admin agent records");
+    var lifecycle = admin.agentStart(adminAgentStartRequest());
+    check(lifecycle.operation().equals("agent.start") && lifecycle.agentURA().contains("/agent/"), "admin lifecycle result");
+
+    var preflight = admin.pairingPreflight(pairingPreflightRequest());
+    check(preflight.pairingRequired() && !preflight.trustReady(), "pairing preflight state");
+    var token = admin.createPairing(createPairingRequest());
+    check(token.tokenID().equals("pair-token-1") && token.scopes().size() == 2, "pairing token");
+    var credential = admin.validatePairing(validatePairingRequest());
+    check(credential.credentialID().equals("cred-dev-a") && credential.hubURA().contains("/hub/"), "device credential");
+    var session = admin.createDeviceSession(createDeviceSessionRequest());
+    check(session.sessionID().equals("dev-session-1") && session.sessionKind().equals("remote_desktop"), "device session");
+    var sessions = admin.listDeviceSessions(adminSessionListRequest());
+    check(sessions.items().size() == 1, "device session page");
+    var deleted = admin.deleteDeviceSession(deleteDeviceSessionRequest());
+    check(Boolean.TRUE.equals(deleted.ack()) && deleted.operation().equals("session.delete"), "device session delete");
+
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new AdminAgentStartRequest(
+        adminCarrier("admin-agent-start-1"), "device.system", "codex", Map.of(), "gpt-5", "primary", "", List.of(), "", null, null, null, null));
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new AdminAgentListRequest(
+        new AdminCarrierBase("", "easynet:///r/example/device/dev-a", "easynet:///r/example/device/dev-a", "1.0.0", "AQIDBAUGBwgJCgsMDQ4PEA==", Map.of("form", "none"), Map.of())));
+
+    admin.close();
+    expectSDKError(ErrorCode.INVALID_HANDLE, () -> admin.listAgents(adminAgentListRequest()));
+  }
+
   private static MissionCarrierBase missionCarrier() {
     return missionCarrier("mission-run-1");
   }
@@ -832,6 +884,87 @@ public final class RuntimeCoreSeamTest {
 
   private static MissionEventsRequest missionEventsRequest() {
     return new MissionEventsRequest(missionCarrier("mission-events-1"), "2026-07-04_010203_weather", 4, 100);
+  }
+
+  private static AdminCarrierBase adminCarrier(String requestID) {
+    return new AdminCarrierBase(
+        "easynet:///r/example/agent/alice.sdk",
+        "easynet:///r/example/device/dev-a",
+        "easynet:///r/example/device/dev-a",
+        "1.0.0",
+        "AQIDBAUGBwgJCgsMDQ4PEA==",
+        Map.of("form", "none"),
+        Map.of("request_id", requestID));
+  }
+
+  private static AdminAgentListRequest adminAgentListRequest() {
+    return new AdminAgentListRequest(adminCarrier("admin-agent-list-1"));
+  }
+
+  private static AdminAgentStartRequest adminAgentStartRequest() {
+    return new AdminAgentStartRequest(
+        adminCarrier("admin-agent-start-1"),
+        "codex",
+        "codex",
+        Map.of(),
+        "gpt-5",
+        "primary",
+        "",
+        List.of(),
+        "",
+        null,
+        null,
+        null,
+        null);
+  }
+
+  private static AdminAgentStopRequest adminAgentStopRequest() {
+    return new AdminAgentStopRequest(adminCarrier("admin-agent-stop-1"), "codex", "");
+  }
+
+  private static AdminAgentRefreshRequest adminAgentRefreshRequest() {
+    return new AdminAgentRefreshRequest(adminCarrier("admin-agent-refresh-1"), "codex");
+  }
+
+  private static AdminSessionListRequest adminSessionListRequest() {
+    return new AdminSessionListRequest(adminCarrier("admin-session-list-1"), false);
+  }
+
+  private static PairingPreflightRequest pairingPreflightRequest() {
+    return new PairingPreflightRequest(
+        adminCarrier("admin-pairing-preflight-1"),
+        "easynet:///r/example/hub/main",
+        "easynet:///r/example/device/dev-a",
+        List.of("invoke", "events"));
+  }
+
+  private static CreatePairingRequest createPairingRequest() {
+    return new CreatePairingRequest(
+        adminCarrier("admin-pairing-create-1"),
+        "easynet:///r/example/hub/main",
+        "easynet:///r/example/device/dev-a",
+        1893456000000L,
+        List.of("invoke", "events"));
+  }
+
+  private static ValidatePairingRequest validatePairingRequest() {
+    return new ValidatePairingRequest(
+        adminCarrier("admin-pairing-validate-1"),
+        "pair-token-value",
+        "easynet:///r/example/device/dev-a");
+  }
+
+  private static CreateDeviceSessionRequest createDeviceSessionRequest() {
+    return new CreateDeviceSessionRequest(
+        adminCarrier("admin-device-session-create-1"),
+        "easynet:///r/example/device/dev-a",
+        "easynet:///r/example/hub/main",
+        "remote_desktop",
+        1893456000000L);
+  }
+
+  private static DeleteDeviceSessionRequest deleteDeviceSessionRequest() {
+    return new DeleteDeviceSessionRequest(adminCarrier("admin-device-session-delete-1"), "dev-session-1", "done");
   }
 
   private static void hostBindingProfileDelegatesCodecHashAndLifecycle() throws Exception {
@@ -1814,6 +1947,111 @@ public final class RuntimeCoreSeamTest {
     @Override
     public byte[] projectTerminal(byte[] terminalJSON) {
       return fixture("event.directory-terminal.v4.json");
+    }
+  }
+
+  private static final class FixtureAdminTransport implements AdminTransport {
+    private void expectRequest(byte[] requestJSON, String fixtureName, String label) {
+      var request = JsonValueReader.object(requestJSON, label);
+      var expected = JsonValueReader.object(fixture(fixtureName), fixtureName);
+      check(request.equals(expected), label);
+    }
+
+    @Override
+    public byte[] buildAgentListInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-list-request.v4.json", "admin agent list request");
+      return fixture("admin-agent-list-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildAgentStartInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-start-request.v4.json", "admin agent start request");
+      return fixture("admin-agent-start-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildAgentStopInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-stop-request.v4.json", "admin agent stop request");
+      return fixture("admin-agent-stop-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildAgentRefreshInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-refresh-request.v4.json", "admin agent refresh request");
+      return fixture("admin-agent-refresh-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] buildSessionListInvocation(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-session-list-request.v4.json", "admin session list request");
+      return fixture("admin-session-list-invocation.v4.json");
+    }
+
+    @Override
+    public byte[] gatewayStatus(byte[] requestJSON) {
+      var request = JsonValueReader.object(requestJSON, "gateway status request");
+      check(request.isEmpty(), "gateway status request");
+      return fixture("gateway-status.v4.json");
+    }
+
+    @Override
+    public byte[] listAgents(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-list-request.v4.json", "admin list agents request");
+      return fixture("admin-agent-records.v4.json");
+    }
+
+    @Override
+    public byte[] agentStart(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-start-request.v4.json", "admin agent start request");
+      return fixture("admin-agent-lifecycle-result.v4.json");
+    }
+
+    @Override
+    public byte[] agentStop(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-stop-request.v4.json", "admin agent stop request");
+      return fixture("admin-agent-lifecycle-result.v4.json");
+    }
+
+    @Override
+    public byte[] agentRefresh(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-agent-refresh-request.v4.json", "admin agent refresh request");
+      return fixture("admin-agent-lifecycle-result.v4.json");
+    }
+
+    @Override
+    public byte[] pairingPreflight(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-pairing-preflight-request.v4.json", "admin pairing preflight request");
+      return fixture("admin-pairing-preflight.v4.json");
+    }
+
+    @Override
+    public byte[] createPairing(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-pairing-create-request.v4.json", "admin pairing create request");
+      return fixture("admin-pairing-token.v4.json");
+    }
+
+    @Override
+    public byte[] validatePairing(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-pairing-validate-request.v4.json", "admin pairing validate request");
+      return fixture("admin-device-credential.v4.json");
+    }
+
+    @Override
+    public byte[] createDeviceSession(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-device-session-create-request.v4.json", "admin device session create request");
+      return fixture("admin-device-session.v4.json");
+    }
+
+    @Override
+    public byte[] listDeviceSessions(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-session-list-request.v4.json", "admin device session list request");
+      return fixture("admin-device-session-page.v4.json");
+    }
+
+    @Override
+    public byte[] deleteDeviceSession(byte[] requestJSON) {
+      expectRequest(requestJSON, "admin-device-session-delete-request.v4.json", "admin device session delete request");
+      return fixture("admin-device-session-delete-result.v4.json");
     }
   }
 

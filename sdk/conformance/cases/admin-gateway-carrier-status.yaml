@@ -6,6 +6,8 @@ required_for:
   - go
   - python
   - node
+  - java
+  - swift
 description: AdminClient builds complete Invocation carriers for daemon agent/session lifecycle abilities and projects daemon lifecycle status plus agent records into typed Admin + Gateway DTOs without backend admin state leakage.
 steps:
   - action: build_agent_list_invocation
