@@ -105,6 +105,15 @@ impl PolicyEngine {
             );
         }
 
+        if let Some(grant) = matcher.find_reconfirmation_required(&grant_input) {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Deny,
+                PolicyDecisionReason::GrantReconfirmationRequired,
+                Some(grant.grant_id.clone()),
+            );
+        }
+
         if input.interactive_context_available {
             return decision(
                 &input,
@@ -165,6 +174,9 @@ fn decision(
 mod tests {
     use super::*;
     use crate::daemon::invocation::admission::decision::{OwnerResolution, OwnerSource};
+    use crate::daemon::invocation::admission::grant_matcher::{
+        PermissionGrantLifetime, PermissionGrantState,
+    };
 
     fn base_input() -> PolicyInput {
         PolicyInput {
@@ -232,5 +244,49 @@ mod tests {
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
         assert_eq!(got.reason, PolicyDecisionReason::OwnerUnresolved);
+    }
+
+    #[test]
+    fn overdue_permanent_stream_grant_denies_with_reconfirmation_reason() {
+        let mut input = base_input();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.ability_ura = "easynet:///r/test/ability/terminal.create".to_string();
+        input.now = DateTime::parse_from_rfc3339("2026-07-09T00:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        input.grants = vec![PermissionGrant {
+            grant_id: "grant-stream".to_string(),
+            owner_user_id: "alice".to_string(),
+            principal_kind: PrincipalKind::Token,
+            principal_id: "token-principal".to_string(),
+            token_id: Some("token-1".to_string()),
+            token_class: Some(TokenClass::HubLink),
+            callee_ura: Some(input.callee_ura.clone()),
+            subject_ura_pattern: Some(input.subject_ura.clone()),
+            ability_ura_pattern: Some(input.ability_ura.clone()),
+            actions: vec![AccessAction::Stream],
+            constraints: None,
+            effect: PermissionEffect::Allow,
+            lifetime: PermissionGrantLifetime::Permanent,
+            state: PermissionGrantState::Active,
+            expires_at: None,
+            review_required_after: Some("2026-07-01T00:00:00Z".to_string()),
+            last_reviewed_at: None,
+            last_used_at: None,
+            created_by: "easynet:///r/test/user/alice".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: None,
+            revoked_at: None,
+            reason: None,
+        }];
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(
+            got.reason,
+            PolicyDecisionReason::GrantReconfirmationRequired
+        );
+        assert_eq!(got.grant_id.as_deref(), Some("grant-stream"));
     }
 }

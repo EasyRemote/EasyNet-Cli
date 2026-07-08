@@ -217,7 +217,7 @@ impl SignatureDecisionReason {
     #[must_use]
     pub fn from_admission_detail(detail: &str) -> Self {
         let upper = detail.to_ascii_uppercase();
-        if upper.contains(Self::CallerKeyNotFound.as_str()) {
+        if upper.contains(Self::CallerKeyNotFound.as_str()) || upper.contains("CALLER_UNKNOWN") {
             return Self::CallerKeyNotFound;
         }
         if upper.contains(Self::CallerKeyRevoked.as_str()) {
@@ -446,6 +446,10 @@ mod tests {
         assert_eq!(
             SignatureDecisionReason::from_admission_detail("opaque bad signature"),
             SignatureDecisionReason::CallerSignatureVerifyFailed
+        );
+        assert_eq!(
+            SignatureDecisionReason::from_admission_detail("CALLER_UNKNOWN: caller not trusted"),
+            SignatureDecisionReason::CallerKeyNotFound
         );
     }
 }

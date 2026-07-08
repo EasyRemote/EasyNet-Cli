@@ -89,7 +89,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use sha2::Digest;
-use tonic::Status;
+use tonic::{Code, Status};
 
 use easynet_axon::invocation::admission::{
     now_ms as axon_now_ms, run_descriptor_bound_admission, REASON_CALLER_SIGNATURE_INVALID,
@@ -646,7 +646,11 @@ impl AdmissionFacade {
                     )?;
                     return Ok(());
                 }
-                return Err(permission_denied_unknown_caller(caller_ura));
+                return Err(self.signature_denied_status(
+                    envelope,
+                    ability,
+                    permission_denied_unknown_caller(caller_ura),
+                ));
             }
         };
 
@@ -697,19 +701,24 @@ impl AdmissionFacade {
                 "envelope present but ability/function_name is empty; cannot run admission",
             ));
         }
-        reject_missing_or_malformed_caller_signature(envelope)?;
+        reject_missing_or_malformed_caller_signature(envelope)
+            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
 
-        let signed_descriptor_ref = signed_descriptor_ref_from_metadata(ability, metadata)?;
-        ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)?;
+        let signed_descriptor_ref = signed_descriptor_ref_from_metadata(ability, metadata)
+            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
+        ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)
+            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
         let descriptor_bound = descriptor_bound_from_wire_parts(
             envelope.clone(),
             signed_descriptor_ref,
             args,
             WireCallerIdentity::FromEnvelope,
         )
-        .map_err(axon_error_to_status)?;
+        .map_err(axon_error_to_status)
+        .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
         let axiom_signature = build_axiom_signature(envelope.caller_signature.as_ref())
-            .map_err(axon_error_to_status)?;
+            .map_err(axon_error_to_status)
+            .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
 
         // DEC-EU §multi-device. User URAs are 1:N, so the resolver must
         // key local and cross-realm lookup on the envelope-presented
@@ -760,7 +769,8 @@ impl AdmissionFacade {
                     metadata,
                     trust_anchor.as_ref(),
                     axon_now_ms(),
-                )?;
+                )
+                .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
                 AdmissionPolicyGate::verify(AdmissionPolicyContext {
                     envelope,
                     ability,
@@ -783,7 +793,9 @@ impl AdmissionFacade {
                 })?;
                 Ok(())
             }
-            Err(err) => Err(axon_error_to_status(err)),
+            Err(err) => {
+                Err(self.signature_denied_status(envelope, ability, axon_error_to_status(err)))
+            }
         }
     }
 
@@ -927,6 +939,137 @@ impl AdmissionFacade {
         let peers = self.federated_peers.snapshot();
         peers.contains_key(&caller_realm)
     }
+
+    fn signature_denied_status(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        status: Status,
+    ) -> Status {
+        admission_denied_status(
+            status,
+            "SIGNATURE_DENIED",
+            "signature",
+            signature_reason_from_status,
+            envelope,
+            ability,
+            self.daemon_ura.as_deref(),
+        )
+    }
+
+    fn authority_denied_status(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        status: Status,
+    ) -> Status {
+        admission_denied_status(
+            status,
+            "AUTHORITY_DENIED",
+            "authority",
+            authority_reason_from_status,
+            envelope,
+            ability,
+            self.daemon_ura.as_deref(),
+        )
+    }
+}
+
+type AdmissionReasonExtractor = fn(&Status) -> String;
+
+fn admission_denied_status(
+    status: Status,
+    outer_code: &'static str,
+    target_stage: &'static str,
+    reason_from_status: AdmissionReasonExtractor,
+    envelope: &Envelope,
+    ability: &str,
+    rejector_ura: Option<&str>,
+) -> Status {
+    let grpc_code = status.code();
+    let detail = status.message().to_string();
+    let target_reason = reason_from_status(&status);
+    let payload = serde_json::json!({
+        "outer_code": outer_code,
+        "target_stage": target_stage,
+        "target_reason": target_reason,
+        "caller_ura": identity_ura_for_diagnostic(envelope.caller.as_ref()),
+        "callee_ura": identity_ura_for_diagnostic(envelope.callee.as_ref()),
+        "ability_ura": ability_ura_for_diagnostic(envelope, ability),
+        "subject_ura": subject_ura_for_diagnostic(envelope),
+        "rejector_ura": rejector_ura,
+        "detail": detail,
+    });
+    let encoded = serde_json::to_string(&payload).unwrap_or_else(|_| {
+        format!(
+            "{{\"outer_code\":\"{outer_code}\",\"target_stage\":\"{target_stage}\",\"target_reason\":\"{target_reason}\",\"detail\":\"{detail}\"}}"
+        )
+    });
+    status_with_code(grpc_code, format!("{outer_code}: {encoded}"))
+}
+
+fn signature_reason_from_status(status: &Status) -> String {
+    SignatureDecisionReason::from_admission_detail(status.message())
+        .as_str()
+        .to_string()
+}
+
+fn authority_reason_from_status(status: &Status) -> String {
+    status
+        .message()
+        .split_once(':')
+        .map(|(reason, _)| reason)
+        .unwrap_or_else(|| status.message())
+        .trim()
+        .to_ascii_uppercase()
+}
+
+fn status_with_code(code: Code, message: String) -> Status {
+    match code {
+        Code::Ok => Status::unknown(message),
+        Code::Cancelled => Status::cancelled(message),
+        Code::Unknown => Status::unknown(message),
+        Code::InvalidArgument => Status::invalid_argument(message),
+        Code::DeadlineExceeded => Status::deadline_exceeded(message),
+        Code::NotFound => Status::not_found(message),
+        Code::AlreadyExists => Status::already_exists(message),
+        Code::PermissionDenied => Status::permission_denied(message),
+        Code::ResourceExhausted => Status::resource_exhausted(message),
+        Code::FailedPrecondition => Status::failed_precondition(message),
+        Code::Aborted => Status::aborted(message),
+        Code::OutOfRange => Status::out_of_range(message),
+        Code::Unimplemented => Status::unimplemented(message),
+        Code::Internal => Status::internal(message),
+        Code::Unavailable => Status::unavailable(message),
+        Code::DataLoss => Status::data_loss(message),
+        Code::Unauthenticated => Status::unauthenticated(message),
+    }
+}
+
+fn identity_ura_for_diagnostic(
+    identity: Option<&easynet_axon::pb::axon::v1::AgentIdentity>,
+) -> Option<String> {
+    identity
+        .map(|identity| identity.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .map(ToString::to_string)
+}
+
+fn subject_ura_for_diagnostic(envelope: &Envelope) -> Option<String> {
+    envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.ura.trim())
+        .filter(|ura| !ura.is_empty())
+        .map(ToString::to_string)
+}
+
+fn ability_ura_for_diagnostic(envelope: &Envelope, ability: &str) -> String {
+    envelope
+        .callee
+        .as_ref()
+        .and_then(|callee| crate::core::ura::owner_ability_ura(callee.ura.trim(), ability))
+        .unwrap_or_else(|| ability.to_string())
 }
 
 /// **PR-N2 commit 1/N**. Parse the realm component from a canonical
@@ -1686,6 +1829,19 @@ mod tests {
         );
     }
 
+    fn assert_signature_denied(err: &Status, reason: &str) {
+        assert!(
+            err.message().contains("SIGNATURE_DENIED"),
+            "expected RFC-014 signature denial, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains(reason),
+            "expected signature reason {reason}, got: {}",
+            err.message()
+        );
+    }
+
     /// Build an envelope+signature pair that admits cleanly. `nonce`
     /// is variable so distinct tests don't collide on the daemon-
     /// shared replay store.
@@ -1764,6 +1920,7 @@ mod tests {
         )));
         let err = facade.verify_invoke(&req).expect_err("must reject");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert_signature_denied(&err, SignatureDecisionReason::CallerKeyNotFound.as_str());
         assert!(
             err.message().contains("not in the realm trust anchor"),
             "rejection message must call out membership miss, got: {}",
@@ -1890,9 +2047,33 @@ mod tests {
         // the strict path rejects it as an unknown caller rather than
         // silently admitting it.
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert_signature_denied(&err, SignatureDecisionReason::CallerKeyNotFound.as_str());
         assert!(
             tcp_facade.replay_store.is_empty(),
             "an unknown-caller reject must never touch the replay store"
+        );
+    }
+
+    #[test]
+    fn trusted_unsigned_caller_returns_signature_denied_payload() {
+        let caller_ura = hub_ura("trusted-unsigned");
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::new(backend_anchor(&[&caller_ura]), Some(daemon_ura));
+        let req = invoke_request(Some(envelope_with_caller(&caller_ura)));
+
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("trusted public caller still needs a signature");
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert_signature_denied(
+            &err,
+            SignatureDecisionReason::CallerSignatureMissing.as_str(),
+        );
+        assert!(
+            err.message().contains(REASON_CALLER_SIGNATURE_INVALID),
+            "legacy signature reason should remain inspectable: {}",
+            err.message()
         );
     }
 

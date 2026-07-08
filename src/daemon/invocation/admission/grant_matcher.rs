@@ -1,7 +1,7 @@
 // EasyNet CLI — RFC-014 deterministic grant matcher
 // ==================================================
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::decision::{AccessAction, PrincipalKind, TokenClass};
@@ -107,6 +107,75 @@ impl PermissionGrant {
             None => true,
         }
     }
+
+    #[must_use]
+    pub fn admissible_for(&self, action: AccessAction, now: DateTime<Utc>) -> bool {
+        self.active_at(now) && !self.reconfirmation_required_for(action, now)
+    }
+
+    #[must_use]
+    pub fn reconfirmation_required_for(&self, action: AccessAction, now: DateTime<Utc>) -> bool {
+        if !self.active_at(now)
+            || self.effect != PermissionEffect::Allow
+            || !self.actions.contains(&action)
+            || !self.requires_periodic_reconfirmation_for(action)
+        {
+            return false;
+        }
+        self.reconfirmation_deadline_for(action)
+            .map(|deadline| deadline <= now)
+            .unwrap_or(true)
+    }
+
+    #[must_use]
+    pub fn default_reconfirmation_deadline(&self) -> Option<DateTime<Utc>> {
+        if self.effect != PermissionEffect::Allow
+            || self.lifetime != PermissionGrantLifetime::Permanent
+        {
+            return None;
+        }
+        let interval = review_interval_for_actions(&self.actions)?;
+        let anchor = self
+            .last_reviewed_at
+            .as_deref()
+            .filter(|raw| !raw.trim().is_empty())
+            .unwrap_or(self.created_at.as_str());
+        DateTime::parse_from_rfc3339(anchor)
+            .ok()
+            .map(|timestamp| timestamp.with_timezone(&Utc) + interval)
+    }
+
+    fn requires_periodic_reconfirmation_for(&self, action: AccessAction) -> bool {
+        self.lifetime == PermissionGrantLifetime::Permanent
+            && matches!(
+                action,
+                AccessAction::Stream | AccessAction::Manage | AccessAction::Grant
+            )
+    }
+
+    fn reconfirmation_deadline_for(&self, action: AccessAction) -> Option<DateTime<Utc>> {
+        if !self.requires_periodic_reconfirmation_for(action) {
+            return None;
+        }
+        match self.review_required_after.as_deref() {
+            Some(raw) if !raw.trim().is_empty() => DateTime::parse_from_rfc3339(raw)
+                .ok()
+                .map(|timestamp| timestamp.with_timezone(&Utc)),
+            _ => self.default_reconfirmation_deadline(),
+        }
+    }
+}
+
+fn review_interval_for_actions(actions: &[AccessAction]) -> Option<Duration> {
+    if actions
+        .iter()
+        .any(|action| matches!(action, AccessAction::Manage | AccessAction::Grant))
+    {
+        return Some(Duration::days(30));
+    }
+    actions
+        .contains(&AccessAction::Stream)
+        .then_some(Duration::days(90))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +207,35 @@ impl<'a> PermissionGrantMatcher<'a> {
         input: &GrantMatchInput<'_>,
         effect: PermissionEffect,
     ) -> Option<&'a PermissionGrant> {
+        self.find_active(input, effect)
+    }
+
+    #[must_use]
+    pub fn find_active(
+        &self,
+        input: &GrantMatchInput<'_>,
+        effect: PermissionEffect,
+    ) -> Option<&'a PermissionGrant> {
+        self.matching_grants(input, effect)
+            .into_iter()
+            .find(|grant| grant.admissible_for(input.action, input.now))
+    }
+
+    #[must_use]
+    pub fn find_reconfirmation_required(
+        &self,
+        input: &GrantMatchInput<'_>,
+    ) -> Option<&'a PermissionGrant> {
+        self.matching_grants(input, PermissionEffect::Allow)
+            .into_iter()
+            .find(|grant| grant.reconfirmation_required_for(input.action, input.now))
+    }
+
+    fn matching_grants(
+        &self,
+        input: &GrantMatchInput<'_>,
+        effect: PermissionEffect,
+    ) -> Vec<&'a PermissionGrant> {
         let mut matches: Vec<(GrantSpecificity, &PermissionGrant)> = self
             .grants
             .iter()
@@ -162,7 +260,7 @@ impl<'a> PermissionGrantMatcher<'a> {
                 .cmp(left_score)
                 .then_with(|| left.grant_id.cmp(&right.grant_id))
         });
-        matches.into_iter().map(|(_, grant)| grant).next()
+        matches.into_iter().map(|(_, grant)| grant).collect()
     }
 }
 
@@ -276,5 +374,81 @@ mod tests {
             .find(&input, PermissionEffect::Allow)
             .expect("allow match");
         assert_eq!(got.grant_id, "a-exact");
+    }
+
+    #[test]
+    fn overdue_permanent_stream_grant_requires_reconfirmation() {
+        let mut grants = vec![grant(
+            "stream-grant",
+            PermissionEffect::Allow,
+            "easynet:///r/a/resource/x",
+            "easynet:///r/a/ability/device.stream",
+        )];
+        grants[0].actions = vec![AccessAction::Stream];
+        grants[0].review_required_after = Some("2026-07-01T00:00:00Z".to_string());
+        let input = GrantMatchInput {
+            owner_user_id: "alice",
+            principal_kind: PrincipalKind::Token,
+            principal_id: "token-principal",
+            token_id: Some("token-1"),
+            callee_ura: "easynet:///r/a/device/dev",
+            subject_ura: "easynet:///r/a/resource/x",
+            ability_ura: "easynet:///r/a/ability/device.stream",
+            action: AccessAction::Stream,
+            now: DateTime::parse_from_rfc3339("2026-07-09T00:00:00Z")
+                .expect("timestamp")
+                .with_timezone(&Utc),
+        };
+        let matcher = PermissionGrantMatcher::new(&grants);
+
+        assert!(matcher
+            .find_active(&input, PermissionEffect::Allow)
+            .is_none());
+        assert_eq!(
+            matcher
+                .find_reconfirmation_required(&input)
+                .expect("reconfirmation match")
+                .grant_id,
+            "stream-grant"
+        );
+    }
+
+    #[test]
+    fn active_broader_grant_can_admit_when_specific_grant_is_overdue() {
+        let mut specific = grant(
+            "specific-overdue",
+            PermissionEffect::Allow,
+            "easynet:///r/a/resource/x",
+            "easynet:///r/a/ability/device.stream",
+        );
+        specific.actions = vec![AccessAction::Stream];
+        specific.review_required_after = Some("2026-07-01T00:00:00Z".to_string());
+        let mut broader = grant(
+            "broader-active",
+            PermissionEffect::Allow,
+            "easynet:///r/a/resource/*",
+            "easynet:///r/a/ability/device.*",
+        );
+        broader.actions = vec![AccessAction::Stream];
+        broader.review_required_after = Some("2026-08-01T00:00:00Z".to_string());
+        let grants = vec![specific, broader];
+        let input = GrantMatchInput {
+            owner_user_id: "alice",
+            principal_kind: PrincipalKind::Token,
+            principal_id: "token-principal",
+            token_id: Some("token-1"),
+            callee_ura: "easynet:///r/a/device/dev",
+            subject_ura: "easynet:///r/a/resource/x",
+            ability_ura: "easynet:///r/a/ability/device.stream",
+            action: AccessAction::Stream,
+            now: DateTime::parse_from_rfc3339("2026-07-09T00:00:00Z")
+                .expect("timestamp")
+                .with_timezone(&Utc),
+        };
+
+        let got = PermissionGrantMatcher::new(&grants)
+            .find_active(&input, PermissionEffect::Allow)
+            .expect("active broader grant");
+        assert_eq!(got.grant_id, "broader-active");
     }
 }

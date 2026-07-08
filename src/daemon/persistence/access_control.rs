@@ -38,7 +38,8 @@ use crate::daemon::invocation::admission::decision::{
     AccessAction, PermissionRequest, PermissionRequestStatus,
 };
 use crate::daemon::invocation::admission::grant_matcher::{
-    PermissionConstraints, PermissionEffect, PermissionGrant, PermissionGrantState,
+    PermissionConstraints, PermissionEffect, PermissionGrant, PermissionGrantLifetime,
+    PermissionGrantState,
 };
 
 use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
@@ -265,6 +266,7 @@ impl AccessControlStore {
         mut grant: PermissionGrant,
         actor_ura: &str,
     ) -> anyhow::Result<AuthorityBindingGrantResult> {
+        normalize_grant_for_create(&mut grant)?;
         validate_grant(&grant)?;
         grant.state = PermissionGrantState::Active;
         let idempotency_key = grant_idempotency_key(&grant)?;
@@ -818,12 +820,51 @@ fn validate_grant(grant: &PermissionGrant) -> anyhow::Result<()> {
     }
     reject_broad_pattern(grant.ability_ura_pattern.as_deref())?;
     reject_unenforceable_constraints(grant.constraints.as_ref())?;
+    DateTime::parse_from_rfc3339(&grant.created_at)
+        .map_err(|_| anyhow::anyhow!("PermissionGrant created_at must be RFC3339"))?;
     if grant
         .expires_at
         .as_deref()
         .is_some_and(|raw| DateTime::parse_from_rfc3339(raw).is_err())
     {
         anyhow::bail!("PermissionGrant expires_at must be RFC3339");
+    }
+    if grant
+        .review_required_after
+        .as_deref()
+        .is_some_and(|raw| DateTime::parse_from_rfc3339(raw).is_err())
+    {
+        anyhow::bail!("PermissionGrant review_required_after must be RFC3339");
+    }
+    if grant
+        .last_reviewed_at
+        .as_deref()
+        .is_some_and(|raw| DateTime::parse_from_rfc3339(raw).is_err())
+    {
+        anyhow::bail!("PermissionGrant last_reviewed_at must be RFC3339");
+    }
+    Ok(())
+}
+
+fn normalize_grant_for_create(grant: &mut PermissionGrant) -> anyhow::Result<()> {
+    if grant.state != PermissionGrantState::Active {
+        grant.state = PermissionGrantState::Active;
+    }
+    if grant.effect == PermissionEffect::Allow
+        && grant.lifetime == PermissionGrantLifetime::Permanent
+        && grant.review_required_after.is_none()
+        && grant.actions.iter().any(|action| {
+            matches!(
+                action,
+                AccessAction::Stream | AccessAction::Manage | AccessAction::Grant
+            )
+        })
+    {
+        let deadline = grant
+            .default_reconfirmation_deadline()
+            .ok_or_else(|| anyhow::anyhow!("PermissionGrant created_at must be RFC3339"))?;
+        grant.review_required_after =
+            Some(deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     }
     Ok(())
 }
@@ -1241,6 +1282,62 @@ mod tests {
 
         let reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
         assert_eq!(reopened.grants()[0].state, PermissionGrantState::Revoked);
+    }
+
+    #[test]
+    fn permanent_stream_grant_materializes_default_review_deadline() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let mut grant = sample_grant("grant-stream");
+        grant.actions = vec![AccessAction::Stream];
+        grant.ability_ura_pattern = Some("terminal.create".to_string());
+
+        let created = store
+            .create_grant(grant, "easynet:///r/test/user/alice")
+            .expect("create stream grant")
+            .grant;
+
+        assert_eq!(
+            created.review_required_after.as_deref(),
+            Some("2026-10-07T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn permanent_manage_or_grant_uses_thirty_day_review_deadline() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let mut grant = sample_grant("grant-manage");
+        grant.actions = vec![AccessAction::Stream, AccessAction::Manage];
+        grant.ability_ura_pattern = Some("device.settings".to_string());
+
+        let created = store
+            .create_grant(grant, "easynet:///r/test/user/alice")
+            .expect("create manage grant")
+            .grant;
+
+        assert_eq!(
+            created.review_required_after.as_deref(),
+            Some("2026-08-08T00:00:00Z")
+        );
+    }
+
+    #[test]
+    fn grant_timestamps_must_be_rfc3339() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let mut grant = sample_grant("grant-invalid-time");
+        grant.created_at = "2026-07-09 00:00:00".to_string();
+
+        let err = store
+            .create_grant(grant, "easynet:///r/test/user/alice")
+            .expect_err("invalid created_at must fail");
+        assert!(err
+            .to_string()
+            .contains("PermissionGrant created_at must be RFC3339"));
     }
 
     #[test]
