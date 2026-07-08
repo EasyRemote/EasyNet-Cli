@@ -44,6 +44,7 @@
 // Public so integration tests + future external embedders can
 // construct `Credentials`. Inner field visibility on the struct
 // itself is already `pub`.
+pub mod access_control;
 pub mod agent_registry;
 pub mod chat_sessions;
 pub mod config;

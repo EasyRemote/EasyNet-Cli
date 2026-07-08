@@ -1,0 +1,14 @@
+schema_version = "1"
+name = "policy.request.resolve"
+description = "Resolve one RFC-014 PermissionRequest terminal transition."
+
+[input_schema]
+type = "object"
+required = ["request"]
+additionalProperties = false
+
+[input_schema.properties.actor_ura]
+type = "string"
+
+[input_schema.properties.request]
+type = "object"

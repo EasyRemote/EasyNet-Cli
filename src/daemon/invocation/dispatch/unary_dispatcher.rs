@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use tokio::sync::mpsc;
 
-use crate::daemon::federation::client::FederationClient;
+use crate::daemon::federation::client::{FederationClient, FederationClientError};
 use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
@@ -1368,6 +1368,9 @@ impl UnaryDispatcher {
                     target_hub_endpoint = target_hub_endpoint,
                     error = err_msg,
                 );
+                if let Some(status) = target_admission_denial_status(&err) {
+                    return Err(status);
+                }
                 Err(Status::failed_precondition(
                     federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
                 ))
@@ -2089,6 +2092,29 @@ fn local_invoke_target_ura(request: &InvokeRequest) -> Result<String, Status> {
 /// owner-presence resolution (e.g. `runtime.bootstrap_self_identity`).
 pub(crate) fn is_runtime_admin_ability(function: &str) -> bool {
     function.trim().starts_with("runtime.")
+}
+
+fn target_admission_denial_status(error: &FederationClientError) -> Option<Status> {
+    let FederationClientError::InnerInvokeFailed { status, .. } = error else {
+        return None;
+    };
+    if !is_admission_denial_message(status) {
+        return None;
+    }
+    if status.contains("code=InvalidArgument") {
+        Some(Status::invalid_argument(status.clone()))
+    } else {
+        Some(Status::permission_denied(status.clone()))
+    }
+}
+
+fn is_admission_denial_message(message: &str) -> bool {
+    message.contains("POLICY_DENIED")
+        || message.contains("AUTHORITY_DENIED")
+        || message.contains("SIGNATURE_DENIED")
+        || message.contains("AXON_CALLER_SIGNATURE_INVALID")
+        || message.contains("SIGNED_DESCRIPTOR_REF_")
+        || message.contains("SIGNED_ENVELOPE_ROUTE_MUTATION")
 }
 
 fn sorted_non_empty_urls(urls: Vec<String>) -> Vec<String> {

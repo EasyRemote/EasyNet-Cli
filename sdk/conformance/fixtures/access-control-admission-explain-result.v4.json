@@ -1,0 +1,33 @@
+{
+  "observer_ura": "easynet:///r/example/user/alice",
+  "redacted": false,
+  "root_trace": {
+    "invocation_id": "inv-0001",
+    "root_invocation_id": "inv-0001",
+    "caller_ura": "easynet:///r/example/hub",
+    "callee_ura": "easynet:///r/example/device/dev-a",
+    "subject_ura": "easynet:///r/example/resource/agent.alice.shell/session-1",
+    "ability_ura": "easynet:///r/example/ability/device.terminal.attach",
+    "action": "stream",
+    "stage": "policy_denied",
+    "redacted": false
+  },
+  "policy_decision": {
+    "decision": "deny",
+    "reason": "TOKEN_SCOPE_DENIED",
+    "owner_user_id": "alice",
+    "owner_source": "subject",
+    "caller_ura": "easynet:///r/example/hub",
+    "principal_kind": "token",
+    "principal_id": "token-principal-1",
+    "token_id": "token-1",
+    "callee_ura": "easynet:///r/example/device/dev-a",
+    "subject_ura": "easynet:///r/example/resource/agent.alice.shell/session-1",
+    "ability_ura": "easynet:///r/example/ability/device.terminal.attach",
+    "action": "stream",
+    "rejector_ura": "easynet:///r/example/device/dev-a"
+  },
+  "authority_reason": "AUTHORITY_PROOF_MISSING",
+  "route_ref": "route-ref::example",
+  "rejector_ura": "easynet:///r/example/device/dev-a"
+}

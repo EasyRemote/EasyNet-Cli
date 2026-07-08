@@ -1,0 +1,35 @@
+schema_version = "1"
+name = "admission.explain"
+description = "Return an observer-scoped RFC-014 admission diagnostic projection."
+
+[input_schema]
+type = "object"
+required = ["observer_ura"]
+additionalProperties = false
+
+[input_schema.properties.authority_reason]
+type = "string"
+
+[input_schema.properties.observer_ura]
+type = "string"
+
+[input_schema.properties.policy_decision]
+type = "object"
+
+[input_schema.properties.redacted]
+type = "boolean"
+
+[input_schema.properties.redaction_reason]
+type = "string"
+
+[input_schema.properties.rejector_ura]
+type = "string"
+
+[input_schema.properties.root_trace]
+type = "object"
+
+[input_schema.properties.route_ref]
+type = "string"
+
+[input_schema.properties.signature_decision]
+type = "object"

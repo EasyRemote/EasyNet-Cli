@@ -28,7 +28,8 @@ use crate::daemon::ability::builtins::{
         },
     },
     governance::{
-        admin_status as admin_status_ability, consent as permission_ability, health as ping,
+        access_control as access_control_ability, admin_status as admin_status_ability,
+        consent as permission_ability, health as ping,
         invocation_history as invocation_history_ability, meta as meta_ability,
         network_health as network_health_ability, teach as teach_ability,
     },
@@ -251,6 +252,131 @@ pub(crate) fn discovery_hints_for(registry: &AxonAbilityCatalog, name: &str) -> 
     AbilityDiscoveryHintSnapshot::from_registry(registry).for_name(name)
 }
 
+pub(crate) fn discovery_hints_for_name(name: &str) -> AbilityHints {
+    let registry = build_registry();
+    AbilityDiscoveryHintSnapshot::from_registry(&registry).for_name(name)
+}
+
+/// RFC-014 hub-linked-token safe-read projection.
+///
+/// `read_only` and `idempotent` remain the descriptor/catalog source of
+/// truth for purity. Safe-read is narrower: the output must also be a
+/// descriptor-safe public metadata projection that does not expose private
+/// content, topology, reusable handles, route facts, key/proof material, or
+/// session authority. This function is deliberately catalog-owned so
+/// admission and diagnostics do not maintain a parallel allowlist.
+pub(crate) fn safe_read_eligible_for_name(name: &str) -> bool {
+    let hints = discovery_hints_for_name(name);
+    descriptor_safe_read_from_hints(name, &hints)
+}
+
+pub(crate) fn descriptor_safe_read_from_hints(name: &str, hints: &AbilityHints) -> bool {
+    hints.read_only
+        && hints.idempotent
+        && !hints.streaming_only
+        && !hints.bidi_only
+        && exposure_class_for_name(name) == AbilityExposureClass::DescriptorSafeMetadata
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AbilityExposureClass {
+    DescriptorSafeMetadata,
+    PrivateRead,
+    SessionOrCarrier,
+    ManagementOrExecution,
+}
+
+pub(crate) fn exposure_class_for_name(name: &str) -> AbilityExposureClass {
+    use AbilityExposureClass::{
+        DescriptorSafeMetadata, ManagementOrExecution, PrivateRead, SessionOrCarrier,
+    };
+
+    if name.ends_with(".chat") {
+        return ManagementOrExecution;
+    }
+
+    match name {
+        // Descriptor-safe, bounded metadata/readiness projections.
+        governance_names::OBSERVE_HEALTH
+        | governance_names::OBSERVE_NETWORK_HEALTH
+        | governance_names::ADMIN_STATUS
+        | governance_names::META_DESCRIBE
+        | governance_names::META_LIST_ABILITIES
+        | resource_names::META_LIST_RESOURCES
+        | "plugin.status"
+        | "plugin.companion_status" => DescriptorSafeMetadata,
+
+        // RFC-014 governance diagnostics and policy records are private by
+        // default; callers need owner/default authority or explicit grants.
+        governance_names::AUTHORITY_BINDING_LIST
+        | governance_names::AUTHORITY_BINDING_CHECK
+        | governance_names::POLICY_REQUEST_LIST
+        | governance_names::ADMISSION_EXPLAIN
+        | governance_names::CONSENT_LIST_PENDING
+        | governance_names::INVOCATION_HISTORY_LIST
+        | governance_names::INVOCATION_HISTORY_GET
+        | governance_names::INVOCATION_TRACE_GET
+        | governance_names::INVOCATION_HISTORY_PATH
+        | device_names::SESSION_LIST
+        | device_names::TERMINAL_LIST
+        | agent_names::AGENT_LIST
+        | agent_names::CHAT_HISTORY_LIST
+        | agent_names::CHAT_HISTORY_GET
+        | automation_names::MISSION_TRACK
+        | automation_names::DISCUSS_LIST_TURNS
+        | automation_names::SCHEDULE_LIST
+        | automation_names::LOOP_STATUS
+        | resource_names::SKILL_LIST
+        | resource_names::SKILL_TREE
+        | resource_names::SKILL_READ_FILE
+        | resource_names::CONTEXT_CLIPBOARD_LIST
+        | resource_names::CONTEXT_CLIPBOARD_GET
+        | resource_names::CONTEXT_FOLDERS_LIST
+        | resource_names::CONTEXT_FS_LIST
+        | resource_names::CONTEXT_FAVORITES_LIST
+        | resource_names::CONTEXT_CAPTURES_LIST
+        | resource_names::CONTEXT_CAPTURES_GET
+        | device_names::FS_READ
+        | device_names::FS_STAT
+        | device_names::FS_LIST
+        | federation_names::NODE_LIST
+        | federation_names::NODE_DESCRIBE
+        | integration_names::OPENAI_LIST_MODELS
+        | integration_names::OPENAI_FILES_RETRIEVE
+        | resource_names::VOICE_SHOW_CALL
+        | resource_names::VOICE_WATCH_CALL
+        | resource_names::VOICE_REPORT_METRICS
+        | resource_names::VOICE_LIST_CALLS => PrivateRead,
+
+        // Carriers and long-lived/session-style surfaces are never hub
+        // default safe-read, even when a specific frame is idempotent.
+        "federation.forward_invoke"
+        | device_names::SESSION_OPEN
+        | device_names::SESSION_ATTACH
+        | device_names::TERMINAL_CREATE
+        | device_names::TERMINAL_ATTACH
+        | device_names::TERMINAL_INPUT
+        | device_names::TERMINAL_READ
+        | device_names::TERMINAL_RESIZE
+        | device_names::BROWSER_OPEN_SESSION
+        | device_names::BROWSER_ATTACH_SESSION
+        | device_names::BROWSER_SEND_INPUT
+        | device_names::BROWSER_CAPTURE_VIEWPORT
+        | resource_names::MEDIA_MIC_SUBSCRIBE
+        | resource_names::MEDIA_CAMERA_SUBSCRIBE
+        | resource_names::MEDIA_CAMERA_SNAPSHOT
+        | resource_names::MEDIA_CAMERA_RECORD_START
+        | resource_names::MEDIA_CAMERA_RECORD_STOP
+        | resource_names::MEDIA_SCREEN_SUBSCRIBE
+        | resource_names::MEDIA_SCREEN_SNAPSHOT
+        | resource_names::MEDIA_SPEAKER_PUBLISH
+        | resource_names::VOICE_SUBSCRIBE
+        | resource_names::VOICE_TRANSCRIBE => SessionOrCarrier,
+
+        _ => ManagementOrExecution,
+    }
+}
+
 fn discovery_hints_from_modes(
     name: &str,
     modes: Option<&BTreeSet<DescriptorCallMode>>,
@@ -385,6 +511,14 @@ pub fn description_for(name: &str) -> &'static str {
         governance_names::INVOCATION_HISTORY_PATH => {
             invocation_history_ability::get_path_description()
         }
+        governance_names::AUTHORITY_BINDING_GRANT
+        | governance_names::AUTHORITY_BINDING_REVOKE
+        | governance_names::AUTHORITY_BINDING_LIST
+        | governance_names::AUTHORITY_BINDING_CHECK
+        | governance_names::POLICY_REQUEST_CREATE
+        | governance_names::POLICY_REQUEST_RESOLVE
+        | governance_names::POLICY_REQUEST_LIST
+        | governance_names::ADMISSION_EXPLAIN => access_control_ability::description_for(name),
         device_names::TERMINAL_CREATE => pty_lifecycle_ability::description_create(),
         device_names::TERMINAL_LIST => pty_lifecycle_ability::description_list(),
         device_names::TERMINAL_CLOSE => pty_lifecycle_ability::description_close(),
@@ -600,6 +734,14 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         governance_names::INVOCATION_HISTORY_PATH => {
             invocation_history_ability::get_path_input_schema()
         }
+        governance_names::AUTHORITY_BINDING_GRANT
+        | governance_names::AUTHORITY_BINDING_REVOKE
+        | governance_names::AUTHORITY_BINDING_LIST
+        | governance_names::AUTHORITY_BINDING_CHECK
+        | governance_names::POLICY_REQUEST_CREATE
+        | governance_names::POLICY_REQUEST_RESOLVE
+        | governance_names::POLICY_REQUEST_LIST
+        | governance_names::ADMISSION_EXPLAIN => access_control_ability::input_schema_for(name),
         device_names::TERMINAL_CREATE => pty_lifecycle_ability::input_schema_create(),
         device_names::TERMINAL_LIST => pty_lifecycle_ability::input_schema_list(),
         device_names::TERMINAL_CLOSE => pty_lifecycle_ability::input_schema_close(),
@@ -894,6 +1036,10 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | governance_names::INVOCATION_HISTORY_GET
         | governance_names::INVOCATION_TRACE_GET
         | governance_names::INVOCATION_HISTORY_PATH
+        | governance_names::AUTHORITY_BINDING_LIST
+        | governance_names::AUTHORITY_BINDING_CHECK
+        | governance_names::POLICY_REQUEST_LIST
+        | governance_names::ADMISSION_EXPLAIN
         | device_names::TERMINAL_LIST
         | device_names::SESSION_LIST
         | governance_names::CONSENT_LIST_PENDING
@@ -928,6 +1074,10 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | "context.captures.get" => Some(AbilityLayer::Introspection),
         // ── Control / decision ──────────────────────────────
         governance_names::CONSENT_DECIDE
+        | governance_names::AUTHORITY_BINDING_GRANT
+        | governance_names::AUTHORITY_BINDING_REVOKE
+        | governance_names::POLICY_REQUEST_CREATE
+        | governance_names::POLICY_REQUEST_RESOLVE
         // context mutations — flip clipboard tracking, delete a
         // clip, add / remove favorites: device-context
         // configuration writes, same decision class as

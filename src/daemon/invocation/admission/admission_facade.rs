@@ -88,6 +88,7 @@ use std::{collections::HashMap, sync::Arc};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
+use sha2::Digest;
 use tonic::Status;
 
 use easynet_axon::invocation::admission::{
@@ -112,11 +113,16 @@ use crate::daemon::invocation::admission::authority_metadata::{
     DELEGATION_METADATA_KEY, REASON_AUTHORITY_EXPIRED, REASON_AUTHORITY_FORMAT_INVALID,
     SESSION_AUTHORITY_METADATA_KEY,
 };
+use crate::daemon::invocation::admission::decision::AccessAction;
+use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
 use crate::daemon::invocation::admission::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
+use crate::daemon::invocation::admission::policy_gate::{
+    AdmissionPolicyContext, AdmissionPolicyGate,
+};
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
@@ -517,6 +523,7 @@ impl AdmissionFacade {
             &request.function_name,
             &request.arguments,
             Some(&request.metadata),
+            action_for_unary_ability(&request.function_name),
         )
     }
 
@@ -533,6 +540,7 @@ impl AdmissionFacade {
             &request.function_name,
             &request.arguments,
             Some(&request.metadata),
+            AccessAction::Stream,
         )
     }
 
@@ -555,7 +563,13 @@ impl AdmissionFacade {
                     "InvokeBidi frame 0 missing target.ability_name; cannot dispatch",
                 )
             })?;
-        self.run_transport_policy_gate(envelope, ability, &open.initial_args, Some(&open.metadata))
+        self.run_transport_policy_gate(
+            envelope,
+            ability,
+            &open.initial_args,
+            Some(&open.metadata),
+            AccessAction::Stream,
+        )
     }
 
     // ── Internal pipeline ────────────────────────────────────────
@@ -574,6 +588,7 @@ impl AdmissionFacade {
         ability: &str,
         args: &[u8],
         metadata: Option<&HashMap<String, String>>,
+        action: AccessAction,
     ) -> Result<(), Status> {
         let caller_ura = caller_ura_required(envelope)?;
 
@@ -619,7 +634,15 @@ impl AdmissionFacade {
             None => {
                 if self.is_federated_caller(caller_ura) {
                     reject_public_hosted_agent_delegation_metadata(metadata)?;
-                    self.run_strict_signature_gate(envelope, ability, args, metadata, snapshot)?;
+                    self.run_strict_signature_gate(
+                        envelope,
+                        ability,
+                        args,
+                        metadata,
+                        snapshot,
+                        TrustedAgentRole::Hub,
+                        action,
+                    )?;
                     return Ok(());
                 }
                 return Err(permission_denied_unknown_caller(caller_ura));
@@ -636,8 +659,17 @@ impl AdmissionFacade {
             | TrustedAgentRole::Backend
             | TrustedAgentRole::Hub
             | TrustedAgentRole::User => {
+                let trusted_role = trusted.role;
                 reject_public_hosted_agent_delegation_metadata(metadata)?;
-                self.run_strict_signature_gate(envelope, ability, args, metadata, snapshot)?;
+                self.run_strict_signature_gate(
+                    envelope,
+                    ability,
+                    args,
+                    metadata,
+                    snapshot,
+                    trusted_role,
+                    action,
+                )?;
                 Ok(())
             }
         }
@@ -656,6 +688,8 @@ impl AdmissionFacade {
         args: &[u8],
         metadata: Option<&HashMap<String, String>>,
         trust_anchor: Arc<RealmTrustAnchor>,
+        trusted_role: TrustedAgentRole,
+        action: AccessAction,
     ) -> Result<(), Status> {
         if ability.is_empty() {
             return Err(Status::invalid_argument(
@@ -717,13 +751,36 @@ impl AdmissionFacade {
             // `op_event!` audit lines + the wire-level error
             // their gRPC client sees.
             Ok(()) if bootstrap_authority_ability(ability) => Ok(()),
-            Ok(()) => verify_delegation_metadata(
-                envelope,
-                ability,
-                metadata,
-                trust_anchor.as_ref(),
-                axon_now_ms(),
-            ),
+            Ok(()) => {
+                verify_delegation_metadata(
+                    envelope,
+                    ability,
+                    metadata,
+                    trust_anchor.as_ref(),
+                    axon_now_ms(),
+                )?;
+                AdmissionPolicyGate::verify(AdmissionPolicyContext {
+                    envelope,
+                    ability,
+                    action,
+                    trusted_role,
+                    daemon_ura: self.daemon_ura.as_deref(),
+                    canonical_hash: Some(format!(
+                        "sha256:{}",
+                        hex::encode(sha2::Sha256::digest(
+                            descriptor_bound.envelope.canonical_bytes()
+                        ))
+                    )),
+                    signature_key_id: envelope
+                        .caller_signature
+                        .as_ref()
+                        .map(|signature| signature.key_id_hint.clone())
+                        .filter(|key| !key.is_empty()),
+                    authority_proof_id: None,
+                    rejector_ura: self.daemon_ura.clone(),
+                })?;
+                Ok(())
+            }
             Err(err) => Err(axon_error_to_status(err)),
         }
     }
@@ -899,6 +956,16 @@ fn bootstrap_authority_ability(ability: &str) -> bool {
             | ABILITY_IDENTITY_LIST_USER_PUBKEYS
             | ABILITY_IDENTITY_REVOKE_USER_PUBKEY
     )
+}
+
+fn action_for_unary_ability(ability: &str) -> AccessAction {
+    let hints =
+        crate::daemon::ability::catalog::catalog_metadata::discovery_hints_for_name(ability);
+    if hints.read_only && hints.idempotent && !hints.streaming_only && !hints.bidi_only {
+        AccessAction::Read
+    } else {
+        AccessAction::Invoke
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1316,17 +1383,20 @@ fn reject_public_hosted_agent_delegation_metadata(
 fn reject_missing_or_malformed_caller_signature(envelope: &Envelope) -> Result<(), Status> {
     let Some(signature) = envelope.caller_signature.as_ref() else {
         return Err(Status::invalid_argument(format!(
-            "{REASON_CALLER_SIGNATURE_INVALID}:caller_signature_missing"
+            "{REASON_CALLER_SIGNATURE_INVALID}:{}",
+            SignatureDecisionReason::CallerSignatureMissing.as_str()
         )));
     };
     if signature.algorithm.trim().is_empty() {
         return Err(Status::invalid_argument(format!(
-            "{REASON_CALLER_SIGNATURE_INVALID}:signature_algorithm_empty"
+            "{REASON_CALLER_SIGNATURE_INVALID}:{}:signature_algorithm_empty",
+            SignatureDecisionReason::CallerSignatureMissing.as_str()
         )));
     }
     if signature.signature.is_empty() {
         return Err(Status::invalid_argument(format!(
-            "{REASON_CALLER_SIGNATURE_INVALID}:signature_bytes_empty"
+            "{REASON_CALLER_SIGNATURE_INVALID}:{}:signature_bytes_empty",
+            SignatureDecisionReason::CallerSignatureMissing.as_str()
         )));
     }
     Ok(())
@@ -1370,8 +1440,10 @@ fn signed_descriptor_ref_from_metadata(
         .filter(|value| !value.is_empty())
     else {
         return Err(Status::invalid_argument(format!(
-            "signed public Invoke for `{route_ability}` is missing `{SIGNED_DESCRIPTOR_REF_METADATA_KEY}`; \
+            "{}: signed public Invoke for `{route_ability}` is missing `{SIGNED_DESCRIPTOR_REF_METADATA_KEY}`; \
              route name and descriptor-bound signature target must be explicit"
+            ,
+            SignatureDecisionReason::SignedDescriptorRefMissing.as_str()
         )));
     };
     Ok(value.to_string())
@@ -1408,8 +1480,9 @@ fn ensure_signed_descriptor_ref_matches_route(
             .map_err(axon_error_to_status)?;
     if signed_ability_ura != routed_ability_ura {
         return Err(Status::invalid_argument(format!(
-            "signed descriptor ref `{descriptor_ref}` does not match route `{route_ability}` \
-             for callee `{callee_ura}`"
+            "{}: signed descriptor ref `{descriptor_ref}` does not match route `{route_ability}` \
+             for callee `{callee_ura}`",
+            SignatureDecisionReason::SignedDescriptorRefMismatch.as_str()
         )));
     }
     Ok(())
@@ -1566,6 +1639,15 @@ mod tests {
             callee_ura, ability, "1.0.0",
         )
         .expect("test descriptor ref")
+    }
+
+    fn assert_policy_denied(err: &Status) {
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("POLICY_DENIED"),
+            "expected RFC-014 policy denial, got: {}",
+            err.message()
+        );
     }
 
     /// Build an envelope+signature pair that admits cleanly. `nonce`
@@ -1926,8 +2008,11 @@ mod tests {
             &signing_key,
             [0x11u8; 16],
         );
-        facade.verify_invoke(&req).expect("signed caller admitted");
-        // Replay store retains exactly this nonce.
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("signed non-owner caller reaches RFC-014 policy and is denied");
+        assert_policy_denied(&err);
+        // Signature/replay admission ran before RFC-014 policy denied.
         assert_eq!(facade.replay_store.len(), 1);
     }
 
@@ -2094,7 +2179,10 @@ mod tests {
             &signing_key,
             [0x22u8; 16],
         );
-        facade.verify_invoke(&req).expect("first admitted");
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("first signed non-owner call reaches policy deny");
+        assert_policy_denied(&err);
         let err = facade.verify_invoke(&req).expect_err("replay must reject");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(
@@ -2192,9 +2280,10 @@ mod tests {
             metadata: req.metadata.clone(),
             ..InvokeServerStreamRequest::default()
         };
-        facade
+        let err = facade
             .verify_invoke_stream(&stream_req)
-            .expect("admitted on stream too");
+            .expect_err("stream call reaches RFC-014 policy and is denied");
+        assert_policy_denied(&err);
     }
 
     #[test]
@@ -2231,7 +2320,10 @@ mod tests {
             &signing_key,
             [0x66u8; 16],
         );
-        facade_a.verify_invoke(&req).expect("facade A admits first");
+        let err = facade_a
+            .verify_invoke(&req)
+            .expect_err("facade A records nonce before policy deny");
+        assert_policy_denied(&err);
         let err = facade_b
             .verify_invoke(&req)
             .expect_err("facade B must reject the replayed nonce");
@@ -2369,9 +2461,10 @@ mod tests {
             &signing_key,
             [0x5Au8; 16],
         );
-        facade
+        let err = facade
             .verify_invoke(&req)
-            .expect("signed device caller admitted");
+            .expect_err("signed device caller reaches RFC-014 policy and is denied");
+        assert_policy_denied(&err);
         assert_eq!(facade.replay_store.len(), 1);
 
         let err = facade
@@ -2425,9 +2518,10 @@ mod tests {
             &device_signing,
             [0xC2u8; 16],
         );
-        facade
+        let err = facade
             .verify_invoke(&device_signed)
-            .expect("device arm admits signed");
+            .expect_err("device arm reaches RFC-014 policy after signature");
+        assert_policy_denied(&err);
 
         // Backend caller, unsigned: rejects strict.
         let backend_unsigned = invoke_request(Some(envelope_with_caller(&backend_ura)));
@@ -2446,9 +2540,10 @@ mod tests {
             &backend_signing,
             [0xD0u8; 16],
         );
-        facade
+        let err = facade
             .verify_invoke(&backend_signed)
-            .expect("backend arm admits signed");
+            .expect_err("backend arm reaches RFC-014 policy after signature");
+        assert_policy_denied(&err);
         assert_eq!(
             facade.replay_store.len(),
             2,

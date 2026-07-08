@@ -981,9 +981,14 @@ async fn forward_invoke_cross_realm_peer_request_admits_against_hub_anchor() {
     let peer_admission =
         AdmissionFacade::new(peer_anchor, Some(crate::core::ura::hub_ura("peer-realm")));
 
-    peer_admission
+    let denied = peer_admission
         .verify_invoke(&peer_request)
-        .expect("peer hub must admit the rebuilt signed wrapper");
+        .expect_err("public carrier without owner grant or AuthorityProof must fail closed");
+    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
+    assert!(
+        denied.message().contains("POLICY_DENIED"),
+        "target admission denial must stay structured: {denied}"
+    );
 }
 
 // ── C1b / DEC-N5 §1: ForwardReceipt dual-write tests ──
@@ -1167,33 +1172,14 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
         ..InvokeRequest::default()
     });
 
-    let response = daemon_a
+    let denied = daemon_a
         .invoke(req)
         .await
-        .expect("e2e forward_invoke returns Ok");
-    let body = response.into_inner();
-
-    // ── Assert: cross-realm chain returned the device's ──
-    // canned bytes intact.
-    // LB-57 Option A wire shape: the outer InvokeResponse
-    // body carries a `ForwardInvokeResponse {result_bytes,
-    // correlation_call_id}`, where `result_bytes` is the
-    // canned bytes the fake device-B task fed back via
-    // `PendingDispatchMap::complete`. The pre-LB-57 path
-    // returned an empty `result_bytes` and the assertion
-    // accidentally passed because the layered wrapper JSON
-    // happened to parse as an object — that masked a real
-    // wire-shape gap (raw inner-envelope BinaryChunk push
-    // with no SessionDispatch::Dispatch wrapper, no
-    // PendingDispatchMap correlation). The new contract
-    // closes both halves.
-    let outer: federation_wrappers::ForwardInvokeResponse =
-        serde_json::from_slice(&body.result).expect("outer ForwardInvokeResponse is JSON");
-    assert_eq!(outer.correlation_call_id, "e2e-call-id-1");
-    assert_eq!(
-        outer.result_bytes,
-        br#"{"echo":"e2e-canned"}"#.to_vec(),
-        "result_bytes must carry the fake device-B canned reply verbatim"
+        .expect_err("public carrier without child authority must fail closed");
+    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
+    assert!(
+        denied.message().contains("POLICY_DENIED"),
+        "target admission denial must not be collapsed to target_offline: {denied}"
     );
 }
 

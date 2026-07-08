@@ -1,0 +1,19 @@
+{
+  "grant_id": "grant-0001",
+  "owner_user_id": "alice",
+  "principal_kind": "token",
+  "principal_id": "token-principal-1",
+  "token_id": "token-1",
+  "token_class": "hub_link",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "subject_ura_pattern": "easynet:///r/example/resource/agent.alice.shell/*",
+  "ability_ura_pattern": "easynet:///r/example/ability/device.terminal.*",
+  "actions": ["stream"],
+  "effect": "allow",
+  "lifetime": "ttl",
+  "state": "active",
+  "expires_at": "2026-07-09T01:00:00Z",
+  "created_by": "easynet:///r/example/user/alice",
+  "created_at": "2026-07-09T00:00:00Z",
+  "reason": "terminal support session"
+}

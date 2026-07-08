@@ -191,6 +191,14 @@ impl SystemAbilityDescriptorGroup {
             | governance::INVOCATION_HISTORY_PATH
             | governance::INVOCATION_RECORD_GET
             | governance::INVOCATION_TRACE_GET
+            | governance::AUTHORITY_BINDING_GRANT
+            | governance::AUTHORITY_BINDING_REVOKE
+            | governance::AUTHORITY_BINDING_LIST
+            | governance::AUTHORITY_BINDING_CHECK
+            | governance::POLICY_REQUEST_CREATE
+            | governance::POLICY_REQUEST_RESOLVE
+            | governance::POLICY_REQUEST_LIST
+            | governance::ADMISSION_EXPLAIN
             | governance::META_ACQUIRE
             | governance::META_DESCRIBE
             | governance::META_FORGET

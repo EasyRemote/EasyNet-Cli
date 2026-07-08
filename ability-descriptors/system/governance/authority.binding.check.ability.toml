@@ -1,0 +1,65 @@
+schema_version = "1"
+name = "authority.binding.check"
+description = "Run RFC-014 PolicyEngine.check in read-only mode."
+
+[input_schema]
+type = "object"
+required = ["owner_user_id", "caller_ura", "principal_kind", "principal_id", "callee_ura", "subject_ura", "ability_ura", "action"]
+additionalProperties = false
+
+[input_schema.properties.ability_ura]
+type = "string"
+
+[input_schema.properties.action]
+type = "string"
+
+[input_schema.properties.authority_proof_id]
+type = "string"
+
+[input_schema.properties.callee_ura]
+type = "string"
+
+[input_schema.properties.caller_ura]
+type = "string"
+
+[input_schema.properties.caller_user_id]
+type = "string"
+
+[input_schema.properties.canonical_hash]
+type = "string"
+
+[input_schema.properties.interactive_context_available]
+type = "boolean"
+
+[input_schema.properties.owner_source]
+type = "string"
+
+[input_schema.properties.owner_ura]
+type = "string"
+
+[input_schema.properties.owner_user_id]
+type = "string"
+
+[input_schema.properties.principal_id]
+type = "string"
+
+[input_schema.properties.principal_kind]
+type = "string"
+
+[input_schema.properties.rejector_ura]
+type = "string"
+
+[input_schema.properties.safe_read]
+type = "boolean"
+
+[input_schema.properties.signature_key_id]
+type = "string"
+
+[input_schema.properties.subject_ura]
+type = "string"
+
+[input_schema.properties.token_class]
+type = "string"
+
+[input_schema.properties.token_id]
+type = "string"

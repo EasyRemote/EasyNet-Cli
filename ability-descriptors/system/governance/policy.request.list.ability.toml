@@ -1,0 +1,20 @@
+schema_version = "1"
+name = "policy.request.list"
+description = "List RFC-014 PermissionRequest records by owner and filters."
+
+[input_schema]
+type = "object"
+required = ["owner_user_id"]
+additionalProperties = false
+
+[input_schema.properties.owner_user_id]
+type = "string"
+
+[input_schema.properties.principal_id]
+type = "string"
+
+[input_schema.properties.status]
+type = "string"
+
+[input_schema.properties.token_id]
+type = "string"

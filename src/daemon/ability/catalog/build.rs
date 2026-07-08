@@ -29,8 +29,8 @@ use crate::daemon::ability::builtins::{
         },
     },
     governance::{
-        admin_status as admin_status_ability, api_key as api_key_ability,
-        consent as permission_ability, health as ping,
+        access_control as access_control_ability, admin_status as admin_status_ability,
+        api_key as api_key_ability, consent as permission_ability, health as ping,
         invocation_history as invocation_history_ability, meta as meta_ability,
         network_health as network_health_ability, teach as teach_ability,
     },
@@ -427,6 +427,11 @@ fn build_registry_with_services_result_inner(
     // gRPC invocation service; these handlers only expose persisted
     // URA-complete records for UI/backend tracing.
     invocation_history_ability::register(&mut reg, invocation_ledger);
+    // RFC-014 ability access-control governance surface.
+    // These handlers are daemon policy management/read-model adapters over the
+    // text-backed access-control store; they do not touch keyring secrets and
+    // do not introduce a standalone policy engine.
+    access_control_ability::register(&mut reg);
     // AXIOM §"Tier 2.5" Baseline Locomotion — PTY data-plane and
     // its lifecycle control-plane. terminal.create /
     // terminal.close manage the session catalog;

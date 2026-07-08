@@ -1,3 +1,4 @@
+pub mod access_control;
 pub mod admin_status;
 pub mod api_key;
 pub mod consent;

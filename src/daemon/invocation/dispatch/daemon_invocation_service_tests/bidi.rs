@@ -718,8 +718,8 @@ async fn remote_bidi_open_frame_rides_carrier_by_negotiated_contract() {
         envelope: Some(
             crate::daemon::invocation::ProtoEnvelope::targeted(
                 "easynet:///r/test-realm/user/alice",
-                "easynet:///r/test-realm/device/caller-supplied",
-                "easynet:///r/test-realm/device/caller-supplied",
+                target_ura,
+                target_ura,
             )
             .expect("valid remote bidi open envelope")
             .into_inner(),

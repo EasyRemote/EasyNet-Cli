@@ -84,7 +84,7 @@ fn hub_daemon_invocation_surface_satisfies_baseline_contract() {
 }
 
 #[tokio::test]
-async fn forward_invoke_quota_throttles_by_inner_user_ability() {
+async fn forward_invoke_without_authority_denies_before_quota() {
     let caller_ura = "easynet:///r/test-realm/device/quota-caller";
     let rt = runtime_with_json_echo(
         TEST_DAEMON_URA,
@@ -101,35 +101,19 @@ async fn forward_invoke_quota_throttles_by_inner_user_ability() {
         serde_json::json!({"probe": true}),
     );
 
-    let first = svc
-        .invoke(invoke_request_from_device(
-            caller_ura,
-            ABILITY_FEDERATION_FORWARD_INVOKE,
-            args.clone(),
-        ))
-        .await
-        .expect("first forwarded user ability is within quota");
-    let info = first
-        .get_ref()
-        .rate_limit
-        .as_ref()
-        .expect("forward_invoke response carries inner ability quota status");
-    assert_eq!(info.quota_limit, 1);
-    assert_eq!(info.quota_remaining, 0);
-
-    let second = svc
+    let denied = svc
         .invoke(invoke_request_from_device(
             caller_ura,
             ABILITY_FEDERATION_FORWARD_INVOKE,
             args,
         ))
         .await
-        .expect_err("second forwarded user ability exhausts quota");
-    assert_eq!(second.code(), tonic::Code::ResourceExhausted);
+        .expect_err("public carrier without grant or AuthorityProof must fail before quota");
+    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
     assert!(
-        second.message().contains("ability=observe.health"),
-        "quota error must name the inner user ability, got: {}",
-        second.message()
+        denied.message().contains("POLICY_DENIED"),
+        "carrier denial must remain a policy denial, got: {}",
+        denied.message()
     );
 }
 

@@ -2050,6 +2050,173 @@ fn real_meta_forget_routes_with_missing_args() {
     }
 }
 
+#[test]
+fn real_authority_binding_grant_list_check_and_revoke_round_trip() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let owner_user_id = "rfc014-owner";
+    let actor_ura = "easynet:///r/test/user/rfc014-owner";
+    let grant = json!({
+        "grant_id": "grant-real-001",
+        "owner_user_id": owner_user_id,
+        "principal_kind": "token",
+        "principal_id": "token-principal",
+        "token_id": "token-1",
+        "token_class": "hub_link",
+        "callee_ura": "easynet:///r/test/device/dev",
+        "subject_ura_pattern": "easynet:///r/test/device/dev",
+        "ability_ura_pattern": "meta.describe",
+        "actions": ["read"],
+        "effect": "allow",
+        "lifetime": "permanent",
+        "state": "active",
+        "created_by": actor_ura,
+        "created_at": "2026-07-09T00:00:00Z"
+    });
+
+    let granted = d
+        .execute_rpc(target(
+            "authority.binding.grant",
+            json!({ "grant": grant, "actor_ura": actor_ura }),
+        ))
+        .expect("authority.binding.grant must create a grant");
+    assert_eq!(granted["grant"]["grant_id"], "grant-real-001");
+    assert_eq!(granted["idempotent_replay"], false);
+
+    let listed = d
+        .execute_rpc(target(
+            "authority.binding.list",
+            json!({ "owner_user_id": owner_user_id, "principal_id": "token-principal" }),
+        ))
+        .expect("authority.binding.list must return grants");
+    assert_eq!(listed["grants"].as_array().expect("grants").len(), 1);
+
+    let checked = d
+        .execute_rpc(target(
+            "authority.binding.check",
+            json!({
+                "owner_user_id": owner_user_id,
+                "caller_ura": "easynet:///r/test/hub",
+                "principal_kind": "token",
+                "principal_id": "token-principal",
+                "token_id": "token-1",
+                "token_class": "hub_link",
+                "callee_ura": "easynet:///r/test/device/dev",
+                "subject_ura": "easynet:///r/test/device/dev",
+                "ability_ura": "meta.describe",
+                "action": "read"
+            }),
+        ))
+        .expect("authority.binding.check must evaluate policy");
+    assert_eq!(checked["policy_decision"]["decision"], "allow");
+    assert_eq!(checked["policy_decision"]["reason"], "EXPLICIT_GRANT_ALLOW");
+
+    let revoked = d
+        .execute_rpc(target(
+            "authority.binding.revoke",
+            json!({
+                "grant_id": "grant-real-001",
+                "owner_user_id": owner_user_id,
+                "actor_ura": actor_ura,
+                "reason": "real-invoke coverage"
+            }),
+        ))
+        .expect("authority.binding.revoke must revoke grant");
+    assert_eq!(revoked["grant"]["state"], "revoked");
+}
+
+#[test]
+fn real_policy_request_create_list_and_resolve_round_trip() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let owner_user_id = "rfc014-request-owner";
+    let actor_ura = "easynet:///r/test/hub";
+    let pending = json!({
+        "request_id": "req-real-001",
+        "owner_user_id": owner_user_id,
+        "caller_ura": actor_ura,
+        "principal_kind": "token",
+        "principal_id": "token-principal",
+        "token_id": "token-1",
+        "token_class": "hub_link",
+        "callee_ura": "easynet:///r/test/device/dev",
+        "subject_ura": "easynet:///r/test/device/dev",
+        "ability_ura": "terminal.create",
+        "action": "stream",
+        "canonical_hash": "sha256:test",
+        "requested_lifetimes": ["session"],
+        "status": "pending",
+        "created_at": "2026-07-09T00:00:00Z",
+        "expires_at": "2026-07-09T00:05:00Z"
+    });
+
+    let created = d
+        .execute_rpc(target(
+            "policy.request.create",
+            json!({ "request": pending, "actor_ura": actor_ura }),
+        ))
+        .expect("policy.request.create must persist pending request");
+    assert_eq!(created["request"]["status"], "pending");
+
+    let listed = d
+        .execute_rpc(target(
+            "policy.request.list",
+            json!({ "owner_user_id": owner_user_id, "principal_id": "token-principal" }),
+        ))
+        .expect("policy.request.list must return requests");
+    assert_eq!(listed["requests"].as_array().expect("requests").len(), 1);
+
+    let denied = json!({
+        "request_id": "req-real-001",
+        "owner_user_id": owner_user_id,
+        "caller_ura": actor_ura,
+        "principal_kind": "token",
+        "principal_id": "token-principal",
+        "token_id": "token-1",
+        "token_class": "hub_link",
+        "callee_ura": "easynet:///r/test/device/dev",
+        "subject_ura": "easynet:///r/test/device/dev",
+        "ability_ura": "terminal.create",
+        "action": "stream",
+        "canonical_hash": "sha256:test",
+        "requested_lifetimes": ["session"],
+        "status": "denied",
+        "created_at": "2026-07-09T00:00:00Z",
+        "expires_at": "2026-07-09T00:05:00Z",
+        "resolver_ura": "easynet:///r/test/user/rfc014-request-owner",
+        "resolved_at": "2026-07-09T00:01:00Z",
+        "decision_reason": "owner denied"
+    });
+    let resolved = d
+        .execute_rpc(target(
+            "policy.request.resolve",
+            json!({
+                "request": denied,
+                "actor_ura": "easynet:///r/test/user/rfc014-request-owner"
+            }),
+        ))
+        .expect("policy.request.resolve must persist terminal decision");
+    assert_eq!(resolved["request"]["status"], "denied");
+}
+
+#[test]
+fn real_admission_explain_returns_redacted_projection() {
+    let (reg, _g) = registry_with_temp_home();
+    let explained = dispatcher_for(reg)
+        .execute_rpc(target(
+            "admission.explain",
+            json!({
+                "observer_ura": "easynet:///r/test/user/alice",
+                "redacted": true,
+                "authority_reason": "AUTHORITY_PROOF_MISSING"
+            }),
+        ))
+        .expect("admission.explain must project diagnostics");
+    assert_eq!(explained["observer_ura"], "easynet:///r/test/user/alice");
+    assert_eq!(explained["redacted"], true);
+    assert_eq!(explained["authority_reason"], "AUTHORITY_PROOF_MISSING");
+}
+
 // ════════════════════════════════════════════════════════════════
 // Coverage matrix: every published ability is exercised above
 // ════════════════════════════════════════════════════════════════

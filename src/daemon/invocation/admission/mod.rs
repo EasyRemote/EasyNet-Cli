@@ -2,19 +2,27 @@
 
 pub mod admission_facade;
 pub(crate) mod authority_metadata;
+pub mod authority_proof;
+pub mod child_invocation_builder;
+pub mod decision;
 pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;
+pub mod grant_matcher;
 pub(crate) mod hosted_agent_delegation;
 pub(crate) mod identity_write_gate;
 pub mod list_user_pubkeys;
 pub(crate) mod nonce_replay;
 pub mod origin_caller;
+pub mod owner_resolution;
 pub(crate) mod peer_envelope_signer;
+pub mod policy_engine;
+pub mod policy_gate;
 pub(crate) mod quota_meter;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;
 pub(crate) mod runtime_trust;
 pub(crate) mod runtime_trust_invalidator;
 pub(crate) mod target_gate;
+pub mod trace_projection;
 pub mod usage_quota;

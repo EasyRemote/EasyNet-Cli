@@ -1,0 +1,11 @@
+{
+  "decision": "invalid",
+  "reason": "CALLER_KEY_NOT_FOUND",
+  "caller_ura": "easynet:///r/example/hub",
+  "callee_ura": "easynet:///r/example/device/dev-a",
+  "ability_ura": "easynet:///r/example/ability/device.terminal.attach",
+  "subject_ura": "easynet:///r/example/resource/agent.alice.shell/session-1",
+  "canonical_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "signature_key_id": "ed25519:test-key",
+  "verifier_ura": "easynet:///r/example/device/dev-a"
+}

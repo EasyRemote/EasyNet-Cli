@@ -1,0 +1,26 @@
+schema_version = "1"
+name = "authority.binding.list"
+description = "List RFC-014 PermissionGrant records by owner and filters."
+
+[input_schema]
+type = "object"
+required = ["owner_user_id"]
+additionalProperties = false
+
+[input_schema.properties.action]
+type = "string"
+
+[input_schema.properties.effect]
+type = "string"
+
+[input_schema.properties.owner_user_id]
+type = "string"
+
+[input_schema.properties.principal_id]
+type = "string"
+
+[input_schema.properties.state]
+type = "string"
+
+[input_schema.properties.token_id]
+type = "string"
