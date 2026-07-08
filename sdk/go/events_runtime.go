@@ -259,11 +259,15 @@ func (t *EventsRuntimeTransport) buildSubscriptionInvocation(ctx context.Context
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	subjectURA, err := descriptorBoundSubjectURA(ctx, t.identity, request.SubjectURA, abilityName)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	return NewInvocationBuilder().
 		WithCallerURA(request.CallerURA).
 		WithCalleeURA(request.CalleeURA).
 		WithDescriptorRef(descriptorRef).
-		WithSubjectURA(request.SubjectURA).
+		WithSubjectURA(subjectURA).
 		WithNonceBase64(request.NonceBase64).
 		WithCausalContext(request.CausalContext).
 		WithJSONArgs(eventsRuntimeArgs(payload, stream, abilityName)).
@@ -342,11 +346,15 @@ func (t *EventsRuntimeTransport) buildDeviceHistoryInvocation(ctx context.Contex
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	subjectURA, err := descriptorBoundSubjectURA(ctx, t.identity, request.SubjectURA, eventsAbilityDeviceHistory)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	return NewInvocationBuilder().
 		WithCallerURA(request.CallerURA).
 		WithCalleeURA(request.CalleeURA).
 		WithDescriptorRef(descriptorRef).
-		WithSubjectURA(request.SubjectURA).
+		WithSubjectURA(subjectURA).
 		WithNonceBase64(request.NonceBase64).
 		WithCausalContext(request.CausalContext).
 		WithJSONArgs(eventsDeviceHistoryRuntimeArgs(request)).

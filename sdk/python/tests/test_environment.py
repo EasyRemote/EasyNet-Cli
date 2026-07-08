@@ -800,7 +800,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertIn("mission.run", runtime_abilities)
         self.assertIn("agent.list", runtime_abilities)
         self.assertIn("agent.start", runtime_abilities)
-        self.assertIn("pages.list", runtime_abilities)
+        self.assertIn("project_list", runtime_abilities)
         self.assertIn("pages.publish", runtime_abilities)
         self.assertIn("pages.get", runtime_abilities)
         self.assertIn("openai.list_models", runtime_abilities)
@@ -898,7 +898,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         self.assertEqual(raw.runtime_requests[-1][0], "invoke")
         self.assertEqual(
             raw.runtime_requests[-1][1]["metadata"]["system_ability"],
-            "pages.list",
+            "project_list",
         )
         self.assertEqual(raw.shutdown_handles, [42, 42])
 

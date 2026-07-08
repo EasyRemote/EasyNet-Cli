@@ -337,11 +337,15 @@ func (t *PublicationRuntimeTransport) buildInvocation(ctx context.Context, args 
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	subjectURA, err := descriptorBoundSubjectURA(ctx, t.identity, carrier.SubjectURA, abilityName)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	return NewInvocationBuilder().
 		WithCallerURA(carrier.CallerURA).
 		WithCalleeURA(carrier.CalleeURA).
 		WithDescriptorRef(descriptorRef).
-		WithSubjectURA(carrier.SubjectURA).
+		WithSubjectURA(subjectURA).
 		WithNonceBase64(carrier.NonceBase64).
 		WithCausalContext(carrier.CausalContext).
 		WithJSONArgs(args).

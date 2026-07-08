@@ -101,7 +101,7 @@ func TestSurfaceRuntimeTransportInvokesAndProjectsRawPagesOutput(t *testing.T) {
 	}
 	args := runtimeTransport.seenDraft["args"].(map[string]any)
 	if len(args) != 0 {
-		t.Fatalf("pages.list should not receive carrier args: %#v", args)
+		t.Fatalf("project_list should not receive carrier args: %#v", args)
 	}
 
 	runtimeTransport.outputJSON = surfaceRuntimePageRecordRawJSON
@@ -194,14 +194,14 @@ func TestSurfaceRuntimeTransportMapsTerminalFailure(t *testing.T) {
 func newSurfaceRuntimeIdentityTransport() *compatibilityRuntimeIdentityTransport {
 	return &compatibilityRuntimeIdentityTransport{
 		abilityByName: map[string]string{
-			surfaceAbilityListPages:  "easynet:///r/example/ability/alice.pages.pages.list",
+			surfaceAbilityListPages:  "easynet:///r/example/ability/alice.pages.project_list",
 			surfaceAbilityCreatePage: "easynet:///r/example/ability/alice.pages.pages.publish",
 			surfaceAbilityDeletePage: "easynet:///r/example/ability/alice.pages.pages.unpublish",
 			surfaceAbilityManifest:   "easynet:///r/example/ability/alice.pages.pages.get",
 			surfaceAbilityHealth:     "easynet:///r/example/ability/alice.pages.pages.health",
 		},
 		descriptorByAbility: map[string]string{
-			"easynet:///r/example/ability/alice.pages.pages.list":      "easynet:///r/example/ability/alice.pages.pages.list@1.0.0",
+			"easynet:///r/example/ability/alice.pages.project_list":    "easynet:///r/example/ability/alice.pages.project_list@1.0.0",
 			"easynet:///r/example/ability/alice.pages.pages.publish":   "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0",
 			"easynet:///r/example/ability/alice.pages.pages.unpublish": "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0",
 			"easynet:///r/example/ability/alice.pages.pages.get":       "easynet:///r/example/ability/alice.pages.pages.get@1.0.0",

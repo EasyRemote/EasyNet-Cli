@@ -4094,7 +4094,7 @@ impl SignatureMaterialJson {
         let signature = base64::engine::general_purpose::STANDARD
             .decode(required_string(obj, "signature_base64")?.as_bytes())
             .map_err(InvocationJsonError::InvalidSignatureBase64)?;
-        let key_id_hint = optional_string(obj, "key_id_hint")?.unwrap_or_default();
+        let key_id_hint = caller_signature_key_id_hint(obj)?;
         Ok(Self {
             algorithm,
             signature,
@@ -4457,12 +4457,23 @@ fn parse_caller_signature(
     let signature = base64::engine::general_purpose::STANDARD
         .decode(required_string(signature_obj, "signature_base64")?.as_bytes())
         .map_err(InvocationJsonError::InvalidSignatureBase64)?;
-    let key_id_hint = optional_string(signature_obj, "key_id_hint")?.unwrap_or_default();
+    let key_id_hint = caller_signature_key_id_hint(signature_obj)?;
     Ok(Some(easynet_axon::pb::axon::v1::CallerSignature {
         algorithm,
         signature,
         key_id_hint,
     }))
+}
+
+#[cfg(feature = "axon-pb")]
+fn caller_signature_key_id_hint(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<String, InvocationJsonError> {
+    let key_id_hint = optional_string(obj, "key_id_hint")?.unwrap_or_default();
+    if !key_id_hint.trim().is_empty() {
+        return Ok(key_id_hint);
+    }
+    Ok(optional_string(obj, "signer_public_key_base64")?.unwrap_or_default())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6364,6 +6375,45 @@ mod tests {
         assert_eq!(spec.bidi_streams[0].content_type, "text/pty");
         assert_eq!(spec.bidi_streams[0].codec_params, "raw");
         assert_eq!(spec.bidi_streams[0].ordering, "STRICT");
+    }
+
+    #[test]
+    fn parse_invocation_json_projects_signer_pubkey_to_key_hint() {
+        let raw = canonical_invocation_json(serde_json::json!({
+            "caller_signature": {
+                "algorithm": "ed25519",
+                "signature_base64": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+                "signer_public_key_base64": "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+            }
+        }));
+
+        let signature = InvocationJson::parse(&raw)
+            .unwrap()
+            .caller_signature
+            .expect("caller signature");
+
+        assert_eq!(
+            signature.key_id_hint,
+            "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+        );
+    }
+
+    #[test]
+    fn signature_json_projects_signer_pubkey_to_key_hint() {
+        let parsed = SignatureMaterialJson::parse(
+            &serde_json::json!({
+                "algorithm": "ed25519",
+                "signature_base64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
+                "signer_public_key_base64": "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.key_id_hint,
+            "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+        );
     }
 
     #[test]

@@ -33,8 +33,8 @@ use easynet_axon::pb::axon::v1::{
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::daemon::invocation::admission::target_gate::{
-    envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
-    selected_host_unavailable_message, TargetGate,
+    route_negative_status, route_profile_blocked_status, selected_host_unavailable_message,
+    signed_envelope_for_selected_route, TargetGate,
 };
 use crate::daemon::invocation::bidi::invoke_remote_initiator::{
     build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
@@ -502,7 +502,7 @@ impl StreamDispatcher {
                  envelope on the canonical Invocation face",
             )));
         };
-        let envelope = envelope_with_selected_callee(envelope, &selected_route);
+        let envelope = signed_envelope_for_selected_route(envelope, &selected_route)?;
         let pending = self.sessions.pending_stream.as_ref().ok_or_else(|| {
             Status::failed_precondition(format!(
                 "InvokeStream {}: daemon was constructed without a \

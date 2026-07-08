@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -52,11 +53,17 @@ func (t *compatibilityRuntimeIdentityTransport) BuildURA(ctx context.Context, re
 	if err := json.Unmarshal(requestJSON, &req); err != nil {
 		return nil, err
 	}
-	t.seenBuildURA = append(t.seenBuildURA, requestMapForTest(requestJSON))
 	if req.Kind == "resource" {
+		if !strings.HasPrefix(req.Path, "invoke/") {
+			t.seenBuildURA = append(t.seenBuildURA, requestMapForTest(requestJSON))
+		}
 		resourceURA := t.resourceByOwnerPath[req.OwnerURA+"\n"+req.Path]
 		if resourceURA == "" {
-			return nil, fmt.Errorf("unexpected resource owner/path: %s %s", req.OwnerURA, req.Path)
+			ownerID, err := protocolResourceOwnerIDForTest(req.OwnerURA)
+			if err != nil {
+				return nil, err
+			}
+			resourceURA = ResourceDotURA("example", ownerID, req.Path)
 		}
 		return []byte(fmt.Sprintf(`{
 			"kind":"resource",
@@ -67,6 +74,7 @@ func (t *compatibilityRuntimeIdentityTransport) BuildURA(ctx context.Context, re
 			"metadata":{"grammar_owner":"axon"}
 		}`, resourceURA, req.OwnerURA, req.Path)), nil
 	}
+	t.seenBuildURA = append(t.seenBuildURA, requestMapForTest(requestJSON))
 	abilityURA := t.abilityByName[req.AbilityName]
 	if abilityURA == "" {
 		return nil, fmt.Errorf("unexpected ability name: %s", req.AbilityName)
@@ -87,6 +95,25 @@ func (t *compatibilityRuntimeIdentityTransport) BuildResourceRef(ctx context.Con
 
 func (t *compatibilityRuntimeIdentityTransport) RegisterSigningKey(ctx context.Context, requestJSON []byte) ([]byte, error) {
 	return nil, fmt.Errorf("RegisterSigningKey should not be called")
+}
+
+func protocolResourceOwnerIDForTest(ownerURA string) (string, error) {
+	parts, err := ParseURAParts(ownerURA)
+	if err != nil {
+		return "", err
+	}
+	switch parts.Kind {
+	case URAKindUser:
+		return "user." + parts.UserID, nil
+	case URAKindHub:
+		return "hub", nil
+	case URAKindDevice:
+		return "device." + parts.DeviceID, nil
+	case URAKindAgent:
+		return "agent." + parts.UserID + "." + parts.AgentID, nil
+	default:
+		return "", fmt.Errorf("unsupported owner kind %s", parts.Kind)
+	}
 }
 
 func (t *compatibilityRuntimeIdentityTransport) ListSigningKeys(ctx context.Context, requestJSON []byte) ([]byte, error) {

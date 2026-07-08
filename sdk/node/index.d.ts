@@ -231,6 +231,7 @@ export interface IdentityProjection {
   kind?: string;
   valid?: boolean;
   ura?: string;
+  resource_ura?: string;
   descriptor_ref?: string;
   ability_ura?: string;
   descriptor_version?: string;
@@ -248,6 +249,7 @@ export class IdentityClient {
   ownerAbilityURA(ownerURA: string, abilityName: string): Promise<string>;
   ownerAbilityDescriptorRef(ownerURA: string, abilityName: string, descriptorVersion: string): Promise<string>;
   resourceURA(ownerURA: string, path: string): Promise<string>;
+  descriptorBoundResourceSubjectURA(ownerURA: string, path: string): Promise<string>;
   close(): Promise<void>;
 }
 

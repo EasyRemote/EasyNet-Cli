@@ -41,7 +41,7 @@ use crate::protocol::surface_contract::{
     project_surface_manifest, SurfaceError,
 };
 
-/// Build a complete Invocation JSON carrier for daemon `pages.list`.
+/// Build a complete Invocation JSON carrier for daemon `project_list`.
 ///
 /// # Safety
 /// `request_json` must be a valid UTF-8 C string and `out_invocation_json`
@@ -173,7 +173,7 @@ pub unsafe extern "C" fn easynet_surface_project_page_record(
     )
 }
 
-/// Project daemon `pages.list` output into a bounded Surface page DTO.
+/// Project daemon `project_list` output into a bounded Surface page DTO.
 ///
 /// # Safety
 /// `pages_json` must be a valid UTF-8 C string and `out_page_json` must be a

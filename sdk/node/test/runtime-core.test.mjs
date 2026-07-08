@@ -1635,12 +1635,18 @@ test("IdentityClient delegates DescriptorRef and URA projections without local g
 
   const resource = await identity.resourceURA("easynet:///r/example/agent/alice.sdk", "docs");
   assert.equal(resource, "easynet:///r/example/resource/alice.docs");
+  const descriptorBoundSubject = await identity.descriptorBoundResourceSubjectURA(
+    "easynet:///r/example/user/alice",
+    "invoke/meta.list_resources",
+  );
+  assert.equal(descriptorBoundSubject, "easynet:///r/example/resource/alice.docs");
   assert.deepEqual(seen.map((item) => item.method), [
     "project",
     "project",
     "project",
     "owner",
     "build",
+    "resource",
     "resource",
   ]);
   assert.equal(
@@ -1652,6 +1658,10 @@ test("IdentityClient delegates DescriptorRef and URA projections without local g
     "easynet:///r/example/ability/device.dev-a.observe.health",
   );
   assert.equal(seen[4].request.descriptor_version, "1.0.0");
+  assert.deepEqual(seen[6].request, {
+    owner_ura: "easynet:///r/example/user/alice",
+    path: "invoke/meta.list_resources",
+  });
 
   await assert.rejects(
     () => identity.projectDescriptorRef({ descriptor_ref: " descriptor " }),
@@ -2562,7 +2572,7 @@ test("SurfaceClient delegates page carriers and daemon projections without rende
     buildListPagesInvocation: (requestJSON) => {
       const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
       seen.push({ method: "build_list", request });
-      return surfaceDraftJSON("easynet:///r/example/ability/alice.pages.pages.list@1.0.0");
+      return surfaceDraftJSON("easynet:///r/example/ability/alice.pages.project_list@1.0.0");
     },
     buildCreatePageInvocation: (requestJSON) => {
       const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
@@ -2609,7 +2619,7 @@ test("SurfaceClient delegates page carriers and daemon projections without rende
         source: "pages_read_model",
         metadata: {
           profile: "surface",
-          source_ability: "pages.list",
+          source_ability: "project_list",
         },
       });
     },
@@ -2713,7 +2723,7 @@ test("SurfaceClient delegates page carriers and daemon projections without rende
   const projectedManifest = await surface.projectManifest(manifest.toJSON());
   const projectedHealth = await surface.projectStatus(health);
 
-  assert.equal(listDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.list@1.0.0");
+  assert.equal(listDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.project_list@1.0.0");
   assert.equal(createDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.publish@1.0.0");
   assert.equal(deleteDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.unpublish@1.0.0");
   assert.equal(manifestDraft.descriptorRef, "easynet:///r/example/ability/alice.pages.pages.get@1.0.0");

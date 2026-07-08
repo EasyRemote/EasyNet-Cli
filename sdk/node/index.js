@@ -450,6 +450,10 @@ export class IdentityClient {
     return requiredWireString(projection.resource_ura ?? projection.ura, "resource_ura");
   }
 
+  async descriptorBoundResourceSubjectURA(ownerURA, path) {
+    return this.resourceURA(ownerURA, path);
+  }
+
   async close() {
     if (this.closed) {
       return;

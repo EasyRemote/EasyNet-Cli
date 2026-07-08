@@ -103,6 +103,35 @@ func TestInvocationDraftFromJSONDecodesFixtureShape(t *testing.T) {
 	}
 }
 
+func TestInvocationDraftNormalizesSignerPubkeyIntoKeyHint(t *testing.T) {
+	const pubkey = "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+	draft, err := NewInvocationDraftFromJSON([]byte(`{
+		"caller_ura": "easynet:///r/example/user/alice",
+		"callee_ura": "easynet:///r/example/device/dev-a",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0",
+		"subject_ura": "easynet:///r/example/user/alice",
+		"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+		"causal_context": {"form": "none"},
+		"args": {},
+		"content_type": "application/json",
+		"caller_signature": {
+			"algorithm": "ed25519",
+			"signature_base64": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
+			"signer_public_key_base64": "` + pubkey + `"
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("NewInvocationDraftFromJSON: %v", err)
+	}
+	signature := draft.CallerSignature()
+	if signature == nil {
+		t.Fatal("caller signature missing")
+	}
+	if signature.KeyIDHint != pubkey {
+		t.Fatalf("key_id_hint = %q, want signer pubkey", signature.KeyIDHint)
+	}
+}
+
 func TestInvocationBuilderRejectsMissingTupleField(t *testing.T) {
 	_, err := NewInvocationBuilder().
 		WithCalleeURA("easynet:///r/example/device/dev-a").

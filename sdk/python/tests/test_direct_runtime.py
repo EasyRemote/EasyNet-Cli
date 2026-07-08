@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,6 +13,7 @@ from easynet_sdk import (
     ConnectOptions,
     DaemonInvocationTransport,
     ErrorCode,
+    InvocationSignature,
     SDKError,
     is_code,
 )
@@ -37,6 +39,10 @@ DESCRIPTOR_REF = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0
 ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
 ABILITY_PUBLIC_NAME = "observe.health"
 CALLEE_URA = "easynet:///r/example/device/dev-a"
+USER_SUBJECT_URA = "easynet:///r/example/user/alice"
+PROJECTED_USER_SUBJECT_URA = (
+    "easynet:///r/example/resource/user.alice/invoke/observe.health"
+)
 
 
 class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
@@ -220,6 +226,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_delegates_handle_transport_when_configured(self) -> None:
         servicer = RecordingInvocationServicer()
         handle_transport = _RecordingHandleTransport()
+        draft_json = complete_draft().to_json().encode("utf-8")
         with _fake_daemon(servicer) as endpoint:
             connector = DirectDaemonRuntimeConnector(
                 handle_transport=handle_transport,
@@ -237,7 +244,7 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 facts = json.loads(facts_json.decode("utf-8"))
-                prepared = transport.prepare(b'{"draft":true}', b'{"resolve":true}')
+                prepared = transport.prepare(draft_json, b'{"resolve":true}')
                 submitted = transport.submit_signed(b'{"signed":true}')
                 awaited = transport.await_handle(7)
                 cancelled = transport.cancel_handle(7, "stop")
@@ -257,7 +264,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(
             handle_transport.calls,
             [
-                ("prepare", b'{"draft":true}', b'{"resolve":true}'),
+                ("prepare", draft_json, b'{"resolve":true}'),
                 ("submit_signed", b'{"signed":true}'),
                 ("await_handle", 7),
                 ("cancel_handle", 7, "stop"),
@@ -266,6 +273,35 @@ class DirectRuntimeTests(unittest.TestCase):
             ],
         )
         self.assertEqual(handle_transport.close_count, 0)
+
+    def test_direct_connector_projects_delegated_prepare_subject(self) -> None:
+        servicer = RecordingInvocationServicer()
+        handle_transport = _RecordingHandleTransport()
+        draft_json = _user_subject_draft_json()
+        with _fake_daemon(servicer) as endpoint:
+            connector = DirectDaemonRuntimeConnector(
+                handle_transport=handle_transport,
+                identity=_identity(),
+            )
+            transport, _ = connector.handshake(
+                json.dumps(
+                    {
+                        "endpoint": endpoint,
+                        "dial_timeout_ms": 1000,
+                        "invoke_timeout_ms": 1000,
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            try:
+                transport.prepare(draft_json, b"{}")
+            finally:
+                transport.close()
+                connector.close()
+
+        _, projected_json, _ = handle_transport.calls[0]
+        projected = json.loads(projected_json.decode("utf-8"))
+        self.assertEqual(projected["subject_ura"], PROJECTED_USER_SUBJECT_URA)
 
     def test_direct_connector_closes_owned_handle_transport_once(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -367,6 +403,61 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(identity.descriptor_refs, [DESCRIPTOR_REF])
         self.assertEqual(identity.ability_uras, [ABILITY_URA])
 
+    def test_direct_transport_projects_user_subject_before_daemon_invoke(self) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DaemonInvocationTransport.connect_direct(
+                options=ConnectOptions(
+                    endpoint=endpoint,
+                    dial_timeout_ms=1000,
+                    invoke_timeout_ms=5000,
+                ),
+                identity=_identity(),
+            )
+            try:
+                result = transport.invoke(_user_subject_draft_dict())
+            finally:
+                transport.close()
+
+        self.assertEqual(len(servicer.requests), 1)
+        self.assertEqual(
+            servicer.requests[0].envelope.subject.ura,
+            PROJECTED_USER_SUBJECT_URA,
+        )
+        tuple_json = cast(dict[str, object], result["tuple"])
+        self.assertEqual(tuple_json["subject_ura"], PROJECTED_USER_SUBJECT_URA)
+
+    def test_direct_transport_projects_signer_pubkey_as_wire_key_hint(self) -> None:
+        servicer = RecordingInvocationServicer()
+        public_key_b64 = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
+        draft = replace(
+            complete_draft(),
+            caller_signature=InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+                signer_public_key_base64=public_key_b64,
+            ),
+        )
+        with _fake_daemon(servicer) as endpoint:
+            transport = DaemonInvocationTransport.connect_direct(
+                options=ConnectOptions(
+                    endpoint=endpoint,
+                    dial_timeout_ms=1000,
+                    invoke_timeout_ms=5000,
+                ),
+                identity=_identity(),
+            )
+            try:
+                transport.invoke(draft)
+            finally:
+                transport.close()
+
+        self.assertEqual(len(servicer.requests), 1)
+        self.assertEqual(
+            servicer.requests[0].envelope.caller_signature.key_id_hint,
+            public_key_b64,
+        )
+
     def test_direct_transport_rejects_descriptor_not_owned_by_callee(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
@@ -443,7 +534,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(result["terminal_state"], "Cancelled")
         self.assertEqual(error["code"], ErrorCode.CANCELLED.value)
 
-    def test_direct_transport_rejects_non_string_metadata_before_wire_call(
+    def test_direct_transport_projects_metadata_to_axon_string_map(
         self,
     ) -> None:
         servicer = RecordingInvocationServicer()
@@ -456,16 +547,25 @@ class DirectRuntimeTests(unittest.TestCase):
             )
             try:
                 draft = complete_draft().to_json_dict()
-                draft["metadata"] = {"attempt": 1}
-                with self.assertRaises(SDKError) as raised:
-                    transport.invoke(
-                        json.dumps(draft, separators=(",", ":")).encode("utf-8")
-                    )
+                draft["metadata"] = {
+                    "attempt": 1,
+                    "dry_run": False,
+                    "shape": {"b": 2, "a": 1},
+                    "empty": None,
+                }
+                transport.invoke(json.dumps(draft, separators=(",", ":")).encode("utf-8"))
             finally:
                 transport.close()
 
-        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_INVOCATION))
-        self.assertEqual(len(servicer.requests), 0)
+        self.assertEqual(len(servicer.requests), 1)
+        self.assertEqual(servicer.requests[0].metadata["attempt"], "1")
+        self.assertEqual(servicer.requests[0].metadata["dry_run"], "false")
+        self.assertEqual(servicer.requests[0].metadata["shape"], '{"a":1,"b":2}')
+        self.assertNotIn("empty", servicer.requests[0].metadata)
+        self.assertEqual(
+            servicer.requests[0].metadata["x-easynet-signed-descriptor-ref"],
+            DESCRIPTOR_REF,
+        )
 
     def test_direct_transport_streams_daemon_chunks_over_axon_grpc_uds(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -779,12 +879,30 @@ class _RecordingIdentity:
             metadata={"grammar_owner": "axon"},
         )
 
+    def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
+        if owner_ura != USER_SUBJECT_URA:
+            raise AssertionError(f"unexpected descriptor-bound owner: {owner_ura}")
+        if path != "invoke/observe.health":
+            raise AssertionError(f"unexpected descriptor-bound path: {path}")
+        return PROJECTED_USER_SUBJECT_URA
+
     def close(self) -> None:
         self.close_count += 1
 
 
 def _identity(*, owner_ura: str = CALLEE_URA) -> _RecordingIdentity:
     return _RecordingIdentity(owner_ura=owner_ura)
+
+
+def _user_subject_draft_json() -> bytes:
+    draft = _user_subject_draft_dict()
+    return json.dumps(draft, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _user_subject_draft_dict() -> dict[str, object]:
+    draft = complete_draft().to_json_dict()
+    draft["subject_ura"] = USER_SUBJECT_URA
+    return draft
 
 
 class _RecordingHandleTransport:

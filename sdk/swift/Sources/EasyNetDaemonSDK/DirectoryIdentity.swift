@@ -611,6 +611,7 @@ public struct IdentityProjection: Sendable, Equatable {
     public let ura: String
     public let realm: String
     public let displayID: String
+    public let resourceURA: String
     public let descriptorRef: String
     public let abilityURA: String
     public let descriptorVersion: String
@@ -626,6 +627,7 @@ public struct IdentityProjection: Sendable, Equatable {
             ura: optionalDirectoryJSONString(object["ura"], "ura") ?? "",
             realm: optionalDirectoryJSONString(object["realm"], "realm") ?? "",
             displayID: optionalDirectoryJSONString(object["display_id"], "display_id") ?? "",
+            resourceURA: optionalDirectoryJSONString(object["resource_ura"], "resource_ura") ?? "",
             descriptorRef: optionalDirectoryJSONString(object["descriptor_ref"], "descriptor_ref") ?? "",
             abilityURA: optionalDirectoryJSONString(object["ability_ura"], "ability_ura") ?? "",
             descriptorVersion: optionalDirectoryJSONString(object["descriptor_version"], "descriptor_version") ?? "",
@@ -640,6 +642,7 @@ public protocol IdentityTransport: AnyObject, Sendable {
     func projectDescriptorRef(_ requestJSON: Data) async throws -> Data
     func buildDescriptorRef(_ requestJSON: Data) async throws -> Data
     func ownerAbilityURA(_ requestJSON: Data) async throws -> Data
+    func buildURA(_ requestJSON: Data) async throws -> Data
     func close() async throws
 }
 
@@ -647,6 +650,7 @@ public extension IdentityTransport {
     func projectDescriptorRef(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("identity descriptor projection transport is not available") }
     func buildDescriptorRef(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("identity descriptor build transport is not available") }
     func ownerAbilityURA(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("identity owner ability transport is not available") }
+    func buildURA(_ requestJSON: Data) async throws -> Data { throw directoryUnsupported("identity URA build transport is not available") }
     func close() async throws {}
 }
 
@@ -704,6 +708,30 @@ public final class IdentityClient: @unchecked Sendable {
     public func ownerAbilityDescriptorRef(ownerURA: String, abilityName: String, descriptorVersion: String) async throws -> String {
         let ability = try await ownerAbilityURA(ownerURA: ownerURA, abilityName: abilityName)
         return try await canonicalAbilityDescriptorRef(ability, descriptorVersion: descriptorVersion)
+    }
+
+    public func buildURA(_ request: [String: JSONValue]) async throws -> IdentityProjection {
+        guard !request.isEmpty else {
+            throw invalidDirectory("build_ura request is required")
+        }
+        let data = try await raw { try await transport.buildURA(encodeJSONObject(request)) }
+        return try IdentityProjection.fromJSON(data)
+    }
+
+    public func resourceURA(ownerURA: String, path: String) async throws -> String {
+        let projection = try await buildURA([
+            "kind": .string("resource"),
+            "owner_ura": .string(try cleanDirectoryString(ownerURA, "owner_ura")),
+            "path": .string(try cleanDirectoryString(path, "path")),
+        ])
+        if !projection.resourceURA.isEmpty {
+            return try requiredProjectionString(projection.resourceURA, "resource_ura")
+        }
+        return try requiredProjectionString(projection.ura, "resource_ura")
+    }
+
+    public func descriptorBoundResourceSubjectURA(ownerURA: String, path: String) async throws -> String {
+        try await resourceURA(ownerURA: ownerURA, path: path)
     }
 
     public func close() async throws {

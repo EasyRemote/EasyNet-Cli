@@ -1114,6 +1114,11 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
     // keyring's persisted seed, never from a fresh seed that failed to
     // persist because the user already had a local signing key.
     if !registered_user_pubkey(&user_ura, &public_key_b64)? {
+        let register_subject = crate::core::ura::owner_ability_ura(
+            &crate::daemon::identity::local_invocation::local_device_ura(),
+            "identity.register_pubkey",
+        )
+        .ok_or_else(|| anyhow::anyhow!("derive identity.register_pubkey descriptor subject"))?;
         let register_result =
             crate::support::platform::local_invoke::invoke_local_ability_with_subject(
                 "identity.register_pubkey",
@@ -1122,7 +1127,7 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
                     "public_key_b64": public_key_b64.as_str(),
                     "role": "user",
                 }),
-                Some(user_ura.clone()),
+                Some(register_subject),
             );
         if let Err(err) = register_result {
             if registered_user_pubkey(&user_ura, &public_key_b64).unwrap_or(false) {

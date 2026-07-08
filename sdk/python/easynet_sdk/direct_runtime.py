@@ -13,7 +13,7 @@ import json
 import queue
 import secrets
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Protocol
 
 import grpc  # type: ignore[import-untyped]
@@ -42,6 +42,7 @@ DEFAULT_DIAL_TIMEOUT_SECONDS = 3.0
 DEFAULT_INVOKE_TIMEOUT_SECONDS = 60.0
 DEFAULT_DIRECT_STREAM_QUEUE_EVENTS = 1024
 DEFAULT_DIRECT_BIDI_QUEUE_FRAMES = 1024
+SIGNED_DESCRIPTOR_REF_METADATA_KEY = "x-easynet-signed-descriptor-ref"
 _DIRECT_BIDI_EOF = object()
 
 
@@ -52,6 +53,9 @@ class DirectRuntimeIdentityProjector(Protocol):
         ...
 
     def ability_address(self, ability_ura: str) -> AbilityAddress:
+        ...
+
+    def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
         ...
 
 
@@ -297,12 +301,12 @@ class DirectDaemonRuntimeTransport:
         self._require_open()
         try:
             draft = InvocationDraft.from_json(draft_json)
-            request = _draft_to_invoke_request(draft, self._identity)
+            projected_draft, request = _draft_to_invoke_request(draft, self._identity)
             response = self._stub.Invoke(
                 request,
                 timeout=self._invoke_timeout_seconds,
             )
-            return _invoke_response_json(draft, response)
+            return _invoke_response_json(projected_draft, response)
         except SDKError:
             raise
         except grpc.RpcError as exc:
@@ -385,7 +389,13 @@ class DirectDaemonRuntimeTransport:
             ) from exc
 
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
-        return self._require_handle_transport().prepare(draft_json, options_json)
+        handle_transport = self._require_handle_transport()
+        draft = InvocationDraft.from_json(draft_json)
+        projected_draft = _direct_executable_draft(draft, self._identity)
+        return handle_transport.prepare(
+            projected_draft.to_json().encode("utf-8"),
+            options_json,
+        )
 
     def submit_signed(self, signed_json: bytes) -> bytes:
         return self._require_handle_transport().submit_signed(signed_json)
@@ -770,19 +780,27 @@ class _DirectAbilityProjection:
     public_name: str
 
 
+@dataclass(frozen=True)
+class _DirectInvocationFields:
+    draft: InvocationDraft
+    ability: _DirectAbilityProjection
+
+
 def _draft_to_invoke_request(
     draft: InvocationDraft,
     identity: DirectRuntimeIdentityProjector,
-) -> Any:
-    fields = _invoke_request_fields(draft, identity)
-    return _invoke_pb2.InvokeRequest(**fields)
+) -> tuple[InvocationDraft, Any]:
+    invocation = _direct_invocation_fields(draft, identity)
+    fields = _invoke_request_fields(invocation)
+    return invocation.draft, _invoke_pb2.InvokeRequest(**fields)
 
 
 def _draft_to_stream_request(
     draft: InvocationDraft,
     identity: DirectRuntimeIdentityProjector,
 ) -> Any:
-    fields = _invoke_request_fields(draft, identity)
+    invocation = _direct_invocation_fields(draft, identity)
+    fields = _invoke_request_fields(invocation)
     return _invoke_pb2.InvokeServerStreamRequest(**fields)
 
 
@@ -791,10 +809,11 @@ def _draft_to_bidi_open_frame(
     streams: list[Any],
     identity: DirectRuntimeIdentityProjector,
 ) -> Any:
-    fields = _invoke_request_fields(draft, identity)
+    invocation = _direct_invocation_fields(draft, identity)
+    fields = _invoke_request_fields(invocation)
     return _invoke_pb2.InvokeBidiUp(
         sequence=0,
-        mac=_bidi_open_mac(draft),
+        mac=_bidi_open_mac(invocation.draft),
         envelope_open=_invoke_pb2.EnvelopeOpen(
             envelope=fields["envelope"],
             target=fields["target"],
@@ -807,12 +826,34 @@ def _draft_to_bidi_open_frame(
     )
 
 
-def _invoke_request_fields(
+def _direct_executable_draft(
     draft: InvocationDraft,
     identity: DirectRuntimeIdentityProjector,
-) -> dict[str, object]:
-    content_type = draft.content_type
+) -> InvocationDraft:
+    return _direct_invocation_fields(draft, identity).draft
+
+
+def _direct_invocation_fields(
+    draft: InvocationDraft,
+    identity: DirectRuntimeIdentityProjector,
+) -> _DirectInvocationFields:
     ability = _direct_ability_projection(draft, identity)
+    subject_ura = _descriptor_bound_subject_ura(
+        identity,
+        draft.subject_ura,
+        ability.public_name,
+    )
+    if subject_ura != draft.subject_ura:
+        draft = replace(draft, subject_ura=subject_ura)
+    return _DirectInvocationFields(draft=draft, ability=ability)
+
+
+def _invoke_request_fields(
+    invocation: _DirectInvocationFields,
+) -> dict[str, object]:
+    draft = invocation.draft
+    content_type = draft.content_type
+    ability = invocation.ability
     return {
         "envelope": _types_pb2.Envelope(
             request_id=f"req-{secrets.token_hex(16)}",
@@ -830,7 +871,7 @@ def _invoke_request_fields(
         "function_name": ability.public_name,
         "arguments": _arguments(draft),
         "content_type": content_type,
-        "metadata": _metadata(draft.metadata),
+        "metadata": _metadata(draft),
         "content_envelope": _types_pb2.ContentEnvelope(
             content_type=content_type,
             encoding="identity",
@@ -877,6 +918,48 @@ def _direct_ability_projection(
         ability_ura=ability_ura,
         public_name=address.public_name,
     )
+
+
+def _descriptor_bound_subject_ura(
+    identity: DirectRuntimeIdentityProjector,
+    subject_ura: str,
+    ability_name: str,
+) -> str:
+    subject_kind = _ura_kind(subject_ura)
+    if subject_kind in {"agent", "ability", "device", "resource"}:
+        return subject_ura
+    if subject_kind not in {"hub", "user"}:
+        raise _direct_error(
+            "subject_ura kind is not supported by direct runtime",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+            details={"subject_ura": subject_ura, "subject_kind": subject_kind},
+        )
+    try:
+        return identity.descriptor_bound_resource_subject_ura(
+            subject_ura,
+            f"invoke/{ability_name}",
+        )
+    except SDKError:
+        raise
+    except Exception as exc:
+        raise _direct_error(
+            f"project descriptor-bound subject: {exc}",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+            details={"subject_ura": subject_ura, "ability_name": ability_name},
+            cause=exc,
+        ) from exc
+
+
+def _ura_kind(ura: str) -> str:
+    marker = "easynet:///r/"
+    if not ura.startswith(marker):
+        return ""
+    parts = ura[len(marker) :].split("/")
+    if len(parts) < 2:
+        return ""
+    return parts[1]
 
 
 def _invocation_target(ability_name: str) -> Any:
@@ -1207,13 +1290,14 @@ def _caller_signature(draft: InvocationDraft) -> Any:
     signature = draft.caller_signature
     if signature is None:
         return None
+    key_id_hint = signature.key_id_hint or signature.signer_public_key_base64 or ""
     return _types_pb2.CallerSignature(
         algorithm=signature.algorithm,
         signature=_base64_decode(
             signature.signature_base64,
             "caller_signature.signature_base64",
         ),
-        key_id_hint=signature.key_id_hint or "",
+        key_id_hint=key_id_hint,
     )
 
 
@@ -1223,18 +1307,33 @@ def _arguments(draft: InvocationDraft) -> bytes:
     return json.dumps(draft.args, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
-def _metadata(metadata: Mapping[str, object]) -> dict[str, str]:
+def _metadata(draft: InvocationDraft) -> dict[str, str]:
     result: dict[str, str] = {}
-    for key, value in metadata.items():
-        if not isinstance(key, str) or not isinstance(value, str):
+    for key, value in draft.metadata.items():
+        if not isinstance(key, str):
             raise _direct_error(
                 "metadata must be a string-to-string map for Axon InvokeRequest",
                 code=ErrorCode.INVALID_INVOCATION,
                 retry=RetryHint.NEVER,
                 details={"field": "metadata"},
             )
-        result[key] = value
+        projected = _metadata_value(value)
+        if projected is not None:
+            result[key] = projected
+    result[SIGNED_DESCRIPTOR_REF_METADATA_KEY] = draft.descriptor_ref
     return result
+
+
+def _metadata_value(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
 def _causal_context(value: Mapping[str, object]) -> Any:

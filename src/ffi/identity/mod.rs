@@ -958,6 +958,40 @@ mod tests {
     }
 
     #[test]
+    fn identity_build_descriptor_ref_projects_agent_prefixed_ability_name() {
+        let handle = handle();
+        let raw = CString::new(
+            serde_json::json!({
+                "owner_ura": "easynet:///r/acme/agent/alice.pages",
+                "ability_name": "project_list",
+                "descriptor_version": "1.0.0"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe { easynet_identity_build_descriptor_ref(handle, raw.as_ptr(), &mut out) };
+
+        assert_eq!(code, EASYNET_OK);
+        let value = read_json(out);
+        assert_eq!(
+            value["descriptor_ref"],
+            "easynet:///r/acme/ability/alice.pages.project_list@1.0.0"
+        );
+        assert_eq!(
+            value["ability_ura"],
+            "easynet:///r/acme/ability/alice.pages.project_list"
+        );
+        assert_eq!(
+            value["components"]["owner_ura"],
+            "easynet:///r/acme/agent/alice.pages"
+        );
+        assert_eq!(value["components"]["public_name"], "project_list");
+        release(handle);
+    }
+
+    #[test]
     fn identity_build_descriptor_ref_requires_namespaced_hub_ability() {
         let handle = handle();
         let raw = CString::new(

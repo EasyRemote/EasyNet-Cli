@@ -75,6 +75,37 @@ public final class IdentityClient implements AutoCloseable {
     }
   }
 
+  public IdentityProjection buildURA(Map<String, Object> request) {
+    requireOpen();
+    Map<String, Object> cleanRequest =
+        DirectoryIdentitySupport.requiredCopiedObject(request, "build_ura request");
+    try {
+      return IdentityProjection.fromJSON(
+          transport.buildURA(JsonValueWriter.object(cleanRequest)));
+    } catch (SDKError error) {
+      throw error;
+    } catch (RuntimeException error) {
+      throw transportFailure("identity URA build transport failed", error);
+    }
+  }
+
+  public String resourceURA(String ownerURA, String path) {
+    String cleanOwner = DirectoryIdentitySupport.cleanRequired(ownerURA, "owner_ura");
+    String cleanPath = DirectoryIdentitySupport.cleanRequired(path, "path");
+    IdentityProjection projection =
+        buildURA(Map.of("kind", "resource", "owner_ura", cleanOwner, "path", cleanPath));
+    String resourceURA =
+        DirectoryIdentitySupport.optionalString(projection.resourceURA(), "resource_ura");
+    if (resourceURA == null) {
+      resourceURA = DirectoryIdentitySupport.optionalString(projection.ura(), "ura");
+    }
+    return DirectoryIdentitySupport.cleanRequired(resourceURA, "resource_ura");
+  }
+
+  public String descriptorBoundResourceSubjectURA(String ownerURA, String path) {
+    return resourceURA(ownerURA, path);
+  }
+
   public String ownerAbilityDescriptorRef(
       String ownerURA, String abilityName, String descriptorVersion) {
     return canonicalAbilityDescriptorRef(

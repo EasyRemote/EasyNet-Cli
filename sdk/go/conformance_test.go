@@ -2411,7 +2411,7 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 	} {
 		requireCaseFixture(t, surfaceCase, fixture)
 	}
-	for _, ability := range []string{"pages.list", "pages.publish", "pages.get", "pages.unpublish", "pages.health"} {
+	for _, ability := range []string{"project_list", "pages.publish", "pages.get", "pages.unpublish", "pages.health"} {
 		requireCaseLiteral(t, surfaceCase, "- "+ability)
 	}
 	requireCaseExpectation(t, surfaceCase, "health_invocation_fixture: surface-health-invocation.v4.json")
@@ -2447,8 +2447,8 @@ func TestGoSurfaceFacadeExecutesSharedPageCarrierConformanceCase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildListPagesInvocation(shared fixture): %v", err)
 	}
-	if list.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.list@1.0.0" ||
-		list.Metadata()["system_ability"] != "pages.list" {
+	if list.DescriptorRef() != "easynet:///r/example/ability/alice.pages.project_list@1.0.0" ||
+		list.Metadata()["system_ability"] != "project_list" {
 		t.Fatalf("unexpected shared surface list invocation: %#v", list)
 	}
 

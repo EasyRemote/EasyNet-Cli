@@ -199,11 +199,15 @@ func (t *ReceiptRuntimeTransport) buildHistoryInvocation(ctx context.Context, re
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	subjectURA, err := descriptorBoundSubjectURA(ctx, t.identity, request.SubjectURA, abilityName)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	return NewInvocationBuilder().
 		WithCallerURA(request.CallerURA).
 		WithCalleeURA(request.CalleeURA).
 		WithDescriptorRef(descriptorRef).
-		WithSubjectURA(request.SubjectURA).
+		WithSubjectURA(subjectURA).
 		WithNonceBase64(request.NonceBase64).
 		WithCausalContext(request.CausalContext).
 		WithJSONArgs(copyMap(request.Arguments)).

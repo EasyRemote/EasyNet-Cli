@@ -316,6 +316,28 @@ func TestPreparedInvocationSignsIntoSubmitReadyEnvelope(t *testing.T) {
 	}
 }
 
+func TestPreparedInvocationNormalizesSignerPubkeyIntoKeyHint(t *testing.T) {
+	const pubkey = "o5TNp0VYb4h93vG8tNTXOh9gSePT3OYkGq1hlOYrmsM="
+	prepared, err := NewPreparedInvocationFromJSON([]byte(preparedFixture))
+	if err != nil {
+		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
+	}
+	signed, err := prepared.SignWithCallerSignature(InvocationSignature{
+		Algorithm:             "ed25519",
+		SignatureBase64:       "c2lnbmF0dXJl",
+		SignerPublicKeyBase64: pubkey,
+	})
+	if err != nil {
+		t.Fatalf("SignWithCallerSignature: %v", err)
+	}
+	if signed.Signature().KeyIDHint != pubkey {
+		t.Fatalf("key_id_hint = %q, want signer pubkey", signed.Signature().KeyIDHint)
+	}
+	if signed.SignerID() != pubkey {
+		t.Fatalf("signer id = %q, want pubkey", signed.SignerID())
+	}
+}
+
 type memorySignatureProvider struct {
 	material SigningMaterial
 	handle   SignerHandle

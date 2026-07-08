@@ -47,7 +47,7 @@ impl PagesAbilityVerb {
     fn public_name(self) -> &'static str {
         match self {
             Self::Publish => "pages.publish",
-            Self::List => "pages.list",
+            Self::List => "project_list",
             Self::Get => "pages.get",
             Self::Unpublish => "pages.unpublish",
         }
@@ -80,7 +80,10 @@ impl PagesAbility {
     }
 
     fn local_registry_ability(&self) -> String {
-        self.verb.public_name().to_string()
+        match self.verb {
+            PagesAbilityVerb::List => "pages.project_list".to_string(),
+            _ => self.verb.public_name().to_string(),
+        }
     }
 
     fn local_target(&self, realm: &str) -> anyhow::Result<LocalAbilityTarget> {
@@ -414,7 +417,7 @@ mod tests {
             PagesAbility::for_user("alice", PagesAbilityVerb::List).expect("pages ability");
         let target = ability.local_target("localhost").expect("local target");
 
-        assert_eq!(target.dispatch_name(), "pages.list");
+        assert_eq!(target.dispatch_name(), "pages.project_list");
         assert_eq!(
             target.callee_ura(),
             "easynet:///r/localhost/agent/alice.pages"

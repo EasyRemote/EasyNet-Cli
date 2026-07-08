@@ -142,7 +142,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   session seams. Certificate policy, backend trust policy persistence, and
   product cutovers remain incomplete.
 - Surface page carrier/projection guardrails exist for Rust/C ABI over daemon
-  `pages.list/publish/get/unpublish/health`; Go/Python facades now expose page
+  `project_list/publish/get/unpublish/health`; Go/Python facades now expose page
   carriers, typed page records, public page refs, manifests, mutation results,
   SurfaceHealth readiness projections, and Runtime-backed execution paths.
   Backend route serving, browser auth, CDN/cache policy, content-management UX,

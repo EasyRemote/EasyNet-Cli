@@ -2156,22 +2156,22 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
         let host_ura = device_owner_ura();
         let agent_ura = crate::core::ura::agent_ura("test-realm", "dev", "pages");
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["list"]);
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .with_local_runtime_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
-            .resolve_route(&agent_ura, "pages.list")
+            .resolve_route(&agent_ura, "project_list")
             .expect("hosted agent registry key must resolve through owner-local public name");
 
         assert_eq!(route.kind(), SelectedRouteKind::HostedAgent);
         assert_eq!(route.execution_host_ura, host_ura);
         assert_eq!(
             route.ability_ura,
-            "easynet:///r/test-realm/ability/dev.pages.list"
+            "easynet:///r/test-realm/ability/dev.pages.project_list"
         );
-        assert_eq!(route.dispatch_name, "pages.list");
-        assert_eq!(route.query_name, format!("{agent_ura}#list"));
+        assert_eq!(route.dispatch_name, "pages.project_list");
+        assert_eq!(route.query_name, format!("{agent_ura}#project_list"));
     }
 
     #[test]
@@ -2180,22 +2180,22 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
         let host_ura = crate::core::ura::hub_ura("test-realm");
         let agent_ura = crate::core::ura::agent_ura("test-realm", "dev", "pages");
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["list"]);
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .with_local_runtime_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
-            .resolve_route(&agent_ura, "pages.list")
+            .resolve_route(&agent_ura, "project_list")
             .expect("hub-mode local runtime authority must route built-in pages agent");
 
         assert_eq!(route.kind(), SelectedRouteKind::HostedAgent);
         assert_eq!(route.execution_host_ura, host_ura);
         assert_eq!(
             route.ability_ura,
-            "easynet:///r/test-realm/ability/dev.pages.list"
+            "easynet:///r/test-realm/ability/dev.pages.project_list"
         );
-        assert_eq!(route.dispatch_name, "pages.list");
-        assert_eq!(route.query_name, format!("{agent_ura}#list"));
+        assert_eq!(route.dispatch_name, "pages.project_list");
+        assert_eq!(route.query_name, format!("{agent_ura}#project_list"));
         assert!(catalog.is_empty());
     }
 
@@ -2232,10 +2232,10 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
         let host_ura = device_owner_ura();
         let agent_ura = crate::core::ura::agent_ura("test-realm", "dev", "pages");
-        let ability_ura =
-            crate::core::ura::owner_ability_ura(&agent_ura, "list").expect("agent ability ura");
+        let ability_ura = crate::core::ura::owner_ability_ura(&agent_ura, "project_list")
+            .expect("agent ability ura");
         let descriptor_ref = format!("{ability_ura}@1.0.0");
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["list"]);
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .with_local_runtime_authority(host_ura.clone(), authority)
@@ -2248,8 +2248,8 @@ mod tests {
         assert_eq!(route.callee_ura, agent_ura);
         assert_eq!(route.execution_host_ura, host_ura);
         assert_eq!(route.ability_ura, ability_ura);
-        assert_eq!(route.dispatch_name, "pages.list");
-        assert_eq!(route.query_name, format!("{agent_ura}#list"));
+        assert_eq!(route.dispatch_name, "pages.project_list");
+        assert_eq!(route.query_name, format!("{agent_ura}#project_list"));
     }
 
     #[test]

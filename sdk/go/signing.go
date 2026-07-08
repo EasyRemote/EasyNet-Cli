@@ -199,6 +199,7 @@ func (p PreparedInvocation) SubmitReady() bool {
 
 // SignWithCallerSignature attaches externally produced signature material.
 func (p PreparedInvocation) SignWithCallerSignature(signature InvocationSignature) (SignedInvocation, error) {
+	signature = normalizeInvocationSignatureMaterial(signature)
 	if strings.TrimSpace(signature.Algorithm) == "" {
 		return SignedInvocation{}, invalidInvocation("signature.algorithm is required", nil)
 	}

@@ -877,7 +877,7 @@ class FakeRawCABI:
                 "edges": [],
                 "edge_semantics": "Axon causal links",
             }
-        if system_ability == "pages.list":
+        if system_ability == "project_list":
             return {
                 "projects": [
                     {
@@ -2517,13 +2517,13 @@ ADMIN_CREDENTIAL_VERIFICATION_PROJECTION = (
 SURFACE_LIST_PAGES_INVOCATION = (
     b'{"caller_ura":"easynet:///r/example/agent/alice.sdk",'
     b'"callee_ura":"easynet:///r/example/agent/alice.pages",'
-    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.pages.list@1.0.0",'
+    b'"descriptor_ref":"easynet:///r/example/ability/alice.pages.project_list@1.0.0",'
     b'"subject_ura":"easynet:///r/example/agent/alice.pages",'
     b'"nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==",'
     b'"causal_context":{"form":"none"},'
     b'"args":{},'
     b'"content_type":"application/json",'
-    b'"metadata":{"profile":"surface","system_ability":"pages.list",'
+    b'"metadata":{"profile":"surface","system_ability":"project_list",'
     b'"carrier_owner":"daemon_sdk"}}'
 )
 
@@ -2598,7 +2598,7 @@ SURFACE_PAGE_PAGE_PROJECTION = (
     b'"metadata":{"profile":"surface","source_ability":"pages.get",'
     b'"project_id":"docs"}}],"next_cursor":null,"limit":50,'
     b'"source":"pages_read_model","metadata":{"profile":"surface",'
-    b'"source_ability":"pages.list","total_available":1}}'
+    b'"source_ability":"project_list","total_available":1}}'
 )
 
 SURFACE_MANIFEST_PROJECTION = (
@@ -4508,7 +4508,7 @@ class CABITransportTests(unittest.TestCase):
         )
         self.assertEqual(
             [item[1]["metadata"]["system_ability"] for item in raw.runtime_requests],
-            ["pages.list", "pages.publish", "pages.get", "pages.health", "pages.unpublish"],
+            ["project_list", "pages.publish", "pages.get", "pages.health", "pages.unpublish"],
         )
         self.assertEqual(raw.profile_requests[1][2]["limit"], 50)
         self.assertEqual(

@@ -158,7 +158,7 @@ int32_t easynet_init(const char *control_path, uint64_t *out_handle) {
 int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {
 	(void)handle;
-	if (strstr(invocation_json, "pages.list") != 0) {
+	if (strstr(invocation_json, "project_list") != 0) {
 		*out_result_json = dup_json("{\"ok\":true,\"tuple\":{},\"terminal_state\":\"Completed\",\"output_json\":{\"pages\":[{\"page_id\":\"docs\"}]},\"error\":null}");
 		return 0;
 	}
@@ -178,7 +178,7 @@ int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, 
 }
 int32_t easynet_surface_build_list_pages_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
 	(void)handle; (void)request_json;
-	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/agent/alice.pages\",\"descriptor_ref\":\"easynet:///r/example/ability/alice.pages.pages.list@1.0.0\",\"subject_ura\":\"easynet:///r/example/agent/alice.pages\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"surface\",\"system_ability\":\"pages.list\",\"carrier_owner\":\"daemon_sdk\"}}");
+	*out_invocation_json = dup_json("{\"caller_ura\":\"easynet:///r/example/agent/alice.sdk\",\"callee_ura\":\"easynet:///r/example/agent/alice.pages\",\"descriptor_ref\":\"easynet:///r/example/ability/alice.pages.project_list@1.0.0\",\"subject_ura\":\"easynet:///r/example/agent/alice.pages\",\"nonce_base64\":\"AQIDBAUGBwgJCgsMDQ4PEA==\",\"causal_context\":{\"form\":\"none\"},\"args\":{},\"content_type\":\"application/json\",\"metadata\":{\"profile\":\"surface\",\"system_ability\":\"project_list\",\"carrier_owner\":\"daemon_sdk\"}}");
 	return 0;
 }
 int32_t easynet_surface_build_create_page_invocation(uint64_t handle, const char *request_json, char **out_invocation_json) {
@@ -209,7 +209,7 @@ int32_t easynet_surface_project_page_record(uint64_t handle, const char *page_js
 }
 int32_t easynet_surface_project_page_page(uint64_t handle, const char *pages_json, char **out_page_json) {
 	(void)handle; (void)pages_json;
-	*out_page_json = dup_json("{\"profile\":\"surface\",\"kind\":\"surface_page_page\",\"item_kind\":\"page_record\",\"items\":[{\"profile\":\"surface\",\"kind\":\"page_record\",\"page_id\":\"docs\",\"owner_ura\":\"easynet:///r/example/agent/alice.pages\",\"surface_ref\":\"easynet:///r/example/resource/alice.docs\",\"public_ref\":\"https://example/web/alice/docs/\",\"status\":\"published\",\"metadata\":{\"profile\":\"surface\",\"source_ability\":\"pages.list\"}}],\"next_cursor\":null,\"limit\":50,\"source\":\"pages_read_model\",\"metadata\":{\"profile\":\"surface\",\"source_ability\":\"pages.list\",\"total_available\":1}}");
+	*out_page_json = dup_json("{\"profile\":\"surface\",\"kind\":\"surface_page_page\",\"item_kind\":\"page_record\",\"items\":[{\"profile\":\"surface\",\"kind\":\"page_record\",\"page_id\":\"docs\",\"owner_ura\":\"easynet:///r/example/agent/alice.pages\",\"surface_ref\":\"easynet:///r/example/resource/alice.docs\",\"public_ref\":\"https://example/web/alice/docs/\",\"status\":\"published\",\"metadata\":{\"profile\":\"surface\",\"source_ability\":\"project_list\"}}],\"next_cursor\":null,\"limit\":50,\"source\":\"pages_read_model\",\"metadata\":{\"profile\":\"surface\",\"source_ability\":\"project_list\",\"total_available\":1}}");
 	return 0;
 }
 int32_t easynet_surface_project_manifest(uint64_t handle, const char *page_json, char **out_manifest_json) {

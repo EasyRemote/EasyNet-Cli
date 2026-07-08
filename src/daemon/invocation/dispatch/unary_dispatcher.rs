@@ -58,8 +58,8 @@ use crate::daemon::invocation::admission::runtime_trust_invalidator::{
     RuntimeTrustConnectionStateProjector, RuntimeTrustInvalidator,
 };
 use crate::daemon::invocation::admission::target_gate::{
-    envelope_with_selected_callee, route_negative_status, route_profile_blocked_status,
-    selected_host_unavailable_message, TargetGate,
+    route_negative_status, route_profile_blocked_status, selected_host_unavailable_message,
+    signed_envelope_for_selected_route, TargetGate,
 };
 use crate::daemon::invocation::bidi::invoke_remote_initiator::{
     build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
@@ -1557,9 +1557,7 @@ impl UnaryDispatcher {
                  envelope on the canonical Invocation face",
             )));
         };
-        // The resolver's verdict is authoritative: send the SELECTED
-        // callee downstream, not the caller-supplied one.
-        let envelope = envelope_with_selected_callee(envelope, selected_route);
+        let envelope = signed_envelope_for_selected_route(envelope, selected_route)?;
         let dispatch_ability = selected_route.ability_ura.clone();
         let target_contract_v1 = self
             .directory

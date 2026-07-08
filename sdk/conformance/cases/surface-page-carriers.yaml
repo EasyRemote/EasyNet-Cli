@@ -43,7 +43,7 @@ expect:
     - surface-mutation-result.schema.json
     - surface-health.schema.json
   daemon_abilities:
-    - pages.list
+    - project_list
     - pages.publish
     - pages.get
     - pages.unpublish

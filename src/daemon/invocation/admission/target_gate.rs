@@ -32,7 +32,7 @@ use crate::daemon::invocation::dispatch::deps::{
 use crate::daemon::invocation::routing::route_resolver::{
     DaemonRouteResolver, LocalRuntimeAuthoritySnapshot, ResolveRouteFailure, SelectedInvokeRoute,
 };
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope};
+use easynet_axon::pb::axon::v1::Envelope;
 
 /// Resolve-first gate over the daemon's routing authorities. Cheap to
 /// construct (every plane is `Arc`-shaped); the service builds one per
@@ -402,16 +402,28 @@ pub(crate) fn selected_host_unavailable_message(selected_route: &SelectedInvokeR
     )
 }
 
-/// Stamp the resolver-selected callee onto an envelope. Every
-/// dispatch surface must send the *selected* callee downstream, not
-/// the caller-supplied one — the resolver's verdict is authoritative.
-pub(crate) fn envelope_with_selected_callee(
-    mut envelope: Envelope,
+/// Validate that a caller-signed envelope already names the resolver-selected
+/// callee. Signed envelopes are immutable: changing callee after prepare
+/// changes Axon canonical bytes and turns a valid signature into
+/// `CALLER_SIGNATURE_INVALID` on the executing daemon.
+pub(crate) fn signed_envelope_for_selected_route(
+    envelope: Envelope,
     selected_route: &SelectedInvokeRoute,
-) -> Envelope {
-    envelope.callee = Some(AgentIdentity {
-        ura: selected_route.callee_ura.clone(),
-        profile: crate::daemon::invocation::DEFAULT_URA_PROFILE.to_string(),
-    });
-    envelope
+) -> Result<Envelope, Status> {
+    let signed_callee = envelope
+        .callee
+        .as_ref()
+        .map(|callee| callee.ura.as_str())
+        .map(str::trim)
+        .filter(|callee| !callee.is_empty())
+        .ok_or_else(|| Status::invalid_argument("signed remote Invoke envelope missing callee"))?;
+    if signed_callee != selected_route.callee_ura {
+        return Err(Status::invalid_argument(format!(
+            "signed remote Invoke envelope callee `{signed_callee}` does not match \
+             resolver-selected callee `{}` for route `{}`; prepare must sign the \
+             resolver-selected invocation tuple",
+            selected_route.callee_ura, selected_route.route_ura
+        )));
+    }
+    Ok(envelope)
 }

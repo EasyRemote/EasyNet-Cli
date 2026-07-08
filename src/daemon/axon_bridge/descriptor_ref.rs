@@ -338,10 +338,13 @@ mod tests {
     #[test]
     fn bare_agent_prefixed_name_projects_to_owner_local_ability_ura() {
         let callee = crate::core::ura::agent_ura("localhost", "dev", "pages");
-        let ability_ura = ability_ura_for_wire(&callee, "pages.list")
+        let ability_ura = ability_ura_for_wire(&callee, "project_list")
             .expect("agent-owned registry key should project to public ability URA");
 
-        assert_eq!(ability_ura, "easynet:///r/localhost/ability/dev.pages.list");
+        assert_eq!(
+            ability_ura,
+            "easynet:///r/localhost/ability/dev.pages.project_list"
+        );
     }
 
     #[test]

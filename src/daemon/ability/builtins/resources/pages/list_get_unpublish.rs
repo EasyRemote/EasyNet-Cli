@@ -5,7 +5,7 @@
 // Description: three remaining ability handlers for the Pages
 //              reference system.
 //
-//                pages.list       (operational, read)
+//                project_list       (operational, read)
 //                pages.get        (operational, read)
 //                pages.unpublish  (canonical,    delete)
 //
@@ -25,7 +25,7 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use super::state::{persist_registry_for_user, PUBLISHED_PROJECTS};
 
-/// `pages.list` — return every project the daemon
+/// `project_list` — return every project the daemon
 /// currently hosts under this user. `url_root` is the production
 /// Hub URL; `dev_listener_url_root` is the daemon's local listener
 /// URL, which is the one that actually opens during local dev.

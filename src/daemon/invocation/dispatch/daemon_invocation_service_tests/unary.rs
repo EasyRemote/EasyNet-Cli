@@ -2254,7 +2254,7 @@ async fn dispatch_remote_rpc_times_out_when_target_never_replies() {
         .expect("resolver selects the wedged-device route");
     assert_eq!(selected_route.execution_host_ura, WEDGED_DEVICE_URA);
 
-    let request = invoke_request("observe.health", "{}").into_inner();
+    let request = invoke_request_for_callee(WEDGED_DEVICE_URA, "observe.health", "{}").into_inner();
     let err = svc
         .unary_dispatcher()
         .dispatch_remote_rpc_selected_route(&request, &selected_route)
@@ -2270,4 +2270,49 @@ async fn dispatch_remote_rpc_times_out_when_target_never_replies() {
         0,
         "timeout must evict the pending entry so a late Result is a no-op"
     );
+}
+
+#[tokio::test]
+async fn dispatch_remote_rpc_rejects_signed_callee_rewrite() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx);
+    publish_test_route(&svc, REMOTE_DEVICE_URA, "observe.health");
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, "observe.health")
+        .expect("remote device ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device route");
+    assert_eq!(selected_route.callee_ura, REMOTE_DEVICE_URA);
+
+    // invoke_request signs TEST_DAEMON_URA as callee. The remote route selects
+    // REMOTE_DEVICE_URA. Dispatch must reject locally instead of rewriting the
+    // signed envelope and causing CALLER_SIGNATURE_INVALID on the device.
+    let request = invoke_request("observe.health", "{}").into_inner();
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_remote_rpc_selected_route(&request, &selected_route)
+        .await
+        .expect_err("signed callee mismatch must fail before carrier dispatch");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message()
+            .contains("does not match resolver-selected callee"),
+        "expected signed callee mismatch, got: {}",
+        err.message()
+    );
+    assert!(
+        remote_rx.try_recv().is_err(),
+        "mismatched signed envelope must not be forwarded"
+    );
+    assert_eq!(pending.outstanding(), 0);
 }

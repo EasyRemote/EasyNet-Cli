@@ -8,6 +8,8 @@ public record IdentityProjection(
     boolean valid,
     String descriptorRef,
     String abilityURA,
+    String resourceURA,
+    String ura,
     String descriptorVersion,
     String profile,
     Map<String, Object> components,
@@ -27,6 +29,8 @@ public record IdentityProjection(
         DirectoryIdentitySupport.requiredBoolean(fields, "valid"),
         DirectoryIdentitySupport.optionalString(fields.get("descriptor_ref"), "descriptor_ref"),
         DirectoryIdentitySupport.optionalString(fields.get("ability_ura"), "ability_ura"),
+        DirectoryIdentitySupport.optionalString(fields.get("resource_ura"), "resource_ura"),
+        DirectoryIdentitySupport.optionalString(fields.get("ura"), "ura"),
         DirectoryIdentitySupport.optionalString(
             fields.get("descriptor_version"), "descriptor_version"),
         DirectoryIdentitySupport.requiredString(fields, "profile"),

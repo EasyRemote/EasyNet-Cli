@@ -24,7 +24,7 @@
   "source": "pages_read_model",
   "metadata": {
     "profile": "surface",
-    "source_ability": "pages.list",
+    "source_ability": "project_list",
     "page_size_default": 50,
     "page_size_max": 500,
     "total_available": 1

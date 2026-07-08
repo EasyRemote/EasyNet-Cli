@@ -3745,7 +3745,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         ):
             self._require_case_fixture(surface_case, fixture)
         for ability in (
-            "pages.list",
+            "project_list",
             "pages.publish",
             "pages.get",
             "pages.unpublish",
@@ -3785,9 +3785,9 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         self.assertEqual(
             list_draft.descriptor_ref,
-            "easynet:///r/example/ability/alice.pages.pages.list@1.0.0",
+            "easynet:///r/example/ability/alice.pages.project_list@1.0.0",
         )
-        self.assertEqual(list_draft.metadata["system_ability"], "pages.list")
+        self.assertEqual(list_draft.metadata["system_ability"], "project_list")
 
         create_draft = surface.build_create_page_invocation(
             shared_surface_create_page_request()

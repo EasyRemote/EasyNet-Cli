@@ -4,6 +4,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -13,6 +14,8 @@ import (
 
 	"easynet.run/cli/sdk/go/internal/axonpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type directRuntimeFakeDaemon struct {
@@ -147,6 +150,96 @@ func TestDirectDaemonRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	}
 }
 
+func TestDirectDaemonRuntimeTransportStringifiesTypedMetadata(t *testing.T) {
+	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
+	defer cleanup()
+
+	client, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	_, err = client.Invoke(context.Background(), directRuntimeDraftWithMetadata(t, map[string]any{
+		"trace_id":    "direct-test",
+		"timeout_ms":  int64(1500),
+		"system":      true,
+		"authority":   map[string]any{"subject_ura": "easynet:///r/example/device/dev-a"},
+		"empty_value": nil,
+	}))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	metadata := daemon.seenInvoke.GetMetadata()
+	if metadata["trace_id"] != "direct-test" {
+		t.Fatalf("trace_id metadata = %q", metadata["trace_id"])
+	}
+	if metadata["timeout_ms"] != "1500" {
+		t.Fatalf("timeout_ms metadata = %q", metadata["timeout_ms"])
+	}
+	if metadata["system"] != "true" {
+		t.Fatalf("system metadata = %q", metadata["system"])
+	}
+	if metadata["authority"] != `{"subject_ura":"easynet:///r/example/device/dev-a"}` {
+		t.Fatalf("authority metadata = %q", metadata["authority"])
+	}
+	if _, ok := metadata["empty_value"]; ok {
+		t.Fatalf("nil metadata value should be omitted: %#v", metadata)
+	}
+	if got := metadata[directSignedDescriptorRefMetadata]; got != directRuntimeDraft(t).DescriptorRef() {
+		t.Fatalf("signed descriptor metadata = %q", got)
+	}
+}
+
+func TestDirectRuntimeDialTargetClassifiesEndpointTransport(t *testing.T) {
+	cases := []struct {
+		name     string
+		endpoint string
+		target   string
+	}{
+		{name: "uds path", endpoint: "/tmp/easynet-daemon.sock", target: "passthrough:///easynet-daemon"},
+		{name: "uds scheme", endpoint: "unix:///tmp/easynet-daemon.sock", target: "passthrough:///easynet-daemon"},
+		{name: "bare tcp", endpoint: "127.0.0.1:50051", target: "127.0.0.1:50051"},
+		{name: "plain grpc tcp", endpoint: "grpc://127.0.0.1:50051", target: "127.0.0.1:50051"},
+		{name: "tls grpc tcp", endpoint: "grpcs://hub:50443", target: "hub:50443"},
+		{name: "axon grpc tcp", endpoint: "axon://hub:50443", target: "hub:50443"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			target, options, err := directRuntimeDialTarget(tc.endpoint)
+			if err != nil {
+				t.Fatalf("directRuntimeDialTarget: %v", err)
+			}
+			if target != tc.target {
+				t.Fatalf("target = %q, want %q", target, tc.target)
+			}
+			if len(options) == 0 {
+				t.Fatal("dial options must include transport credentials")
+			}
+		})
+	}
+}
+
+func TestDirectRuntimeDialTargetRejectsPublicHTTPEndpoints(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://127.0.0.1:50051",
+		"https://hub.example:50443",
+	} {
+		_, _, err := directRuntimeDialTarget(endpoint)
+		if !IsCode(err, ErrProtocolMismatch) {
+			t.Fatalf("directRuntimeDialTarget(%q) error = %#v, want PROTOCOL_MISMATCH", endpoint, err)
+		}
+	}
+}
+
+func TestDirectRuntimeGRPCErrorClassifiesHTTP2ProtocolReset(t *testing.T) {
+	err := directRuntimeGRPCError(
+		status.Error(codes.Internal, "stream terminated by RST_STREAM with error code: PROTOCOL_ERROR"),
+		"https://hub.example:50443",
+	)
+	if !IsCode(err, ErrProtocolMismatch) {
+		t.Fatalf("directRuntimeGRPCError = %#v, want PROTOCOL_MISMATCH", err)
+	}
+}
+
 func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughIdentity(t *testing.T) {
 	identityTransport := &memoryIdentityTransport{descriptorJSON: directRuntimeDescriptorProjectionJSON}
 	identity, err := NewIdentityClient(identityTransport)
@@ -171,6 +264,86 @@ func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughIdentity(t *tes
 	}
 	if daemon.seenInvoke == nil || daemon.seenInvoke.GetFunctionName() != "er.weather" {
 		t.Fatalf("daemon function name = %#v", daemon.seenInvoke)
+	}
+}
+
+func TestDirectDaemonRuntimeTransportPrepareProjectsSignedUserSubject(t *testing.T) {
+	identity := directRuntimeUserSubjectIdentity(t)
+	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+		DialTimeoutMS: 3000,
+		Identity:      identity,
+	})
+	defer cleanup()
+	draft := directRuntimeUserSubjectDraft(t)
+
+	preparedJSON, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, draft), []byte(`{"expires_in_ms":60000}`))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	prepared, err := NewPreparedInvocationFromJSON(preparedJSON)
+	if err != nil {
+		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
+	}
+	if got := prepared.Tuple().SubjectURA(); got != directRuntimeUserSubjectResourceURA {
+		t.Fatalf("prepared tuple subject = %q, want %q", got, directRuntimeUserSubjectResourceURA)
+	}
+	if draft.SubjectURA() == prepared.Tuple().SubjectURA() {
+		t.Fatalf("prepare did not project user subject: %q", draft.SubjectURA())
+	}
+	expectedMaterial, err := signingMaterialForInvocationDraft(prepared.Tuple())
+	if err != nil {
+		t.Fatalf("signingMaterialForInvocationDraft(projected tuple): %v", err)
+	}
+	if prepared.SigningMaterial().CanonicalBytesBase64() != expectedMaterial.CanonicalBytesBase64() {
+		t.Fatalf("prepared signing material was not built from projected tuple")
+	}
+}
+
+func TestDirectDaemonRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubject(t *testing.T) {
+	identity := directRuntimeUserSubjectIdentity(t)
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+		DialTimeoutMS: 3000,
+		Identity:      identity,
+	})
+	defer cleanup()
+	preparedJSON, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, directRuntimeUserSubjectDraft(t)), []byte(`{"expires_in_ms":60000,"signer_id":"caller-key"}`))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	prepared, err := NewPreparedInvocationFromJSON(preparedJSON)
+	if err != nil {
+		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
+	}
+	signed, err := prepared.SignWithCallerSignature(InvocationSignature{
+		Algorithm:             "ed25519",
+		SignatureBase64:       base64.StdEncoding.EncodeToString([]byte("direct-signature")),
+		SignerPublicKeyBase64: directRuntimeUserSubjectPubkeyBase64,
+	})
+	if err != nil {
+		t.Fatalf("SignWithCallerSignature: %v", err)
+	}
+	signedJSON, err := json.Marshal(signed)
+	if err != nil {
+		t.Fatalf("marshal signed: %v", err)
+	}
+
+	if _, err := transport.SubmitSigned(context.Background(), signedJSON); err != nil {
+		t.Fatalf("SubmitSigned: %v", err)
+	}
+	if daemon.seenInvoke == nil {
+		t.Fatal("daemon did not receive signed invocation")
+	}
+	if got := daemon.seenInvoke.GetEnvelope().GetSubject().GetUra(); got != prepared.Tuple().SubjectURA() {
+		t.Fatalf("dispatched subject = %q, want prepared tuple subject %q", got, prepared.Tuple().SubjectURA())
+	}
+	if got := daemon.seenInvoke.GetEnvelope().GetSubject().GetUra(); got != directRuntimeUserSubjectResourceURA {
+		t.Fatalf("dispatched subject = %q, want %q", got, directRuntimeUserSubjectResourceURA)
+	}
+	if got := daemon.seenInvoke.GetEnvelope().GetCallerSignature().GetKeyIdHint(); got != directRuntimeUserSubjectPubkeyBase64 {
+		t.Fatalf("caller signature key hint = %q, want user pubkey", got)
+	}
+	if got := daemon.seenInvoke.GetMetadata()[directSignedDescriptorRefMetadata]; got != prepared.Tuple().DescriptorRef() {
+		t.Fatalf("signed descriptor metadata = %q, want %q", got, prepared.Tuple().DescriptorRef())
 	}
 }
 
@@ -307,6 +480,71 @@ func TestDirectDaemonRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	}
 	if handle.closeCalls != 1 {
 		t.Fatalf("handle close calls = %d, want 1", handle.closeCalls)
+	}
+}
+
+func TestDirectDaemonRuntimeTransportProvidesHandleOperationsWithoutDelegate(t *testing.T) {
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
+	defer cleanup()
+
+	preparedJSON, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, directRuntimeDraft(t)), []byte(`{"expires_in_ms":60000,"signer_id":"caller-key"}`))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	prepared, err := NewPreparedInvocationFromJSON(preparedJSON)
+	if err != nil {
+		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
+	}
+	signed, err := prepared.SignWithCallerSignature(InvocationSignature{
+		Algorithm:       "ed25519",
+		SignatureBase64: base64.StdEncoding.EncodeToString([]byte("direct-signature")),
+		KeyIDHint:       "caller-key",
+	})
+	if err != nil {
+		t.Fatalf("SignWithCallerSignature: %v", err)
+	}
+	signedJSON, err := json.Marshal(signed)
+	if err != nil {
+		t.Fatalf("marshal signed: %v", err)
+	}
+	handleJSON, err := transport.SubmitSigned(context.Background(), signedJSON)
+	if err != nil {
+		t.Fatalf("SubmitSigned: %v", err)
+	}
+	handle, err := NewInvocationHandleFromJSON(handleJSON)
+	if err != nil {
+		t.Fatalf("NewInvocationHandleFromJSON: %v", err)
+	}
+	if handle.HandleID() == 0 || !handle.Terminal() || daemon.seenInvoke.GetEnvelope().GetCallerSignature() == nil {
+		t.Fatalf("direct handle submit did not invoke signed request: handle=%#v request=%#v", handle, daemon.seenInvoke)
+	}
+	resultJSON, err := transport.AwaitHandle(context.Background(), handle.HandleID())
+	if err != nil {
+		t.Fatalf("AwaitHandle: %v", err)
+	}
+	result, err := NewInvocationResultFromJSON(resultJSON)
+	if err != nil {
+		t.Fatalf("NewInvocationResultFromJSON: %v", err)
+	}
+	if !result.OK() {
+		t.Fatalf("await result not ok: %#v", result.Failure())
+	}
+	eventsJSON, err := transport.HandleEvents(context.Background(), handle.HandleID())
+	if err != nil {
+		t.Fatalf("HandleEvents: %v", err)
+	}
+	events, err := NewInvocationHandleFromJSON(eventsJSON)
+	if err != nil {
+		t.Fatalf("events handle decode: %v", err)
+	}
+	if len(events.Events()) != 1 {
+		t.Fatalf("events = %#v", events.Events())
+	}
+	if err := transport.FreeHandle(context.Background(), handle.HandleID()); err != nil {
+		t.Fatalf("FreeHandle: %v", err)
+	}
+	if _, err := transport.AwaitHandle(context.Background(), handle.HandleID()); !IsCode(err, ErrNotFound) {
+		t.Fatalf("AwaitHandle after free = %v, want %s", err, ErrNotFound)
 	}
 }
 
@@ -477,6 +715,11 @@ func (f *directRuntimeFakeHandleTransport) Close(context.Context) error {
 
 func directRuntimeDraft(t *testing.T) InvocationDraft {
 	t.Helper()
+	return directRuntimeDraftWithMetadata(t, map[string]any{"trace_id": "direct-test"})
+}
+
+func directRuntimeDraftWithMetadata(t *testing.T, metadata map[string]any) InvocationDraft {
+	t.Helper()
 	raw, err := json.Marshal(map[string]any{
 		"caller_ura":     "easynet:///r/example/agent/alice",
 		"callee_ura":     "easynet:///r/example/device/dev-a",
@@ -486,7 +729,7 @@ func directRuntimeDraft(t *testing.T) InvocationDraft {
 		"causal_context": map[string]any{"form": "none"},
 		"args":           map[string]any{"city": "Singapore"},
 		"content_type":   "application/json",
-		"metadata":       map[string]any{"trace_id": "direct-test"},
+		"metadata":       metadata,
 	})
 	if err != nil {
 		t.Fatalf("marshal draft: %v", err)
@@ -498,14 +741,62 @@ func directRuntimeDraft(t *testing.T) InvocationDraft {
 	return draft
 }
 
+func directRuntimeUserSubjectDraft(t *testing.T) InvocationDraft {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"caller_ura":     "easynet:///r/example/user/alice",
+		"callee_ura":     "easynet:///r/example/device/dev-a",
+		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0",
+		"subject_ura":    "easynet:///r/example/user/alice",
+		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
+		"causal_context": map[string]any{"form": "none"},
+		"args":           map[string]any{},
+		"content_type":   "application/json",
+		"metadata":       map[string]any{"trace_id": "direct-user-subject-test"},
+	})
+	if err != nil {
+		t.Fatalf("marshal user subject draft: %v", err)
+	}
+	draft, err := NewInvocationDraftFromJSON(raw)
+	if err != nil {
+		t.Fatalf("NewInvocationDraftFromJSON: %v", err)
+	}
+	return draft
+}
+
+func mustMarshalDirectRuntimeDraft(t *testing.T, draft InvocationDraft) []byte {
+	t.Helper()
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatalf("marshal draft: %v", err)
+	}
+	return raw
+}
+
 func directRuntimeIdentityClient(t *testing.T) *IdentityClient {
 	t.Helper()
-	identity, err := NewIdentityClient(&memoryIdentityTransport{descriptorJSON: directRuntimeDescriptorProjectionJSON})
+	return mustDirectRuntimeIdentity(t, &memoryIdentityTransport{descriptorJSON: directRuntimeDescriptorProjectionJSON})
+}
+
+func mustDirectRuntimeIdentity(t *testing.T, transport IdentityTransport) *IdentityClient {
+	t.Helper()
+	identity, err := NewIdentityClient(transport)
 	if err != nil {
 		t.Fatalf("NewIdentityClient: %v", err)
 	}
 	return identity
 }
+
+func directRuntimeUserSubjectIdentity(t *testing.T) *IdentityClient {
+	t.Helper()
+	return mustDirectRuntimeIdentity(t, &memoryIdentityTransport{
+		descriptorJSON: directRuntimeMetaListResourcesDescriptorProjectionJSON,
+		buildURAJSON:   directRuntimeProjectedSubjectJSON(directRuntimeUserSubjectResourceURA),
+	})
+}
+
+const directRuntimeUserSubjectResourceURA = "easynet:///r/example/resource/user.alice/invoke/meta.list_resources"
+const directRuntimeUserSubjectPubkeyBase64 = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="
 
 const directRuntimeDescriptorProjectionJSON = `{
   "kind":"descriptor_ref",
@@ -517,3 +808,29 @@ const directRuntimeDescriptorProjectionJSON = `{
   "components":{"owner_ura":"easynet:///r/example/device/dev-a"},
   "metadata":{"grammar_owner":"axon"}
 }`
+
+const directRuntimeMetaListResourcesDescriptorProjectionJSON = `{
+  "kind":"descriptor_ref",
+  "valid":true,
+  "descriptor_ref":"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0",
+  "ability_ura":"easynet:///r/example/ability/device.dev-a.meta.list_resources",
+  "descriptor_version":"1.0.0",
+  "profile":"easynet-strict-v2",
+  "components":{"owner_ura":"easynet:///r/example/device/dev-a"},
+  "metadata":{"grammar_owner":"axon"}
+}`
+
+func directRuntimeProjectedSubjectJSON(ura string) string {
+	raw, err := json.Marshal(map[string]any{
+		"kind":       "resource",
+		"valid":      true,
+		"ura":        ura,
+		"profile":    "directory_identity",
+		"components": map[string]any{"owner_ura": "easynet:///r/example/user/alice"},
+		"metadata":   map[string]any{"source": "direct-runtime-test"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}

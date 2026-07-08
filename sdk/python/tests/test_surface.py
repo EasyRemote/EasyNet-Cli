@@ -18,13 +18,13 @@ from easynet_sdk.surface import (
 SURFACE_LIST_INVOCATION = b"""{
   "caller_ura": "easynet:///r/example/agent/alice.sdk",
   "callee_ura": "easynet:///r/example/agent/alice.pages",
-  "descriptor_ref": "easynet:///r/example/ability/alice.pages.pages.list@1.0.0",
+  "descriptor_ref": "easynet:///r/example/ability/alice.pages.project_list@1.0.0",
   "subject_ura": "easynet:///r/example/agent/alice.pages",
   "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
   "causal_context": {"form": "none"},
   "args": {},
   "content_type": "application/json",
-  "metadata": {"request_id": "surface-list-1", "profile": "surface", "system_ability": "pages.list", "carrier_owner": "daemon_sdk"}
+  "metadata": {"request_id": "surface-list-1", "profile": "surface", "system_ability": "project_list", "carrier_owner": "daemon_sdk"}
 }"""
 
 SURFACE_CREATE_INVOCATION = b"""{
@@ -97,7 +97,7 @@ SURFACE_PAGE_PAGE = (
   "next_cursor": null,
   "limit": 50,
   "source": "pages_read_model",
-  "metadata": {"profile": "surface", "source_ability": "pages.list", "page_size_default": 50, "page_size_max": 500, "total_available": 1}
+  "metadata": {"profile": "surface", "source_ability": "project_list", "page_size_default": 50, "page_size_max": 500, "total_available": 1}
 }"""
 )
 
@@ -287,7 +287,7 @@ class SurfaceClientTests(unittest.TestCase):
         )
         self.assertEqual(
             list_draft.descriptor_ref,
-            "easynet:///r/example/ability/alice.pages.pages.list@1.0.0",
+            "easynet:///r/example/ability/alice.pages.project_list@1.0.0",
         )
 
         create_draft = client.build_create_page_invocation(
@@ -400,7 +400,7 @@ class SurfaceClientTests(unittest.TestCase):
         assert runtime_transport.seen_draft is not None
         self.assertEqual(
             runtime_transport.seen_draft["metadata"]["system_ability"],
-            "pages.list",
+            "project_list",
         )
         self.assertEqual(carrier.seen["project_page_page"]["limit"], 50)
 

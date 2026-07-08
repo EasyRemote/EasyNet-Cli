@@ -533,6 +533,14 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
         XCTAssertEqual(abilityURA, "easynet:///r/example/ability/device.dev-a.observe.health")
         XCTAssertEqual(descriptorRef, "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0")
+        let descriptorBoundSubject = try await identity.descriptorBoundResourceSubjectURA(
+            ownerURA: "easynet:///r/example/user/alice",
+            path: "invoke/meta.list_resources"
+        )
+        XCTAssertEqual(
+            descriptorBoundSubject,
+            "easynet:///r/example/resource/user.alice/invoke/meta.list_resources"
+        )
         await expectSDKError(.invalidArgument) {
             _ = try await identity.canonicalAbilityDescriptorRef("")
         }
@@ -1094,7 +1102,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let healthInvocation = try await surface.buildHealthInvocation(health)
         XCTAssertEqual(
             try optionalDirectoryJSONString(listInvocation["descriptor_ref"], "descriptor_ref"),
-            "easynet:///r/example/ability/alice.pages.pages.list@1.0.0"
+            "easynet:///r/example/ability/alice.pages.project_list@1.0.0"
         )
         XCTAssertEqual(
             try optionalDirectoryJSONString(createInvocation["descriptor_ref"], "descriptor_ref"),
@@ -1839,6 +1847,29 @@ final class FixtureIdentityTransport: IdentityTransport, @unchecked Sendable {
         Data("""
         {
           "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health"
+        }
+        """.utf8)
+    }
+
+    func buildURA(_ requestJSON: Data) async throws -> Data {
+        let request = try decodeDirectoryObject(requestJSON, label: "identity build_ura request JSON")
+        XCTAssertEqual(try optionalDirectoryJSONString(request["kind"], "kind"), "resource")
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(request["owner_ura"], "owner_ura"),
+            "easynet:///r/example/user/alice"
+        )
+        XCTAssertEqual(
+            try optionalDirectoryJSONString(request["path"], "path"),
+            "invoke/meta.list_resources"
+        )
+        return Data("""
+        {
+          "kind": "resource",
+          "valid": true,
+          "resource_ura": "easynet:///r/example/resource/user.alice/invoke/meta.list_resources",
+          "profile": "directory_identity",
+          "components": {},
+          "metadata": {}
         }
         """.utf8)
     }

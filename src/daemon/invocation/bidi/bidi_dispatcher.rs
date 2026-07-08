@@ -48,9 +48,9 @@ use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::admission::target_gate::{
-    envelope_with_selected_callee, route_negative_message, route_negative_status,
-    route_owner_mismatch_message, route_profile_blocked_message, route_profile_blocked_status,
-    route_selected_remote_host_status, selected_host_unavailable_message, TargetGate,
+    route_negative_message, route_negative_status, route_owner_mismatch_message,
+    route_profile_blocked_message, route_profile_blocked_status, route_selected_remote_host_status,
+    selected_host_unavailable_message, signed_envelope_for_selected_route, TargetGate,
 };
 use crate::daemon::invocation::bidi::invoke_remote_initiator::{
     build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
@@ -3223,7 +3223,10 @@ pub(crate) fn build_remote_bidi_open_frame_for_contract(
         (true, Some(envelope)) => Ok(build_carrier_v1_dispatch_frame(
             call_id,
             easynet_axon::pb::axon::v1::InvokeRequest {
-                envelope: Some(envelope_with_selected_callee(envelope, selected_route)),
+                envelope: Some(signed_envelope_for_selected_route(
+                    envelope,
+                    selected_route,
+                )?),
                 function_name: selected_route.dispatch_name.clone(),
                 arguments: envelope_open.initial_args.clone(),
                 ..Default::default()

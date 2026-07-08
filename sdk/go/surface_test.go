@@ -120,7 +120,7 @@ func TestSurfaceBuildsPageInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if listDraft.DescriptorRef() != "easynet:///r/example/ability/alice.pages.pages.list@1.0.0" {
+	if listDraft.DescriptorRef() != "easynet:///r/example/ability/alice.pages.project_list@1.0.0" {
 		t.Fatalf("list descriptor = %q", listDraft.DescriptorRef())
 	}
 
@@ -294,13 +294,13 @@ func TestSurfaceClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 const surfaceListInvocationJSON = `{
   "caller_ura": "easynet:///r/example/agent/alice.sdk",
   "callee_ura": "easynet:///r/example/agent/alice.pages",
-  "descriptor_ref": "easynet:///r/example/ability/alice.pages.pages.list@1.0.0",
+  "descriptor_ref": "easynet:///r/example/ability/alice.pages.project_list@1.0.0",
   "subject_ura": "easynet:///r/example/agent/alice.pages",
   "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
   "causal_context": {"form": "none"},
   "args": {},
   "content_type": "application/json",
-  "metadata": {"request_id": "surface-list-1", "profile": "surface", "system_ability": "pages.list", "carrier_owner": "daemon_sdk"}
+  "metadata": {"request_id": "surface-list-1", "profile": "surface", "system_ability": "project_list", "carrier_owner": "daemon_sdk"}
 }`
 
 const surfaceCreateInvocationJSON = `{
@@ -370,7 +370,7 @@ const surfacePagePageJSON = `{
   "next_cursor": null,
   "limit": 50,
   "source": "pages_read_model",
-  "metadata": {"profile": "surface", "source_ability": "pages.list", "page_size_default": 50, "page_size_max": 500, "total_available": 1}
+  "metadata": {"profile": "surface", "source_ability": "project_list", "page_size_default": 50, "page_size_max": 500, "total_available": 1}
 }`
 
 const surfacePublicPageRefJSON = `{

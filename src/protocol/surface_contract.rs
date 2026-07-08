@@ -15,7 +15,7 @@
 //
 // Implementation Approach
 // -----------------------
-// Reuse the shared daemon SDK carrier builder for `pages.list`,
+// Reuse the shared daemon SDK carrier builder for `project_list`,
 // `pages.publish`, `pages.get`, and `pages.unpublish`. Keep page identity
 // derivation explicit: record projection needs a page id plus either direct
 // refs or enough daemon facts to derive canonical URAs through Axon helpers.
@@ -43,7 +43,7 @@ use crate::protocol::sdk_contract::{
 };
 
 const SURFACE_PROFILE: &str = "surface";
-const ABILITY_PAGES_LIST: &str = "pages.list";
+const ABILITY_PAGES_LIST: &str = "project_list";
 const ABILITY_PAGES_PUBLISH: &str = "pages.publish";
 const ABILITY_PAGES_GET: &str = "pages.get";
 const ABILITY_PAGES_UNPUBLISH: &str = "pages.unpublish";

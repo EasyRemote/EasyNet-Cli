@@ -811,13 +811,11 @@ mod tests {
 
     #[test]
     fn synthetic_pages_descriptors_match_resolver_lookup_keys() {
-        // RFC-005 name match: the backend invokes `pages.list` against
+        // RFC-005 name match: the backend invokes `project_list` against
         // `agent/<user>.pages`; the resolver looks up the relative name
-        // `pages.list` AND the canonical ability URA
-        // `…/ability/<user>.pages.pages.list`. The advertised descriptor
-        // must project to both, or pages.* stays NODATA. This pins the
-        // `pages.pages.list` descriptor-name trick (public_name() strips
-        // the owner's `pages.` agent-id prefix).
+        // `project_list` AND the canonical ability URA
+        // `…/ability/<user>.pages.project_list`. The advertised descriptor
+        // must project to both, or pages.* stays NODATA.
         let owner = "easynet:///r/acme/agent/alice.pages";
         let descriptors = build_synthetic_pages_ability_descriptors(owner);
         let by_public: std::collections::BTreeMap<_, _> = descriptors
@@ -825,8 +823,8 @@ mod tests {
             .map(|d| (d.public_name(), d.canonical_ability_ura()))
             .collect();
         assert_eq!(
-            by_public.get("pages.list").cloned().flatten().as_deref(),
-            Some("easynet:///r/acme/ability/alice.pages.pages.list"),
+            by_public.get("project_list").cloned().flatten().as_deref(),
+            Some("easynet:///r/acme/ability/alice.pages.project_list"),
         );
         assert_eq!(
             by_public.get("pages.publish").cloned().flatten().as_deref(),
@@ -1878,11 +1876,17 @@ mod tests {
             crate::daemon::ability::descriptors::Visibility::Scoped,
         )
         .expect("test descriptor")];
+        let signing_seed = [0x42; 32];
+        let expected_public_key_hex = hex::encode(
+            ed25519_dalek::SigningKey::from_bytes(&signing_seed)
+                .verifying_key()
+                .to_bytes(),
+        );
         let result = dial_and_run_session_with_idle_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
                 caller_ura: device_ura.to_string(),
-                signing_seed: None,
+                signing_seed: Some(signing_seed),
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
@@ -1900,6 +1904,18 @@ mod tests {
         );
 
         let calls = invokes.lock().await.clone();
+        let join = calls
+            .iter()
+            .find(|(name, _)| name == "federation.join")
+            .expect("join prelude must be sent before session open");
+        assert_eq!(
+            join.1.get("membership_ura").and_then(Value::as_str),
+            Some(device_ura)
+        );
+        assert_eq!(
+            join.1.get("public_key_hex").and_then(Value::as_str),
+            Some(expected_public_key_hex.as_str())
+        );
         assert!(
             calls
                 .iter()

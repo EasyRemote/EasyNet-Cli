@@ -282,7 +282,7 @@ async fn run_hosted_agent_advertise_prelude(
     // the username slug. The backend resolves these owners via
     // `svc.UsernameForUID` (username), so advertising under the UUID
     // (`<uuid>.pages`) lands a directory entry the resolver never queries →
-    // `namespace.resolve NXDOMAIN: owner is not online` on `pages.list`/etc.
+    // `namespace.resolve NXDOMAIN: owner is not online` on `project_list`/etc.
     let user_segment = std::env::var("EASYNET_PAGES_USER")
         .ok()
         .filter(|v| !v.is_empty())
@@ -531,10 +531,12 @@ async fn send_federation_join_prelude(
         .map(|parsed| parsed.realm)
         .unwrap_or_default();
 
-    let body = serde_json::json!({
-        "membership_ura": caller_ura,
-        "realm": realm,
-    });
+    let body = crate::daemon::federation::client::ability_contract::JoinArgs {
+        realm,
+        membership_ura: caller_ura.to_string(),
+        public_key_hex: federation_join_public_key_hex(signing_seed),
+        pairing_secret: None,
+    };
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;
 
@@ -580,6 +582,14 @@ async fn send_federation_join_prelude(
         }
         Err(status) => Err(status),
     }
+}
+
+fn federation_join_public_key_hex(signing_seed: Option<SessionSigningSeed>) -> String {
+    let Some(seed) = signing_seed else {
+        return String::new();
+    };
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    hex::encode(signing_key.verifying_key().to_bytes())
 }
 
 async fn send_advertise_agent_prelude(

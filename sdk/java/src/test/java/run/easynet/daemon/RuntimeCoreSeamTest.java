@@ -650,6 +650,12 @@ public final class RuntimeCoreSeamTest {
                 "easynet:///r/example/device/dev-a", "observe.health", "1.0.0")
             .equals("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"),
         "identity owner descriptor ref");
+    check(
+        identity
+            .descriptorBoundResourceSubjectURA(
+                "easynet:///r/example/user/alice", "invoke/meta.list_resources")
+            .equals("easynet:///r/example/resource/user.alice/invoke/meta.list_resources"),
+        "identity descriptor-bound resource subject");
     expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> identity.canonicalAbilityDescriptorRef("", ""));
     expectSDKError(
         ErrorCode.INVALID_ARGUMENT,
@@ -1367,7 +1373,7 @@ public final class RuntimeCoreSeamTest {
     check(
         surface.buildListPagesInvocation(list)
             .get("descriptor_ref")
-            .equals("easynet:///r/example/ability/alice.pages.pages.list@1.0.0"),
+            .equals("easynet:///r/example/ability/alice.pages.project_list@1.0.0"),
         "surface list descriptor");
     check(
         surface.buildCreatePageInvocation(create)
@@ -1977,6 +1983,29 @@ public final class RuntimeCoreSeamTest {
           """
           {
             "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health"
+          }
+          """);
+    }
+
+    @Override
+    public byte[] buildURA(byte[] requestJSON) {
+      String request = new String(requestJSON, StandardCharsets.UTF_8);
+      check(request.contains("\"kind\":\"resource\""), "identity resource URA kind");
+      check(
+          request.contains("\"owner_ura\":\"easynet:///r/example/user/alice\""),
+          "identity resource URA owner");
+      check(
+          request.contains("\"path\":\"invoke/meta.list_resources\""),
+          "identity resource URA path");
+      return bytes(
+          """
+          {
+            "kind": "resource",
+            "valid": true,
+            "resource_ura": "easynet:///r/example/resource/user.alice/invoke/meta.list_resources",
+            "profile": "directory_identity",
+            "components": {},
+            "metadata": {}
           }
           """);
     }

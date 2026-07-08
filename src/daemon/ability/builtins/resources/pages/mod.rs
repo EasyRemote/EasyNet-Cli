@@ -182,10 +182,10 @@ fn register_management_abilities(
     });
     register_management_rpc(
         reg,
-        "pages.list",
+        "pages.project_list",
         owner.clone(),
         authority_scope.clone(),
-        manifest_for_verb("pages.list"),
+        manifest_for_verb("project_list"),
         list_handler,
     );
 
@@ -286,7 +286,7 @@ fn pages_project_id_schema() -> serde_json::Value {
 }
 
 /// One management verb's advertise-facing spec: the registry-relative
-/// ability name (`pages.list`), a human description, and the input
+/// ability name (`project_list`), a human description, and the input
 /// schema. Single source of truth shared by the local registration
 /// (manifests) AND the session-prelude advertise descriptor builder,
 /// so the Frontend InvokeAbilityDialog renders the right form whether
@@ -317,7 +317,7 @@ fn pages_health_schema() -> serde_json::Value {
 pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
     vec![
         PagesAbilitySpec {
-            relative_name: "pages.list",
+            relative_name: "project_list",
             description: "List the page projects this user currently publishes on this daemon.",
             input_schema: serde_json::json!({ "type": "object", "properties": {} }),
         },

@@ -336,12 +336,20 @@ fn signed_test_envelope(
 }
 
 fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest> {
+    invoke_request_for_callee(TEST_DAEMON_URA, function_name, args_json)
+}
+
+fn invoke_request_for_callee(
+    callee_ura: &str,
+    function_name: &str,
+    args_json: &str,
+) -> Request<InvokeRequest> {
     let arguments = args_json.as_bytes().to_vec();
     let signing_key = test_device_signing_key();
     Request::new(InvokeRequest {
         envelope: Some(signed_test_envelope(
             TEST_DAEMON_URA,
-            TEST_DAEMON_URA,
+            callee_ura,
             TEST_DAEMON_URA,
             function_name,
             &arguments,
@@ -352,7 +360,7 @@ fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest
         metadata: std::collections::HashMap::from([(
             crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                 .to_string(),
-            test_descriptor_ref(TEST_DAEMON_URA, function_name),
+            test_descriptor_ref(callee_ura, function_name),
         )]),
         ..InvokeRequest::default()
     })

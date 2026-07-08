@@ -231,11 +231,15 @@ func (t *WrapperRuntimeTransport) buildInvocation(ctx context.Context, requestJS
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	subjectURA, err := descriptorBoundSubjectURA(ctx, t.identity, base.SubjectURA, abilityName)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	return NewInvocationBuilder().
 		WithCallerURA(base.CallerURA).
 		WithCalleeURA(base.CalleeURA).
 		WithDescriptorRef(descriptorRef).
-		WithSubjectURA(base.SubjectURA).
+		WithSubjectURA(subjectURA).
 		WithNonceBase64(base.NonceBase64).
 		WithCausalContext(base.CausalContext).
 		WithJSONArgs(wrapperRuntimeArgs(payload)).

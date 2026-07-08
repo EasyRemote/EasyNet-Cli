@@ -13,6 +13,10 @@ public interface IdentityTransport extends AutoCloseable {
     throw DirectoryIdentitySupport.notImplemented("identity ownerAbilityURA is not available");
   }
 
+  default byte[] buildURA(byte[] requestJSON) {
+    throw DirectoryIdentitySupport.notImplemented("identity buildURA is not available");
+  }
+
   @Override
   default void close() {}
 }

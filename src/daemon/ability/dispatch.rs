@@ -5597,10 +5597,13 @@ mod tests {
     #[test]
     fn local_runtime_key_strips_agent_owner_prefix() {
         let pages_agent = crate::core::ura::agent_ura("localhost", "dev", "pages");
-        let runtime_key = local_runtime_ability_key_for_authority(&pages_agent, "pages.list")
+        let runtime_key = local_runtime_ability_key_for_authority(&pages_agent, "project_list")
             .expect("runtime key");
 
-        assert_eq!(runtime_key, "easynet:///r/localhost/ability/dev.pages.list");
+        assert_eq!(
+            runtime_key,
+            "easynet:///r/localhost/ability/dev.pages.project_list"
+        );
     }
 
     #[test]

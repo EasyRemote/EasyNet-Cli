@@ -169,11 +169,15 @@ func (t *IdentityRuntimeTransport) buildInvocation(ctx context.Context, requestJ
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	subjectURA, err := descriptorBoundSubjectURA(ctx, t.resolver, base.SubjectURA, abilityName)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	return NewInvocationBuilder().
 		WithCallerURA(base.CallerURA).
 		WithCalleeURA(base.CalleeURA).
 		WithDescriptorRef(descriptorRef).
-		WithSubjectURA(base.SubjectURA).
+		WithSubjectURA(subjectURA).
 		WithNonceBase64(base.NonceBase64).
 		WithCausalContext(base.CausalContext).
 		WithJSONArgs(identityRuntimeArgs(payload, abilityName)).

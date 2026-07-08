@@ -4,6 +4,8 @@ package easynet
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +22,7 @@ import (
 	"easynet.run/cli/sdk/go/internal/axonpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
@@ -275,7 +280,17 @@ type DirectDaemonRuntimeTransport struct {
 	handle               RuntimeTransport
 	identity             *IdentityClient
 	closeHandleTransport bool
+	nextHandleID         uint64
+	handles              map[uint64]directRuntimeHandleSnapshot
 	closed               bool
+}
+
+type directRuntimeHandleSnapshot struct {
+	handleID uint64
+	state    string
+	terminal bool
+	events   []map[string]any
+	result   json.RawMessage
 }
 
 // OpenDirectDaemonRuntimeTransport opens a direct daemon Runtime transport.
@@ -293,11 +308,11 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 	invokeTimeout := durationFromMillis(options.InvokeTimeoutMS, defaultDirectRuntimeInvokeTimeout)
 	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
-	dialOptions := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithContextDialer(directRuntimeDialer),
-		grpc.WithBlock(),
+	target, transportOptions, err := directRuntimeDialTarget(endpoint)
+	if err != nil {
+		return nil, err
 	}
+	dialOptions := append(transportOptions, grpc.WithBlock())
 	if options.MaxMessageBytes > 0 {
 		dialOptions = append(
 			dialOptions,
@@ -307,7 +322,7 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 			),
 		)
 	}
-	conn, err := grpc.DialContext(dialCtx, grpcUDSTarget(endpoint), dialOptions...)
+	conn, err := grpc.DialContext(dialCtx, target, dialOptions...)
 	if err != nil {
 		return nil, directRuntimeError(
 			"daemon invocation endpoint is not ready",
@@ -325,6 +340,7 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 		handle:               options.HandleTransport,
 		identity:             options.Identity,
 		closeHandleTransport: options.CloseHandleTransport,
+		handles:              map[uint64]directRuntimeHandleSnapshot{},
 	}, nil
 }
 
@@ -414,51 +430,323 @@ func (t *DirectDaemonRuntimeTransport) OpenBidi(ctx context.Context, draftJSON [
 }
 
 func (t *DirectDaemonRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
-	handle, err := t.requireHandleTransport(ctx)
-	if err != nil {
+	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return nil, err
+	} else if ok {
+		return handle.Prepare(ctx, draftJSON, optionsJSON)
 	}
-	return handle.Prepare(ctx, draftJSON, optionsJSON)
+	return directRuntimePrepare(ctx, t.identity, draftJSON, optionsJSON)
 }
 
 func (t *DirectDaemonRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
-	handle, err := t.requireHandleTransport(ctx)
+	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		return handle.SubmitSigned(ctx, signedJSON)
+	}
+	draftJSON, err := directSignedInvocationDraftJSON(signedJSON)
 	if err != nil {
 		return nil, err
 	}
-	return handle.SubmitSigned(ctx, signedJSON)
+	resultJSON, err := t.Invoke(ctx, draftJSON)
+	if err != nil {
+		return nil, err
+	}
+	result, err := NewInvocationResultFromJSON(resultJSON)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := t.storeDirectHandle(result.TerminalState(), true, resultJSON)
+	return directRuntimeHandleSnapshotJSON(snapshot)
 }
 
 func (t *DirectDaemonRuntimeTransport) AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error) {
-	handle, err := t.requireHandleTransport(ctx)
+	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		return handle.AwaitHandle(ctx, handleID)
+	}
+	snapshot, err := t.directHandleSnapshot(ctx, handleID)
 	if err != nil {
 		return nil, err
 	}
-	return handle.AwaitHandle(ctx, handleID)
+	return append([]byte(nil), snapshot.result...), nil
 }
 
 func (t *DirectDaemonRuntimeTransport) CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
-	handle, err := t.requireHandleTransport(ctx)
+	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		return handle.CancelHandle(ctx, handleID, reason)
+	}
+	snapshot, err := t.directHandleSnapshot(ctx, handleID)
 	if err != nil {
 		return nil, err
 	}
-	return handle.CancelHandle(ctx, handleID, reason)
+	return json.Marshal(map[string]any{
+		"handle_id": handleID,
+		"cancelled": false,
+		"state":     snapshot.state,
+		"terminal":  snapshot.terminal,
+	})
 }
 
 func (t *DirectDaemonRuntimeTransport) HandleEvents(ctx context.Context, handleID uint64) ([]byte, error) {
-	handle, err := t.requireHandleTransport(ctx)
+	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
+		return nil, err
+	} else if ok {
+		return handle.HandleEvents(ctx, handleID)
+	}
+	snapshot, err := t.directHandleSnapshot(ctx, handleID)
 	if err != nil {
 		return nil, err
 	}
-	return handle.HandleEvents(ctx, handleID)
+	return directRuntimeHandleSnapshotJSON(snapshot)
 }
 
 func (t *DirectDaemonRuntimeTransport) FreeHandle(ctx context.Context, handleID uint64) error {
-	handle, err := t.requireHandleTransport(ctx)
-	if err != nil {
+	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return err
+	} else if ok {
+		return handle.FreeHandle(ctx, handleID)
 	}
-	return handle.FreeHandle(ctx, handleID)
+	if ctx == nil {
+		return invalidRuntimeClient("context is required")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return invalidRuntimeClient("runtime transport is closed")
+	}
+	delete(t.handles, handleID)
+	return nil
+}
+
+func directRuntimePrepare(ctx context.Context, identity *IdentityClient, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+	draft, err := NewInvocationDraftFromJSON(draftJSON)
+	if err != nil {
+		return nil, err
+	}
+	draft, err = directPreparedInvocationDraft(ctx, identity, draft)
+	if err != nil {
+		return nil, err
+	}
+	var options PrepareOptions
+	if len(optionsJSON) > 0 && string(optionsJSON) != "null" {
+		if err := json.Unmarshal(optionsJSON, &options); err != nil {
+			return nil, invalidRuntimePayload(fmt.Sprintf("decode prepare options: %v", err), err)
+		}
+	}
+	material, err := signingMaterialForInvocationDraft(draft)
+	if err != nil {
+		return nil, err
+	}
+	expiresIn := time.Duration(options.ExpiresInMS) * time.Millisecond
+	if expiresIn <= 0 {
+		expiresIn = 5 * time.Minute
+	}
+	expiresAtUnixMS := time.Now().Add(expiresIn).UnixMilli()
+	material.expiresAtUnixMS = expiresAtUnixMS
+	if options.LocalDaemonSigning || strings.TrimSpace(options.SignerID) != "" || strings.TrimSpace(options.PolicyRef) != "" {
+		mode := "caller_signing"
+		if options.LocalDaemonSigning {
+			mode = "local_daemon_signing"
+		}
+		material.signerPolicy = &SignerPolicy{
+			mode:            mode,
+			signerID:        strings.TrimSpace(options.SignerID),
+			policyRef:       strings.TrimSpace(options.PolicyRef),
+			expiresAtUnixMS: expiresAtUnixMS,
+		}
+	}
+	canonical, err := decodeCanonicalBytesBase64(material.CanonicalBytesBase64())
+	if err != nil {
+		return nil, err
+	}
+	canonicalHash := sha256.Sum256(canonical)
+	preparedID := fmt.Sprintf("direct-prepared-%d", time.Now().UnixNano())
+	return json.Marshal(map[string]any{
+		"prepared_id":        preparedID,
+		"request_id":         "req-" + preparedID,
+		"descriptor_ref":     draft.DescriptorRef(),
+		"canonical_hash_hex": hex.EncodeToString(canonicalHash[:]),
+		"expires_at_unix_ms": expiresAtUnixMS,
+		"tuple":              draft,
+		"signing_material":   directRuntimeSigningMaterialJSON(material),
+		"submit_ready":       false,
+	})
+}
+
+func directPreparedInvocationDraft(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (InvocationDraft, error) {
+	abilityName, err := directLocalAbilityName(ctx, identity, draft)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	return directPreparedInvocationDraftWithAbility(ctx, identity, draft, abilityName)
+}
+
+func directPreparedInvocationDraftWithAbility(ctx context.Context, identity *IdentityClient, draft InvocationDraft, abilityName string) (InvocationDraft, error) {
+	subjectURA, err := descriptorBoundSubjectURA(ctx, identity, draft.SubjectURA(), abilityName)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	if subjectURA == draft.SubjectURA() {
+		return draft, nil
+	}
+	return invocationDraftWithSubjectURA(draft, subjectURA)
+}
+
+func invocationDraftWithSubjectURA(draft InvocationDraft, subjectURA string) (InvocationDraft, error) {
+	builder := NewInvocationBuilder().
+		WithCallerURA(draft.CallerURA()).
+		WithCalleeURA(draft.CalleeURA()).
+		WithDescriptorRef(draft.DescriptorRef()).
+		WithSubjectURA(subjectURA).
+		WithNonceBase64(draft.NonceBase64()).
+		WithCausalContext(draft.CausalContext()).
+		WithContentType(draft.ContentType()).
+		WithMetadata(draft.Metadata())
+	if signature := draft.CallerSignature(); signature != nil {
+		builder.WithCallerSignature(*signature)
+	}
+	if draft.HasJSONArgs() {
+		builder.WithJSONArgs(draft.JSONArgs())
+	} else {
+		builder.WithArgumentsBase64(draft.ArgumentsBase64())
+	}
+	return builder.Build()
+}
+
+func directRuntimeSigningMaterialJSON(material SigningMaterial) map[string]any {
+	value := map[string]any{
+		"algorithm":              material.Algorithm(),
+		"canonical_bytes_base64": material.CanonicalBytesBase64(),
+		"args_digest_hex":        material.ArgsDigestHex(),
+		"descriptor_ref":         material.DescriptorRef(),
+		"nonce_base64":           material.NonceBase64(),
+		"signed_fields":          material.SignedFields(),
+		"expires_at_unix_ms":     material.ExpiresAtUnixMS(),
+	}
+	if policy := material.SignerPolicy(); policy != nil {
+		value["signer_policy"] = map[string]any{
+			"mode":               policy.Mode(),
+			"signer_id":          policy.SignerID(),
+			"policy_ref":         policy.PolicyRef(),
+			"expires_at_unix_ms": policy.ExpiresAtUnixMS(),
+		}
+	}
+	return value
+}
+
+func directSignedInvocationDraftJSON(signedJSON []byte) ([]byte, error) {
+	var signed struct {
+		Prepared struct {
+			Tuple json.RawMessage `json:"tuple"`
+		} `json:"prepared"`
+		Signature InvocationSignature `json:"signature"`
+	}
+	if err := json.Unmarshal(signedJSON, &signed); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode signed invocation: %v", err), err)
+	}
+	if len(signed.Prepared.Tuple) == 0 || string(signed.Prepared.Tuple) == "null" {
+		return nil, invalidRuntimePayload("signed invocation prepared.tuple is required", nil)
+	}
+	if strings.TrimSpace(signed.Signature.Algorithm) == "" || strings.TrimSpace(signed.Signature.SignatureBase64) == "" {
+		return nil, invalidRuntimePayload("signed invocation signature is required", nil)
+	}
+	draft, err := NewInvocationDraftFromJSON(signed.Prepared.Tuple)
+	if err != nil {
+		return nil, err
+	}
+	builder := NewInvocationBuilder().
+		WithCallerURA(draft.CallerURA()).
+		WithCalleeURA(draft.CalleeURA()).
+		WithDescriptorRef(draft.DescriptorRef()).
+		WithSubjectURA(draft.SubjectURA()).
+		WithNonceBase64(draft.NonceBase64()).
+		WithCausalContext(draft.CausalContext()).
+		WithContentType(draft.ContentType()).
+		WithMetadata(draft.Metadata()).
+		WithCallerSignature(signed.Signature)
+	if draft.HasJSONArgs() {
+		builder.WithJSONArgs(draft.JSONArgs())
+	} else {
+		builder.WithArgumentsBase64(draft.ArgumentsBase64())
+	}
+	signedDraft, err := builder.Build()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(signedDraft)
+}
+
+func (t *DirectDaemonRuntimeTransport) storeDirectHandle(state string, terminal bool, result json.RawMessage) directRuntimeHandleSnapshot {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.nextHandleID++
+	handleID := t.nextHandleID
+	if handleID == 0 {
+		t.nextHandleID++
+		handleID = t.nextHandleID
+	}
+	eventKind := "terminal"
+	if !terminal {
+		eventKind = "submitted"
+	}
+	snapshot := directRuntimeHandleSnapshot{
+		handleID: handleID,
+		state:    state,
+		terminal: terminal,
+		events: []map[string]any{{
+			"sequence": uint64(1),
+			"kind":     eventKind,
+			"state":    state,
+			"terminal": terminal,
+			"result":   json.RawMessage(result),
+		}},
+		result: append(json.RawMessage(nil), result...),
+	}
+	t.handles[handleID] = snapshot
+	return snapshot
+}
+
+func (t *DirectDaemonRuntimeTransport) directHandleSnapshot(ctx context.Context, handleID uint64) (directRuntimeHandleSnapshot, error) {
+	if ctx == nil {
+		return directRuntimeHandleSnapshot{}, invalidRuntimeClient("context is required")
+	}
+	if handleID == 0 {
+		return directRuntimeHandleSnapshot{}, invalidRuntimePayload("handle_id is required", nil)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return directRuntimeHandleSnapshot{}, invalidRuntimeClient("runtime transport is closed")
+	}
+	snapshot, ok := t.handles[handleID]
+	if !ok {
+		return directRuntimeHandleSnapshot{}, &SDKError{
+			Code:      ErrNotFound,
+			Stage:     "runtime",
+			Retry:     RetryNever,
+			Retryable: RetryableForHint(RetryNever),
+			Message:   fmt.Sprintf("direct runtime handle %d not found", handleID),
+		}
+	}
+	return snapshot, nil
+}
+
+func directRuntimeHandleSnapshotJSON(snapshot directRuntimeHandleSnapshot) ([]byte, error) {
+	result := json.RawMessage("null")
+	if len(snapshot.result) > 0 {
+		result = snapshot.result
+	}
+	return json.Marshal(map[string]any{
+		"handle_id": snapshot.handleID,
+		"state":     snapshot.state,
+		"terminal":  snapshot.terminal,
+		"events":    snapshot.events,
+		"result":    result,
+	})
 }
 
 func (t *DirectDaemonRuntimeTransport) Close(ctx context.Context) error {
@@ -513,22 +801,16 @@ func (t *DirectDaemonRuntimeTransport) requireOpen(ctx context.Context) (axonpb.
 	return t.client, t.invokeTimeout, nil
 }
 
-func (t *DirectDaemonRuntimeTransport) requireHandleTransport(ctx context.Context) (RuntimeTransport, error) {
+func (t *DirectDaemonRuntimeTransport) optionalHandleTransport(ctx context.Context) (RuntimeTransport, bool, error) {
 	if _, _, err := t.requireOpen(ctx); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.handle == nil {
-		return nil, directRuntimeError(
-			"direct daemon handle transport is not configured",
-			ErrNotImplemented,
-			RetryNever,
-			map[string]any{"transport": defaultDirectRuntimeTransportName},
-			nil,
-		)
+		return nil, false, nil
 	}
-	return t.handle, nil
+	return t.handle, true, nil
 }
 
 type directDaemonStreamTransport struct {
@@ -825,7 +1107,7 @@ func directInvokeRequestFromDraftJSON(ctx context.Context, identity *IdentityCli
 	if err != nil {
 		return InvocationDraft{}, nil, err
 	}
-	return draft, &axonpb.InvokeRequest{
+	return fields.draft, &axonpb.InvokeRequest{
 		Envelope:        fields.envelope,
 		Target:          fields.target,
 		FunctionName:    fields.abilityName,
@@ -857,6 +1139,7 @@ func directStreamRequestFromDraftJSON(ctx context.Context, identity *IdentityCli
 }
 
 type directInvokeFieldSet struct {
+	draft           InvocationDraft
 	envelope        *axonpb.Envelope
 	target          *axonpb.InvocationTarget
 	abilityName     string
@@ -866,6 +1149,11 @@ type directInvokeFieldSet struct {
 }
 
 func directInvokeFields(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (directInvokeFieldSet, error) {
+	projectedDraft, abilityName, err := directExecutableInvocationDraft(ctx, identity, draft)
+	if err != nil {
+		return directInvokeFieldSet{}, err
+	}
+	draft = projectedDraft
 	nonce, err := base64.StdEncoding.DecodeString(draft.NonceBase64())
 	if err != nil {
 		return directInvokeFieldSet{}, invalidRuntimePayload(fmt.Sprintf("decode nonce_base64: %v", err), err)
@@ -878,10 +1166,6 @@ func directInvokeFields(ctx context.Context, identity *IdentityClient, draft Inv
 	if err != nil {
 		return directInvokeFieldSet{}, err
 	}
-	abilityName, err := directLocalAbilityName(ctx, identity, draft)
-	if err != nil {
-		return directInvokeFieldSet{}, err
-	}
 	metadata, err := directMetadata(draft)
 	if err != nil {
 		return directInvokeFieldSet{}, err
@@ -891,6 +1175,7 @@ func directInvokeFields(ctx context.Context, identity *IdentityClient, draft Inv
 		return directInvokeFieldSet{}, err
 	}
 	return directInvokeFieldSet{
+		draft: draft,
 		envelope: &axonpb.Envelope{
 			RequestId:       fmt.Sprintf("req-%d", time.Now().UnixNano()),
 			Caller:          directAgentIdentity(draft.CallerURA()),
@@ -909,6 +1194,18 @@ func directInvokeFields(ctx context.Context, identity *IdentityClient, draft Inv
 			Encoding:    "identity",
 		},
 	}, nil
+}
+
+func directExecutableInvocationDraft(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (InvocationDraft, string, error) {
+	abilityName, err := directLocalAbilityName(ctx, identity, draft)
+	if err != nil {
+		return InvocationDraft{}, "", err
+	}
+	projected, err := directPreparedInvocationDraftWithAbility(ctx, identity, draft, abilityName)
+	if err != nil {
+		return InvocationDraft{}, "", err
+	}
+	return projected, abilityName, nil
 }
 
 func directBidiOpenFrame(ctx context.Context, identity *IdentityClient, draft InvocationDraft, streams []*axonpb.StreamDescriptor) (*axonpb.InvokeBidiUp, error) {
@@ -979,24 +1276,72 @@ func directCallerSignature(draft InvocationDraft) (*axonpb.CallerSignature, erro
 	if err != nil {
 		return nil, invalidRuntimePayload(fmt.Sprintf("decode caller_signature.signature_base64: %v", err), err)
 	}
+	keyIDHint := strings.TrimSpace(signature.KeyIDHint)
+	if keyIDHint == "" {
+		keyIDHint = strings.TrimSpace(signature.SignerPublicKeyBase64)
+	}
 	return &axonpb.CallerSignature{
 		Algorithm: signature.Algorithm,
 		Signature: decoded,
-		KeyIdHint: signature.KeyIDHint,
+		KeyIdHint: keyIDHint,
 	}, nil
 }
 
 func directMetadata(draft InvocationDraft) (map[string]string, error) {
 	result := map[string]string{}
 	for key, value := range draft.Metadata() {
-		stringValue, ok := value.(string)
+		stringValue, ok, err := directMetadataValueString(key, value)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
-			return nil, invalidRuntimePayload("metadata must be a string-to-string map for Axon InvokeRequest", nil)
+			continue
 		}
 		result[key] = stringValue
 	}
 	result[directSignedDescriptorRefMetadata] = draft.DescriptorRef()
 	return result, nil
+}
+
+func directMetadataValueString(key string, value any) (string, bool, error) {
+	switch v := value.(type) {
+	case nil:
+		return "", false, nil
+	case string:
+		return v, true, nil
+	case bool:
+		return strconv.FormatBool(v), true, nil
+	case int:
+		return strconv.FormatInt(int64(v), 10), true, nil
+	case int8:
+		return strconv.FormatInt(int64(v), 10), true, nil
+	case int16:
+		return strconv.FormatInt(int64(v), 10), true, nil
+	case int32:
+		return strconv.FormatInt(int64(v), 10), true, nil
+	case int64:
+		return strconv.FormatInt(v, 10), true, nil
+	case uint:
+		return strconv.FormatUint(uint64(v), 10), true, nil
+	case uint8:
+		return strconv.FormatUint(uint64(v), 10), true, nil
+	case uint16:
+		return strconv.FormatUint(uint64(v), 10), true, nil
+	case uint32:
+		return strconv.FormatUint(uint64(v), 10), true, nil
+	case uint64:
+		return strconv.FormatUint(v, 10), true, nil
+	case float32:
+		return strconv.FormatFloat(float64(v), 'f', -1, 32), true, nil
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64), true, nil
+	default:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return "", false, invalidRuntimePayload(fmt.Sprintf("metadata[%q] must be JSON-encodable for Axon InvokeRequest: %v", key, err), err)
+		}
+		return string(raw), true, nil
+	}
 }
 
 func directCausalContext(value map[string]any) (*axonpb.CausalContext, error) {
@@ -1430,6 +1775,8 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 		code, retry, retryable = ErrAbilityNotFound, RetryNever, false
 	case codes.Unimplemented:
 		code, retry, retryable = ErrProtocolMismatch, RetryNever, false
+	case codes.Unknown, codes.Internal, codes.DataLoss:
+		code, retry, retryable = ErrProtocolMismatch, RetryNever, false
 	}
 	return &SDKError{
 		Code:      code,
@@ -1461,13 +1808,64 @@ func durationFromMillis(value int64, fallback time.Duration) time.Duration {
 	return time.Duration(value) * time.Millisecond
 }
 
-func grpcUDSTarget(endpoint string) string {
-	return strings.TrimPrefix(endpoint, "unix://")
+func directRuntimeDialTarget(endpoint string) (string, []grpc.DialOption, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", nil, invalidRuntimeClient("endpoint is required")
+	}
+	if directRuntimeEndpointIsUDS(endpoint) {
+		socketPath := strings.TrimPrefix(endpoint, "unix://")
+		return "passthrough:///easynet-daemon", []grpc.DialOption{
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithContextDialer(directRuntimeUDSDialer(socketPath)),
+		}, nil
+	}
+	if !strings.Contains(endpoint, "://") {
+		return endpoint, []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, nil
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", nil, invalidRuntimePayload(fmt.Sprintf("parse daemon invocation endpoint: %v", err), err)
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+		return "", nil, directRuntimeError(
+			"http(s) endpoints are Hub/public endpoints, not direct daemon Invocation endpoints; use unix://, grpc://, grpcs://, axon://, or host:port",
+			ErrProtocolMismatch,
+			RetryNever,
+			map[string]any{"endpoint": endpoint, "scheme": parsed.Scheme},
+			nil,
+		)
+	case "grpc":
+		target := parsed.Host
+		if target == "" {
+			return "", nil, invalidRuntimePayload("grpc daemon invocation endpoint requires host", nil)
+		}
+		return target, []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, nil
+	case "grpcs", "axon":
+		target := parsed.Host
+		if target == "" {
+			return "", nil, invalidRuntimePayload(parsed.Scheme+" daemon invocation endpoint requires host", nil)
+		}
+		// Direct runtime discovery currently does not carry a CA bundle. The
+		// endpoint is read from the local daemon control plane; use TLS for the
+		// transport class and leave endpoint authenticity to daemon discovery.
+		tlsConfig := &tls.Config{ServerName: parsed.Hostname(), InsecureSkipVerify: true}
+		return target, []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))}, nil
+	default:
+		return "", nil, invalidRuntimePayload(fmt.Sprintf("unsupported daemon invocation endpoint scheme %q", parsed.Scheme), nil)
+	}
 }
 
-func directRuntimeDialer(ctx context.Context, address string) (net.Conn, error) {
-	dialer := net.Dialer{}
-	return dialer.DialContext(ctx, "unix", strings.TrimPrefix(address, "unix:"))
+func directRuntimeEndpointIsUDS(endpoint string) bool {
+	return strings.HasPrefix(endpoint, "/") || strings.HasPrefix(endpoint, "unix://")
+}
+
+func directRuntimeUDSDialer(socketPath string) func(context.Context, string) (net.Conn, error) {
+	return func(ctx context.Context, _ string) (net.Conn, error) {
+		dialer := net.Dialer{}
+		return dialer.DialContext(ctx, "unix", socketPath)
+	}
 }
 
 func numericJSONValue(value any) float64 {
