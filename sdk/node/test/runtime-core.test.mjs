@@ -35,6 +35,7 @@ import {
   ReceiptClient,
   ReceiptRef,
   RuntimeClient,
+  RetryHint,
   SDKError,
   SESSION_AUTHORITY_METADATA_KEY,
   SessionAuthority,
@@ -1346,6 +1347,25 @@ test("typed daemon error JSON rejects legacy code aliases", () => {
         ),
       (error) => error instanceof SDKError && error.code === ErrorCode.INVALID_ARGUMENT,
     );
+  }
+});
+
+test("RFC-014 admission error categories classify consistently", () => {
+  const cases = [
+    [ErrorCode.HTTP_AUTH_DENIED, ErrorClass.PERMISSION],
+    [ErrorCode.SIGNATURE_DENIED, ErrorClass.ADMISSION],
+    [ErrorCode.POLICY_DENIED, ErrorClass.ADMISSION],
+    [ErrorCode.AUTHORITY_DENIED, ErrorClass.ADMISSION],
+    [ErrorCode.EXECUTION_FAILED, ErrorClass.ADMISSION],
+  ];
+  for (const [code, expectedClass] of cases) {
+    const error = new SDKError({
+      code,
+      stage: "admission",
+      message: code,
+      retry: RetryHint.NEVER,
+    });
+    assert.equal(error.errorClass(), expectedClass);
   }
 });
 

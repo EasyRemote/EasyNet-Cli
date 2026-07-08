@@ -6,8 +6,13 @@ public enum SDKErrorCode: String, Sendable {
     case daemonOffline = "DAEMON_OFFLINE"
     case permissionDenied = "PERMISSION_DENIED"
     case admissionDenied = "ADMISSION_DENIED"
+    case httpAuthDenied = "HTTP_AUTH_DENIED"
+    case signatureDenied = "SIGNATURE_DENIED"
+    case policyDenied = "POLICY_DENIED"
+    case authorityDenied = "AUTHORITY_DENIED"
     case abilityNotFound = "ABILITY_NOT_FOUND"
     case routeUnavailable = "ROUTE_UNAVAILABLE"
+    case executionFailed = "EXECUTION_FAILED"
     case timeout = "TIMEOUT"
     case cancelled = "CANCELLED"
     case invalidInvocation = "INVALID_INVOCATION"
@@ -92,9 +97,9 @@ public struct SDKError: Error, Sendable, CustomStringConvertible {
             return .handle
         case .daemonOffline, .routeUnavailable, .transport:
             return .availability
-        case .permissionDenied:
+        case .permissionDenied, .httpAuthDenied:
             return .permission
-        case .admissionDenied:
+        case .admissionDenied, .signatureDenied, .policyDenied, .authorityDenied, .executionFailed:
             return .admission
         case .abilityNotFound:
             return .routing

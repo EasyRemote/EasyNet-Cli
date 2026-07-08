@@ -20,8 +20,13 @@ class ErrorCode(StrEnum):
     DAEMON_OFFLINE = "DAEMON_OFFLINE"
     PERMISSION_DENIED = "PERMISSION_DENIED"
     ADMISSION_DENIED = "ADMISSION_DENIED"
+    HTTP_AUTH_DENIED = "HTTP_AUTH_DENIED"
+    SIGNATURE_DENIED = "SIGNATURE_DENIED"
+    POLICY_DENIED = "POLICY_DENIED"
+    AUTHORITY_DENIED = "AUTHORITY_DENIED"
     ABILITY_NOT_FOUND = "ABILITY_NOT_FOUND"
     ROUTE_UNAVAILABLE = "ROUTE_UNAVAILABLE"
+    EXECUTION_FAILED = "EXECUTION_FAILED"
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
     INVALID_INVOCATION = "INVALID_INVOCATION"
@@ -192,9 +197,16 @@ def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
             return ErrorClass.LIFECYCLE
         case ErrorCode.DAEMON_OFFLINE | ErrorCode.TRANSPORT:
             return ErrorClass.AVAILABILITY
-        case ErrorCode.PERMISSION_DENIED:
+        case ErrorCode.PERMISSION_DENIED | ErrorCode.HTTP_AUTH_DENIED:
             return ErrorClass.PERMISSION
-        case ErrorCode.ADMISSION_DENIED | ErrorCode.ABILITY_FAILED:
+        case (
+            ErrorCode.ADMISSION_DENIED
+            | ErrorCode.SIGNATURE_DENIED
+            | ErrorCode.POLICY_DENIED
+            | ErrorCode.AUTHORITY_DENIED
+            | ErrorCode.EXECUTION_FAILED
+            | ErrorCode.ABILITY_FAILED
+        ):
             return ErrorClass.ADMISSION
         case ErrorCode.ABILITY_NOT_FOUND | ErrorCode.ROUTE_UNAVAILABLE | ErrorCode.NOT_FOUND:
             return ErrorClass.ROUTING

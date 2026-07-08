@@ -70,6 +70,26 @@ public final class RuntimeCoreSeamTest {
     client.close();
     expectSDKError(ErrorCode.INVALID_HANDLE, client::featureDiscovery);
     check(SDKError.validation("x", "bad").errorClass() == ErrorClass.VALIDATION, "error class");
+    check(
+        sdkError(ErrorCode.HTTP_AUTH_DENIED, "auth", "denied").errorClass()
+            == ErrorClass.PERMISSION,
+        "http auth class");
+    check(
+        sdkError(ErrorCode.SIGNATURE_DENIED, "admission", "denied").errorClass()
+            == ErrorClass.ADMISSION,
+        "signature class");
+    check(
+        sdkError(ErrorCode.POLICY_DENIED, "admission", "denied").errorClass()
+            == ErrorClass.ADMISSION,
+        "policy class");
+    check(
+        sdkError(ErrorCode.AUTHORITY_DENIED, "admission", "denied").errorClass()
+            == ErrorClass.ADMISSION,
+        "authority class");
+    check(
+        sdkError(ErrorCode.EXECUTION_FAILED, "execution", "failed").errorClass()
+            == ErrorClass.ADMISSION,
+        "execution class");
   }
 
   private static void completeInvocationDraftAndRuntimeDispatch() throws Exception {
@@ -1601,6 +1621,10 @@ public final class RuntimeCoreSeamTest {
       throw new AssertionError("expected SDKError, got " + error, error);
     }
     throw new AssertionError("expected SDKError " + code);
+  }
+
+  private static SDKError sdkError(ErrorCode code, String stage, String message) {
+    return new SDKError(code, stage, RetryHint.NEVER, false, message, "", "", "", Map.of(), null);
   }
 
   private static void check(boolean condition, String message) {

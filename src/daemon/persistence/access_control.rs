@@ -178,6 +178,7 @@ pub struct AccessControlStore {
     grants: BTreeMap<String, PermissionGrant>,
     requests: BTreeMap<String, PermissionRequest>,
     proofs: BTreeMap<String, AuthorityProof>,
+    consumed_proof_ids: BTreeSet<String>,
     audit: BTreeMap<String, GrantAuditRecord>,
     last_sequence: u64,
     head_hash: String,
@@ -235,6 +236,7 @@ impl AccessControlStore {
             grants: BTreeMap::new(),
             requests: BTreeMap::new(),
             proofs: BTreeMap::new(),
+            consumed_proof_ids: BTreeSet::new(),
             audit: BTreeMap::new(),
             last_sequence: 0,
             head_hash: ZERO_HASH.to_string(),
@@ -533,6 +535,9 @@ impl AccessControlStore {
         if self.proofs.contains_key(&proof.proof_id) {
             anyhow::bail!("authority proof `{}` already exists", proof.proof_id);
         }
+        if self.consumed_proof_ids.contains(&proof.proof_id) {
+            anyhow::bail!("authority proof `{}` was already consumed", proof.proof_id);
+        }
         self.append(
             RecordKind::AuthorityProof,
             &proof.proof_id,
@@ -541,6 +546,33 @@ impl AccessControlStore {
             actor_ura,
         )?;
         self.proofs.insert(proof.proof_id.clone(), proof.clone());
+        Ok(proof)
+    }
+
+    pub fn consume_authority_proof_once(
+        &mut self,
+        proof_id: &str,
+        actor_ura: &str,
+    ) -> anyhow::Result<AuthorityProof> {
+        let proof = self
+            .proofs
+            .get(proof_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("authority proof `{proof_id}` not found"))?;
+        if !is_one_time_authority_proof(&proof) {
+            anyhow::bail!("authority proof `{proof_id}` is not a one-time proof");
+        }
+        if self.consumed_proof_ids.contains(proof_id) {
+            anyhow::bail!("authority proof `{proof_id}` was already consumed");
+        }
+        self.append(
+            RecordKind::AuthorityProof,
+            proof_id,
+            RecordOperation::Consumed,
+            serde_json::to_value(&proof)?,
+            actor_ura,
+        )?;
+        self.consumed_proof_ids.insert(proof_id.to_string());
         Ok(proof)
     }
 
@@ -614,7 +646,32 @@ impl AccessControlStore {
             }
             RecordKind::AuthorityProof => {
                 let proof: AuthorityProof = serde_json::from_value(record.payload)?;
-                self.proofs.insert(proof.proof_id.clone(), proof);
+                match record.operation {
+                    RecordOperation::Consumed => {
+                        if !self.proofs.contains_key(&proof.proof_id) {
+                            anyhow::bail!(
+                                "authority proof `{}` consumed before creation",
+                                proof.proof_id
+                            );
+                        }
+                        self.consumed_proof_ids.insert(proof.proof_id);
+                    }
+                    RecordOperation::Created => {
+                        if self.consumed_proof_ids.contains(&proof.proof_id) {
+                            anyhow::bail!(
+                                "authority proof `{}` recreated after consumption",
+                                proof.proof_id
+                            );
+                        }
+                        self.proofs.insert(proof.proof_id.clone(), proof);
+                    }
+                    _ => {
+                        anyhow::bail!(
+                            "unsupported authority proof journal operation `{:?}`",
+                            record.operation
+                        );
+                    }
+                }
             }
             RecordKind::Audit => {
                 let audit: GrantAuditRecord = serde_json::from_value(record.payload)?;
@@ -947,10 +1004,35 @@ fn validate_proof_resolves_request(
     {
         anyhow::bail!("authority proof canonical hash does not match PermissionRequest");
     }
+    if !proof_binds_permission_request_invocation(proof, request) {
+        anyhow::bail!("authority proof must bind PermissionRequest nonce or canonical_hash");
+    }
     if DateTime::parse_from_rfc3339(&proof.expires_at).is_err() {
         anyhow::bail!("authority proof expires_at must be RFC3339");
     }
     Ok(())
+}
+
+fn proof_binds_permission_request_invocation(
+    proof: &AuthorityProof,
+    request: &PermissionRequest,
+) -> bool {
+    proof
+        .nonce
+        .as_deref()
+        .map(str::trim)
+        .filter(|nonce| !nonce.is_empty())
+        .is_some_and(|nonce| Some(nonce) == request.nonce.as_deref())
+        || proof
+            .canonical_hash
+            .as_deref()
+            .map(str::trim)
+            .filter(|hash| !hash.is_empty())
+            .is_some_and(|hash| Some(hash) == request.canonical_hash.as_deref())
+}
+
+fn is_one_time_authority_proof(proof: &AuthorityProof) -> bool {
+    proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
 }
 
 fn permission_request_idempotency_key(request: &PermissionRequest) -> String {
@@ -1292,6 +1374,69 @@ mod tests {
     }
 
     #[test]
+    fn approved_request_rejects_unbound_authority_proof() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let pending = store
+            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .expect("create pending request");
+        let mut approved = pending;
+        approved.status = PermissionRequestStatus::Approved;
+        let mut proof = proof_for_request("proof-request-1", &approved);
+        proof.nonce = None;
+        proof.canonical_hash = None;
+
+        let err = store
+            .resolve_permission_request_with_authority_proof(
+                approved,
+                proof,
+                "easynet:///r/test/user/alice",
+            )
+            .expect_err("proof-backed approval must bind invocation identity");
+        assert!(err
+            .to_string()
+            .contains("authority proof must bind PermissionRequest nonce or canonical_hash"));
+        assert_eq!(store.requests()[0].status, PermissionRequestStatus::Pending);
+        assert!(store.proofs().is_empty());
+    }
+
+    #[test]
+    fn one_time_authority_proof_consumption_is_durable_and_single_use() {
+        let _home = HomeGuard::new();
+        let root = default_policy_store_dir();
+        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let pending = store
+            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .expect("create pending request");
+        let mut approved = pending;
+        approved.status = PermissionRequestStatus::Approved;
+        let proof = proof_for_request("proof-request-1", &approved);
+
+        store
+            .resolve_permission_request_with_authority_proof(
+                approved,
+                proof,
+                "easynet:///r/test/user/alice",
+            )
+            .expect("proof-backed approval");
+        let consumed = store
+            .consume_authority_proof_once("proof-request-1", "easynet:///r/test/device/dev")
+            .expect("consume proof");
+        assert_eq!(consumed.proof_id, "proof-request-1");
+        let err = store
+            .consume_authority_proof_once("proof-request-1", "easynet:///r/test/device/dev")
+            .expect_err("one-time proof must not be reusable");
+        assert!(err.to_string().contains("was already consumed"));
+
+        let mut reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        let err = reopened
+            .consume_authority_proof_once("proof-request-1", "easynet:///r/test/device/dev")
+            .expect_err("consumed proof must stay consumed after replay");
+        assert!(err.to_string().contains("was already consumed"));
+    }
+
+    #[test]
     fn request_creation_rejects_unbounded_prompt_shape() {
         let _home = HomeGuard::new();
         let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
@@ -1419,6 +1564,33 @@ mod tests {
             updated_at: None,
             revoked_at: None,
             reason: None,
+        }
+    }
+
+    fn proof_for_request(id: &str, request: &PermissionRequest) -> AuthorityProof {
+        AuthorityProof {
+            proof_id: id.to_string(),
+            grant_id: None,
+            permission_request_id: Some(request.request_id.clone()),
+            owner_user_id: request.owner_user_id.clone(),
+            principal_kind: request.principal_kind,
+            principal_id: request.principal_id.clone(),
+            token_id: request.token_id.clone(),
+            callee_ura: request.callee_ura.clone(),
+            subject_ura: request.subject_ura.clone(),
+            ability_ura: request.ability_ura.clone(),
+            action: request.action,
+            nonce: request.nonce.clone(),
+            canonical_hash: request.canonical_hash.clone(),
+            session_id: None,
+            session_owner_user_id: None,
+            allowed_followup_abilities: vec![],
+            session_expires_at: None,
+            issued_at: "2026-07-09T00:01:00Z".to_string(),
+            expires_at: "2026-07-09T00:05:00Z".to_string(),
+            issuer_ura: "easynet:///r/test/user/alice".to_string(),
+            audience_ura: request.callee_ura.clone(),
+            signature: "ed25519:test".to_string(),
         }
     }
 }

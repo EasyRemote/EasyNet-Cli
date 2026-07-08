@@ -63,9 +63,14 @@ class ErrorTests(unittest.TestCase):
             "DAEMON_OFFLINE": ErrorCode.DAEMON_OFFLINE,
             "VERSION_MISMATCH": ErrorCode.VERSION_MISMATCH,
             "ADMISSION_DENIED": ErrorCode.ADMISSION_DENIED,
+            "HTTP_AUTH_DENIED": ErrorCode.HTTP_AUTH_DENIED,
+            "SIGNATURE_DENIED": ErrorCode.SIGNATURE_DENIED,
+            "POLICY_DENIED": ErrorCode.POLICY_DENIED,
+            "AUTHORITY_DENIED": ErrorCode.AUTHORITY_DENIED,
             "ABILITY_NOT_FOUND": ErrorCode.ABILITY_NOT_FOUND,
             "PROTOCOL_MISMATCH": ErrorCode.PROTOCOL_MISMATCH,
             "ROUTE_UNAVAILABLE": ErrorCode.ROUTE_UNAVAILABLE,
+            "EXECUTION_FAILED": ErrorCode.EXECUTION_FAILED,
         }
         for raw, expected in cases.items():
             with self.subTest(raw=raw):
@@ -94,7 +99,12 @@ class ErrorTests(unittest.TestCase):
             ErrorCode.DAEMON_OFFLINE: ErrorClass.AVAILABILITY,
             ErrorCode.TRANSPORT: ErrorClass.AVAILABILITY,
             ErrorCode.PERMISSION_DENIED: ErrorClass.PERMISSION,
+            ErrorCode.HTTP_AUTH_DENIED: ErrorClass.PERMISSION,
             ErrorCode.ADMISSION_DENIED: ErrorClass.ADMISSION,
+            ErrorCode.SIGNATURE_DENIED: ErrorClass.ADMISSION,
+            ErrorCode.POLICY_DENIED: ErrorClass.ADMISSION,
+            ErrorCode.AUTHORITY_DENIED: ErrorClass.ADMISSION,
+            ErrorCode.EXECUTION_FAILED: ErrorClass.ADMISSION,
             ErrorCode.ABILITY_FAILED: ErrorClass.ADMISSION,
             ErrorCode.ABILITY_NOT_FOUND: ErrorClass.ROUTING,
             ErrorCode.NOT_FOUND: ErrorClass.ROUTING,

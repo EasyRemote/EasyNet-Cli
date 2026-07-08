@@ -219,6 +219,9 @@ fn verify_invocation_binding(
             return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
         }
     }
+    if is_request_scoped_one_time_proof(proof) && !proof_binds_invocation_identity(proof) {
+        return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
     Ok(())
 }
 
@@ -231,6 +234,23 @@ fn normalized_followup_abilities(abilities: &[String]) -> Vec<String> {
     abilities.sort();
     abilities.dedup();
     abilities
+}
+
+fn is_request_scoped_one_time_proof(proof: &AuthorityProof) -> bool {
+    proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
+}
+
+fn proof_binds_invocation_identity(proof: &AuthorityProof) -> bool {
+    proof
+        .nonce
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|nonce| !nonce.is_empty())
+        || proof
+            .canonical_hash
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|hash| !hash.is_empty())
 }
 
 fn verify_signature(
@@ -449,6 +469,24 @@ mod tests {
         let resolver = resign(&mut proof);
         let err = AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver)
             .expect_err("session proof must admit current follow-up ability");
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
+    fn verifier_rejects_unbound_request_scoped_one_time_proof() {
+        let (mut proof, _resolver) = signed_proof();
+        proof.grant_id = None;
+        proof.permission_request_id = Some("req-1".to_string());
+        proof.nonce = None;
+        proof.canonical_hash = None;
+        proof.session_id = None;
+        proof.session_owner_user_id = None;
+        proof.allowed_followup_abilities.clear();
+        proof.session_expires_at = None;
+        let resolver = resign(&mut proof);
+
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver)
+            .expect_err("request-scoped one-time proof must bind invocation identity");
         assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
     }
 }

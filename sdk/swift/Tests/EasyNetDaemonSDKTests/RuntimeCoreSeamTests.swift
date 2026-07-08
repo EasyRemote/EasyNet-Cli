@@ -16,6 +16,11 @@ final class RuntimeCoreSeamTests: XCTestCase {
             _ = try await client.featureDiscovery()
         }
         XCTAssertEqual(SDKError.validation("x", "bad").errorClass, .validation)
+        XCTAssertEqual(SDKError(code: .httpAuthDenied, stage: "auth", message: "denied").errorClass, .permission)
+        XCTAssertEqual(SDKError(code: .signatureDenied, stage: "admission", message: "denied").errorClass, .admission)
+        XCTAssertEqual(SDKError(code: .policyDenied, stage: "admission", message: "denied").errorClass, .admission)
+        XCTAssertEqual(SDKError(code: .authorityDenied, stage: "admission", message: "denied").errorClass, .admission)
+        XCTAssertEqual(SDKError(code: .executionFailed, stage: "execution", message: "failed").errorClass, .admission)
     }
 
     func testCompleteInvocationDraftAndRuntimeDispatch() async throws {

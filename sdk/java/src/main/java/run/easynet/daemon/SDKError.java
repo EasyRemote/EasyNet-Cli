@@ -102,8 +102,10 @@ public final class SDKError extends RuntimeException {
       case INVALID_ARGUMENT, INVALID_INVOCATION -> ErrorClass.VALIDATION;
       case INVALID_HANDLE, NOT_INITIALIZED -> ErrorClass.HANDLE;
       case DAEMON_OFFLINE, ROUTE_UNAVAILABLE, TRANSPORT -> ErrorClass.AVAILABILITY;
-      case PERMISSION_DENIED -> ErrorClass.PERMISSION;
-      case ADMISSION_DENIED -> ErrorClass.ADMISSION;
+      case PERMISSION_DENIED, HTTP_AUTH_DENIED -> ErrorClass.PERMISSION;
+      case ADMISSION_DENIED, SIGNATURE_DENIED, POLICY_DENIED, AUTHORITY_DENIED,
+              EXECUTION_FAILED ->
+          ErrorClass.ADMISSION;
       case ABILITY_NOT_FOUND -> ErrorClass.ROUTING;
       case TIMEOUT -> ErrorClass.TIMEOUT;
       case CANCELLED -> ErrorClass.CANCELLATION;

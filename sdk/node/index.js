@@ -10,8 +10,13 @@ const ERROR_CODES = new Set([
   "DAEMON_OFFLINE",
   "PERMISSION_DENIED",
   "ADMISSION_DENIED",
+  "HTTP_AUTH_DENIED",
+  "SIGNATURE_DENIED",
+  "POLICY_DENIED",
+  "AUTHORITY_DENIED",
   "ABILITY_NOT_FOUND",
   "ROUTE_UNAVAILABLE",
+  "EXECUTION_FAILED",
   "TIMEOUT",
   "CANCELLED",
   "INVALID_INVOCATION",
@@ -6671,8 +6676,13 @@ function errorClassForCode(code) {
     case ErrorCode.TRANSPORT:
       return ErrorClass.AVAILABILITY;
     case ErrorCode.PERMISSION_DENIED:
+    case ErrorCode.HTTP_AUTH_DENIED:
       return ErrorClass.PERMISSION;
     case ErrorCode.ADMISSION_DENIED:
+    case ErrorCode.SIGNATURE_DENIED:
+    case ErrorCode.POLICY_DENIED:
+    case ErrorCode.AUTHORITY_DENIED:
+    case ErrorCode.EXECUTION_FAILED:
     case ErrorCode.ABILITY_FAILED:
       return ErrorClass.ADMISSION;
     case ErrorCode.ABILITY_NOT_FOUND:

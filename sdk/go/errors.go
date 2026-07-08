@@ -20,8 +20,13 @@ const (
 	ErrDaemonOffline       ErrorCode = "DAEMON_OFFLINE"
 	ErrPermissionDenied    ErrorCode = "PERMISSION_DENIED"
 	ErrAdmissionDenied     ErrorCode = "ADMISSION_DENIED"
+	ErrHTTPAuthDenied      ErrorCode = "HTTP_AUTH_DENIED"
+	ErrSignatureDenied     ErrorCode = "SIGNATURE_DENIED"
+	ErrPolicyDenied        ErrorCode = "POLICY_DENIED"
+	ErrAuthorityDenied     ErrorCode = "AUTHORITY_DENIED"
 	ErrAbilityNotFound     ErrorCode = "ABILITY_NOT_FOUND"
 	ErrRouteUnavailable    ErrorCode = "ROUTE_UNAVAILABLE"
+	ErrExecutionFailed     ErrorCode = "EXECUTION_FAILED"
 	ErrTimeout             ErrorCode = "TIMEOUT"
 	ErrCancelled           ErrorCode = "CANCELLED"
 	ErrInvalidInvocation   ErrorCode = "INVALID_INVOCATION"
@@ -147,9 +152,10 @@ func ErrorClassForCode(code ErrorCode) ErrorClass {
 		return ErrorClassLifecycle
 	case ErrDaemonOffline, ErrTransport:
 		return ErrorClassAvailability
-	case ErrPermissionDenied:
+	case ErrPermissionDenied, ErrHTTPAuthDenied:
 		return ErrorClassPermission
-	case ErrAdmissionDenied, ErrAbilityFailed:
+	case ErrAdmissionDenied, ErrSignatureDenied, ErrPolicyDenied, ErrAuthorityDenied,
+		ErrExecutionFailed, ErrAbilityFailed:
 		return ErrorClassAdmission
 	case ErrAbilityNotFound, ErrRouteUnavailable, ErrNotFound:
 		return ErrorClassRouting
@@ -252,10 +258,20 @@ func ParseErrorCode(code string) (ErrorCode, error) {
 		return ErrPermissionDenied, nil
 	case "ADMISSION_DENIED":
 		return ErrAdmissionDenied, nil
+	case "HTTP_AUTH_DENIED":
+		return ErrHTTPAuthDenied, nil
+	case "SIGNATURE_DENIED":
+		return ErrSignatureDenied, nil
+	case "POLICY_DENIED":
+		return ErrPolicyDenied, nil
+	case "AUTHORITY_DENIED":
+		return ErrAuthorityDenied, nil
 	case "ABILITY_NOT_FOUND":
 		return ErrAbilityNotFound, nil
 	case "ROUTE_UNAVAILABLE":
 		return ErrRouteUnavailable, nil
+	case "EXECUTION_FAILED":
+		return ErrExecutionFailed, nil
 	case "TIMEOUT":
 		return ErrTimeout, nil
 	case "CANCELLED":
