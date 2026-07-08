@@ -124,6 +124,9 @@ use crate::daemon::invocation::admission::decision::{
 use crate::daemon::invocation::admission::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
+use crate::daemon::invocation::admission::grant_matcher::{
+    GrantMatchInput, PermissionEffect, PermissionGrant, PermissionGrantMatcher,
+};
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::admission::policy_gate::{
@@ -1124,7 +1127,7 @@ impl AuthorityProofIssuerResolver for StoreBackedAuthorityProofResolver<'_> {
             (Some(grant_id), None) => self
                 .store
                 .grant(grant_id)
-                .is_some_and(|grant| grant.admissible_for(proof.action, self.now)),
+                .is_some_and(|grant| grant_authorizes_proof(grant, proof, self.now)),
             (None, Some(request_id)) => self.store.request(request_id).is_some_and(|request| {
                 request.status == PermissionRequestStatus::Approved
                     && request.authority_proof_id.as_deref() == Some(proof.proof_id.as_str())
@@ -1132,6 +1135,28 @@ impl AuthorityProofIssuerResolver for StoreBackedAuthorityProofResolver<'_> {
             _ => false,
         }
     }
+}
+
+fn grant_authorizes_proof(
+    grant: &PermissionGrant,
+    proof: &AuthorityProof,
+    now: DateTime<Utc>,
+) -> bool {
+    let matcher = PermissionGrantMatcher::new(std::slice::from_ref(grant));
+    let input = GrantMatchInput {
+        owner_user_id: &proof.owner_user_id,
+        principal_kind: proof.principal_kind,
+        principal_id: &proof.principal_id,
+        token_id: proof.token_id.as_deref(),
+        callee_ura: &proof.callee_ura,
+        subject_ura: &proof.subject_ura,
+        ability_ura: &proof.ability_ura,
+        action: proof.action,
+        now,
+    };
+    matcher
+        .find_active(&input, PermissionEffect::Allow)
+        .is_some_and(|matched| matched.grant_id == grant.grant_id)
 }
 
 fn authority_proof_from_metadata(
@@ -1935,6 +1960,9 @@ mod tests {
     use crate::daemon::invocation::admission::decision::{
         PermissionLifetime, PermissionRequest, PrincipalKind,
     };
+    use crate::daemon::invocation::admission::grant_matcher::{
+        PermissionGrantLifetime, PermissionGrantState,
+    };
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
     use easynet_axon::pb::axon::v1::CallerSignature as PbCallerSignature;
     use ed25519_dalek::{Signer, SigningKey};
@@ -2400,6 +2428,74 @@ mod tests {
         assert!(
             reopened.proof_consumed("proof-metadata-1"),
             "one-time proof must be durably consumed"
+        );
+    }
+
+    #[test]
+    fn grant_backed_authority_proof_requires_matching_grant_scope() {
+        let now = DateTime::parse_from_rfc3339("2026-07-09T00:00:00Z")
+            .expect("time")
+            .with_timezone(&Utc);
+        let subject_ura = "easynet:///r/realm/resource/user.alice/screen";
+        let ability_ura = "easynet:///r/realm/ability/hub.remote_desktop.attach";
+        let grant = PermissionGrant {
+            grant_id: "grant-rdp-stream".to_string(),
+            owner_user_id: "alice".to_string(),
+            principal_kind: PrincipalKind::Service,
+            principal_id: "easynet:///r/other/hub".to_string(),
+            token_id: None,
+            token_class: None,
+            callee_ura: Some("easynet:///r/realm/hub".to_string()),
+            subject_ura_pattern: Some(subject_ura.to_string()),
+            ability_ura_pattern: Some(ability_ura.to_string()),
+            actions: vec![AccessAction::Stream],
+            constraints: None,
+            effect: PermissionEffect::Allow,
+            lifetime: PermissionGrantLifetime::Ttl,
+            state: PermissionGrantState::Active,
+            expires_at: Some("2099-01-01T00:00:00Z".to_string()),
+            review_required_after: None,
+            last_reviewed_at: None,
+            last_used_at: None,
+            created_by: "easynet:///r/realm/user/alice".to_string(),
+            created_at: "2026-07-09T00:00:00Z".to_string(),
+            updated_at: None,
+            revoked_at: None,
+            reason: None,
+        };
+        let mut proof = AuthorityProof {
+            proof_id: "proof-grant-1".to_string(),
+            grant_id: Some(grant.grant_id.clone()),
+            permission_request_id: None,
+            owner_user_id: "alice".to_string(),
+            principal_kind: PrincipalKind::Service,
+            principal_id: grant.principal_id.clone(),
+            token_id: None,
+            callee_ura: "easynet:///r/realm/hub".to_string(),
+            subject_ura: subject_ura.to_string(),
+            ability_ura: ability_ura.to_string(),
+            action: AccessAction::Stream,
+            nonce: None,
+            canonical_hash: Some("sha256:abc".to_string()),
+            session_id: None,
+            session_owner_user_id: None,
+            allowed_followup_abilities: vec![],
+            session_expires_at: None,
+            issued_at: "2026-07-09T00:00:00Z".to_string(),
+            expires_at: "2099-01-01T00:00:00Z".to_string(),
+            issuer_ura: "easynet:///r/realm/user/alice".to_string(),
+            audience_ura: "easynet:///r/realm/hub".to_string(),
+            signature: "ed25519:test".to_string(),
+        };
+
+        assert!(
+            grant_authorizes_proof(&grant, &proof, now),
+            "matching grant-backed proof should inherit the referenced grant scope"
+        );
+        proof.subject_ura = "easynet:///r/realm/resource/user.alice/other-screen".to_string();
+        assert!(
+            !grant_authorizes_proof(&grant, &proof, now),
+            "proof must not borrow liveness from a grant with a different subject scope"
         );
     }
 

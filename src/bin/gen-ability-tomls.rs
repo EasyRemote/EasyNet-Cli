@@ -174,6 +174,9 @@ fn delete_stale_descriptors(
     live_names: &BTreeSet<String>,
     deleted: &mut Vec<String>,
 ) -> anyhow::Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
     // Stale-file removal. Any `<name>.ability.toml` whose name is NOT in
     // `live_names` AND whose body parses as TOML gets deleted. Files that
     // don't match the strict descriptor suffix are left alone.

@@ -7,7 +7,13 @@ type = "object"
 required = ["owner_user_id"]
 additionalProperties = false
 
+[input_schema.properties.ability_ura_pattern]
+type = "string"
+
 [input_schema.properties.action]
+type = "string"
+
+[input_schema.properties.callee_ura]
 type = "string"
 
 [input_schema.properties.effect]
@@ -20,6 +26,9 @@ type = "string"
 type = "string"
 
 [input_schema.properties.state]
+type = "string"
+
+[input_schema.properties.subject_ura_pattern]
 type = "string"
 
 [input_schema.properties.token_id]

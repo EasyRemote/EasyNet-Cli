@@ -7,6 +7,24 @@ type = "object"
 required = ["owner_user_id"]
 additionalProperties = false
 
+[input_schema.properties.ability_ura]
+type = "string"
+
+[input_schema.properties.callee_ura]
+type = "string"
+
+[input_schema.properties.created_at]
+type = "string"
+format = "date-time"
+
+[input_schema.properties.created_at_or_after]
+type = "string"
+format = "date-time"
+
+[input_schema.properties.created_at_or_before]
+type = "string"
+format = "date-time"
+
 [input_schema.properties.owner_user_id]
 type = "string"
 
@@ -14,6 +32,9 @@ type = "string"
 type = "string"
 
 [input_schema.properties.status]
+type = "string"
+
+[input_schema.properties.subject_ura]
 type = "string"
 
 [input_schema.properties.token_id]

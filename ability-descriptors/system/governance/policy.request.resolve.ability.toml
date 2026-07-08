@@ -10,5 +10,11 @@ additionalProperties = false
 [input_schema.properties.actor_ura]
 type = "string"
 
+[input_schema.properties.authority_proof]
+type = "object"
+
+[input_schema.properties.created_grant]
+type = "object"
+
 [input_schema.properties.request]
 type = "object"
