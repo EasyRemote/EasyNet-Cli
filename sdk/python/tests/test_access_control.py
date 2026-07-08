@@ -10,6 +10,7 @@ from easynet_sdk import (
     AuthorityProof,
     PermissionGrant,
     PermissionRequest,
+    PermissionRequestResolutionResult,
     PolicyDecision,
     PrincipalKind,
     SignatureDecision,
@@ -64,7 +65,43 @@ class FakeAccessControlTransport:
         return json.dumps({"request": self.last["request"]}).encode("utf-8")
 
     def resolve_policy_request(self, request_json: bytes) -> bytes:
-        return self.create_policy_request(request_json)
+        self._decode(request_json)
+        return json.dumps(
+            {
+                "request": {
+                    "request_id": "req-1",
+                    "owner_user_id": "alice",
+                    "caller_ura": "c",
+                    "principal_kind": "token",
+                    "principal_id": "p",
+                    "callee_ura": "d",
+                    "subject_ura": "s",
+                    "ability_ura": "terminal.create",
+                    "action": "stream",
+                    "requested_lifetimes": ["session"],
+                    "status": "approved",
+                    "created_at": "t",
+                    "expires_at": "e",
+                    "created_grant_id": "grant-approval-1",
+                },
+                "created_grant": {
+                    "grant_id": "grant-approval-1",
+                    "owner_user_id": "alice",
+                    "principal_kind": "token",
+                    "principal_id": "p",
+                    "callee_ura": "d",
+                    "subject_ura_pattern": "s",
+                    "ability_ura_pattern": "terminal.create",
+                    "actions": ["stream"],
+                    "effect": "allow",
+                    "lifetime": "session",
+                    "state": "active",
+                    "created_by": "easynet:///r/test/user/alice",
+                    "created_at": "t",
+                },
+                "idempotent_replay": False,
+            }
+        ).encode("utf-8")
 
     def list_policy_requests(self, request_json: bytes) -> bytes:
         self._decode(request_json)
@@ -106,6 +143,54 @@ class AccessControlTests(unittest.TestCase):
         self.assertIsInstance(result, AdmissionExplainResult)
         self.assertTrue(result.redacted)
         self.assertEqual(result.raw["authority_reason"], "AUTHORITY_PROOF_MISSING")
+
+    def test_resolve_request_with_grant_uses_typed_resolution(self) -> None:
+        transport = FakeAccessControlTransport()
+        client = AccessControlClient(transport)
+        request = PermissionRequest.from_dict(
+            {
+                "request_id": "req-1",
+                "owner_user_id": "alice",
+                "caller_ura": "c",
+                "principal_kind": "token",
+                "principal_id": "p",
+                "callee_ura": "d",
+                "subject_ura": "s",
+                "ability_ura": "terminal.create",
+                "action": "stream",
+                "requested_lifetimes": ["session"],
+                "status": "approved",
+                "created_at": "t",
+                "expires_at": "e",
+            }
+        )
+        grant = PermissionGrant(
+            grant_id="grant-approval-1",
+            owner_user_id="alice",
+            principal_kind=PrincipalKind.TOKEN,
+            principal_id="p",
+            callee_ura="d",
+            subject_ura_pattern="s",
+            ability_ura_pattern="terminal.create",
+            actions=(AccessAction.STREAM,),
+            effect="allow",
+            lifetime="session",
+            state="active",
+            created_by="easynet:///r/test/user/alice",
+            created_at="t",
+        )
+
+        result = client.resolve_request_with_grant(
+            request,
+            grant,
+            actor_ura="easynet:///r/test/user/alice",
+        )
+
+        self.assertIsInstance(result, PermissionRequestResolutionResult)
+        self.assertEqual(result.request.raw["created_grant_id"], "grant-approval-1")
+        self.assertIsNotNone(result.created_grant)
+        self.assertEqual(result.created_grant.grant_id, "grant-approval-1")
+        self.assertIn("created_grant", transport.last)
 
     def test_shared_rfc014_fixtures_decode(self) -> None:
         grant = PermissionGrant.from_dict(_fixture("access-control-permission-grant.v4.json"))

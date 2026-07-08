@@ -2,7 +2,7 @@
   "delegation_metadata_key": "x-easynet-delegation",
   "session_authority_metadata_key": "x-easynet-session-authority",
   "delegation_metadata_value": "eyJwYXlsb2FkIjp7Imlzc3Vlcl91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS91c2VyL2FsaWNlIiwic3ViamVjdF91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS91c2VyL2FsaWNlIiwiY2FsbGVyX3VyYSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2FnZW50L2JhY2tlbmQiLCJhdWRpZW5jZSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInNjb3BlcyI6WyJkZXZpY2Uub2JzZXJ2ZS4qIl0sImlzc3VlZF9hdF9tcyI6MTAwMCwiZXhwaXJlc19hdF9tcyI6MjAwMH0sInNpZ25hdHVyZSI6IlpHVnNaV2RoZEdsdmJpMXphV2R1WVhSMWNtVT0ifQ==",
-  "session_authority_metadata_value": "eyJwYXlsb2FkIjp7Imlzc3Vlcl91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9hZ2VudC9iYWNrZW5kIiwic3ViamVjdF91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS91c2VyL2FsaWNlIiwiYXVkaWVuY2UiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9kZXZpY2UvZGV2LWEiLCJzY29wZXMiOlsiZGV2aWNlLm9ic2VydmUuKiJdLCJpc3N1ZWRfYXRfbXMiOjEwMDAsImV4cGlyZXNfYXRfbXMiOjIwMDB9LCJzaWduYXR1cmUiOiJjMlZ6YzJsdmJpMXphV2R1WVhSMWNtVT0ifQ==",
+  "session_authority_metadata_value": "eyJwYXlsb2FkIjp7Imlzc3Vlcl91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9hZ2VudC9iYWNrZW5kIiwic2Vzc2lvbl9pZCI6InNlc3Npb24tMSIsInNlc3Npb25fb3duZXJfdXNlcl9pZCI6ImFsaWNlIiwiY3JlYXRvcl9wcmluY2lwYWxfaWQiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9hZ2VudC9iYWNrZW5kIiwiY2FsbGVlX3VyYSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInN1YmplY3RfdXJhIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvc2Vzc2lvbi9zZXNzaW9uLTEiLCJhdWRpZW5jZSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInNjb3BlcyI6WyJkZXZpY2Uub2JzZXJ2ZS4qIl0sImFsbG93ZWRfYWN0aW9ucyI6WyJyZWFkIl0sImFsbG93ZWRfZm9sbG93dXBfYWJpbGl0aWVzIjpbImRldmljZS5vYnNlcnZlLmhlYWx0aCJdLCJpc3N1ZWRfYXRfbXMiOjEwMDAsImV4cGlyZXNfYXRfbXMiOjIwMDB9LCJzaWduYXR1cmUiOiJjMlZ6YzJsdmJpMXphV2R1WVhSMWNtVT0ifQ==",
   "expected_delegation": {
     "issuer_ura": "easynet:///r/example/user/alice",
     "subject_ura": "easynet:///r/example/user/alice",
@@ -15,9 +15,15 @@
   },
   "expected_session_authority": {
     "issuer_ura": "easynet:///r/example/agent/backend",
-    "subject_ura": "easynet:///r/example/user/alice",
+    "session_id": "session-1",
+    "session_owner_user_id": "alice",
+    "creator_principal_id": "easynet:///r/example/agent/backend",
+    "callee_ura": "easynet:///r/example/device/dev-a",
+    "subject_ura": "easynet:///r/example/session/session-1",
     "audience": "easynet:///r/example/device/dev-a",
     "scopes": ["device.observe.*"],
+    "allowed_actions": ["read"],
+    "allowed_followup_abilities": ["device.observe.health"],
     "issued_at_ms": 1000,
     "expires_at_ms": 2000,
     "signature_base64": "c2Vzc2lvbi1zaWduYXR1cmU="

@@ -87,9 +87,15 @@ public struct DelegationProof: Sendable, Equatable {
 
 public struct SessionAuthority: Sendable, Equatable {
     public let issuerURA: String
+    public let sessionID: String
+    public let sessionOwnerUserID: String
+    public let creatorPrincipalID: String
+    public let calleeURA: String
     public let subjectURA: String
     public let audience: String
     public let scopes: [String]
+    public let allowedActions: [String]
+    public let allowedFollowupAbilities: [String]
     public let issuedAtMS: Int64
     public let expiresAtMS: Int64
     public let signatureBase64: String
@@ -97,18 +103,30 @@ public struct SessionAuthority: Sendable, Equatable {
 
     public init(
         issuerURA: String,
+        sessionID: String,
+        sessionOwnerUserID: String,
+        creatorPrincipalID: String,
+        calleeURA: String,
         subjectURA: String,
         audience: String,
         scopes: [String],
+        allowedActions: [String],
+        allowedFollowupAbilities: [String],
         issuedAtMS: Int64,
         expiresAtMS: Int64,
         signatureBase64: String,
         metadataValue: String
     ) throws {
         self.issuerURA = try requiredAuthorityURA(issuerURA, "issuer_ura")
+        self.sessionID = try requiredAuthorityString(sessionID, "session_id")
+        self.sessionOwnerUserID = try requiredAuthorityString(sessionOwnerUserID, "session_owner_user_id")
+        self.creatorPrincipalID = try requiredAuthorityURA(creatorPrincipalID, "creator_principal_id")
+        self.calleeURA = try requiredAuthorityURA(calleeURA, "callee_ura")
         self.subjectURA = try requiredAuthorityURA(subjectURA, "subject_ura")
         self.audience = try requiredAuthorityURA(audience, "audience")
         self.scopes = try requiredAuthorityScopes(scopes)
+        self.allowedActions = try requiredAuthorityScopes(allowedActions)
+        self.allowedFollowupAbilities = try requiredAuthorityScopes(allowedFollowupAbilities)
         guard expiresAtMS > issuedAtMS else {
             throw invalidAuthority("session authority expires_at_ms must be greater than issued_at_ms")
         }
@@ -123,9 +141,15 @@ public struct SessionAuthority: Sendable, Equatable {
         let payload = decoded.payload
         return try SessionAuthority(
             issuerURA: requiredAuthorityString(payload, "issuer_ura"),
+            sessionID: requiredAuthorityString(payload, "session_id"),
+            sessionOwnerUserID: requiredAuthorityString(payload, "session_owner_user_id"),
+            creatorPrincipalID: requiredAuthorityString(payload, "creator_principal_id"),
+            calleeURA: requiredAuthorityString(payload, "callee_ura"),
             subjectURA: requiredAuthorityString(payload, "subject_ura"),
             audience: requiredAuthorityString(payload, "audience"),
             scopes: requiredAuthorityStringArray(payload, "scopes"),
+            allowedActions: requiredAuthorityStringArray(payload, "allowed_actions"),
+            allowedFollowupAbilities: requiredAuthorityStringArray(payload, "allowed_followup_abilities"),
             issuedAtMS: requiredAuthorityInteger(payload["issued_at_ms"], "issued_at_ms"),
             expiresAtMS: requiredAuthorityInteger(payload["expires_at_ms"], "expires_at_ms"),
             signatureBase64: decoded.signatureBase64,
@@ -178,18 +202,30 @@ public struct DelegationRequest: Sendable, Equatable {
 
 public struct SessionAuthorityRequest: Sendable, Equatable {
     public let issuerURA: String
+    public let sessionID: String
+    public let sessionOwnerUserID: String
+    public let creatorPrincipalID: String
+    public let calleeURA: String
     public let subjectURA: String
     public let audience: String
     public let scopes: [String]
+    public let allowedActions: [String]
+    public let allowedFollowupAbilities: [String]
     public let issuedAtMS: Int64
     public let expiresAtMS: Int64
     public let metadata: [String: JSONValue]
 
-    public init(issuerURA: String, subjectURA: String, audience: String, scopes: [String], issuedAtMS: Int64, expiresAtMS: Int64, metadata: [String: JSONValue] = [:]) throws {
+    public init(issuerURA: String, sessionID: String, sessionOwnerUserID: String, creatorPrincipalID: String, calleeURA: String, subjectURA: String, audience: String, scopes: [String], allowedActions: [String], allowedFollowupAbilities: [String], issuedAtMS: Int64, expiresAtMS: Int64, metadata: [String: JSONValue] = [:]) throws {
         self.issuerURA = try requiredAuthorityURA(issuerURA, "issuer_ura")
+        self.sessionID = try requiredAuthorityString(sessionID, "session_id")
+        self.sessionOwnerUserID = try requiredAuthorityString(sessionOwnerUserID, "session_owner_user_id")
+        self.creatorPrincipalID = try requiredAuthorityURA(creatorPrincipalID, "creator_principal_id")
+        self.calleeURA = try requiredAuthorityURA(calleeURA, "callee_ura")
         self.subjectURA = try requiredAuthorityURA(subjectURA, "subject_ura")
         self.audience = try requiredAuthorityURA(audience, "audience")
         self.scopes = try requiredAuthorityScopes(scopes)
+        self.allowedActions = try requiredAuthorityScopes(allowedActions)
+        self.allowedFollowupAbilities = try requiredAuthorityScopes(allowedFollowupAbilities)
         guard expiresAtMS > issuedAtMS else {
             throw invalidAuthority("session authority request expires_at_ms must be greater than issued_at_ms")
         }
@@ -201,9 +237,15 @@ public struct SessionAuthorityRequest: Sendable, Equatable {
     func jsonData() throws -> Data {
         try encodeJSONObject([
             "issuer_ura": .string(issuerURA),
+            "session_id": .string(sessionID),
+            "session_owner_user_id": .string(sessionOwnerUserID),
+            "creator_principal_id": .string(creatorPrincipalID),
+            "callee_ura": .string(calleeURA),
             "subject_ura": .string(subjectURA),
             "audience": .string(audience),
             "scopes": .array(scopes.map(JSONValue.string)),
+            "allowed_actions": .array(allowedActions.map(JSONValue.string)),
+            "allowed_followup_abilities": .array(allowedFollowupAbilities.map(JSONValue.string)),
             "issued_at_ms": .number(Double(issuedAtMS)),
             "expires_at_ms": .number(Double(expiresAtMS)),
             "metadata": .object(metadata),

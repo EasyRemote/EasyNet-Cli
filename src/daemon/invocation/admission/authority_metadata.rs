@@ -90,9 +90,15 @@ pub(crate) struct DelegationPayload {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct SessionAuthorityPayload {
     pub(crate) issuer_ura: String,
+    pub(crate) session_id: String,
+    pub(crate) session_owner_user_id: String,
+    pub(crate) creator_principal_id: String,
+    pub(crate) callee_ura: String,
     pub(crate) subject_ura: String,
     pub(crate) audience: String,
     pub(crate) scopes: Vec<String>,
+    pub(crate) allowed_actions: Vec<String>,
+    pub(crate) allowed_followup_abilities: Vec<String>,
     pub(crate) issued_at_ms: i64,
     pub(crate) expires_at_ms: i64,
 }
@@ -113,9 +119,15 @@ struct DelegationRequest {
 #[derive(Debug, Deserialize)]
 struct SessionAuthorityRequest {
     issuer_ura: String,
+    session_id: String,
+    session_owner_user_id: String,
+    creator_principal_id: String,
+    callee_ura: String,
     subject_ura: String,
     audience: String,
     scopes: Vec<String>,
+    allowed_actions: Vec<String>,
+    allowed_followup_abilities: Vec<String>,
     issued_at_ms: i64,
     expires_at_ms: i64,
     #[serde(default)]
@@ -224,14 +236,28 @@ pub(crate) fn validate_session_authority_payload_shape(
     now_ms: Option<i64>,
 ) -> Result<(), AuthorityMetadataError> {
     if payload.issuer_ura.trim().is_empty()
+        || payload.session_id.trim().is_empty()
+        || payload.session_owner_user_id.trim().is_empty()
+        || payload.creator_principal_id.trim().is_empty()
+        || payload.callee_ura.trim().is_empty()
         || payload.subject_ura.trim().is_empty()
         || payload.audience.trim().is_empty()
         || payload.scopes.is_empty()
         || payload.scopes.iter().any(|scope| scope.trim().is_empty())
+        || payload.allowed_actions.is_empty()
+        || payload
+            .allowed_actions
+            .iter()
+            .any(|action| action.trim().is_empty())
+        || payload.allowed_followup_abilities.is_empty()
+        || payload
+            .allowed_followup_abilities
+            .iter()
+            .any(|ability| ability.trim().is_empty())
     {
         return Err(AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
-            "session authority must carry issuer, subject, audience, and at least one scope",
+            "session authority must carry issuer, session id, owner, creator principal, callee, subject, audience, scopes, allowed actions, and follow-up abilities",
         ));
     }
     if !matches!(
@@ -291,9 +317,15 @@ impl SessionAuthorityRequest {
         reject_private_key_metadata(&self.metadata)?;
         let payload = SessionAuthorityPayload {
             issuer_ura: self.issuer_ura,
+            session_id: self.session_id,
+            session_owner_user_id: self.session_owner_user_id,
+            creator_principal_id: self.creator_principal_id,
+            callee_ura: self.callee_ura,
             subject_ura: self.subject_ura,
             audience: self.audience,
             scopes: self.scopes,
+            allowed_actions: self.allowed_actions,
+            allowed_followup_abilities: self.allowed_followup_abilities,
             issued_at_ms: self.issued_at_ms,
             expires_at_ms: self.expires_at_ms,
         };
@@ -408,9 +440,15 @@ fn authority_signed_fields(kind: &str) -> &'static [&'static str] {
         ],
         "session_authority" => &[
             "issuer_ura",
+            "session_id",
+            "session_owner_user_id",
+            "creator_principal_id",
+            "callee_ura",
             "subject_ura",
             "audience",
             "scopes",
+            "allowed_actions",
+            "allowed_followup_abilities",
             "issued_at_ms",
             "expires_at_ms",
         ],
@@ -508,9 +546,15 @@ mod tests {
 
     const SESSION_REQUEST: &str = r#"{
       "issuer_ura":"easynet:///r/example/agent/backend",
-      "subject_ura":"easynet:///r/example/user/alice",
+      "session_id":"session-1",
+      "session_owner_user_id":"alice",
+      "creator_principal_id":"easynet:///r/example/agent/backend",
+      "callee_ura":"easynet:///r/example/device/dev-a",
+      "subject_ura":"easynet:///r/example/session/session-1",
       "audience":"easynet:///r/example/device/dev-a",
       "scopes":["device.observe.*"],
+      "allowed_actions":["read"],
+      "allowed_followup_abilities":["device.observe.health"],
       "issued_at_ms":1000,
       "expires_at_ms":2000
     }"#;
@@ -550,9 +594,27 @@ mod tests {
         );
         assert_eq!(
             wire_json["payload"]["subject_ura"],
-            "easynet:///r/example/user/alice"
+            "easynet:///r/example/session/session-1"
         );
+        assert_eq!(wire_json["payload"]["session_id"], "session-1");
+        assert_eq!(wire_json["payload"]["allowed_actions"][0], "read");
         assert_eq!(wire_json["signature"], "c2Vzc2lvbi1zaWduYXR1cmU=");
+    }
+
+    #[test]
+    fn session_authority_requires_followup_binding_fields() {
+        let err = prepare_session_authority_from_json(
+            r#"{
+              "issuer_ura":"easynet:///r/example/agent/backend",
+              "subject_ura":"easynet:///r/example/session/session-1",
+              "audience":"easynet:///r/example/device/dev-a",
+              "scopes":["device.observe.*"],
+              "issued_at_ms":1000,
+              "expires_at_ms":2000
+            }"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
     }
 
     #[test]

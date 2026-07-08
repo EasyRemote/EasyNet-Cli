@@ -37,7 +37,8 @@ func (f *fakeAccessControlTransport) CreatePolicyRequest(_ context.Context, raw 
 	return []byte(`{"request":{"request_id":"req-1","owner_user_id":"alice","caller_ura":"c","principal_kind":"token","principal_id":"p","callee_ura":"d","subject_ura":"s","ability_ura":"a","action":"stream","requested_lifetimes":["session"],"status":"pending","created_at":"t","expires_at":"e"}}`), nil
 }
 func (f *fakeAccessControlTransport) ResolvePolicyRequest(ctx context.Context, raw []byte) ([]byte, error) {
-	return f.CreatePolicyRequest(ctx, raw)
+	f.decode(raw)
+	return []byte(`{"request":{"request_id":"req-1","owner_user_id":"alice","caller_ura":"c","principal_kind":"token","principal_id":"p","callee_ura":"d","subject_ura":"s","ability_ura":"terminal.create","action":"stream","requested_lifetimes":["session"],"status":"approved","created_at":"t","expires_at":"e","created_grant_id":"grant-approval-1"},"created_grant":{"grant_id":"grant-approval-1","owner_user_id":"alice","principal_kind":"token","principal_id":"p","callee_ura":"d","subject_ura_pattern":"s","ability_ura_pattern":"terminal.create","actions":["stream"],"effect":"allow","lifetime":"session","state":"active","created_by":"easynet:///r/test/user/alice","created_at":"t"},"idempotent_replay":false}`), nil
 }
 func (f *fakeAccessControlTransport) ListPolicyRequests(_ context.Context, raw []byte) ([]byte, error) {
 	f.decode(raw)
@@ -81,6 +82,46 @@ func TestAccessControlClientExplainProjectsRFC014DTO(t *testing.T) {
 	}
 	if !result.Redacted || result.AuthorityReason != "AUTHORITY_PROOF_MISSING" {
 		t.Fatalf("unexpected explain result: %#v", result)
+	}
+}
+
+func TestAccessControlClientResolveRequestWithGrantUsesTypedResolution(t *testing.T) {
+	transport := &fakeAccessControlTransport{}
+	client, err := NewAccessControlClient(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := PermissionRequest{
+		RequestID: "req-1", OwnerUserID: "alice", CallerURA: "c",
+		PrincipalKind: PrincipalToken, PrincipalID: "p", CalleeURA: "d",
+		SubjectURA: "s", AbilityURA: "terminal.create", Action: AccessStream,
+		RequestedLifetimes: []string{"session"}, Status: "approved",
+		CreatedAt: "t", ExpiresAt: "e",
+	}
+	grant := PermissionGrant{
+		GrantID: "grant-approval-1", OwnerUserID: "alice", PrincipalKind: PrincipalToken,
+		PrincipalID: "p", CalleeURA: "d", SubjectURAPattern: "s",
+		AbilityURAPattern: "terminal.create", Actions: []AccessAction{AccessStream},
+		Effect: PermissionAllow, Lifetime: "session", State: PermissionGrantActive,
+		CreatedBy: "easynet:///r/test/user/alice", CreatedAt: "t",
+	}
+	result, err := client.ResolveRequestWithGrant(
+		context.Background(),
+		request,
+		grant,
+		"easynet:///r/test/user/alice",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Request.CreatedGrantID != "grant-approval-1" {
+		t.Fatalf("request resolution did not decode created grant id: %#v", result)
+	}
+	if result.CreatedGrant == nil || result.CreatedGrant.GrantID != "grant-approval-1" {
+		t.Fatalf("created_grant not decoded: %#v", result)
+	}
+	if _, ok := transport.last["created_grant"].(map[string]any); !ok {
+		t.Fatalf("created_grant not serialized: %#v", transport.last)
 	}
 }
 

@@ -517,7 +517,7 @@ class FakeRawCABI:
         )
 
     def _authority_prepare_session(self, raw, out_ptr) -> int:
-        json.loads(raw.value.decode("utf-8"))
+        request = json.loads(raw.value.decode("utf-8"))
         return self._write(
             out_ptr,
             json.dumps(
@@ -528,8 +528,36 @@ class FakeRawCABI:
                     "metadata_key": "x-easynet-session-authority",
                     "canonical_bytes_base64": "Y2Fub24=",
                     "canonical_hash_hex": "b" * 64,
-                    "signed_fields": ["issuer_ura"],
-                    "payload": {"issuer_ura": "easynet:///r/example/agent/backend"},
+                    "signed_fields": [
+                        "issuer_ura",
+                        "session_id",
+                        "session_owner_user_id",
+                        "creator_principal_id",
+                        "callee_ura",
+                        "subject_ura",
+                        "audience",
+                        "scopes",
+                        "allowed_actions",
+                        "allowed_followup_abilities",
+                        "issued_at_ms",
+                        "expires_at_ms",
+                    ],
+                    "payload": {
+                        "issuer_ura": request["issuer_ura"],
+                        "session_id": request["session_id"],
+                        "session_owner_user_id": request["session_owner_user_id"],
+                        "creator_principal_id": request["creator_principal_id"],
+                        "callee_ura": request["callee_ura"],
+                        "subject_ura": request["subject_ura"],
+                        "audience": request["audience"],
+                        "scopes": request["scopes"],
+                        "allowed_actions": request["allowed_actions"],
+                        "allowed_followup_abilities": request[
+                            "allowed_followup_abilities"
+                        ],
+                        "issued_at_ms": request["issued_at_ms"],
+                        "expires_at_ms": request["expires_at_ms"],
+                    },
                 },
                 separators=(",", ":"),
             ).encode("utf-8"),
@@ -541,9 +569,15 @@ class FakeRawCABI:
         value = _authority_metadata_value(
             {
                 "issuer_ura": request["issuer_ura"],
+                "session_id": request["session_id"],
+                "session_owner_user_id": request["session_owner_user_id"],
+                "creator_principal_id": request["creator_principal_id"],
+                "callee_ura": request["callee_ura"],
                 "subject_ura": request["subject_ura"],
                 "audience": request["audience"],
                 "scopes": request["scopes"],
+                "allowed_actions": request["allowed_actions"],
+                "allowed_followup_abilities": request["allowed_followup_abilities"],
                 "issued_at_ms": request["issued_at_ms"],
                 "expires_at_ms": request["expires_at_ms"],
             },

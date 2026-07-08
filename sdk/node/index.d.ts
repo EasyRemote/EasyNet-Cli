@@ -299,9 +299,15 @@ export class DelegationProof {
 
 export interface SessionAuthorityFields {
   issuer_ura: string;
+  session_id: string;
+  session_owner_user_id: string;
+  creator_principal_id: string;
+  callee_ura: string;
   subject_ura: string;
   audience: string;
   scopes: string[];
+  allowed_actions: string[];
+  allowed_followup_abilities: string[];
   issued_at_ms: number;
   expires_at_ms: number;
   signature_base64: string;
@@ -310,9 +316,15 @@ export interface SessionAuthorityFields {
 
 export class SessionAuthority {
   issuerURA: string;
+  sessionID: string;
+  sessionOwnerUserID: string;
+  creatorPrincipalID: string;
+  calleeURA: string;
   subjectURA: string;
   audience: string;
   scopes: string[];
+  allowedActions: string[];
+  allowedFollowupAbilities: string[];
   issuedAtMS: number;
   expiresAtMS: number;
   signatureBase64: string;
@@ -350,9 +362,15 @@ export class DelegationRequest {
 
 export interface SessionAuthorityRequestFields {
   issuer_ura: string;
+  session_id: string;
+  session_owner_user_id: string;
+  creator_principal_id: string;
+  callee_ura: string;
   subject_ura: string;
   audience: string;
   scopes: string[];
+  allowed_actions: string[];
+  allowed_followup_abilities: string[];
   issued_at_ms: number;
   expires_at_ms: number;
   metadata?: Record<string, unknown>;
@@ -360,9 +378,15 @@ export interface SessionAuthorityRequestFields {
 
 export class SessionAuthorityRequest {
   issuerURA: string;
+  sessionID: string;
+  sessionOwnerUserID: string;
+  creatorPrincipalID: string;
+  calleeURA: string;
   subjectURA: string;
   audience: string;
   scopes: string[];
+  allowedActions: string[];
+  allowedFollowupAbilities: string[];
   issuedAtMS: number;
   expiresAtMS: number;
   metadata: Record<string, unknown>;

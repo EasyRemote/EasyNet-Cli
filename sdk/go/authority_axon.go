@@ -116,12 +116,18 @@ func (a *SessionAuthority) CanonicalPayload() ([]byte, error) {
 		return nil, err
 	}
 	payload := map[string]any{
-		"audience":      a.Audience,
-		"expires_at_ms": a.ExpiresAtMS,
-		"issued_at_ms":  a.IssuedAtMS,
-		"issuer_ura":    a.IssuerURA,
-		"scopes":        append([]string(nil), a.Scopes...),
-		"subject_ura":   a.SubjectURA,
+		"allowed_actions":            append([]string(nil), a.AllowedActions...),
+		"allowed_followup_abilities": append([]string(nil), a.AllowedFollowupAbilities...),
+		"audience":                   a.Audience,
+		"callee_ura":                 a.CalleeURA,
+		"creator_principal_id":       a.CreatorPrincipalID,
+		"expires_at_ms":              a.ExpiresAtMS,
+		"issued_at_ms":               a.IssuedAtMS,
+		"issuer_ura":                 a.IssuerURA,
+		"scopes":                     append([]string(nil), a.Scopes...),
+		"session_id":                 a.SessionID,
+		"session_owner_user_id":      a.SessionOwnerUserID,
+		"subject_ura":                a.SubjectURA,
 	}
 	return json.Marshal(payload)
 }
@@ -194,13 +200,19 @@ func UnmarshalRawSessionAuthority(data []byte) (*SessionAuthority, error) {
 		return nil, err
 	}
 	out := &SessionAuthority{
-		IssuerURA:   payload.IssuerURA,
-		SubjectURA:  payload.SubjectURA,
-		Audience:    payload.Audience,
-		Scopes:      append([]string(nil), payload.Scopes...),
-		IssuedAtMS:  payload.IssuedAtMS,
-		ExpiresAtMS: payload.ExpiresAtMS,
-		Signature:   signature,
+		IssuerURA:                payload.IssuerURA,
+		SessionID:                payload.SessionID,
+		SessionOwnerUserID:       payload.SessionOwnerUserID,
+		CreatorPrincipalID:       payload.CreatorPrincipalID,
+		CalleeURA:                payload.CalleeURA,
+		SubjectURA:               payload.SubjectURA,
+		Audience:                 payload.Audience,
+		Scopes:                   append([]string(nil), payload.Scopes...),
+		AllowedActions:           append([]string(nil), payload.AllowedActions...),
+		AllowedFollowupAbilities: append([]string(nil), payload.AllowedFollowupAbilities...),
+		IssuedAtMS:               payload.IssuedAtMS,
+		ExpiresAtMS:              payload.ExpiresAtMS,
+		Signature:                signature,
 	}
 	if err := validateSessionAuthority(*out); err != nil {
 		return nil, err

@@ -550,9 +550,18 @@ export class SessionAuthority {
   constructor(fields) {
     const value = objectValue(fields, "session authority");
     this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
+    this.sessionID = requiredAuthorityString(value.session_id, "session_id");
+    this.sessionOwnerUserID = requiredAuthorityString(value.session_owner_user_id, "session_owner_user_id");
+    this.creatorPrincipalID = requiredAuthorityString(value.creator_principal_id, "creator_principal_id");
+    this.calleeURA = requiredAuthorityString(value.callee_ura, "callee_ura");
     this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
     this.audience = requiredAuthorityString(value.audience, "audience");
     this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
+    this.allowedActions = requiredAuthorityStringArray(value.allowed_actions, "allowed_actions");
+    this.allowedFollowupAbilities = requiredAuthorityStringArray(
+      value.allowed_followup_abilities,
+      "allowed_followup_abilities",
+    );
     this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
     this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
     this.signatureBase64 = requiredAuthorityBase64(value.signature_base64, "signature_base64");
@@ -585,9 +594,15 @@ export class SessionAuthority {
   toJSON() {
     return {
       issuer_ura: this.issuerURA,
+      session_id: this.sessionID,
+      session_owner_user_id: this.sessionOwnerUserID,
+      creator_principal_id: this.creatorPrincipalID,
+      callee_ura: this.calleeURA,
       subject_ura: this.subjectURA,
       audience: this.audience,
       scopes: [...this.scopes],
+      allowed_actions: [...this.allowedActions],
+      allowed_followup_abilities: [...this.allowedFollowupAbilities],
       issued_at_ms: this.issuedAtMS,
       expires_at_ms: this.expiresAtMS,
       signature_base64: this.signatureBase64,
@@ -627,9 +642,18 @@ export class SessionAuthorityRequest {
   constructor(fields) {
     const value = objectValue(fields, "session authority request");
     this.issuerURA = requiredAuthorityString(value.issuer_ura, "issuer_ura");
+    this.sessionID = requiredAuthorityString(value.session_id, "session_id");
+    this.sessionOwnerUserID = requiredAuthorityString(value.session_owner_user_id, "session_owner_user_id");
+    this.creatorPrincipalID = requiredAuthorityString(value.creator_principal_id, "creator_principal_id");
+    this.calleeURA = requiredAuthorityString(value.callee_ura, "callee_ura");
     this.subjectURA = requiredAuthorityString(value.subject_ura, "subject_ura");
     this.audience = requiredAuthorityString(value.audience, "audience");
     this.scopes = requiredAuthorityStringArray(value.scopes, "scopes");
+    this.allowedActions = requiredAuthorityStringArray(value.allowed_actions, "allowed_actions");
+    this.allowedFollowupAbilities = requiredAuthorityStringArray(
+      value.allowed_followup_abilities,
+      "allowed_followup_abilities",
+    );
     this.issuedAtMS = requiredAuthorityInteger(value.issued_at_ms, "issued_at_ms");
     this.expiresAtMS = requiredAuthorityInteger(value.expires_at_ms, "expires_at_ms");
     this.metadata = objectValue(value.metadata ?? {}, "metadata");
@@ -639,9 +663,15 @@ export class SessionAuthorityRequest {
   toJSON() {
     return {
       issuer_ura: this.issuerURA,
+      session_id: this.sessionID,
+      session_owner_user_id: this.sessionOwnerUserID,
+      creator_principal_id: this.creatorPrincipalID,
+      callee_ura: this.calleeURA,
       subject_ura: this.subjectURA,
       audience: this.audience,
       scopes: [...this.scopes],
+      allowed_actions: [...this.allowedActions],
+      allowed_followup_abilities: [...this.allowedFollowupAbilities],
       issued_at_ms: this.issuedAtMS,
       expires_at_ms: this.expiresAtMS,
       metadata: this.metadata,

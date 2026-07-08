@@ -206,6 +206,13 @@ type AuthorityBindingGrantResult struct {
 	AuditRecordID    string          `json:"audit_record_id"`
 }
 
+type PermissionRequestResolutionResult struct {
+	Request          PermissionRequest `json:"request"`
+	CreatedGrant     *PermissionGrant  `json:"created_grant,omitempty"`
+	AuthorityProof   *AuthorityProof   `json:"authority_proof,omitempty"`
+	IdempotentReplay bool              `json:"idempotent_replay"`
+}
+
 type AccessControlTransport interface {
 	GrantAuthorityBinding(ctx context.Context, requestJSON []byte) ([]byte, error)
 	RevokeAuthorityBinding(ctx context.Context, requestJSON []byte) ([]byte, error)
@@ -267,11 +274,36 @@ func (c *AccessControlClient) CreateRequest(ctx context.Context, request Permiss
 }
 
 func (c *AccessControlClient) ResolveRequest(ctx context.Context, request PermissionRequest, actorURA string) (PermissionRequest, error) {
-	var out struct {
-		Request PermissionRequest `json:"request"`
-	}
+	result, err := c.ResolveRequestResult(ctx, request, actorURA)
+	return result.Request, err
+}
+
+func (c *AccessControlClient) ResolveRequestResult(ctx context.Context, request PermissionRequest, actorURA string) (PermissionRequestResolutionResult, error) {
+	var out PermissionRequestResolutionResult
 	err := c.roundTrip(ctx, map[string]any{"request": request, "actor_ura": actorURA}, c.transport.ResolvePolicyRequest, &out)
-	return out.Request, err
+	return out, err
+}
+
+func (c *AccessControlClient) ResolveRequestWithGrant(ctx context.Context, request PermissionRequest, grant PermissionGrant, actorURA string) (PermissionRequestResolutionResult, error) {
+	var out PermissionRequestResolutionResult
+	err := c.roundTrip(
+		ctx,
+		map[string]any{"request": request, "created_grant": grant, "actor_ura": actorURA},
+		c.transport.ResolvePolicyRequest,
+		&out,
+	)
+	return out, err
+}
+
+func (c *AccessControlClient) ResolveRequestWithAuthorityProof(ctx context.Context, request PermissionRequest, proof AuthorityProof, actorURA string) (PermissionRequestResolutionResult, error) {
+	var out PermissionRequestResolutionResult
+	err := c.roundTrip(
+		ctx,
+		map[string]any{"request": request, "authority_proof": proof, "actor_ura": actorURA},
+		c.transport.ResolvePolicyRequest,
+		&out,
+	)
+	return out, err
 }
 
 func (c *AccessControlClient) ListRequests(ctx context.Context, request map[string]any) ([]PermissionRequest, error) {

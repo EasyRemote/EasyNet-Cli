@@ -40,20 +40,15 @@ func TestDelegationProofFromMetadataProjectsTypedAuthority(t *testing.T) {
 }
 
 func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
-	value := authorityMetadataFixture(t, map[string]any{
-		"issuer_ura":    "easynet:///r/example/agent/backend",
-		"subject_ura":   "easynet:///r/example/user/alice",
-		"audience":      "easynet:///r/example/device/dev-a",
-		"scopes":        []string{"device.observe.*"},
-		"issued_at_ms":  float64(1000),
-		"expires_at_ms": float64(2000),
-	}, []byte("session-signature"))
+	value := authorityMetadataFixture(t, sessionAuthorityPayloadFixture(), []byte("session-signature"))
 
 	authority, err := NewSessionAuthorityFromMetadata(value)
 	if err != nil {
 		t.Fatalf("NewSessionAuthorityFromMetadata: %v", err)
 	}
-	if authority.IssuerURA != "easynet:///r/example/agent/backend" || authority.SubjectURA != "easynet:///r/example/user/alice" {
+	if authority.IssuerURA != "easynet:///r/example/agent/backend" ||
+		authority.SessionID != "session-1" ||
+		authority.SubjectURA != "easynet:///r/example/session/session-1" {
 		t.Fatalf("unexpected session authority projection: %#v", authority)
 	}
 	metadata, err := authority.Metadata()
@@ -71,12 +66,18 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	authority := &SessionAuthority{
-		IssuerURA:   "easynet:///r/example/agent/backend",
-		SubjectURA:  "easynet:///r/example/user/alice",
-		Audience:    "easynet:///r/example/device/dev-a",
-		Scopes:      []string{"device.observe.*"},
-		IssuedAtMS:  1000,
-		ExpiresAtMS: 2000,
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerUserID:       "alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/session/session-1",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
 	}
 
 	payload, err := authority.CanonicalPayload()
@@ -87,7 +88,9 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(payload, &projected); err != nil {
 		t.Fatalf("decode canonical payload: %v", err)
 	}
-	if projected["issuer_ura"] != authority.IssuerURA || projected["subject_ura"] != authority.SubjectURA {
+	if projected["issuer_ura"] != authority.IssuerURA ||
+		projected["session_id"] != authority.SessionID ||
+		projected["subject_ura"] != authority.SubjectURA {
 		t.Fatalf("canonical payload used non-generic authority fields: %#v", projected)
 	}
 
@@ -223,14 +226,7 @@ func TestAuthorityClientMintsDelegationThroughTransport(t *testing.T) {
 }
 
 func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
-	value := authorityMetadataFixture(t, map[string]any{
-		"issuer_ura":    "easynet:///r/example/agent/backend",
-		"subject_ura":   "easynet:///r/example/user/alice",
-		"audience":      "easynet:///r/example/device/dev-a",
-		"scopes":        []string{"device.observe.*"},
-		"issued_at_ms":  float64(1000),
-		"expires_at_ms": float64(2000),
-	}, []byte("session-signature"))
+	value := authorityMetadataFixture(t, sessionAuthorityPayloadFixture(), []byte("session-signature"))
 	transport := &memoryAuthorityTransport{
 		sessionJSON: []byte(`{"metadata":{"` + SessionAuthorityMetadataKey + `":"` + value + `"}}`),
 	}
@@ -240,12 +236,18 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 	}
 
 	authority, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		IssuerURA:   "easynet:///r/example/agent/backend",
-		SubjectURA:  "easynet:///r/example/user/alice",
-		Audience:    "easynet:///r/example/device/dev-a",
-		Scopes:      []string{"device.observe.*"},
-		IssuedAtMS:  1000,
-		ExpiresAtMS: 2000,
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerUserID:       "alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/session/session-1",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
 	})
 	if err != nil {
 		t.Fatalf("MintSessionAuthority: %v", err)
@@ -281,12 +283,18 @@ func TestAuthorityClientRejectsInvalidMintBeforeTransport(t *testing.T) {
 	}
 
 	_, err = client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		IssuerURA:   "easynet:///r/example/agent/backend",
-		SubjectURA:  "easynet:///r/example/user/alice",
-		Audience:    "easynet:///r/example/device/dev-a",
-		Scopes:      []string{"device.observe.*"},
-		IssuedAtMS:  2000,
-		ExpiresAtMS: 1000,
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerUserID:       "alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/session/session-1",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               2000,
+		ExpiresAtMS:              1000,
 	})
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("MintSessionAuthority error = %v, want invalid argument", err)
@@ -348,6 +356,23 @@ func authorityMetadataFixture(t *testing.T, payload map[string]any, signature []
 		t.Fatalf("marshal authority fixture: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(wire)
+}
+
+func sessionAuthorityPayloadFixture() map[string]any {
+	return map[string]any{
+		"issuer_ura":                 "easynet:///r/example/agent/backend",
+		"session_id":                 "session-1",
+		"session_owner_user_id":      "alice",
+		"creator_principal_id":       "easynet:///r/example/agent/backend",
+		"callee_ura":                 "easynet:///r/example/device/dev-a",
+		"subject_ura":                "easynet:///r/example/session/session-1",
+		"audience":                   "easynet:///r/example/device/dev-a",
+		"scopes":                     []string{"device.observe.*"},
+		"allowed_actions":            []string{"read"},
+		"allowed_followup_abilities": []string{"device.observe.health"},
+		"issued_at_ms":               float64(1000),
+		"expires_at_ms":              float64(2000),
+	}
 }
 
 type memoryAuthorityTransport struct {

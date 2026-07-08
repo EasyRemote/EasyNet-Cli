@@ -327,6 +327,7 @@ impl AdmissionFacade {
         verify_delegation_metadata(
             envelope,
             ability,
+            action_for_unary_ability(ability),
             Some(metadata),
             self.trust_anchor_snapshot().as_ref(),
             axon_now_ms(),
@@ -755,6 +756,7 @@ impl AdmissionFacade {
                 verify_delegation_metadata(
                     envelope,
                     ability,
+                    action,
                     metadata,
                     trust_anchor.as_ref(),
                     axon_now_ms(),
@@ -987,6 +989,7 @@ struct SessionAuthorityRaw {
 fn verify_delegation_metadata(
     envelope: &Envelope,
     ability: &str,
+    action: AccessAction,
     metadata: Option<&HashMap<String, String>>,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
@@ -1013,7 +1016,7 @@ fn verify_delegation_metadata(
         }
         (None, Some(raw_session)) => {
             let payload = parse_and_verify_session_authority(raw_session, trust_anchor, now_ms)?;
-            verify_session_authority_bindings(&payload, envelope, ability)
+            verify_session_authority_bindings(&payload, envelope, ability, action)
         }
         (None, None) => {
             if envelope_requires_authority(envelope) {
@@ -1076,6 +1079,7 @@ fn verify_session_authority_bindings(
     payload: &SessionAuthorityPayload,
     envelope: &Envelope,
     ability: &str,
+    action: AccessAction,
 ) -> Result<(), Status> {
     let caller = envelope
         .caller
@@ -1119,11 +1123,43 @@ fn verify_session_authority_bindings(
         .as_ref()
         .map(|c| c.ura.as_str())
         .unwrap_or("");
+    if payload.callee_ura != callee {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: session callee `{}` does not match envelope \
+             callee `{callee}`",
+            payload.callee_ura
+        )));
+    }
     if !audience_admits(&payload.audience, callee) {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_AUDIENCE_VIOLATION}: session audience `{}` does not admit \
              envelope callee `{callee}`",
             payload.audience
+        )));
+    }
+
+    if !payload
+        .allowed_actions
+        .iter()
+        .any(|allowed| allowed.trim() == action.as_str())
+    {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_SCOPE_VIOLATION}: session allowed actions {:?} do not admit action \
+             `{}`",
+            payload.allowed_actions,
+            action.as_str()
+        )));
+    }
+
+    if !payload
+        .allowed_followup_abilities
+        .iter()
+        .any(|candidate| candidate.trim() == ability)
+    {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_SCOPE_VIOLATION}: session follow-up abilities {:?} do not admit \
+             ability `{ability}`",
+            payload.allowed_followup_abilities
         )));
     }
 

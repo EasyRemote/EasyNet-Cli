@@ -75,13 +75,19 @@ type DelegationProof struct {
 // SessionAuthority is a typed projection of daemon/Axon session-authority
 // metadata. It does not own canonical signing or verification.
 type SessionAuthority struct {
-	IssuerURA   string
-	SubjectURA  string
-	Audience    string
-	Scopes      []string
-	IssuedAtMS  int64
-	ExpiresAtMS int64
-	Signature   []byte
+	IssuerURA                string
+	SessionID                string
+	SessionOwnerUserID       string
+	CreatorPrincipalID       string
+	CalleeURA                string
+	SubjectURA               string
+	Audience                 string
+	Scopes                   []string
+	AllowedActions           []string
+	AllowedFollowupAbilities []string
+	IssuedAtMS               int64
+	ExpiresAtMS              int64
+	Signature                []byte
 
 	metadataValue string
 }
@@ -104,13 +110,19 @@ type DelegationRequest struct {
 // authority metadata. It carries generic authority facts, not product session
 // or backend auth state.
 type SessionAuthorityRequest struct {
-	IssuerURA   string         `json:"issuer_ura"`
-	SubjectURA  string         `json:"subject_ura"`
-	Audience    string         `json:"audience"`
-	Scopes      []string       `json:"scopes"`
-	IssuedAtMS  int64          `json:"issued_at_ms"`
-	ExpiresAtMS int64          `json:"expires_at_ms"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	IssuerURA                string         `json:"issuer_ura"`
+	SessionID                string         `json:"session_id"`
+	SessionOwnerUserID       string         `json:"session_owner_user_id"`
+	CreatorPrincipalID       string         `json:"creator_principal_id"`
+	CalleeURA                string         `json:"callee_ura"`
+	SubjectURA               string         `json:"subject_ura"`
+	Audience                 string         `json:"audience"`
+	Scopes                   []string       `json:"scopes"`
+	AllowedActions           []string       `json:"allowed_actions"`
+	AllowedFollowupAbilities []string       `json:"allowed_followup_abilities"`
+	IssuedAtMS               int64          `json:"issued_at_ms"`
+	ExpiresAtMS              int64          `json:"expires_at_ms"`
+	Metadata                 map[string]any `json:"metadata,omitempty"`
 }
 
 // AuthorityMetadata is the mutually-exclusive Invocation metadata envelope
@@ -239,14 +251,20 @@ func NewSessionAuthorityFromMetadata(value string) (SessionAuthority, error) {
 		return SessionAuthority{}, err
 	}
 	authority := SessionAuthority{
-		IssuerURA:     payload.IssuerURA,
-		SubjectURA:    payload.SubjectURA,
-		Audience:      payload.Audience,
-		Scopes:        append([]string(nil), payload.Scopes...),
-		IssuedAtMS:    payload.IssuedAtMS,
-		ExpiresAtMS:   payload.ExpiresAtMS,
-		Signature:     append([]byte(nil), signature...),
-		metadataValue: strings.TrimSpace(value),
+		IssuerURA:                payload.IssuerURA,
+		SessionID:                payload.SessionID,
+		SessionOwnerUserID:       payload.SessionOwnerUserID,
+		CreatorPrincipalID:       payload.CreatorPrincipalID,
+		CalleeURA:                payload.CalleeURA,
+		SubjectURA:               payload.SubjectURA,
+		Audience:                 payload.Audience,
+		Scopes:                   append([]string(nil), payload.Scopes...),
+		AllowedActions:           append([]string(nil), payload.AllowedActions...),
+		AllowedFollowupAbilities: append([]string(nil), payload.AllowedFollowupAbilities...),
+		IssuedAtMS:               payload.IssuedAtMS,
+		ExpiresAtMS:              payload.ExpiresAtMS,
+		Signature:                append([]byte(nil), signature...),
+		metadataValue:            strings.TrimSpace(value),
 	}
 	if err := validateSessionAuthority(authority); err != nil {
 		return SessionAuthority{}, err
@@ -379,13 +397,19 @@ func validateDelegationRequest(req DelegationRequest) error {
 
 func validateSessionAuthorityRequest(req SessionAuthorityRequest) error {
 	authority := SessionAuthority{
-		IssuerURA:   req.IssuerURA,
-		SubjectURA:  req.SubjectURA,
-		Audience:    req.Audience,
-		Scopes:      req.Scopes,
-		IssuedAtMS:  req.IssuedAtMS,
-		ExpiresAtMS: req.ExpiresAtMS,
-		Signature:   []byte("shape-only"),
+		IssuerURA:                req.IssuerURA,
+		SessionID:                req.SessionID,
+		SessionOwnerUserID:       req.SessionOwnerUserID,
+		CreatorPrincipalID:       req.CreatorPrincipalID,
+		CalleeURA:                req.CalleeURA,
+		SubjectURA:               req.SubjectURA,
+		Audience:                 req.Audience,
+		Scopes:                   req.Scopes,
+		AllowedActions:           req.AllowedActions,
+		AllowedFollowupAbilities: req.AllowedFollowupAbilities,
+		IssuedAtMS:               req.IssuedAtMS,
+		ExpiresAtMS:              req.ExpiresAtMS,
+		Signature:                []byte("shape-only"),
 	}
 	if err := validateSessionAuthority(authority); err != nil {
 		return err
@@ -499,12 +523,18 @@ type delegationAuthorityPayload struct {
 }
 
 type sessionAuthorityPayload struct {
-	IssuerURA   string   `json:"issuer_ura"`
-	SubjectURA  string   `json:"subject_ura"`
-	Audience    string   `json:"audience"`
-	Scopes      []string `json:"scopes"`
-	IssuedAtMS  int64    `json:"issued_at_ms"`
-	ExpiresAtMS int64    `json:"expires_at_ms"`
+	IssuerURA                string   `json:"issuer_ura"`
+	SessionID                string   `json:"session_id"`
+	SessionOwnerUserID       string   `json:"session_owner_user_id"`
+	CreatorPrincipalID       string   `json:"creator_principal_id"`
+	CalleeURA                string   `json:"callee_ura"`
+	SubjectURA               string   `json:"subject_ura"`
+	Audience                 string   `json:"audience"`
+	Scopes                   []string `json:"scopes"`
+	AllowedActions           []string `json:"allowed_actions"`
+	AllowedFollowupAbilities []string `json:"allowed_followup_abilities"`
+	IssuedAtMS               int64    `json:"issued_at_ms"`
+	ExpiresAtMS              int64    `json:"expires_at_ms"`
 }
 
 func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, error) {
@@ -546,7 +576,7 @@ func validateDelegationProof(proof DelegationProof) error {
 		strings.TrimSpace(proof.Audience) == "" {
 		return invalidInvocation("delegation authority must bind issuer, subject, caller, and audience", nil)
 	}
-	if len(proof.Scopes) == 0 {
+	if containsBlankString(proof.Scopes) {
 		return invalidInvocation("delegation authority scopes are required", nil)
 	}
 	if proof.ExpiresAtMS <= proof.IssuedAtMS {
@@ -560,12 +590,22 @@ func validateDelegationProof(proof DelegationProof) error {
 
 func validateSessionAuthority(authority SessionAuthority) error {
 	if strings.TrimSpace(authority.IssuerURA) == "" ||
+		strings.TrimSpace(authority.SessionID) == "" ||
+		strings.TrimSpace(authority.SessionOwnerUserID) == "" ||
+		strings.TrimSpace(authority.CreatorPrincipalID) == "" ||
+		strings.TrimSpace(authority.CalleeURA) == "" ||
 		strings.TrimSpace(authority.SubjectURA) == "" ||
 		strings.TrimSpace(authority.Audience) == "" {
-		return invalidInvocation("session authority must bind issuer, subject, and audience", nil)
+		return invalidInvocation("session authority must bind issuer, session id, owner, creator principal, callee, subject, and audience", nil)
 	}
-	if len(authority.Scopes) == 0 {
+	if containsBlankString(authority.Scopes) {
 		return invalidInvocation("session authority scopes are required", nil)
+	}
+	if containsBlankString(authority.AllowedActions) {
+		return invalidInvocation("session authority allowed actions are required", nil)
+	}
+	if containsBlankString(authority.AllowedFollowupAbilities) {
+		return invalidInvocation("session authority allowed follow-up abilities are required", nil)
 	}
 	if authority.ExpiresAtMS <= authority.IssuedAtMS {
 		return invalidInvocation("session authority expires_at_ms must be greater than issued_at_ms", nil)
@@ -574,4 +614,16 @@ func validateSessionAuthority(authority SessionAuthority) error {
 		return invalidInvocation("session authority signature is required", nil)
 	}
 	return nil
+}
+
+func containsBlankString(values []string) bool {
+	if len(values) == 0 {
+		return true
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return true
+		}
+	}
+	return false
 }

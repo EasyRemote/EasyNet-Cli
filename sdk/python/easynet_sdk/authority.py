@@ -148,9 +148,15 @@ class SessionAuthority:
     """Typed projection of daemon/Axon session-authority metadata."""
 
     issuer_ura: str
+    session_id: str
+    session_owner_user_id: str
+    creator_principal_id: str
+    callee_ura: str
     subject_ura: str
     audience: str
     scopes: tuple[str, ...]
+    allowed_actions: tuple[str, ...]
+    allowed_followup_abilities: tuple[str, ...]
     issued_at_ms: int
     expires_at_ms: int
     signature: bytes
@@ -161,9 +167,25 @@ class SessionAuthority:
         payload, signature = _decode_authority_metadata(value, "session authority")
         authority = cls(
             issuer_ura=_required_payload_string(payload, "issuer_ura", "session authority"),
+            session_id=_required_payload_string(payload, "session_id", "session authority"),
+            session_owner_user_id=_required_payload_string(
+                payload, "session_owner_user_id", "session authority"
+            ),
+            creator_principal_id=_required_payload_string(
+                payload, "creator_principal_id", "session authority"
+            ),
+            callee_ura=_required_payload_string(payload, "callee_ura", "session authority"),
             subject_ura=_required_payload_string(payload, "subject_ura", "session authority"),
             audience=_required_payload_string(payload, "audience", "session authority"),
             scopes=_required_string_tuple(payload.get("scopes"), "scopes", "session authority"),
+            allowed_actions=_required_string_tuple(
+                payload.get("allowed_actions"), "allowed_actions", "session authority"
+            ),
+            allowed_followup_abilities=_required_string_tuple(
+                payload.get("allowed_followup_abilities"),
+                "allowed_followup_abilities",
+                "session authority",
+            ),
             issued_at_ms=_required_payload_int(payload, "issued_at_ms", "session authority"),
             expires_at_ms=_required_payload_int(payload, "expires_at_ms", "session authority"),
             signature=signature,
@@ -218,9 +240,15 @@ class SessionAuthorityRequest:
     """Typed request for session-authority metadata minting."""
 
     issuer_ura: str
+    session_id: str
+    session_owner_user_id: str
+    creator_principal_id: str
+    callee_ura: str
     subject_ura: str
     audience: str
     scopes: tuple[str, ...]
+    allowed_actions: tuple[str, ...]
+    allowed_followup_abilities: tuple[str, ...]
     issued_at_ms: int
     expires_at_ms: int
     metadata: Mapping[str, object] = field(default_factory=dict)
@@ -230,9 +258,15 @@ class SessionAuthorityRequest:
         return json.dumps(
             {
                 "issuer_ura": self.issuer_ura,
+                "session_id": self.session_id,
+                "session_owner_user_id": self.session_owner_user_id,
+                "creator_principal_id": self.creator_principal_id,
+                "callee_ura": self.callee_ura,
                 "subject_ura": self.subject_ura,
                 "audience": self.audience,
                 "scopes": list(self.scopes),
+                "allowed_actions": list(self.allowed_actions),
+                "allowed_followup_abilities": list(self.allowed_followup_abilities),
                 "issued_at_ms": self.issued_at_ms,
                 "expires_at_ms": self.expires_at_ms,
                 "metadata": dict(self.metadata),
@@ -438,12 +472,26 @@ def _validate_delegation(proof: DelegationProof) -> None:
 def _validate_session_authority(authority: SessionAuthority) -> None:
     if not (
         authority.issuer_ura.strip()
+        and authority.session_id.strip()
+        and authority.session_owner_user_id.strip()
+        and authority.creator_principal_id.strip()
+        and authority.callee_ura.strip()
         and authority.subject_ura.strip()
         and authority.audience.strip()
     ):
-        raise _invalid_authority("session authority must bind issuer, subject, and audience")
-    if not authority.scopes:
+        raise _invalid_authority(
+            "session authority must bind issuer, session id, owner, creator principal, callee, subject, and audience"
+        )
+    if not authority.scopes or any(not scope.strip() for scope in authority.scopes):
         raise _invalid_authority("session authority scopes are required")
+    if not authority.allowed_actions or any(
+        not action.strip() for action in authority.allowed_actions
+    ):
+        raise _invalid_authority("session authority allowed actions are required")
+    if not authority.allowed_followup_abilities or any(
+        not ability.strip() for ability in authority.allowed_followup_abilities
+    ):
+        raise _invalid_authority("session authority allowed follow-up abilities are required")
     if authority.expires_at_ms <= authority.issued_at_ms:
         raise _invalid_authority(
             "session authority expires_at_ms must be greater than issued_at_ms"
@@ -472,9 +520,15 @@ def _validate_session_authority_request(request: SessionAuthorityRequest) -> Non
     _validate_session_authority(
         SessionAuthority(
             issuer_ura=request.issuer_ura,
+            session_id=request.session_id,
+            session_owner_user_id=request.session_owner_user_id,
+            creator_principal_id=request.creator_principal_id,
+            callee_ura=request.callee_ura,
             subject_ura=request.subject_ura,
             audience=request.audience,
             scopes=tuple(request.scopes),
+            allowed_actions=tuple(request.allowed_actions),
+            allowed_followup_abilities=tuple(request.allowed_followup_abilities),
             issued_at_ms=request.issued_at_ms,
             expires_at_ms=request.expires_at_ms,
             signature=b"shape-only",

@@ -250,6 +250,7 @@ public final class RuntimeCoreSeamTest {
     check(delegation.issuerURA().equals("easynet:///r/example/user/alice"), "delegation issuer");
     check(delegation.signatureBase64().equals("ZGVsZWdhdGlvbi1zaWduYXR1cmU="), "delegation signature");
     check(session.audience().equals("easynet:///r/example/device/dev-a"), "session audience");
+    check(session.sessionID().equals("session-1"), "session authority id");
 
     var draft =
         new InvocationBuilder()
@@ -301,9 +302,15 @@ public final class RuntimeCoreSeamTest {
         authority.mintSessionAuthority(
             new SessionAuthorityRequest(
                 session.issuerURA(),
+                session.sessionID(),
+                session.sessionOwnerUserID(),
+                session.creatorPrincipalID(),
+                session.calleeURA(),
                 session.subjectURA(),
                 session.audience(),
                 session.scopes(),
+                session.allowedActions(),
+                session.allowedFollowupAbilities(),
                 session.issuedAtMS(),
                 session.expiresAtMS(),
                 Map.of("trace", "session")));
@@ -330,9 +337,15 @@ public final class RuntimeCoreSeamTest {
             authority.mintSessionAuthority(
                 new SessionAuthorityRequest(
                     session.issuerURA(),
+                    session.sessionID(),
+                    session.sessionOwnerUserID(),
+                    session.creatorPrincipalID(),
+                    session.calleeURA(),
                     session.subjectURA(),
                     session.audience(),
                     session.scopes(),
+                    session.allowedActions(),
+                    session.allowedFollowupAbilities(),
                     session.issuedAtMS(),
                     session.expiresAtMS(),
                     Map.of())));

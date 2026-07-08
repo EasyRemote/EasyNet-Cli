@@ -132,6 +132,10 @@ func TestGoRuntimeCoreExecutesSharedAuthorityConformanceCase(t *testing.T) {
 		t.Fatalf("NewSessionAuthorityFromMetadata(shared fixture): %v", err)
 	}
 	if session.IssuerURA != fixture.ExpectedSessionAuthority.IssuerURA ||
+		session.SessionID != fixture.ExpectedSessionAuthority.SessionID ||
+		session.SessionOwnerUserID != fixture.ExpectedSessionAuthority.SessionOwnerUserID ||
+		session.CreatorPrincipalID != fixture.ExpectedSessionAuthority.CreatorPrincipalID ||
+		session.CalleeURA != fixture.ExpectedSessionAuthority.CalleeURA ||
 		session.SubjectURA != fixture.ExpectedSessionAuthority.SubjectURA ||
 		session.Audience != fixture.ExpectedSessionAuthority.Audience ||
 		session.IssuedAtMS != fixture.ExpectedSessionAuthority.IssuedAtMS ||
@@ -165,12 +169,18 @@ func TestGoRuntimeCoreExecutesSharedAuthorityConformanceCase(t *testing.T) {
 		t.Fatalf("minted delegation metadata mismatch")
 	}
 	mintedSession, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		IssuerURA:   fixture.ExpectedSessionAuthority.IssuerURA,
-		SubjectURA:  fixture.ExpectedSessionAuthority.SubjectURA,
-		Audience:    fixture.ExpectedSessionAuthority.Audience,
-		Scopes:      fixture.ExpectedSessionAuthority.Scopes,
-		IssuedAtMS:  fixture.ExpectedSessionAuthority.IssuedAtMS,
-		ExpiresAtMS: fixture.ExpectedSessionAuthority.ExpiresAtMS,
+		IssuerURA:                fixture.ExpectedSessionAuthority.IssuerURA,
+		SessionID:                fixture.ExpectedSessionAuthority.SessionID,
+		SessionOwnerUserID:       fixture.ExpectedSessionAuthority.SessionOwnerUserID,
+		CreatorPrincipalID:       fixture.ExpectedSessionAuthority.CreatorPrincipalID,
+		CalleeURA:                fixture.ExpectedSessionAuthority.CalleeURA,
+		SubjectURA:               fixture.ExpectedSessionAuthority.SubjectURA,
+		Audience:                 fixture.ExpectedSessionAuthority.Audience,
+		Scopes:                   fixture.ExpectedSessionAuthority.Scopes,
+		AllowedActions:           fixture.ExpectedSessionAuthority.AllowedActions,
+		AllowedFollowupAbilities: fixture.ExpectedSessionAuthority.AllowedFollowupAbilities,
+		IssuedAtMS:               fixture.ExpectedSessionAuthority.IssuedAtMS,
+		ExpiresAtMS:              fixture.ExpectedSessionAuthority.ExpiresAtMS,
 	})
 	if err != nil {
 		t.Fatalf("MintSessionAuthority(shared fixture): %v", err)
@@ -5113,13 +5123,19 @@ type sharedDelegationAuthorityProjection struct {
 }
 
 type sharedSessionAuthorityProjection struct {
-	IssuerURA       string   `json:"issuer_ura"`
-	SubjectURA      string   `json:"subject_ura"`
-	Audience        string   `json:"audience"`
-	Scopes          []string `json:"scopes"`
-	IssuedAtMS      int64    `json:"issued_at_ms"`
-	ExpiresAtMS     int64    `json:"expires_at_ms"`
-	SignatureBase64 string   `json:"signature_base64"`
+	IssuerURA                string   `json:"issuer_ura"`
+	SessionID                string   `json:"session_id"`
+	SessionOwnerUserID       string   `json:"session_owner_user_id"`
+	CreatorPrincipalID       string   `json:"creator_principal_id"`
+	CalleeURA                string   `json:"callee_ura"`
+	SubjectURA               string   `json:"subject_ura"`
+	Audience                 string   `json:"audience"`
+	Scopes                   []string `json:"scopes"`
+	AllowedActions           []string `json:"allowed_actions"`
+	AllowedFollowupAbilities []string `json:"allowed_followup_abilities"`
+	IssuedAtMS               int64    `json:"issued_at_ms"`
+	ExpiresAtMS              int64    `json:"expires_at_ms"`
+	SignatureBase64          string   `json:"signature_base64"`
 }
 
 func sharedAuthorityFixture(t *testing.T, root string) sharedAuthorityMetadataFixture {

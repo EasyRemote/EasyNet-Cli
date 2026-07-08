@@ -392,19 +392,16 @@ impl AccessControlStore {
 
     pub fn resolve_permission_request(
         &mut self,
-        request: PermissionRequest,
+        mut request: PermissionRequest,
         actor_ura: &str,
     ) -> anyhow::Result<PermissionRequest> {
+        if request.status.is_terminal() {
+            normalize_terminal_resolution_fields(&mut request, actor_ura);
+        }
         let previous = self.requests.get(&request.request_id);
         validate_request_transition(previous, &request)?;
         self.validate_resolution_authority(&request)?;
-        let operation = match request.status {
-            PermissionRequestStatus::Approved => RecordOperation::Approved,
-            PermissionRequestStatus::Denied => RecordOperation::Denied,
-            PermissionRequestStatus::Expired => RecordOperation::Expired,
-            PermissionRequestStatus::Cancelled => RecordOperation::Cancelled,
-            PermissionRequestStatus::Pending => RecordOperation::Edited,
-        };
+        let operation = request_transition_operation(previous, &request)?;
         self.append(
             RecordKind::PermissionRequest,
             &request.request_id,
@@ -416,7 +413,42 @@ impl AccessControlStore {
             .insert(request.request_id.clone(), request.clone());
         Ok(request)
     }
+}
 
+fn request_transition_operation(
+    previous: Option<&PermissionRequest>,
+    request: &PermissionRequest,
+) -> anyhow::Result<RecordOperation> {
+    match previous {
+        None if request.status == PermissionRequestStatus::Pending => Ok(RecordOperation::Created),
+        None => {
+            anyhow::bail!(
+                "initial PermissionRequest record must be pending, got `{:?}`",
+                request.status
+            )
+        }
+        Some(previous) if previous.status == PermissionRequestStatus::Pending => {
+            match request.status {
+                PermissionRequestStatus::Approved => Ok(RecordOperation::Approved),
+                PermissionRequestStatus::Denied => Ok(RecordOperation::Denied),
+                PermissionRequestStatus::Expired => Ok(RecordOperation::Expired),
+                PermissionRequestStatus::Cancelled => Ok(RecordOperation::Cancelled),
+                PermissionRequestStatus::Pending => {
+                    anyhow::bail!("PermissionRequest cannot remain pending after initial creation")
+                }
+            }
+        }
+        Some(previous) => {
+            anyhow::bail!(
+                "terminal PermissionRequest cannot transition from `{:?}` to `{:?}`",
+                previous.status,
+                request.status
+            )
+        }
+    }
+}
+
+impl AccessControlStore {
     pub fn resolve_permission_request_with_grant(
         &mut self,
         mut request: PermissionRequest,
@@ -783,6 +815,26 @@ fn validate_request_transition(
     {
         anyhow::bail!("PermissionRequest identity fields must not be empty");
     }
+    if next.requested_lifetimes.is_empty() {
+        anyhow::bail!("PermissionRequest requested_lifetimes must not be empty");
+    }
+    if next
+        .nonce
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+        && next
+            .canonical_hash
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        anyhow::bail!("PermissionRequest must bind nonce or canonical_hash");
+    }
+    validate_request_timestamps(next)?;
+    request_transition_operation(previous, next)?;
     if next.status == PermissionRequestStatus::Approved
         && next.created_grant_id.is_none()
         && next.authority_proof_id.is_none()
@@ -797,10 +849,37 @@ fn validate_request_transition(
     {
         anyhow::bail!("only approved PermissionRequest records may reference authority source ids");
     }
-    if let Some(previous) = previous {
-        if previous.status.is_terminal() && previous.status != next.status {
-            anyhow::bail!("terminal PermissionRequest cannot transition");
+    if next.status.is_terminal() {
+        if next
+            .resolver_ura
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+            || next
+                .resolved_at
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_none()
+        {
+            anyhow::bail!("terminal PermissionRequest requires resolver_ura and resolved_at");
         }
+    }
+    Ok(())
+}
+
+fn validate_request_timestamps(request: &PermissionRequest) -> anyhow::Result<()> {
+    let created_at = DateTime::parse_from_rfc3339(&request.created_at)
+        .map_err(|_| anyhow::anyhow!("PermissionRequest created_at must be RFC3339"))?;
+    let expires_at = DateTime::parse_from_rfc3339(&request.expires_at)
+        .map_err(|_| anyhow::anyhow!("PermissionRequest expires_at must be RFC3339"))?;
+    if expires_at <= created_at {
+        anyhow::bail!("PermissionRequest expires_at must be after created_at");
+    }
+    if let Some(raw) = request.resolved_at.as_deref() {
+        DateTime::parse_from_rfc3339(raw)
+            .map_err(|_| anyhow::anyhow!("PermissionRequest resolved_at must be RFC3339"))?;
     }
     Ok(())
 }
@@ -1005,7 +1084,9 @@ fn ensure_owner_private_dir(path: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
-    use crate::daemon::invocation::admission::decision::{PrincipalKind, TokenClass};
+    use crate::daemon::invocation::admission::decision::{
+        PermissionLifetime, PrincipalKind, TokenClass,
+    };
     use crate::daemon::invocation::admission::grant_matcher::{
         PermissionGrantLifetime, PermissionGrantState,
     };
@@ -1109,7 +1190,7 @@ mod tests {
             action: AccessAction::Stream,
             nonce: None,
             canonical_hash: Some("sha256:test".to_string()),
-            requested_lifetimes: vec![],
+            requested_lifetimes: vec![PermissionLifetime::Once],
             status: PermissionRequestStatus::Approved,
             created_at: "2026-07-09T00:00:00Z".to_string(),
             expires_at: "2026-07-09T00:05:00Z".to_string(),
@@ -1210,6 +1291,79 @@ mod tests {
         assert!(store.grants().is_empty());
     }
 
+    #[test]
+    fn request_creation_rejects_unbounded_prompt_shape() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+
+        let mut no_lifetimes = pending_request();
+        no_lifetimes.requested_lifetimes.clear();
+        let err = store
+            .upsert_permission_request(no_lifetimes, "easynet:///r/test/hub")
+            .expect_err("prompt must expose requested lifetimes");
+        assert!(err
+            .to_string()
+            .contains("requested_lifetimes must not be empty"));
+
+        let mut no_invocation_binding = pending_request();
+        no_invocation_binding.nonce = None;
+        no_invocation_binding.canonical_hash = None;
+        let err = store
+            .upsert_permission_request(no_invocation_binding, "easynet:///r/test/hub")
+            .expect_err("prompt must bind invocation identity");
+        assert!(err
+            .to_string()
+            .contains("must bind nonce or canonical_hash"));
+
+        let mut invalid_expiry = pending_request();
+        invalid_expiry.expires_at = invalid_expiry.created_at.clone();
+        let err = store
+            .upsert_permission_request(invalid_expiry, "easynet:///r/test/hub")
+            .expect_err("prompt expiry must be bounded");
+        assert!(err
+            .to_string()
+            .contains("expires_at must be after created_at"));
+    }
+
+    #[test]
+    fn request_lifecycle_allows_one_pending_to_terminal_transition() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let pending = store
+            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .expect("create pending request");
+
+        let pending_edit = pending.clone();
+        let err = store
+            .resolve_permission_request(pending_edit, "easynet:///r/test/user/alice")
+            .expect_err("pending edit is not a valid RFC-014 transition");
+        assert!(err.to_string().contains("cannot remain pending"));
+
+        let mut denied = pending;
+        denied.status = PermissionRequestStatus::Denied;
+        denied.decision_reason = Some("owner denied".to_string());
+        let denied = store
+            .resolve_permission_request(denied, "easynet:///r/test/user/alice")
+            .expect("deny request");
+        assert_eq!(denied.status, PermissionRequestStatus::Denied);
+        assert_eq!(
+            denied.resolver_ura.as_deref(),
+            Some("easynet:///r/test/user/alice")
+        );
+        assert!(denied.resolved_at.is_some());
+
+        let mut cancelled = denied;
+        cancelled.status = PermissionRequestStatus::Cancelled;
+        let err = store
+            .resolve_permission_request(cancelled, "easynet:///r/test/user/alice")
+            .expect_err("terminal request cannot transition again");
+        assert!(err
+            .to_string()
+            .contains("terminal PermissionRequest cannot transition"));
+    }
+
     fn pending_request() -> PermissionRequest {
         let mut request = PermissionRequest {
             request_id: "req-1".to_string(),
@@ -1225,7 +1379,7 @@ mod tests {
             action: AccessAction::Stream,
             nonce: None,
             canonical_hash: Some("sha256:test".to_string()),
-            requested_lifetimes: vec![],
+            requested_lifetimes: vec![PermissionLifetime::Once, PermissionLifetime::Session],
             status: PermissionRequestStatus::Pending,
             created_at: "2026-07-09T00:00:00Z".to_string(),
             expires_at: "2026-07-09T00:05:00Z".to_string(),

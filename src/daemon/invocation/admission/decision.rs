@@ -57,6 +57,19 @@ pub enum AccessAction {
     Grant,
 }
 
+impl AccessAction {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Invoke => "invoke",
+            Self::Stream => "stream",
+            Self::Manage => "manage",
+            Self::Grant => "grant",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerSource {

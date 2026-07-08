@@ -44,22 +44,13 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(metadata.value, value)
 
     def test_session_authority_metadata_projects_typed_authority(self) -> None:
-        value = _authority_metadata(
-            {
-                "issuer_ura": "easynet:///r/example/agent/backend",
-                "subject_ura": "easynet:///r/example/user/alice",
-                "audience": "easynet:///r/example/device/dev-a",
-                "scopes": ["device.observe.*"],
-                "issued_at_ms": 1000,
-                "expires_at_ms": 2000,
-            },
-            b"session-signature",
-        )
+        value = _authority_metadata(_session_authority_payload(), b"session-signature")
 
         authority = SessionAuthority.from_metadata(value)
 
         self.assertEqual(authority.issuer_ura, "easynet:///r/example/agent/backend")
-        self.assertEqual(authority.subject_ura, "easynet:///r/example/user/alice")
+        self.assertEqual(authority.session_id, "session-1")
+        self.assertEqual(authority.subject_ura, "easynet:///r/example/session/session-1")
         self.assertEqual(authority.signature, b"session-signature")
         metadata = authority.metadata()
         self.assertEqual(metadata.key, SESSION_AUTHORITY_METADATA_KEY)
@@ -164,17 +155,7 @@ class AuthorityTests(unittest.TestCase):
         )
 
     def test_authority_client_mints_session_through_transport(self) -> None:
-        value = _authority_metadata(
-            {
-                "issuer_ura": "easynet:///r/example/agent/backend",
-                "subject_ura": "easynet:///r/example/user/alice",
-                "audience": "easynet:///r/example/device/dev-a",
-                "scopes": ["device.observe.*"],
-                "issued_at_ms": 1000,
-                "expires_at_ms": 2000,
-            },
-            b"session-signature",
-        )
+        value = _authority_metadata(_session_authority_payload(), b"session-signature")
         transport = _MemoryAuthorityTransport(
             session_json=json.dumps(
                 {"metadata": {SESSION_AUTHORITY_METADATA_KEY: value}}
@@ -185,9 +166,15 @@ class AuthorityTests(unittest.TestCase):
         authority = client.mint_session_authority(
             SessionAuthorityRequest(
                 issuer_ura="easynet:///r/example/agent/backend",
-                subject_ura="easynet:///r/example/user/alice",
+                session_id="session-1",
+                session_owner_user_id="alice",
+                creator_principal_id="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
+                allowed_actions=("read",),
+                allowed_followup_abilities=("device.observe.health",),
                 issued_at_ms=1000,
                 expires_at_ms=2000,
             )
@@ -220,9 +207,15 @@ class AuthorityTests(unittest.TestCase):
             client.mint_session_authority(
                 SessionAuthorityRequest(
                     issuer_ura="easynet:///r/example/agent/backend",
-                    subject_ura="easynet:///r/example/user/alice",
+                    session_id="session-1",
+                    session_owner_user_id="alice",
+                    creator_principal_id="easynet:///r/example/agent/backend",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/session/session-1",
                     audience="easynet:///r/example/device/dev-a",
                     scopes=("device.observe.*",),
+                    allowed_actions=("read",),
+                    allowed_followup_abilities=("device.observe.health",),
                     issued_at_ms=2000,
                     expires_at_ms=1000,
                 )
@@ -243,17 +236,7 @@ class AuthorityTests(unittest.TestCase):
             },
             b"cabi-signature",
         )
-        session_value = _authority_metadata(
-            {
-                "issuer_ura": "easynet:///r/example/agent/backend",
-                "subject_ura": "easynet:///r/example/user/alice",
-                "audience": "easynet:///r/example/device/dev-a",
-                "scopes": ["device.observe.*"],
-                "issued_at_ms": 1000,
-                "expires_at_ms": 2000,
-            },
-            b"cabi-signature",
-        )
+        session_value = _authority_metadata(_session_authority_payload(), b"cabi-signature")
         signer = _RecordingAuthoritySigner(
             AuthoritySignature(
                 signature_base64=base64.b64encode(b"cabi-signature").decode("ascii")
@@ -279,9 +262,15 @@ class AuthorityTests(unittest.TestCase):
         session = client.mint_session_authority(
             SessionAuthorityRequest(
                 issuer_ura="easynet:///r/example/agent/backend",
-                subject_ura="easynet:///r/example/user/alice",
+                session_id="session-1",
+                session_owner_user_id="alice",
+                creator_principal_id="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
+                allowed_actions=("read",),
+                allowed_followup_abilities=("device.observe.health",),
                 issued_at_ms=1000,
                 expires_at_ms=2000,
             )
@@ -325,6 +314,23 @@ def _authority_metadata(payload: dict[str, object], signature: bytes) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return base64.b64encode(wire).decode("ascii")
+
+
+def _session_authority_payload() -> dict[str, object]:
+    return {
+        "issuer_ura": "easynet:///r/example/agent/backend",
+        "session_id": "session-1",
+        "session_owner_user_id": "alice",
+        "creator_principal_id": "easynet:///r/example/agent/backend",
+        "callee_ura": "easynet:///r/example/device/dev-a",
+        "subject_ura": "easynet:///r/example/session/session-1",
+        "audience": "easynet:///r/example/device/dev-a",
+        "scopes": ["device.observe.*"],
+        "allowed_actions": ["read"],
+        "allowed_followup_abilities": ["device.observe.health"],
+        "issued_at_ms": 1000,
+        "expires_at_ms": 2000,
+    }
 
 
 class _MemoryAuthorityTransport:
@@ -397,7 +403,7 @@ class _FakeCABIAuthorityLibrary:
         ).encode("utf-8")
 
     def authority_prepare_session(self, request_json: bytes) -> bytes:
-        json.loads(request_json.decode("utf-8"))
+        request = json.loads(request_json.decode("utf-8"))
         return json.dumps(
             {
                 "profile": "authority",
@@ -406,8 +412,34 @@ class _FakeCABIAuthorityLibrary:
                 "metadata_key": SESSION_AUTHORITY_METADATA_KEY,
                 "canonical_bytes_base64": base64.b64encode(b"canonical").decode("ascii"),
                 "canonical_hash_hex": "b" * 64,
-                "signed_fields": ["issuer_ura"],
-                "payload": {"issuer_ura": "easynet:///r/example/agent/backend"},
+                "signed_fields": [
+                    "issuer_ura",
+                    "session_id",
+                    "session_owner_user_id",
+                    "creator_principal_id",
+                    "callee_ura",
+                    "subject_ura",
+                    "audience",
+                    "scopes",
+                    "allowed_actions",
+                    "allowed_followup_abilities",
+                    "issued_at_ms",
+                    "expires_at_ms",
+                ],
+                "payload": {
+                    "issuer_ura": request["issuer_ura"],
+                    "session_id": request["session_id"],
+                    "session_owner_user_id": request["session_owner_user_id"],
+                    "creator_principal_id": request["creator_principal_id"],
+                    "callee_ura": request["callee_ura"],
+                    "subject_ura": request["subject_ura"],
+                    "audience": request["audience"],
+                    "scopes": request["scopes"],
+                    "allowed_actions": request["allowed_actions"],
+                    "allowed_followup_abilities": request["allowed_followup_abilities"],
+                    "issued_at_ms": request["issued_at_ms"],
+                    "expires_at_ms": request["expires_at_ms"],
+                },
             }
         ).encode("utf-8")
 

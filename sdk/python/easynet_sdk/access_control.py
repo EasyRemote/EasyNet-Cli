@@ -228,6 +228,30 @@ class AuthorityBindingGrantResult:
         )
 
 
+@dataclass(frozen=True)
+class PermissionRequestResolutionResult:
+    request: PermissionRequest
+    created_grant: PermissionGrant | None = None
+    authority_proof: AuthorityProof | None = None
+    idempotent_replay: bool = False
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, object]) -> "PermissionRequestResolutionResult":
+        request = PermissionRequest.from_dict(_required_mapping(raw, "request"))
+        grant = raw.get("created_grant")
+        proof = raw.get("authority_proof")
+        if grant is not None and not isinstance(grant, Mapping):
+            raise _invalid_access_control("created_grant must be an object")
+        if proof is not None and not isinstance(proof, Mapping):
+            raise _invalid_access_control("authority_proof must be an object")
+        return cls(
+            request=request,
+            created_grant=PermissionGrant.from_dict(grant) if isinstance(grant, Mapping) else None,
+            authority_proof=AuthorityProof.from_dict(proof) if isinstance(proof, Mapping) else None,
+            idempotent_replay=bool(raw.get("idempotent_replay", False)),
+        )
+
+
 class AccessControlTransport(Protocol):
     def grant_authority_binding(self, request_json: bytes) -> bytes: ...
     def revoke_authority_binding(self, request_json: bytes) -> bytes: ...
@@ -293,12 +317,57 @@ class AccessControlClient:
         return PermissionRequest.from_dict(_required_mapping(decoded, "request"))
 
     def resolve_request(self, request: PermissionRequest, *, actor_ura: str = "") -> PermissionRequest:
+        return self.resolve_request_result(request, actor_ura=actor_ura).request
+
+    def resolve_request_result(
+        self, request: PermissionRequest, *, actor_ura: str = ""
+    ) -> PermissionRequestResolutionResult:
         decoded = _json_object(
             self._transport.resolve_policy_request(
                 _json_bytes({"request": request.to_dict(), "actor_ura": actor_ura})
             )
         )
-        return PermissionRequest.from_dict(_required_mapping(decoded, "request"))
+        return PermissionRequestResolutionResult.from_dict(decoded)
+
+    def resolve_request_with_grant(
+        self,
+        request: PermissionRequest,
+        grant: PermissionGrant,
+        *,
+        actor_ura: str = "",
+    ) -> PermissionRequestResolutionResult:
+        decoded = _json_object(
+            self._transport.resolve_policy_request(
+                _json_bytes(
+                    {
+                        "request": request.to_dict(),
+                        "created_grant": grant.to_dict(),
+                        "actor_ura": actor_ura,
+                    }
+                )
+            )
+        )
+        return PermissionRequestResolutionResult.from_dict(decoded)
+
+    def resolve_request_with_authority_proof(
+        self,
+        request: PermissionRequest,
+        authority_proof: AuthorityProof,
+        *,
+        actor_ura: str = "",
+    ) -> PermissionRequestResolutionResult:
+        decoded = _json_object(
+            self._transport.resolve_policy_request(
+                _json_bytes(
+                    {
+                        "request": request.to_dict(),
+                        "authority_proof": authority_proof.to_dict(),
+                        "actor_ura": actor_ura,
+                    }
+                )
+            )
+        )
+        return PermissionRequestResolutionResult.from_dict(decoded)
 
     def list_requests(self, request: Mapping[str, object]) -> tuple[PermissionRequest, ...]:
         decoded = _json_object(self._transport.list_policy_requests(_json_bytes(request)))

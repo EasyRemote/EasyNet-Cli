@@ -50,6 +50,10 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let session = try SessionAuthority.fromMetadata(sessionValue)
         XCTAssertEqual(delegation.issuerURA, "easynet:///r/example/user/alice")
         XCTAssertEqual(delegation.signatureBase64, "ZGVsZWdhdGlvbi1zaWduYXR1cmU=")
+        XCTAssertEqual(session.sessionID, "session-1")
+        XCTAssertEqual(session.sessionOwnerUserID, "alice")
+        XCTAssertEqual(session.creatorPrincipalID, "easynet:///r/example/agent/backend")
+        XCTAssertEqual(session.calleeURA, "easynet:///r/example/device/dev-a")
         XCTAssertEqual(session.audience, "easynet:///r/example/device/dev-a")
 
         let builder = InvocationBuilder()
@@ -95,9 +99,15 @@ final class RuntimeCoreSeamTests: XCTestCase {
         ))
         let mintedSession = try await authority.mintSessionAuthority(try SessionAuthorityRequest(
             issuerURA: session.issuerURA,
+            sessionID: session.sessionID,
+            sessionOwnerUserID: session.sessionOwnerUserID,
+            creatorPrincipalID: session.creatorPrincipalID,
+            calleeURA: session.calleeURA,
             subjectURA: session.subjectURA,
             audience: session.audience,
             scopes: session.scopes,
+            allowedActions: session.allowedActions,
+            allowedFollowupAbilities: session.allowedFollowupAbilities,
             issuedAtMS: session.issuedAtMS,
             expiresAtMS: session.expiresAtMS,
             metadata: ["trace": .string("session")]
@@ -121,9 +131,15 @@ final class RuntimeCoreSeamTests: XCTestCase {
         await expectSDKError(.invalidHandle) {
             _ = try await authority.mintSessionAuthority(try SessionAuthorityRequest(
                 issuerURA: session.issuerURA,
+                sessionID: session.sessionID,
+                sessionOwnerUserID: session.sessionOwnerUserID,
+                creatorPrincipalID: session.creatorPrincipalID,
+                calleeURA: session.calleeURA,
                 subjectURA: session.subjectURA,
                 audience: session.audience,
                 scopes: session.scopes,
+                allowedActions: session.allowedActions,
+                allowedFollowupAbilities: session.allowedFollowupAbilities,
                 issuedAtMS: session.issuedAtMS,
                 expiresAtMS: session.expiresAtMS
             ))
@@ -2397,6 +2413,8 @@ final class FixtureAuthorityTransport: AuthorityTransport, @unchecked Sendable {
     func mintSessionAuthority(_ requestJSON: Data) async throws -> Data {
         let request = try decodedObject(requestJSON)
         XCTAssertEqual(request["issuer_ura"] as? String, "easynet:///r/example/agent/backend")
+        XCTAssertEqual(request["session_id"] as? String, "session-1")
+        XCTAssertEqual(request["creator_principal_id"] as? String, "easynet:///r/example/agent/backend")
         XCTAssertEqual(request["audience"] as? String, "easynet:///r/example/device/dev-a")
         return try JSONSerialization.data(
             withJSONObject: ["metadata": [sessionAuthorityMetadataKey: sessionValue]],

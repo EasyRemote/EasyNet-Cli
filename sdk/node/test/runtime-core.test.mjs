@@ -953,9 +953,15 @@ test("Authority metadata projects typed proofs and attaches exactly one authorit
   const sessionValue = authorityMetadata(
     {
       issuer_ura: "easynet:///r/example/agent/runtime",
-      subject_ura: "easynet:///r/example/user/alice",
+      session_id: "session-1",
+      session_owner_user_id: "alice",
+      creator_principal_id: "easynet:///r/example/agent/backend",
+      callee_ura: "easynet:///r/example/device/dev-a",
+      subject_ura: "easynet:///r/example/session/session-1",
       audience: "easynet:///r/example/device/dev-a",
       scopes: ["device.observe.*"],
+      allowed_actions: ["read"],
+      allowed_followup_abilities: ["device.observe.health"],
       issued_at_ms: 1000,
       expires_at_ms: 2000,
     },
@@ -980,6 +986,10 @@ test("Authority metadata projects typed proofs and attaches exactly one authorit
   assert.equal(delegation.issuerURA, "easynet:///r/example/user/alice");
   assert.equal(delegation.signatureBase64, Buffer.from("delegation-signature").toString("base64"));
   assert.equal(session.issuerURA, "easynet:///r/example/agent/runtime");
+  assert.equal(session.sessionID, "session-1");
+  assert.equal(session.sessionOwnerUserID, "alice");
+  assert.equal(session.creatorPrincipalID, "easynet:///r/example/agent/backend");
+  assert.equal(session.calleeURA, "easynet:///r/example/device/dev-a");
   assert.equal(session.signatureBase64, Buffer.from("session-signature").toString("base64"));
   assert.equal(draft.metadata.trace, "authority-1");
   assert.equal(draft.metadata[DELEGATION_METADATA_KEY], delegationValue);
@@ -1028,9 +1038,15 @@ test("Authority metadata projects typed proofs and attaches exactly one authorit
   });
   const mintedSession = await authority.mintSessionAuthority({
     issuer_ura: "easynet:///r/example/agent/runtime",
-    subject_ura: "easynet:///r/example/user/alice",
+    session_id: "session-1",
+    session_owner_user_id: "alice",
+    creator_principal_id: "easynet:///r/example/agent/backend",
+    callee_ura: "easynet:///r/example/device/dev-a",
+    subject_ura: "easynet:///r/example/session/session-1",
     audience: "easynet:///r/example/device/dev-a",
     scopes: ["device.observe.*"],
+    allowed_actions: ["read"],
+    allowed_followup_abilities: ["device.observe.health"],
     issued_at_ms: 1000,
     expires_at_ms: 2000,
   });
@@ -1041,6 +1057,7 @@ test("Authority metadata projects typed proofs and attaches exactly one authorit
   assert.equal(mintedSession.metadata().value, sessionValue);
   assert.equal(seen[0][1].caller_ura, "easynet:///r/example/agent/backend");
   assert.equal(seen[1][1].audience, "easynet:///r/example/device/dev-a");
+  assert.equal(seen[1][1].session_id, "session-1");
 
   await assert.rejects(
     () =>

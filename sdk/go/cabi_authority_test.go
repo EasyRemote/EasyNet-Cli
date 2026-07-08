@@ -24,14 +24,7 @@ func TestCABIAuthorityTransportMintsViaCoreAndSigner(t *testing.T) {
 		"issued_at_ms":  float64(1000),
 		"expires_at_ms": float64(2000),
 	}, []byte("cabi-signature"))
-	sessionValue := authorityMetadataFixture(t, map[string]any{
-		"issuer_ura":    "easynet:///r/example/agent/backend",
-		"subject_ura":   "easynet:///r/example/user/alice",
-		"audience":      "easynet:///r/example/device/dev-a",
-		"scopes":        []string{"device.observe.*"},
-		"issued_at_ms":  float64(1000),
-		"expires_at_ms": float64(2000),
-	}, []byte("cabi-signature"))
+	sessionValue := authorityMetadataFixture(t, sessionAuthorityPayloadFixture(), []byte("cabi-signature"))
 	libraryPath := buildFakeCABIAuthorityLibrary(t, delegationValue, sessionValue)
 	signer := &recordingAuthoritySigner{
 		signature: AuthoritySignature{SignatureBase64: base64.StdEncoding.EncodeToString([]byte("cabi-signature"))},
@@ -66,12 +59,18 @@ func TestCABIAuthorityTransportMintsViaCoreAndSigner(t *testing.T) {
 	}
 
 	session, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
-		IssuerURA:   "easynet:///r/example/agent/backend",
-		SubjectURA:  "easynet:///r/example/user/alice",
-		Audience:    "easynet:///r/example/device/dev-a",
-		Scopes:      []string{"device.observe.*"},
-		IssuedAtMS:  1000,
-		ExpiresAtMS: 2000,
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerUserID:       "alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/session/session-1",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
 	})
 	if err != nil {
 		t.Fatalf("MintSessionAuthority: %v", err)
@@ -182,7 +181,7 @@ int32_t easynet_authority_materialize_delegation(const char *request_json, const
 
 int32_t easynet_authority_prepare_session(const char *request_json, char **out_material_json) {
 	(void)request_json;
-	*out_material_json = dup_json("{\"profile\":\"authority\",\"kind\":\"session_authority\",\"algorithm\":\"ed25519\",\"metadata_key\":\"x-easynet-session-authority\",\"canonical_bytes_base64\":\"Y2Fub24=\",\"canonical_hash_hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signed_fields\":[\"issuer_ura\"],\"payload\":{\"issuer_ura\":\"easynet:///r/example/agent/backend\"}}");
+	*out_material_json = dup_json("{\"profile\":\"authority\",\"kind\":\"session_authority\",\"algorithm\":\"ed25519\",\"metadata_key\":\"x-easynet-session-authority\",\"canonical_bytes_base64\":\"Y2Fub24=\",\"canonical_hash_hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signed_fields\":[\"issuer_ura\",\"session_id\",\"session_owner_user_id\",\"creator_principal_id\",\"callee_ura\",\"subject_ura\",\"audience\",\"scopes\",\"allowed_actions\",\"allowed_followup_abilities\",\"issued_at_ms\",\"expires_at_ms\"],\"payload\":{\"issuer_ura\":\"easynet:///r/example/agent/backend\",\"session_id\":\"session-1\",\"session_owner_user_id\":\"alice\",\"creator_principal_id\":\"easynet:///r/example/agent/backend\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"subject_ura\":\"easynet:///r/example/session/session-1\",\"audience\":\"easynet:///r/example/device/dev-a\",\"scopes\":[\"device.observe.*\"],\"allowed_actions\":[\"read\"],\"allowed_followup_abilities\":[\"device.observe.health\"],\"issued_at_ms\":1000,\"expires_at_ms\":2000}}");
 	return 0;
 }
 

@@ -1440,9 +1440,24 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         )
         expected_session = fixture["expected_session_authority"]
         self.assertEqual(session.issuer_ura, expected_session["issuer_ura"])
+        self.assertEqual(session.session_id, expected_session["session_id"])
+        self.assertEqual(
+            session.session_owner_user_id,
+            expected_session["session_owner_user_id"],
+        )
+        self.assertEqual(
+            session.creator_principal_id,
+            expected_session["creator_principal_id"],
+        )
+        self.assertEqual(session.callee_ura, expected_session["callee_ura"])
         self.assertEqual(session.subject_ura, expected_session["subject_ura"])
         self.assertEqual(session.audience, expected_session["audience"])
         self.assertEqual(list(session.scopes), expected_session["scopes"])
+        self.assertEqual(list(session.allowed_actions), expected_session["allowed_actions"])
+        self.assertEqual(
+            list(session.allowed_followup_abilities),
+            expected_session["allowed_followup_abilities"],
+        )
         self.assertEqual(session.issued_at_ms, expected_session["issued_at_ms"])
         self.assertEqual(session.expires_at_ms, expected_session["expires_at_ms"])
         self.assertEqual(
@@ -1474,9 +1489,17 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         minted_session = authority_client.mint_session_authority(
             SessionAuthorityRequest(
                 issuer_ura=expected_session["issuer_ura"],
+                session_id=expected_session["session_id"],
+                session_owner_user_id=expected_session["session_owner_user_id"],
+                creator_principal_id=expected_session["creator_principal_id"],
+                callee_ura=expected_session["callee_ura"],
                 subject_ura=expected_session["subject_ura"],
                 audience=expected_session["audience"],
                 scopes=tuple(expected_session["scopes"]),
+                allowed_actions=tuple(expected_session["allowed_actions"]),
+                allowed_followup_abilities=tuple(
+                    expected_session["allowed_followup_abilities"]
+                ),
                 issued_at_ms=expected_session["issued_at_ms"],
                 expires_at_ms=expected_session["expires_at_ms"],
             )
