@@ -81,6 +81,7 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
 use crate::daemon::invocation::dispatch::invocation_wire::{
     dispatch_key_mismatch_message, parse_json_args, status_from_axon_invoke_error,
     target_ura_from_envelope, wrap_json_response, BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
+    SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
 use crate::daemon::invocation::routing::route_resolver::{
     DelegatedInvokeRoute, ForwardInvokeRouteSelection, ResolveRouteFailure, SelectedInvokeRoute,
@@ -1560,7 +1561,16 @@ impl UnaryDispatcher {
                  envelope on the canonical Invocation face",
             )));
         };
-        let envelope = signed_envelope_for_selected_route(envelope, selected_route)?;
+        let arguments = request.arguments.clone();
+        let envelope = signed_envelope_for_selected_route(
+            envelope,
+            selected_route,
+            request
+                .metadata
+                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
+                .map(String::as_str),
+            &arguments,
+        )?;
         let dispatch_ability = selected_route.ability_ura.clone();
         let target_contract_v1 = self
             .directory
@@ -1578,7 +1588,6 @@ impl UnaryDispatcher {
             route_ura = selected_route.route_ura.as_str(),
             carrier_v1 = target_contract_v1,
         );
-        let arguments = request.arguments.clone();
         let (_call_id, dispatch_result) = self
             .dispatch_frame_to_presence(selected_route, "Invoke", |call_id| {
                 if target_contract_v1 {
@@ -1588,6 +1597,7 @@ impl UnaryDispatcher {
                             envelope: Some(envelope.clone()),
                             function_name: selected_route.dispatch_name.clone(),
                             arguments: arguments.clone(),
+                            metadata: request.metadata.clone(),
                             ..easynet_axon::pb::axon::v1::InvokeRequest::default()
                         },
                         false,

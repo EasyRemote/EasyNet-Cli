@@ -117,23 +117,26 @@ type SignatureDecision struct {
 
 type AuthorityProof struct {
 	ProofID                  string        `json:"proof_id"`
+	GrantID                  string        `json:"grant_id,omitempty"`
+	PermissionRequestID      string        `json:"permission_request_id,omitempty"`
 	OwnerUserID              string        `json:"owner_user_id"`
 	PrincipalKind            PrincipalKind `json:"principal_kind"`
 	PrincipalID              string        `json:"principal_id"`
 	TokenID                  string        `json:"token_id,omitempty"`
-	GrantID                  string        `json:"grant_id,omitempty"`
-	PermissionRequestID      string        `json:"permission_request_id,omitempty"`
 	CalleeURA                string        `json:"callee_ura"`
 	SubjectURA               string        `json:"subject_ura"`
 	AbilityURA               string        `json:"ability_ura"`
 	Action                   AccessAction  `json:"action"`
-	CanonicalHash            string        `json:"canonical_hash"`
-	IssuerURA                string        `json:"issuer_ura"`
-	IssuedAt                 string        `json:"issued_at"`
-	ExpiresAt                string        `json:"expires_at,omitempty"`
 	Nonce                    string        `json:"nonce,omitempty"`
-	Audience                 string        `json:"audience"`
+	CanonicalHash            string        `json:"canonical_hash,omitempty"`
+	SessionID                string        `json:"session_id,omitempty"`
+	SessionOwnerUserID       string        `json:"session_owner_user_id,omitempty"`
 	AllowedFollowupAbilities []string      `json:"allowed_followup_abilities,omitempty"`
+	SessionExpiresAt         string        `json:"session_expires_at,omitempty"`
+	IssuedAt                 string        `json:"issued_at"`
+	ExpiresAt                string        `json:"expires_at"`
+	IssuerURA                string        `json:"issuer_ura"`
+	AudienceURA              string        `json:"audience_ura"`
 	Signature                string        `json:"signature"`
 }
 

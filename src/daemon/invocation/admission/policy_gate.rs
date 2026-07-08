@@ -13,7 +13,7 @@ use easynet_axon::pb::axon::v1::Envelope;
 use crate::core::ura::{parse_ura, AbilityOwner, URAKind};
 use crate::daemon::ability::catalog::catalog_metadata;
 use crate::daemon::invocation::admission::decision::{
-    AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PrincipalKind,
+    AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PrincipalKind, TokenClass,
 };
 use crate::daemon::invocation::admission::owner_resolution::{
     OwnerFact, OwnerResolutionInput, OwnerResolver,
@@ -62,8 +62,8 @@ impl AdmissionPolicyGate {
             caller_ura,
             principal_kind: principal.kind,
             principal_id: principal.id,
-            token_id: None,
-            token_class: None,
+            token_id: principal.token_id,
+            token_class: principal.token_class,
             callee_ura,
             subject_ura,
             ability_ura,
@@ -99,6 +99,8 @@ impl AdmissionPolicyGate {
 struct PrincipalProjection {
     kind: PrincipalKind,
     id: String,
+    token_id: Option<String>,
+    token_class: Option<TokenClass>,
     caller_user_id: Option<String>,
 }
 
@@ -109,22 +111,30 @@ fn principal_for(role: TrustedAgentRole, caller_ura: &str) -> PrincipalProjectio
             PrincipalProjection {
                 kind: PrincipalKind::User,
                 id: user_id.clone(),
+                token_id: None,
+                token_class: None,
                 caller_user_id: Some(user_id),
             }
         }
         TrustedAgentRole::Hub => PrincipalProjection {
-            kind: PrincipalKind::Hub,
+            kind: PrincipalKind::Token,
             id: caller_ura.to_string(),
+            token_id: Some(caller_ura.to_string()),
+            token_class: Some(TokenClass::HubLink),
             caller_user_id: None,
         },
         TrustedAgentRole::Device => PrincipalProjection {
             kind: PrincipalKind::Device,
             id: caller_ura.to_string(),
+            token_id: None,
+            token_class: None,
             caller_user_id: None,
         },
         TrustedAgentRole::Backend => PrincipalProjection {
             kind: PrincipalKind::Service,
             id: caller_ura.to_string(),
+            token_id: None,
+            token_class: None,
             caller_user_id: None,
         },
     }
@@ -239,6 +249,7 @@ fn subject_ura(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::invocation::admission::decision::PolicyDecisionReason;
     use easynet_axon::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
     fn identity(ura: &str) -> AgentIdentity {
@@ -272,6 +283,66 @@ mod tests {
         })
         .expect("owner user must pass policy");
         assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+    }
+
+    #[test]
+    fn hub_link_principal_gets_descriptor_safe_read_default() {
+        let envelope = Envelope {
+            caller: Some(identity("easynet:///r/test/hub")),
+            callee: Some(identity("easynet:///r/test/agent/alice.worker")),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/test/user/alice".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "meta.list_resources",
+            action: AccessAction::Read,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: None,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            authority_proof_id: None,
+            rejector_ura: None,
+        })
+        .expect("trusted hub-link principal may read descriptor-safe metadata");
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(decision.reason, PolicyDecisionReason::HubTokenReadAllow);
+        assert_eq!(decision.principal_kind, PrincipalKind::Token);
+        assert_eq!(decision.token_id.as_deref(), Some("easynet:///r/test/hub"));
+    }
+
+    #[test]
+    fn hub_link_principal_cannot_stream_without_grant() {
+        let envelope = Envelope {
+            caller: Some(identity("easynet:///r/test/hub")),
+            callee: Some(identity("easynet:///r/test/agent/alice.worker")),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/test/user/alice".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let err = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "remote_desktop.attach",
+            action: AccessAction::Stream,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: None,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            authority_proof_id: None,
+            rejector_ura: None,
+        })
+        .expect_err("trusted hub-link principal cannot stream without grant");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("\"reason\":\"TOKEN_SCOPE_DENIED\""),
+            "expected token scope denial, got: {}",
+            err.message()
+        );
     }
 
     #[test]

@@ -584,6 +584,11 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             )),
             function_name: ABILITY.to_string(),
             arguments: arguments.clone(),
+            metadata: std::collections::HashMap::from([(
+                crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                    .to_string(),
+                test_descriptor_ref(TARGET_DEVICE_URA, ABILITY),
+            )]),
             ..InvokeServerStreamRequest::default()
         }))
         .await

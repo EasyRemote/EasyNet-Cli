@@ -714,17 +714,22 @@ async fn remote_bidi_open_frame_rides_carrier_by_negotiated_contract() {
         .resolve_route(target_ura, "remote_desktop.attach")
         .expect("published route resolves");
 
+    let initial_args = br#"{"session_id":"rd-9"}"#.to_vec();
     let envelope_open = EnvelopeOpen {
-        envelope: Some(
-            crate::daemon::invocation::ProtoEnvelope::targeted(
-                "easynet:///r/test-realm/user/alice",
-                target_ura,
-                target_ura,
-            )
-            .expect("valid remote bidi open envelope")
-            .into_inner(),
-        ),
-        initial_args: br#"{"session_id":"rd-9"}"#.to_vec(),
+        envelope: Some(signed_test_envelope(
+            "easynet:///r/test-realm/user/alice",
+            target_ura,
+            target_ura,
+            "remote_desktop.attach",
+            &initial_args,
+            &test_device_signing_key(),
+        )),
+        initial_args,
+        metadata: std::collections::HashMap::from([(
+            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(target_ura, "remote_desktop.attach"),
+        )]),
         ..Default::default()
     };
 

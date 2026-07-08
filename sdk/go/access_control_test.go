@@ -104,4 +104,15 @@ func TestAccessControlSharedRFC014FixturesDecode(t *testing.T) {
 			t.Fatalf("decode %s: %v", name, err)
 		}
 	}
+	proofRaw, err := os.ReadFile(filepath.Join(fixtureRoot, "access-control-authority-proof.v4.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proof AuthorityProof
+	if err := json.Unmarshal(proofRaw, &proof); err != nil {
+		t.Fatal(err)
+	}
+	if proof.AudienceURA != "easynet:///r/example/device/dev-a" || proof.SessionID != "session-1" {
+		t.Fatalf("AuthorityProof RFC-014 fields not decoded: %#v", proof)
+	}
 }

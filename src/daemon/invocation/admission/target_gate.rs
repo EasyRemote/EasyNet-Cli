@@ -25,7 +25,17 @@ use std::collections::HashSet;
 
 use tonic::Status;
 
+use crate::daemon::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref;
+use crate::daemon::axon_bridge::wire_descriptor::{
+    descriptor_bound_from_wire_parts, WireCallerIdentity,
+};
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use crate::daemon::invocation::admission::child_invocation_builder::{
+    ChildInvocationAuthority, ChildInvocationBuildFailure, ChildInvocationBuildFailureCode,
+    ChildInvocationBuildInput, ChildInvocationBuilder, ExternallySignedChildInvocation,
+    SelectedChildRoute,
+};
+use crate::daemon::invocation::admission::decision::{SignatureDecisionReason, TraceStage};
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RuntimePlane,
 };
@@ -402,28 +412,152 @@ pub(crate) fn selected_host_unavailable_message(selected_route: &SelectedInvokeR
     )
 }
 
-/// Validate that a caller-signed envelope already names the resolver-selected
-/// callee. Signed envelopes are immutable: changing callee after prepare
-/// changes Axon canonical bytes and turns a valid signature into
-/// `CALLER_SIGNATURE_INVALID` on the executing daemon.
+/// Build the descriptor-bound child invocation facts for a caller-signed
+/// envelope selected for carrier dispatch.
+///
+/// Signed envelopes are immutable: changing callee, descriptor ref, subject,
+/// dispatch payload, or descriptor version after prepare changes Axon's
+/// canonical bytes and turns a valid signature into
+/// `CALLER_SIGNATURE_INVALID` on the executing daemon. RFC-014 centralizes
+/// that drift check in `ChildInvocationBuilder`; this helper only adapts the
+/// resolver-selected route plus transport metadata into the builder input.
 pub(crate) fn signed_envelope_for_selected_route(
     envelope: Envelope,
     selected_route: &SelectedInvokeRoute,
+    signed_descriptor_ref: Option<&str>,
+    args: &[u8],
 ) -> Result<Envelope, Status> {
+    let signed_descriptor_ref = signed_descriptor_ref
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "{}: selected route `{}` requires a signed descriptor ref",
+                SignatureDecisionReason::SignedDescriptorRefMissing.as_str(),
+                selected_route.route_ura
+            ))
+        })?
+        .to_string();
+    let descriptor_version = descriptor_version_from_descriptor_ref(&signed_descriptor_ref)
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "{}: signed descriptor ref `{signed_descriptor_ref}` is invalid for route `{}`: {err}",
+                SignatureDecisionReason::SignedDescriptorRefMismatch.as_str(),
+                selected_route.route_ura
+            ))
+        })?;
+    let route = SelectedChildRoute::descriptor_bound(
+        selected_route.route_ura.clone(),
+        selected_route.callee_ura.clone(),
+        Some(selected_route.execution_host_ura.clone()),
+        selected_route.ability_ura.clone(),
+        selected_route.dispatch_name.clone(),
+        descriptor_version,
+    )
+    .map_err(status_from_child_invocation_failure)?;
+    let signed_caller = envelope
+        .caller
+        .as_ref()
+        .map(|caller| caller.ura.as_str())
+        .map(str::trim)
+        .filter(|caller| !caller.is_empty())
+        .ok_or_else(|| Status::invalid_argument("signed remote Invoke envelope missing caller"))?
+        .to_string();
+    if envelope.caller_signature.is_none() {
+        return Err(Status::invalid_argument(format!(
+            "{}: externally signed child invocation missing caller signature",
+            SignatureDecisionReason::CallerSignatureMissing.as_str()
+        )));
+    }
     let signed_callee = envelope
         .callee
         .as_ref()
         .map(|callee| callee.ura.as_str())
         .map(str::trim)
         .filter(|callee| !callee.is_empty())
-        .ok_or_else(|| Status::invalid_argument("signed remote Invoke envelope missing callee"))?;
-    if signed_callee != selected_route.callee_ura {
-        return Err(Status::invalid_argument(format!(
-            "signed remote Invoke envelope callee `{signed_callee}` does not match \
-             resolver-selected callee `{}` for route `{}`; prepare must sign the \
-             resolver-selected invocation tuple",
-            selected_route.callee_ura, selected_route.route_ura
-        )));
-    }
+        .ok_or_else(|| Status::invalid_argument("signed remote Invoke envelope missing callee"))?
+        .to_string();
+    let signed_subject = envelope
+        .subject
+        .as_ref()
+        .map(|subject| subject.ura.as_str())
+        .map(str::trim)
+        .filter(|subject| !subject.is_empty())
+        .ok_or_else(|| Status::invalid_argument("signed remote Invoke envelope missing subject"))?
+        .to_string();
+    let canonical_hash = signed_child_canonical_hash(&envelope, &signed_descriptor_ref, args)?;
+
+    ChildInvocationBuilder::build(ChildInvocationBuildInput {
+        route,
+        child_subject_ura: signed_subject.clone(),
+        args: args.to_vec(),
+        authority: ChildInvocationAuthority::ExternallySigned(ExternallySignedChildInvocation {
+            caller_ura: signed_caller,
+            signed_callee_ura: signed_callee,
+            signed_descriptor_ref,
+            signed_subject_ura: signed_subject,
+            canonical_hash,
+        }),
+    })
+    .map_err(status_from_child_invocation_failure)?;
     Ok(envelope)
+}
+
+fn signed_child_canonical_hash(
+    envelope: &Envelope,
+    signed_descriptor_ref: &str,
+    args: &[u8],
+) -> Result<String, Status> {
+    let descriptor_bound = descriptor_bound_from_wire_parts(
+        envelope.clone(),
+        signed_descriptor_ref.to_string(),
+        args,
+        WireCallerIdentity::FromEnvelope,
+    )
+    .map_err(|err| {
+        Status::invalid_argument(format!(
+            "{}: rebuild descriptor-bound child invocation bytes: {err}",
+            SignatureDecisionReason::CanonicalHashMismatch.as_str()
+        ))
+    })?;
+    Ok(format!(
+        "sha256:{}",
+        hex::encode(easynet_axon::invocation::sha256(
+            &descriptor_bound.envelope.canonical_bytes()
+        ))
+    ))
+}
+
+fn status_from_child_invocation_failure(failure: ChildInvocationBuildFailure) -> Status {
+    let reason = failure
+        .signature_reason
+        .map(SignatureDecisionReason::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| child_failure_code(&failure.code).to_string());
+    let message = format!("{reason}: {}", failure.reason);
+    match failure.stage {
+        TraceStage::PolicyDenied | TraceStage::AuthorityDenied => {
+            Status::permission_denied(message)
+        }
+        _ => Status::invalid_argument(message),
+    }
+}
+
+fn child_failure_code(code: &ChildInvocationBuildFailureCode) -> &'static str {
+    match code {
+        ChildInvocationBuildFailureCode::SignedEnvelopeRouteMutation => {
+            "SIGNED_ENVELOPE_ROUTE_MUTATION"
+        }
+        ChildInvocationBuildFailureCode::SignedDescriptorRefMissing => {
+            "SIGNED_DESCRIPTOR_REF_MISSING"
+        }
+        ChildInvocationBuildFailureCode::SignedDescriptorRefMismatch => {
+            "SIGNED_DESCRIPTOR_REF_MISMATCH"
+        }
+        ChildInvocationBuildFailureCode::MissingOriginCaller => "MISSING_ORIGIN_CALLER",
+        ChildInvocationBuildFailureCode::AuthorityProofMissing => "AUTHORITY_PROOF_MISSING",
+        ChildInvocationBuildFailureCode::AuthorityProofMismatch => "AUTHORITY_PROOF_MISMATCH",
+        ChildInvocationBuildFailureCode::DescriptorBindingMissing => "DESCRIPTOR_BINDING_MISSING",
+        ChildInvocationBuildFailureCode::ChildSubjectMissing => "CHILD_SUBJECT_MISSING",
+    }
 }

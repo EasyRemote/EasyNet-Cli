@@ -48,6 +48,51 @@ pub struct SelectedChildRoute {
     pub selected_descriptor_ref: String,
 }
 
+impl SelectedChildRoute {
+    pub(crate) fn descriptor_bound(
+        route_ref: impl Into<String>,
+        selected_callee_ura: impl Into<String>,
+        execution_host_ura: Option<String>,
+        public_ability: impl Into<String>,
+        dispatch_key: impl Into<String>,
+        descriptor_version: impl Into<String>,
+    ) -> Result<Self, ChildInvocationBuildFailure> {
+        let route_ref = route_ref.into();
+        let selected_callee_ura = selected_callee_ura.into();
+        let public_ability = public_ability.into();
+        let descriptor_version = descriptor_version.into();
+        let provisional = Self {
+            route_ref,
+            selected_callee_ura,
+            execution_host_ura,
+            public_ability,
+            dispatch_key: dispatch_key.into(),
+            descriptor_version,
+            selected_descriptor_ref: String::new(),
+        };
+        let selected_descriptor_ref =
+            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                &provisional.selected_callee_ura,
+                &provisional.public_ability,
+                &provisional.descriptor_version,
+            )
+            .map_err(|err| {
+                failure(
+                    &provisional,
+                    TraceStage::SignatureDenied,
+                    ChildInvocationBuildFailureCode::SignedDescriptorRefMismatch,
+                    format!("selected route cannot form descriptor-bound ability ref: {err}"),
+                    Some(SignatureDecisionReason::SignedDescriptorRefMismatch),
+                    None,
+                )
+            })?;
+        Ok(Self {
+            selected_descriptor_ref,
+            ..provisional
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChildInvocationAuthority {
     ExternallySigned(ExternallySignedChildInvocation),

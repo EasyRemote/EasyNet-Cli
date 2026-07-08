@@ -2257,6 +2257,51 @@ async fn dispatch_remote_rpc_times_out_when_target_never_replies() {
 }
 
 #[tokio::test]
+async fn dispatch_remote_rpc_rejects_missing_signed_descriptor_ref() {
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory
+        .presence
+        .insert(REMOTE_DEVICE_URA.to_string(), remote_tx);
+    publish_test_route(&svc, REMOTE_DEVICE_URA, "observe.health");
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, "observe.health")
+        .expect("remote device ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device route");
+
+    let mut request =
+        invoke_request_for_callee(REMOTE_DEVICE_URA, "observe.health", "{}").into_inner();
+    request.metadata.remove(
+        crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+    );
+
+    let err = svc
+        .unary_dispatcher()
+        .dispatch_remote_rpc_selected_route(&request, &selected_route)
+        .await
+        .expect_err("missing signed descriptor ref must fail before carrier dispatch");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("SIGNED_DESCRIPTOR_REF_MISSING"),
+        "expected signed descriptor ref missing denial, got: {}",
+        err.message()
+    );
+    assert!(
+        remote_rx.try_recv().is_err(),
+        "missing descriptor-bound signed target must not be forwarded"
+    );
+    assert_eq!(pending.outstanding(), 0);
+}
+
+#[tokio::test]
 async fn dispatch_remote_rpc_rejects_signed_callee_rewrite() {
     const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
 
@@ -2289,9 +2334,8 @@ async fn dispatch_remote_rpc_rejects_signed_callee_rewrite() {
         .expect_err("signed callee mismatch must fail before carrier dispatch");
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(
-        err.message()
-            .contains("does not match resolver-selected callee"),
-        "expected signed callee mismatch, got: {}",
+        err.message().contains("SIGNED_ENVELOPE_ROUTE_MUTATION"),
+        "expected RFC-014 route mutation denial, got: {}",
         err.message()
     );
     assert!(

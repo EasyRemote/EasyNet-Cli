@@ -71,6 +71,7 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
+    SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::receipts::ledger_projection::ledger_record_from_remote_receipt;
@@ -3226,9 +3227,15 @@ pub(crate) fn build_remote_bidi_open_frame_for_contract(
                 envelope: Some(signed_envelope_for_selected_route(
                     envelope,
                     selected_route,
+                    envelope_open
+                        .metadata
+                        .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
+                        .map(String::as_str),
+                    &envelope_open.initial_args,
                 )?),
                 function_name: selected_route.dispatch_name.clone(),
                 arguments: envelope_open.initial_args.clone(),
+                metadata: envelope_open.metadata.clone(),
                 ..Default::default()
             },
             true,

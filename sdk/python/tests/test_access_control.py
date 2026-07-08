@@ -121,6 +121,7 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(grant.grant_id, "grant-0001")
         self.assertEqual(request.request_id, "req-0001")
         self.assertEqual(proof.proof_id, "proof-0001")
+        self.assertEqual(proof.raw["audience_ura"], "easynet:///r/example/device/dev-a")
         self.assertEqual(policy.reason, "TOKEN_SCOPE_DENIED")
         self.assertEqual(signature.reason, "CALLER_KEY_NOT_FOUND")
         self.assertEqual(trace.invocation_id, "inv-0001")

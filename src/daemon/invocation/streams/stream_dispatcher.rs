@@ -48,7 +48,7 @@ use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility
 use crate::daemon::invocation::dispatch::federation_wrappers;
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
-    FEDERATION_RESULT_CONTENT_TYPE,
+    FEDERATION_RESULT_CONTENT_TYPE, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
 use crate::daemon::invocation::routing::route_resolver::SelectedInvokeRoute;
 
@@ -502,7 +502,15 @@ impl StreamDispatcher {
                  envelope on the canonical Invocation face",
             )));
         };
-        let envelope = signed_envelope_for_selected_route(envelope, &selected_route)?;
+        let envelope = signed_envelope_for_selected_route(
+            envelope,
+            &selected_route,
+            request
+                .metadata
+                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
+                .map(String::as_str),
+            &request.arguments,
+        )?;
         let pending = self.sessions.pending_stream.as_ref().ok_or_else(|| {
             Status::failed_precondition(format!(
                 "InvokeStream {}: daemon was constructed without a \
