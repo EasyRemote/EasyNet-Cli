@@ -6,9 +6,9 @@ required_for:
 description: Runtime companion control facades project shared companion status/action DTOs and dispatch lifecycle actions through daemon transport providers without owning platform supervisor policy.
 steps:
   - action: project_companion_status_dto
-    schema: sdk/schemas/desktop-companion-status.schema.json
+    schema: desktop-companion-status.schema.json
   - action: project_companion_action_result_dto
-    schema: sdk/schemas/desktop-companion-action.schema.json
+    schema: desktop-companion-action.schema.json
   - action: call_companion_list
   - action: call_companion_status
   - action: call_companion_lifecycle_action

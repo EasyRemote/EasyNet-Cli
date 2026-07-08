@@ -595,6 +595,8 @@ schema_files=(
   directory-resolved-ref.schema.json
   directory-subscription.schema.json
   diagnostics.schema.json
+  desktop-companion-action.schema.json
+  desktop-companion-status.schema.json
   local-resource-ref-request.schema.json
   publication.schema.json
   ability-package-manifest.schema.json
@@ -809,6 +811,7 @@ validate_declared_file_list fixture_files sdk/conformance/fixtures .v4.json
 
 case_files=(
   runtime-core-feature-discovery.yaml
+  runtime-companion-control.yaml
   version-abi-compatible.yaml
   version-abi-incompatible.yaml
   environment-process-root.yaml
