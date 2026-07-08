@@ -393,6 +393,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::plugins::package::tests::write_test_package;
     use crate::daemon::plugins::package::PluginPackage;
     use crate::daemon::plugins::{PluginLoadPlanner, PluginPackageIndex};
@@ -506,6 +507,7 @@ mod tests {
 
     #[test]
     fn plugin_host_surface_projects_desktop_companion_as_package_only() {
+        let _home = HomeGuard::new();
         let root = tempfile::tempdir().expect("root");
         write_companion_package(root.path());
         let package = PluginPackage::from_installed(root.path(), None).expect("companion package");
@@ -529,7 +531,7 @@ mod tests {
         assert_eq!(companion["kind"], "desktop_companion_status");
         assert_eq!(companion["package_id"], "easynet.desktop.menubar");
         assert_eq!(companion["package_version"], "0.1.0");
-        assert_eq!(companion["projected_state"], "ready_stopped");
+        assert_eq!(companion["projected_state"], "disabled");
     }
 
     #[test]

@@ -306,6 +306,20 @@
       "remaining": "Backend HTTP/WebSocket bridges, storage policy, and product wrapper cutovers remain incomplete outside the daemon SDK facade."
     },
     {
+      "capability_id": "access_control",
+      "profile": "access_control",
+      "shared_cases": [],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [{"kind": "go_test", "ref": "sdk/go/access_control_test.go"}, {"kind": "go_test", "ref": "sdk/go/access_control_runtime_test.go"}]
+      },
+      "python": {
+        "status": "seam",
+        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_access_control.py"}]
+      },
+      "remaining": "Go has a Runtime Core-backed access-control transport for RFC-014 system abilities; Python exposes the same typed DTO/client seam but still needs a Runtime Core-backed provider before provider-backed parity."
+    },
+    {
       "capability_id": "conformance_runner",
       "profile": "conformance",
       "shared_cases": ["sdk/conformance/cases/memc-profile-exclusivity.yaml", "sdk/conformance/cases/memc-consumer-coverage.yaml", "sdk/conformance/cases/memc-semantic-alignment.yaml", "sdk/conformance/cases/memc-no-core-bloat.yaml"],

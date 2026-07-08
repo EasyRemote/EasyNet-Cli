@@ -593,12 +593,13 @@ impl AccessControlStore {
     pub fn resolve_permission_request_with_grant(
         &mut self,
         mut request: PermissionRequest,
-        grant: PermissionGrant,
+        mut grant: PermissionGrant,
         actor_ura: &str,
     ) -> anyhow::Result<PermissionRequestResolutionResult> {
         if request.status != PermissionRequestStatus::Approved {
             anyhow::bail!("grant-backed PermissionRequest resolution requires approved status");
         }
+        normalize_grant_for_create(&mut grant)?;
         validate_grant_resolves_request(&grant, &request)?;
         if request.authority_proof_id.is_some() {
             anyhow::bail!(
@@ -617,14 +618,81 @@ impl AccessControlStore {
         normalize_terminal_resolution_fields(&mut request, actor_ura);
         let previous = self.requests.get(&request.request_id);
         validate_request_transition(previous, &request)?;
+        validate_grant(&grant)?;
 
-        let grant_result = self.create_grant(grant, actor_ura)?;
-        let request = self.resolve_permission_request(request, actor_ura)?;
+        let idempotency_key = grant_idempotency_key(&grant)?;
+        if let Some(existing) = self
+            .grants
+            .values()
+            .find(|existing| {
+                existing.state == PermissionGrantState::Active
+                    && grant_idempotency_key(existing).ok().as_deref()
+                        == Some(idempotency_key.as_str())
+            })
+            .cloned()
+        {
+            if request.created_grant_id.as_deref() != Some(existing.grant_id.as_str()) {
+                anyhow::bail!("idempotent approval request must reference the existing grant id");
+            }
+            self.append(
+                RecordKind::PermissionRequest,
+                &request.request_id,
+                request_transition_operation(previous, &request)?,
+                serde_json::to_value(&request)?,
+                actor_ura,
+            )?;
+            self.requests
+                .insert(request.request_id.clone(), request.clone());
+            return Ok(PermissionRequestResolutionResult {
+                request,
+                created_grant: Some(existing),
+                authority_proof: None,
+                idempotent_replay: true,
+            });
+        }
+        if self.grants.contains_key(&grant.grant_id) {
+            anyhow::bail!("grant_id `{}` already exists", grant.grant_id);
+        }
+
+        let new_grant_hash = grant_hash(&grant)?;
+        let audit = audit_record(
+            &grant,
+            GrantMutation::Created,
+            actor_ura,
+            ZERO_HASH,
+            &new_grant_hash,
+        )?;
+        self.append(
+            RecordKind::PermissionRequest,
+            &request.request_id,
+            request_transition_operation(previous, &request)?,
+            serde_json::to_value(&request)?,
+            actor_ura,
+        )?;
+        self.append(
+            RecordKind::PermissionGrant,
+            &grant.grant_id,
+            RecordOperation::Created,
+            serde_json::to_value(&grant)?,
+            actor_ura,
+        )?;
+        self.append(
+            RecordKind::Audit,
+            &audit.audit_record_id,
+            RecordOperation::Created,
+            serde_json::to_value(&audit)?,
+            actor_ura,
+        )?;
+        self.requests
+            .insert(request.request_id.clone(), request.clone());
+        self.grants.insert(grant.grant_id.clone(), grant.clone());
+        self.audit
+            .insert(audit.audit_record_id.clone(), audit.clone());
         Ok(PermissionRequestResolutionResult {
             request,
-            created_grant: Some(grant_result.grant),
+            created_grant: Some(grant),
             authority_proof: None,
-            idempotent_replay: grant_result.idempotent_replay,
+            idempotent_replay: false,
         })
     }
 
@@ -655,9 +723,30 @@ impl AccessControlStore {
         normalize_terminal_resolution_fields(&mut request, actor_ura);
         let previous = self.requests.get(&request.request_id);
         validate_request_transition(previous, &request)?;
+        if self.proofs.contains_key(&proof.proof_id) {
+            anyhow::bail!("authority proof `{}` already exists", proof.proof_id);
+        }
+        if self.consumed_proof_ids.contains(&proof.proof_id) {
+            anyhow::bail!("authority proof `{}` was already consumed", proof.proof_id);
+        }
 
-        let proof = self.put_authority_proof(proof, actor_ura)?;
-        let request = self.resolve_permission_request(request, actor_ura)?;
+        self.append(
+            RecordKind::PermissionRequest,
+            &request.request_id,
+            request_transition_operation(previous, &request)?,
+            serde_json::to_value(&request)?,
+            actor_ura,
+        )?;
+        self.append(
+            RecordKind::AuthorityProof,
+            &proof.proof_id,
+            RecordOperation::Created,
+            serde_json::to_value(&proof)?,
+            actor_ura,
+        )?;
+        self.requests
+            .insert(request.request_id.clone(), request.clone());
+        self.proofs.insert(proof.proof_id.clone(), proof.clone());
         Ok(PermissionRequestResolutionResult {
             request,
             created_grant: None,
@@ -738,6 +827,7 @@ impl AccessControlStore {
             self.head_hash = record.record_hash.clone();
             self.apply_record(record)?;
         }
+        self.validate_all_resolution_authorities()?;
         self.manifest.policy_store.head_hash = self.head_hash.clone();
         write_manifest(&self.root.join(MANIFEST_FILE), &self.manifest)?;
         Ok(())
@@ -780,7 +870,6 @@ impl AccessControlStore {
                 let request: PermissionRequest = serde_json::from_value(record.payload)?;
                 let previous = self.requests.get(&request.request_id);
                 validate_request_transition(previous, &request)?;
-                self.validate_resolution_authority(&request)?;
                 self.requests.insert(request.request_id.clone(), request);
             }
             RecordKind::AuthorityProof => {
@@ -894,6 +983,13 @@ impl AccessControlStore {
                     "approved PermissionRequest must be backed by exactly one authority source"
                 );
             }
+        }
+        Ok(())
+    }
+
+    fn validate_all_resolution_authorities(&self) -> anyhow::Result<()> {
+        for request in self.requests.values() {
+            self.validate_resolution_authority(request)?;
         }
         Ok(())
     }

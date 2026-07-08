@@ -1286,7 +1286,7 @@ status_file = "companions/easynet.desktop.menubar/status.json"
 
 [companion.macos]
 bundle_id = "tech.silan.easynet.menubar"
-app_bundle = "dist/macos/EasyNetMenuBar.app"
+app_bundle = "release/macos/EasyNetMenuBar.app"
 supervisor = "launch_agent"
 launch_agent_label = "tech.silan.easynet.menubar"
 session = "aqua"

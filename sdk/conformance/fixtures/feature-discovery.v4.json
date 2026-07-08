@@ -1,6 +1,6 @@
 {
   "abi_version": 4,
-  "sdk_version": "0.91.30",
+  "sdk_version": "0.96.8",
   "profiles": {
     "runtime_core": "provider-backed",
     "authority": "provider-backed",

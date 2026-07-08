@@ -1321,6 +1321,155 @@ fn bootstrap_authority_ability(ability: &str) -> bool {
 }
 
 fn action_for_unary_ability(ability: &str) -> AccessAction {
+    use crate::daemon::ability::names::{
+        agents as agent_names, automation as automation_names, device_control as device_names,
+        federation as federation_names, governance as governance_names,
+        integrations as integration_names, resources as resource_names,
+    };
+
+    match ability {
+        device_names::TERMINAL_CREATE
+        | device_names::TERMINAL_ATTACH
+        | device_names::TERMINAL_INPUT
+        | device_names::TERMINAL_READ
+        | device_names::TERMINAL_RESIZE
+        | device_names::SESSION_OPEN
+        | device_names::SESSION_ATTACH
+        | device_names::BROWSER_OPEN_SESSION
+        | device_names::BROWSER_ATTACH_SESSION
+        | device_names::BROWSER_SEND_INPUT
+        | device_names::BROWSER_CAPTURE_VIEWPORT
+        | resource_names::MEDIA_MIC_SUBSCRIBE
+        | resource_names::MEDIA_CAMERA_SUBSCRIBE
+        | resource_names::MEDIA_CAMERA_RECORD_START
+        | resource_names::MEDIA_CAMERA_RECORD_STOP
+        | resource_names::MEDIA_SCREEN_SUBSCRIBE
+        | resource_names::MEDIA_SPEAKER_PUBLISH
+        | resource_names::VOICE_SUBSCRIBE
+        | resource_names::VOICE_TRANSCRIBE
+        | resource_names::VOICE_CREATE_CALL
+        | resource_names::VOICE_JOIN_CALL
+        | resource_names::VOICE_LEAVE_CALL
+        | automation_names::DISCUSS_SUBSCRIBE
+        | automation_names::LOOP_SUBSCRIBE
+        | device_names::FS_TRANSFER
+        | "remote_desktop.create_session"
+        | "remote_desktop.attach"
+        | "remote_desktop.watch_events"
+        | "remote_desktop.set_description"
+        | "remote_desktop.add_ice_candidate"
+        | "remote_desktop.refresh_lease" => return AccessAction::Stream,
+
+        device_names::TERMINAL_CLOSE
+        | device_names::BROWSER_CLOSE_SESSION
+        | resource_names::VOICE_END_CALL
+        | resource_names::CONTEXT_CLIPBOARD_TRACK
+        | resource_names::CONTEXT_CLIPBOARD_REMOVE
+        | resource_names::CONTEXT_FAVORITES_ADD
+        | resource_names::CONTEXT_FAVORITES_REMOVE
+        | resource_names::SKILL_INSTALL
+        | resource_names::SKILL_REMOVE
+        | resource_names::SKILL_UPGRADE
+        | resource_names::SKILL_PUBLISH
+        | resource_names::SKILL_UNPUBLISH
+        | resource_names::SKILL_WRITE_FILE
+        | device_names::FS_WRITE
+        | device_names::FS_EDIT
+        | federation_names::NODE_REMOVE
+        | federation_names::ABILITY_DEPLOY
+        | federation_names::ABILITY_UNINSTALL
+        | federation_names::ABILITY_PUBLISH
+        | federation_names::ABILITY_UNPUBLISH
+        | federation_names::REVOKE
+        | federation_names::IDENTITY_REGISTER_PUBKEY
+        | federation_names::IDENTITY_REVOKE_USER_PUBKEY
+        | agent_names::AGENT_START
+        | agent_names::AGENT_STOP
+        | agent_names::AGENT_REFRESH
+        | automation_names::MISSION_CANCEL
+        | automation_names::LOOP_CANCEL
+        | automation_names::SCHEDULE_REMOVE
+        | automation_names::SCHEDULE_ENABLE
+        | integration_names::OPENAI_FILES_UPLOAD
+        | integration_names::OPENAI_FILES_DELETE
+        | integration_names::PLUGIN_RELOAD
+        | integration_names::PLUGIN_ACTIVATE_REALTIME
+        | integration_names::PLUGIN_COMPANION_RECONCILE
+        | governance_names::CONSENT_DECIDE
+        | "remote_desktop.end_session"
+        | "remote_desktop.request_permission" => return AccessAction::Manage,
+
+        governance_names::AUTHORITY_BINDING_GRANT
+        | governance_names::AUTHORITY_BINDING_REVOKE
+        | governance_names::POLICY_REQUEST_CREATE
+        | governance_names::POLICY_REQUEST_RESOLVE => return AccessAction::Grant,
+
+        device_names::FS_READ
+        | device_names::FS_STAT
+        | device_names::FS_LIST
+        | device_names::SESSION_LIST
+        | device_names::TERMINAL_LIST
+        | federation_names::NODE_LIST
+        | federation_names::NODE_DESCRIBE
+        | federation_names::IDENTITY_LIST_USER_PUBKEYS
+        | resource_names::META_LIST_RESOURCES
+        | resource_names::SKILL_LIST
+        | resource_names::SKILL_TREE
+        | resource_names::SKILL_READ_FILE
+        | resource_names::CONTEXT_CLIPBOARD_LIST
+        | resource_names::CONTEXT_CLIPBOARD_GET
+        | resource_names::CONTEXT_FOLDERS_LIST
+        | resource_names::CONTEXT_FS_LIST
+        | resource_names::CONTEXT_FAVORITES_LIST
+        | resource_names::CONTEXT_CAPTURES_LIST
+        | resource_names::CONTEXT_CAPTURES_GET
+        | resource_names::MEDIA_CAMERA_SNAPSHOT
+        | resource_names::MEDIA_SCREEN_SNAPSHOT
+        | resource_names::VOICE_SHOW_CALL
+        | resource_names::VOICE_WATCH_CALL
+        | resource_names::VOICE_REPORT_METRICS
+        | resource_names::VOICE_LIST_CALLS
+        | agent_names::AGENT_LIST
+        | agent_names::CHAT_HISTORY_LIST
+        | agent_names::CHAT_HISTORY_GET
+        | automation_names::MISSION_TRACK
+        | automation_names::DISCUSS_LIST_TURNS
+        | automation_names::SCHEDULE_LIST
+        | automation_names::LOOP_STATUS
+        | integration_names::MCP_BRIDGE_LIST_TOOLS
+        | integration_names::MCP_CLIENT_LIST
+        | integration_names::A2A_BRIDGE_LIST_SKILLS
+        | integration_names::OPENAI_LIST_MODELS
+        | integration_names::OPENAI_FILES_RETRIEVE
+        | integration_names::PLUGIN_STATUS
+        | integration_names::PLUGIN_COMPANION_STATUS
+        | governance_names::AUTHORITY_BINDING_LIST
+        | governance_names::AUTHORITY_BINDING_CHECK
+        | governance_names::POLICY_REQUEST_LIST
+        | governance_names::ADMISSION_EXPLAIN
+        | governance_names::CONSENT_LIST_PENDING
+        | governance_names::INVOCATION_HISTORY_LIST
+        | governance_names::INVOCATION_HISTORY_GET
+        | governance_names::INVOCATION_TRACE_GET
+        | governance_names::INVOCATION_HISTORY_PATH
+        | governance_names::OBSERVE_HEALTH
+        | governance_names::OBSERVE_NETWORK_HEALTH
+        | governance_names::ADMIN_STATUS
+        | governance_names::META_DESCRIBE
+        | governance_names::META_LIST_ABILITIES
+        | "remote_desktop.permission_status"
+        | "remote_desktop.show_session" => return AccessAction::Read,
+
+        _ => {}
+    }
+
+    if ability.ends_with(".api_key.list") {
+        return AccessAction::Read;
+    }
+    if ability.ends_with(".api_key.create") || ability.ends_with(".api_key.revoke") {
+        return AccessAction::Manage;
+    }
+
     let hints =
         crate::daemon::ability::catalog::catalog_metadata::discovery_hints_for_name(ability);
     if hints.read_only && hints.idempotent && !hints.streaming_only && !hints.bidi_only {
@@ -1990,6 +2139,43 @@ mod tests {
             arguments: b"{}".to_vec(),
             ..InvokeRequest::default()
         }
+    }
+
+    #[test]
+    fn rfc014_unary_action_classifier_pins_session_and_policy_boundaries() {
+        assert_eq!(
+            action_for_unary_ability("terminal.create"),
+            AccessAction::Stream
+        );
+        assert_eq!(
+            action_for_unary_ability("terminal.read"),
+            AccessAction::Stream
+        );
+        assert_eq!(
+            action_for_unary_ability("terminal.close"),
+            AccessAction::Manage
+        );
+        assert_eq!(
+            action_for_unary_ability("remote_desktop.create_session"),
+            AccessAction::Stream
+        );
+        assert_eq!(
+            action_for_unary_ability("remote_desktop.permission_status"),
+            AccessAction::Read
+        );
+        assert_eq!(
+            action_for_unary_ability("context.clipboard.track"),
+            AccessAction::Manage
+        );
+        assert_eq!(
+            action_for_unary_ability("authority.binding.grant"),
+            AccessAction::Grant
+        );
+        assert_eq!(action_for_unary_ability("fs.list"), AccessAction::Read);
+        assert_eq!(
+            action_for_unary_ability("process.exec"),
+            AccessAction::Invoke
+        );
     }
 
     fn entry_with_role(ura: &str, public_key_b64: String, role: TrustedAgentRole) -> TrustedAgent {
