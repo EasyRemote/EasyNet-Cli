@@ -133,6 +133,21 @@ pub enum AuthorityProofDenyReason {
     AuthorityProofRevoked,
 }
 
+impl AuthorityProofDenyReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthorityProofMissing => "AUTHORITY_PROOF_MISSING",
+            Self::AuthorityProofExpired => "AUTHORITY_PROOF_EXPIRED",
+            Self::AuthorityProofSignatureInvalid => "AUTHORITY_PROOF_SIGNATURE_INVALID",
+            Self::AuthorityProofIssuerDenied => "AUTHORITY_PROOF_ISSUER_DENIED",
+            Self::AuthorityProofAudienceMismatch => "AUTHORITY_PROOF_AUDIENCE_MISMATCH",
+            Self::AuthorityProofMismatch => "AUTHORITY_PROOF_MISMATCH",
+            Self::AuthorityProofRevoked => "AUTHORITY_PROOF_REVOKED",
+        }
+    }
+}
+
 pub struct AuthorityProofVerifier;
 
 impl AuthorityProofVerifier {

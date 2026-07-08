@@ -544,11 +544,11 @@ mod tests {
         // reboot orphans every prior receipt referencing that
         // resource.
         let mut f = empty();
-        let uri1 = upsert_resource(
+        let ura1 = upsert_resource(
             &mut f,
             spec(ResourceType::Camera, "Camera-USB-12345", "Logitech C920"),
         );
-        let uri2 = upsert_resource(
+        let ura2 = upsert_resource(
             &mut f,
             ResourceUpsert {
                 metadata: json!({"max_fps":30}),
@@ -559,7 +559,7 @@ mod tests {
                 )
             },
         );
-        assert_eq!(uri1, uri2, "same hardware_id MUST yield same URA");
+        assert_eq!(ura1, ura2, "same hardware_id MUST yield same URA");
         assert_eq!(f.resources.len(), 1, "no duplicate entry");
         // display_name + metadata mutated; resource_ura stable.
         assert_eq!(f.resources[0].display_name, "Logitech C920 (Renamed)");
@@ -569,15 +569,15 @@ mod tests {
     #[test]
     fn upsert_distinguishes_distinct_hardware_ids() {
         let mut f = empty();
-        let uri_front = upsert_resource(
+        let ura_front = upsert_resource(
             &mut f,
             spec(ResourceType::Camera, "Camera-Front", "Front Camera"),
         );
-        let uri_rear = upsert_resource(
+        let ura_rear = upsert_resource(
             &mut f,
             spec(ResourceType::Camera, "Camera-Rear", "Rear Camera"),
         );
-        assert_ne!(uri_front, uri_rear);
+        assert_ne!(ura_front, ura_rear);
         assert_eq!(f.resources.len(), 2);
     }
 

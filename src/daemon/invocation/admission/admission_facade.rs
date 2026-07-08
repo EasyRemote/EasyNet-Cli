@@ -86,6 +86,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use sha2::Digest;
@@ -104,7 +105,7 @@ use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 use crate::daemon::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity,
+    descriptor_bound_from_wire_parts, WireCallerIdentity, WireDescriptorBoundEnvelope,
 };
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
@@ -113,15 +114,20 @@ use crate::daemon::invocation::admission::authority_metadata::{
     DELEGATION_METADATA_KEY, REASON_AUTHORITY_EXPIRED, REASON_AUTHORITY_FORMAT_INVALID,
     SESSION_AUTHORITY_METADATA_KEY,
 };
-use crate::daemon::invocation::admission::decision::AccessAction;
-use crate::daemon::invocation::admission::decision::SignatureDecisionReason;
+use crate::daemon::invocation::admission::authority_proof::{
+    AuthorityProof, AuthorityProofDenyReason, AuthorityProofIssuerResolver,
+    AuthorityProofVerificationContext, AuthorityProofVerifier,
+};
+use crate::daemon::invocation::admission::decision::{
+    AccessAction, PermissionRequestStatus, SignatureDecisionReason,
+};
 use crate::daemon::invocation::admission::federated_key_resolver::{
     FederatedKeyResolver, SharedFederatedKeyCache,
 };
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::admission::policy_gate::{
-    AdmissionPolicyContext, AdmissionPolicyGate,
+    ability_ura_for, principal_for, AdmissionPolicyContext, AdmissionPolicyGate,
 };
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
@@ -131,7 +137,10 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_JOIN,
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
-use crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
+use crate::daemon::invocation::dispatch::invocation_wire::{
+    AUTHORITY_PROOF_METADATA_KEY, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
+};
+use crate::daemon::persistence::access_control::AccessControlStore;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 use easynet_axon::pb::axon::v1::{
@@ -771,6 +780,17 @@ impl AdmissionFacade {
                     axon_now_ms(),
                 )
                 .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
+                let authority_proof_id = self
+                    .verify_authority_proof_metadata(
+                        envelope,
+                        ability,
+                        action,
+                        metadata,
+                        trust_anchor.as_ref(),
+                        trusted_role,
+                        &descriptor_bound,
+                    )
+                    .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
                 AdmissionPolicyGate::verify(AdmissionPolicyContext {
                     envelope,
                     ability,
@@ -788,7 +808,7 @@ impl AdmissionFacade {
                         .as_ref()
                         .map(|signature| signature.key_id_hint.clone())
                         .filter(|key| !key.is_empty()),
-                    authority_proof_id: None,
+                    authority_proof_id,
                     rejector_ura: self.daemon_ura.clone(),
                 })?;
                 Ok(())
@@ -973,6 +993,178 @@ impl AdmissionFacade {
             self.daemon_ura.as_deref(),
         )
     }
+
+    fn verify_authority_proof_metadata(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        action: AccessAction,
+        metadata: Option<&HashMap<String, String>>,
+        trust_anchor: &RealmTrustAnchor,
+        trusted_role: TrustedAgentRole,
+        descriptor_bound: &WireDescriptorBoundEnvelope,
+    ) -> Result<Option<String>, Status> {
+        let Some(proof) = authority_proof_from_metadata(metadata)? else {
+            return Ok(None);
+        };
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.as_str())
+            .unwrap_or_default();
+        let callee_ura = envelope
+            .callee
+            .as_ref()
+            .map(|callee| callee.ura.as_str())
+            .unwrap_or_default();
+        let subject_ura = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.ura.as_str())
+            .unwrap_or_default();
+        let ability_ura = ability_ura_for(callee_ura, ability)?;
+        let principal = principal_for(trusted_role, caller_ura);
+        let canonical_hash = format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(
+                descriptor_bound.envelope.canonical_bytes()
+            ))
+        );
+        let invocation_nonce = invocation_nonce_for_proof(envelope);
+        let audience_ura = self.daemon_ura.as_deref().unwrap_or(callee_ura);
+        let now = Utc::now();
+        let mut store =
+            AccessControlStore::open_or_create(proof.owner_user_id.clone()).map_err(|err| {
+                Status::internal(format!(
+                    "POLICY_STORE_UNAVAILABLE: owner_user_id={} error={err}",
+                    proof.owner_user_id
+                ))
+            })?;
+        let resolver = StoreBackedAuthorityProofResolver {
+            trust_anchor,
+            store: &store,
+            now,
+        };
+        let context = AuthorityProofVerificationContext {
+            owner_user_id: &proof.owner_user_id,
+            principal_kind: principal.kind,
+            principal_id: &principal.id,
+            token_id: principal.token_id.as_deref(),
+            callee_ura,
+            subject_ura,
+            ability_ura: &ability_ura,
+            action,
+            nonce: invocation_nonce.as_deref(),
+            canonical_hash: Some(canonical_hash.as_str()),
+            audience_ura,
+            session_id: proof.session_id.as_deref(),
+            session_owner_user_id: proof.session_owner_user_id.as_deref(),
+            now,
+        };
+        AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
+            .map_err(authority_proof_status)?;
+        if request_scoped_one_time_authority_proof(&proof) {
+            store
+                .consume_authority_proof_once(&proof.proof_id, audience_ura)
+                .map_err(|err| {
+                    Status::permission_denied(format!(
+                        "{}: {err}",
+                        AuthorityProofDenyReason::AuthorityProofRevoked.as_str()
+                    ))
+                })?;
+        }
+        Ok(Some(proof.proof_id))
+    }
+}
+
+struct StoreBackedAuthorityProofResolver<'a> {
+    trust_anchor: &'a RealmTrustAnchor,
+    store: &'a AccessControlStore,
+    now: DateTime<Utc>,
+}
+
+impl AuthorityProofIssuerResolver for StoreBackedAuthorityProofResolver<'_> {
+    fn verifying_key_for_issuer(&self, issuer_ura: &str) -> Option<VerifyingKey> {
+        let entry = self.trust_anchor.lookup(issuer_ura)?;
+        let bytes = BASE64_STANDARD
+            .decode(entry.public_key_b64.as_bytes())
+            .ok()?;
+        let bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = bytes.try_into().ok()?;
+        VerifyingKey::from_bytes(&bytes).ok()
+    }
+
+    fn issuer_authorized_for_owner(&self, issuer_ura: &str, owner_user_id: &str) -> bool {
+        let Some(entry) = self.trust_anchor.lookup(issuer_ura) else {
+            return false;
+        };
+        if entry.role != TrustedAgentRole::User {
+            return false;
+        }
+        crate::core::ura::parse_ura(issuer_ura)
+            .ok()
+            .and_then(|parsed| parsed.user_id().map(ToOwned::to_owned))
+            .is_some_and(|user_id| user_id == owner_user_id)
+    }
+
+    fn referenced_authority_active(&self, proof: &AuthorityProof) -> bool {
+        if self.store.proof_consumed(&proof.proof_id) {
+            return false;
+        }
+        if self
+            .store
+            .proof(&proof.proof_id)
+            .is_none_or(|stored| stored.canonical_hash() != proof.canonical_hash())
+        {
+            return false;
+        }
+        match (
+            proof.grant_id.as_deref(),
+            proof.permission_request_id.as_deref(),
+        ) {
+            (Some(grant_id), None) => self
+                .store
+                .grant(grant_id)
+                .is_some_and(|grant| grant.admissible_for(proof.action, self.now)),
+            (None, Some(request_id)) => self.store.request(request_id).is_some_and(|request| {
+                request.status == PermissionRequestStatus::Approved
+                    && request.authority_proof_id.as_deref() == Some(proof.proof_id.as_str())
+            }),
+            _ => false,
+        }
+    }
+}
+
+fn authority_proof_from_metadata(
+    metadata: Option<&HashMap<String, String>>,
+) -> Result<Option<AuthorityProof>, Status> {
+    let Some(raw) = metadata
+        .and_then(|metadata| metadata.get(AUTHORITY_PROOF_METADATA_KEY))
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    serde_json::from_str::<AuthorityProof>(raw)
+        .map(Some)
+        .map_err(|err| {
+            Status::invalid_argument(format!(
+                "{}: `{AUTHORITY_PROOF_METADATA_KEY}` must contain an AuthorityProof JSON object: {err}",
+                AuthorityProofDenyReason::AuthorityProofMismatch.as_str()
+            ))
+        })
+}
+
+fn authority_proof_status(reason: AuthorityProofDenyReason) -> Status {
+    Status::permission_denied(reason.as_str().to_string())
+}
+
+fn request_scoped_one_time_authority_proof(proof: &AuthorityProof) -> bool {
+    proof.permission_request_id.is_some() && proof.grant_id.is_none() && proof.session_id.is_none()
+}
+
+fn invocation_nonce_for_proof(envelope: &Envelope) -> Option<String> {
+    (!envelope.invocation_nonce.is_empty()).then(|| hex::encode(&envelope.invocation_nonce))
 }
 
 type AdmissionReasonExtractor = fn(&Status) -> String;
@@ -1739,6 +1931,10 @@ fn envelope_presented_pubkey_b64(envelope: &Envelope) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::invocation::admission::decision::{
+        PermissionLifetime, PermissionRequest, PrincipalKind,
+    };
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
     use easynet_axon::pb::axon::v1::CallerSignature as PbCallerSignature;
     use ed25519_dalek::{Signer, SigningKey};
@@ -2074,6 +2270,136 @@ mod tests {
             err.message().contains(REASON_CALLER_SIGNATURE_INVALID),
             "legacy signature reason should remain inspectable: {}",
             err.message()
+        );
+    }
+
+    #[test]
+    fn metadata_authority_proof_admits_and_consumes_one_time_proof() {
+        let _home = HomeGuard::new();
+        let owner_user_id = "alice";
+        let owner_ura = crate::core::ura::user_ura("realm", owner_user_id);
+        let daemon_ura = hub_ura("realm");
+        let caller_ura = hub_ura("authority-proof-caller");
+        let caller_key = SigningKey::from_bytes(&[0x51u8; 32]);
+        let owner_key = SigningKey::from_bytes(&[0x52u8; 32]);
+        let caller_pub_b64 = BASE64_STANDARD.encode(caller_key.verifying_key().to_bytes());
+        let owner_pub_b64 = BASE64_STANDARD.encode(owner_key.verifying_key().to_bytes());
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![
+                backend_entry(&caller_ura, caller_pub_b64),
+                entry_with_role(&owner_ura, owner_pub_b64, TrustedAgentRole::User),
+            ])
+            .expect("trust anchor"),
+        );
+        let subject_ura = "easynet:///r/realm/resource/user.alice/authority-proof-target";
+        let mut req = signed_request_with_subject_and_nonce(
+            &caller_ura,
+            &daemon_ura,
+            subject_ura,
+            "self.echo",
+            b"{}",
+            &caller_key,
+            [0x5a; 16],
+        );
+        let descriptor_ref = req
+            .metadata
+            .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
+            .expect("signed descriptor ref")
+            .clone();
+        let descriptor_bound = descriptor_bound_from_wire_parts(
+            req.envelope.clone().expect("envelope"),
+            descriptor_ref,
+            &req.arguments,
+            WireCallerIdentity::FromEnvelope,
+        )
+        .expect("descriptor-bound request");
+        let canonical_hash = format!(
+            "sha256:{}",
+            hex::encode(sha2::Sha256::digest(
+                descriptor_bound.envelope.canonical_bytes()
+            ))
+        );
+        let request = PermissionRequest {
+            request_id: "req-proof-1".to_string(),
+            owner_user_id: owner_user_id.to_string(),
+            caller_ura: caller_ura.clone(),
+            principal_kind: PrincipalKind::Service,
+            principal_id: caller_ura.clone(),
+            token_id: None,
+            token_class: None,
+            callee_ura: daemon_ura.clone(),
+            subject_ura: subject_ura.to_string(),
+            ability_ura: crate::core::ura::owner_ability_ura(&daemon_ura, "self.echo")
+                .expect("ability ura"),
+            action: AccessAction::Invoke,
+            nonce: None,
+            canonical_hash: Some(canonical_hash.clone()),
+            requested_lifetimes: vec![PermissionLifetime::Once],
+            status: PermissionRequestStatus::Pending,
+            created_at: "2026-07-09T00:00:00Z".to_string(),
+            expires_at: "2099-01-01T00:00:00Z".to_string(),
+            resolver_ura: None,
+            resolved_lifetime: None,
+            created_grant_id: None,
+            authority_proof_id: None,
+            resolved_at: None,
+            decision_reason: None,
+        };
+        let mut proof = AuthorityProof {
+            proof_id: "proof-metadata-1".to_string(),
+            grant_id: None,
+            permission_request_id: Some(request.request_id.clone()),
+            owner_user_id: owner_user_id.to_string(),
+            principal_kind: PrincipalKind::Service,
+            principal_id: caller_ura.clone(),
+            token_id: None,
+            callee_ura: request.callee_ura.clone(),
+            subject_ura: request.subject_ura.clone(),
+            ability_ura: request.ability_ura.clone(),
+            action: request.action,
+            nonce: None,
+            canonical_hash: Some(canonical_hash),
+            session_id: None,
+            session_owner_user_id: None,
+            allowed_followup_abilities: vec![],
+            session_expires_at: None,
+            issued_at: "2026-07-09T00:00:10Z".to_string(),
+            expires_at: "2099-01-01T00:00:00Z".to_string(),
+            issuer_ura: owner_ura.clone(),
+            audience_ura: daemon_ura.clone(),
+            signature: String::new(),
+        };
+        let signature = owner_key.sign(&crate::daemon::ability::canonical_json_bytes(
+            &proof.canonical_material(),
+        ));
+        proof.signature = format!("ed25519:{}", BASE64_STANDARD.encode(signature.to_bytes()));
+
+        let mut store =
+            AccessControlStore::open_or_create(owner_user_id).expect("open access store");
+        store
+            .upsert_permission_request(request.clone(), &caller_ura)
+            .expect("create request");
+        let mut approved = request;
+        approved.status = PermissionRequestStatus::Approved;
+        approved.resolved_lifetime = Some(PermissionLifetime::Once);
+        store
+            .resolve_permission_request_with_authority_proof(approved, proof.clone(), &owner_ura)
+            .expect("approve proof");
+        req.metadata.insert(
+            AUTHORITY_PROOF_METADATA_KEY.to_string(),
+            serde_json::to_string(&proof).expect("proof json"),
+        );
+
+        let facade = AdmissionFacade::new(trust, Some(daemon_ura));
+        facade
+            .verify_invoke(&req)
+            .expect("verified authority proof admits invocation");
+
+        let reopened =
+            AccessControlStore::open_or_create(owner_user_id).expect("reopen access store");
+        assert!(
+            reopened.proof_consumed("proof-metadata-1"),
+            "one-time proof must be durably consumed"
         );
     }
 

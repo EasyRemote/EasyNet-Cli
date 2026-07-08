@@ -136,6 +136,53 @@ pub struct PermissionRequestResolutionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessControlCompactionPolicy {
+    pub grant_mutation_audit_retention_days: i64,
+    pub prompt_audit_retention_days: i64,
+    pub denied_admission_retention_days: i64,
+    pub complete_nested_trace_retention_days: i64,
+    pub redacted_projection_retention_days: i64,
+}
+
+impl Default for AccessControlCompactionPolicy {
+    fn default() -> Self {
+        Self {
+            grant_mutation_audit_retention_days: 365,
+            prompt_audit_retention_days: 180,
+            denied_admission_retention_days: 90,
+            complete_nested_trace_retention_days: 30,
+            redacted_projection_retention_days: 180,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessControlCompactionResult {
+    pub checkpoint_id: String,
+    pub compacted_at: String,
+    pub last_source_sequence: u64,
+    pub last_source_record_hash: String,
+    pub new_segment_head_hash: String,
+    pub retained_active_grants: usize,
+    pub retained_pending_requests: usize,
+    pub retained_unexpired_proofs: usize,
+    pub retained_audit_records: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CompactionCheckpoint {
+    checkpoint_id: String,
+    compacted_at: String,
+    last_source_sequence: u64,
+    last_source_record_hash: String,
+    retained_active_grant_hashes: Vec<String>,
+    retained_pending_request_ids: Vec<String>,
+    retained_unexpired_proof_ids: Vec<String>,
+    retained_audit_record_ids: Vec<String>,
+    retention_floor: AccessControlCompactionPolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct JournalRecord {
     record_kind: RecordKind,
     schema_version: u64,
@@ -157,6 +204,7 @@ enum RecordKind {
     PermissionRequest,
     AuthorityProof,
     Audit,
+    Checkpoint,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +218,7 @@ enum RecordOperation {
     Denied,
     Cancelled,
     Consumed,
+    Compacted,
 }
 
 #[derive(Debug)]
@@ -259,6 +308,94 @@ impl AccessControlStore {
     #[must_use]
     pub fn proofs(&self) -> Vec<AuthorityProof> {
         self.proofs.values().cloned().collect()
+    }
+
+    #[must_use]
+    pub fn grant(&self, grant_id: &str) -> Option<&PermissionGrant> {
+        self.grants.get(grant_id)
+    }
+
+    #[must_use]
+    pub fn request(&self, request_id: &str) -> Option<&PermissionRequest> {
+        self.requests.get(request_id)
+    }
+
+    #[must_use]
+    pub fn proof(&self, proof_id: &str) -> Option<&AuthorityProof> {
+        self.proofs.get(proof_id)
+    }
+
+    #[must_use]
+    pub fn proof_consumed(&self, proof_id: &str) -> bool {
+        self.consumed_proof_ids.contains(proof_id)
+    }
+
+    pub fn compact(
+        &mut self,
+        policy: AccessControlCompactionPolicy,
+        actor_ura: &str,
+    ) -> anyhow::Result<AccessControlCompactionResult> {
+        validate_compaction_policy(&policy)?;
+        let now = Utc::now();
+        let compacted_at = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let retained_active_grant_hashes = self
+            .grants
+            .values()
+            .filter(|grant| grant.active_at(now))
+            .map(grant_hash)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let retained_pending_request_ids = self
+            .requests
+            .values()
+            .filter(|request| pending_request_unexpired_at(request, now))
+            .map(|request| request.request_id.clone())
+            .collect::<Vec<_>>();
+        let retained_unexpired_proof_ids = self
+            .proofs
+            .values()
+            .filter(|proof| authority_proof_unexpired_at(proof, now))
+            .map(|proof| proof.proof_id.clone())
+            .collect::<Vec<_>>();
+        let retained_audit_record_ids = self.audit.keys().cloned().collect::<Vec<_>>();
+        let last_source_sequence = self.last_sequence;
+        let last_source_record_hash = self.head_hash.clone();
+        let checkpoint_id = sha256_value(&json!({
+            "owner_user_id": self.manifest.policy_store.owner_user_id,
+            "last_source_sequence": last_source_sequence,
+            "last_source_record_hash": last_source_record_hash,
+            "compacted_at": compacted_at,
+        }));
+        let checkpoint = CompactionCheckpoint {
+            checkpoint_id: checkpoint_id.clone(),
+            compacted_at: compacted_at.clone(),
+            last_source_sequence,
+            last_source_record_hash: last_source_record_hash.clone(),
+            retained_active_grant_hashes,
+            retained_pending_request_ids,
+            retained_unexpired_proof_ids,
+            retained_audit_record_ids,
+            retention_floor: policy,
+        };
+        self.append(
+            RecordKind::Checkpoint,
+            &checkpoint_id,
+            RecordOperation::Compacted,
+            serde_json::to_value(&checkpoint)?,
+            actor_ura,
+        )?;
+        self.manifest.policy_store.last_compacted_at = compacted_at.clone();
+        write_manifest(&self.root.join(MANIFEST_FILE), &self.manifest)?;
+        Ok(AccessControlCompactionResult {
+            checkpoint_id,
+            compacted_at,
+            last_source_sequence,
+            last_source_record_hash,
+            new_segment_head_hash: self.head_hash.clone(),
+            retained_active_grants: checkpoint.retained_active_grant_hashes.len(),
+            retained_pending_requests: checkpoint.retained_pending_request_ids.len(),
+            retained_unexpired_proofs: checkpoint.retained_unexpired_proof_ids.len(),
+            retained_audit_records: checkpoint.retained_audit_record_ids.len(),
+        })
     }
 
     pub fn create_grant(
@@ -679,6 +816,18 @@ impl AccessControlStore {
                 let audit: GrantAuditRecord = serde_json::from_value(record.payload)?;
                 self.audit.insert(audit.audit_record_id.clone(), audit);
             }
+            RecordKind::Checkpoint => {
+                let checkpoint: CompactionCheckpoint = serde_json::from_value(record.payload)?;
+                if checkpoint.last_source_sequence >= record.sequence {
+                    anyhow::bail!(
+                        "compaction checkpoint `{}` cannot reference sequence {} from checkpoint sequence {}",
+                        checkpoint.checkpoint_id,
+                        checkpoint.last_source_sequence,
+                        record.sequence
+                    );
+                }
+                validate_compaction_policy(&checkpoint.retention_floor)?;
+            }
         }
         Ok(())
     }
@@ -844,6 +993,38 @@ fn validate_grant(grant: &PermissionGrant) -> anyhow::Result<()> {
         anyhow::bail!("PermissionGrant last_reviewed_at must be RFC3339");
     }
     Ok(())
+}
+
+fn validate_compaction_policy(policy: &AccessControlCompactionPolicy) -> anyhow::Result<()> {
+    if policy.grant_mutation_audit_retention_days < 365 {
+        anyhow::bail!("grant mutation audit retention must be at least 365 days");
+    }
+    if policy.prompt_audit_retention_days < 180 {
+        anyhow::bail!("prompt audit retention must be at least 180 days");
+    }
+    if policy.denied_admission_retention_days < 90 {
+        anyhow::bail!("denied admission diagnostics retention must be at least 90 days");
+    }
+    if policy.complete_nested_trace_retention_days < 30 {
+        anyhow::bail!("complete nested trace retention must be at least 30 days");
+    }
+    if policy.redacted_projection_retention_days < 180 {
+        anyhow::bail!("redacted projection retention must be at least 180 days");
+    }
+    Ok(())
+}
+
+fn pending_request_unexpired_at(request: &PermissionRequest, now: DateTime<Utc>) -> bool {
+    request.status == PermissionRequestStatus::Pending
+        && DateTime::parse_from_rfc3339(&request.expires_at)
+            .map(|expires_at| expires_at.with_timezone(&Utc) > now)
+            .unwrap_or(false)
+}
+
+fn authority_proof_unexpired_at(proof: &AuthorityProof, now: DateTime<Utc>) -> bool {
+    DateTime::parse_from_rfc3339(&proof.expires_at)
+        .map(|expires_at| expires_at.with_timezone(&Utc) > now)
+        .unwrap_or(false)
 }
 
 fn normalize_grant_for_create(grant: &mut PermissionGrant) -> anyhow::Result<()> {
@@ -1186,7 +1367,7 @@ fn file_for_kind(kind: RecordKind) -> &'static str {
         RecordKind::PermissionGrant => GRANTS_FILE,
         RecordKind::PermissionRequest => REQUESTS_FILE,
         RecordKind::AuthorityProof => PROOFS_FILE,
-        RecordKind::Audit => AUDIT_FILE,
+        RecordKind::Audit | RecordKind::Checkpoint => AUDIT_FILE,
     }
 }
 
@@ -1338,6 +1519,59 @@ mod tests {
         assert!(err
             .to_string()
             .contains("PermissionGrant created_at must be RFC3339"));
+    }
+
+    #[test]
+    fn compaction_rejects_retention_below_rfc014_floor() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let mut policy = AccessControlCompactionPolicy::default();
+        policy.grant_mutation_audit_retention_days = 364;
+
+        let err = store
+            .compact(policy, "easynet:///r/test/user/alice")
+            .expect_err("retention shorter than RFC-014 floor must fail");
+        assert!(err
+            .to_string()
+            .contains("grant mutation audit retention must be at least 365 days"));
+    }
+
+    #[test]
+    fn expired_grant_remains_denied_after_compaction_and_replay() {
+        let _home = HomeGuard::new();
+        let root = default_policy_store_dir();
+        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let mut grant = sample_grant("grant-expired");
+        grant.lifetime = PermissionGrantLifetime::Ttl;
+        grant.expires_at = Some("2026-07-01T00:00:00Z".to_string());
+        let created = store
+            .create_grant(grant, "easynet:///r/test/user/alice")
+            .expect("create expired grant")
+            .grant;
+        let now = DateTime::parse_from_rfc3339("2026-07-09T00:00:00Z")
+            .expect("timestamp")
+            .with_timezone(&Utc);
+        assert!(!created.active_at(now));
+
+        let head_before = store.head_hash.clone();
+        let result = store
+            .compact(
+                AccessControlCompactionPolicy::default(),
+                "easynet:///r/test/user/alice",
+            )
+            .expect("compact policy store");
+        assert_eq!(result.last_source_record_hash, head_before);
+        assert_ne!(result.new_segment_head_hash, head_before);
+        assert_eq!(result.retained_active_grants, 0);
+
+        let reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        let reopened_grant = reopened
+            .grants()
+            .into_iter()
+            .find(|grant| grant.grant_id == "grant-expired")
+            .expect("expired grant remains recoverable");
+        assert!(!reopened_grant.active_at(now));
     }
 
     #[test]

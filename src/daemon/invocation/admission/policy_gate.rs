@@ -96,15 +96,15 @@ impl AdmissionPolicyGate {
 }
 
 #[derive(Debug, Clone)]
-struct PrincipalProjection {
-    kind: PrincipalKind,
-    id: String,
-    token_id: Option<String>,
-    token_class: Option<TokenClass>,
-    caller_user_id: Option<String>,
+pub(crate) struct PrincipalProjection {
+    pub(crate) kind: PrincipalKind,
+    pub(crate) id: String,
+    pub(crate) token_id: Option<String>,
+    pub(crate) token_class: Option<TokenClass>,
+    pub(crate) caller_user_id: Option<String>,
 }
 
-fn principal_for(role: TrustedAgentRole, caller_ura: &str) -> PrincipalProjection {
+pub(crate) fn principal_for(role: TrustedAgentRole, caller_ura: &str) -> PrincipalProjection {
     match role {
         TrustedAgentRole::User => {
             let user_id = user_id_from_ura(caller_ura).unwrap_or_else(|| caller_ura.to_string());
@@ -210,7 +210,7 @@ fn user_id_from_ura(ura: &str) -> Option<String> {
         .flatten()
 }
 
-fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
+pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
     crate::core::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
         Status::invalid_argument(format!(
             "ABILITY_URA_PROJECTION_FAILED: callee={callee_ura} ability={ability}"

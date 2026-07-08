@@ -96,6 +96,15 @@ impl PolicyEngine {
             );
         }
 
+        if input.authority_proof_id.is_some() {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::ExplicitGrantAllow,
+                None,
+            );
+        }
+
         if let Some(grant) = matcher.find(&grant_input, PermissionEffect::Allow) {
             return decision(
                 &input,
@@ -288,5 +297,19 @@ mod tests {
             PolicyDecisionReason::GrantReconfirmationRequired
         );
         assert_eq!(got.grant_id.as_deref(), Some("grant-stream"));
+    }
+
+    #[test]
+    fn verified_authority_proof_allows_without_durable_grant() {
+        let mut input = base_input();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.authority_proof_id = Some("proof-1".to_string());
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert_eq!(got.authority_proof_id.as_deref(), Some("proof-1"));
+        assert!(got.grant_id.is_none());
     }
 }

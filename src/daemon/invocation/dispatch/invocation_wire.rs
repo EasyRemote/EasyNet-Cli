@@ -57,6 +57,7 @@ pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 /// (single wire-contract source; admission verifies, ledger records).
 pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
 pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
+pub(crate) const AUTHORITY_PROOF_METADATA_KEY: &str = "x-easynet-authority-proof";
 pub(crate) const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
 #[derive(Debug, Clone)]
