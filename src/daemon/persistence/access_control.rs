@@ -125,6 +125,16 @@ pub struct AuthorityBindingGrantResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionRequestResolutionResult {
+    pub request: PermissionRequest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_grant: Option<PermissionGrant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authority_proof: Option<AuthorityProof>,
+    pub idempotent_replay: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct JournalRecord {
     record_kind: RecordKind,
     schema_version: u64,
@@ -357,6 +367,9 @@ impl AccessControlStore {
         request: PermissionRequest,
         actor_ura: &str,
     ) -> anyhow::Result<PermissionRequest> {
+        if request.status != PermissionRequestStatus::Pending {
+            anyhow::bail!("policy.request.create requires a pending PermissionRequest");
+        }
         validate_request_transition(None, &request)?;
         if let Some(existing) = self.requests.values().find(|existing| {
             existing.status == PermissionRequestStatus::Pending
@@ -384,6 +397,7 @@ impl AccessControlStore {
     ) -> anyhow::Result<PermissionRequest> {
         let previous = self.requests.get(&request.request_id);
         validate_request_transition(previous, &request)?;
+        self.validate_resolution_authority(&request)?;
         let operation = match request.status {
             PermissionRequestStatus::Approved => RecordOperation::Approved,
             PermissionRequestStatus::Denied => RecordOperation::Denied,
@@ -403,11 +417,90 @@ impl AccessControlStore {
         Ok(request)
     }
 
+    pub fn resolve_permission_request_with_grant(
+        &mut self,
+        mut request: PermissionRequest,
+        grant: PermissionGrant,
+        actor_ura: &str,
+    ) -> anyhow::Result<PermissionRequestResolutionResult> {
+        if request.status != PermissionRequestStatus::Approved {
+            anyhow::bail!("grant-backed PermissionRequest resolution requires approved status");
+        }
+        validate_grant_resolves_request(&grant, &request)?;
+        if request.authority_proof_id.is_some() {
+            anyhow::bail!(
+                "grant-backed PermissionRequest resolution cannot include authority_proof_id"
+            );
+        }
+        if request
+            .created_grant_id
+            .as_deref()
+            .is_some_and(|grant_id| grant_id != grant.grant_id)
+        {
+            anyhow::bail!("PermissionRequest created_grant_id does not match created grant");
+        }
+        request.created_grant_id = Some(grant.grant_id.clone());
+        request.authority_proof_id = None;
+        normalize_terminal_resolution_fields(&mut request, actor_ura);
+        let previous = self.requests.get(&request.request_id);
+        validate_request_transition(previous, &request)?;
+
+        let grant_result = self.create_grant(grant, actor_ura)?;
+        let request = self.resolve_permission_request(request, actor_ura)?;
+        Ok(PermissionRequestResolutionResult {
+            request,
+            created_grant: Some(grant_result.grant),
+            authority_proof: None,
+            idempotent_replay: grant_result.idempotent_replay,
+        })
+    }
+
+    pub fn resolve_permission_request_with_authority_proof(
+        &mut self,
+        mut request: PermissionRequest,
+        proof: AuthorityProof,
+        actor_ura: &str,
+    ) -> anyhow::Result<PermissionRequestResolutionResult> {
+        if request.status != PermissionRequestStatus::Approved {
+            anyhow::bail!("proof-backed PermissionRequest resolution requires approved status");
+        }
+        validate_proof_resolves_request(&proof, &request)?;
+        if request.created_grant_id.is_some() {
+            anyhow::bail!(
+                "proof-backed PermissionRequest resolution cannot include created_grant_id"
+            );
+        }
+        if request
+            .authority_proof_id
+            .as_deref()
+            .is_some_and(|proof_id| proof_id != proof.proof_id)
+        {
+            anyhow::bail!("PermissionRequest authority_proof_id does not match authority proof");
+        }
+        request.created_grant_id = None;
+        request.authority_proof_id = Some(proof.proof_id.clone());
+        normalize_terminal_resolution_fields(&mut request, actor_ura);
+        let previous = self.requests.get(&request.request_id);
+        validate_request_transition(previous, &request)?;
+
+        let proof = self.put_authority_proof(proof, actor_ura)?;
+        let request = self.resolve_permission_request(request, actor_ura)?;
+        Ok(PermissionRequestResolutionResult {
+            request,
+            created_grant: None,
+            authority_proof: Some(proof),
+            idempotent_replay: false,
+        })
+    }
+
     pub fn put_authority_proof(
         &mut self,
         proof: AuthorityProof,
         actor_ura: &str,
     ) -> anyhow::Result<AuthorityProof> {
+        if self.proofs.contains_key(&proof.proof_id) {
+            anyhow::bail!("authority proof `{}` already exists", proof.proof_id);
+        }
         self.append(
             RecordKind::AuthorityProof,
             &proof.proof_id,
@@ -484,6 +577,7 @@ impl AccessControlStore {
                 let request: PermissionRequest = serde_json::from_value(record.payload)?;
                 let previous = self.requests.get(&request.request_id);
                 validate_request_transition(previous, &request)?;
+                self.validate_resolution_authority(&request)?;
                 self.requests.insert(request.request_id.clone(), request);
             }
             RecordKind::AuthorityProof => {
@@ -525,6 +619,42 @@ impl AccessControlStore {
         self.head_hash = record.record_hash.clone();
         self.manifest.policy_store.head_hash = self.head_hash.clone();
         write_manifest(&self.root.join(MANIFEST_FILE), &self.manifest)?;
+        Ok(())
+    }
+
+    fn validate_resolution_authority(&self, request: &PermissionRequest) -> anyhow::Result<()> {
+        if request.status != PermissionRequestStatus::Approved {
+            return Ok(());
+        }
+        match (
+            request.created_grant_id.as_deref(),
+            request.authority_proof_id.as_deref(),
+        ) {
+            (Some(grant_id), None) => {
+                let grant = self.grants.get(grant_id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "approved PermissionRequest references missing grant `{grant_id}`"
+                    )
+                })?;
+                validate_grant_resolves_request(grant, request)?;
+            }
+            (None, Some(proof_id)) => {
+                let proof = self.proofs.get(proof_id).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "approved PermissionRequest references missing authority proof `{proof_id}`"
+                    )
+                })?;
+                validate_proof_resolves_request(proof, request)?;
+            }
+            (None, None) => {
+                anyhow::bail!("approved PermissionRequest must create a grant or authority proof");
+            }
+            (Some(_), Some(_)) => {
+                anyhow::bail!(
+                    "approved PermissionRequest must be backed by exactly one authority source"
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -653,17 +783,93 @@ fn validate_request_transition(
     {
         anyhow::bail!("PermissionRequest identity fields must not be empty");
     }
+    if next.status == PermissionRequestStatus::Approved
+        && next.created_grant_id.is_none()
+        && next.authority_proof_id.is_none()
+    {
+        anyhow::bail!("approved PermissionRequest must create a grant or authority proof");
+    }
+    if next.created_grant_id.is_some() && next.authority_proof_id.is_some() {
+        anyhow::bail!("approved PermissionRequest must be backed by exactly one authority source");
+    }
+    if next.status != PermissionRequestStatus::Approved
+        && (next.created_grant_id.is_some() || next.authority_proof_id.is_some())
+    {
+        anyhow::bail!("only approved PermissionRequest records may reference authority source ids");
+    }
     if let Some(previous) = previous {
         if previous.status.is_terminal() && previous.status != next.status {
             anyhow::bail!("terminal PermissionRequest cannot transition");
         }
-        if previous.status == PermissionRequestStatus::Pending
-            && next.status == PermissionRequestStatus::Approved
-            && next.created_grant_id.is_none()
-            && next.authority_proof_id.is_none()
-        {
-            anyhow::bail!("approved PermissionRequest must create a grant or authority proof");
-        }
+    }
+    Ok(())
+}
+
+fn normalize_terminal_resolution_fields(request: &mut PermissionRequest, actor_ura: &str) {
+    if request.resolver_ura.as_deref().map_or(true, str::is_empty) {
+        request.resolver_ura = Some(actor_ura.to_string());
+    }
+    if request.resolved_at.as_deref().map_or(true, str::is_empty) {
+        request.resolved_at = Some(now_rfc3339());
+    }
+}
+
+fn validate_grant_resolves_request(
+    grant: &PermissionGrant,
+    request: &PermissionRequest,
+) -> anyhow::Result<()> {
+    if grant.owner_user_id != request.owner_user_id {
+        anyhow::bail!("grant owner does not match PermissionRequest owner");
+    }
+    if grant.principal_kind != request.principal_kind
+        || grant.principal_id != request.principal_id
+        || grant.token_id != request.token_id
+    {
+        anyhow::bail!("grant principal does not match PermissionRequest principal");
+    }
+    if grant.effect != PermissionEffect::Allow || grant.state != PermissionGrantState::Active {
+        anyhow::bail!("PermissionRequest approval grant must be active allow");
+    }
+    if !grant.actions.contains(&request.action) {
+        anyhow::bail!("grant actions do not include PermissionRequest action");
+    }
+    if grant.callee_ura.as_deref() != Some(request.callee_ura.as_str())
+        || grant.subject_ura_pattern.as_deref() != Some(request.subject_ura.as_str())
+        || grant.ability_ura_pattern.as_deref() != Some(request.ability_ura.as_str())
+    {
+        anyhow::bail!("grant scope does not exactly match PermissionRequest scope");
+    }
+    Ok(())
+}
+
+fn validate_proof_resolves_request(
+    proof: &AuthorityProof,
+    request: &PermissionRequest,
+) -> anyhow::Result<()> {
+    if proof.permission_request_id.as_deref() != Some(request.request_id.as_str()) {
+        anyhow::bail!("authority proof does not reference PermissionRequest");
+    }
+    if proof.owner_user_id != request.owner_user_id
+        || proof.principal_kind != request.principal_kind
+        || proof.principal_id != request.principal_id
+        || proof.token_id != request.token_id
+        || proof.callee_ura != request.callee_ura
+        || proof.subject_ura != request.subject_ura
+        || proof.ability_ura != request.ability_ura
+        || proof.action != request.action
+    {
+        anyhow::bail!("authority proof binding does not match PermissionRequest");
+    }
+    if proof.nonce.as_deref().is_some() && proof.nonce.as_deref() != request.nonce.as_deref() {
+        anyhow::bail!("authority proof nonce does not match PermissionRequest");
+    }
+    if proof.canonical_hash.as_deref().is_some()
+        && proof.canonical_hash.as_deref() != request.canonical_hash.as_deref()
+    {
+        anyhow::bail!("authority proof canonical hash does not match PermissionRequest");
+    }
+    if DateTime::parse_from_rfc3339(&proof.expires_at).is_err() {
+        anyhow::bail!("authority proof expires_at must be RFC3339");
     }
     Ok(())
 }
@@ -914,8 +1120,94 @@ mod tests {
             resolved_at: Some("2026-07-09T00:01:00Z".to_string()),
             decision_reason: None,
         };
-        assert!(validate_request_transition(None, &request).is_ok());
+        assert!(validate_request_transition(None, &request).is_err());
         assert!(validate_request_transition(Some(&pending_request()), &request).is_err());
+
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let err = store
+            .upsert_permission_request(request, "easynet:///r/test/user/alice")
+            .expect_err("policy.request.create must not create approved records");
+        assert!(err
+            .to_string()
+            .contains("policy.request.create requires a pending PermissionRequest"));
+    }
+
+    #[test]
+    fn approved_request_resolution_creates_effective_grant() {
+        let _home = HomeGuard::new();
+        let root = default_policy_store_dir();
+        let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
+        let pending = store
+            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .expect("create pending request");
+        let mut approved = pending.clone();
+        approved.status = PermissionRequestStatus::Approved;
+        let grant = grant_for_request("grant-request-1", &approved);
+
+        let result = store
+            .resolve_permission_request_with_grant(approved, grant, "easynet:///r/test/user/alice")
+            .expect("grant-backed approval");
+
+        assert_eq!(result.request.status, PermissionRequestStatus::Approved);
+        assert_eq!(
+            result.request.created_grant_id.as_deref(),
+            Some("grant-request-1")
+        );
+        assert!(result.request.authority_proof_id.is_none());
+        assert!(result.created_grant.is_some());
+
+        let reopened = AccessControlStore::open_or_create_at(root, "alice").expect("reopen");
+        assert_eq!(
+            reopened.requests()[0].status,
+            PermissionRequestStatus::Approved
+        );
+        assert_eq!(reopened.grants()[0].grant_id, "grant-request-1");
+    }
+
+    #[test]
+    fn approved_request_rejects_missing_effective_grant() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let pending = store
+            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .expect("create pending request");
+        let mut approved = pending;
+        approved.status = PermissionRequestStatus::Approved;
+        approved.created_grant_id = Some("missing-grant".to_string());
+
+        let err = store
+            .resolve_permission_request(approved, "easynet:///r/test/user/alice")
+            .expect_err("missing approval grant must fail");
+        assert!(err
+            .to_string()
+            .contains("approved PermissionRequest references missing grant"));
+        assert_eq!(store.requests()[0].status, PermissionRequestStatus::Pending);
+    }
+
+    #[test]
+    fn approved_request_rejects_scope_mismatched_created_grant() {
+        let _home = HomeGuard::new();
+        let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
+            .expect("store");
+        let pending = store
+            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .expect("create pending request");
+        let mut approved = pending;
+        approved.status = PermissionRequestStatus::Approved;
+        let mut grant = grant_for_request("grant-request-1", &approved);
+        grant.ability_ura_pattern = Some("terminal.*".to_string());
+
+        let err = store
+            .resolve_permission_request_with_grant(approved, grant, "easynet:///r/test/user/alice")
+            .expect_err("grant scope mismatch must fail");
+        assert!(err
+            .to_string()
+            .contains("grant scope does not exactly match PermissionRequest scope"));
+        assert_eq!(store.requests()[0].status, PermissionRequestStatus::Pending);
+        assert!(store.grants().is_empty());
     }
 
     fn pending_request() -> PermissionRequest {
@@ -946,5 +1238,33 @@ mod tests {
         };
         request.status = PermissionRequestStatus::Pending;
         request
+    }
+
+    fn grant_for_request(id: &str, request: &PermissionRequest) -> PermissionGrant {
+        PermissionGrant {
+            grant_id: id.to_string(),
+            owner_user_id: request.owner_user_id.clone(),
+            principal_kind: request.principal_kind,
+            principal_id: request.principal_id.clone(),
+            token_id: request.token_id.clone(),
+            token_class: request.token_class,
+            callee_ura: Some(request.callee_ura.clone()),
+            subject_ura_pattern: Some(request.subject_ura.clone()),
+            ability_ura_pattern: Some(request.ability_ura.clone()),
+            actions: vec![request.action],
+            constraints: None,
+            effect: PermissionEffect::Allow,
+            lifetime: PermissionGrantLifetime::Permanent,
+            state: PermissionGrantState::Active,
+            expires_at: None,
+            review_required_after: None,
+            last_reviewed_at: None,
+            last_used_at: None,
+            created_by: "easynet:///r/test/user/alice".to_string(),
+            created_at: "2026-07-09T00:01:00Z".to_string(),
+            updated_at: None,
+            revoked_at: None,
+            reason: None,
+        }
     }
 }

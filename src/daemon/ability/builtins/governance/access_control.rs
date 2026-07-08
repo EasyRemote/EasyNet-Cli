@@ -27,8 +27,8 @@ use serde_json::{json, Value};
 use crate::daemon::ability::catalog::system_manifest::registry_manifest;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::invocation::admission::decision::{
-    AbilityCallTrace, AdmissionExplainResult, OwnerResolution, OwnerSource, PolicyDecision,
-    SignatureDecision,
+    AbilityCallTrace, AdmissionExplainResult, OwnerResolution, OwnerSource,
+    PermissionRequestStatus, PolicyDecision, SignatureDecision,
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
 use crate::daemon::persistence::access_control::AccessControlStore;
@@ -174,12 +174,27 @@ fn request_create_handler(args: Value) -> anyhow::Result<Value> {
 }
 
 fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
-    let request: PermissionRequestEnvelope = serde_json::from_value(args)?;
+    let request: PermissionRequestResolutionEnvelope = serde_json::from_value(args)?;
     let actor_ura = request
         .actor_ura
         .clone()
         .unwrap_or_else(|| request.request.resolver_ura.clone().unwrap_or_default());
     let mut store = AccessControlStore::open_or_create(request.request.owner_user_id.clone())?;
+    if request.request.status == PermissionRequestStatus::Approved {
+        if let Some(grant) = request.created_grant {
+            let result =
+                store.resolve_permission_request_with_grant(request.request, grant, &actor_ura)?;
+            return Ok(serde_json::to_value(result)?);
+        }
+        if let Some(proof) = request.authority_proof {
+            let result = store.resolve_permission_request_with_authority_proof(
+                request.request,
+                proof,
+                &actor_ura,
+            )?;
+            return Ok(serde_json::to_value(result)?);
+        }
+    }
     let request = store.resolve_permission_request(request.request, &actor_ura)?;
     Ok(json!({ "request": request }))
 }
@@ -285,6 +300,17 @@ struct CheckRequest {
 #[derive(Debug, Deserialize)]
 struct PermissionRequestEnvelope {
     request: crate::daemon::invocation::admission::decision::PermissionRequest,
+    #[serde(default)]
+    actor_ura: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PermissionRequestResolutionEnvelope {
+    request: crate::daemon::invocation::admission::decision::PermissionRequest,
+    #[serde(default)]
+    created_grant: Option<crate::daemon::invocation::admission::grant_matcher::PermissionGrant>,
+    #[serde(default)]
+    authority_proof: Option<crate::daemon::invocation::admission::authority_proof::AuthorityProof>,
     #[serde(default)]
     actor_ura: Option<String>,
 }
@@ -398,11 +424,22 @@ pub fn input_schema_for(name: &str) -> Value {
             },
             "additionalProperties": false
         }),
-        POLICY_REQUEST_CREATE | POLICY_REQUEST_RESOLVE => json!({
+        POLICY_REQUEST_CREATE => json!({
             "type": "object",
             "required": ["request"],
             "properties": {
                 "request": {"type": "object"},
+                "actor_ura": {"type": "string"}
+            },
+            "additionalProperties": false
+        }),
+        POLICY_REQUEST_RESOLVE => json!({
+            "type": "object",
+            "required": ["request"],
+            "properties": {
+                "request": {"type": "object"},
+                "created_grant": {"type": "object"},
+                "authority_proof": {"type": "object"},
                 "actor_ura": {"type": "string"}
             },
             "additionalProperties": false

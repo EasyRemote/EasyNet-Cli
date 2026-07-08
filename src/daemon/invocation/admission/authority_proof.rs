@@ -48,9 +48,7 @@ pub struct AuthorityProof {
 impl AuthorityProof {
     #[must_use]
     pub fn canonical_material(&self) -> Value {
-        let mut abilities = self.allowed_followup_abilities.clone();
-        abilities.sort();
-        abilities.dedup();
+        let abilities = normalized_followup_abilities(&self.allowed_followup_abilities);
         let mut value = json!({
             "profile": "easynet-authority-proof-v0",
             "proof_id": self.proof_id,
@@ -102,6 +100,7 @@ impl AuthorityProof {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorityProofVerificationContext<'a> {
     pub owner_user_id: &'a str,
+    pub principal_kind: PrincipalKind,
     pub principal_id: &'a str,
     pub token_id: Option<&'a str>,
     pub callee_ura: &'a str,
@@ -185,6 +184,7 @@ fn verify_invocation_binding(
         return Err(AuthorityProofDenyReason::AuthorityProofAudienceMismatch);
     }
     if proof.owner_user_id != context.owner_user_id
+        || proof.principal_kind != context.principal_kind
         || proof.principal_id != context.principal_id
         || proof.token_id.as_deref() != context.token_id
         || proof.callee_ura != context.callee_ura
@@ -210,7 +210,27 @@ fn verify_invocation_binding(
     {
         return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
     }
+    if proof.session_id.is_some() {
+        let allowed = normalized_followup_abilities(&proof.allowed_followup_abilities);
+        if allowed.is_empty() {
+            return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+        }
+        if !allowed.iter().any(|ability| ability == context.ability_ura) {
+            return Err(AuthorityProofDenyReason::AuthorityProofMismatch);
+        }
+    }
     Ok(())
+}
+
+fn normalized_followup_abilities(abilities: &[String]) -> Vec<String> {
+    let mut abilities = abilities
+        .iter()
+        .map(|ability| ability.trim().to_string())
+        .filter(|ability| !ability.is_empty())
+        .collect::<Vec<_>>();
+    abilities.sort();
+    abilities.dedup();
+    abilities
 }
 
 fn verify_signature(
@@ -338,21 +358,33 @@ mod tests {
             "ed25519:{}",
             BASE64_STANDARD.encode(signing_key.sign(&bytes).to_bytes())
         );
+        (proof, resolver_for(&issuer, &signing_key))
+    }
+
+    fn resign(proof: &mut AuthorityProof) -> TestIssuerResolver {
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let bytes = crate::daemon::ability::canonical_json_bytes(&proof.canonical_material());
+        proof.signature = format!(
+            "ed25519:{}",
+            BASE64_STANDARD.encode(signing_key.sign(&bytes).to_bytes())
+        );
+        resolver_for(&proof.issuer_ura, &signing_key)
+    }
+
+    fn resolver_for(issuer: &str, signing_key: &SigningKey) -> TestIssuerResolver {
         let mut keys = BTreeMap::new();
-        keys.insert(issuer, signing_key.verifying_key());
-        (
-            proof,
-            TestIssuerResolver {
-                keys,
-                authorized: true,
-                active: true,
-            },
-        )
+        keys.insert(issuer.to_string(), signing_key.verifying_key());
+        TestIssuerResolver {
+            keys,
+            authorized: true,
+            active: true,
+        }
     }
 
     fn context() -> AuthorityProofVerificationContext<'static> {
         AuthorityProofVerificationContext {
             owner_user_id: "alice",
+            principal_kind: PrincipalKind::Token,
             principal_id: "token-principal",
             token_id: Some("token-1"),
             callee_ura: "easynet:///r/test/device/dev",
@@ -388,5 +420,35 @@ mod tests {
             err,
             AuthorityProofDenyReason::AuthorityProofAudienceMismatch
         );
+    }
+
+    #[test]
+    fn verifier_rejects_principal_kind_mismatch() {
+        let (proof, resolver) = signed_proof();
+        let mut context = context();
+        context.principal_kind = PrincipalKind::User;
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context, &resolver)
+            .expect_err("principal kind mismatch");
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
+    fn verifier_rejects_session_proof_without_followup_set() {
+        let (mut proof, _resolver) = signed_proof();
+        proof.allowed_followup_abilities.clear();
+        let resolver = resign(&mut proof);
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver)
+            .expect_err("session proof must bind follow-up ability set");
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
+    }
+
+    #[test]
+    fn verifier_rejects_session_proof_for_disallowed_followup() {
+        let (mut proof, _resolver) = signed_proof();
+        proof.allowed_followup_abilities = vec!["terminal.read".to_string()];
+        let resolver = resign(&mut proof);
+        let err = AuthorityProofVerifier::verify(Some(&proof), &context(), &resolver)
+            .expect_err("session proof must admit current follow-up ability");
+        assert_eq!(err, AuthorityProofDenyReason::AuthorityProofMismatch);
     }
 }
