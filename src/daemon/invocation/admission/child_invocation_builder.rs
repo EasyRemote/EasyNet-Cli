@@ -113,7 +113,6 @@ pub struct ExternallySignedChildInvocation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OriginCallerAuthority {
     pub caller_ura: String,
-    pub principal_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +172,22 @@ pub enum ChildInvocationBuildFailureCode {
     ChildSubjectMissing,
 }
 
+impl ChildInvocationBuildFailureCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SignedEnvelopeRouteMutation => "SIGNED_ENVELOPE_ROUTE_MUTATION",
+            Self::SignedDescriptorRefMissing => "SIGNED_DESCRIPTOR_REF_MISSING",
+            Self::SignedDescriptorRefMismatch => "SIGNED_DESCRIPTOR_REF_MISMATCH",
+            Self::MissingOriginCaller => "MISSING_ORIGIN_CALLER",
+            Self::AuthorityProofMissing => "AUTHORITY_PROOF_MISSING",
+            Self::AuthorityProofMismatch => "AUTHORITY_PROOF_MISMATCH",
+            Self::DescriptorBindingMissing => "DESCRIPTOR_BINDING_MISSING",
+            Self::ChildSubjectMissing => "CHILD_SUBJECT_MISSING",
+        }
+    }
+}
+
 pub struct ChildInvocationBuilder;
 
 impl ChildInvocationBuilder {
@@ -214,7 +229,7 @@ impl ChildInvocationBuilder {
                 })
             }
             ChildInvocationAuthority::OriginCaller(origin) => {
-                if origin.caller_ura.trim().is_empty() || origin.principal_id.trim().is_empty() {
+                if origin.caller_ura.trim().is_empty() {
                     return Err(failure(
                         &input.route,
                         TraceStage::PolicyDenied,

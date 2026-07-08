@@ -31,9 +31,8 @@ use crate::daemon::axon_bridge::wire_descriptor::{
 };
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::child_invocation_builder::{
-    ChildInvocationAuthority, ChildInvocationBuildFailure, ChildInvocationBuildFailureCode,
-    ChildInvocationBuildInput, ChildInvocationBuilder, ExternallySignedChildInvocation,
-    SelectedChildRoute,
+    ChildInvocationAuthority, ChildInvocationBuildFailure, ChildInvocationBuildInput,
+    ChildInvocationBuilder, ExternallySignedChildInvocation, SelectedChildRoute,
 };
 use crate::daemon::invocation::admission::decision::{SignatureDecisionReason, TraceStage};
 use crate::daemon::invocation::dispatch::deps::{
@@ -533,31 +532,12 @@ fn status_from_child_invocation_failure(failure: ChildInvocationBuildFailure) ->
         .signature_reason
         .map(SignatureDecisionReason::as_str)
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| child_failure_code(&failure.code).to_string());
+        .unwrap_or_else(|| failure.code.as_str().to_string());
     let message = format!("{reason}: {}", failure.reason);
     match failure.stage {
         TraceStage::PolicyDenied | TraceStage::AuthorityDenied => {
             Status::permission_denied(message)
         }
         _ => Status::invalid_argument(message),
-    }
-}
-
-fn child_failure_code(code: &ChildInvocationBuildFailureCode) -> &'static str {
-    match code {
-        ChildInvocationBuildFailureCode::SignedEnvelopeRouteMutation => {
-            "SIGNED_ENVELOPE_ROUTE_MUTATION"
-        }
-        ChildInvocationBuildFailureCode::SignedDescriptorRefMissing => {
-            "SIGNED_DESCRIPTOR_REF_MISSING"
-        }
-        ChildInvocationBuildFailureCode::SignedDescriptorRefMismatch => {
-            "SIGNED_DESCRIPTOR_REF_MISMATCH"
-        }
-        ChildInvocationBuildFailureCode::MissingOriginCaller => "MISSING_ORIGIN_CALLER",
-        ChildInvocationBuildFailureCode::AuthorityProofMissing => "AUTHORITY_PROOF_MISSING",
-        ChildInvocationBuildFailureCode::AuthorityProofMismatch => "AUTHORITY_PROOF_MISMATCH",
-        ChildInvocationBuildFailureCode::DescriptorBindingMissing => "DESCRIPTOR_BINDING_MISSING",
-        ChildInvocationBuildFailureCode::ChildSubjectMissing => "CHILD_SUBJECT_MISSING",
     }
 }

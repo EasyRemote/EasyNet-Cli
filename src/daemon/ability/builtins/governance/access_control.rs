@@ -21,6 +21,7 @@
 // Architectural Position:
 // Built-in governance ability surface on top of daemon admission policy state.
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -117,6 +118,19 @@ fn list_grants_handler(args: Value) -> anyhow::Result<Value> {
     if let Some(token_id) = request.token_id {
         grants.retain(|grant| grant.token_id.as_deref() == Some(token_id.as_str()));
     }
+    if let Some(callee_ura) = request.callee_ura {
+        grants.retain(|grant| grant.callee_ura.as_deref() == Some(callee_ura.as_str()));
+    }
+    if let Some(ability_ura_pattern) = request.ability_ura_pattern {
+        grants.retain(|grant| {
+            grant.ability_ura_pattern.as_deref() == Some(ability_ura_pattern.as_str())
+        });
+    }
+    if let Some(subject_ura_pattern) = request.subject_ura_pattern {
+        grants.retain(|grant| {
+            grant.subject_ura_pattern.as_deref() == Some(subject_ura_pattern.as_str())
+        });
+    }
     if let Some(action) = request.action {
         grants.retain(|grant| grant.actions.contains(&action));
     }
@@ -201,6 +215,20 @@ fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
 
 fn request_list_handler(args: Value) -> anyhow::Result<Value> {
     let request: ListRequestsRequest = serde_json::from_value(args)?;
+    let created_at = parse_creation_time_filter(request.created_at.as_deref(), "created_at")?;
+    let created_at_or_after = parse_creation_time_filter(
+        request.created_at_or_after.as_deref(),
+        "created_at_or_after",
+    )?;
+    let created_at_or_before = parse_creation_time_filter(
+        request.created_at_or_before.as_deref(),
+        "created_at_or_before",
+    )?;
+    if let (Some(after), Some(before)) = (created_at_or_after, created_at_or_before) {
+        if after > before {
+            anyhow::bail!("created_at_or_after must not be after created_at_or_before");
+        }
+    }
     let store = AccessControlStore::open_or_create(request.owner_user_id)?;
     let mut requests = store.requests();
     if let Some(principal_id) = request.principal_id {
@@ -212,7 +240,62 @@ fn request_list_handler(args: Value) -> anyhow::Result<Value> {
     if let Some(status) = request.status {
         requests.retain(|item| item.status == status);
     }
+    if let Some(callee_ura) = request.callee_ura {
+        requests.retain(|item| item.callee_ura == callee_ura);
+    }
+    if let Some(ability_ura) = request.ability_ura {
+        requests.retain(|item| item.ability_ura == ability_ura);
+    }
+    if let Some(subject_ura) = request.subject_ura {
+        requests.retain(|item| item.subject_ura == subject_ura);
+    }
+    if created_at.is_some() || created_at_or_after.is_some() || created_at_or_before.is_some() {
+        requests.retain(|item| {
+            creation_time_matches(
+                &item.created_at,
+                created_at,
+                created_at_or_after,
+                created_at_or_before,
+            )
+        });
+    }
     Ok(json!({ "requests": requests }))
+}
+
+fn parse_creation_time_filter(
+    value: Option<&str>,
+    field_name: &str,
+) -> anyhow::Result<Option<DateTime<Utc>>> {
+    value
+        .map(|raw| {
+            DateTime::parse_from_rfc3339(raw)
+                .map(|timestamp| timestamp.with_timezone(&Utc))
+                .map_err(|_| anyhow::anyhow!("{field_name} must be RFC3339"))
+        })
+        .transpose()
+}
+
+fn creation_time_matches(
+    created_at: &str,
+    exact: Option<DateTime<Utc>>,
+    at_or_after: Option<DateTime<Utc>>,
+    at_or_before: Option<DateTime<Utc>>,
+) -> bool {
+    let Ok(created_at) =
+        DateTime::parse_from_rfc3339(created_at).map(|timestamp| timestamp.with_timezone(&Utc))
+    else {
+        return false;
+    };
+    if exact.is_some_and(|exact| created_at != exact) {
+        return false;
+    }
+    if at_or_after.is_some_and(|lower_bound| created_at < lower_bound) {
+        return false;
+    }
+    if at_or_before.is_some_and(|upper_bound| created_at > upper_bound) {
+        return false;
+    }
+    true
 }
 
 fn explain_handler(args: Value) -> anyhow::Result<Value> {
@@ -255,6 +338,12 @@ struct ListGrantsRequest {
     principal_id: Option<String>,
     #[serde(default)]
     token_id: Option<String>,
+    #[serde(default)]
+    callee_ura: Option<String>,
+    #[serde(default)]
+    ability_ura_pattern: Option<String>,
+    #[serde(default)]
+    subject_ura_pattern: Option<String>,
     #[serde(default)]
     action: Option<crate::daemon::invocation::admission::decision::AccessAction>,
     #[serde(default)]
@@ -324,6 +413,18 @@ struct ListRequestsRequest {
     token_id: Option<String>,
     #[serde(default)]
     status: Option<crate::daemon::invocation::admission::decision::PermissionRequestStatus>,
+    #[serde(default)]
+    callee_ura: Option<String>,
+    #[serde(default)]
+    ability_ura: Option<String>,
+    #[serde(default)]
+    subject_ura: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    created_at_or_after: Option<String>,
+    #[serde(default)]
+    created_at_or_before: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,6 +493,9 @@ pub fn input_schema_for(name: &str) -> Value {
                 "owner_user_id": {"type": "string"},
                 "principal_id": {"type": "string"},
                 "token_id": {"type": "string"},
+                "callee_ura": {"type": "string"},
+                "ability_ura_pattern": {"type": "string"},
+                "subject_ura_pattern": {"type": "string"},
                 "action": {"type": "string"},
                 "effect": {"type": "string"},
                 "state": {"type": "string"}
@@ -451,7 +555,13 @@ pub fn input_schema_for(name: &str) -> Value {
                 "owner_user_id": {"type": "string"},
                 "principal_id": {"type": "string"},
                 "token_id": {"type": "string"},
-                "status": {"type": "string"}
+                "status": {"type": "string"},
+                "callee_ura": {"type": "string"},
+                "ability_ura": {"type": "string"},
+                "subject_ura": {"type": "string"},
+                "created_at": {"type": "string", "format": "date-time"},
+                "created_at_or_after": {"type": "string", "format": "date-time"},
+                "created_at_or_before": {"type": "string", "format": "date-time"}
             },
             "additionalProperties": false
         }),
@@ -478,6 +588,7 @@ pub fn input_schema_for(name: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
     #[test]
@@ -509,5 +620,131 @@ mod tests {
         assert_eq!(output["observer_ura"], "easynet:///r/test/user/alice");
         assert_eq!(output["redacted"], true);
         assert_eq!(output["authority_reason"], "AUTHORITY_PROOF_MISSING");
+    }
+
+    #[test]
+    fn authority_binding_list_supports_rfc014_scope_filters() {
+        let _home = HomeGuard::new();
+        grant_handler(json!({
+            "grant": grant_payload("grant-target", "device.terminal.attach", "session-target")
+        }))
+        .expect("target grant");
+        grant_handler(json!({
+            "grant": grant_payload("grant-other", "device.files.read", "session-other")
+        }))
+        .expect("other grant");
+
+        let output = list_grants_handler(json!({
+            "owner_user_id": "alice",
+            "principal_id": "token-principal-1",
+            "token_id": "token-1",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "ability_ura_pattern": "easynet:///r/example/ability/device.terminal.attach",
+            "subject_ura_pattern": "easynet:///r/example/resource/session-target",
+            "action": "stream",
+            "effect": "allow",
+            "state": "active"
+        }))
+        .expect("list grants");
+
+        let grants = output["grants"].as_array().expect("grants array");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0]["grant_id"], "grant-target");
+    }
+
+    #[test]
+    fn policy_request_list_supports_rfc014_scope_and_creation_filters() {
+        let _home = HomeGuard::new();
+        request_create_handler(json!({
+            "request": request_payload(
+                "req-target",
+                "device.terminal.attach",
+                "session-target",
+                "2026-07-09T00:00:00Z"
+            )
+        }))
+        .expect("target request");
+        request_create_handler(json!({
+            "request": request_payload(
+                "req-other",
+                "device.files.read",
+                "session-other",
+                "2026-07-09T00:10:00Z"
+            )
+        }))
+        .expect("other request");
+
+        let output = request_list_handler(json!({
+            "owner_user_id": "alice",
+            "principal_id": "token-principal-1",
+            "token_id": "token-1",
+            "status": "pending",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "ability_ura": "easynet:///r/example/ability/device.terminal.attach",
+            "subject_ura": "easynet:///r/example/resource/session-target",
+            "created_at_or_after": "2026-07-09T00:00:00Z",
+            "created_at_or_before": "2026-07-09T00:05:00Z"
+        }))
+        .expect("list requests");
+
+        let requests = output["requests"].as_array().expect("requests array");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["request_id"], "req-target");
+    }
+
+    #[test]
+    fn policy_request_list_rejects_invalid_creation_filter_window() {
+        let err = request_list_handler(json!({
+            "owner_user_id": "alice",
+            "created_at_or_after": "2026-07-09T00:05:00Z",
+            "created_at_or_before": "2026-07-09T00:00:00Z"
+        }))
+        .expect_err("invalid creation filter window must fail");
+        assert!(
+            err.to_string()
+                .contains("created_at_or_after must not be after created_at_or_before"),
+            "{err}"
+        );
+    }
+
+    fn grant_payload(grant_id: &str, ability: &str, subject: &str) -> Value {
+        json!({
+            "grant_id": grant_id,
+            "owner_user_id": "alice",
+            "principal_kind": "token",
+            "principal_id": "token-principal-1",
+            "token_id": "token-1",
+            "token_class": "hub_link",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura_pattern": format!("easynet:///r/example/resource/{subject}"),
+            "ability_ura_pattern": format!("easynet:///r/example/ability/{ability}"),
+            "actions": ["stream"],
+            "effect": "allow",
+            "lifetime": "session",
+            "state": "active",
+            "created_by": "easynet:///r/example/user/alice",
+            "created_at": "2026-07-09T00:00:00Z"
+        })
+    }
+
+    fn request_payload(request_id: &str, ability: &str, subject: &str, created_at: &str) -> Value {
+        json!({
+            "request_id": request_id,
+            "owner_user_id": "alice",
+            "caller_ura": "easynet:///r/example/hub",
+            "principal_kind": "token",
+            "principal_id": "token-principal-1",
+            "token_id": "token-1",
+            "token_class": "hub_link",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura": format!("easynet:///r/example/resource/{subject}"),
+            "ability_ura": format!("easynet:///r/example/ability/{ability}"),
+            "action": "stream",
+            "canonical_hash": format!("sha256:{request_id}"),
+            "requested_lifetimes": ["once", "session"],
+            "status": "pending",
+            "created_at": created_at,
+            "expires_at": "2026-07-09T01:00:00Z"
+        })
     }
 }

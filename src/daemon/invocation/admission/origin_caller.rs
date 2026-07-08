@@ -25,8 +25,11 @@ use easynet_axon::invocation::{
     DescriptorBoundEnvelopeParts, EntityRef, SubjectIdentity, UraProfile,
 };
 
-use crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire;
 use crate::daemon::axon_bridge::dispatch_shim::{WireDispatch, WireDispatchIngress};
+use crate::daemon::invocation::admission::child_invocation_builder::{
+    ChildInvocationAuthority, ChildInvocationBuildFailure, ChildInvocationBuildInput,
+    ChildInvocationBuilder, OriginCallerAuthority, SelectedChildRoute,
+};
 
 const ED25519_ALGORITHM: &str = "ed25519";
 const ED25519_SIGNATURE_LEN: usize = 64;
@@ -146,16 +149,32 @@ impl OriginCaller {
         subject_ura: &str,
         payload: Vec<u8>,
     ) -> anyhow::Result<WireDispatch> {
-        let caller = AgentIdentity::new(self.caller_ura, UraProfile::EasynetStrictV2);
-        let callee = AgentIdentity::new(callee_ura.to_string(), UraProfile::EasynetStrictV2);
-        let (subject, _subject_ref) = descriptor_subject_identity(subject_ura)?;
-        let ability =
-            ability_descriptor_ref_for_wire(callee_ura, &self.ability, &self.descriptor_version)
-                .map_err(|err| anyhow::anyhow!("origin_caller: descriptor-bound ability: {err}"))?;
+        let route = SelectedChildRoute::descriptor_bound(
+            String::new(),
+            callee_ura.to_string(),
+            None,
+            self.ability.clone(),
+            self.ability.clone(),
+            self.descriptor_version.clone(),
+        )
+        .map_err(origin_child_build_error)?;
+        let built = ChildInvocationBuilder::build(ChildInvocationBuildInput {
+            route,
+            child_subject_ura: subject_ura.to_string(),
+            args: payload.clone(),
+            authority: ChildInvocationAuthority::OriginCaller(OriginCallerAuthority {
+                caller_ura: self.caller_ura.clone(),
+            }),
+        })
+        .map_err(origin_child_build_error)?;
+
+        let caller = AgentIdentity::new(built.caller_ura, UraProfile::EasynetStrictV2);
+        let callee = AgentIdentity::new(built.callee_ura, UraProfile::EasynetStrictV2);
+        let (subject, _subject_ref) = descriptor_subject_identity(&built.subject_ura)?;
         let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
             caller,
             callee,
-            ability,
+            ability: built.descriptor_ref,
             subject,
             invocation_nonce: self.nonce,
             causal_context: CausalContext::None,
@@ -175,6 +194,14 @@ impl OriginCaller {
             trace_id: String::new(),
         })
     }
+}
+
+fn origin_child_build_error(failure: ChildInvocationBuildFailure) -> anyhow::Error {
+    let reason = failure
+        .signature_reason
+        .map(|reason| reason.as_str().to_string())
+        .unwrap_or_else(|| failure.code.as_str().to_string());
+    anyhow::anyhow!("origin_caller: {reason}: {}", failure.reason)
 }
 
 fn descriptor_subject_identity(subject_ura: &str) -> anyhow::Result<(SubjectIdentity, EntityRef)> {
