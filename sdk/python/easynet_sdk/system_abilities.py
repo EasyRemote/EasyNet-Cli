@@ -33,3 +33,14 @@ class MissionSystemAbility(str, Enum):
     TRACK = "mission.track"
     CANCEL = "mission.cancel"
     EVENTS = "mission.events"
+
+
+class AccessControlSystemAbility(str, Enum):
+    AUTHORITY_BINDING_GRANT = "authority.binding.grant"
+    AUTHORITY_BINDING_REVOKE = "authority.binding.revoke"
+    AUTHORITY_BINDING_LIST = "authority.binding.list"
+    AUTHORITY_BINDING_CHECK = "authority.binding.check"
+    POLICY_REQUEST_CREATE = "policy.request.create"
+    POLICY_REQUEST_RESOLVE = "policy.request.resolve"
+    POLICY_REQUEST_LIST = "policy.request.list"
+    ADMISSION_EXPLAIN = "admission.explain"

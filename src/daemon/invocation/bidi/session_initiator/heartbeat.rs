@@ -128,6 +128,7 @@ async fn send_federation_heartbeat(
     let mut refresh_owner_uras =
         crate::daemon::federation::read_model::owner_projection::heartbeat_refresh_owner_uras()
             .unwrap_or_default();
+    refresh_owner_uras.retain(|owner_ura| owner_ura.trim() == caller_ura);
     refresh_owner_uras.truncate(MAX_HEARTBEAT_LEASE_REFRESH_OWNERS);
     let body = serde_json::json!({
         "since_abilities_revision": hub_published_abilities.revision(),

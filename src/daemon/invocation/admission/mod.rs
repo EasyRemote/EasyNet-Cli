@@ -3,6 +3,7 @@
 pub mod admission_facade;
 pub(crate) mod authority_metadata;
 pub mod authority_proof;
+pub(crate) mod bootstrap_authority;
 pub mod child_invocation_builder;
 pub mod decision;
 pub mod device_trust_sync;

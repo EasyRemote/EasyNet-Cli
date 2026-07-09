@@ -107,6 +107,25 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalRaw: %v", err)
 	}
+	if len(raw) == 0 || raw[0] != '{' {
+		t.Fatalf("MarshalRaw must remain raw JSON wire payload, got %q", string(raw))
+	}
+	metadataValue, err := authority.MarshalMetadataValue()
+	if err != nil {
+		t.Fatalf("MarshalMetadataValue: %v", err)
+	}
+	if metadataValue == "" || metadataValue[0] == '{' {
+		t.Fatalf("MarshalMetadataValue must be base64 metadata value, got %q", metadataValue)
+	}
+	metadataDecoded, err := NewSessionAuthorityFromMetadata(metadataValue)
+	if err != nil {
+		t.Fatalf("NewSessionAuthorityFromMetadata(metadata value): %v", err)
+	}
+	if metadataDecoded.IssuerURA != authority.IssuerURA ||
+		metadataDecoded.SubjectURA != authority.SubjectURA ||
+		metadataDecoded.Audience != authority.Audience {
+		t.Fatalf("unexpected metadata decoded authority: %#v", metadataDecoded)
+	}
 	decoded, err := UnmarshalRawSessionAuthority(raw)
 	if err != nil {
 		t.Fatalf("UnmarshalRawSessionAuthority: %v", err)

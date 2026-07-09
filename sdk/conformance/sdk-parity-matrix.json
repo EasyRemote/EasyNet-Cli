@@ -308,16 +308,16 @@
     {
       "capability_id": "access_control",
       "profile": "access_control",
-      "shared_cases": [],
+      "shared_cases": ["sdk/conformance/cases/access-control-runtime-transport.yaml"],
       "go": {
         "status": "provider-backed",
         "evidence": [{"kind": "go_test", "ref": "sdk/go/access_control_test.go"}, {"kind": "go_test", "ref": "sdk/go/access_control_runtime_test.go"}]
       },
       "python": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_access_control.py"}]
       },
-      "remaining": "Go has a Runtime Core-backed access-control transport for RFC-014 system abilities; Python exposes the same typed DTO/client seam but still needs a Runtime Core-backed provider before provider-backed parity."
+      "remaining": "Go and Python expose typed access-control DTOs plus Runtime Core-backed transports for RFC-014 system abilities; product prompt UX and downstream route cutover evidence remain outside the SDK parity gate."
     },
     {
       "capability_id": "conformance_runner",

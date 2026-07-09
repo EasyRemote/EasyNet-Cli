@@ -46,7 +46,7 @@ use tonic::Status;
 
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::trust::anchor::{
-    RealmTrustAnchor, RealmTrustError, TrustedAgent, TrustedAgentRole,
+    RealmTrustAnchor, RealmTrustError, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
 };
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
@@ -141,12 +141,30 @@ impl<'a> RuntimeTrust<'a> {
         public_key_b64: String,
         role: TrustedAgentRole,
     ) -> Result<(), Status> {
+        self.register_pubkey_with_owner(agent_ura, public_key_b64, role, None)
+    }
+
+    pub(crate) fn register_pubkey_with_owner(
+        &self,
+        agent_ura: String,
+        public_key_b64: String,
+        role: TrustedAgentRole,
+        owner: Option<TrustedPrincipalOwner>,
+    ) -> Result<(), Status> {
         validate_public_key_b64("identity.register_pubkey", &public_key_b64)?;
         self.validate_register_realm(&agent_ura, role)?;
+        if let Some(owner) = owner.as_ref() {
+            if owner.principal_ura != agent_ura {
+                return Err(Status::invalid_argument(format!(
+                    "identity.register_pubkey: owner principal_ura `{}` must match agent_ura `{agent_ura}`",
+                    owner.principal_ura
+                )));
+            }
+        }
 
         let entry = TrustedAgent {
-            agent_ura,
-            public_key_b64,
+            agent_ura: agent_ura.clone(),
+            public_key_b64: public_key_b64.clone(),
             role,
             added_at_unix_ms: now_unix_ms(),
             // Cross-hub federation fields are only operator-curated on
@@ -163,8 +181,21 @@ impl<'a> RuntimeTrust<'a> {
                     next_anchor.upsert_singleton_agent(entry)?;
                 }
                 TrustedAgentRole::Device | TrustedAgentRole::User => {
-                    next_anchor.append_agent(entry)?;
+                    match next_anchor.append_agent(entry) {
+                        Ok(()) => {}
+                        Err(RealmTrustError::DuplicateUra {
+                            agent_ura: duplicate,
+                        }) if role == TrustedAgentRole::Device
+                            && next_anchor.lookup(&duplicate).is_some_and(|existing| {
+                                existing.public_key_b64 == public_key_b64
+                                    && existing.role == TrustedAgentRole::Device
+                            }) => {}
+                        Err(err) => return Err(err),
+                    }
                 }
+            }
+            if let Some(owner) = owner {
+                next_anchor.upsert_principal_owner(owner)?;
             }
             Ok(())
         })
@@ -213,8 +244,9 @@ impl<'a> RuntimeTrust<'a> {
         }
 
         let snapshot = self.cell.snapshot();
-        RealmTrustAnchor::from_parts(
+        RealmTrustAnchor::from_parts_with_principal_owners(
             snapshot.entries_sorted(),
+            snapshot.principal_owners_sorted(),
             snapshot.revoked_user_pubkeys_sorted(),
         )
         .map_err(|err| realm_error_to_status(ability, err))
@@ -308,7 +340,7 @@ fn validate_public_key_b64(ability: &'static str, raw: &str) -> Result<(), Statu
     Ok(())
 }
 
-fn now_unix_ms() -> u64 {
+pub(crate) fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -362,6 +394,12 @@ fn realm_error_to_status(ability: &'static str, err: RealmTrustError) -> Status 
         } => Status::invalid_argument(format!(
             "{ability}: trusted {role} URA `{agent_ura}` is invalid: {detail}"
         )),
+        RealmTrustError::InvalidPrincipalOwner {
+            principal_ura,
+            detail,
+        } => Status::invalid_argument(format!(
+            "{ability}: trusted principal owner `{principal_ura}` is invalid: {detail}"
+        )),
     }
 }
 
@@ -409,6 +447,41 @@ mod tests {
         let from_disk =
             RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
         assert_eq!(from_disk.len(), 1);
+    }
+
+    #[test]
+    fn register_backfills_principal_owner_for_existing_device_key() {
+        let (_dir, ctx) = context();
+        let device_ura = "easynet:///r/realm/device/dev-1".to_string();
+        let public_key = b64_pubkey(2);
+
+        ctx.writer()
+            .register_pubkey(
+                device_ura.clone(),
+                public_key.clone(),
+                TrustedAgentRole::Device,
+            )
+            .expect("initial register");
+        ctx.writer()
+            .register_pubkey_with_owner(
+                device_ura.clone(),
+                public_key,
+                TrustedAgentRole::Device,
+                Some(TrustedPrincipalOwner {
+                    principal_ura: device_ura.clone(),
+                    owner_user_id: "alice".to_string(),
+                    owner_ura: "easynet:///r/realm/user/alice".to_string(),
+                    added_at_unix_ms: 1,
+                }),
+            )
+            .expect("idempotent owner backfill");
+
+        let from_disk =
+            RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
+        let owner = from_disk
+            .lookup_principal_owner(&device_ura)
+            .expect("owner fact");
+        assert_eq!(owner.owner_user_id, "alice");
     }
 
     #[test]

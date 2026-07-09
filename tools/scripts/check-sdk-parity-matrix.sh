@@ -54,6 +54,7 @@ REQUIRED_CAPABILITIES = (
     "surface",
     "compatibility",
     "wrappers",
+    "access_control",
     "conformance_runner",
 )
 

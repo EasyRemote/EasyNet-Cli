@@ -1,0 +1,24 @@
+id: access_control/runtime_transport
+profile: access_control
+required_for:
+  - go
+  - python
+description: AccessControlClient exposes typed RFC-014 DTOs and lowers authority-binding, policy-request, and admission-explain operations through Runtime Core-backed SDK transports without product code assembling daemon system ability payloads.
+steps:
+  - action: grant_authority_binding
+  - action: revoke_authority_binding
+  - action: list_authority_bindings
+  - action: check_authority_binding
+  - action: create_policy_request
+  - action: resolve_policy_request
+  - action: list_policy_requests
+  - action: explain_admission
+expect:
+  result: access_control_runtime_transport_observed
+  invocation_schema: invocation.schema.json
+  runtime_transport_owner: runtime_core
+  carrier_owner: daemon_sdk
+  product_policy_owner: backend
+  daemon_policy_owner: easynet_daemon
+  typed_client_required: true
+  backend_system_ability_assembly: false

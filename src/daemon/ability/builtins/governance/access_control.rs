@@ -168,7 +168,7 @@ fn check_handler(args: Value) -> anyhow::Result<Value> {
         interactive_context_available: request.interactive_context_available,
         canonical_hash: request.canonical_hash,
         signature_key_id: request.signature_key_id,
-        authority_proof_id: request.authority_proof_id,
+        verified_authority_id: request.authority_proof_id,
         rejector_ura: request.rejector_ura,
         now: chrono::Utc::now(),
         grants: store.grants(),

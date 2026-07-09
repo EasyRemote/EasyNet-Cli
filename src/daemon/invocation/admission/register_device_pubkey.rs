@@ -60,7 +60,7 @@ use serde::Deserialize;
 use tonic::Status;
 
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrust;
-use crate::daemon::trust::anchor::TrustedAgentRole;
+use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// Canonical daemon identity/trust ability name.
@@ -76,6 +76,10 @@ struct RegisterArgs {
     agent_ura: String,
     public_key_b64: String,
     role: String,
+    #[serde(default)]
+    principal_owner_ura: Option<String>,
+    #[serde(default)]
+    principal_owner_user_id: Option<String>,
 }
 
 /// Narrow policy view of an `identity.register_pubkey` request.
@@ -143,10 +147,12 @@ pub fn handle(
 ) -> Result<Vec<u8>, Status> {
     let (args, role) = decode_register_args(arguments)?;
 
-    RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey(
+    let owner = trusted_principal_owner_from_args(&args);
+    RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_with_owner(
         args.agent_ura,
         args.public_key_b64,
         role,
+        owner,
     )?;
 
     serde_json::to_vec(&RegisterResponse { ok: true }).map_err(|err| {
@@ -183,9 +189,41 @@ fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustedAgentR
             "identity.register_pubkey: public_key_b64 is required",
         ));
     }
+    let has_owner_ura = args
+        .principal_owner_ura
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    let has_owner_user_id = args
+        .principal_owner_user_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    if has_owner_ura != has_owner_user_id {
+        return Err(Status::invalid_argument(
+            "identity.register_pubkey: principal_owner_ura and principal_owner_user_id must be supplied together",
+        ));
+    }
 
     let role = parse_role(&args.role)?;
     Ok((args, role))
+}
+
+fn trusted_principal_owner_from_args(args: &RegisterArgs) -> Option<TrustedPrincipalOwner> {
+    let owner_ura = args
+        .principal_owner_ura
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let owner_user_id = args
+        .principal_owner_user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(TrustedPrincipalOwner {
+        principal_ura: args.agent_ura.clone(),
+        owner_user_id: owner_user_id.to_string(),
+        owner_ura: owner_ura.to_string(),
+        added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
+    })
 }
 
 /// Parse a `TrustedAgentRole` from a wire-string. The wire shape
@@ -338,12 +376,31 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_ura_rejected_with_already_exists() {
+    fn duplicate_device_ura_same_key_is_idempotent() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
         let args = args_bytes("easynet:///r/r1/device/dup", &test_pub_b64(), "device");
         handle(&args, "r1", &path, &cell).expect("first ok");
-        let err = handle(&args, "r1", &path, &cell).expect_err("second must reject as duplicate");
+        handle(&args, "r1", &path, &cell).expect("same key retry ok");
+    }
+
+    #[test]
+    fn duplicate_device_ura_different_key_rejected_with_already_exists() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let first = args_bytes(
+            "easynet:///r/r1/device/dup",
+            &test_pub_b64_with_seed(1),
+            "device",
+        );
+        let second = args_bytes(
+            "easynet:///r/r1/device/dup",
+            &test_pub_b64_with_seed(2),
+            "device",
+        );
+        handle(&first, "r1", &path, &cell).expect("first ok");
+        let err =
+            handle(&second, "r1", &path, &cell).expect_err("different key must reject duplicate");
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
     }
 

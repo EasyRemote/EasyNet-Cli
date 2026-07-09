@@ -28,7 +28,7 @@ pub struct PolicyInput {
     pub interactive_context_available: bool,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
-    pub authority_proof_id: Option<String>,
+    pub verified_authority_id: Option<String>,
     pub rejector_ura: Option<String>,
     pub now: DateTime<Utc>,
     pub grants: Vec<PermissionGrant>,
@@ -39,6 +39,15 @@ pub struct PolicyEngine;
 impl PolicyEngine {
     #[must_use]
     pub fn check(input: PolicyInput) -> PolicyDecision {
+        if input.verified_authority_id.is_some() {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::ExplicitGrantAllow,
+                None,
+            );
+        }
+
         let Some(owner_user_id) = input
             .owner
             .owner_user_id
@@ -92,15 +101,6 @@ impl PolicyEngine {
                 &input,
                 PolicyDecisionOutcome::Allow,
                 PolicyDecisionReason::HubTokenReadAllow,
-                None,
-            );
-        }
-
-        if input.authority_proof_id.is_some() {
-            return decision(
-                &input,
-                PolicyDecisionOutcome::Allow,
-                PolicyDecisionReason::ExplicitGrantAllow,
                 None,
             );
         }
@@ -175,7 +175,7 @@ fn decision(
         prompt_request_id: None,
         canonical_hash: input.canonical_hash.clone(),
         signature_key_id: input.signature_key_id.clone(),
-        authority_proof_id: input.authority_proof_id.clone(),
+        authority_proof_id: input.verified_authority_id.clone(),
     }
 }
 
@@ -209,7 +209,7 @@ mod tests {
             interactive_context_available: false,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: Some("ed25519:key".to_string()),
-            authority_proof_id: None,
+            verified_authority_id: None,
             rejector_ura: Some("easynet:///r/test/device/dev".to_string()),
             now: Utc::now(),
             grants: vec![],
@@ -304,12 +304,32 @@ mod tests {
         let mut input = base_input();
         input.action = AccessAction::Stream;
         input.safe_read = false;
-        input.authority_proof_id = Some("proof-1".to_string());
+        input.verified_authority_id = Some("proof-1".to_string());
 
         let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
         assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
         assert_eq!(got.authority_proof_id.as_deref(), Some("proof-1"));
+        assert!(got.grant_id.is_none());
+    }
+
+    #[test]
+    fn verified_authority_proof_allows_without_resolved_owner() {
+        let mut input = base_input();
+        input.owner = OwnerResolution {
+            owner_user_id: None,
+            owner_ura: None,
+            owner_source: crate::daemon::invocation::admission::decision::OwnerSource::Unresolved,
+            audit_warnings: vec![],
+        };
+        input.action = AccessAction::Invoke;
+        input.safe_read = false;
+        input.verified_authority_id = Some("proof-bootstrap".to_string());
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
+        assert_eq!(got.authority_proof_id.as_deref(), Some("proof-bootstrap"));
         assert!(got.grant_id.is_none());
     }
 }

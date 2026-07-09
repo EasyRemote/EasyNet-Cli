@@ -65,6 +65,15 @@ func (p *DelegationProof) MarshalRaw() ([]byte, error) {
 	return (&proof).MarshalRaw()
 }
 
+// MarshalMetadataValue returns the value to put under x-easynet-delegation.
+func (p *DelegationProof) MarshalMetadataValue() (string, error) {
+	raw, err := p.MarshalRaw()
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
+}
+
 // UnmarshalRawDelegationProof decodes daemon authority metadata wire payload.
 func UnmarshalRawDelegationProof(data []byte) (*DelegationProof, error) {
 	proof, err := axonsdk.UnmarshalRawDelegationProof(data)
@@ -183,6 +192,15 @@ func (a *SessionAuthority) MarshalRaw() ([]byte, error) {
 		Payload:   payload,
 		Signature: base64.StdEncoding.EncodeToString(a.Signature),
 	})
+}
+
+// MarshalMetadataValue returns the value to put under x-easynet-session-authority.
+func (a *SessionAuthority) MarshalMetadataValue() (string, error) {
+	raw, err := a.MarshalRaw()
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(raw), nil
 }
 
 // UnmarshalRawSessionAuthority decodes daemon authority metadata wire payload.

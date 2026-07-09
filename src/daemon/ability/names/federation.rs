@@ -7,6 +7,13 @@ pub const ABILITY_UNINSTALL: &str = "ability.uninstall";
 pub const ABILITY_PUBLISH: &str = "ability.publish";
 pub const ABILITY_UNPUBLISH: &str = "ability.unpublish";
 
+pub const JOIN: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN;
+pub const ADVERTISE_AGENT: &str =
+    crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_AGENT;
+pub const ADVERTISE_ABILITIES: &str =
+    crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES;
+pub const HEARTBEAT: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_HEARTBEAT;
+pub const RESOLVE_KEY: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY;
 pub const REVOKE: &str = "federation.revoke";
 
 pub const IDENTITY_LIST_USER_PUBKEYS: &str = "identity.list_user_pubkeys";

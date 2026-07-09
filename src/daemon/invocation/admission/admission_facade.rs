@@ -101,6 +101,7 @@ use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
+use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
@@ -117,6 +118,9 @@ use crate::daemon::invocation::admission::authority_metadata::{
 use crate::daemon::invocation::admission::authority_proof::{
     AuthorityProof, AuthorityProofDenyReason, AuthorityProofIssuerResolver,
     AuthorityProofVerificationContext, AuthorityProofVerifier,
+};
+use crate::daemon::invocation::admission::bootstrap_authority::{
+    BootstrapAuthorityDecision, BootstrapAuthorityVerifier,
 };
 use crate::daemon::invocation::admission::decision::{
     AccessAction, PermissionRequestStatus, SignatureDecisionReason,
@@ -344,6 +348,7 @@ impl AdmissionFacade {
             self.trust_anchor_snapshot().as_ref(),
             axon_now_ms(),
         )
+        .map(|_| ())
     }
 
     /// The daemon's own canonical URA. Used by per-ability
@@ -774,7 +779,7 @@ impl AdmissionFacade {
             // their gRPC client sees.
             Ok(()) if bootstrap_authority_ability(ability) => Ok(()),
             Ok(()) => {
-                verify_delegation_metadata(
+                let delegation_authority_id = verify_delegation_metadata(
                     envelope,
                     ability,
                     action,
@@ -794,12 +799,28 @@ impl AdmissionFacade {
                         &descriptor_bound,
                     )
                     .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
+                let bootstrap_authority_id = match BootstrapAuthorityVerifier::verify(
+                    envelope,
+                    ability,
+                    action,
+                    args,
+                    trust_anchor.as_ref(),
+                    trusted_role,
+                    self.daemon_ura.as_deref(),
+                ) {
+                    BootstrapAuthorityDecision::Verified { authority_id } => Some(authority_id),
+                    BootstrapAuthorityDecision::NotApplicable => None,
+                };
+                let verified_authority_id = authority_proof_id
+                    .or(delegation_authority_id)
+                    .or(bootstrap_authority_id);
                 AdmissionPolicyGate::verify(AdmissionPolicyContext {
                     envelope,
                     ability,
                     action,
                     trusted_role,
                     daemon_ura: self.daemon_ura.as_deref(),
+                    trust_anchor: trust_anchor.as_ref(),
                     canonical_hash: Some(format!(
                         "sha256:{}",
                         hex::encode(sha2::Sha256::digest(
@@ -811,7 +832,7 @@ impl AdmissionFacade {
                         .as_ref()
                         .map(|signature| signature.key_id_hint.clone())
                         .filter(|key| !key.is_empty()),
-                    authority_proof_id,
+                    verified_authority_id,
                     rejector_ura: self.daemon_ura.clone(),
                 })?;
                 Ok(())
@@ -1380,6 +1401,10 @@ fn action_for_unary_ability(ability: &str) -> AccessAction {
         | federation_names::ABILITY_UNINSTALL
         | federation_names::ABILITY_PUBLISH
         | federation_names::ABILITY_UNPUBLISH
+        | federation_names::JOIN
+        | federation_names::ADVERTISE_AGENT
+        | federation_names::ADVERTISE_ABILITIES
+        | federation_names::HEARTBEAT
         | federation_names::REVOKE
         | federation_names::IDENTITY_REGISTER_PUBKEY
         | federation_names::IDENTITY_REVOKE_USER_PUBKEY
@@ -1502,7 +1527,7 @@ fn verify_delegation_metadata(
     metadata: Option<&HashMap<String, String>>,
     trust_anchor: &RealmTrustAnchor,
     now_ms: i64,
-) -> Result<(), Status> {
+) -> Result<Option<String>, Status> {
     let raw_delegation = metadata.and_then(|m| {
         m.get(DELEGATION_METADATA_KEY)
             .map(String::as_str)
@@ -1521,11 +1546,13 @@ fn verify_delegation_metadata(
         ))),
         (Some(raw_proof), None) => {
             let payload = parse_and_verify_delegation_proof(raw_proof, trust_anchor, now_ms)?;
-            verify_delegation_bindings(&payload, envelope, ability)
+            verify_delegation_bindings(&payload, envelope, ability)?;
+            Ok(Some(verified_delegation_authority_id(&payload)?))
         }
         (None, Some(raw_session)) => {
             let payload = parse_and_verify_session_authority(raw_session, trust_anchor, now_ms)?;
-            verify_session_authority_bindings(&payload, envelope, ability, action)
+            verify_session_authority_bindings(&payload, envelope, ability, action)?;
+            Ok(Some(verified_session_authority_id(&payload)))
         }
         (None, None) => {
             if envelope_requires_authority(envelope) {
@@ -1534,7 +1561,7 @@ fn verify_delegation_metadata(
                      missing `{DELEGATION_METADATA_KEY}` or `{SESSION_AUTHORITY_METADATA_KEY}` metadata"
                 )));
             }
-            Ok(())
+            Ok(None)
         }
     }
 }
@@ -1608,23 +1635,12 @@ fn verify_session_authority_bindings(
         .as_ref()
         .map(|s| s.ura.as_str())
         .unwrap_or("");
-    match authority_metadata::authority_subject_kind(subject) {
-        AuthoritySubjectKind::User | AuthoritySubjectKind::Session
-            if payload.subject_ura != subject =>
-        {
-            return Err(Status::permission_denied(format!(
-                "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session subject `{}` does not match envelope \
-                 subject `{subject}`",
-                payload.subject_ura
-            )));
-        }
-        AuthoritySubjectKind::Other => {
-            return Err(Status::permission_denied(format!(
-                "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session authority can only bind user or \
-                 session subjects; got `{subject}`"
-            )));
-        }
-        AuthoritySubjectKind::User | AuthoritySubjectKind::Session => {}
+    if !session_authority_admits_subject(payload, subject) {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_SUBJECT_MISMATCH}: session subject `{}` owned by `{}` does not \
+             admit envelope subject `{subject}`",
+            payload.subject_ura, payload.session_owner_user_id
+        )));
     }
 
     let callee = envelope
@@ -1685,6 +1701,49 @@ fn verify_session_authority_bindings(
     }
 
     Ok(())
+}
+
+fn session_authority_admits_subject(payload: &SessionAuthorityPayload, subject: &str) -> bool {
+    if payload.subject_ura == subject {
+        return true;
+    }
+    let Ok(parsed) = parse_ura(subject) else {
+        return false;
+    };
+    if parsed.kind != URAKind::Resource {
+        return false;
+    }
+    let Some(owner_id) = parsed.resource_owner_id() else {
+        return false;
+    };
+    resource_owner_matches_session_owner(owner_id, &payload.session_owner_user_id)
+}
+
+fn resource_owner_matches_session_owner(owner_id: &str, session_owner_user_id: &str) -> bool {
+    let session_owner_user_id = session_owner_user_id.trim();
+    if session_owner_user_id.is_empty() {
+        return false;
+    }
+    if let Some(user_id) = owner_id.strip_prefix("user.") {
+        return user_id == session_owner_user_id;
+    }
+    owner_id
+        .strip_prefix("agent.")
+        .and_then(|rest| rest.split_once('.').map(|(user_id, _)| user_id))
+        .is_some_and(|user_id| user_id == session_owner_user_id)
+}
+
+fn verified_session_authority_id(payload: &SessionAuthorityPayload) -> String {
+    format!("session_authority:{}", payload.session_id)
+}
+
+fn verified_delegation_authority_id(payload: &DelegationPayload) -> Result<String, Status> {
+    let payload_bytes = authority_metadata::canonical_authority_payload_bytes(payload)
+        .map_err(authority_metadata_error_status)?;
+    Ok(format!(
+        "delegation:sha256:{}",
+        hex::encode(sha2::Sha256::digest(payload_bytes))
+    ))
 }
 
 fn parse_and_verify_delegation_proof(
@@ -2171,6 +2230,24 @@ mod tests {
             action_for_unary_ability("authority.binding.grant"),
             AccessAction::Grant
         );
+        assert_eq!(
+            action_for_unary_ability(ABILITY_FEDERATION_JOIN),
+            AccessAction::Manage
+        );
+        assert_eq!(
+            action_for_unary_ability(ABILITY_FEDERATION_ADVERTISE_AGENT),
+            AccessAction::Manage
+        );
+        assert_eq!(
+            action_for_unary_ability(
+                crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES
+            ),
+            AccessAction::Manage
+        );
+        assert_eq!(
+            action_for_unary_ability("federation.heartbeat"),
+            AccessAction::Manage
+        );
         assert_eq!(action_for_unary_ability("fs.list"), AccessAction::Read);
         assert_eq!(
             action_for_unary_ability("process.exec"),
@@ -2313,6 +2390,42 @@ mod tests {
                 descriptor_ref,
             )]),
             ..InvokeRequest::default()
+        }
+    }
+
+    fn signed_session_authority_metadata(
+        payload: &SessionAuthorityPayload,
+        signing_key: &SigningKey,
+    ) -> String {
+        let payload_bytes = authority_metadata::canonical_authority_payload_bytes(payload)
+            .expect("canonical session authority payload");
+        let signature = signing_key.sign(&payload_bytes);
+        let wire = serde_json::json!({
+            "payload": payload,
+            "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+        });
+        BASE64_STANDARD.encode(serde_json::to_vec(&wire).expect("session authority wire json"))
+    }
+
+    fn test_session_authority_payload(
+        caller_ura: &str,
+        callee_ura: &str,
+        owner_user_id: &str,
+        ability: &str,
+    ) -> SessionAuthorityPayload {
+        SessionAuthorityPayload {
+            issuer_ura: caller_ura.to_string(),
+            session_id: "sa-test-session".to_string(),
+            session_owner_user_id: owner_user_id.to_string(),
+            creator_principal_id: caller_ura.to_string(),
+            callee_ura: callee_ura.to_string(),
+            subject_ura: "easynet:///r/realm/session/sa-test-session".to_string(),
+            audience: callee_ura.to_string(),
+            scopes: vec![ability.to_string()],
+            allowed_actions: vec![AccessAction::Invoke.as_str().to_string()],
+            allowed_followup_abilities: vec![ability.to_string()],
+            issued_at_ms: 1_714_492_800_000,
+            expires_at_ms: 4_102_444_800_000,
         }
     }
 
@@ -2485,6 +2598,84 @@ mod tests {
             "legacy signature reason should remain inspectable: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn session_authority_admits_descriptor_bound_resource_owned_by_session_user() {
+        let caller_ura = hub_ura("session-authority-caller");
+        let callee_ura = hub_ura("realm");
+        let payload =
+            test_session_authority_payload(&caller_ura, &callee_ura, "alice", "namespace.resolve");
+        let admitted = crate::daemon::invocation::ProtoEnvelope::targeted(
+            &caller_ura,
+            &callee_ura,
+            "easynet:///r/realm/resource/user.alice/invoke/namespace.resolve",
+        )
+        .expect("descriptor-bound subject")
+        .into_inner();
+
+        verify_session_authority_bindings(
+            &payload,
+            &admitted,
+            "namespace.resolve",
+            AccessAction::Invoke,
+        )
+        .expect("resource subject owned by session user should be admitted");
+
+        let rejected = crate::daemon::invocation::ProtoEnvelope::targeted(
+            &caller_ura,
+            &callee_ura,
+            "easynet:///r/realm/resource/user.bob/invoke/namespace.resolve",
+        )
+        .expect("descriptor-bound subject")
+        .into_inner();
+        let err = verify_session_authority_bindings(
+            &payload,
+            &rejected,
+            "namespace.resolve",
+            AccessAction::Invoke,
+        )
+        .expect_err("resource subject owned by another user must be rejected");
+        assert!(
+            err.message().contains(REASON_AUTHORITY_SUBJECT_MISMATCH),
+            "expected subject mismatch, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn verified_session_authority_metadata_admits_namespace_resolve_refetch() {
+        let _home = HomeGuard::new();
+        let caller_key = SigningKey::from_bytes(&[0x63u8; 32]);
+        let caller_ura = hub_ura("backend-session-authority");
+        let caller_pub_b64 = BASE64_STANDARD.encode(caller_key.verifying_key().to_bytes());
+        let callee_ura = hub_ura("realm");
+        let subject_ura = "easynet:///r/realm/resource/user.alice/invoke/namespace.resolve";
+        let mut req = signed_request_with_subject_and_nonce(
+            &caller_ura,
+            &callee_ura,
+            subject_ura,
+            "namespace.resolve",
+            b"{}",
+            &caller_key,
+            [0x63; 16],
+        );
+        let payload =
+            test_session_authority_payload(&caller_ura, &callee_ura, "alice", "namespace.resolve");
+        req.metadata.insert(
+            SESSION_AUTHORITY_METADATA_KEY.to_string(),
+            signed_session_authority_metadata(&payload, &caller_key),
+        );
+
+        let trust = Arc::new(
+            RealmTrustAnchor::from_entries(vec![backend_entry(&caller_ura, caller_pub_b64)])
+                .expect("trust anchor"),
+        );
+        let facade = AdmissionFacade::new(trust, Some(callee_ura));
+
+        facade
+            .verify_invoke(&req)
+            .expect("verified session authority should admit namespace.resolve refetch");
     }
 
     #[test]

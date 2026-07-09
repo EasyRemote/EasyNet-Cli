@@ -188,18 +188,42 @@ pub(super) fn record_connection_state(
     state: crate::daemon::boot::join_connection_state::JoinConnectionState,
     transition: crate::daemon::boot::join_connection_state::JoinTransition,
     source: &str,
-) {
+) -> bool {
     let prior = crate::daemon::boot::join_connection_state::latest_snapshot();
-    crate::daemon::boot::join_connection_state::record_snapshot(
-        crate::daemon::boot::join_connection_state::JoinConnectionSnapshot::from_parts(
-            state,
-            Some(transition),
-            prior.realm,
-            prior.node_id,
-            prior.hub_endpoint,
-            source.to_string(),
-        ),
+    let snapshot = crate::daemon::boot::join_connection_state::JoinConnectionSnapshot::from_parts(
+        state,
+        Some(transition),
+        prior.realm,
+        prior.node_id,
+        prior.hub_endpoint,
+        source.to_string(),
     );
+    let state_code = snapshot.state_code.clone();
+    let transition_id = snapshot.transition_id.clone().unwrap_or_default();
+    match crate::daemon::boot::join_connection_state::save_snapshot(&snapshot) {
+        Ok(()) => {
+            crate::op_event!(
+                component = session,
+                kind = connection_state_projected,
+                state_code = state_code,
+                transition_id = transition_id,
+                source = source,
+            );
+            true
+        }
+        Err(err) => {
+            let message = format!("{err:#}");
+            crate::op_event!(
+                component = session,
+                kind = connection_state_projection_failed,
+                state_code = state_code,
+                transition_id = transition_id,
+                source = source,
+                error = message,
+            );
+            false
+        }
+    }
 }
 
 struct OutboxGuard {
@@ -219,5 +243,58 @@ impl Drop for OutboxGuard {
         if let Some(outbox) = &self.outbox {
             outbox.clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::boot::join_connection_state::{
+        load_snapshot, record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinTransition,
+    };
+    use crate::daemon::persistence::config::Credentials;
+
+    fn credentials() -> Credentials {
+        Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "https://127.0.0.1:50443".to_string(),
+            realm: "test".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: Some("http://127.0.0.1:8080".to_string()),
+            username: Some("alice".to_string()),
+            user_id: Some("alice".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    #[test]
+    fn session_contract_projection_promotes_connection_snapshot() {
+        let _home = HomeGuard::new();
+        let credentials = credentials();
+        record_snapshot(JoinConnectionSnapshot::from_credentials(
+            JoinConnectionState::SelfSessionAdmissionPending,
+            Some(JoinTransition::OpenSelfSession),
+            &credentials,
+            "test.start",
+        ));
+
+        assert!(record_connection_state(
+            JoinConnectionState::ConnectedOnline,
+            JoinTransition::AdmitPresence,
+            "session.contract_negotiated",
+        ));
+
+        let snapshot = load_snapshot().expect("snapshot");
+        assert_eq!(snapshot.state, "FRONTEND_CONNECTED");
+        assert_eq!(snapshot.state_code, "J800");
+        assert_eq!(
+            snapshot.transition_id.as_deref(),
+            Some("T10_ADMIT_PRESENCE")
+        );
+        assert_eq!(snapshot.source, "session.contract_negotiated");
     }
 }

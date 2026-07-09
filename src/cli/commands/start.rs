@@ -307,6 +307,17 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         &creds,
         "cli.start",
     ));
+    // From here the daemon process owns the asynchronous `session.open`
+    // lifecycle. Publish the pending state before waiting for Ready so a fast
+    // session contract cannot be overwritten later by the CLI's older view.
+    // Boot failures still record a failed snapshot below; successful contracts
+    // promote this to J800 from the frame loop.
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::SelfSessionAdmissionPending,
+        Some(JoinTransition::OpenSelfSession),
+        &creds,
+        "cli.start",
+    ));
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
     let boot = match super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
@@ -354,21 +365,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     };
     save_runtime_projection_after_ready(&mut daemon_handle, &state)?;
     ensure_desktop_companions_after_ready();
-    // The daemon process is up and the local runtime is ready, but the hub
-    // `session.open` bidi has NOT been admitted yet — that handshake runs
-    // asynchronously in the session initiator. Reporting ConnectedOnline here
-    // was a lie: `doctor` showed FRONTEND_CONNECTED even while session.open was
-    // failing in an endless reconnect backoff, because nothing downgraded the
-    // optimistic snapshot. Record the honest "self-session opening, presence
-    // not yet admitted" state (J500); the frame loop promotes to ConnectedOnline
-    // only when the hub returns the session contract, and downgrades to
-    // ConnectedSuspect when the session errors out.
-    record_snapshot(JoinConnectionSnapshot::from_credentials(
-        JoinConnectionState::SelfSessionAdmissionPending,
-        Some(JoinTransition::OpenSelfSession),
-        &creds,
-        "cli.start",
-    ));
 
     if attached_existing_daemon {
         output::success("EasyNet daemon attached");

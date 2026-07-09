@@ -18,7 +18,7 @@ expect:
   result: sdk_parity_matrix_enforced
   case_id: sdk/go_python_parity_matrix
   language_count: 2
-  capability_count: 22
+  capability_count: 23
   product_boundary_count: 2
   missing_capability: false
   invalid_status: false

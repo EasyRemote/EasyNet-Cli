@@ -208,6 +208,26 @@ pub struct TrustedAgent {
     pub tls_ca_pem_path: Option<PathBuf>,
 }
 
+/// Ownership fact for a trusted runtime principal.
+///
+/// `TrustedAgent` answers "which key may sign for this principal URA".
+/// This row answers "which user owns this principal URA" for RFC-014 policy
+/// owner resolution. Keeping it as a separate read model avoids overloading
+/// key trust with authorization ownership and lets existing trust rows remain
+/// valid while new pairings/backfills add owner facts.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedPrincipalOwner {
+    /// Principal URA whose owner is known, e.g. a device URA.
+    pub principal_ura: String,
+    /// Canonical owner user id used by RFC-014 grant storage.
+    pub owner_user_id: String,
+    /// Canonical owner user URA.
+    pub owner_ura: String,
+    /// Timestamp the owner fact was written.
+    pub added_at_unix_ms: u64,
+}
+
 /// Tombstone for a user public key that was explicitly revoked.
 ///
 /// Revocation is persisted alongside active trust rows instead of being
@@ -235,6 +255,8 @@ pub(crate) struct RevokedUserPubkey {
 struct RawTrustAnchor {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     trusted_agent: Vec<TrustedAgent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    trusted_principal_owner: Vec<TrustedPrincipalOwner>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     revoked_user_pubkey: Vec<RevokedUserPubkey>,
 }
@@ -285,6 +307,8 @@ pub struct RealmTrustAnchor {
     /// separate from active `users` so a missing active key can be
     /// distinguished from an explicitly revoked key.
     revoked_users: HashMap<String, Vec<RevokedUserPubkey>>,
+    /// RFC-014 owner facts for trusted runtime principals.
+    principal_owners: HashMap<String, TrustedPrincipalOwner>,
 }
 
 fn role_label(role: TrustedAgentRole) -> &'static str {
@@ -334,6 +358,39 @@ fn canonicalize_entry(mut entry: TrustedAgent) -> Result<TrustedAgent, RealmTrus
     Ok(entry)
 }
 
+fn canonicalize_principal_owner(
+    mut owner: TrustedPrincipalOwner,
+) -> Result<TrustedPrincipalOwner, RealmTrustError> {
+    owner.principal_ura = canonical_ura_for_runtime_principal(&owner.principal_ura)?;
+    owner.owner_ura = canonical_ura_for_role(&owner.owner_ura, TrustedAgentRole::User)?;
+    if owner.owner_user_id.trim().is_empty() {
+        return Err(RealmTrustError::InvalidPrincipalOwner {
+            principal_ura: owner.principal_ura,
+            detail: "owner_user_id is required".to_string(),
+        });
+    }
+    owner.owner_user_id = owner.owner_user_id.trim().to_string();
+    Ok(owner)
+}
+
+fn canonical_ura_for_runtime_principal(agent_ura: &str) -> Result<String, RealmTrustError> {
+    let parsed = crate::core::ura::parse_ura(agent_ura).map_err(|err| {
+        RealmTrustError::InvalidPrincipalOwner {
+            principal_ura: agent_ura.to_string(),
+            detail: err.to_string(),
+        }
+    })?;
+    match parsed.kind {
+        crate::core::ura::URAKind::Device
+        | crate::core::ura::URAKind::Hub
+        | crate::core::ura::URAKind::User => Ok(agent_ura.to_string()),
+        kind => Err(RealmTrustError::InvalidPrincipalOwner {
+            principal_ura: agent_ura.to_string(),
+            detail: format!("expected device, hub, or user URA, got {kind:?}"),
+        }),
+    }
+}
+
 fn canonicalize_revoked_user_key(
     mut entry: RevokedUserPubkey,
 ) -> Result<RevokedUserPubkey, RealmTrustError> {
@@ -378,8 +435,17 @@ impl RealmTrustAnchor {
     /// Construct from both active trust rows and persisted revocation
     /// tombstones. Mutation code uses this to rebuild a complete aggregate
     /// from a snapshot before applying one transaction.
+    #[cfg(test)]
     pub(crate) fn from_parts(
         entries: Vec<TrustedAgent>,
+        revoked_user_pubkeys: Vec<RevokedUserPubkey>,
+    ) -> Result<Self, RealmTrustError> {
+        Self::from_parts_with_principal_owners(entries, Vec::new(), revoked_user_pubkeys)
+    }
+
+    pub(crate) fn from_parts_with_principal_owners(
+        entries: Vec<TrustedAgent>,
+        principal_owners: Vec<TrustedPrincipalOwner>,
         revoked_user_pubkeys: Vec<RevokedUserPubkey>,
     ) -> Result<Self, RealmTrustError> {
         let mut anchor = Self::default();
@@ -390,6 +456,10 @@ impl RealmTrustAnchor {
         for entry in entries {
             let entry = canonicalize_entry(entry)?;
             anchor.insert_canonicalized(entry)?;
+        }
+        for owner in principal_owners {
+            let owner = canonicalize_principal_owner(owner)?;
+            anchor.upsert_principal_owner_canonicalized(owner)?;
         }
         Ok(anchor)
     }
@@ -422,11 +492,12 @@ impl RealmTrustAnchor {
                 bucket.push(entry);
             }
             TrustedAgentRole::Backend | TrustedAgentRole::Device | TrustedAgentRole::Hub => {
-                if let Some(prior) = self.by_ura.insert(entry.agent_ura.clone(), entry.clone()) {
+                if self.by_ura.contains_key(&entry.agent_ura) {
                     return Err(RealmTrustError::DuplicateUra {
-                        agent_ura: prior.agent_ura,
+                        agent_ura: entry.agent_ura,
                     });
                 }
+                self.by_ura.insert(entry.agent_ura.clone(), entry);
             }
         }
         Ok(())
@@ -452,13 +523,26 @@ impl RealmTrustAnchor {
         Ok(())
     }
 
+    fn upsert_principal_owner_canonicalized(
+        &mut self,
+        owner: TrustedPrincipalOwner,
+    ) -> Result<(), RealmTrustError> {
+        self.principal_owners
+            .insert(owner.principal_ura.clone(), owner);
+        Ok(())
+    }
+
     fn parse(raw: &str, path: &Path) -> Result<Self, RealmTrustError> {
         let parsed: RawTrustAnchor =
             toml::from_str(raw).map_err(|source| RealmTrustError::ParseFailed {
                 path: path.to_path_buf(),
                 source,
             })?;
-        Self::from_parts(parsed.trusted_agent, parsed.revoked_user_pubkey)
+        Self::from_parts_with_principal_owners(
+            parsed.trusted_agent,
+            parsed.trusted_principal_owner,
+            parsed.revoked_user_pubkey,
+        )
     }
 
     /// Look up the trust entry for an agent URA.
@@ -489,6 +573,11 @@ impl RealmTrustAnchor {
             sorted.sort_by(|a, b| a.public_key_b64.cmp(&b.public_key_b64));
             sorted.into_iter().next()
         })
+    }
+
+    #[must_use]
+    pub fn lookup_principal_owner(&self, principal_ura: &str) -> Option<&TrustedPrincipalOwner> {
+        self.principal_owners.get(principal_ura)
     }
 
     /// DEC-EU: resolve a user envelope's caller against the
@@ -606,6 +695,14 @@ impl RealmTrustAnchor {
         self.insert_canonicalized(entry)
     }
 
+    pub fn upsert_principal_owner(
+        &mut self,
+        owner: TrustedPrincipalOwner,
+    ) -> Result<(), RealmTrustError> {
+        let owner = canonicalize_principal_owner(owner)?;
+        self.upsert_principal_owner_canonicalized(owner)
+    }
+
     /// Insert or replace one singleton-role trust entry.
     ///
     /// This is intentionally narrower than `append_agent`: it is
@@ -712,6 +809,17 @@ impl RealmTrustAnchor {
         out
     }
 
+    #[must_use]
+    pub fn principal_owners_sorted(&self) -> Vec<TrustedPrincipalOwner> {
+        let mut out: Vec<TrustedPrincipalOwner> = self.principal_owners.values().cloned().collect();
+        out.sort_by(|a, b| {
+            a.principal_ura
+                .cmp(&b.principal_ura)
+                .then_with(|| a.owner_ura.cmp(&b.owner_ura))
+        });
+        out
+    }
+
     /// Snapshot of persisted user-key revocations as a stable sorted list.
     /// Sort order mirrors active entries and then preserves epoch order for
     /// easier operator review.
@@ -749,6 +857,7 @@ impl RealmTrustAnchor {
     pub fn save(&self, path: &Path) -> Result<(), RealmTrustError> {
         let raw = RawTrustAnchor {
             trusted_agent: self.entries_sorted(),
+            trusted_principal_owner: self.principal_owners_sorted(),
             revoked_user_pubkey: self.revoked_user_pubkeys_sorted(),
         };
         let body =
@@ -871,6 +980,12 @@ pub enum RealmTrustError {
     InvalidUraForRole {
         agent_ura: String,
         role: String,
+        detail: String,
+    },
+
+    #[error("trusted principal owner `{principal_ura}` is invalid: {detail}")]
+    InvalidPrincipalOwner {
+        principal_ura: String,
         detail: String,
     },
 

@@ -20,7 +20,7 @@ use crate::daemon::invocation::admission::owner_resolution::{
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
 use crate::daemon::persistence::access_control::AccessControlStore;
-use crate::daemon::trust::anchor::TrustedAgentRole;
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 
 #[derive(Debug, Clone)]
 pub struct AdmissionPolicyContext<'a> {
@@ -29,9 +29,10 @@ pub struct AdmissionPolicyContext<'a> {
     pub action: AccessAction,
     pub trusted_role: TrustedAgentRole,
     pub daemon_ura: Option<&'a str>,
+    pub trust_anchor: &'a RealmTrustAnchor,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
-    pub authority_proof_id: Option<String>,
+    pub verified_authority_id: Option<String>,
     pub rejector_ura: Option<String>,
 }
 
@@ -43,7 +44,12 @@ impl AdmissionPolicyGate {
         let callee_ura = agent_ura(context.envelope.callee.as_ref(), "callee")?;
         let subject_ura = subject_ura(context.envelope.subject.as_ref())?;
         let ability_ura = ability_ura_for(&callee_ura, context.ability)?;
-        let owner = resolve_owner(&subject_ura, &callee_ura, context.daemon_ura);
+        let owner = resolve_owner(
+            &subject_ura,
+            &callee_ura,
+            context.daemon_ura,
+            context.trust_anchor,
+        );
         let principal = principal_for(context.trusted_role, &caller_ura);
         let grants = match owner.owner_user_id.as_deref() {
             Some(owner_user_id) => AccessControlStore::open_or_create(owner_user_id)
@@ -72,7 +78,7 @@ impl AdmissionPolicyGate {
             interactive_context_available: false,
             canonical_hash: context.canonical_hash,
             signature_key_id: context.signature_key_id,
-            authority_proof_id: context.authority_proof_id,
+            verified_authority_id: context.verified_authority_id,
             rejector_ura: context.rejector_ura,
             now: Utc::now(),
             grants,
@@ -140,16 +146,26 @@ pub(crate) fn principal_for(role: TrustedAgentRole, caller_ura: &str) -> Princip
     }
 }
 
-fn resolve_owner(subject_ura: &str, callee_ura: &str, daemon_ura: Option<&str>) -> OwnerResolution {
+fn resolve_owner(
+    subject_ura: &str,
+    callee_ura: &str,
+    daemon_ura: Option<&str>,
+    trust_anchor: &RealmTrustAnchor,
+) -> OwnerResolution {
     OwnerResolver::resolve(&OwnerResolutionInput {
-        subject: owner_fact_from_ura(subject_ura, daemon_ura),
-        callee: owner_fact_from_ura(callee_ura, daemon_ura),
-        device: owner_fact_from_local_device(callee_ura, daemon_ura),
+        subject: owner_fact_from_ura(subject_ura, daemon_ura, trust_anchor),
+        callee: owner_fact_from_ura(callee_ura, daemon_ura, trust_anchor),
+        device: owner_fact_from_trust_anchor(callee_ura, trust_anchor)
+            .or_else(|| owner_fact_from_local_device(callee_ura, daemon_ura)),
         session: None,
     })
 }
 
-fn owner_fact_from_ura(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact> {
+fn owner_fact_from_ura(
+    ura: &str,
+    daemon_ura: Option<&str>,
+    trust_anchor: &RealmTrustAnchor,
+) -> Option<OwnerFact> {
     let parsed = parse_ura(ura).ok()?;
     match parsed.kind {
         URAKind::User => parsed
@@ -163,11 +179,22 @@ fn owner_fact_from_ura(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact>
                 user_id.clone(),
                 crate::core::ura::user_ura(&parsed.realm, &user_id),
             )),
-            AbilityOwner::Device { .. } | AbilityOwner::Hub => {
-                owner_fact_from_local_device(ura, daemon_ura)
+            AbilityOwner::Device { device_id } => owner_fact_from_trust_anchor(
+                &crate::core::ura::device_ura(&parsed.realm, &device_id),
+                trust_anchor,
+            )
+            .or_else(|| {
+                owner_fact_from_local_device(
+                    &crate::core::ura::device_ura(&parsed.realm, &device_id),
+                    daemon_ura,
+                )
+            }),
+            AbilityOwner::Hub => {
+                owner_fact_from_local_device(&crate::core::ura::hub_ura(&parsed.realm), daemon_ura)
             }
         }),
-        URAKind::Device | URAKind::Hub => owner_fact_from_local_device(ura, daemon_ura),
+        URAKind::Device | URAKind::Hub => owner_fact_from_trust_anchor(ura, trust_anchor)
+            .or_else(|| owner_fact_from_local_device(ura, daemon_ura)),
         URAKind::Resource => resource_owner_user_id(&parsed).map(|user_id| {
             OwnerFact::user(
                 user_id.clone(),
@@ -178,12 +205,30 @@ fn owner_fact_from_ura(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact>
     }
 }
 
+fn owner_fact_from_trust_anchor(ura: &str, trust_anchor: &RealmTrustAnchor) -> Option<OwnerFact> {
+    let owner = trust_anchor.lookup_principal_owner(ura)?;
+    Some(OwnerFact::user(
+        owner.owner_user_id.clone(),
+        owner.owner_ura.clone(),
+    ))
+}
+
 fn owner_fact_from_local_device(ura: &str, daemon_ura: Option<&str>) -> Option<OwnerFact> {
-    let daemon_ura = daemon_ura?;
-    if ura != daemon_ura && parse_ura(ura).ok()?.kind != URAKind::Hub {
+    let parsed = parse_ura(ura).ok()?;
+    let credentials = crate::daemon::persistence::config::load_credentials().ok()?;
+    let is_local_identity = match parsed.kind {
+        URAKind::Device => {
+            parsed.realm == credentials.realm
+                && parsed
+                    .device_id()
+                    .is_some_and(|device_id| device_id == credentials.node_id.as_str())
+        }
+        URAKind::Hub => Some(ura) == daemon_ura || parsed.realm == credentials.realm,
+        _ => Some(ura) == daemon_ura,
+    };
+    if !is_local_identity {
         return None;
     }
-    let credentials = crate::daemon::persistence::config::load_credentials().ok()?;
     let user_id = credentials.user_id().ok()?.to_string();
     Some(OwnerFact::user(
         user_id.clone(),
@@ -249,7 +294,10 @@ fn subject_ura(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::invocation::admission::decision::PolicyDecisionReason;
+    use crate::daemon::persistence::config::{save_credentials, Credentials};
+    use crate::daemon::trust::anchor::TrustedPrincipalOwner;
     use easynet_axon::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
     fn identity(ura: &str) -> AgentIdentity {
@@ -257,6 +305,92 @@ mod tests {
             ura: ura.to_string(),
             profile: String::new(),
         }
+    }
+
+    fn save_test_credentials() {
+        save_credentials(&Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "https://127.0.0.1:50443".to_string(),
+            realm: "test".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: Some("http://127.0.0.1:8080".to_string()),
+            username: Some("alice".to_string()),
+            user_id: Some("alice".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("join-hash".to_string()),
+        })
+        .expect("save test credentials");
+    }
+
+    fn empty_anchor() -> RealmTrustAnchor {
+        RealmTrustAnchor::default()
+    }
+
+    fn anchor_with_device_owner() -> RealmTrustAnchor {
+        RealmTrustAnchor::from_parts_with_principal_owners(
+            Vec::new(),
+            vec![TrustedPrincipalOwner {
+                principal_ura: "easynet:///r/test/device/dev-1".to_string(),
+                owner_user_id: "alice".to_string(),
+                owner_ura: "easynet:///r/test/user/alice".to_string(),
+                added_at_unix_ms: 1,
+            }],
+            Vec::new(),
+        )
+        .expect("owner anchor")
+    }
+
+    #[test]
+    fn trusted_device_subject_projects_anchor_owner() {
+        let anchor = anchor_with_device_owner();
+        let owner = resolve_owner(
+            "easynet:///r/test/device/dev-1",
+            "easynet:///r/test/hub",
+            Some("easynet:///r/test/hub"),
+            &anchor,
+        );
+
+        assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(
+            owner.owner_ura.as_deref(),
+            Some("easynet:///r/test/user/alice")
+        );
+    }
+
+    #[test]
+    fn paired_device_subject_projects_credentials_owner() {
+        let _home = HomeGuard::new();
+        save_test_credentials();
+        let anchor = empty_anchor();
+        let owner = resolve_owner(
+            "easynet:///r/test/device/dev-1",
+            "easynet:///r/test/hub",
+            Some("easynet:///r/test/hub"),
+            &anchor,
+        );
+
+        assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
+        assert_eq!(
+            owner.owner_ura.as_deref(),
+            Some("easynet:///r/test/user/alice")
+        );
+    }
+
+    #[test]
+    fn paired_device_ability_projects_credentials_owner() {
+        let _home = HomeGuard::new();
+        save_test_credentials();
+        let anchor = empty_anchor();
+        let owner = resolve_owner(
+            "easynet:///r/test/ability/device.dev-1.federation.advertise_abilities",
+            "easynet:///r/test/hub",
+            Some("easynet:///r/test/hub"),
+            &anchor,
+        );
+
+        assert_eq!(owner.owner_user_id.as_deref(), Some("alice"));
     }
 
     #[test]
@@ -276,9 +410,10 @@ mod tests {
             action: AccessAction::Read,
             trusted_role: TrustedAgentRole::User,
             daemon_ura: None,
+            trust_anchor: &empty_anchor(),
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
-            authority_proof_id: None,
+            verified_authority_id: None,
             rejector_ura: None,
         })
         .expect("owner user must pass policy");
@@ -302,9 +437,10 @@ mod tests {
             action: AccessAction::Read,
             trusted_role: TrustedAgentRole::Hub,
             daemon_ura: None,
+            trust_anchor: &empty_anchor(),
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
-            authority_proof_id: None,
+            verified_authority_id: None,
             rejector_ura: None,
         })
         .expect("trusted hub-link principal may read descriptor-safe metadata");
@@ -331,9 +467,10 @@ mod tests {
             action: AccessAction::Stream,
             trusted_role: TrustedAgentRole::Hub,
             daemon_ura: None,
+            trust_anchor: &empty_anchor(),
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
-            authority_proof_id: None,
+            verified_authority_id: None,
             rejector_ura: None,
         })
         .expect_err("trusted hub-link principal cannot stream without grant");

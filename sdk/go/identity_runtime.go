@@ -273,11 +273,14 @@ func identityRuntimeArgs(payload map[string]any, abilityName string) map[string]
 		if role == "" {
 			role = identityDefaultRole
 		}
-		return map[string]any{
+		args := map[string]any{
 			"agent_ura":      payload["owner_ura"],
 			"public_key_b64": payload["public_key_base64"],
 			"role":           role,
 		}
+		putNonEmptyIdentityArg(args, "principal_owner_ura", firstIdentityString(payload, "principal_owner_ura"))
+		putNonEmptyIdentityArg(args, "principal_owner_user_id", firstIdentityString(payload, "principal_owner_user_id"))
+		return args
 	case identityAbilityListUserPubkeys:
 		return map[string]any{
 			"agent_ura": payload["owner_ura"],
@@ -289,6 +292,12 @@ func identityRuntimeArgs(payload map[string]any, abilityName string) map[string]
 		}
 	default:
 		return map[string]any{}
+	}
+}
+
+func putNonEmptyIdentityArg(args map[string]any, key string, value string) {
+	if strings.TrimSpace(value) != "" {
+		args[key] = strings.TrimSpace(value)
 	}
 }
 

@@ -28,6 +28,18 @@
       "message": "Python Directory + Identity aggregate read model projects bounded partial results with child receipt refs instead of SDK-side fan-out."
     },
     {
+      "case_id": "access_control/runtime_transport",
+      "profile": "access_control",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_access_control.py"
+        }
+      ],
+      "message": "Python AccessControl runtime transport lowers RFC-014 system abilities through Runtime Core and keeps daemon ability payload construction inside the SDK."
+    },
+    {
       "case_id": "authority/mutual_exclusion",
       "profile": "runtime_core",
       "status": "passed",

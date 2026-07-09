@@ -62,13 +62,15 @@ type IdentityCarrierBase struct {
 // SigningKeyRegistrationRequest registers daemon-owned public signing-key metadata.
 type SigningKeyRegistrationRequest struct {
 	IdentityCarrierBase
-	OwnerURA        string         `json:"owner_ura"`
-	KeyID           string         `json:"key_id"`
-	Algorithm       string         `json:"algorithm"`
-	PublicKeyBase64 string         `json:"public_key_base64"`
-	Role            string         `json:"role,omitempty"`
-	Usage           []string       `json:"usage"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
+	OwnerURA             string         `json:"owner_ura"`
+	KeyID                string         `json:"key_id"`
+	Algorithm            string         `json:"algorithm"`
+	PublicKeyBase64      string         `json:"public_key_base64"`
+	Role                 string         `json:"role,omitempty"`
+	Usage                []string       `json:"usage"`
+	PrincipalOwnerURA    string         `json:"principal_owner_ura,omitempty"`
+	PrincipalOwnerUserID string         `json:"principal_owner_user_id,omitempty"`
+	Metadata             map[string]any `json:"metadata,omitempty"`
 }
 
 // SigningKeyListRequest asks for a bounded signing-key read-model page.
@@ -661,6 +663,10 @@ func marshalSigningKeyRegistrationRequest(req SigningKeyRegistrationRequest) ([]
 		if err := requiredCleanIdentityField(usage, "usage"); err != nil {
 			return nil, err
 		}
+	}
+	if strings.TrimSpace(req.PrincipalOwnerURA) != req.PrincipalOwnerURA ||
+		strings.TrimSpace(req.PrincipalOwnerUserID) != req.PrincipalOwnerUserID {
+		return nil, invalidProfilePayload(directoryIdentityProfile, "principal owner fields must already be trimmed", nil)
 	}
 	if containsPrivateKeyMetadata(req.Metadata) {
 		return nil, invalidProfilePayload(directoryIdentityProfile, "private key material must not be supplied to identity facade", nil)
