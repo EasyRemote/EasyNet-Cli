@@ -242,6 +242,7 @@ pub fn dispatch(
             call_mode: CallMode::Rpc,
             subject: Some(parsed.owner_ura.clone()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         registry.invoke_rpc_target_json(target).map_err(|err| {
             let msg = format!("{err}");

@@ -239,6 +239,12 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
     }
     let (local_id, _tenant, _hub, paired) = local_identity();
     if is_local_target(node_id, &local_id) {
+        if let Some(record) = federation_probe::local_device_record() {
+            return Ok(node_json_with_abilities(
+                &record.node,
+                record.ability_summaries,
+            ));
+        }
         if paired {
             if let Some(record) = federation_probe::resolve_device_record(&local_id)? {
                 return Ok(node_json_with_abilities(

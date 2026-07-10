@@ -68,6 +68,7 @@ struct HotAgentRuntimeSyncContext<'a> {
     runtime: &'a Arc<LocalRuntime>,
     catalog: &'a Arc<AxonAbilityCatalog>,
     binding: &'a HostedAgentRuntimeBinding,
+    authority_scope: crate::daemon::ability::AuthorityScope,
     outcome: &'a mut HotAgentRuntimeSyncOutcome,
 }
 
@@ -112,6 +113,19 @@ impl HostedAgentRuntimeBinding {
         let public_name =
             crate::core::ura::owner_local_ability_name(&self.agent_ura, registry_ability);
         crate::core::ura::owner_ability_ura(&self.agent_ura, &public_name)
+    }
+
+    fn authority_scope(
+        &self,
+        agent_name: &str,
+    ) -> Result<
+        crate::daemon::ability::AuthorityScope,
+        crate::daemon::ability::AbilityControlPlaneError,
+    > {
+        crate::daemon::ability::AuthorityScope::new(
+            format!("agent:{agent_name}"),
+            self.agent_ura.clone(),
+        )
     }
 }
 
@@ -411,6 +425,26 @@ impl HotAgentRegistrar {
             }
         };
 
+        let authority_scope = match binding.authority_scope(name) {
+            Ok(authority_scope) => authority_scope,
+            Err(err) => {
+                let err_msg = err.to_string();
+                crate::op_event!(
+                    component = axon_bridge,
+                    kind = hot_agent_register_authority_invalid,
+                    agent = name,
+                    agent_ura = binding.agent_ura.as_str(),
+                    error = err_msg.as_str(),
+                    message =
+                        "hosted agent runtime registration requires a canonical authority scope",
+                );
+                return HotAgentRuntimeSyncOutcome {
+                    failed: 1,
+                    ..Default::default()
+                };
+            }
+        };
+
         let mut outcome = HotAgentRuntimeSyncOutcome::default();
         let owner = OwnerKind::Agent(name.to_string());
         // Every catalogue row this sync (re-)registers; the reconcile pass at
@@ -422,6 +456,7 @@ impl HotAgentRegistrar {
                 runtime,
                 catalog: &catalog,
                 binding: &binding,
+                authority_scope,
                 outcome: &mut outcome,
             };
 
@@ -665,10 +700,13 @@ impl HotAgentRegistrar {
                 return false;
             }
         };
-        match ctx
-            .catalog
-            .hot_register_rpc_with_spec(ability_name, owner, manifest, handler)
-        {
+        match ctx.catalog.hot_register_rpc_with_spec_and_authority_scope(
+            ability_name,
+            owner,
+            ctx.authority_scope.clone(),
+            manifest,
+            handler,
+        ) {
             Ok(()) if was_present => {
                 ctx.outcome.replaced += 1;
                 true
@@ -707,8 +745,13 @@ impl HotAgentRegistrar {
         };
         match ctx
             .catalog
-            .hot_register_stream_with_spec(ability_name, owner, manifest, handler)
-        {
+            .hot_register_stream_with_spec_and_authority_scope(
+                ability_name,
+                owner,
+                ctx.authority_scope.clone(),
+                manifest,
+                handler,
+            ) {
             Ok(()) if was_present => {
                 ctx.outcome.replaced += 1;
                 true
@@ -745,12 +788,15 @@ impl HotAgentRegistrar {
                 return false;
             }
         };
-        match ctx.catalog.hot_register_stream_with_envelope_and_spec(
-            ability_name,
-            owner,
-            manifest,
-            handler,
-        ) {
+        match ctx
+            .catalog
+            .hot_register_stream_with_envelope_and_spec_and_authority_scope(
+                ability_name,
+                owner,
+                ctx.authority_scope.clone(),
+                manifest,
+                handler,
+            ) {
             Ok(()) if was_present => {
                 ctx.outcome.replaced += 1;
                 true
@@ -856,7 +902,19 @@ mod tests {
         runtime: Arc<LocalRuntime>,
     ) -> Arc<AxonAbilityCatalog> {
         registrar.set_runtime(Arc::clone(&runtime));
-        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(runtime));
+        // Production daemon boot pins the catalog to its concrete Device URA.
+        // Hosted Agent registration must still use the Agent URA persisted by
+        // its lifecycle, never derive a device-scoped Agent identity from this
+        // fixed context.
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                crate::core::ura::device_ura("localhost", "dev"),
+            )
+            .expect("test device authority");
+        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            runtime,
+            authority_context,
+        ));
         registrar
             .dispatch_handle
             .set(Arc::clone(&catalog))
@@ -915,10 +973,15 @@ mod tests {
         // since been deleted: the row exists in the runtime but no
         // current source will re-register it.
         let ghost_key = runtime_key("liangbing", "liangbing.ghost_op");
+        let ghost_authority = HostedAgentRuntimeBinding::load("liangbing")
+            .expect("hosted Agent binding")
+            .authority_scope("liangbing")
+            .expect("hosted Agent authority scope");
         catalog
-            .hot_register_rpc_with_spec(
+            .hot_register_rpc_with_spec_and_authority_scope(
                 "liangbing.ghost_op",
                 OwnerKind::Agent("liangbing".to_string()),
+                ghost_authority,
                 crate::core::ability::spec::default_chat_manifest(),
                 Arc::new(|_args| Ok(serde_json::Value::Null)),
             )
@@ -981,6 +1044,15 @@ mod tests {
             rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
                 .await,
             "liangbing.chat MUST be in LocalRuntime after register_agent"
+        );
+        let wrong_device_scoped_key = crate::core::ura::owner_ability_ura(
+            &crate::core::ura::device_agent_ura("localhost", "dev", "liangbing"),
+            "chat",
+        )
+        .expect("device-scoped negative key");
+        assert!(
+            !rt.has_ability(&wrong_device_scoped_key).await,
+            "hosted Agent runtime rows must not inherit the host Device authority root"
         );
         assert!(
             rt.has_ability(&runtime_key("liangbing", "liangbing.discover"))

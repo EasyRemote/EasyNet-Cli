@@ -150,7 +150,8 @@ async fn local_system_request(
     LocalRuntimeRequestFactory::request_for(
         mode,
         LocalRuntimeIngress::LocalSystem { envelope, payload },
-        LocalRuntimeRequestOptions::default(),
+        LocalRuntimeRequestOptions::default()
+            .with_request_metadata(target.request_metadata.clone()),
     )
     .map_err(|err| format!("{err}"))
 }
@@ -348,6 +349,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         }
     }
 

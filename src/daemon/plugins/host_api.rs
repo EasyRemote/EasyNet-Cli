@@ -551,6 +551,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .expect("declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hello"}));
@@ -585,6 +586,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .expect("hot declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hot"}));
@@ -602,6 +604,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .expect_err("hot-unregistered plugin ability must not remain invokable");
     }
@@ -670,6 +673,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .expect_err("missing EAL template argument should surface through handler");
         let msg = format!("{err}");
@@ -711,6 +715,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some("easynet:///r/acme/resource/test".to_string()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .expect_err("non-object MCP args should be rejected by mcp executor");
         let msg = format!("{err}");

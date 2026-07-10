@@ -140,8 +140,10 @@ use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTI
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
 use crate::daemon::invocation::bidi::session_initiator::SessionSigningSeed;
+#[cfg(test)]
+use crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_AGENT;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
-    ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_JOIN,
+    ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_JOIN,
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
@@ -1460,7 +1462,6 @@ fn bootstrap_authority_ability(ability: &str) -> bool {
         ability,
         ABILITY_IDENTITY_REGISTER_PUBKEY
             | ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
-            | ABILITY_FEDERATION_ADVERTISE_AGENT
             | ABILITY_IDENTITY_LIST_USER_PUBKEYS
             | ABILITY_IDENTITY_REVOKE_USER_PUBKEY
     )
@@ -1619,6 +1620,11 @@ fn action_for_unary_ability(ability: &str) -> AccessAction {
         | governance_names::ADMIN_STATUS
         | governance_names::META_DESCRIBE
         | governance_names::META_LIST_ABILITIES
+        | federation_names::RESOLVE
+        | federation_names::DISCOVER
+        | federation_names::STATUS
+        | federation_names::NAMESPACE_RESOLVE
+        | federation_names::RESOLVE_KEY
         | "remote_desktop.permission_status"
         | "remote_desktop.show_session" => return AccessAction::Read,
 
@@ -2922,8 +2928,9 @@ mod tests {
             &caller_key,
             [0x63; 16],
         );
-        let payload =
+        let mut payload =
             test_session_authority_payload(&caller_ura, &callee_ura, "alice", "namespace.resolve");
+        payload.allowed_actions = vec![AccessAction::Read.as_str().to_string()];
         req.metadata.insert(
             SESSION_AUTHORITY_METADATA_KEY.to_string(),
             signed_session_authority_metadata(&payload, &caller_key),

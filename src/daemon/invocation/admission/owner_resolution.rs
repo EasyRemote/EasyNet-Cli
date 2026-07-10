@@ -4,6 +4,8 @@
 // Resolves the single accountable user owner before policy evaluation.
 
 use super::decision::{OwnerResolution, OwnerSource};
+use crate::core::ura::{parse_ura, user_ura, URAKind};
+use crate::daemon::persistence::config;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerFact {
@@ -32,6 +34,29 @@ pub struct OwnerResolutionInput {
 }
 
 pub struct OwnerResolver;
+
+/// Projects the locally paired device into the canonical accountable user.
+///
+/// This is the device's local identity source during the bootstrap window,
+/// before the trust anchor has materialized the same owner fact.  Keeping the
+/// projection here makes bootstrap authority and ordinary policy admission use
+/// the same owner-resolution model.
+#[must_use]
+pub(crate) fn local_device_owner_fact(ura: &str) -> Option<OwnerFact> {
+    let parsed = parse_ura(ura).ok()?;
+    if parsed.kind != URAKind::Device {
+        return None;
+    }
+    let credentials = config::load_credentials().ok()?;
+    if parsed.realm != credentials.realm || parsed.device_id()? != credentials.node_id.as_str() {
+        return None;
+    }
+    let owner_user_id = credentials.user_id().ok()?.to_string();
+    Some(OwnerFact::user(
+        owner_user_id.clone(),
+        user_ura(&credentials.realm, &owner_user_id),
+    ))
+}
 
 impl OwnerResolver {
     #[must_use]

@@ -161,6 +161,20 @@ fn discovery_hints_read_only_tracks_ability_layer() {
     // Introspection read → read_only + idempotent.
     let h = discovery_hints_for(&reg, "meta.list_resources");
     assert!(h.read_only && h.idempotent, "introspection read: {h:?}");
+    for name in [
+        "federation.resolve",
+        "federation.discover",
+        "federation.status",
+        "federation.resolve_key",
+        "namespace.resolve",
+        "identity.list_user_pubkeys",
+    ] {
+        let h = discovery_hints_for(&reg, name);
+        assert!(
+            h.read_only && h.idempotent,
+            "RFC-014 resolver read: {name}: {h:?}"
+        );
+    }
     // Observation read → read_only + idempotent.
     let h = discovery_hints_for(&reg, "observe.health");
     assert!(h.read_only && h.idempotent, "observation read: {h:?}");
@@ -437,6 +451,7 @@ fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         match dispatcher.execute_rpc(target) {
             Ok(_) => invoked_ok.push(name.clone()),

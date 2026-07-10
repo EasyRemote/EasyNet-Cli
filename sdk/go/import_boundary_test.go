@@ -1,7 +1,9 @@
 package easynet
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -135,6 +137,50 @@ func TestPublicGoSDKDoesNotAliasAxonBridgeTypes(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestTrackedGoSDKSourcesKeepKeyringPersistenceInRuntimeIdentityProvider(t *testing.T) {
+	root := gitRepositoryRoot(t)
+	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", "sdk/go/*.go")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("list tracked Go SDK sources: %v", err)
+	}
+	for _, rawPath := range bytes.Split(output, []byte{0}) {
+		if len(rawPath) == 0 {
+			continue
+		}
+		path := string(rawPath)
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if filepath.Base(path) == "runtime_identity.go" {
+			continue
+		}
+		for _, marker := range []string{
+			"keyring.enc",
+			"VaultCiphertextB64",
+			"PrivateKeySeedHex",
+			"argon2.IDKey(",
+		} {
+			if strings.Contains(string(body), marker) {
+				t.Fatalf("%s owns runtime keyring persistence marker %q; keep key custody in runtime_identity.go", path, marker)
+			}
+		}
+	}
+}
+
+func gitRepositoryRoot(t *testing.T) string {
+	t.Helper()
+	output, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func allowedTaggedDirectRuntimeProvider(path, text string) bool {

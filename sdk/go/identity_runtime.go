@@ -302,6 +302,7 @@ func identityRuntimeArgs(payload map[string]any, abilityName string) map[string]
 		}
 		putNonEmptyIdentityArg(args, "principal_owner_ura", firstIdentityString(payload, "principal_owner_ura"))
 		putNonEmptyIdentityArg(args, "principal_owner_user_id", firstIdentityString(payload, "principal_owner_user_id"))
+		putNonEmptyIdentityArg(args, "principal_owner_username", firstIdentityString(payload, "principal_owner_username"))
 		return args
 	case identityAbilityListUserPubkeys:
 		return map[string]any{

@@ -34,8 +34,6 @@ pub(crate) struct AbilityCatalogueRow {
     label: String,
     ability_ura: Option<String>,
     owner_ura: Option<String>,
-    version: Option<String>,
-    state: String,
 }
 
 impl AbilityCatalogueRow {
@@ -47,16 +45,10 @@ impl AbilityCatalogueRow {
             .or_else(|| string_field(value, "name"))
             .or_else(|| ability_ura.clone())
             .unwrap_or_else(|| "-".to_string());
-        let version =
-            string_field(value, "version").or_else(|| string_field(value, "ability_version"));
-        let state = string_field(value, "state").unwrap_or_else(|| "ACTIVE".to_string());
-
         Self {
             label,
             ability_ura,
             owner_ura,
-            version,
-            state,
         }
     }
 
@@ -70,14 +62,6 @@ impl AbilityCatalogueRow {
 
     pub(crate) fn owner_ura(&self) -> Option<&str> {
         self.owner_ura.as_deref()
-    }
-
-    pub(crate) fn version(&self) -> Option<&str> {
-        self.version.as_deref()
-    }
-
-    pub(crate) fn state(&self) -> &str {
-        &self.state
     }
 }
 

@@ -378,6 +378,7 @@ fn handle_chat_completions_with_handle(
         call_mode: CallMode::Rpc,
         subject: Some(target.owner_ura.clone()),
         causal_context: None,
+        request_metadata: std::collections::HashMap::new(),
     };
     let dispatch_result = registry
         .invoke_rpc_target_json(invocation_target)

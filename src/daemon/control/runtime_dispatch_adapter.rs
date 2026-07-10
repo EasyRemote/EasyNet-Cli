@@ -226,6 +226,7 @@ mod tests {
                     call_mode: plan.call_mode,
                     subject: plan.subject,
                     causal_context: None,
+                    request_metadata: std::collections::HashMap::new(),
                 },
             )
         }

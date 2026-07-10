@@ -256,22 +256,10 @@ pub(crate) fn sign_peer_request_envelope(
         ))
     })?;
 
-    // Hub identity is a fresh-random Ed25519 seed minted by
-    // backend's `LoadOrInitHubIdentity` at first boot and persisted
-    // to `${HOME}/.easynet-hub/<realm>/identity.json` (see backend
-    // `runtime/subject_context.go::backendIdentityRecord`). The
-    // pre-fix path used `derive_subject_keypair(realm,
-    // "easynet:prv:hub:{realm}")` — deterministically derived from
-    // SHA256(realm + subject_id) — which produced a DIFFERENT key
-    // than the trust-anchor entry (sourced from `identity.json`).
-    // Peer hubs verifying via `federation.resolve_key` saw a
-    // signature/key mismatch and rejected with
-    // `CALLER_SIGNATURE_INVALID:caller_signature_invalid`.
-    //
-    // Read the on-disk seed in production so the signing key
-    // matches the pubkey the trust anchor advertises. Tests stage
-    // an identity.json under their per-test HomeGuard root via
-    // `stage_test_hub_identity` so the same code path covers both.
+    // Hub signing material is the SDK keyring entry for HubURA(realm).
+    // Backend, daemon admission, and cross-hub forwarding therefore project
+    // the same runtime owner identity instead of reading product-local
+    // identity files.
     let hub_seed = match hub_signing_seed.copied() {
         Some(seed) => seed,
         None => read_hub_identity_seed(realm).map_err(|err| {
@@ -330,76 +318,17 @@ fn descriptor_subject_ura_for(
 /// Decode the base64-encoded inner envelope carried by
 /// `federation.forward_invoke`. Errors map to
 /// `Status::invalid_argument` with a useful message.
-/// Tests fall back to the deterministic
-/// `derive_subject_keypair(realm, "easynet:prv:hub:{realm}")`
-/// seed when the on-disk file is missing — this preserves the
-/// pre-fix wire shape for in-process unit tests that don't stage
-/// a `~/.easynet-hub/<realm>/identity.json` fixture, while
-/// production daemons (which always have the file, written by
-/// backend's first-boot bootstrap) take the real-seed path.
-/// The fallback is `cfg(test)`-gated so an accidentally-missing
-/// identity file in production fails loudly rather than silently
-/// substituting a key the peer hub will reject.
-/// Load the hub's Ed25519 signing seed for `realm` from the
-/// on-disk identity file backend's `LoadOrInitHubIdentity` writes
-/// at first boot. File shape mirrors backend
-/// `runtime/subject_context.go::backendIdentityRecord`:
-///
-/// ```json
-/// {
-///   "private_key_seed_hex": "<64-hex>",
-///   "agent_ura": "easynet:///r/<realm>/hub",
-///   "created_at_unix_ms": <int>
-/// }
-/// ```
-///
-/// Path: `${HOME}/.easynet-hub/<realm>/identity.json`. In
-/// production hub containers `HOME=/srv/easynet`, so the resolved
-/// path is `/srv/easynet/.easynet-hub/<realm>/identity.json`.
-///
-/// Returns the 32-byte seed. Errors propagate as `String` and the
-/// caller wraps them in `Status::internal`. This helper is only
-/// used by the cross-hub `federation.forward_invoke` signing path
-/// today; the seed is the same one the trust anchor's hub entry
-/// advertises as `public_key_b64`, so a peer's
-/// `federation.resolve_key` lookup → signature verify round trip
-/// closes cleanly.
+/// Load the Hub URA Ed25519 signing seed for `realm` from the canonical
+/// daemon keyring vault. Production has no fallback: a missing keyring entry
+/// means the runtime owner identity has not been provisioned correctly.
 pub(crate) fn read_hub_identity_seed(realm: &str) -> Result<[u8; 32], String> {
-    let home = std::env::var_os("HOME").ok_or_else(|| "HOME unset".to_string())?;
-    let path = std::path::Path::new(&home)
-        .join(".easynet-hub")
-        .join(realm)
-        .join("identity.json");
-    match std::fs::read_to_string(&path) {
-        Ok(raw) => {
-            #[derive(serde::Deserialize)]
-            struct HubIdentityRecord {
-                private_key_seed_hex: String,
-            }
-            let parsed: HubIdentityRecord = serde_json::from_str(&raw)
-                .map_err(|err| format!("parse {}: {err}", path.display()))?;
-            let seed_bytes = hex::decode(parsed.private_key_seed_hex.trim())
-                .map_err(|err| format!("decode hex from {}: {err}", path.display()))?;
-            if seed_bytes.len() != 32 {
-                return Err(format!(
-                    "{} private_key_seed_hex must decode to 32 bytes, got {}",
-                    path.display(),
-                    seed_bytes.len()
-                ));
-            }
-            let mut seed = [0u8; 32];
-            seed.copy_from_slice(&seed_bytes);
-            Ok(seed)
-        }
+    let hub_ura = crate::core::ura::hub_ura(realm);
+    match crate::daemon::keyring::export_seed_from_default_vault(&hub_ura) {
+        Ok(seed) => Ok(seed),
         Err(err) => {
             #[cfg(test)]
             {
                 let _ = err;
-                // Test fallback: deterministic derive matches the
-                // pre-fix wire shape so existing unit tests that
-                // don't stage an `identity.json` fixture stay
-                // green. Production never takes this path (see
-                // function-level docs).
                 let hub_subject_id = easynet_axon::invocation::private_hub_subject_id(realm);
                 let (seed, _pk_b64) = crate::daemon::federation::publish::derive_subject_keypair(
                     realm,
@@ -409,7 +338,7 @@ pub(crate) fn read_hub_identity_seed(realm: &str) -> Result<[u8; 32], String> {
             }
             #[cfg(not(test))]
             {
-                Err(format!("read {}: {err}", path.display()))
+                Err(format!("read Hub URA {hub_ura} from SDK keyring: {err}"))
             }
         }
     }

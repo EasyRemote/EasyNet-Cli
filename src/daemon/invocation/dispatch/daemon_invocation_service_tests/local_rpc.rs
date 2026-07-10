@@ -168,6 +168,16 @@ async fn dispatch_invoke_remote_routes_through_axon_runtime_when_ability_registe
         .with_session_realm("test-realm")
         .with_local_runtime(Arc::clone(&rt));
     publish_test_route(&svc, owner_ura, "chat");
+    grant_child_access_for_test(
+        "user-dev",
+        PrincipalKind::Token,
+        &crate::core::ura::hub_ura("test-realm"),
+        Some(TokenClass::HubLink),
+        owner_ura,
+        owner_ura,
+        &ability_ura,
+        AccessAction::Invoke,
+    );
 
     let selected_route = svc
         .target_gate()

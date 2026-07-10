@@ -174,6 +174,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura.clone()),
                 causal_context: Some(test_consent_causal_context()),
+                request_metadata: std::collections::HashMap::new(),
             };
             let created = dispatcher.execute_rpc(create_target).unwrap();
             let token = created["session_token"]
@@ -193,6 +194,7 @@ mod tests {
                 call_mode: CallMode::Bidi,
                 subject: Some(ura),
                 causal_context: Some(test_consent_causal_context()),
+                request_metadata: std::collections::HashMap::new(),
             };
             let mut bidi = dispatcher.execute_bidi(attach_target).unwrap();
             let first = tokio::time::timeout(Duration::from_secs(2), bidi.from_client.recv())
@@ -393,6 +395,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura),
                 causal_context: Some(test_consent_causal_context()),
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
         let token = created["session_token"].as_str().unwrap().to_string();
@@ -408,6 +411,7 @@ mod tests {
                 call_mode: CallMode::Bidi,
                 subject: Some(other_ura),
                 causal_context: Some(test_consent_causal_context()),
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap_err();
         assert!(err.to_string().contains("does not match session subject"));
@@ -436,6 +440,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura),
                 causal_context: Some(test_consent_causal_context()),
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
         let token = created["session_token"].as_str().unwrap().to_string();
@@ -451,6 +456,7 @@ mod tests {
                 call_mode: CallMode::Bidi,
                 subject: None,
                 causal_context: Some(test_consent_causal_context()),
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap_err();
         assert!(err.to_string().contains("envelope subject is required"));

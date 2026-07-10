@@ -224,6 +224,13 @@ pub struct TrustedPrincipalOwner {
     pub owner_user_id: String,
     /// Canonical owner user URA.
     pub owner_ura: String,
+    /// Authenticated routing alias used by public user-owned Agent URAs.
+    ///
+    /// Authorization never treats this alias as the owner id. It is retained
+    /// only so a hosted Agent such as `/agent/dev.eval` can be bound back to
+    /// the canonical UUID in `owner_user_id` without changing its public URA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_username: Option<String>,
     /// Timestamp the owner fact was written.
     pub added_at_unix_ms: u64,
 }
@@ -370,6 +377,33 @@ fn canonicalize_principal_owner(
         });
     }
     owner.owner_user_id = owner.owner_user_id.trim().to_string();
+    let owner_ura = crate::core::ura::parse_ura(&owner.owner_ura).map_err(|err| {
+        RealmTrustError::InvalidPrincipalOwner {
+            principal_ura: owner.principal_ura.clone(),
+            detail: format!("owner_ura parse failed after canonicalization: {err}"),
+        }
+    })?;
+    if owner_ura.user_id() != Some(owner.owner_user_id.as_str()) {
+        return Err(RealmTrustError::InvalidPrincipalOwner {
+            principal_ura: owner.principal_ura,
+            detail: "owner_ura user id must equal owner_user_id".to_string(),
+        });
+    }
+    owner.owner_username = match owner.owner_username {
+        Some(username) if username.trim().is_empty() => {
+            return Err(RealmTrustError::InvalidPrincipalOwner {
+                principal_ura: owner.principal_ura,
+                detail: "owner_username must not be empty when supplied".to_string(),
+            });
+        }
+        Some(username) if username.trim() != username => {
+            return Err(RealmTrustError::InvalidPrincipalOwner {
+                principal_ura: owner.principal_ura,
+                detail: "owner_username must not contain surrounding whitespace".to_string(),
+            });
+        }
+        value => value,
+    };
     Ok(owner)
 }
 
@@ -381,12 +415,13 @@ fn canonical_ura_for_runtime_principal(agent_ura: &str) -> Result<String, RealmT
         }
     })?;
     match parsed.kind {
-        crate::core::ura::URAKind::Device
+        crate::core::ura::URAKind::Agent
+        | crate::core::ura::URAKind::Device
         | crate::core::ura::URAKind::Hub
         | crate::core::ura::URAKind::User => Ok(agent_ura.to_string()),
         kind => Err(RealmTrustError::InvalidPrincipalOwner {
             principal_ura: agent_ura.to_string(),
-            detail: format!("expected device, hub, or user URA, got {kind:?}"),
+            detail: format!("expected agent, device, hub, or user URA, got {kind:?}"),
         }),
     }
 }
@@ -525,8 +560,25 @@ impl RealmTrustAnchor {
 
     fn upsert_principal_owner_canonicalized(
         &mut self,
-        owner: TrustedPrincipalOwner,
+        mut owner: TrustedPrincipalOwner,
     ) -> Result<(), RealmTrustError> {
+        if let Some(existing) = self.principal_owners.get(&owner.principal_ura) {
+            if existing.owner_user_id != owner.owner_user_id
+                || existing.owner_ura != owner.owner_ura
+                || matches!(
+                    (&existing.owner_username, &owner.owner_username),
+                    (Some(existing), Some(next)) if existing != next
+                )
+            {
+                return Err(RealmTrustError::PrincipalOwnerConflict {
+                    principal_ura: owner.principal_ura,
+                });
+            }
+            if owner.owner_username.is_none() {
+                owner.owner_username.clone_from(&existing.owner_username);
+            }
+            owner.added_at_unix_ms = existing.added_at_unix_ms;
+        }
         self.principal_owners
             .insert(owner.principal_ura.clone(), owner);
         Ok(())
@@ -988,6 +1040,11 @@ pub enum RealmTrustError {
         principal_ura: String,
         detail: String,
     },
+
+    #[error(
+        "trusted principal owner `{principal_ura}` conflicts with the existing canonical owner binding"
+    )]
+    PrincipalOwnerConflict { principal_ura: String },
 
     #[error("failed to write realm trust anchor at {path}: {source}")]
     WriteFailed {

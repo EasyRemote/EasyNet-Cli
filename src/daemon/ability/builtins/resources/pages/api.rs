@@ -241,6 +241,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                 call_mode: CallMode::Rpc,
                 subject: Some(selector.owner_ura().to_string()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             };
             let result = registry.invoke_rpc_target_json(target).map_err(|e| {
                 anyhow::anyhow!(

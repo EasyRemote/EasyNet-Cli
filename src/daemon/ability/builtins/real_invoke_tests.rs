@@ -181,7 +181,46 @@ fn target(name: &str, args: Value) -> InvocationTarget {
         // attach one when exercising INV-SUBJECT-ENVELOPE paths.
         subject: None,
         causal_context: None,
+        request_metadata: std::collections::HashMap::new(),
     }
+}
+
+fn terminal_followup_target(
+    name: &str,
+    args: Value,
+    session_id: &str,
+    action: &str,
+) -> InvocationTarget {
+    use base64::Engine;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_millis() as i64;
+    let callee = crate::daemon::identity::local_invocation::local_device_ura();
+    let payload = json!({
+        "issuer_ura": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        "session_id": session_id,
+        "session_owner_user_id": "real-invoke-test-user",
+        "creator_principal_id": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        "callee_ura": callee,
+        "subject_ura": format!("easynet:///r/default/session/{session_id}"),
+        "audience": callee,
+        "scopes": [name],
+        "allowed_actions": [action],
+        "allowed_followup_abilities": [name],
+        "issued_at_ms": now_ms - 1_000,
+        "expires_at_ms": now_ms + 300_000,
+    });
+    let wire = json!({"payload": payload, "signature": "test-session-authority"});
+    let encoded = base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(&wire).expect("session authority wire"));
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(
+        crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY
+            .to_string(),
+        encoded,
+    );
+    target(name, args).with_request_metadata(metadata)
 }
 
 // Borrowed receipt-URA shape (ledger.rs test convention) — no
@@ -2451,7 +2490,12 @@ fn real_device_terminal_create_then_close_round_trip() {
     );
 
     let close = d
-        .execute_rpc(target("terminal.close", json!({"session_id": session_id})))
+        .execute_rpc(terminal_followup_target(
+            "terminal.close",
+            json!({"session_id": session_id}),
+            &session_id,
+            "manage",
+        ))
         .expect("pty_session_close");
     assert_eq!(close["ack"], json!(true));
 }
@@ -2483,9 +2527,11 @@ fn real_device_terminal_input_read_resize_round_trip() {
     // terminal.resize — exercise it before any I/O so
     // the shell starts at the requested geometry.
     let resize = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
+            &sid,
+            "stream",
         ))
         .expect("pty_session_resize");
     assert_eq!(resize["ack"], json!(true));
@@ -2496,9 +2542,11 @@ fn real_device_terminal_input_read_resize_round_trip() {
     let input_b64 =
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_REAL_PTY_OK\\n'\n");
     let input = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
+            &sid,
+            "stream",
         ))
         .expect("pty_session_input");
     assert_eq!(input["ack"], json!(true));
@@ -2510,9 +2558,11 @@ fn real_device_terminal_input_read_resize_round_trip() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_REAL_PTY_OK") {
         let resp = d
-            .execute_rpc(target(
+            .execute_rpc(terminal_followup_target(
                 "terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
+                &sid,
+                "stream",
             ))
             .expect("pty_session_read");
         if let Some(b64) = resp["output"].as_str() {
@@ -2530,7 +2580,12 @@ fn real_device_terminal_input_read_resize_round_trip() {
     );
 
     // Cleanup.
-    let _ = d.execute_rpc(target("terminal.close", json!({"session_id": sid})));
+    let _ = d.execute_rpc(terminal_followup_target(
+        "terminal.close",
+        json!({"session_id": sid}),
+        &sid,
+        "manage",
+    ));
 }
 
 // pty_session_attach spawns three tokio tasks (reader / writer /
@@ -2550,12 +2605,22 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
         .expect("pty_session_create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
-    let mut t = target("terminal.attach", json!({"session_id": sid.clone()}));
+    let mut t = terminal_followup_target(
+        "terminal.attach",
+        json!({"session_id": sid.clone()}),
+        &sid,
+        "stream",
+    );
     t.call_mode = CallMode::Bidi;
     let _bidi = d.execute_bidi(t).expect("pty_session_attach bidi");
 
     // Cleanup.
-    let _ = d.execute_rpc(target("terminal.close", json!({"session_id": sid})));
+    let _ = d.execute_rpc(terminal_followup_target(
+        "terminal.close",
+        json!({"session_id": sid}),
+        &sid,
+        "manage",
+    ));
 }
 
 // fs.transfer is a bidi ability — open it with mode=upload
@@ -3282,7 +3347,12 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     assert!(!session_id.is_empty());
 
     let close = d
-        .execute_rpc(target("terminal.close", json!({"session_id": session_id})))
+        .execute_rpc(terminal_followup_target(
+            "terminal.close",
+            json!({"session_id": session_id}),
+            &session_id,
+            "manage",
+        ))
         .expect("terminal.close");
     assert_eq!(close["ack"], json!(true));
 }
@@ -3306,9 +3376,11 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let sid = create["session_id"].as_str().unwrap().to_string();
 
     let resize = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
+            &sid,
+            "stream",
         ))
         .expect("terminal.resize");
     assert_eq!(resize["ack"], json!(true));
@@ -3317,9 +3389,11 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let input_b64 =
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_V2_PTY_OK\\n'\n");
     let input = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
+            &sid,
+            "stream",
         ))
         .expect("terminal.input");
     assert_eq!(input["ack"], json!(true));
@@ -3328,9 +3402,11 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_V2_PTY_OK") {
         let resp = d
-            .execute_rpc(target(
+            .execute_rpc(terminal_followup_target(
                 "terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
+                &sid,
+                "stream",
             ))
             .expect("terminal.read");
         if let Some(b64) = resp["output"].as_str() {
@@ -3360,7 +3436,7 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     let mut reg = AxonAbilityCatalog::new();
     pty_attach_ability::register(&mut reg, pty);
     assert!(
-        reg.get_bidi("terminal.attach").is_some(),
+        reg.resolve_bidi_with_env("terminal.attach").is_some(),
         "terminal.attach (v2 alias) must be registered as bidi"
     );
 }

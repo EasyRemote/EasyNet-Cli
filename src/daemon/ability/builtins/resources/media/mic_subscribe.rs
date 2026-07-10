@@ -559,6 +559,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: Some(ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let src = dispatcher.execute_stream(target).unwrap();
         let frame = match src {
@@ -630,6 +631,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: Some(cam_ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH));
@@ -648,6 +650,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: Some("easynet:///r/acme/resource/01MIC".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_IN_ARGS));
@@ -671,6 +674,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: Some("easynet:///r/acme/resource/01MIC".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
 
         let err = dispatcher.execute_stream(target).unwrap_err();

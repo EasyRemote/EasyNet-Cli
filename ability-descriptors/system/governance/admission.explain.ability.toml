@@ -7,29 +7,17 @@ type = "object"
 required = ["observer_ura"]
 additionalProperties = false
 
-[input_schema.properties.authority_reason]
+[input_schema.properties.invocation_id]
 type = "string"
 
 [input_schema.properties.observer_ura]
 type = "string"
 
-[input_schema.properties.policy_decision]
-type = "object"
-
-[input_schema.properties.redacted]
-type = "boolean"
-
-[input_schema.properties.redaction_reason]
+[input_schema.properties.request_id]
 type = "string"
 
-[input_schema.properties.rejector_ura]
+[input_schema.properties.root_id]
 type = "string"
 
-[input_schema.properties.root_trace]
-type = "object"
-
-[input_schema.properties.route_ref]
+[input_schema.properties.trace_id]
 type = "string"
-
-[input_schema.properties.signature_decision]
-type = "object"

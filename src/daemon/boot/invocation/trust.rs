@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
-use serde::Deserialize;
 
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::persistence::daemon_config::DaemonConfig;
@@ -47,43 +46,21 @@ pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct BackendIdentityRecord {
-    pub private_key_seed_hex: String,
-    #[serde(default)]
-    pub agent_ura: String,
-    #[serde(default, rename = "created_at_unix_ms")]
-    pub _created_at_unix_ms: Option<u64>,
-}
-
-pub(super) fn upsert_backend_identity_from_disk(
+pub(super) fn upsert_hub_identity_from_keyring(
     realm: &str,
     trust_anchor_path: &Path,
     mut anchor: RealmTrustAnchor,
 ) -> RealmTrustAnchor {
-    let Some(record) = read_backend_identity_record(realm) else {
-        return anchor;
-    };
     let expected_ura = crate::core::ura::hub_ura(realm);
-    if !record.agent_ura.trim().is_empty() && record.agent_ura != expected_ura {
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = backend_identity_trust_upsert_skipped,
-            expected_ura = expected_ura,
-            actual_ura = record.agent_ura,
-            message = "backend identity file does not match daemon realm",
-        );
-        return anchor;
-    }
-    let seed = match decode_backend_identity_seed(&record.private_key_seed_hex) {
+    let seed = match crate::daemon::keyring::export_seed_from_default_vault(&expected_ura) {
         Ok(seed) => seed,
         Err(err) => {
             crate::op_event!(
                 component = daemon_invocation,
                 kind = backend_identity_trust_upsert_failed,
-                error = err,
-                message = "backend identity seed is not usable",
+                agent_ura = expected_ura,
+                error = format!("{err}"),
+                message = "Hub runtime identity is not available in the SDK keyring",
             );
             return anchor;
         }
@@ -92,7 +69,7 @@ pub(super) fn upsert_backend_identity_from_disk(
     let entry = TrustedAgent {
         agent_ura: expected_ura.clone(),
         public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
-        role: TrustedAgentRole::Backend,
+        role: TrustedAgentRole::Hub,
         added_at_unix_ms: now_unix_ms(),
         origin_realm: None,
         hub_endpoint: None,
@@ -121,53 +98,10 @@ pub(super) fn upsert_backend_identity_from_disk(
             kind = backend_identity_trust_upserted,
             path = format!("{}", trust_anchor_path.display()),
             agent_ura = expected_ura,
-            message = "backend identity public key is present in trust anchor",
+            message = "Hub runtime identity public key is present in trust anchor",
         );
     }
     anchor
-}
-
-pub(super) fn read_backend_identity_record(realm: &str) -> Option<BackendIdentityRecord> {
-    let home = std::env::var_os("HOME")?;
-    let path = Path::new(&home)
-        .join(".easynet-hub")
-        .join(realm)
-        .join("identity.json");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(err) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = backend_identity_trust_upsert_failed,
-                path = format!("{}", path.display()),
-                error = format!("{err}"),
-                message = "failed to read backend identity file",
-            );
-            return None;
-        }
-    };
-    match serde_json::from_str(&raw) {
-        Ok(record) => Some(record),
-        Err(err) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = backend_identity_trust_upsert_failed,
-                path = format!("{}", path.display()),
-                error = format!("{err}"),
-                message = "failed to parse backend identity file",
-            );
-            None
-        }
-    }
-}
-
-fn decode_backend_identity_seed(raw: &str) -> Result<[u8; 32], String> {
-    let bytes = hex::decode(raw.trim()).map_err(|err| format!("seed hex decode failed: {err}"))?;
-    bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| format!("seed must decode to 32 bytes, got {}", bytes.len()))
 }
 
 fn now_unix_ms() -> u64 {

@@ -13,6 +13,10 @@ pub const ADVERTISE_AGENT: &str =
 pub const ADVERTISE_ABILITIES: &str =
     crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES;
 pub const HEARTBEAT: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_HEARTBEAT;
+pub const RESOLVE: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE;
+pub const DISCOVER: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_DISCOVER;
+pub const STATUS: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_STATUS;
+pub const NAMESPACE_RESOLVE: &str = crate::daemon::ability::conformance::ABILITY_NAMESPACE_RESOLVE;
 pub const RESOLVE_KEY: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY;
 pub const REVOKE: &str = "federation.revoke";
 

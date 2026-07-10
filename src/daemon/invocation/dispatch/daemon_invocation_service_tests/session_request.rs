@@ -2,6 +2,53 @@ use super::*;
 
 // ── PR-N6 C3 — dispatch_session_request hub-side handler ────────
 
+fn make_hosted_publication_service() -> (tempfile::TempDir, DaemonInvocationService) {
+    let dir = tempfile::tempdir().expect("runtime trust tempdir");
+    let anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+        Vec::new(),
+        vec![crate::daemon::trust::anchor::TrustedPrincipalOwner {
+            principal_ura: TEST_DAEMON_URA.to_string(),
+            owner_user_id: "user-1".to_string(),
+            owner_ura: "easynet:///r/test-realm/user/user-1".to_string(),
+            owner_username: Some("dev".to_string()),
+            added_at_unix_ms: 1,
+        }],
+        Vec::new(),
+    )
+    .expect("host owner anchor");
+    let cell = crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(anchor));
+    let admission = AdmissionFacade::with_trust_anchor_cell(
+        cell.clone(),
+        Some("easynet:///r/test-realm/hub".to_string()),
+    );
+    let service = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
+        .with_register_pubkey("test-realm", dir.path().join("realm-trust.toml"), cell)
+        .with_session_realm("test-realm")
+        .with_hub_signing_seed([0x11; 32]);
+    (dir, service)
+}
+
+async fn advertise_test_hosted_agent(svc: &DaemonInvocationService, agent_ura: &str) {
+    let args = serde_json::to_vec(&serde_json::json!({
+        "agent_ura": agent_ura,
+        "signing_authority": {
+            "kind": "hosted_by",
+            "host_ura": TEST_DAEMON_URA,
+        },
+        "host_node_id": "test-daemon",
+    }))
+    .expect("advertise args encode");
+    let outcome = svc
+        .bidi_dispatcher()
+        .dispatch_session_request_from_session(
+            TEST_DAEMON_URA,
+            &session_request_ability_ura("test-realm", ABILITY_FEDERATION_ADVERTISE_AGENT),
+            &args,
+        )
+        .await;
+    assert!(matches!(outcome, RequestOutcome::Ok { .. }), "{outcome:?}");
+}
+
 #[tokio::test]
 async fn dispatch_session_request_forward_invoke_target_offline_when_presence_empty() {
     // Hub-side handler routes the inbound `Request` through
@@ -45,7 +92,7 @@ async fn dispatch_session_request_advertise_agent_updates_store() {
     // wrapper as unary Invoke; otherwise agent add succeeds
     // locally while chat / skill / history still fail with
     // "agent is not advertised on this hub".
-    let svc = make_service().with_session_realm("test-realm");
+    let (_dir, svc) = make_hosted_publication_service();
     let agent_ura = "easynet:///r/test-realm/agent/dev.anthropic";
     let args = serde_json::to_vec(&serde_json::json!({
         "agent_ura": agent_ura,
@@ -59,7 +106,8 @@ async fn dispatch_session_request_advertise_agent_updates_store() {
 
     let outcome = svc
         .bidi_dispatcher()
-        .dispatch_session_request(
+        .dispatch_session_request_from_session(
+            TEST_DAEMON_URA,
             &session_request_ability_ura("test-realm", ABILITY_FEDERATION_ADVERTISE_AGENT),
             &args,
         )
@@ -92,20 +140,25 @@ async fn dispatch_session_request_routes_advertise_abilities() {
     // existed the identity advertise above landed but the abilities
     // frame bounced with PermissionDenied — the hub showed the
     // agent with zero abilities until a stop/start republish.
-    let svc = make_service().with_session_realm("test-realm");
-    let args = serde_json::to_vec(&serde_json::json!({
-        "owner_ura": "easynet:///r/test-realm/agent/dev.anthropic",
-        "host_device_ura": "easynet:///r/test-realm/device/test-daemon",
-        "projection_revision": 1,
-        "projection_digest": "digest-1",
-        "lease_expires_unix_ms": 0,
-        "ability_summaries": [],
-    }))
-    .expect("advertise_abilities args encode");
+    let (_dir, svc) = make_hosted_publication_service();
+    let agent_ura = "easynet:///r/test-realm/agent/dev.anthropic";
+    advertise_test_hosted_agent(&svc, agent_ura).await;
+    let mut publication =
+        crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication {
+            owner_ura: agent_ura.to_string(),
+            host_device_ura: TEST_DAEMON_URA.to_string(),
+            projection_revision: 1,
+            projection_digest: String::new(),
+            lease_expires_unix_ms: 0,
+            ability_summaries: Vec::new(),
+        };
+    publication.projection_digest = publication.canonical_digest();
+    let args = serde_json::to_vec(&publication).expect("advertise_abilities args encode");
 
     let outcome = svc
         .bidi_dispatcher()
-        .dispatch_session_request(
+        .dispatch_session_request_from_session(
+            TEST_DAEMON_URA,
             &session_request_ability_ura("test-realm", ABILITY_FEDERATION_ADVERTISE_ABILITIES),
             &args,
         )

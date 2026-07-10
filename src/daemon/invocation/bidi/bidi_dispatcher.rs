@@ -2162,8 +2162,29 @@ impl BidiDispatcher {
     /// the bidi was established with a signed Bootstrap frame, so
     /// the hub trusts the originating device on every Request frame
     /// — no per-Request signature verify happens here.
+    #[cfg(test)]
     pub(crate) async fn dispatch_session_request(
         &self,
+        ability_ura: &str,
+        args: &[u8],
+    ) -> RequestOutcome {
+        self.dispatch_session_request_for_caller(None, ability_ura, args)
+            .await
+    }
+
+    pub(crate) async fn dispatch_session_request_from_session(
+        &self,
+        caller_device_ura: &str,
+        ability_ura: &str,
+        args: &[u8],
+    ) -> RequestOutcome {
+        self.dispatch_session_request_for_caller(Some(caller_device_ura), ability_ura, args)
+            .await
+    }
+
+    async fn dispatch_session_request_for_caller(
+        &self,
+        caller_device_ura: Option<&str>,
         ability_ura: &str,
         args: &[u8],
     ) -> RequestOutcome {
@@ -2175,7 +2196,8 @@ impl BidiDispatcher {
                 }
             }
         };
-        self.dispatch_session_request_named(&ability, args).await
+        self.dispatch_session_request_named_for_caller(caller_device_ura, &ability, args)
+            .await
     }
 
     fn is_inline_session_request(&self, ability_ura: &str) -> bool {
@@ -2188,6 +2210,7 @@ impl BidiDispatcher {
 
     async fn dispatch_checked_session_request(
         &self,
+        caller_device_ura: &str,
         ability_ura: &str,
         args: &[u8],
         args_content_envelope: &SessionContentEnvelope,
@@ -2226,7 +2249,8 @@ impl BidiDispatcher {
                 },
             }
         } else {
-            self.dispatch_session_request(ability_ura, args).await
+            self.dispatch_session_request_from_session(caller_device_ura, ability_ura, args)
+                .await
         }
     }
 
@@ -2235,8 +2259,29 @@ impl BidiDispatcher {
     /// public-name projection of the JSON path is unnecessary. The
     /// dispatch match below is itself the hub's public-ability
     /// whitelist (unknown names return PermissionDenied).
+    #[cfg(test)]
     pub(crate) async fn dispatch_session_request_named(
         &self,
+        ability: &str,
+        args: &[u8],
+    ) -> RequestOutcome {
+        self.dispatch_session_request_named_for_caller(None, ability, args)
+            .await
+    }
+
+    async fn dispatch_session_request_named_from_session(
+        &self,
+        caller_device_ura: &str,
+        ability: &str,
+        args: &[u8],
+    ) -> RequestOutcome {
+        self.dispatch_session_request_named_for_caller(Some(caller_device_ura), ability, args)
+            .await
+    }
+
+    async fn dispatch_session_request_named_for_caller(
+        &self,
+        caller_device_ura: Option<&str>,
         ability: &str,
         args: &[u8],
     ) -> RequestOutcome {
@@ -2259,7 +2304,15 @@ impl BidiDispatcher {
                 }
             }
             ABILITY_FEDERATION_ADVERTISE_AGENT => {
-                match self.unary.dispatch_federation_advertise_agent(args) {
+                let result = match caller_device_ura {
+                    Some(caller_device_ura) => self
+                        .unary
+                        .dispatch_federation_advertise_agent_from_session(args, caller_device_ura),
+                    None => Err(Status::failed_precondition(
+                        "federation.advertise_agent: admitted session caller is required",
+                    )),
+                };
+                match result {
                     Ok(response) => {
                         let body = response.into_inner();
                         RequestOutcome::Ok {
@@ -2277,7 +2330,18 @@ impl BidiDispatcher {
             // until a stop/start republish. Routes to the same handler
             // the unary Invoke path uses.
             ABILITY_FEDERATION_ADVERTISE_ABILITIES => {
-                match self.unary.dispatch_federation_advertise_abilities(args) {
+                let result = match caller_device_ura {
+                    Some(caller_device_ura) => self
+                        .unary
+                        .dispatch_federation_advertise_abilities_from_session(
+                            args,
+                            caller_device_ura,
+                        ),
+                    None => Err(Status::failed_precondition(
+                        "federation.advertise_abilities: admitted session caller is required",
+                    )),
+                };
+                match result {
                     Ok(response) => {
                         let body = response.into_inner();
                         RequestOutcome::Ok {
@@ -2909,7 +2973,8 @@ async fn drain_session_up_stream(
                         }
                     } else {
                         dispatcher_for_request
-                            .dispatch_session_request_named(
+                            .dispatch_session_request_named_from_session(
+                                &caller_ura_for_reply,
                                 &request.function_name,
                                 &request.arguments,
                             )
@@ -3069,6 +3134,7 @@ async fn drain_session_up_stream(
                     );
                     let outcome = dispatcher_for_request
                         .dispatch_checked_session_request(
+                            &caller_ura_for_reply,
                             &ability_ura,
                             &args,
                             &args_content_envelope,
@@ -3090,6 +3156,7 @@ async fn drain_session_up_stream(
                     tokio::spawn(async move {
                         let outcome = dispatcher_for_request
                             .dispatch_checked_session_request(
+                                &caller_ura_for_reply,
                                 &ability_ura,
                                 &args,
                                 &args_content_envelope,

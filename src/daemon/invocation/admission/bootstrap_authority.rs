@@ -5,6 +5,7 @@
 // verified-authority input consumed by PolicyEngine. It deliberately does not
 // mutate read models and does not bypass signature admission.
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use sha2::{Digest as _, Sha256};
 
 use easynet_axon::pb::axon::v1::Envelope;
@@ -12,10 +13,13 @@ use easynet_axon::pb::axon::v1::Envelope;
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::ability::names::device_control;
 use crate::daemon::invocation::admission::decision::AccessAction;
+use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
+use crate::daemon::invocation::admission::owner_resolution::{local_device_owner_fact, OwnerFact};
+use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
-    AdvertiseAbilitiesRequest, HeartbeatRequest, JoinRequest,
-    ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
-    ABILITY_FEDERATION_RESOLVE_KEY,
+    AdvertiseAbilitiesRequest, AdvertiseAgentRequest, HeartbeatRequest, JoinRequest,
+    ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
+    ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE_KEY,
 };
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use easynet_axon::ResolveKeyRequest;
@@ -74,18 +78,50 @@ impl BootstrapAuthorityVerifier {
             return BootstrapAuthorityDecision::NotApplicable;
         }
 
-        let Some(owner) = trust_anchor.lookup_principal_owner(caller_ura) else {
+        let owner = trust_anchor
+            .lookup_principal_owner(caller_ura)
+            .map(|owner| OwnerFact::user(owner.owner_user_id.clone(), owner.owner_ura.clone()))
+            .or_else(|| local_device_owner_fact(caller_ura));
+        let Some(owner) = owner else {
             return BootstrapAuthorityDecision::NotApplicable;
         };
-        if owner.owner_user_id.trim().is_empty() || owner.owner_ura.trim().is_empty() {
+        let Some(owner_user_id) = owner
+            .owner_user_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
             return BootstrapAuthorityDecision::NotApplicable;
-        }
+        };
+        let Some(owner_ura) = owner
+            .owner_ura
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return BootstrapAuthorityDecision::NotApplicable;
+        };
 
         match (ability, action) {
             (device_control::SESSION_OPEN, AccessAction::Stream) => {
                 if callee_ura != caller_ura || subject_ura != caller_ura {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
+            }
+            (ABILITY_FEDERATION_ADVERTISE_AGENT, AccessAction::Manage) => {
+                let Ok(request) = serde_json::from_slice::<AdvertiseAgentRequest>(args) else {
+                    return BootstrapAuthorityDecision::NotApplicable;
+                };
+                let Ok(publication) =
+                    HostedAgentPublication::verify(envelope, &request, trust_anchor, daemon_ura)
+                else {
+                    return BootstrapAuthorityDecision::NotApplicable;
+                };
+                return BootstrapAuthorityDecision::Verified {
+                    authority_id: bootstrap_authority_id(
+                        publication.caller_device_ura(),
+                        ability,
+                        publication.owner_user_id(),
+                    ),
+                };
             }
             (_, AccessAction::Manage) if subject_ura == caller_ura => {
                 if !callee_is_selected_hub(callee_ura, caller_ura, daemon_ura) {
@@ -95,11 +131,19 @@ impl BootstrapAuthorityVerifier {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
             }
-            (ABILITY_FEDERATION_RESOLVE_KEY, AccessAction::Invoke) => {
+            (ABILITY_FEDERATION_RESOLVE_KEY, AccessAction::Read) => {
                 if !callee_is_selected_hub(callee_ura, caller_ura, daemon_ura) {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
-                if verify_bootstrap_resolve_key(args, callee_ura, &owner.owner_ura).is_none() {
+                if verify_bootstrap_resolve_key(args, callee_ura, owner_ura).is_none() {
+                    return BootstrapAuthorityDecision::NotApplicable;
+                }
+            }
+            (ABILITY_IDENTITY_REGISTER_PUBKEY, AccessAction::Manage) => {
+                if !callee_is_selected_hub(callee_ura, caller_ura, daemon_ura) {
+                    return BootstrapAuthorityDecision::NotApplicable;
+                }
+                if verify_bootstrap_owner_user_key(args, owner_ura).is_none() {
                     return BootstrapAuthorityDecision::NotApplicable;
                 }
             }
@@ -107,7 +151,7 @@ impl BootstrapAuthorityVerifier {
         }
 
         BootstrapAuthorityDecision::Verified {
-            authority_id: bootstrap_authority_id(caller_ura, ability, &owner.owner_user_id),
+            authority_id: bootstrap_authority_id(caller_ura, ability, owner_user_id),
         }
     }
 }
@@ -120,7 +164,7 @@ fn verify_hub_link_authority(
     args: &[u8],
     daemon_ura: Option<&str>,
 ) -> BootstrapAuthorityDecision {
-    if ability != ABILITY_FEDERATION_RESOLVE_KEY || action != AccessAction::Invoke {
+    if ability != ABILITY_FEDERATION_RESOLVE_KEY || action != AccessAction::Read {
         return BootstrapAuthorityDecision::NotApplicable;
     }
     if !is_hub_ura(caller_ura) || !callee_is_current_hub(callee_ura, daemon_ura) {
@@ -180,6 +224,25 @@ fn verify_bootstrap_resolve_key(args: &[u8], hub_ura: &str, owner_ura: &str) -> 
         return Some(());
     }
     None
+}
+
+/// Pairing bootstrap may seed exactly the paired owner's user signing key at
+/// the selected hub. It is intentionally narrower than general identity
+/// mutation: a device cannot author another user, a device key, or a hub key.
+fn verify_bootstrap_owner_user_key(args: &[u8], owner_ura: &str) -> Option<()> {
+    #[derive(serde::Deserialize)]
+    struct UserKeyRegistration {
+        agent_ura: String,
+        public_key_b64: String,
+        role: String,
+    }
+
+    let request = serde_json::from_slice::<UserKeyRegistration>(args).ok()?;
+    if request.role.trim() != "user" || request.agent_ura.trim() != owner_ura {
+        return None;
+    }
+    let public_key = BASE64_STANDARD.decode(request.public_key_b64.trim()).ok()?;
+    (public_key.len() == 32).then_some(())
 }
 
 fn verify_hub_link_resolve_key(args: &[u8], hub_ura: &str) -> Option<()> {
@@ -289,6 +352,7 @@ mod tests {
                 principal_ura: "easynet:///r/test/device/dev-1".to_string(),
                 owner_user_id: "alice".to_string(),
                 owner_ura: "easynet:///r/test/user/alice".to_string(),
+                owner_username: Some("alice".to_string()),
                 added_at_unix_ms: 1,
             }],
             Vec::new(),
@@ -486,7 +550,7 @@ mod tests {
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
-            AccessAction::Invoke,
+            AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Device,
@@ -515,7 +579,7 @@ mod tests {
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
-            AccessAction::Invoke,
+            AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Device,
@@ -523,6 +587,57 @@ mod tests {
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn paired_device_can_seed_only_its_owner_user_key_during_bootstrap() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[0x11; 32]);
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/alice",
+            "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            "role": "user",
+        }))
+        .expect("args");
+        let subject = crate::core::ura::owner_ability_ura(
+            "easynet:///r/test/hub",
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+        )
+        .expect("subject");
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/hub",
+                &subject,
+            ),
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+            AccessAction::Manage,
+            &args,
+            &anchor(),
+            TrustedAgentRole::Device,
+            Some("easynet:///r/test/hub"),
+        );
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+
+        let other_args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/user/bob",
+            "public_key_b64": BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
+            "role": "user",
+        }))
+        .expect("args");
+        let rejected = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/hub",
+                &subject,
+            ),
+            ABILITY_IDENTITY_REGISTER_PUBKEY,
+            AccessAction::Manage,
+            &other_args,
+            &anchor(),
+            TrustedAgentRole::Device,
+            Some("easynet:///r/test/hub"),
+        );
+        assert_eq!(rejected, BootstrapAuthorityDecision::NotApplicable);
     }
 
     #[test]
@@ -544,7 +659,7 @@ mod tests {
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
-            AccessAction::Invoke,
+            AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Device,
@@ -569,7 +684,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
             ABILITY_FEDERATION_RESOLVE_KEY,
-            AccessAction::Invoke,
+            AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Hub,
@@ -594,7 +709,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
             ABILITY_FEDERATION_RESOLVE_KEY,
-            AccessAction::Invoke,
+            AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Hub,
@@ -619,7 +734,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
             ABILITY_FEDERATION_RESOLVE_KEY,
-            AccessAction::Invoke,
+            AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Hub,

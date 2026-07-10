@@ -33,6 +33,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::HashMap;
+
 use crate::core::domain::NodeId;
 use serde_json::Value;
 
@@ -177,6 +179,9 @@ pub struct InvocationTarget {
     /// the invocation to a prior receipt. This is how local callers represent
     /// product consent receipts without smuggling protocol state through args.
     pub causal_context: Option<easynet_axon::invocation::CausalContext>,
+    /// Transport metadata admitted before local dispatch. Authority semantics
+    /// remain owned by the admission layer; this field is only the carrier.
+    pub request_metadata: HashMap<String, String>,
 }
 
 impl InvocationTarget {
@@ -196,6 +201,11 @@ impl InvocationTarget {
         causal_context: easynet_axon::invocation::CausalContext,
     ) -> Self {
         self.causal_context = Some(causal_context);
+        self
+    }
+
+    pub fn with_request_metadata(mut self, request_metadata: HashMap<String, String>) -> Self {
+        self.request_metadata = request_metadata;
         self
     }
 }
@@ -270,6 +280,7 @@ impl TargetResolver for LocalNodeResolver {
             call_mode: plan.call_mode,
             subject: plan.subject,
             causal_context: None,
+            request_metadata: HashMap::new(),
         })
     }
 }
@@ -398,6 +409,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: HashMap::new(),
         };
         let with = t.with_subject("easynet:///r/acme/resource/01CAM");
         assert_eq!(

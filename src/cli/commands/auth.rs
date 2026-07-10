@@ -37,7 +37,6 @@ use clap::Args;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
 use crate::core::ura;
 use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentity, SelfIdentityError};
 use crate::daemon::persistence::config::{
@@ -55,6 +54,11 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct AuthSession {
     /// JWT access token. Bearer-prefixed when sent.
     pub token: String,
+    /// Refresh token returned by the backend. Keeping the refresh credential
+    /// with the access credential lets every CLI HTTP operation use the same
+    /// authenticated session instead of failing after the access JWT expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
     /// Hub HTTP URL the token was minted against. Defaults to
     /// `http://127.0.0.1:8080` when login is run with no `--hub`.
     pub hub_url: String,
@@ -114,6 +118,74 @@ fn clear_session() -> anyhow::Result<()> {
     }
 }
 
+fn authenticated_session() -> anyhow::Result<AuthSession> {
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
+    if let Ok(credentials) = config::load_credentials() {
+        if let (Some(session_user_id), Ok(device_user_id)) =
+            (session.user_id.as_deref(), credentials.user_id())
+        {
+            if session_user_id != device_user_id {
+                bail!(
+                    "authenticated user {session_user_id} does not own paired device {} (owner {device_user_id}); log in as the paired owner or rejoin the device",
+                    credentials.node_id
+                );
+            }
+        }
+    }
+    Ok(session)
+}
+
+fn refresh_session(session: &mut AuthSession) -> anyhow::Result<()> {
+    let refresh_token = session
+        .refresh_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| anyhow!("access token expired and no refresh token is stored; run 'easynet auth login <email>'"))?;
+    let url = format!("{}/api/v1/auth/refresh", session.hub_url);
+    let auth: AuthResp =
+        http_post_json(&url, &serde_json::json!({"refresh_token": refresh_token}))?;
+    session.token = auth.token;
+    if auth.refresh_token.is_some() {
+        session.refresh_token = auth.refresh_token;
+    }
+    save_session(session)
+}
+
+fn auth_post_json<T: for<'de> Deserialize<'de>>(
+    path: &str,
+    body: &serde_json::Value,
+    timeout: Duration,
+) -> anyhow::Result<T> {
+    let mut session = authenticated_session()?;
+    let url = format!("{}{}", session.hub_url, path);
+    let mut refreshed = false;
+    loop {
+        let result = ureq::post(&url)
+            .timeout(timeout)
+            .set("Authorization", &format!("Bearer {}", session.token))
+            .set("Content-Type", "application/json")
+            .send_json(body.clone());
+        match result {
+            Ok(response) => return response.into_json().context("parse response JSON"),
+            Err(ureq::Error::Status(401, response)) if !refreshed => {
+                let _ = response.into_string();
+                refresh_session(&mut session)?;
+                refreshed = true;
+            }
+            Err(ureq::Error::Status(401, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP 401 from {url}: token expired or invalid: {body}");
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP {code} from {url}: {body}");
+            }
+            Err(ureq::Error::Transport(error)) => bail!("transport to {url}: {error}"),
+        }
+    }
+}
+
 // ── login ──────────────────────────────────────────────────────
 
 #[derive(Debug, Args)]
@@ -147,6 +219,8 @@ pub struct LoginArgs {
 #[derive(Deserialize)]
 struct AuthResp {
     token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
     #[serde(default)]
     user: Option<UserResp>,
 }
@@ -193,6 +267,7 @@ pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
     let username = auth.user.as_ref().and_then(|u| u.username.clone());
     let session = AuthSession {
         token: auth.token,
+        refresh_token: auth.refresh_token,
         hub_url: hub,
         email: args.email,
         user_id,
@@ -388,31 +463,11 @@ struct PairingResp {
 }
 
 pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
-
-    let url = format!("{}/api/v1/devices/pairing", session.hub_url);
-    let resp: PairingResp = ureq::post(&url)
-        .timeout(HTTP_TIMEOUT)
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .set("Content-Type", "application/json")
-        .send_json(serde_json::json!({}))
-        .map_err(|e| match e {
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                if code == 401 {
-                    anyhow!(
-                        "HTTP 401 from {url}: token expired or invalid — run \
-                         `easynet auth login <email>` to refresh.\nBody: {body}"
-                    )
-                } else {
-                    anyhow!("HTTP {code} from {url}: {body}")
-                }
-            }
-            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
-        })?
-        .into_json()
-        .context("parse pairing response")?;
+    let resp: PairingResp = auth_post_json(
+        "/api/v1/devices/pairing",
+        &serde_json::json!({}),
+        HTTP_TIMEOUT,
+    )?;
 
     if args.quiet {
         println!("{}", resp.pairing_token);
@@ -455,25 +510,32 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 // well-known meaning.
 
 fn auth_get_json<T: for<'de> Deserialize<'de>>(path: &str) -> anyhow::Result<T> {
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
+    let mut session = authenticated_session()?;
     let url = format!("{}{}", session.hub_url, path);
-    let resp = ureq::get(&url)
-        .timeout(HTTP_TIMEOUT)
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => anyhow!(
-                "HTTP 401 — token expired or invalid. Run 'easynet auth login <email>' to refresh."
-            ),
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                anyhow!("HTTP {code} from {url}: {body}")
+    let mut refreshed = false;
+    loop {
+        match ureq::get(&url)
+            .timeout(HTTP_TIMEOUT)
+            .set("Authorization", &format!("Bearer {}", session.token))
+            .call()
+        {
+            Ok(response) => return response.into_json().context("parse response JSON"),
+            Err(ureq::Error::Status(401, response)) if !refreshed => {
+                let _ = response.into_string();
+                refresh_session(&mut session)?;
+                refreshed = true;
             }
-            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
-        })?;
-    let parsed: T = resp.into_json().context("parse response JSON")?;
-    Ok(parsed)
+            Err(ureq::Error::Status(401, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP 401 from {url}: token expired or invalid: {body}");
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP {code} from {url}: {body}");
+            }
+            Err(ureq::Error::Transport(error)) => bail!("transport to {url}: {error}"),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -569,33 +631,8 @@ struct AbilityItem {
 }
 
 pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     let path = format!("/api/v1/devices/{}/abilities", args.node_id);
-    let url = format!("{}{}", session.hub_url, path);
-    let resp: AbilityListResp = match ureq::get(&url)
-        .timeout(HTTP_TIMEOUT)
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .call()
-    {
-        Ok(resp) => resp.into_json().context("parse response JSON")?,
-        Err(ureq::Error::Status(401, _)) => bail!(
-            "HTTP 401 — token expired or invalid. Run 'easynet auth login <email>' to refresh."
-        ),
-        Err(ureq::Error::Status(404, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            fallback_device_abilities_from_local_daemon(&args.node_id).map_err(|fallback_err| {
-                anyhow!(
-                    "HTTP 404 from {url}: {body}\nlocal federation fallback failed: {fallback_err}"
-                )
-            })?
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            bail!("HTTP {code} from {url}: {body}");
-        }
-        Err(ureq::Error::Transport(e)) => bail!("transport to {url}: {e}"),
-    };
+    let resp: AbilityListResp = auth_get_json(&path)?;
     if args.json {
         println!(
             "{}",
@@ -633,96 +670,6 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Joint-plan unified path: when the backend HTTP API can't find a
-/// device (typically cross-hub), fall back to the daemon's
-/// `node.describe` ability — the same surface
-/// `easynet device show` uses post-phase-1.2.
-///
-/// Routing matches the rest of the CLI:
-///   * `node_id` matches this device's own node id → invoke
-///     `node.describe` locally over the control socket.
-///   * Otherwise → resolve the target as a canonical device URA:
-///     cross-hub directory hit first, local-realm fallback second,
-///     then forward_invoke `node.describe`.
-///     The backend HTTP API surface only exposes bare uuid today,
-///     but a canonical URA still lands here correctly if passed by
-///     a future caller.
-///
-/// The legacy `node.describe` path handled both arms server-
-/// side; the daemon-side handler is on the phase 4 cull list. This
-/// helper preserves the operator-visible behaviour while the
-/// dependency moves.
-fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<AbilityListResp> {
-    let node = describe_node_via_unified_path(node_id)
-        .with_context(|| format!("invoke node.describe for node {node_id}"))?;
-    let abilities = node
-        .get("abilities")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("node.describe returned no 'abilities' array"))?;
-    let items = abilities
-        .iter()
-        .map(ability_item_from_descriptor)
-        .collect::<Vec<_>>();
-    Ok(AbilityListResp { items })
-}
-
-fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::Value> {
-    let trimmed = node_id.trim();
-    let creds = crate::daemon::persistence::config::load_credentials().ok();
-    let local_node = creds
-        .as_ref()
-        .map(|c| c.node_id.clone())
-        .unwrap_or_default();
-    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
-
-    let is_local = !local_node.is_empty() && trimmed == local_node;
-    if is_local {
-        return crate::support::platform::local_invoke::invoke_local_ability(
-            "node.describe",
-            serde_json::json!({"node_id": "local"}),
-        )
-        .context("invoke node.describe (local)");
-    }
-
-    describe_node_remote(trimmed, &local_tenant)
-}
-
-#[cfg(feature = "axon-pb")]
-fn describe_node_remote(node: &str, local_tenant: &str) -> anyhow::Result<serde_json::Value> {
-    let _ = local_tenant;
-    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &target_ura,
-        "node.describe",
-    )?;
-    crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
-        &target_call,
-        serde_json::json!({"node_id": "local"}),
-        caller_ura.as_deref(),
-    )
-    .with_context(|| format!("forward node.describe to target={target_ura}"))
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn describe_node_remote(node: &str, _local_tenant: &str) -> anyhow::Result<serde_json::Value> {
-    Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(&format!(
-            "describing remote device {node:?}"
-        )),
-    )
-}
-
-fn ability_item_from_descriptor(value: &serde_json::Value) -> AbilityItem {
-    let row = AbilityCatalogueRow::from_value(value);
-    AbilityItem {
-        name: Some(row.label().to_string()),
-        ability_ura: row.ability_ura().map(str::to_string),
-        version: row.version().map(str::to_string),
-        state: Some(row.state().to_string()),
-    }
-}
-
 #[derive(Debug, Args)]
 pub struct ExecArgs {
     /// Device node_id to run the command on.
@@ -751,13 +698,10 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         bail!("no command — usage: easynet auth exec <node_id> -- <cmd> [args ...]");
     }
     let tool_name = canonical_auth_exec_tool_name(&args.tool)?.to_string();
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     // Backend's POST /api/v1/abilities/invoke is what the frontend
     // uses for ad-hoc exec — `node_id` selects the target device,
     // `tool_name` picks the canonical ability advertised by the
     // device's daemon.
-    let url = format!("{}/api/v1/abilities/invoke", session.hub_url);
     let arguments = match tool_name.as_str() {
         // shell.run / process.exec take a full command string.
         "shell.run" | "process.exec" => {
@@ -773,23 +717,11 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         "arguments": arguments,
         "timeout_ms": args.timeout_ms,
     });
-    let resp: serde_json::Value = ureq::post(&url)
-        .timeout(Duration::from_millis(args.timeout_ms as u64 + 5_000))
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .set("Content-Type", "application/json")
-        .send_json(body)
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => {
-                anyhow!("HTTP 401 — token expired. Run 'easynet auth login <email>' to refresh.")
-            }
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                anyhow!("HTTP {code} from {url}: {body}")
-            }
-            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
-        })?
-        .into_json()
-        .context("parse invoke response")?;
+    let resp: serde_json::Value = auth_post_json(
+        "/api/v1/abilities/invoke",
+        &body,
+        Duration::from_millis(args.timeout_ms as u64 + 5_000),
+    )?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
         return Ok(());
@@ -1276,22 +1208,6 @@ mod tests {
             self.put_seeds.borrow_mut().push(seed_hex);
             self.put_results.borrow_mut().pop_front().unwrap_or(Ok(()))
         }
-    }
-
-    #[test]
-    fn ability_item_projection_maps_ura_descriptor_shape() {
-        let item = ability_item_from_descriptor(&serde_json::json!({
-            "name": "shell.run",
-            "ability_ura": "easynet:///r/test/ability/device.dev-1.shell.run",
-            "ability_version": "1",
-        }));
-        assert_eq!(item.name.as_deref(), Some("shell.run"));
-        assert_eq!(
-            item.ability_ura.as_deref(),
-            Some("easynet:///r/test/ability/device.dev-1.shell.run")
-        );
-        assert_eq!(item.version.as_deref(), Some("1"));
-        assert_eq!(item.state.as_deref(), Some("ACTIVE"));
     }
 
     #[test]

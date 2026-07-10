@@ -806,6 +806,12 @@ pub struct UserTrustSync {
 
 #[derive(Debug, thiserror::Error)]
 pub enum UserTrustBootstrapError {
+    #[error("publishing paired user key for `{user_ura}` failed: {status}")]
+    PublishFailed {
+        user_ura: String,
+        status: tonic::Status,
+    },
+
     #[error("paired user `{user_ura}` has no public key registered at the Hub")]
     MissingAtHub { user_ura: String },
 
@@ -825,7 +831,6 @@ pub enum UserTrustBootstrapError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum UserTrustBootstrapOutcome {
     NotRequired,
-    AlreadyTrusted { user_ura: String },
     Imported { user_ura: String, key_count: usize },
 }
 
@@ -837,13 +842,6 @@ fn log_user_trust_bootstrap_outcome(outcome: &UserTrustBootstrapOutcome) {
             crate::op_event!(
                 component = session,
                 kind = user_trust_bootstrap_not_required,
-            );
-        }
-        UserTrustBootstrapOutcome::AlreadyTrusted { user_ura } => {
-            crate::op_event!(
-                component = session,
-                kind = user_trust_bootstrap_already_trusted,
-                user_ura = user_ura,
             );
         }
         UserTrustBootstrapOutcome::Imported {
@@ -976,8 +974,16 @@ async fn sync_paired_user_trust_prelude(
     if realm != sync.daemon_realm {
         return Ok(UserTrustBootstrapOutcome::NotRequired);
     }
-    if paired_user_trust_present(sync, &user_ura) {
-        return Ok(UserTrustBootstrapOutcome::AlreadyTrusted { user_ura });
+    let local_public_keys = paired_user_public_keys(sync, &user_ura);
+    if !local_public_keys.is_empty() {
+        publish_paired_user_keys_prelude(
+            client,
+            caller_ura,
+            signing_seed,
+            &user_ura,
+            &local_public_keys,
+        )
+        .await?;
     }
 
     let args = match serde_json::to_vec(&serde_json::json!({ "agent_ura": user_ura })) {
@@ -1123,7 +1129,75 @@ fn resolved_public_keys(result: &[u8]) -> Vec<String> {
 }
 
 fn paired_user_trust_present(sync: &UserTrustSync, user_ura: &str) -> bool {
-    !sync.cell.snapshot().lookup_user_all(user_ura).is_empty()
+    !paired_user_public_keys(sync, user_ura).is_empty()
+}
+
+fn paired_user_public_keys(sync: &UserTrustSync, user_ura: &str) -> Vec<String> {
+    sync.cell
+        .snapshot()
+        .lookup_user_all(user_ura)
+        .iter()
+        .map(|entry| entry.public_key_b64.trim())
+        .filter(|key| !key.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+async fn publish_paired_user_keys_prelude(
+    client: &mut InvocationClient<Channel>,
+    caller_ura: &str,
+    signing_seed: Option<SessionSigningSeed>,
+    user_ura: &str,
+    public_keys_b64: &[String],
+) -> Result<(), UserTrustBootstrapError> {
+    for public_key_b64 in public_keys_b64 {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": user_ura,
+            "public_key_b64": public_key_b64,
+            "role": "user",
+        }))
+        .map_err(|err| UserTrustBootstrapError::PublishFailed {
+            user_ura: user_ura.to_string(),
+            status: tonic::Status::internal(format!(
+                "identity.register_pubkey user args encode failed: {err}"
+            )),
+        })?;
+        let request = signed_prelude_request(
+            caller_ura,
+            user_ura,
+            crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY,
+            args,
+            signing_seed,
+        )
+        .map_err(|status| UserTrustBootstrapError::PublishFailed {
+            user_ura: user_ura.to_string(),
+            status,
+        })?;
+        match invoke_prelude_unary(client, request, "identity.register_pubkey").await {
+            Ok(_) => {}
+            Err(status) if status.code() == tonic::Code::AlreadyExists => {}
+            Err(status) => {
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_publish_failed,
+                    code = status.code(),
+                    error = status.message(),
+                    user_ura = user_ura,
+                );
+                return Err(UserTrustBootstrapError::PublishFailed {
+                    user_ura: user_ura.to_string(),
+                    status,
+                });
+            }
+        }
+    }
+    crate::op_event!(
+        component = session,
+        kind = user_trust_sync_published,
+        user_ura = user_ura,
+        key_count = public_keys_b64.len() as u64,
+    );
+    Ok(())
 }
 
 pub(super) async fn invoke_prelude_unary(

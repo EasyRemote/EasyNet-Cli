@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	easynet.run/axon/sdk/go v0.0.0
+	golang.org/x/crypto v0.21.0
 	google.golang.org/grpc v1.64.0
 	google.golang.org/protobuf v1.34.2
 )

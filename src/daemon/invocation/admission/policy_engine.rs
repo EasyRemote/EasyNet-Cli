@@ -39,6 +39,39 @@ pub struct PolicyEngine;
 impl PolicyEngine {
     #[must_use]
     pub fn check(input: PolicyInput) -> PolicyDecision {
+        let owner_user_id = input
+            .owner
+            .owner_user_id
+            .clone()
+            .filter(|owner| !owner.trim().is_empty());
+        let matcher = PermissionGrantMatcher::new(&input.grants);
+
+        if let Some(owner_user_id) = owner_user_id.as_deref() {
+            let grant_input = GrantMatchInput {
+                owner_user_id,
+                principal_kind: input.principal_kind,
+                principal_id: &input.principal_id,
+                token_id: input.token_id.as_deref(),
+                callee_ura: &input.callee_ura,
+                subject_ura: &input.subject_ura,
+                ability_ura: &input.ability_ura,
+                action: input.action,
+                now: input.now,
+            };
+            if let Some(grant) = matcher.find(&grant_input, PermissionEffect::Deny) {
+                return decision(
+                    &input,
+                    PolicyDecisionOutcome::Deny,
+                    PolicyDecisionReason::ExplicitDeny,
+                    Some(grant.grant_id.clone()),
+                );
+            }
+        }
+
+        // Verified authority is bounded by its verifier, but it never
+        // overrides an explicit owner deny. Bootstrap authority may be the
+        // only source of owner truth during first publication, so it remains
+        // valid when owner resolution is not yet available.
         if input.verified_authority_id.is_some() {
             return decision(
                 &input,
@@ -48,12 +81,7 @@ impl PolicyEngine {
             );
         }
 
-        let Some(owner_user_id) = input
-            .owner
-            .owner_user_id
-            .clone()
-            .filter(|owner| !owner.trim().is_empty())
-        else {
+        let Some(owner_user_id) = owner_user_id else {
             return decision(
                 &input,
                 PolicyDecisionOutcome::Deny,
@@ -62,7 +90,6 @@ impl PolicyEngine {
             );
         };
 
-        let matcher = PermissionGrantMatcher::new(&input.grants);
         let grant_input = GrantMatchInput {
             owner_user_id: &owner_user_id,
             principal_kind: input.principal_kind,
@@ -74,15 +101,6 @@ impl PolicyEngine {
             action: input.action,
             now: input.now,
         };
-
-        if let Some(grant) = matcher.find(&grant_input, PermissionEffect::Deny) {
-            return decision(
-                &input,
-                PolicyDecisionOutcome::Deny,
-                PolicyDecisionReason::ExplicitDeny,
-                Some(grant.grant_id.clone()),
-            );
-        }
 
         if input.caller_user_id.as_deref() == Some(owner_user_id.as_str()) {
             return decision(
@@ -331,5 +349,43 @@ mod tests {
         assert_eq!(got.reason, PolicyDecisionReason::ExplicitGrantAllow);
         assert_eq!(got.authority_proof_id.as_deref(), Some("proof-bootstrap"));
         assert!(got.grant_id.is_none());
+    }
+
+    #[test]
+    fn explicit_deny_wins_over_verified_authority() {
+        let mut input = base_input();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.verified_authority_id = Some("proof-1".to_string());
+        input.grants = vec![PermissionGrant {
+            grant_id: "deny-stream".to_string(),
+            owner_user_id: "alice".to_string(),
+            principal_kind: input.principal_kind,
+            principal_id: input.principal_id.clone(),
+            token_id: input.token_id.clone(),
+            token_class: input.token_class,
+            callee_ura: Some(input.callee_ura.clone()),
+            subject_ura_pattern: Some(input.subject_ura.clone()),
+            ability_ura_pattern: Some(input.ability_ura.clone()),
+            actions: vec![AccessAction::Stream],
+            constraints: None,
+            effect: PermissionEffect::Deny,
+            lifetime: PermissionGrantLifetime::Permanent,
+            state: PermissionGrantState::Active,
+            expires_at: None,
+            review_required_after: None,
+            last_reviewed_at: None,
+            last_used_at: None,
+            created_by: "easynet:///r/test/user/alice".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: None,
+            revoked_at: None,
+            reason: None,
+        }];
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(got.reason, PolicyDecisionReason::ExplicitDeny);
+        assert_eq!(got.grant_id.as_deref(), Some("deny-stream"));
     }
 }

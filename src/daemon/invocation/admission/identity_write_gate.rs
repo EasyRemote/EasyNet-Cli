@@ -65,12 +65,26 @@ impl IdentityWriteGate {
         let caller_ura = caller.ura.as_str();
 
         match intent.role() {
-            TrustedAgentRole::Device | TrustedAgentRole::User => {
+            TrustedAgentRole::Device => {
                 if caller.loopback || self.is_local_backend_or_hub(caller_ura, caller.role) {
                     Ok(())
                 } else {
                     Err(self.permission_denied_register(caller_ura, caller.role, intent))
                 }
+            }
+            TrustedAgentRole::User => {
+                if caller.loopback || self.is_local_backend_or_hub(caller_ura, caller.role) {
+                    return Ok(());
+                }
+                if caller.role == TrustedAgentRole::Device
+                    && self
+                        .trust_anchor
+                        .lookup_principal_owner(caller_ura)
+                        .is_some_and(|owner| owner.owner_ura == intent.agent_ura())
+                {
+                    return Ok(());
+                }
+                Err(self.permission_denied_register(caller_ura, caller.role, intent))
             }
             TrustedAgentRole::Backend => {
                 if caller.loopback
@@ -232,8 +246,18 @@ mod tests {
     }
 
     fn gate(entries: Vec<crate::daemon::trust::anchor::TrustedAgent>) -> IdentityWriteGate {
+        gate_with_owners(entries, Vec::new())
+    }
+
+    fn gate_with_owners(
+        entries: Vec<crate::daemon::trust::anchor::TrustedAgent>,
+        owners: Vec<crate::daemon::trust::anchor::TrustedPrincipalOwner>,
+    ) -> IdentityWriteGate {
         IdentityWriteGate::new(
-            Arc::new(RealmTrustAnchor::from_entries(entries).expect("test trust anchor")),
+            Arc::new(
+                RealmTrustAnchor::from_parts_with_principal_owners(entries, owners, Vec::new())
+                    .expect("test trust anchor"),
+            ),
             Some("easynet:///r/local/device/daemon".to_string()),
             "local",
         )
@@ -289,6 +313,34 @@ mod tests {
             .expect_err("device must not author user trust rows");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(err.message().contains("role `device`"));
+    }
+
+    #[test]
+    fn paired_device_can_register_only_its_owner_user_row() {
+        let device_ura = "easynet:///r/local/device/dev-1";
+        let owner_ura = "easynet:///r/local/user/owner-1";
+        let gate = gate_with_owners(
+            vec![anchor_entry(device_ura, TrustedAgentRole::Device)],
+            vec![crate::daemon::trust::anchor::TrustedPrincipalOwner {
+                principal_ura: device_ura.to_string(),
+                owner_user_id: "owner-1".to_string(),
+                owner_ura: owner_ura.to_string(),
+                owner_username: None,
+                added_at_unix_ms: 1,
+            }],
+        );
+        let env = envelope(device_ura);
+
+        gate.authorize_register_pubkey(Some(&env), &intent(owner_ura, TrustedAgentRole::User))
+            .expect("paired device may seed its owner user key");
+
+        let err = gate
+            .authorize_register_pubkey(
+                Some(&env),
+                &intent("easynet:///r/local/user/other", TrustedAgentRole::User),
+            )
+            .expect_err("paired device must not seed another user's key");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
     }
 
     #[test]

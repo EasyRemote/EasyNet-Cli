@@ -46,7 +46,9 @@ use crate::daemon::federation::client::{FederationClient, FederationClientError}
 use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
+use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::list_user_pubkeys::handle as handle_list_user_pubkeys;
+use crate::daemon::invocation::admission::owner_projection_publication::OwnerProjectionPublicationAuthority;
 use crate::daemon::invocation::admission::peer_envelope_signer::PeerInvokeRequest;
 use crate::daemon::invocation::admission::register_device_pubkey::handle as handle_register_device_pubkey;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_register_pubkey_intent;
@@ -332,8 +334,67 @@ impl UnaryDispatcher {
     pub(crate) fn dispatch_federation_advertise_agent(
         &self,
         arguments: &[u8],
+        envelope: Option<&Envelope>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::AdvertiseAgentRequest = parse_json_args(arguments)?;
+        let envelope = envelope.ok_or_else(|| {
+            Status::invalid_argument("federation.advertise_agent: envelope is required")
+        })?;
+        let trust_anchor = self.admission.trust_anchor_snapshot();
+        let publication = HostedAgentPublication::verify(
+            envelope,
+            &request,
+            trust_anchor.as_ref(),
+            self.admission.daemon_ura(),
+        )
+        .map_err(|err| {
+            Status::permission_denied(format!(
+                "federation.advertise_agent: hosted publication authority denied: {err}"
+            ))
+        })?;
+        self.persist_hosted_agent_publication(&request, publication)
+    }
+
+    pub(crate) fn dispatch_federation_advertise_agent_from_session(
+        &self,
+        arguments: &[u8],
+        caller_device_ura: &str,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::AdvertiseAgentRequest = parse_json_args(arguments)?;
+        let hub_ura = self.admission.daemon_ura().ok_or_else(|| {
+            Status::failed_precondition(
+                "federation.advertise_agent: session carrier requires the selected hub identity",
+            )
+        })?;
+        let trust_anchor = self.admission.trust_anchor_snapshot();
+        let publication = HostedAgentPublication::verify_admitted_session(
+            caller_device_ura,
+            hub_ura,
+            &request,
+            trust_anchor.as_ref(),
+        )
+        .map_err(|err| {
+            Status::permission_denied(format!(
+                "federation.advertise_agent: session publication authority denied: {err}"
+            ))
+        })?;
+        self.persist_hosted_agent_publication(&request, publication)
+    }
+
+    fn persist_hosted_agent_publication(
+        &self,
+        request: &federation_wrappers::AdvertiseAgentRequest,
+        publication: HostedAgentPublication,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "federation.advertise_agent: this hub was booted without the trust-write surface",
+            )
+        })?;
+        RuntimeTrust::new(&ctx.daemon_realm, &ctx.trust_anchor_path, &ctx.cell)
+            .bind_principal_owner(publication.into_owner_binding(
+                crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
+            ))?;
         let response = federation_wrappers::handle_advertise_agent(
             &request,
             Some(self.directory.advertised_agents.as_ref()),
@@ -344,8 +405,59 @@ impl UnaryDispatcher {
     pub(crate) fn dispatch_federation_advertise_abilities(
         &self,
         arguments: &[u8],
+        envelope: Option<&Envelope>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
+        let envelope = envelope.ok_or_else(|| {
+            Status::invalid_argument("federation.advertise_abilities: envelope is required")
+        })?;
+        let trust_anchor = self.admission.trust_anchor_snapshot();
+        OwnerProjectionPublicationAuthority::verify(
+            envelope,
+            &request,
+            self.directory.advertised_agents.as_ref(),
+            trust_anchor.as_ref(),
+            self.admission.daemon_ura(),
+        )
+        .map_err(|err| {
+            Status::permission_denied(format!(
+                "federation.advertise_abilities: publication authority denied: {err}"
+            ))
+        })?;
+        self.persist_owner_projection(&request)
+    }
+
+    pub(crate) fn dispatch_federation_advertise_abilities_from_session(
+        &self,
+        arguments: &[u8],
+        caller_device_ura: &str,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
+        let hub_ura = self.admission.daemon_ura().ok_or_else(|| {
+            Status::failed_precondition(
+                "federation.advertise_abilities: session carrier requires the selected hub identity",
+            )
+        })?;
+        let trust_anchor = self.admission.trust_anchor_snapshot();
+        OwnerProjectionPublicationAuthority::verify_admitted_session(
+            caller_device_ura,
+            hub_ura,
+            &request,
+            self.directory.advertised_agents.as_ref(),
+            trust_anchor.as_ref(),
+        )
+        .map_err(|err| {
+            Status::permission_denied(format!(
+                "federation.advertise_abilities: session publication authority denied: {err}"
+            ))
+        })?;
+        self.persist_owner_projection(&request)
+    }
+
+    fn persist_owner_projection(
+        &self,
+        request: &federation_wrappers::AdvertiseAbilitiesRequest,
+    ) -> Result<Response<InvokeResponse>, Status> {
         let response = federation_wrappers::handle_advertise_abilities(
             &request,
             Some(self.directory.ability_catalog.as_ref()),

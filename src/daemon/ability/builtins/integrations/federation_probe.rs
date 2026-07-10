@@ -77,6 +77,47 @@ pub(crate) struct ResolvedDeviceRecord {
     pub ability_summaries: Vec<Value>,
 }
 
+/// Build the local device record from the daemon's canonical catalog. This
+/// path is deliberately independent of the optional federation bridge: the
+/// daemon owns its local identity and descriptors even in daemon-only mode.
+pub(crate) fn local_device_record() -> Option<ResolvedDeviceRecord> {
+    let local = local_identity();
+    if !local.paired {
+        return None;
+    }
+    let abilities = crate::daemon::ability::catalog::published_abilities()
+        .into_iter()
+        .map(|metadata| {
+            json!({
+                "name": metadata.name,
+                "description": metadata.description,
+                "input_schema": metadata.input_schema,
+                "read_only": metadata.hints.read_only,
+                "idempotent": metadata.hints.idempotent,
+            })
+        })
+        .collect();
+    Some(ResolvedDeviceRecord {
+        node: DeviceNodeSnapshot {
+            node_id: local.node_id.clone(),
+            tenant_id: local.tenant_id.clone(),
+            agent_ura: Some(crate::core::ura::device_ura(
+                &local.tenant_id,
+                &local.node_id,
+            )),
+            is_self: true,
+            paired: true,
+            hub_endpoint: local.hub_endpoint,
+            state: "HEALTHY".to_string(),
+            online: true,
+            probe_status: "local".to_string(),
+            probe_error: None,
+            latency_ms: None,
+        },
+        ability_summaries: abilities,
+    })
+}
+
 #[derive(Debug)]
 struct ProbeOutcome {
     online: bool,

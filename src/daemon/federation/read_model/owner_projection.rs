@@ -120,7 +120,70 @@ pub(crate) struct OwnerProjectionPublication {
     pub projection_revision: u64,
     pub projection_digest: String,
     pub lease_expires_unix_ms: i64,
+    #[serde(default)]
     pub ability_summaries: Vec<AbilityProjectionSummary>,
+}
+
+impl OwnerProjectionPublication {
+    pub(crate) fn canonical_digest(&self) -> String {
+        projection_digest(
+            &self.owner_ura,
+            &self.host_device_ura,
+            self.projection_revision,
+            self.lease_expires_unix_ms,
+            &self.ability_summaries,
+        )
+    }
+
+    /// Validate a received complete-set projection before it reaches the
+    /// directory read model. The digest binds every routing and descriptor
+    /// field, while the owner checks prevent internally consistent payloads
+    /// from smuggling abilities for a different principal.
+    pub(crate) fn validate_integrity(&self) -> Result<(), String> {
+        if self.owner_ura.trim() != self.owner_ura || self.owner_ura.is_empty() {
+            return Err("owner_ura must be non-empty and trimmed".to_string());
+        }
+        if self.host_device_ura.trim() != self.host_device_ura || self.host_device_ura.is_empty() {
+            return Err("host_device_ura must be non-empty and trimmed".to_string());
+        }
+        if self.projection_revision == 0 {
+            return Err("projection_revision must be greater than zero".to_string());
+        }
+
+        let mut seen_ability_uras = BTreeSet::new();
+        for summary in &self.ability_summaries {
+            if summary.owner_ura != self.owner_ura {
+                return Err(format!(
+                    "ability summary owner_ura `{}` does not match projection owner `{}`",
+                    summary.owner_ura, self.owner_ura
+                ));
+            }
+            let selector = crate::core::ura::AbilitySelector::parse(&summary.ability_ura)
+                .map_err(|err| format!("invalid ability_ura `{}`: {err}", summary.ability_ura))?;
+            if selector.owner_ura() != self.owner_ura {
+                return Err(format!(
+                    "ability_ura `{}` belongs to `{}`, not projection owner `{}`",
+                    summary.ability_ura,
+                    selector.owner_ura(),
+                    self.owner_ura
+                ));
+            }
+            if !seen_ability_uras.insert(summary.ability_ura.as_str()) {
+                return Err(format!(
+                    "projection contains duplicate ability_ura `{}`",
+                    summary.ability_ura
+                ));
+            }
+        }
+
+        let expected_digest = self.canonical_digest();
+        if self.projection_digest != expected_digest {
+            return Err(format!(
+                "projection_digest mismatch: expected `{expected_digest}`"
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -611,6 +611,7 @@ impl DiscoverProviderTarget {
             call_mode: CallMode::Rpc,
             subject: Some(self.subject_ura),
             causal_context: Some(easynet_axon::invocation::CausalContext::None),
+            request_metadata: std::collections::HashMap::new(),
         }
     }
 }

@@ -978,6 +978,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some(ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         for field in [
@@ -1014,6 +1015,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: Some(ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let frames = dispatcher.execute_stream(target).unwrap().into_snapshot();
         assert!(
@@ -1055,6 +1057,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_REQUIRED));
@@ -1087,6 +1090,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some(cam_ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH));
@@ -1106,6 +1110,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some("easynet:///r/acme/resource/01NEVER".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_NOT_FOUND));
@@ -1124,6 +1129,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some("easynet:///r/acme/resource/01SCR".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_IN_ARGS));

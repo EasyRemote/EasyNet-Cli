@@ -53,9 +53,8 @@ struct PairingPreflight {
     /// cross-machine fix: backend surfaces this here so the
     /// device can write the hub's `(ura, pubkey, role=hub)` row
     /// into its local `realm-trust.toml` during join, without
-    /// needing on-host access to `~/.easynet-hub/<realm>/
-    /// identity.json`. Empty on pre-v4.1.4 hubs (legacy fallback
-    /// path reads the on-disk identity file when same-host).
+    /// needing on-host access to the hub runtime keyring. Empty
+    /// responses are rejected by the trust wiring step.
     #[serde(default)]
     hub_public_key_b64: String,
     /// Optional base64-encoded PEM trust anchor for the hub's
@@ -1207,7 +1206,14 @@ fn rewrite_local_docker_session_endpoint(
 
 fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<PairingPreflight> {
     let base = hub_base.trim_end_matches('/');
-    let url = format!("{base}/api/v1/devices/pairing/{token}/preflight");
+    let install_id = config::load_or_create_install_id().ok();
+    let url = match install_id.as_deref() {
+        Some(id) if !id.is_empty() => format!(
+            "{base}/api/v1/devices/pairing/{token}/preflight?install_id={}",
+            urlencoding::encode(id)
+        ),
+        _ => format!("{base}/api/v1/devices/pairing/{token}/preflight"),
+    };
 
     let resp = match ureq::get(&url)
         .timeout(std::time::Duration::from_secs(30))

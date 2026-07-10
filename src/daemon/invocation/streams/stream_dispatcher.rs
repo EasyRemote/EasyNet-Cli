@@ -92,6 +92,7 @@ impl StreamDispatcher {
         let initial_chunk = InvokeStreamChunk {
             content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             payload: initial_bytes,
+            sequence: 0,
             ..InvokeStreamChunk::default()
         };
 
@@ -114,8 +115,8 @@ impl StreamDispatcher {
 
         let initial_stream = futures::stream::once(async move { Ok(initial_chunk) });
         let event_stream = futures::stream::unfold(
-            (events, presence_weak),
-            |(mut events, presence_weak)| async move {
+            (events, presence_weak, 1_u64),
+            |(mut events, presence_weak, next_sequence)| async move {
                 use tokio::sync::broadcast::error::RecvError;
 
                 match events.recv().await {
@@ -138,9 +139,13 @@ impl StreamDispatcher {
                         let chunk = InvokeStreamChunk {
                             content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                             payload,
+                            sequence: next_sequence,
                             ..InvokeStreamChunk::default()
                         };
-                        Some((Ok(chunk), (events, presence_weak)))
+                        Some((
+                            Ok(chunk),
+                            (events, presence_weak, next_sequence.saturating_add(1)),
+                        ))
                     }
                     Err(RecvError::Lagged(_)) => {
                         // Re-snapshot recovery: emit a fresh
@@ -165,9 +170,13 @@ impl StreamDispatcher {
                         let chunk = InvokeStreamChunk {
                             content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                             payload,
+                            sequence: next_sequence,
                             ..InvokeStreamChunk::default()
                         };
-                        Some((Ok(chunk), (events, presence_weak)))
+                        Some((
+                            Ok(chunk),
+                            (events, presence_weak, next_sequence.saturating_add(1)),
+                        ))
                     }
                     Err(RecvError::Closed) => None,
                 }
@@ -206,6 +215,7 @@ impl StreamDispatcher {
         let initial_chunk = InvokeStreamChunk {
             content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             payload: initial_bytes,
+            sequence: 0,
             ..InvokeStreamChunk::default()
         };
 
@@ -221,8 +231,8 @@ impl StreamDispatcher {
         let heartbeat_interval_ms: u64 = self.directory.subscribe_v2_heartbeat_interval_ms;
         let initial_stream = futures::stream::once(async move { Ok(initial_chunk) });
         let event_stream = futures::stream::unfold(
-            (events, presence_weak, heartbeat_interval_ms),
-            |(mut events, presence_weak, hb_ms)| async move {
+            (events, presence_weak, heartbeat_interval_ms, 1_u64),
+            |(mut events, presence_weak, hb_ms, next_sequence)| async move {
                 use tokio::sync::broadcast::error::RecvError;
 
                 let mut hb = tokio::time::interval(std::time::Duration::from_millis(hb_ms));
@@ -247,9 +257,10 @@ impl StreamDispatcher {
                                 let chunk = InvokeStreamChunk {
                                     content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                                     payload,
+                                    sequence: next_sequence,
                                     ..InvokeStreamChunk::default()
                                 };
-                                Some((Ok(chunk), (events, presence_weak, hb_ms)))
+                                Some((Ok(chunk), (events, presence_weak, hb_ms, next_sequence.saturating_add(1))))
                             }
                             Err(RecvError::Lagged(_)) => {
                                 // Slow consumer; emit a
@@ -268,9 +279,10 @@ impl StreamDispatcher {
                                 let chunk = InvokeStreamChunk {
                                     content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
                                     payload,
+                                    sequence: next_sequence,
                                     ..InvokeStreamChunk::default()
                                 };
-                                Some((Ok(chunk), (events, presence_weak, hb_ms)))
+                                Some((Ok(chunk), (events, presence_weak, hb_ms, next_sequence.saturating_add(1))))
                             }
                             Err(RecvError::Closed) => None,
                         }
@@ -285,12 +297,13 @@ impl StreamDispatcher {
                         };
                         let payload = serde_json::to_vec(&hb_evt)
                             .expect("DirectoryEvent::Heartbeat is statically Serialize");
-                        let chunk = InvokeStreamChunk {
-                            content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
-                            payload,
-                            ..InvokeStreamChunk::default()
-                        };
-                        Some((Ok(chunk), (events, presence_weak, hb_ms)))
+                            let chunk = InvokeStreamChunk {
+                                content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+                                payload,
+                                sequence: next_sequence,
+                                ..InvokeStreamChunk::default()
+                            };
+                            Some((Ok(chunk), (events, presence_weak, hb_ms, next_sequence.saturating_add(1))))
                     }
                 }
             },

@@ -309,6 +309,15 @@ pub enum AdvertiseSigningAuthorityRequest {
 
 impl AdvertiseAgentRequest {
     #[must_use]
+    pub(crate) fn host_ura(&self) -> Option<&str> {
+        match &self.signing_authority {
+            Some(AdvertiseSigningAuthorityRequest::HostedBy { host_ura }) => Some(host_ura),
+            Some(AdvertiseSigningAuthorityRequest::SelfSigned) => None,
+            None => self.host_ura.as_deref(),
+        }
+    }
+
+    #[must_use]
     fn to_record(&self) -> AdvertisedAgentRecord {
         let signing_authority = match &self.signing_authority {
             Some(AdvertiseSigningAuthorityRequest::SelfSigned) => {
@@ -370,17 +379,8 @@ pub fn handle_advertise_agent(
 ///
 /// The current wire shape is RFC-005 owner projection publication:
 /// the caller sends projection metadata plus bounded ability summaries.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct AdvertiseAbilitiesRequest {
-    pub owner_ura: String,
-    pub host_device_ura: String,
-    pub projection_revision: u64,
-    pub projection_digest: String,
-    pub lease_expires_unix_ms: i64,
-    #[serde(default)]
-    pub ability_summaries:
-        Vec<crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary>,
-}
+pub(crate) type AdvertiseAbilitiesRequest =
+    crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication;
 
 /// Response payload for `federation.advertise_abilities`. Matches the
 /// daemon-backed wrapper contract (`ack` + `count`). PR-1 staging always

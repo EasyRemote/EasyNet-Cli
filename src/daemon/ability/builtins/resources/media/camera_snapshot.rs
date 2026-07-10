@@ -1401,6 +1401,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some(ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
 
@@ -1451,6 +1452,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: Some(ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let source = dispatcher.execute_stream(target).unwrap();
         let (snapshot, mut rx) = match source {
@@ -1491,6 +1493,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura.clone()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
         let session_id = start["recording_session_id"].as_str().unwrap().to_string();
@@ -1504,6 +1507,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
         assert_eq!(stop["state"], "stopped");
@@ -1543,6 +1547,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura.clone()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
         let session_id = first["recording_session_id"].as_str().unwrap().to_string();
@@ -1555,6 +1560,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura.clone()),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap_err()
             .to_string();
@@ -1582,6 +1588,7 @@ mod tests {
                 call_mode: CallMode::Rpc,
                 subject: Some(ura),
                 causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
         assert_eq!(stop["state"], "stopped");
@@ -1601,6 +1608,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_stream(target).unwrap_err().to_string();
 
@@ -1632,6 +1640,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: None, // no envelope subject
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
@@ -1660,6 +1669,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some("easynet:///r/acme/resource/01NEVER-EXISTED".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
@@ -1700,6 +1710,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some(mic_ura),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
@@ -1726,6 +1737,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some("easynet:///r/acme/resource/01CAM".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(

@@ -302,6 +302,12 @@ pub(crate) fn exposure_class_for_name(name: &str) -> AbilityExposureClass {
         | governance_names::ADMIN_STATUS
         | governance_names::META_DESCRIBE
         | governance_names::META_LIST_ABILITIES
+        | federation_names::RESOLVE
+        | federation_names::DISCOVER
+        | federation_names::STATUS
+        | federation_names::NAMESPACE_RESOLVE
+        | federation_names::RESOLVE_KEY
+        | federation_names::IDENTITY_LIST_USER_PUBKEYS
         | resource_names::META_LIST_RESOURCES
         | "plugin.status"
         | "plugin.companion_status" => DescriptorSafeMetadata,
@@ -1020,6 +1026,12 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // ── Introspection ───────────────────────────────────
         governance_names::META_DESCRIBE
         | governance_names::META_LIST_ABILITIES
+        | federation_names::RESOLVE
+        | federation_names::DISCOVER
+        | federation_names::STATUS
+        | federation_names::NAMESPACE_RESOLVE
+        | federation_names::RESOLVE_KEY
+        | federation_names::IDENTITY_LIST_USER_PUBKEYS
         // `mission.track` reads the persisted run dir of a
         // prior mission.run. Pure read of derived state →
         // Introspection, same logic that puts schedule.list

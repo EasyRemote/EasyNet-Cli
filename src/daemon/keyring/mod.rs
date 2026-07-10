@@ -723,6 +723,24 @@ pub fn home_relative(rel: &str) -> PathBuf {
     home.join(rel)
 }
 
+/// Export the raw Ed25519 seed for one runtime owner from the default daemon
+/// keyring vault.
+///
+/// This is the canonical same-process bootstrap seam for daemon components
+/// that still need a seed-shaped API. It reads `EASYNET_KEYRING_VAULT_PATH`
+/// when set, otherwise `~/.easynet/keyring.enc`, and requires
+/// `EASYNET_KEYRING_PASSPHRASE`.
+pub fn export_seed_from_default_vault(
+    self_ura: &str,
+) -> Result<[u8; ED25519_SEED_LEN], VaultError> {
+    let path = std::env::var_os("EASYNET_KEYRING_VAULT_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_relative(DEFAULT_VAULT_REL));
+    let source = MasterKeySource::from_env()?;
+    let vault = Vault::open(&path, &source)?;
+    vault.export_seed(self_ura)
+}
+
 /// Default transport endpoint for the keyring daemon.
 pub fn default_socket_path() -> PathBuf {
     #[cfg(windows)]

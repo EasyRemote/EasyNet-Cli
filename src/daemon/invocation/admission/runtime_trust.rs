@@ -201,6 +201,18 @@ impl<'a> RuntimeTrust<'a> {
         })
     }
 
+    /// Persist one authenticated runtime-principal ownership fact.
+    ///
+    /// Hosted Agents do not own signing keys, so their owner binding is
+    /// created by the already-admitted host publication rather than by
+    /// `identity.register_pubkey`. Both paths still use this aggregate and
+    /// the same conflict-safe trust-anchor transaction.
+    pub(crate) fn bind_principal_owner(&self, owner: TrustedPrincipalOwner) -> Result<(), Status> {
+        self.mutate_anchor("federation.advertise_agent", |next_anchor| {
+            next_anchor.upsert_principal_owner(owner)
+        })
+    }
+
     pub(crate) fn revoke_user_pubkey(
         &self,
         agent_ura: &str,
@@ -400,6 +412,11 @@ fn realm_error_to_status(ability: &'static str, err: RealmTrustError) -> Status 
         } => Status::invalid_argument(format!(
             "{ability}: trusted principal owner `{principal_ura}` is invalid: {detail}"
         )),
+        RealmTrustError::PrincipalOwnerConflict { principal_ura } => {
+            Status::failed_precondition(format!(
+                "{ability}: trusted principal owner `{principal_ura}` conflicts with the existing canonical owner binding"
+            ))
+        }
     }
 }
 
@@ -471,6 +488,7 @@ mod tests {
                     principal_ura: device_ura.clone(),
                     owner_user_id: "alice".to_string(),
                     owner_ura: "easynet:///r/realm/user/alice".to_string(),
+                    owner_username: Some("alice".to_string()),
                     added_at_unix_ms: 1,
                 }),
             )

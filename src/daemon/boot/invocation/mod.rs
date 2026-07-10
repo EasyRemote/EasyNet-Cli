@@ -115,11 +115,9 @@ use identity::{load_daemon_identity, maybe_bootstrap_runtime_self_identity, Daem
 use listeners::{spawn_tcp_tls_listener, spawn_uds_listener};
 use paths::expand_home;
 use presence_seed::seed_boot_presence;
-#[cfg(test)]
-use trust::read_backend_identity_record;
 use trust::{
     load_trust_anchor_from, reload_daemon_config_cells_from, reload_trust_anchor_cell_from,
-    upsert_backend_identity_from_disk,
+    upsert_hub_identity_from_keyring,
 };
 
 /// Maximum decoded gRPC message size for InvocationServer/Client on
@@ -237,7 +235,7 @@ pub fn start_daemon_invocation_transport(
     // intentionally narrow (one path, no other behaviour change) so
     // production paths cannot diverge accidentally.
     let trust_anchor_path = trust_anchor_path_from_env_or_default();
-    let trust_anchor = upsert_backend_identity_from_disk(
+    let trust_anchor = upsert_hub_identity_from_keyring(
         config.realm(),
         &trust_anchor_path,
         load_trust_anchor_from(&trust_anchor_path),
@@ -1742,33 +1740,32 @@ mod tests {
     }
 
     #[test]
-    fn backend_identity_upsert_replaces_stale_trust_anchor_key() {
+    fn hub_identity_keyring_upsert_replaces_stale_trust_anchor_key() {
         let _hg = crate::cli::commands::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
+        std::env::set_var("EASYNET_KEYRING_PASSPHRASE", "test-passphrase");
+        let vault_path = temp.path().join(".easynet").join("keyring.enc");
+        std::env::set_var("EASYNET_KEYRING_VAULT_PATH", &vault_path);
 
         let realm = "realm-upsert";
-        let identity_dir = temp.path().join(".easynet-hub").join(realm);
-        std::fs::create_dir_all(&identity_dir).expect("identity dir");
+        let hub_ura = crate::core::ura::hub_ura(realm);
         let new_seed = [0x42u8; 32];
-        std::fs::write(
-            identity_dir.join("identity.json"),
-            serde_json::json!({
-                "private_key_seed_hex": hex::encode(new_seed),
-                "agent_ura": crate::core::ura::hub_ura(realm),
-                "created_at_unix_ms": 1_714_492_800_000i64,
-            })
-            .to_string(),
-        )
-        .expect("identity file");
+        let source = crate::daemon::keyring::MasterKeySource::Explicit("test-passphrase".into());
+        let mut vault = crate::daemon::keyring::Vault::open_or_init(&vault_path, &source)
+            .expect("keyring vault");
+        vault
+            .put(&hub_ura, vec![], hex::encode(new_seed))
+            .expect("put hub identity");
+        vault.seal().expect("seal keyring vault");
 
         let old_key = SigningKey::from_bytes(&[0x41u8; 32]);
         let old_pub = BASE64_STANDARD.encode(old_key.verifying_key().to_bytes());
         let trust_path = temp.path().join("realm-trust.toml");
         let stale = RealmTrustAnchor::from_entries(vec![TrustedAgent {
-            agent_ura: crate::core::ura::hub_ura(realm),
+            agent_ura: hub_ura.clone(),
             public_key_b64: old_pub,
-            role: TrustedAgentRole::Backend,
+            role: TrustedAgentRole::Hub,
             added_at_unix_ms: 1,
             origin_realm: None,
             hub_endpoint: None,
@@ -1776,12 +1773,12 @@ mod tests {
         }])
         .expect("stale anchor");
 
-        let updated = upsert_backend_identity_from_disk(realm, &trust_path, stale);
+        let updated = upsert_hub_identity_from_keyring(realm, &trust_path, stale);
         let want_pub =
             BASE64_STANDARD.encode(SigningKey::from_bytes(&new_seed).verifying_key().to_bytes());
         assert_eq!(
             updated
-                .lookup(&crate::core::ura::hub_ura(realm))
+                .lookup(&hub_ura)
                 .expect("backend entry")
                 .public_key_b64,
             want_pub
@@ -1789,7 +1786,7 @@ mod tests {
         let from_disk = RealmTrustAnchor::try_load_strict(&trust_path).expect("disk anchor");
         assert_eq!(
             from_disk
-                .lookup(&crate::core::ura::hub_ura(realm))
+                .lookup(&hub_ura)
                 .expect("backend entry on disk")
                 .public_key_b64,
             want_pub
@@ -1797,28 +1794,40 @@ mod tests {
     }
 
     #[test]
-    fn backend_identity_reader_rejects_unknown_agent_identity_alias() {
+    fn hub_identity_keyring_upsert_skips_missing_vault() {
         let _hg = crate::cli::commands::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
+        std::env::set_var("EASYNET_KEYRING_PASSPHRASE", "test-passphrase");
+        std::env::set_var(
+            "EASYNET_KEYRING_VAULT_PATH",
+            temp.path().join(".easynet").join("missing.enc"),
+        );
 
-        let realm = "realm-retired-agent-alias";
-        let identity_dir = temp.path().join(".easynet-hub").join(realm);
-        std::fs::create_dir_all(&identity_dir).expect("identity dir");
-        std::fs::write(
-            identity_dir.join("identity.json"),
-            serde_json::json!({
-                "private_key_seed_hex": hex::encode([0x42u8; 32]),
-                "agent_identity_alias": crate::core::ura::hub_ura(realm),
-                "created_at_unix_ms": 1_714_492_800_000i64,
-            })
-            .to_string(),
-        )
-        .expect("identity file");
+        let realm = "realm-missing-keyring";
+        let hub_ura = crate::core::ura::hub_ura(realm);
+        let old_key = SigningKey::from_bytes(&[0x41u8; 32]);
+        let old_pub = BASE64_STANDARD.encode(old_key.verifying_key().to_bytes());
+        let stale = RealmTrustAnchor::from_entries(vec![TrustedAgent {
+            agent_ura: hub_ura.clone(),
+            public_key_b64: old_pub.clone(),
+            role: TrustedAgentRole::Hub,
+            added_at_unix_ms: 1,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }])
+        .expect("stale anchor");
 
-        assert!(
-            read_backend_identity_record(realm).is_none(),
-            "unknown identity alias must not be accepted as backend identity agent_ura"
+        let updated =
+            upsert_hub_identity_from_keyring(realm, &temp.path().join("realm-trust.toml"), stale);
+        assert_eq!(
+            updated
+                .lookup(&hub_ura)
+                .expect("existing entry")
+                .public_key_b64,
+            old_pub,
+            "missing SDK keyring identity must not fabricate a replacement key"
         );
     }
 

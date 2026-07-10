@@ -124,6 +124,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(resp["status"], "healthy");

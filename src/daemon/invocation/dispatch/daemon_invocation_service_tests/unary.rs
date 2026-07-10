@@ -155,14 +155,75 @@ async fn invoke_dispatches_federation_join_to_wrapper() {
 
 #[tokio::test]
 async fn invoke_dispatches_federation_advertise_agent() {
-    let svc = make_service();
-    let resp = svc
-        .invoke(invoke_request(
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+    let caller_ura = "easynet:///r/realm/device/test-daemon";
+    let trust_dir = tempfile::tempdir().expect("runtime trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+        vec![TrustedAgent {
+            agent_ura: caller_ura.to_string(),
+            public_key_b64: BASE64_STANDARD
+                .encode(test_device_signing_key().verifying_key().to_bytes()),
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }],
+        vec![crate::daemon::trust::anchor::TrustedPrincipalOwner {
+            principal_ura: caller_ura.to_string(),
+            owner_user_id: "user-dev".to_string(),
+            owner_ura: "easynet:///r/realm/user/user-dev".to_string(),
+            owner_username: Some("dev".to_string()),
+            added_at_unix_ms: 1,
+        }],
+        Vec::new(),
+    )
+    .expect("host owner anchor");
+    let cell = crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(anchor));
+    let svc = DaemonInvocationService::new(
+        Arc::new(PresenceRegistry::new()),
+        AdmissionFacade::with_trust_anchor_cell(
+            cell.clone(),
+            Some(crate::core::ura::hub_ura("realm")),
+        ),
+    )
+    .with_register_pubkey("realm", trust_path, cell)
+    .with_session_realm("realm")
+    .with_hub_signing_seed([0x11; 32]);
+    let agent_ura = "easynet:///r/realm/agent/dev.anthropic";
+    let arguments = br#"{"agent_ura":"easynet:///r/realm/agent/dev.anthropic","signing_authority":{"kind":"hosted_by","host_ura":"easynet:///r/realm/device/test-daemon"},"host_node_id":"test-daemon"}"#;
+    let callee_ura = crate::core::ura::hub_ura("realm");
+    let request = Request::new(InvokeRequest {
+        envelope: Some(signed_test_envelope(
+            caller_ura,
+            &callee_ura,
+            agent_ura,
             ABILITY_FEDERATION_ADVERTISE_AGENT,
-            r#"{"agent_ura":"easynet:///r/realm/device/n1"}"#,
-        ))
-        .await
-        .expect("dispatch returns Ok");
+            arguments,
+            &test_device_signing_key(),
+        )),
+        function_name: ABILITY_FEDERATION_ADVERTISE_AGENT.to_string(),
+        arguments: arguments.to_vec(),
+        metadata: std::collections::HashMap::from([(
+            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            test_descriptor_ref(&callee_ura, ABILITY_FEDERATION_ADVERTISE_AGENT),
+        )]),
+        ..InvokeRequest::default()
+    });
+    grant_child_access_for_test(
+        "dev",
+        PrincipalKind::Device,
+        caller_ura,
+        None,
+        &callee_ura,
+        agent_ura,
+        &test_owner_ability_ura(&callee_ura, ABILITY_FEDERATION_ADVERTISE_AGENT),
+        AccessAction::Manage,
+    );
+    let resp = svc.invoke(request).await.expect("dispatch returns Ok");
     let body: federation_wrappers::AdvertiseAgentResponse = parse_response_body(resp);
     assert!(body.ack);
     assert!(!body.replaced_prior);

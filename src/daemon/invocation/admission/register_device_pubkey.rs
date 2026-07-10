@@ -80,6 +80,8 @@ struct RegisterArgs {
     principal_owner_ura: Option<String>,
     #[serde(default)]
     principal_owner_user_id: Option<String>,
+    #[serde(default)]
+    principal_owner_username: Option<String>,
 }
 
 /// Narrow policy view of an `identity.register_pubkey` request.
@@ -202,6 +204,15 @@ fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustedAgentR
             "identity.register_pubkey: principal_owner_ura and principal_owner_user_id must be supplied together",
         ));
     }
+    let has_owner_username = args
+        .principal_owner_username
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    if has_owner_username && !has_owner_user_id {
+        return Err(Status::invalid_argument(
+            "identity.register_pubkey: principal_owner_username requires principal_owner_ura and principal_owner_user_id",
+        ));
+    }
 
     let role = parse_role(&args.role)?;
     Ok((args, role))
@@ -222,6 +233,12 @@ fn trusted_principal_owner_from_args(args: &RegisterArgs) -> Option<TrustedPrinc
         principal_ura: args.agent_ura.clone(),
         owner_user_id: owner_user_id.to_string(),
         owner_ura: owner_ura.to_string(),
+        owner_username: args
+            .principal_owner_username
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
     })
 }

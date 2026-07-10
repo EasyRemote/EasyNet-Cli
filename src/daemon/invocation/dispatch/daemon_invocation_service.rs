@@ -714,9 +714,8 @@ impl DaemonInvocationService {
 
     /// Attach the hub identity seed used to sign cross-hub
     /// peer-envelope rewrites. Boot wires this best-effort from
-    /// backend's `~/.easynet-hub/<realm>/identity.json`; tests can
-    /// inject a deterministic fixture to avoid relying on process
-    /// `HOME`.
+    /// the SDK runtime keyring; tests can inject a deterministic fixture
+    /// to avoid relying on process environment.
     #[must_use]
     pub fn with_hub_signing_seed(mut self, seed: SessionSigningSeed) -> Self {
         self.admission = self.admission.with_hub_signing_seed(seed);
@@ -977,10 +976,16 @@ impl Invocation for DaemonInvocationService {
                     unary.dispatch_federation_join(&inner.arguments)
                 }
                 Some(DaemonUnaryRoute::FederationAdvertiseAgent) => {
-                    unary.dispatch_federation_advertise_agent(&inner.arguments)
+                    unary.dispatch_federation_advertise_agent(
+                        &inner.arguments,
+                        inner.envelope.as_ref(),
+                    )
                 }
                 Some(DaemonUnaryRoute::FederationAdvertiseAbilities) => {
-                    unary.dispatch_federation_advertise_abilities(&inner.arguments)
+                    unary.dispatch_federation_advertise_abilities(
+                        &inner.arguments,
+                        inner.envelope.as_ref(),
+                    )
                 }
                 Some(DaemonUnaryRoute::FederationHeartbeat) => {
                     unary.dispatch_federation_heartbeat(&inner.arguments)

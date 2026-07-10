@@ -3233,6 +3233,7 @@ impl AxonAbilityCatalog {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         self.invoke_rpc_target_json(target)
     }
@@ -5016,6 +5017,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         }
     }
 
@@ -5090,6 +5092,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: Some("easynet:///r/acme/resource/01CAM".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(
@@ -5138,6 +5141,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(
@@ -5169,6 +5173,7 @@ mod tests {
             call_mode: CallMode::Stream,
             subject: Some("easynet:///r/x/resource/01MIC".into()),
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let src = dispatcher.execute_stream(target).unwrap();
         match src {
@@ -5218,6 +5223,7 @@ mod tests {
             call_mode: CallMode::Rpc,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
         let msg = format!("{err}");
@@ -5482,6 +5488,7 @@ mod tests {
             call_mode: CallMode::Bidi,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -5512,6 +5519,7 @@ mod tests {
             call_mode: CallMode::Bidi,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         let msg = format!("{err}");
@@ -5541,6 +5549,7 @@ mod tests {
             call_mode: CallMode::Bidi,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").contains("precondition foo missing"));
@@ -5562,6 +5571,7 @@ mod tests {
             call_mode: CallMode::Bidi,
             subject: None,
             causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("remote"));

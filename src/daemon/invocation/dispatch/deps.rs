@@ -85,7 +85,7 @@ pub(crate) struct FederationDial {
     pub(crate) peers: SharedFederatedPeers,
     /// Hub signing seed for cross-hub `federation.forward_invoke`
     /// peer-envelope signatures. `None` preserves the on-demand read
-    /// of `~/.easynet-hub/<realm>/identity.json`.
+    /// from the SDK runtime keyring.
     pub(crate) hub_signing_seed: Option<SessionSigningSeed>,
     /// When `false` (default) the dispatcher refuses to dial a peer
     /// hub whose endpoint came from an observed `federated_directory`

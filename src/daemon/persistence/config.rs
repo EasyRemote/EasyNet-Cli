@@ -443,10 +443,8 @@ pub struct Credentials {
     /// preflight. Cross-machine cold-start fix (hub in US, CLI in
     /// SG): the device's `auto_wire_self_realm_trust` step needs
     /// this to write the hub's `(ura, pubkey, role=hub)` row into
-    /// `realm-trust.toml` without needing on-host access to the
-    /// hub's `~/.easynet-hub/<realm>/identity.json`. Empty when
-    /// paired against a pre-v4.1.4 hub (legacy fallback path reads
-    /// identity.json directly when same-host).
+    /// `realm-trust.toml` without needing on-host access to the hub
+    /// runtime keyring. Empty pairing responses are rejected by join.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_pubkey_b64: Option<String>,
     /// Optional base64-encoded PEM trust anchor for the hub's
