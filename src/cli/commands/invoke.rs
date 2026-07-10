@@ -165,14 +165,27 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             // legacy `/agent/<node>` shape collapsed devices into
             // the agent namespace; v4.1.4 puts the daemon under the
             // `device` role with the same node-id tail.
-            let caller_ura = crate::daemon::persistence::config::load_credentials()
-                .ok()
+            let credentials = crate::daemon::persistence::config::load_credentials().ok();
+            let caller_ura = credentials
+                .as_ref()
                 .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
                 .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
             let target_call = ability_ref.remote_target(target)?;
+            let subject = invoke_args
+                .subject
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    credentials
+                        .as_ref()
+                        .and_then(|creds| default_owner_invoke_subject(creds, ability_selector))
+                });
             let value =
                 crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target_with_timeout(
                     &target_call,
+                    subject.as_deref(),
                     arguments,
                     caller_ura.as_deref(),
                     // Originating CLI invoke: no inbound causal parent to chain.
@@ -233,6 +246,19 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         ability_selector.ability_ura()
     ));
     Ok(())
+}
+
+#[cfg(feature = "axon-pb")]
+fn default_owner_invoke_subject(
+    credentials: &crate::daemon::persistence::config::Credentials,
+    ability_selector: &AbilitySelector,
+) -> Option<String> {
+    let user_id = credentials.user_id().ok()?;
+    Some(crate::core::ura::resource_dot_ura(
+        credentials.realm_str().trim(),
+        &format!("user.{user_id}"),
+        &format!("invoke/{}", ability_selector.public_name()),
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -416,6 +442,32 @@ mod tests {
         });
         let err = res.expect_err("must reject malformed JSON");
         assert!(format!("{err:#}").contains("parse --args JSON"));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn default_owner_invoke_subject_uses_credentials_user_resource() {
+        let credentials = crate::daemon::persistence::config::Credentials {
+            node_id: "node-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "https://hub.example".to_string(),
+            realm: "easynet.run".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("dev".to_string()),
+            user_id: Some("user-123".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let selector =
+            AbilitySelector::parse("easynet:///r/easynet.run/ability/device.node-b.shell.run")
+                .expect("ability selector");
+
+        assert_eq!(
+            default_owner_invoke_subject(&credentials, &selector).as_deref(),
+            Some("easynet:///r/easynet.run/resource/user.user-123/invoke/shell.run")
+        );
     }
 
     #[test]

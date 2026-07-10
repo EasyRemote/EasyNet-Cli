@@ -1197,15 +1197,19 @@ func directInvokeFields(ctx context.Context, identity *IdentityClient, draft Inv
 }
 
 func directExecutableInvocationDraft(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (InvocationDraft, string, error) {
-	abilityName, err := directLocalAbilityName(ctx, identity, draft)
+	localAbilityName, err := directLocalAbilityName(ctx, identity, draft)
 	if err != nil {
 		return InvocationDraft{}, "", err
 	}
-	projected, err := directPreparedInvocationDraftWithAbility(ctx, identity, draft, abilityName)
+	projected, err := directPreparedInvocationDraftWithAbility(ctx, identity, draft, localAbilityName)
 	if err != nil {
 		return InvocationDraft{}, "", err
 	}
-	return projected, abilityName, nil
+	wireAbilityName := localAbilityName
+	if projected.CallerSignature() != nil {
+		wireAbilityName = projected.DescriptorRef()
+	}
+	return projected, wireAbilityName, nil
 }
 
 func directBidiOpenFrame(ctx context.Context, identity *IdentityClient, draft InvocationDraft, streams []*axonpb.StreamDescriptor) (*axonpb.InvokeBidiUp, error) {
@@ -1679,7 +1683,7 @@ func directReceipt(receipt *axonpb.InvocationReceipt) map[string]any {
 	if receipt == nil {
 		return nil
 	}
-	return map[string]any{
+	value := map[string]any{
 		"index":                 receipt.GetIndex(),
 		"invocation_id":         receipt.GetInvocationId(),
 		"receipt_type":          receipt.GetReceiptType(),
@@ -1692,6 +1696,19 @@ func directReceipt(receipt *axonpb.InvocationReceipt) map[string]any {
 		"reason":                receipt.GetReason(),
 		"child_invocation_id":   receipt.GetChildInvocationId(),
 	}
+	if payload := receipt.GetPayload(); len(payload) > 0 {
+		if json.Valid(payload) {
+			var decoded any
+			if err := json.Unmarshal(payload, &decoded); err == nil {
+				value["payload"] = decoded
+			} else {
+				value["payload_base64"] = base64.StdEncoding.EncodeToString(payload)
+			}
+		} else {
+			value["payload_base64"] = base64.StdEncoding.EncodeToString(payload)
+		}
+	}
+	return value
 }
 
 func directStateName(state axonpb.InvocationState) string {

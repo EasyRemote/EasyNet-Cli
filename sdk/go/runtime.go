@@ -764,12 +764,18 @@ func invalidRuntimePayload(message string, cause error) error {
 }
 
 func transportRuntimeError(message string, cause error) error {
+	details := map[string]any{}
+	if cause != nil {
+		details["cause"] = cause.Error()
+		message = fmt.Sprintf("%s: %v", message, cause)
+	}
 	return &SDKError{
 		Code:      ErrTransport,
 		Stage:     "transport",
 		Retry:     RetrySafe,
 		Retryable: RetryableForHint(RetrySafe),
 		Message:   message,
+		Details:   details,
 		Cause:     cause,
 	}
 }

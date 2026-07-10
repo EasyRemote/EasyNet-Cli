@@ -24,7 +24,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -378,7 +378,7 @@ impl BidiDispatcher {
                 Status::failed_precondition(selected_host_unavailable_message(selected_route))
             })?;
 
-        let mut handle = pending.register_pending_for(&selected_route.execution_host_ura);
+        let mut handle = pending.register_lossless_pending_for(&selected_route.execution_host_ura);
         let call_id = handle.call_id();
         let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
 
@@ -1464,12 +1464,10 @@ impl BidiDispatcher {
 /// non-business metadata and ignore them, so this is wire-compatible
 /// with every existing `session.open` consumer.
 fn build_session_down_keepalive_frame() -> DispatchFrame {
-    DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(DownPayload::Control(BidiControl::default())),
-            ..InvokeBidiDown::default()
-        },
-    }
+    DispatchFrame::control(InvokeBidiDown {
+        payload: Some(DownPayload::Control(BidiControl::default())),
+        ..InvokeBidiDown::default()
+    })
 }
 
 /// Build the spec §1.1 admission-accept frame: down frame 0 carries
@@ -1987,6 +1985,7 @@ fn json_frame_error_reason(value: &serde_json::Value) -> String {
 /// bug we are trying to eliminate here.
 struct SessionDownStream {
     down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>,
+    pending_normal_frames: VecDeque<Result<DispatchFrame, Status>>,
     next_heartbeat: Pin<Box<tokio::time::Sleep>>,
     next_sequence: u64,
     /// Set to `Some(receipt)` at construction; first `poll_next`
@@ -2056,6 +2055,7 @@ impl SessionDownStream {
     ) -> Self {
         Self {
             down_rx,
+            pending_normal_frames: VecDeque::new(),
             next_heartbeat: Box::pin(tokio::time::sleep(SESSION_DOWN_HEARTBEAT_INTERVAL)),
             next_sequence: 0,
             pending_admission_receipt: Some(admission_receipt),
@@ -2070,6 +2070,35 @@ impl SessionDownStream {
 
     fn stamp_sequence(&mut self, frame: InvokeBidiDown) -> InvokeBidiDown {
         stamp_bidi_down_sequence(&mut self.next_sequence, frame)
+    }
+
+    fn poll_dispatch_frame(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<DispatchFrame, Status>>> {
+        for _ in 0..DISPATCH_CHANNEL_CAPACITY {
+            match Pin::new(&mut self.down_rx).poll_recv(cx) {
+                Poll::Ready(Some(Ok(frame))) if frame.is_control() => {
+                    return Poll::Ready(Some(Ok(frame)));
+                }
+                Poll::Ready(Some(Ok(frame))) => {
+                    self.pending_normal_frames.push_back(Ok(frame));
+                }
+                Poll::Ready(Some(Err(status))) => {
+                    return Poll::Ready(Some(Err(status)));
+                }
+                Poll::Ready(None) => {
+                    return Poll::Ready(self.pending_normal_frames.pop_front());
+                }
+                Poll::Pending => break,
+            }
+        }
+
+        if let Some(frame) = self.pending_normal_frames.pop_front() {
+            return Poll::Ready(Some(frame));
+        }
+
+        Poll::Pending
     }
 }
 
@@ -2087,7 +2116,7 @@ impl Stream for SessionDownStream {
             return Poll::Ready(Some(Ok(self.stamp_sequence(receipt))));
         }
 
-        match Pin::new(&mut self.down_rx).poll_recv(cx) {
+        match self.poll_dispatch_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => {
                 self.reset_heartbeat();
                 return Poll::Ready(Some(Ok(self.stamp_sequence(frame.frame))));
@@ -2147,6 +2176,58 @@ impl BidiDispatcher {
             }
         };
         self.dispatch_session_request_named(&ability, args).await
+    }
+
+    fn is_inline_session_request(&self, ability_ura: &str) -> bool {
+        matches!(
+            self.session_request_public_ability_for_hub(ability_ura)
+                .as_deref(),
+            Ok(federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY)
+        )
+    }
+
+    async fn dispatch_checked_session_request(
+        &self,
+        ability_ura: &str,
+        args: &[u8],
+        args_content_envelope: &SessionContentEnvelope,
+    ) -> RequestOutcome {
+        if args_content_envelope.is_encrypted() {
+            RequestOutcome::Err {
+                error: SessionRequestError::PermissionDenied {
+                    reason: format!(
+                        "session.open: Request ability_ura `{ability_ura}` received encrypted args \
+                         but no hub-side request decryptor is wired"
+                    ),
+                },
+            }
+        } else if !args_content_envelope.content_type.is_empty()
+            && args_content_envelope.content_type != "application/json"
+        {
+            RequestOutcome::Err {
+                error: SessionRequestError::PermissionDenied {
+                    reason: format!(
+                        "session.open: Request ability_ura `{ability_ura}` received unsupported \
+                         args content_type {:?}",
+                        args_content_envelope.content_type
+                    ),
+                },
+            }
+        } else if !args_content_envelope.encoding.is_empty()
+            && args_content_envelope.encoding != "identity"
+        {
+            RequestOutcome::Err {
+                error: SessionRequestError::PermissionDenied {
+                    reason: format!(
+                        "session.open: Request ability_ura `{ability_ura}` received unsupported \
+                         args encoding {:?}",
+                        args_content_envelope.encoding
+                    ),
+                },
+            }
+        } else {
+            self.dispatch_session_request(ability_ura, args).await
+        }
     }
 
     /// Carrier-v1 entry (DEC-F004): the proto frame already carries the
@@ -2406,15 +2487,13 @@ pub(crate) fn build_session_request_result_frame(
             serde_json::to_vec(&fallback).expect("typed error variant must always encode")
         }
     };
-    crate::daemon::invocation::bidi::state::presence::DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(Payload::BinaryChunk(BinaryChunk {
-                data,
-                ..BinaryChunk::default()
-            })),
-            ..InvokeBidiDown::default()
-        },
-    }
+    crate::daemon::invocation::bidi::state::presence::DispatchFrame::control(InvokeBidiDown {
+        payload: Some(Payload::BinaryChunk(BinaryChunk {
+            data,
+            ..BinaryChunk::default()
+        })),
+        ..InvokeBidiDown::default()
+    })
 }
 
 /// Push a `RequestResult` frame back down the device's bidi via
@@ -2537,18 +2616,16 @@ pub(crate) fn build_reverse_dispatch_result_frame(
             )
         }
     };
-    DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(DownPayload::ReverseDispatchResult(ReverseDispatchResult {
-                call_id: call_id.to_vec(),
-                payload,
-                terminal: true,
-                receipt: None,
-                failure,
-            })),
-            ..InvokeBidiDown::default()
-        },
-    }
+    DispatchFrame::control(InvokeBidiDown {
+        payload: Some(DownPayload::ReverseDispatchResult(ReverseDispatchResult {
+            call_id: call_id.to_vec(),
+            payload,
+            terminal: true,
+            receipt: None,
+            failure,
+        })),
+        ..InvokeBidiDown::default()
+    })
 }
 
 /// Terminal-result settlement shared by the JSON `Result` arm and the
@@ -2559,7 +2636,7 @@ pub(crate) fn build_reverse_dispatch_result_frame(
 /// only reader of the device's whole `session.open` — so it must
 /// never wait on one call's consumer. A stalled streaming consumer
 /// costs that call alone (`ConsumerStalled`), not the session.
-fn settle_terminal_result(
+async fn settle_terminal_result(
     pending: &Option<Arc<PendingDispatchMap>>,
     pending_stream: &Option<Arc<PendingStreamDispatchMap>>,
     caller_ura: &str,
@@ -2568,7 +2645,10 @@ fn settle_terminal_result(
 ) {
     let mut completed = false;
     if let Some(pending_stream) = pending_stream.as_ref() {
-        match pending_stream.try_finish(call_id, dispatch_result.clone()) {
+        match pending_stream
+            .deliver_terminal(call_id, dispatch_result.clone())
+            .await
+        {
             crate::daemon::invocation::bidi::state::pending_dispatch::StreamDeliver::Delivered => {
                 completed = true
             }
@@ -2769,10 +2849,11 @@ async fn drain_session_up_stream(
                 let call_id = result.call_id;
                 let mapped = pending_result_from_carrier_v1(&result);
                 if terminal {
-                    settle_terminal_result(&pending, &pending_stream, &caller_ura, call_id, mapped);
+                    settle_terminal_result(&pending, &pending_stream, &caller_ura, call_id, mapped)
+                        .await;
                 } else if let Some(pending_stream) = pending_stream.as_ref() {
                     report_chunk_delivery(
-                        pending_stream.try_push_chunk(call_id, mapped.payload),
+                        pending_stream.deliver_chunk(call_id, mapped.payload).await,
                         &caller_ura,
                         call_id,
                     );
@@ -2887,7 +2968,8 @@ async fn drain_session_up_stream(
                         &caller_ura,
                         call_id,
                         dispatch_result,
-                    );
+                    )
+                    .await;
                 } else {
                     let Some(pending_stream) = pending_stream.as_ref() else {
                         crate::op_event!(
@@ -2899,7 +2981,7 @@ async fn drain_session_up_stream(
                         continue;
                     };
                     report_chunk_delivery(
-                        pending_stream.try_push_chunk(call_id, payload),
+                        pending_stream.deliver_chunk(call_id, payload).await,
                         &caller_ura,
                         call_id,
                     );
@@ -2973,53 +3055,25 @@ async fn drain_session_up_stream(
                     ability_ura = ability_ura,
                 );
 
-                // Dispatch off the drain task so a slow inner
-                // call (peer delegation round-trip, peer-side
-                // ability handler latency) does not stall
-                // subsequent up-frames the device sends. Each
-                // Request gets its own short-lived task.
+                let inline_control_request = dispatcher.is_inline_session_request(&ability_ura);
                 let dispatcher_for_request = dispatcher.clone();
                 let presence_for_reply = Arc::clone(&presence);
                 let caller_ura_for_reply = caller_ura.clone();
-                tokio::spawn(async move {
-                    let outcome = if args_content_envelope.is_encrypted() {
-                        RequestOutcome::Err {
-                            error: SessionRequestError::PermissionDenied {
-                                reason: format!(
-                                    "session.open: Request ability_ura `{ability_ura}` received encrypted args \
-                                     but no hub-side request decryptor is wired"
-                                ),
-                            },
-                        }
-                    } else if !args_content_envelope.content_type.is_empty()
-                        && args_content_envelope.content_type != "application/json"
-                    {
-                        RequestOutcome::Err {
-                            error: SessionRequestError::PermissionDenied {
-                                reason: format!(
-                                    "session.open: Request ability_ura `{ability_ura}` received unsupported \
-                                     args content_type {:?}",
-                                    args_content_envelope.content_type
-                                ),
-                            },
-                        }
-                    } else if !args_content_envelope.encoding.is_empty()
-                        && args_content_envelope.encoding != "identity"
-                    {
-                        RequestOutcome::Err {
-                            error: SessionRequestError::PermissionDenied {
-                                reason: format!(
-                                    "session.open: Request ability_ura `{ability_ura}` received unsupported \
-                                     args encoding {:?}",
-                                    args_content_envelope.encoding
-                                ),
-                            },
-                        }
-                    } else {
-                        dispatcher_for_request
-                            .dispatch_session_request(&ability_ura, &args)
-                            .await
-                    };
+                if inline_control_request {
+                    crate::op_event!(
+                        component = session_accept,
+                        kind = session_request_inline_control_dispatch,
+                        caller = caller_ura,
+                        call_id = id_hex,
+                        ability_ura = ability_ura,
+                    );
+                    let outcome = dispatcher_for_request
+                        .dispatch_checked_session_request(
+                            &ability_ura,
+                            &args,
+                            &args_content_envelope,
+                        )
+                        .await;
                     let frame = build_session_request_result_frame(call_id, outcome);
                     push_session_request_result(
                         &presence_for_reply,
@@ -3027,7 +3081,29 @@ async fn drain_session_up_stream(
                         &id_hex,
                         frame,
                     );
-                });
+                } else {
+                    // Dispatch off the drain task so a slow inner
+                    // call (peer delegation round-trip, peer-side
+                    // ability handler latency) does not stall
+                    // subsequent up-frames the device sends. Each
+                    // Request gets its own short-lived task.
+                    tokio::spawn(async move {
+                        let outcome = dispatcher_for_request
+                            .dispatch_checked_session_request(
+                                &ability_ura,
+                                &args,
+                                &args_content_envelope,
+                            )
+                            .await;
+                        let frame = build_session_request_result_frame(call_id, outcome);
+                        push_session_request_result(
+                            &presence_for_reply,
+                            &caller_ura_for_reply,
+                            &id_hex,
+                            frame,
+                        );
+                    });
+                }
             }
             SessionDispatch::RequestResult { call_id, .. } => {
                 // RequestResult is hub → device only; a device
@@ -3275,16 +3351,14 @@ pub(crate) fn build_remote_bidi_open_dispatch_frame(
             "InvokeBidi remote file_transfer: encode SessionDispatch::BidiOpen: {err}"
         ))
     })?;
-    Ok(DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                stream_id: INVOKE_REMOTE_STREAM_ID,
-                data: bytes,
-                ..BinaryChunk::default()
-            })),
-            ..InvokeBidiDown::default()
-        },
-    })
+    Ok(DispatchFrame::normal(InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+            stream_id: INVOKE_REMOTE_STREAM_ID,
+            data: bytes,
+            ..BinaryChunk::default()
+        })),
+        ..InvokeBidiDown::default()
+    }))
 }
 
 fn build_remote_bidi_input_dispatch_frame(
@@ -3300,16 +3374,14 @@ fn build_remote_bidi_input_dispatch_frame(
     let data = frame
         .encode_frame()
         .expect("SessionDispatch::BidiInput is statically encodable");
-    DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                stream_id: INVOKE_REMOTE_STREAM_ID,
-                data,
-                ..BinaryChunk::default()
-            })),
-            ..InvokeBidiDown::default()
-        },
-    }
+    DispatchFrame::normal(InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+            stream_id: INVOKE_REMOTE_STREAM_ID,
+            data,
+            ..BinaryChunk::default()
+        })),
+        ..InvokeBidiDown::default()
+    })
 }
 
 fn build_remote_bidi_input_frame_for_ability(
@@ -3469,6 +3541,65 @@ mod tests {
         let failure = r.failure.expect("typed failure");
         assert_eq!(failure.code, "TARGET_OFFLINE");
         assert!(failure.retryable);
+    }
+
+    #[tokio::test]
+    async fn session_down_stream_prioritizes_control_frames_over_normal_backlog() {
+        let (tx, rx) = mpsc::channel::<Result<DispatchFrame, Status>>(8);
+        let mut stream =
+            SessionDownStream::new(rx, build_session_down_admission_receipt(1, 7, false));
+
+        let first = stream.next().await.expect("admission frame").expect("ok");
+        assert!(
+            matches!(first.payload, Some(DownPayload::Receipt(_))),
+            "frame 0 remains the admission receipt"
+        );
+
+        tx.send(Ok(DispatchFrame::normal(InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                data: b"normal-a".to_vec(),
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        })))
+        .await
+        .expect("normal-a queued");
+        tx.send(Ok(DispatchFrame::normal(InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                data: b"normal-b".to_vec(),
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        })))
+        .await
+        .expect("normal-b queued");
+        tx.send(Ok(DispatchFrame::control(InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                data: b"control".to_vec(),
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        })))
+        .await
+        .expect("control queued");
+
+        let prioritized = stream.next().await.expect("prioritized frame").expect("ok");
+        let Some(DownPayload::BinaryChunk(chunk)) = prioritized.payload else {
+            panic!("expected prioritized BinaryChunk");
+        };
+        assert_eq!(chunk.data, b"control");
+
+        let normal_a = stream.next().await.expect("normal-a").expect("ok");
+        let Some(DownPayload::BinaryChunk(chunk)) = normal_a.payload else {
+            panic!("expected normal-a BinaryChunk");
+        };
+        assert_eq!(chunk.data, b"normal-a");
+
+        let normal_b = stream.next().await.expect("normal-b").expect("ok");
+        let Some(DownPayload::BinaryChunk(chunk)) = normal_b.payload else {
+            panic!("expected normal-b BinaryChunk");
+        };
+        assert_eq!(chunk.data, b"normal-b");
     }
 
     #[test]

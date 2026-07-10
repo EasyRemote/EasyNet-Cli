@@ -213,6 +213,10 @@ func decodeSigningKeyRegistrationForRuntime(requestJSON []byte) (SigningKeyRegis
 	if _, err := marshalSigningKeyRegistrationRequest(req); err != nil {
 		return SigningKeyRegistrationRequest{}, err
 	}
+	req.IdentityCarrierBase.Metadata = normalizedIdentityRuntimeCarrierMetadata(
+		req.IdentityCarrierBase.Metadata,
+		req.Metadata,
+	)
 	if err := validateIdentityRole(req.Role); err != nil {
 		return SigningKeyRegistrationRequest{}, err
 	}
@@ -252,7 +256,25 @@ func decodeSignerForRuntime(requestJSON []byte) (SignerRequest, error) {
 	if _, err := marshalSignerRequest(req); err != nil {
 		return SignerRequest{}, err
 	}
+	req.IdentityCarrierBase.Metadata = normalizedIdentityRuntimeCarrierMetadata(
+		req.IdentityCarrierBase.Metadata,
+		req.Metadata,
+	)
 	return req, nil
+}
+
+func normalizedIdentityRuntimeCarrierMetadata(carrier map[string]any, request map[string]any) map[string]any {
+	if len(carrier) == 0 && len(request) == 0 {
+		return nil
+	}
+	metadata := map[string]any{}
+	for key, value := range request {
+		metadata[key] = value
+	}
+	for key, value := range carrier {
+		metadata[key] = value
+	}
+	return metadata
 }
 
 func identityRuntimePayload(requestJSON []byte) (map[string]any, error) {

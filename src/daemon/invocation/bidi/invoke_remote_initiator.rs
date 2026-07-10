@@ -632,6 +632,7 @@ fn extract_chunk_bytes(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> Op
 /// response with its awaiting bidi.
 pub(crate) struct InnerPayload {
     pub ability_ura: String,
+    pub subject_ura: String,
     pub args_bytes: Vec<u8>,
     pub call_id: String,
 }
@@ -650,7 +651,7 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
         return Err(Status::invalid_argument(
             "federation.forward_invoke: inner_envelope_b64 is empty; \
              cross-hub dispatch requires a base64-encoded JSON \
-             {ability_ura, args, call_id} payload",
+             {ability_ura, subject_ura, args, call_id} payload",
         ));
     }
     let parsed: serde_json::Value = serde_json::from_slice(&raw).map_err(|err| {
@@ -661,7 +662,7 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
     let obj = parsed.as_object().ok_or_else(|| {
         Status::invalid_argument(
             "federation.forward_invoke: inner envelope must be a JSON object \
-             with `ability_ura`, `args`, and `call_id` fields",
+             with `ability_ura`, `subject_ura`, `args`, and `call_id` fields",
         )
     })?;
     let ability_ura = obj
@@ -686,6 +687,22 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
             )
         })?
         .to_string();
+    let subject_ura = obj
+        .get("subject_ura")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            Status::invalid_argument(
+                "federation.forward_invoke: inner envelope is missing a non-empty \
+                 string `subject_ura` field",
+            )
+        })?
+        .to_string();
+    crate::core::ura::parse_ura(&subject_ura).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation.forward_invoke: inner envelope subject_ura is not a canonical URA: {err}"
+        ))
+    })?;
     let args_value = obj
         .get("args")
         .cloned()
@@ -697,6 +714,7 @@ pub(crate) fn decode_inner_payload(b64: &str) -> Result<InnerPayload, Status> {
     })?;
     Ok(InnerPayload {
         ability_ura,
+        subject_ura,
         args_bytes,
         call_id,
     })
@@ -713,16 +731,14 @@ pub(crate) fn build_carrier_v1_dispatch_frame(
     open_bidi: bool,
 ) -> DispatchFrame {
     use easynet_axon::pb::axon::v1::DispatchCall;
-    DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(DownPayload::DispatchCall(DispatchCall {
-                call_id,
-                request: Some(request),
-                open_bidi,
-            })),
-            ..InvokeBidiDown::default()
-        },
-    }
+    DispatchFrame::normal(InvokeBidiDown {
+        payload: Some(DownPayload::DispatchCall(DispatchCall {
+            call_id,
+            request: Some(request),
+            open_bidi,
+        })),
+        ..InvokeBidiDown::default()
+    })
 }
 
 /// Build a `DispatchFrame` carrying a `SessionDispatch::Dispatch` JSON
@@ -783,12 +799,10 @@ pub(crate) fn build_invoke_remote_dispatch_frame(
         data: bytes,
         ..BinaryChunk::default()
     };
-    Ok(DispatchFrame {
-        frame: InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..InvokeBidiDown::default()
-        },
-    })
+    Ok(DispatchFrame::normal(InvokeBidiDown {
+        payload: Some(DownPayload::BinaryChunk(chunk)),
+        ..InvokeBidiDown::default()
+    }))
 }
 
 /// Build the terminal `InvokeBidiDown` frame the

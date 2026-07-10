@@ -4,6 +4,7 @@ package easynet
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -109,11 +110,13 @@ func (d *directRuntimeFakeDaemon) InvokeBidi(stream grpc.BidiStreamingServer[axo
 	return stream.Send(&axonpb.InvokeBidiDown{
 		Sequence: 2,
 		Payload: &axonpb.InvokeBidiDown_Receipt{Receipt: &axonpb.InvocationReceipt{
-			Index:           1,
-			InvocationId:    "inv-bidi",
-			ReceiptType:     "completed",
-			State:           axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
-			CleanupComplete: true,
+			Index:              1,
+			InvocationId:       "inv-bidi",
+			ReceiptType:        "completed",
+			State:              axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
+			Payload:            []byte(`{"sha256":"bidi-sha"}`),
+			PayloadContentType: "application/json",
+			CleanupComplete:    true,
 		}},
 	})
 }
@@ -314,10 +317,22 @@ func TestDirectDaemonRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubj
 	if err != nil {
 		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
 	}
+	seed := [32]byte{}
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+	privateKey := ed25519.NewKeyFromSeed(seed[:])
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey)
+	canonicalBytes, err := base64.StdEncoding.DecodeString(prepared.SigningMaterial().CanonicalBytesBase64())
+	if err != nil {
+		t.Fatalf("canonical decode: %v", err)
+	}
+	signature := ed25519.Sign(privateKey, canonicalBytes)
 	signed, err := prepared.SignWithCallerSignature(InvocationSignature{
 		Algorithm:             "ed25519",
-		SignatureBase64:       base64.StdEncoding.EncodeToString([]byte("direct-signature")),
-		SignerPublicKeyBase64: directRuntimeUserSubjectPubkeyBase64,
+		SignatureBase64:       base64.StdEncoding.EncodeToString(signature),
+		SignerPublicKeyBase64: publicKeyBase64,
 	})
 	if err != nil {
 		t.Fatalf("SignWithCallerSignature: %v", err)
@@ -339,11 +354,31 @@ func TestDirectDaemonRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubj
 	if got := daemon.seenInvoke.GetEnvelope().GetSubject().GetUra(); got != directRuntimeUserSubjectResourceURA {
 		t.Fatalf("dispatched subject = %q, want %q", got, directRuntimeUserSubjectResourceURA)
 	}
-	if got := daemon.seenInvoke.GetEnvelope().GetCallerSignature().GetKeyIdHint(); got != directRuntimeUserSubjectPubkeyBase64 {
+	if got := daemon.seenInvoke.GetEnvelope().GetCallerSignature().GetKeyIdHint(); got != publicKeyBase64 {
 		t.Fatalf("caller signature key hint = %q, want user pubkey", got)
+	}
+	wireEnvelope := daemon.seenInvoke.GetEnvelope()
+	wireCanonical, err := CanonicalInvocationBytes(Envelope{
+		Caller:        AgentRef{URA: wireEnvelope.GetCaller().GetUra()},
+		Callee:        AgentRef{URA: wireEnvelope.GetCallee().GetUra()},
+		Subject:       SubjectRef{URA: wireEnvelope.GetSubject().GetUra()},
+		CausalContext: CausalNullWithReason(""),
+		Nonce:         wireEnvelope.GetInvocationNonce(),
+	}, prepared.Tuple().DescriptorRef(), daemon.seenInvoke.GetArguments())
+	if err != nil {
+		t.Fatalf("wire canonical bytes: %v", err)
+	}
+	if !ed25519.Verify(publicKey, wireCanonical, signature) {
+		t.Fatal("daemon wire request must verify against prepare-time caller signature")
 	}
 	if got := daemon.seenInvoke.GetMetadata()[directSignedDescriptorRefMetadata]; got != prepared.Tuple().DescriptorRef() {
 		t.Fatalf("signed descriptor metadata = %q, want %q", got, prepared.Tuple().DescriptorRef())
+	}
+	if got := daemon.seenInvoke.GetFunctionName(); got != prepared.Tuple().DescriptorRef() {
+		t.Fatalf("signed dispatch function_name = %q, want descriptor ref %q", got, prepared.Tuple().DescriptorRef())
+	}
+	if got := daemon.seenInvoke.GetTarget().GetAbilityName(); got != prepared.Tuple().DescriptorRef() {
+		t.Fatalf("signed dispatch target ability_name = %q, want descriptor ref %q", got, prepared.Tuple().DescriptorRef())
 	}
 }
 
@@ -423,6 +458,19 @@ func TestDirectDaemonRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	}
 	if !terminal.Terminal() || session.State() != BidiTerminal {
 		t.Fatalf("terminal = %v state %s", terminal.Terminal(), session.State())
+	}
+	terminalFrame, err := session.TerminalFrame()
+	if err != nil {
+		t.Fatalf("TerminalFrame: %v", err)
+	}
+	var receipt struct {
+		Payload map[string]string `json:"payload"`
+	}
+	if err := json.Unmarshal(terminalFrame.ReceiptJSON(), &receipt); err != nil {
+		t.Fatalf("decode terminal receipt: %v; raw=%s", err, terminalFrame.ReceiptJSON())
+	}
+	if receipt.Payload["sha256"] != "bidi-sha" {
+		t.Fatalf("terminal receipt payload = %#v", receipt.Payload)
 	}
 	if len(daemon.seenBidi) < 2 || daemon.seenBidi[0].GetEnvelopeOpen() == nil {
 		t.Fatalf("daemon did not receive bidi open and data frames")

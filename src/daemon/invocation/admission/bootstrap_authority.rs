@@ -1,9 +1,9 @@
 // EasyNet CLI - RFC-014 bootstrap authority verifier
 // ==================================================
 //
-// This module turns a narrow paired-device bootstrap fact into the same
+// This module turns bounded control-plane authority facts into the same
 // verified-authority input consumed by PolicyEngine. It deliberately does not
-// mutate read models and does not special-case federation handlers.
+// mutate read models and does not bypass signature admission.
 
 use sha2::{Digest as _, Sha256};
 
@@ -39,10 +39,6 @@ impl BootstrapAuthorityVerifier {
         trusted_role: TrustedAgentRole,
         daemon_ura: Option<&str>,
     ) -> BootstrapAuthorityDecision {
-        if trusted_role != TrustedAgentRole::Device {
-            return BootstrapAuthorityDecision::NotApplicable;
-        }
-
         let Some(caller_ura) = envelope
             .caller
             .as_ref()
@@ -51,10 +47,6 @@ impl BootstrapAuthorityVerifier {
         else {
             return BootstrapAuthorityDecision::NotApplicable;
         };
-        if !is_device_ura(caller_ura) {
-            return BootstrapAuthorityDecision::NotApplicable;
-        }
-
         let Some(callee_ura) = envelope
             .callee
             .as_ref()
@@ -71,6 +63,17 @@ impl BootstrapAuthorityVerifier {
         else {
             return BootstrapAuthorityDecision::NotApplicable;
         };
+
+        if trusted_role == TrustedAgentRole::Hub {
+            return verify_hub_link_authority(
+                caller_ura, callee_ura, ability, action, args, daemon_ura,
+            );
+        }
+
+        if trusted_role != TrustedAgentRole::Device || !is_device_ura(caller_ura) {
+            return BootstrapAuthorityDecision::NotApplicable;
+        }
+
         let Some(owner) = trust_anchor.lookup_principal_owner(caller_ura) else {
             return BootstrapAuthorityDecision::NotApplicable;
         };
@@ -106,6 +109,28 @@ impl BootstrapAuthorityVerifier {
         BootstrapAuthorityDecision::Verified {
             authority_id: bootstrap_authority_id(caller_ura, ability, &owner.owner_user_id),
         }
+    }
+}
+
+fn verify_hub_link_authority(
+    caller_ura: &str,
+    callee_ura: &str,
+    ability: &str,
+    action: AccessAction,
+    args: &[u8],
+    daemon_ura: Option<&str>,
+) -> BootstrapAuthorityDecision {
+    if ability != ABILITY_FEDERATION_RESOLVE_KEY || action != AccessAction::Invoke {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    if !is_hub_ura(caller_ura) || !callee_is_current_hub(callee_ura, daemon_ura) {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    if verify_hub_link_resolve_key(args, callee_ura).is_none() {
+        return BootstrapAuthorityDecision::NotApplicable;
+    }
+    BootstrapAuthorityDecision::Verified {
+        authority_id: hub_link_authority_id(caller_ura, callee_ura, ability),
     }
 }
 
@@ -157,9 +182,40 @@ fn verify_bootstrap_resolve_key(args: &[u8], hub_ura: &str, owner_ura: &str) -> 
     None
 }
 
+fn verify_hub_link_resolve_key(args: &[u8], hub_ura: &str) -> Option<()> {
+    let Ok(request) = serde_json::from_slice::<ResolveKeyRequest>(args) else {
+        return None;
+    };
+    let agent_ura = request.agent_ura.trim();
+    let hub = parse_ura(hub_ura).ok()?;
+    let agent = parse_ura(agent_ura).ok()?;
+    if hub.kind != URAKind::Hub || agent.realm != hub.realm {
+        return None;
+    }
+    match agent.kind {
+        URAKind::User | URAKind::Agent | URAKind::Device | URAKind::Hub => Some(()),
+        _ => None,
+    }
+}
+
 fn is_device_ura(ura: &str) -> bool {
     parse_ura(ura)
         .map(|parsed| parsed.kind == URAKind::Device && parsed.device_id().is_some())
+        .unwrap_or(false)
+}
+
+fn is_hub_ura(ura: &str) -> bool {
+    parse_ura(ura)
+        .map(|parsed| parsed.kind == URAKind::Hub)
+        .unwrap_or(false)
+}
+
+fn callee_is_current_hub(callee_ura: &str, daemon_ura: Option<&str>) -> bool {
+    if daemon_ura.is_some_and(|daemon| daemon != callee_ura) {
+        return false;
+    }
+    parse_ura(callee_ura)
+        .map(|callee| callee.kind == URAKind::Hub)
         .unwrap_or(false)
 }
 
@@ -185,6 +241,19 @@ fn bootstrap_authority_id(caller_ura: &str, ability: &str, owner_user_id: &str) 
     hasher.update(owner_user_id.as_bytes());
     format!(
         "device_bootstrap_authority:sha256:{}",
+        hex::encode(hasher.finalize())
+    )
+}
+
+fn hub_link_authority_id(caller_ura: &str, callee_ura: &str, ability: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(caller_ura.as_bytes());
+    hasher.update([0]);
+    hasher.update(callee_ura.as_bytes());
+    hasher.update([0]);
+    hasher.update(ability.as_bytes());
+    format!(
+        "hub_link_authority:sha256:{}",
         hex::encode(hasher.finalize())
     )
 }
@@ -480,6 +549,81 @@ mod tests {
             &anchor(),
             TrustedAgentRole::Device,
             Some("easynet:///r/test/hub"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn trusted_peer_hub_can_resolve_current_realm_device_key() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/device/dev-1",
+        }))
+        .expect("args");
+
+        let subject = crate::core::ura::owner_ability_ura(
+            "easynet:///r/test/hub",
+            ABILITY_FEDERATION_RESOLVE_KEY,
+        )
+        .expect("subject");
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Invoke,
+            &args,
+            &anchor(),
+            TrustedAgentRole::Hub,
+            Some("easynet:///r/test/hub"),
+        );
+
+        assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn trusted_peer_hub_cannot_resolve_third_realm_key() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/third/device/dev-1",
+        }))
+        .expect("args");
+
+        let subject = crate::core::ura::owner_ability_ura(
+            "easynet:///r/test/hub",
+            ABILITY_FEDERATION_RESOLVE_KEY,
+        )
+        .expect("subject");
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Invoke,
+            &args,
+            &anchor(),
+            TrustedAgentRole::Hub,
+            Some("easynet:///r/test/hub"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+    }
+
+    #[test]
+    fn trusted_peer_hub_cannot_resolve_against_non_current_hub() {
+        let args = serde_json::to_vec(&serde_json::json!({
+            "agent_ura": "easynet:///r/test/device/dev-1",
+        }))
+        .expect("args");
+
+        let subject = crate::core::ura::owner_ability_ura(
+            "easynet:///r/test/hub",
+            ABILITY_FEDERATION_RESOLVE_KEY,
+        )
+        .expect("subject");
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            AccessAction::Invoke,
+            &args,
+            &anchor(),
+            TrustedAgentRole::Hub,
+            Some("easynet:///r/other/hub"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);

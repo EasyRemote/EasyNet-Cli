@@ -731,6 +731,13 @@ mod tests {
             .with_modes(AbilityCallModes::RPC)
             .with_descriptor_proof(WIRE_TEST_DESCRIPTOR_VERSION, [0x11; 32], [0x22; 32])
     }
+
+    fn production_proof_bound_rpc_options() -> AbilityOptions {
+        AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof("1.0.0", [0x11; 32], [0x22; 32])
+    }
+    use base64::Engine;
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use serde_json::Value;
 
@@ -880,6 +887,77 @@ mod tests {
         assert_eq!(
             outcome.invocation_id.as_deref(),
             Some(records[0].request_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_rpc_accepts_backend_prepare_signed_fixture() {
+        let temp = tempfile::tempdir().unwrap();
+        let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
+        let public_key = base64::engine::general_purpose::STANDARD
+            .decode("Ild93/uiXzP6DGBhe0FLETKB8GoOYz/QEKCl77wPYJ4=")
+            .unwrap();
+        let verifying_key =
+            VerifyingKey::from_bytes(public_key.as_slice().try_into().unwrap()).unwrap();
+        let rt = LocalRuntime::new();
+        rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
+        rt.set_admission_key_resolver(Arc::new(FixedKey(verifying_key)));
+
+        let callee_ura = "easynet:///r/hub-a.local/device/be2146d3-2afe-4977-9f9a-245982b79db4";
+        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, "shell.run").unwrap();
+        rt.register_ability_with_options(
+            ability_ura,
+            make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+            production_proof_bound_rpc_options(),
+        )
+        .await
+        .unwrap();
+
+        let wire_env = pb::Envelope {
+            caller: Some(pb::AgentIdentity {
+                ura: "easynet:///r/hub-a.local/user/ad5a2619-4c49-459d-a862-a41111cc646d"
+                    .to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            callee: Some(pb::AgentIdentity {
+                ura: callee_ura.to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            subject: Some(pb::SubjectIdentity {
+                ura: "easynet:///r/hub-a.local/resource/user.ad5a2619-4c49-459d-a862-a41111cc646d/invoke/shell.run"
+                    .to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            invocation_nonce: base64::engine::general_purpose::STANDARD
+                .decode("70OZGnyx21TmUqWXuVfNag==")
+                .unwrap(),
+            causal_context: Some(pb::CausalContext {
+                form: Some(pb::causal_context::Form::None(pb::Empty {})),
+            }),
+            caller_signature: Some(pb::CallerSignature {
+                algorithm: "ed25519".to_string(),
+                signature: base64::engine::general_purpose::STANDARD
+                    .decode("s7GnQI8MVYQcxwkTX1dHoatVFVsLlFpn1O9LJQHZt8RElvZj3orC8jdcKKflvVVu93Ou5o9WWXEnRoYtlAZJAg==")
+                    .unwrap(),
+                key_id_hint: "Ild93/uiXzP6DGBhe0FLETKB8GoOYz/QEKCl77wPYJ4=".to_string(),
+            }),
+            ..Default::default()
+        };
+        let dispatch = external_signed_from_wire_parts(
+            wire_env,
+            "easynet:///r/hub-a.local/ability/device.be2146d3-2afe-4977-9f9a-245982b79db4.shell.run@1.0.0"
+                .to_string(),
+            br#"{"command":"hostname"}"#.to_vec(),
+            Default::default(),
+        )
+        .expect("translate backend signed fixture");
+
+        let outcome = dispatch_rpc(&rt, dispatch).await;
+        assert_eq!(outcome.state, InvocationState::Completed);
+        assert!(
+            outcome.error.is_none(),
+            "backend signed fixture must pass admission: {:?}",
+            outcome.error
         );
     }
 

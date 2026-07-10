@@ -34,6 +34,13 @@ func TestIdentityRuntimeTransportBuildsRegisterInvocationThroughResolver(t *test
 	if len(resolverTransport.seenBuildURA) != 1 || resolverTransport.seenBuildURA[0]["ability_name"] != identityAbilityRegisterPubkey {
 		t.Fatalf("ability descriptor was not delegated through resolver: %#v", resolverTransport.seenBuildURA)
 	}
+	metadata, ok := runtime.transport.(*compatibilityRuntimeInvokeTransport).seenDraft["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("runtime draft metadata missing: %#v", runtime.transport.(*compatibilityRuntimeInvokeTransport).seenDraft)
+	}
+	if got := metadata[SessionAuthorityMetadataKey]; got != "session-authority-test-value" {
+		t.Fatalf("session authority metadata = %#v, want preserved test value", got)
+	}
 }
 
 func TestIdentityRuntimeTransportInvokesListAndRevoke(t *testing.T) {
@@ -126,7 +133,10 @@ func identityBaseForTest() IdentityCarrierBase {
 		DescriptorVersion: "1.0.0",
 		NonceBase64:       "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext:     map[string]any{"form": "none"},
-		Metadata:          map[string]any{"request_id": "identity-1"},
+		Metadata: map[string]any{
+			"request_id":                "identity-1",
+			SessionAuthorityMetadataKey: "session-authority-test-value",
+		},
 	}
 }
 

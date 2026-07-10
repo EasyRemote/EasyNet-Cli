@@ -63,6 +63,7 @@ fn federated_peers_cell_picks_up_replace_without_service_rebuild() {
 
 #[tokio::test]
 async fn forward_invoke_self_target_runs_locally_via_axon_runtime() {
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
     // PR-1 commit 7/9 acceptance: when an inbound
     // `federation.forward_invoke` call's `target_ura` matches
     // THIS daemon's own canonical URA AND a local
@@ -101,13 +102,28 @@ async fn forward_invoke_self_target_runs_locally_via_axon_runtime() {
         .with_local_runtime(Arc::clone(&rt));
     publish_test_route(&svc, TEST_DAEMON_URA, "demo.echo");
 
+    let ability_ura = test_owner_ability_ura(TEST_DAEMON_URA, "demo.echo");
+    let subject_ura = test_user_invoke_subject_ura("test-owner", "demo.echo");
+    grant_child_access_for_test(
+        "test-owner",
+        PrincipalKind::Device,
+        TEST_DAEMON_URA,
+        Some(TokenClass::DevicePairing),
+        TEST_DAEMON_URA,
+        &subject_ura,
+        &ability_ura,
+        AccessAction::Invoke,
+    );
+
+    let carrier = test_envelope();
     let response = svc
         .unary_dispatcher()
         .dispatch_federation_forward_invoke(
-            None,
-            &forward_invoke_args_for_ability(
+            Some(&carrier),
+            &forward_invoke_args_for_ability_subject(
                 TEST_DAEMON_URA,
-                "demo.echo",
+                &ability_ura,
+                &subject_ura,
                 serde_json::json!({"k": "v"}),
             ),
         )
@@ -170,13 +186,28 @@ async fn forward_invoke_self_target_scopes_agent_target_ability() {
         .with_local_runtime(Arc::clone(&rt));
     publish_test_route(&svc, target_ura, "alice.chat");
 
+    let ability_ura = "easynet:///r/test-realm/ability/user.alice.chat";
+    let subject_ura = test_user_invoke_subject_ura("user", "alice.chat");
+    grant_child_access_for_test(
+        "user",
+        PrincipalKind::Device,
+        TEST_DAEMON_URA,
+        Some(TokenClass::DevicePairing),
+        target_ura,
+        &subject_ura,
+        ability_ura,
+        AccessAction::Invoke,
+    );
+
+    let carrier = test_envelope();
     let response = svc
         .unary_dispatcher()
         .dispatch_federation_forward_invoke(
-            None,
-            &forward_invoke_args_for_ability_ura(
+            Some(&carrier),
+            &forward_invoke_args_for_ability_subject(
                 target_ura,
-                "easynet:///r/test-realm/ability/user.alice.chat",
+                ability_ura,
+                &subject_ura,
                 serde_json::json!({"prompt": "hi"}),
             ),
         )
@@ -282,6 +313,7 @@ async fn forward_invoke_rejects_bare_device_agent_alias() {
 
 #[tokio::test]
 async fn forward_invoke_local_hub_ura_runs_locally_via_axon_runtime() {
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
     // Device-mode escalation targets the local realm's hub URA,
     // not the hub host's device URA. The hub daemon must treat
     // `easynet:///r/<realm>/hub` as self-targeted even though
@@ -300,13 +332,29 @@ async fn forward_invoke_local_hub_ura_runs_locally_via_axon_runtime() {
         .with_local_runtime(Arc::clone(&rt));
     publish_test_route(&svc, &crate::core::ura::hub_ura("test-realm"), "demo.echo");
 
+    let hub_ura = crate::core::ura::hub_ura("test-realm");
+    let ability_ura = test_owner_ability_ura(&hub_ura, "demo.echo");
+    let subject_ura = test_user_invoke_subject_ura("test-owner", "demo.echo");
+    grant_child_access_for_test(
+        "test-owner",
+        PrincipalKind::Device,
+        TEST_DAEMON_URA,
+        Some(TokenClass::DevicePairing),
+        &hub_ura,
+        &subject_ura,
+        &ability_ura,
+        AccessAction::Invoke,
+    );
+
+    let carrier = test_envelope();
     let response = svc
         .unary_dispatcher()
         .dispatch_federation_forward_invoke(
-            None,
-            &forward_invoke_args_for_ability(
-                &crate::core::ura::hub_ura("test-realm"),
-                "demo.echo",
+            Some(&carrier),
+            &forward_invoke_args_for_ability_subject(
+                &hub_ura,
+                &ability_ura,
+                &subject_ura,
                 serde_json::json!({"k": "hub"}),
             ),
         )
@@ -981,14 +1029,9 @@ async fn forward_invoke_cross_realm_peer_request_admits_against_hub_anchor() {
     let peer_admission =
         AdmissionFacade::new(peer_anchor, Some(crate::core::ura::hub_ura("peer-realm")));
 
-    let denied = peer_admission
+    peer_admission
         .verify_invoke(&peer_request)
-        .expect_err("public carrier without owner grant or AuthorityProof must fail closed");
-    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
-    assert!(
-        denied.message().contains("POLICY_DENIED"),
-        "target admission denial must stay structured: {denied}"
-    );
+        .expect("strict signed carrier admission must accept the rebuilt peer envelope");
 }
 
 // ── C1b / DEC-N5 §1: ForwardReceipt dual-write tests ──
@@ -1139,11 +1182,11 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     // ── Drive: daemon_a receives a federation.forward_invoke ──
     // PR-N1 commit 11/N rewrote the dispatch path: daemon A
     // now decodes the CLI bridge's `inner_envelope_b64`
-    // (base64 of `{ability_ura, args}`) and sends the inner
+    // (base64 of `{ability_ura, subject_ura, args}`) and sends the inner
     // ability URA to the peer instead of re-wrapping in another
     // `federation.forward_invoke`.
     //
-    // base64({"ability_ura":".../ability/device.target-device-b.federation.heartbeat","args":{
+    // base64({"ability_ura":".../ability/device.target-device-b.federation.heartbeat","subject_ura":".../device/target-device-b","args":{
     //   "membership_ura":"easynet:///r/realm-b/device/target-device-b",
     //   "ts_ms":0
     // }})
@@ -1152,6 +1195,7 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
         .expect("target device ability URA");
     let inner_payload = serde_json::json!({
         "ability_ura": ability_ura,
+        "subject_ura": TARGET_DEVICE_URA,
         "args": {
             "agent_ura": TARGET_DEVICE_URA,
         },
@@ -1172,14 +1216,15 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
         ..InvokeRequest::default()
     });
 
-    let denied = daemon_a
+    let resp = daemon_a
         .invoke(req)
         .await
-        .expect_err("public carrier without child authority must fail closed");
-    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
-    assert!(
-        denied.message().contains("POLICY_DENIED"),
-        "target admission denial must not be collapsed to target_offline: {denied}"
+        .expect("public carrier must reach the execution host; child policy is target-owned");
+    let body: federation_wrappers::ForwardInvokeResponse = parse_response_body(resp);
+    assert_eq!(body.correlation_call_id, "e2e-call-id-1");
+    assert_eq!(
+        body.result_bytes, br#"{"echo":"e2e-canned"}"#,
+        "execution-host result must round-trip through cross-hub carrier",
     );
 }
 

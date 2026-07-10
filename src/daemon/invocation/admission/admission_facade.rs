@@ -101,7 +101,7 @@ use easynet_axon::invocation::{
     AxonError as InvocationError, AxonErrorKind as InvocationErrorKind,
 };
 
-use crate::core::ura::{parse_ura, URAKind};
+use crate::core::ura::{owner_local_ability_name, parse_ura, AbilitySelector, URAKind};
 use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
@@ -134,14 +134,14 @@ use crate::daemon::invocation::admission::grant_matcher::{
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::admission::policy_gate::{
-    ability_ura_for, principal_for, AdmissionPolicyContext, AdmissionPolicyGate,
+    ability_ura_for, principal_for, resolve_owner, AdmissionPolicyContext, AdmissionPolicyGate,
 };
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
 use crate::daemon::invocation::bidi::session_initiator::SessionSigningSeed;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
-    ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_JOIN,
+    ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_JOIN,
     ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
@@ -325,6 +325,52 @@ impl AdmissionFacade {
         self.trust_anchor.snapshot()
     }
 
+    /// Resolve a caller public key through the same canonical resolver used by
+    /// strict Axon admission, returning base64-encoded Ed25519 bytes for the
+    /// `federation.resolve_key` wire surface.
+    ///
+    /// Local trust-anchor hits are handled by `federation_wrappers` before this
+    /// method is called. This method owns the federated miss path so execution
+    /// hosts that ask their local hub to resolve an external caller get the same
+    /// local-first, explicit-peer-gated semantics as transport admission.
+    pub fn resolve_federated_key_b64(
+        &self,
+        agent_ura: &str,
+        presented_pubkey_b64: Option<&str>,
+    ) -> Result<Option<String>, Status> {
+        let mut resolver = FederatedKeyResolver::new(
+            self.trust_anchor_snapshot(),
+            self.federation_client.clone(),
+            self.federated_peers.snapshot(),
+            self.self_realm.clone(),
+        )
+        .with_cache(self.federated_key_cache.clone())
+        .with_hub_signing_seed(self.hub_signing_seed.as_ref());
+        if let Some(pubkey) = presented_pubkey_b64.filter(|value| !value.is_empty()) {
+            resolver = resolver.with_presented_pubkey_b64(pubkey.to_string());
+        }
+        match resolver.resolve(agent_ura) {
+            Ok(key) => {
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = federated_resolve_key_succeeded,
+                    agent_ura = agent_ura,
+                );
+                Ok(Some(BASE64_STANDARD.encode(key.to_bytes())))
+            }
+            Err(err) if err.reason == "CALLER_KEY_NOT_FOUND" => {
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = federated_resolve_key_not_found,
+                    agent_ura = agent_ura,
+                    detail = err.message.as_str(),
+                );
+                Ok(None)
+            }
+            Err(err) => Err(axon_error_to_status(err)),
+        }
+    }
+
     /// Verify delegation metadata against an already-constructed
     /// envelope without re-running caller signature / nonce policy checks.
     ///
@@ -349,6 +395,86 @@ impl AdmissionFacade {
             axon_now_ms(),
         )
         .map(|_| ())
+    }
+
+    /// Verify RFC-014 policy for an invocation that enters the daemon from an
+    /// already-admitted carrier instead of a fresh public Axon envelope.
+    ///
+    /// `federation.forward_invoke` JSON frames and self-targeted
+    /// `runtime.invoke_remote` dispatches land in this category: their outer
+    /// carrier proves transport membership, but the inner ability still needs
+    /// the same owner/token/grant policy floor before touching LocalRuntime.
+    pub fn verify_carried_runtime_policy(
+        &self,
+        caller_ura: &str,
+        trusted_role: TrustedAgentRole,
+        callee_ura: &str,
+        subject_ura: &str,
+        ability_ura: &str,
+        ability: &str,
+        verified_authority_id: Option<String>,
+    ) -> Result<(), Status> {
+        let trust_anchor = self.trust_anchor_snapshot();
+        let owner = resolve_owner(
+            subject_ura,
+            callee_ura,
+            self.daemon_ura.as_deref(),
+            trust_anchor.as_ref(),
+        );
+        let principal = principal_for(trusted_role, caller_ura, trust_anchor.as_ref());
+        let grants = match owner.owner_user_id.as_deref() {
+            Some(owner_user_id) => AccessControlStore::open_or_create(owner_user_id)
+                .map(|store| store.grants())
+                .map_err(|err| {
+                    Status::internal(format!(
+                        "POLICY_STORE_UNAVAILABLE: owner_user_id={owner_user_id} error={err}"
+                    ))
+                })?,
+            None => Vec::new(),
+        };
+        let action = action_for_unary_ability(ability);
+        let decision = crate::daemon::invocation::admission::policy_engine::PolicyEngine::check(
+            crate::daemon::invocation::admission::policy_engine::PolicyInput {
+                owner,
+                caller_user_id: principal.caller_user_id,
+                caller_ura: caller_ura.to_string(),
+                principal_kind: principal.kind,
+                principal_id: principal.id,
+                token_id: principal.token_id,
+                token_class: principal.token_class,
+                callee_ura: callee_ura.to_string(),
+                subject_ura: subject_ura.to_string(),
+                ability_ura: ability_ura.to_string(),
+                action,
+                // Carrier children are not hub safe-read by default. A
+                // hub-linked token that enters through `federation.forward_invoke`
+                // or `runtime.invoke_remote` must rely on owner default, an
+                // explicit child grant, or verified authority material.
+                safe_read: false,
+                interactive_context_available: false,
+                canonical_hash: None,
+                signature_key_id: None,
+                verified_authority_id,
+                rejector_ura: self.daemon_ura.clone(),
+                now: Utc::now(),
+                grants,
+            },
+        );
+        match decision.decision {
+            crate::daemon::invocation::admission::decision::PolicyDecisionOutcome::Allow => Ok(()),
+            crate::daemon::invocation::admission::decision::PolicyDecisionOutcome::Prompt
+            | crate::daemon::invocation::admission::decision::PolicyDecisionOutcome::Deny => {
+                let encoded = serde_json::to_string(&decision).unwrap_or_else(|_| {
+                    format!(
+                        "{{\"decision\":\"{:?}\",\"reason\":\"{:?}\"}}",
+                        decision.decision, decision.reason
+                    )
+                });
+                Err(Status::permission_denied(format!(
+                    "POLICY_DENIED: {encoded}"
+                )))
+            }
+        }
     }
 
     /// The daemon's own canonical URA. Used by per-ability
@@ -778,6 +904,7 @@ impl AdmissionFacade {
             // `op_event!` audit lines + the wire-level error
             // their gRPC client sees.
             Ok(()) if bootstrap_authority_ability(ability) => Ok(()),
+            Ok(()) if carrier_admission_only_ability(ability) => Ok(()),
             Ok(()) => {
                 let delegation_authority_id = verify_delegation_metadata(
                     envelope,
@@ -1047,7 +1174,7 @@ impl AdmissionFacade {
             .map(|subject| subject.ura.as_str())
             .unwrap_or_default();
         let ability_ura = ability_ura_for(callee_ura, ability)?;
-        let principal = principal_for(trusted_role, caller_ura);
+        let principal = principal_for(trusted_role, caller_ura, trust_anchor);
         let canonical_hash = format!(
             "sha256:{}",
             hex::encode(sha2::Sha256::digest(
@@ -1303,11 +1430,9 @@ fn subject_ura_for_diagnostic(envelope: &Envelope) -> Option<String> {
 }
 
 fn ability_ura_for_diagnostic(envelope: &Envelope, ability: &str) -> String {
-    envelope
-        .callee
-        .as_ref()
-        .and_then(|callee| crate::core::ura::owner_ability_ura(callee.ura.trim(), ability))
-        .unwrap_or_else(|| ability.to_string())
+    AuthorityAbilityView::from_envelope(envelope, ability)
+        .map(|view| view.ability_ura)
+        .unwrap_or_else(|_| ability.to_string())
 }
 
 /// **PR-N2 commit 1/N**. Parse the realm component from a canonical
@@ -1341,12 +1466,24 @@ fn bootstrap_authority_ability(ability: &str) -> bool {
     )
 }
 
+/// Carrier abilities only authorize transport placement. Their child
+/// invocation is admitted separately after the carrier is decoded.
+fn carrier_admission_only_ability(ability: &str) -> bool {
+    matches!(
+        action_classification_ability_name(ability).as_str(),
+        ABILITY_FEDERATION_FORWARD_INVOKE
+            | crate::daemon::ability::conformance::ABILITY_RUNTIME_INVOKE_REMOTE
+    )
+}
+
 fn action_for_unary_ability(ability: &str) -> AccessAction {
     use crate::daemon::ability::names::{
         agents as agent_names, automation as automation_names, device_control as device_names,
         federation as federation_names, governance as governance_names,
         integrations as integration_names, resources as resource_names,
     };
+    let ability = action_classification_ability_name(ability);
+    let ability = ability.as_str();
 
     match ability {
         device_names::TERMINAL_CREATE
@@ -1504,6 +1641,17 @@ fn action_for_unary_ability(ability: &str) -> AccessAction {
     }
 }
 
+fn action_classification_ability_name(ability: &str) -> String {
+    let trimmed = ability.trim();
+    let ability_ura = trimmed
+        .split_once('@')
+        .map(|(ability_ura, _)| ability_ura)
+        .unwrap_or(trimmed);
+    AbilitySelector::parse(ability_ura)
+        .map(|selector| selector.public_name().to_string())
+        .unwrap_or_else(|_| trimmed.to_string())
+}
+
 #[derive(Debug, Deserialize)]
 struct DelegationProofRaw {
     #[serde(default)]
@@ -1617,6 +1765,7 @@ fn verify_session_authority_bindings(
     ability: &str,
     action: AccessAction,
 ) -> Result<(), Status> {
+    let ability_view = AuthorityAbilityView::from_envelope(envelope, ability)?;
     let caller = envelope
         .caller
         .as_ref()
@@ -1679,28 +1828,88 @@ fn verify_session_authority_bindings(
     if !payload
         .allowed_followup_abilities
         .iter()
-        .any(|candidate| candidate.trim() == ability)
+        .any(|candidate| ability_view.matches(candidate))
     {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_SCOPE_VIOLATION}: session follow-up abilities {:?} do not admit \
-             ability `{ability}`",
-            payload.allowed_followup_abilities
+             ability `{}`",
+            payload.allowed_followup_abilities,
+            ability_view.diagnostic_name()
         )));
     }
 
     if !payload
         .scopes
         .iter()
-        .any(|pattern| scope_matches(pattern, ability))
+        .any(|pattern| ability_view.matches(pattern))
     {
         return Err(Status::permission_denied(format!(
             "{REASON_AUTHORITY_SCOPE_VIOLATION}: session scopes {:?} do not admit ability \
-             `{ability}`",
-            payload.scopes
+             `{}`",
+            payload.scopes,
+            ability_view.diagnostic_name()
         )));
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct AuthorityAbilityView {
+    wire: String,
+    public_name: String,
+    ability_ura: String,
+}
+
+impl AuthorityAbilityView {
+    fn from_envelope(envelope: &Envelope, ability: &str) -> Result<Self, Status> {
+        let callee_ura = envelope
+            .callee
+            .as_ref()
+            .map(|callee| callee.ura.as_str())
+            .map(str::trim)
+            .filter(|callee| !callee.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "authority ability projection requires envelope callee URA",
+                )
+            })?;
+        let wire = ability.trim();
+        if wire.is_empty() {
+            return Err(Status::invalid_argument(
+                "authority ability projection requires ability",
+            ));
+        }
+        let ability_ura =
+            crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, wire)
+                .map_err(axon_error_to_status)?;
+        let public_name = AbilitySelector::parse(&ability_ura)
+            .map(|selector| selector.public_name().to_string())
+            .unwrap_or_else(|_| owner_local_ability_name(callee_ura, wire));
+        Ok(Self {
+            wire: wire.to_string(),
+            public_name,
+            ability_ura,
+        })
+    }
+
+    fn diagnostic_name(&self) -> &str {
+        if self.public_name.is_empty() {
+            &self.wire
+        } else {
+            &self.public_name
+        }
+    }
+
+    fn matches(&self, pattern: &str) -> bool {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            return false;
+        }
+        scope_matches(pattern, &self.public_name)
+            || scope_matches(pattern, &self.ability_ura)
+            || scope_matches(pattern, &self.wire)
+    }
 }
 
 fn session_authority_admits_subject(payload: &SessionAuthorityPayload, subject: &str) -> bool {
@@ -2202,6 +2411,16 @@ mod tests {
 
     #[test]
     fn rfc014_unary_action_classifier_pins_session_and_policy_boundaries() {
+        assert!(carrier_admission_only_ability(
+            ABILITY_FEDERATION_FORWARD_INVOKE
+        ));
+        assert!(carrier_admission_only_ability(
+            crate::daemon::ability::conformance::ABILITY_RUNTIME_INVOKE_REMOTE
+        ));
+        assert!(
+            !carrier_admission_only_ability("terminal.create"),
+            "terminal.create creates the governed child resource and must stay in owner policy"
+        );
         assert_eq!(
             action_for_unary_ability("terminal.create"),
             AccessAction::Stream
@@ -2249,6 +2468,16 @@ mod tests {
             AccessAction::Manage
         );
         assert_eq!(action_for_unary_ability("fs.list"), AccessAction::Read);
+        assert_eq!(
+            action_for_unary_ability("easynet:///r/realm/ability/device.dev-a.agent.list"),
+            AccessAction::Read
+        );
+        assert_eq!(
+            action_for_unary_ability(
+                "easynet:///r/realm/ability/device.dev-a.meta.list_abilities@1.0.0"
+            ),
+            AccessAction::Read
+        );
         assert_eq!(
             action_for_unary_ability("process.exec"),
             AccessAction::Invoke
@@ -2640,6 +2869,39 @@ mod tests {
             err.message().contains(REASON_AUTHORITY_SUBJECT_MISMATCH),
             "expected subject mismatch, got: {}",
             err.message()
+        );
+    }
+
+    #[test]
+    fn session_authority_scope_matches_descriptor_ref_public_ability() {
+        let caller_ura = hub_ura("session-authority-caller");
+        let callee_ura = hub_ura("realm");
+        let payload =
+            test_session_authority_payload(&caller_ura, &callee_ura, "alice", "identity.*");
+        let envelope = crate::daemon::invocation::ProtoEnvelope::targeted(
+            &caller_ura,
+            &callee_ura,
+            "easynet:///r/realm/resource/user.alice/invoke/identity.register_pubkey",
+        )
+        .expect("descriptor-bound subject")
+        .into_inner();
+        let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &callee_ura,
+            "identity.register_pubkey",
+        )
+        .expect("identity ability URA");
+        let descriptor_ref = format!("{ability_ura}@1.0.0");
+
+        verify_session_authority_bindings(
+            &payload,
+            &envelope,
+            &descriptor_ref,
+            AccessAction::Invoke,
+        )
+        .expect("identity.* should admit descriptor-ref identity.register_pubkey");
+        assert_eq!(
+            ability_ura_for_diagnostic(&envelope, &descriptor_ref),
+            ability_ura
         );
     }
 

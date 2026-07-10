@@ -1933,6 +1933,52 @@ async fn invoke_dispatches_federation_resolve_key_returns_pubkey_when_present() 
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invoke_dispatches_federation_resolve_key_uses_federated_resolver_on_local_miss() {
+    let peer_hub_url = "https://peer-hub.example:50443";
+    let peer_caller_ura = "easynet:///r/peer-realm/device/n1";
+    let peer_public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let canned = InvokeResponse {
+        result: serde_json::to_vec(&federation_wrappers::resolve_key_response(
+            peer_public_key_b64,
+            Vec::new(),
+        ))
+        .expect("resolve_key response serializes"),
+        result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+        ..InvokeResponse::default()
+    };
+    let recorder = Arc::new(RecordingFederationClient::new(canned));
+    let peers = crate::daemon::federation::peers::SharedFederatedPeers::new(
+        std::collections::BTreeMap::from([("peer-realm".to_string(), peer_hub_url.to_string())]),
+    );
+    let admission = AdmissionFacade::new(
+        Arc::new(RealmTrustAnchor::default()),
+        Some(TEST_DAEMON_URA.to_string()),
+    )
+    .with_federation(recorder.clone() as Arc<dyn FederationClient>, peers)
+    .with_hub_signing_seed([0x11; 32]);
+    let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
+
+    let resp = svc
+        .invoke(invoke_request(
+            ABILITY_FEDERATION_RESOLVE_KEY,
+            r#"{"agent_ura":"easynet:///r/peer-realm/device/n1"}"#,
+        ))
+        .await
+        .expect("federated resolve_key succeeds");
+    let body: federation_wrappers::ResolveKeyResponse = parse_response_body(resp);
+    assert_eq!(body.public_key_b64, peer_public_key_b64);
+
+    let calls = recorder.calls();
+    assert_eq!(calls.len(), 1, "local miss must dial the peer hub once");
+    assert_eq!(calls[0].0, peer_hub_url);
+    assert_eq!(calls[0].1.function_name, ABILITY_FEDERATION_RESOLVE_KEY);
+    let peer_args: federation_wrappers::ResolveKeyRequest =
+        serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
+    assert_eq!(peer_args.agent_ura, peer_caller_ura);
+}
+
 #[tokio::test]
 async fn invoke_dispatches_federation_resolve_key_returns_not_found_when_ura_unknown() {
     // PR-N2 commit 2/N: miss surfaces as Status::not_found
@@ -2299,6 +2345,88 @@ async fn dispatch_remote_rpc_rejects_missing_signed_descriptor_ref() {
         "missing descriptor-bound signed target must not be forwarded"
     );
     assert_eq!(pending.outstanding(), 0);
+}
+
+#[tokio::test]
+async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
+    use ed25519_dalek::Verifier as _;
+
+    const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/remote-device";
+
+    let pending = Arc::new(PendingDispatchMap::new());
+    let svc = make_service().with_pending(Arc::clone(&pending));
+    let (remote_tx, mut remote_rx) = mpsc::channel(8);
+    svc.directory.presence.insert_negotiated(
+        REMOTE_DEVICE_URA.to_string(),
+        remote_tx,
+        crate::daemon::invocation::bidi::state::presence::SessionContract {
+            version: 1,
+            claimant_boot_nonce: vec![9; 16],
+        },
+    );
+    publish_test_route(&svc, REMOTE_DEVICE_URA, "shell.run");
+
+    let ability_ura = crate::core::ura::owner_ability_ura(REMOTE_DEVICE_URA, "shell.run")
+        .expect("remote device ability URA");
+    let selected_route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route(&ability_ura, "")
+        .expect("resolver selects the remote-device route");
+    let descriptor_ref = test_descriptor_ref(REMOTE_DEVICE_URA, "shell.run");
+    let mut request =
+        invoke_request_for_callee(REMOTE_DEVICE_URA, "shell.run", r#"{"command":"hostname"}"#)
+            .into_inner();
+    request.function_name = descriptor_ref.clone();
+
+    let dispatcher = svc.unary_dispatcher();
+    let dispatch_task = tokio::spawn(async move {
+        dispatcher
+            .dispatch_remote_rpc_selected_route(&request, &selected_route)
+            .await
+    });
+    let frame = remote_rx
+        .recv()
+        .await
+        .expect("carrier frame delivered to v1 presence target")
+        .expect("presence dispatch frame ok")
+        .frame;
+    dispatch_task.abort();
+
+    let call = match frame.payload {
+        Some(easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call)) => call,
+        other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
+    };
+    let request = call.request.expect("carrier-v1 request");
+    assert_eq!(request.function_name, "shell.run");
+    assert_eq!(
+        request
+            .metadata
+            .get(crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY)
+            .map(String::as_str),
+        Some(descriptor_ref.as_str())
+    );
+    let envelope = request.envelope.expect("carrier-v1 envelope");
+    let signature = envelope
+        .caller_signature
+        .as_ref()
+        .expect("caller signature preserved")
+        .signature
+        .clone();
+    let descriptor_bound =
+        crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+            envelope,
+            descriptor_ref,
+            &request.arguments,
+            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+        )
+        .expect("descriptor-bound forwarded carrier");
+    let signature = ed25519_dalek::Signature::from_slice(&signature).expect("ed25519 signature");
+    test_device_signing_key()
+        .verifying_key()
+        .verify(&descriptor_bound.envelope.canonical_bytes(), &signature)
+        .expect("forwarded carrier material must verify against original signature");
 }
 
 #[tokio::test]

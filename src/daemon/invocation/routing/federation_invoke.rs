@@ -144,6 +144,7 @@ pub(crate) struct RemoteAbilityInvocationTarget {
     ability_ura: String,
     callee_ura: String,
     public_ability: String,
+    default_subject_ura: String,
     descriptor_binding: RemoteDescriptorBinding,
 }
 
@@ -190,11 +191,13 @@ impl RemoteAbilityInvocationTarget {
         let trimmed = ability_ura.trim();
         let selector = crate::core::ura::AbilitySelector::parse(trimmed)?;
         validate_forward_execution_target(execution_target_ura, &selector)?;
+        let default_subject_ura = default_subject_ura_for_selector(&selector);
         Ok(Self {
             execution_target_ura: execution_target_ura.trim().to_string(),
             ability_ura: trimmed.to_string(),
             callee_ura: selector.owner_ura().to_string(),
             public_ability: selector.public_name().to_string(),
+            default_subject_ura,
             descriptor_binding: RemoteDescriptorBinding::DeferredToDestination,
         })
     }
@@ -242,6 +245,10 @@ impl RemoteAbilityInvocationTarget {
             RemoteDescriptorBinding::DeferredToDestination => None,
         }
     }
+
+    pub(crate) fn default_subject_ura(&self) -> &str {
+        &self.default_subject_ura
+    }
 }
 
 pub(crate) fn invoke_via_federation_forward_target(
@@ -251,6 +258,7 @@ pub(crate) fn invoke_via_federation_forward_target(
 ) -> anyhow::Result<Value> {
     invoke_via_federation_forward_target_with_timeout(
         target,
+        None,
         args,
         caller_ura,
         &[],
@@ -273,6 +281,7 @@ pub(crate) fn invoke_via_federation_forward_target_with_causal_parents(
 ) -> anyhow::Result<Value> {
     invoke_via_federation_forward_target_with_timeout(
         target,
+        None,
         args,
         caller_ura,
         causal_parents,
@@ -282,6 +291,7 @@ pub(crate) fn invoke_via_federation_forward_target_with_causal_parents(
 
 pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     target: &RemoteAbilityInvocationTarget,
+    subject_ura: Option<&str>,
     args: Value,
     caller_ura: Option<&str>,
     causal_parents: &[Value],
@@ -320,10 +330,20 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     // of the SAME value — not whatever bytes the operator typed.
     let args_bytes_for_claim =
         serde_json::to_vec(&args).context("serialise args for origin-caller claim")?;
-    let origin_caller =
-        caller_ura.and_then(|caller| device_origin_claim(caller, target, &args_bytes_for_claim));
+    let inner_subject_ura = subject_ura
+        .map(str::trim)
+        .filter(|subject| !subject.is_empty())
+        .unwrap_or_else(|| target.default_subject_ura())
+        .to_string();
+    crate::core::ura::parse_ura(&inner_subject_ura).map_err(|err| {
+        anyhow!("invalid explicit forward subject URA `{inner_subject_ura}`: {err}")
+    })?;
+    let origin_caller = caller_ura.and_then(|caller| {
+        device_origin_claim(caller, target, &inner_subject_ura, &args_bytes_for_claim)
+    });
     let inner_payload = json!({
         "ability_ura": target.as_str(),
+        "subject_ura": inner_subject_ura,
         "args": args,
         "call_id": call_id,
     });
@@ -696,16 +716,16 @@ fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
 /// The signed tuple must match what the executing device rebuilds
 /// (`OriginCaller::into_wire_dispatch` fed by the hub's dispatch
 /// frame): callee = the ability's owner identity (the route resolver
-/// selects exactly this as callee), subject = the callee default (the
-/// forward path relays no explicit subject), causal = None, ability =
-/// the PUBLIC name, args = the hub-re-serialised bytes.
+/// selects exactly this as callee), subject = the inner payload subject,
+/// causal = None, ability = the PUBLIC name, args = the hub-re-serialised bytes.
 ///
-/// Returns `None` when the caller is not a device URA or when the route target
-/// lacks a descriptor version. Fidelity is additive, but it must never mint an
-/// origin proof over a guessed descriptor.
+/// Returns `None` when the caller is not a device URA. Plain Ability URA
+/// callers use the runtime's canonical default descriptor version; explicit
+/// descriptor refs preserve their supplied version.
 fn device_origin_claim(
     caller_ura: &str,
     target: &RemoteAbilityInvocationTarget,
+    subject_ura: &str,
     args_bytes: &[u8],
 ) -> Option<easynet_axon::OriginCallerClaim> {
     use base64::engine::general_purpose::STANDARD as B64;
@@ -729,15 +749,10 @@ fn device_origin_claim(
     let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
 
     let nonce = easynet_axon::invocation::fresh_nonce();
-    let descriptor_version = target.descriptor_version()?;
-    let subject_ura = match EntityRef::try_from_subject_identity(&SubjectIdentity::new(
-        callee_ura.clone(),
-        UraProfile::EasynetStrictV2,
-    )) {
-        Ok(_) => callee_ura.clone(),
-        Err(_) => crate::core::ura::owner_ability_ura(&callee_ura, &public_ability)?,
-    };
-    let subject = SubjectIdentity::new(subject_ura, UraProfile::EasynetStrictV2);
+    let descriptor_version = target
+        .descriptor_version()
+        .unwrap_or(crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION);
+    let subject = SubjectIdentity::new(subject_ura.to_string(), UraProfile::EasynetStrictV2);
     let ability = crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         &callee_ura,
         &public_ability,
@@ -835,6 +850,14 @@ fn validate_forward_execution_target(
             owner_kind,
             target_kind
         ),
+    }
+}
+
+fn default_subject_ura_for_selector(selector: &crate::core::ura::AbilitySelector) -> String {
+    if selector.owner_kind() == "hub" {
+        selector.ability_ura().to_string()
+    } else {
+        selector.owner_ura().to_string()
     }
 }
 
@@ -1029,7 +1052,7 @@ mod tests {
     /// The whole fidelity contract in one place: the claim the
     /// submitting device signs must verify against the canonical bytes
     /// the EXECUTING device rebuilds from the hub's dispatch frame
-    /// (callee = route owner, subject = callee default, ability =
+    /// (callee = route owner, subject = explicit inner subject, ability =
     /// public name, args = hub-re-serialised bytes).
     #[test]
     fn device_origin_claim_round_trips_executing_device_rebuild() {
@@ -1047,7 +1070,9 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({"rows": "[]", "code": "return True"}))
                 .expect("args bytes");
 
-        let claim = device_origin_claim(caller, &target, &args_bytes)
+        let route_callee = "easynet:///r/easynet.run/agent/alice.bfilter";
+        let subject_ura = "easynet:///r/easynet.run/resource/dataset.rows-1";
+        let claim = device_origin_claim(caller, &target, subject_ura, &args_bytes)
             .expect("device caller produces a claim");
         assert_eq!(claim.caller_ura, caller);
         assert_eq!(claim.ability, "code_filter");
@@ -1055,14 +1080,13 @@ mod tests {
 
         // Executing-device side: decode and rebuild exactly as
         // `LocalAxonSessionDispatcher` does (claim -> wire dispatch with
-        // the frame's callee and the subject default).
+        // the frame's callee and the explicit inner subject).
         let origin = crate::daemon::invocation::admission::origin_caller::OriginCaller::from_claim(
             claim.clone(),
         )
         .expect("claim decodes");
-        let route_callee = "easynet:///r/easynet.run/agent/alice.bfilter";
         let wire = origin
-            .into_wire_dispatch(route_callee, route_callee, args_bytes.clone())
+            .into_wire_dispatch(route_callee, subject_ura, args_bytes.clone())
             .expect("origin caller wire dispatch");
 
         use base64::Engine as _;
@@ -1093,7 +1117,7 @@ mod tests {
             crate::daemon::invocation::admission::origin_caller::OriginCaller::from_claim(claim)
                 .expect("claim decodes");
         let wire2 = origin2
-            .into_wire_dispatch(route_callee, route_callee, tampered)
+            .into_wire_dispatch(route_callee, subject_ura, tampered)
             .expect("origin caller wire dispatch");
         assert!(verifying
             .verify(&wire2.envelope.canonical_bytes(), &signature)
@@ -1109,21 +1133,32 @@ mod tests {
             "easynet:///r/easynet.run/ability/alice.bfilter.code_filter@2.4.0",
         )
         .expect("remote ability target");
-        assert!(
-            device_origin_claim("easynet:///r/easynet.run/user/alice", &target, b"{}",).is_none()
-        );
+        assert!(device_origin_claim(
+            "easynet:///r/easynet.run/user/alice",
+            &target,
+            target.default_subject_ura(),
+            b"{}",
+        )
+        .is_none());
     }
 
     #[test]
-    fn device_origin_claim_requires_descriptor_version() {
+    fn device_origin_claim_uses_default_descriptor_version_for_plain_ability_ura() {
         let target = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/easynet.run/device/node-b",
             "easynet:///r/easynet.run/ability/alice.bfilter.code_filter",
         )
         .expect("remote ability target");
-        assert!(
-            device_origin_claim("easynet:///r/easynet.run/device/node-a", &target, b"{}",)
-                .is_none()
+        let claim = device_origin_claim(
+            "easynet:///r/easynet.run/device/node-a",
+            &target,
+            target.default_subject_ura(),
+            b"{}",
+        )
+        .expect("plain Ability URA uses the canonical default descriptor version");
+        assert_eq!(
+            claim.descriptor_version,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
         );
     }
 

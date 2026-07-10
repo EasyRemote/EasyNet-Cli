@@ -60,6 +60,38 @@ enum KeySource {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DeviceTrustSyncStatus {
+    NotSyncable,
+    AlreadyTrusted,
+    Synced,
+    NegativeCached,
+    HubReturnedNoKeys,
+    ResolveFailed(String),
+    ImportDidNotTrust,
+}
+
+impl DeviceTrustSyncStatus {
+    #[must_use]
+    pub(crate) fn trusted(&self) -> bool {
+        matches!(self, Self::AlreadyTrusted | Self::Synced)
+    }
+
+    #[must_use]
+    pub(crate) fn diagnostic(&self) -> Option<String> {
+        match self {
+            Self::NotSyncable | Self::AlreadyTrusted | Self::Synced => None,
+            Self::NegativeCached => Some("negative cache is active".to_string()),
+            Self::HubReturnedNoKeys => Some("hub returned no public keys".to_string()),
+            Self::ResolveFailed(err) => Some(format!("hub resolve_key failed: {err}")),
+            Self::ImportDidNotTrust => Some(
+                "hub-attested key import completed but trust anchor still misses caller"
+                    .to_string(),
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SyncableCaller {
     Device,
     User {
@@ -190,11 +222,21 @@ impl DeviceTrustSync {
         caller_ura: &str,
         presented_pubkey_b64: Option<&str>,
     ) -> bool {
+        self.ensure_caller_key_status(caller_ura, presented_pubkey_b64)
+            .await
+            .trusted()
+    }
+
+    pub(crate) async fn ensure_caller_key_status(
+        &self,
+        caller_ura: &str,
+        presented_pubkey_b64: Option<&str>,
+    ) -> DeviceTrustSyncStatus {
         let Some(role) = self.syncable_caller(caller_ura, presented_pubkey_b64) else {
-            return false;
+            return DeviceTrustSyncStatus::NotSyncable;
         };
         if self.anchor_has_caller_key(caller_ura, &role) {
-            return true;
+            return DeviceTrustSyncStatus::AlreadyTrusted;
         }
         let cache_key = role.cache_key(caller_ura);
 
@@ -202,11 +244,11 @@ impl DeviceTrustSync {
         // Double-check under the lock: a concurrent miss may have
         // synced while this one waited.
         if self.anchor_has_caller_key(caller_ura, &role) {
-            return true;
+            return DeviceTrustSyncStatus::AlreadyTrusted;
         }
         if let Some(failed_at) = state.get(&cache_key) {
             if failed_at.elapsed() < NEGATIVE_CACHE_TTL {
-                return false;
+                return DeviceTrustSyncStatus::NegativeCached;
             }
         }
 
@@ -217,17 +259,18 @@ impl DeviceTrustSync {
             Ok(keys) if !keys.is_empty() => keys,
             Ok(_) => {
                 state.insert(cache_key, Instant::now());
-                return false;
+                return DeviceTrustSyncStatus::HubReturnedNoKeys;
             }
             Err(err) => {
+                let diagnostic = err.to_string();
                 crate::op_event!(
                     component = device_trust_sync,
                     kind = resolve_failed,
                     caller_ura = caller_ura,
-                    error = err.to_string(),
+                    error = diagnostic,
                 );
                 state.insert(cache_key, Instant::now());
-                return false;
+                return DeviceTrustSyncStatus::ResolveFailed(diagnostic);
             }
         };
 
@@ -240,10 +283,11 @@ impl DeviceTrustSync {
                 caller_ura = caller_ura,
                 role = role.register_role(),
             );
+            DeviceTrustSyncStatus::Synced
         } else {
             state.insert(cache_key, Instant::now());
+            DeviceTrustSyncStatus::ImportDidNotTrust
         }
-        imported
     }
 
     fn syncable_caller(

@@ -319,6 +319,7 @@ async fn reverse_dispatch_named_entry_rejects_unknown_ability() {
 
 #[tokio::test]
 async fn dispatch_session_request_forward_invoke_hits_selected_local_session() {
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
     // **LB-57 Option A acceptance** (same-hub): when the
     // inbound Request's target_ura realm matches the hub's
     // local realm AND the target device is subscribed in
@@ -340,6 +341,19 @@ async fn dispatch_session_request_forward_invoke_hits_selected_local_session() {
         .with_pending(Arc::new(PendingDispatchMap::new()));
     let target_ura = "easynet:///r/test-realm/device/local-target";
     publish_test_route(&svc, target_ura, "observe.health");
+    let ability_ura = test_owner_ability_ura(target_ura, "observe.health");
+    let subject_ura = test_user_invoke_subject_ura("test-owner", "observe.health");
+    let hub_ura = crate::core::ura::hub_ura("test-realm");
+    grant_child_access_for_test(
+        "test-owner",
+        PrincipalKind::Token,
+        &hub_ura,
+        Some(TokenClass::HubLink),
+        target_ura,
+        &subject_ura,
+        &ability_ura,
+        AccessAction::Read,
+    );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
         Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
@@ -391,7 +405,12 @@ async fn dispatch_session_request_forward_invoke_hits_selected_local_session() {
         .bidi_dispatcher()
         .dispatch_session_request(
             &session_request_ability_ura("test-realm", ABILITY_FEDERATION_FORWARD_INVOKE),
-            &forward_invoke_args(target_ura),
+            &forward_invoke_args_for_ability_subject(
+                target_ura,
+                &ability_ura,
+                &subject_ura,
+                serde_json::json!({}),
+            ),
         )
         .await;
 
@@ -419,11 +438,25 @@ async fn dispatch_session_request_forward_invoke_hits_selected_local_session() {
 
 #[tokio::test]
 async fn dispatch_session_request_forward_invoke_preserves_target_failure_code() {
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_pending(Arc::new(PendingDispatchMap::new()));
     let target_ura = "easynet:///r/test-realm/device/local-target";
     publish_test_route(&svc, target_ura, "observe.health");
+    let ability_ura = test_owner_ability_ura(target_ura, "observe.health");
+    let subject_ura = test_user_invoke_subject_ura("test-owner", "observe.health");
+    let hub_ura = crate::core::ura::hub_ura("test-realm");
+    grant_child_access_for_test(
+        "test-owner",
+        PrincipalKind::Token,
+        &hub_ura,
+        Some(TokenClass::HubLink),
+        target_ura,
+        &subject_ura,
+        &ability_ura,
+        AccessAction::Read,
+    );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
         Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
@@ -465,7 +498,12 @@ async fn dispatch_session_request_forward_invoke_preserves_target_failure_code()
         .bidi_dispatcher()
         .dispatch_session_request(
             &session_request_ability_ura("test-realm", ABILITY_FEDERATION_FORWARD_INVOKE),
-            &forward_invoke_args(target_ura),
+            &forward_invoke_args_for_ability_subject(
+                target_ura,
+                &ability_ura,
+                &subject_ura,
+                serde_json::json!({}),
+            ),
         )
         .await;
 
@@ -486,12 +524,26 @@ async fn dispatch_session_request_forward_invoke_preserves_target_failure_code()
 
 #[tokio::test]
 async fn dispatch_session_request_forward_invoke_scopes_agent_target_ability() {
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let svc = make_service()
         .with_session_realm("test-realm")
         .with_pending(Arc::new(PendingDispatchMap::new()));
     let target_ura = "easynet:///r/test-realm/agent/user.alice";
     let host_ura = "easynet:///r/test-realm/device/alice-host";
     publish_test_route_hosted_by(&svc, target_ura, "alice.chat", host_ura);
+    let ability_ura = "easynet:///r/test-realm/ability/user.alice.chat";
+    let subject_ura = test_user_invoke_subject_ura("user", "alice.chat");
+    let hub_ura = crate::core::ura::hub_ura("test-realm");
+    grant_child_access_for_test(
+        "user",
+        PrincipalKind::Token,
+        &hub_ura,
+        Some(TokenClass::HubLink),
+        target_ura,
+        &subject_ura,
+        ability_ura,
+        AccessAction::Invoke,
+    );
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<
         Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
@@ -539,9 +591,10 @@ async fn dispatch_session_request_forward_invoke_scopes_agent_target_ability() {
         .bidi_dispatcher()
         .dispatch_session_request(
             &session_request_ability_ura("test-realm", ABILITY_FEDERATION_FORWARD_INVOKE),
-            &forward_invoke_args_for_ability_ura(
+            &forward_invoke_args_for_ability_subject(
                 target_ura,
-                "easynet:///r/test-realm/ability/user.alice.chat",
+                ability_ura,
+                &subject_ura,
                 serde_json::json!({"prompt": "hi"}),
             ),
         )

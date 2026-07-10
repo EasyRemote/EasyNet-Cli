@@ -191,6 +191,17 @@ enum BreakerScope {
     SubscribeDirectoryV2,
 }
 
+fn status_counts_as_peer_health_failure(code: tonic::Code) -> bool {
+    matches!(
+        code,
+        tonic::Code::Unknown
+            | tonic::Code::DeadlineExceeded
+            | tonic::Code::Unavailable
+            | tonic::Code::Internal
+            | tonic::Code::DataLoss
+    )
+}
+
 /// Canonical hub endpoint string used as the federation peer key. We
 /// intentionally do not introduce a newtype wrapper around
 /// `String` for v1 — the endpoint is parsed by `tonic::transport::
@@ -563,6 +574,17 @@ impl CrossHubDialer {
         *entry = next;
     }
 
+    fn record_breaker_failure_for_status(
+        &self,
+        target_hub_endpoint: &HubEndpoint,
+        scope: BreakerScope,
+        status: &tonic::Status,
+    ) {
+        if status_counts_as_peer_health_failure(status.code()) {
+            self.record_breaker_failure(target_hub_endpoint, scope);
+        }
+    }
+
     /// Resolve a `tonic::transport::Channel` for `target_hub_endpoint`,
     /// reusing a cached channel when the peer has been dialed
     /// before. The trust-anchor entry the caller already verified
@@ -722,7 +744,11 @@ impl FederationClient for CrossHubDialer {
                 Ok(response.into_inner())
             }
             Ok(Err(status)) => {
-                self.record_breaker_failure(target_hub_endpoint, BreakerScope::ForwardInvoke);
+                self.record_breaker_failure_for_status(
+                    target_hub_endpoint,
+                    BreakerScope::ForwardInvoke,
+                    &status,
+                );
                 Err(FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
                     status: format!("code={:?} message={}", status.code(), status.message()),
@@ -815,9 +841,10 @@ impl FederationClient for CrossHubDialer {
                 Ok(Box::pin(stream))
             }
             Ok(Err(status)) => {
-                self.record_breaker_failure(
+                self.record_breaker_failure_for_status(
                     target_hub_endpoint,
                     BreakerScope::SubscribeDirectoryV2,
+                    &status,
                 );
                 Err(FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
@@ -1550,6 +1577,62 @@ mod tests {
         assert!(
             dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
             "success between failures must reset the counter"
+        );
+    }
+
+    #[test]
+    fn application_statuses_do_not_count_as_peer_health_failures() {
+        for code in [
+            tonic::Code::PermissionDenied,
+            tonic::Code::Unauthenticated,
+            tonic::Code::InvalidArgument,
+            tonic::Code::NotFound,
+            tonic::Code::FailedPrecondition,
+            tonic::Code::AlreadyExists,
+        ] {
+            assert!(
+                !status_counts_as_peer_health_failure(code),
+                "{code:?} is an application/admission outcome, not peer health"
+            );
+        }
+    }
+
+    #[test]
+    fn transport_statuses_count_as_peer_health_failures() {
+        for code in [
+            tonic::Code::Unknown,
+            tonic::Code::DeadlineExceeded,
+            tonic::Code::Unavailable,
+            tonic::Code::Internal,
+            tonic::Code::DataLoss,
+        ] {
+            assert!(
+                status_counts_as_peer_health_failure(code),
+                "{code:?} should contribute to peer health breaker"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn permission_denied_inner_status_does_not_open_forward_breaker() {
+        let target = "https://peer-hub.example:50443".to_string();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, SELF_SIGNED_CA_PEM).expect("seed ca");
+
+        let entry = fed_peer_entry(&target, ca_path);
+        let anchor = anchor_with(entry);
+
+        let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(1);
+        dialer.record_breaker_failure_for_status(
+            &target,
+            BreakerScope::ForwardInvoke,
+            &tonic::Status::permission_denied("POLICY_DENIED"),
+        );
+
+        assert!(
+            dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
+            "application-level PermissionDenied must not open the transport breaker"
         );
     }
 

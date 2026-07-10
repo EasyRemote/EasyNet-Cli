@@ -225,9 +225,7 @@ pub fn start_daemon_invocation_transport(
     };
 
     let daemon_identity = load_daemon_identity();
-    let daemon_ura = daemon_identity
-        .as_ref()
-        .map(|identity| identity.caller_ura.clone());
+    let daemon_ura = transport_daemon_ura(config.mode(), config.realm(), daemon_identity.as_ref());
     if let Some(identity) = daemon_identity.as_ref() {
         maybe_bootstrap_runtime_self_identity(identity);
     }
@@ -366,6 +364,7 @@ pub fn start_daemon_invocation_transport(
         quota_gate.clone(),
         federated_key_cache,
     );
+    let session_admission = admission.clone();
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_directory_read_models(advertised_agents, ability_catalog)
         .with_pending(Arc::clone(&pending))
@@ -719,6 +718,7 @@ pub fn start_daemon_invocation_transport(
                 escalation_state,
                 local_runtime: Arc::clone(&local_runtime),
                 ability_wire_registry: Arc::clone(&ability_wire_registry),
+                admission: session_admission.clone(),
                 plugin_runtime_manager: plugin_runtime_manager.clone(),
                 hub_published_abilities: Arc::clone(&hub_published_abilities),
                 user_trust_sync,
@@ -734,6 +734,17 @@ pub fn start_daemon_invocation_transport(
     }
 
     Ok(session_shutdown)
+}
+
+fn transport_daemon_ura(
+    mode: DaemonMode,
+    realm: &str,
+    daemon_identity: Option<&DaemonIdentity>,
+) -> Option<String> {
+    match mode {
+        DaemonMode::Hub | DaemonMode::Both => Some(crate::core::ura::hub_ura(realm)),
+        DaemonMode::Device => daemon_identity.map(|identity| identity.caller_ura.clone()),
+    }
 }
 
 /// Device-mode hot-advertise adapter for `agent.start`.
@@ -937,6 +948,7 @@ struct SessionSupervisorConfig {
     escalation_state: Option<DeviceEscalationState>,
     local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ability_wire_registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
+    admission: AdmissionFacade,
     plugin_runtime_manager: Option<Arc<crate::daemon::plugins::PluginRuntimeManager>>,
     hub_published_abilities: Arc<
         crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
@@ -952,6 +964,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         escalation_state,
         local_runtime,
         ability_wire_registry,
+        admission,
         plugin_runtime_manager,
         hub_published_abilities,
         user_trust_sync,
@@ -1015,6 +1028,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         local_dispatcher = local_dispatcher.with_escalation_correlation(correlation);
     }
     local_dispatcher = local_dispatcher.with_local_runtime(Arc::clone(&local_runtime));
+    local_dispatcher = local_dispatcher.with_admission_policy(admission);
     local_dispatcher =
         local_dispatcher.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
     // Cross-device origin-caller claims: warm the anchor from the hub
@@ -1599,6 +1613,38 @@ mod tests {
         assert!(
             identity.signing_seed.is_some(),
             "realm+node credentials must derive a signing seed"
+        );
+    }
+
+    #[test]
+    fn hub_mode_transport_identity_uses_hub_ura_not_device_credentials() {
+        let identity = DaemonIdentity {
+            caller_ura: "easynet:///r/cli/device/local".to_string(),
+            signing_seed: None,
+        };
+        assert_eq!(
+            transport_daemon_ura(DaemonMode::Hub, "hub-a.local", Some(&identity)).as_deref(),
+            Some("easynet:///r/hub-a.local/hub"),
+        );
+        assert_eq!(
+            transport_daemon_ura(DaemonMode::Both, "hub-a.local", Some(&identity)).as_deref(),
+            Some("easynet:///r/hub-a.local/hub"),
+        );
+    }
+
+    #[test]
+    fn device_mode_transport_identity_uses_device_credentials() {
+        let identity = DaemonIdentity {
+            caller_ura: "easynet:///r/hub-a.local/device/dev-1".to_string(),
+            signing_seed: None,
+        };
+        assert_eq!(
+            transport_daemon_ura(DaemonMode::Device, "hub-a.local", Some(&identity)).as_deref(),
+            Some("easynet:///r/hub-a.local/device/dev-1"),
+        );
+        assert_eq!(
+            transport_daemon_ura(DaemonMode::Device, "hub-a.local", None),
+            None,
         );
     }
 

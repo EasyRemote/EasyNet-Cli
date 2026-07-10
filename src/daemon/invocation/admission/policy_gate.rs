@@ -50,7 +50,7 @@ impl AdmissionPolicyGate {
             context.daemon_ura,
             context.trust_anchor,
         );
-        let principal = principal_for(context.trusted_role, &caller_ura);
+        let principal = principal_for(context.trusted_role, &caller_ura, context.trust_anchor);
         let grants = match owner.owner_user_id.as_deref() {
             Some(owner_user_id) => AccessControlStore::open_or_create(owner_user_id)
                 .map(|store| store.grants())
@@ -110,7 +110,11 @@ pub(crate) struct PrincipalProjection {
     pub(crate) caller_user_id: Option<String>,
 }
 
-pub(crate) fn principal_for(role: TrustedAgentRole, caller_ura: &str) -> PrincipalProjection {
+pub(crate) fn principal_for(
+    role: TrustedAgentRole,
+    caller_ura: &str,
+    trust_anchor: &RealmTrustAnchor,
+) -> PrincipalProjection {
     match role {
         TrustedAgentRole::User => {
             let user_id = user_id_from_ura(caller_ura).unwrap_or_else(|| caller_ura.to_string());
@@ -129,13 +133,19 @@ pub(crate) fn principal_for(role: TrustedAgentRole, caller_ura: &str) -> Princip
             token_class: Some(TokenClass::HubLink),
             caller_user_id: None,
         },
-        TrustedAgentRole::Device => PrincipalProjection {
-            kind: PrincipalKind::Device,
-            id: caller_ura.to_string(),
-            token_id: None,
-            token_class: None,
-            caller_user_id: None,
-        },
+        TrustedAgentRole::Device => {
+            let owner_user_id = trust_anchor
+                .lookup_principal_owner(caller_ura)
+                .map(|owner| owner.owner_user_id.clone())
+                .or_else(|| local_device_owner_user_id(caller_ura));
+            PrincipalProjection {
+                kind: PrincipalKind::Device,
+                id: caller_ura.to_string(),
+                token_id: Some(caller_ura.to_string()),
+                token_class: Some(TokenClass::DevicePairing),
+                caller_user_id: owner_user_id,
+            }
+        }
         TrustedAgentRole::Backend => PrincipalProjection {
             kind: PrincipalKind::Service,
             id: caller_ura.to_string(),
@@ -146,7 +156,7 @@ pub(crate) fn principal_for(role: TrustedAgentRole, caller_ura: &str) -> Princip
     }
 }
 
-fn resolve_owner(
+pub(crate) fn resolve_owner(
     subject_ura: &str,
     callee_ura: &str,
     daemon_ura: Option<&str>,
@@ -255,15 +265,33 @@ fn user_id_from_ura(ura: &str) -> Option<String> {
         .flatten()
 }
 
-pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
-    crate::core::ura::owner_ability_ura(callee_ura, ability).ok_or_else(|| {
-        Status::invalid_argument(format!(
-            "ABILITY_URA_PROJECTION_FAILED: callee={callee_ura} ability={ability}"
-        ))
-    })
+fn local_device_owner_user_id(caller_ura: &str) -> Option<String> {
+    let parsed = parse_ura(caller_ura).ok()?;
+    if parsed.kind != URAKind::Device {
+        return None;
+    }
+    let credentials = crate::daemon::persistence::config::load_credentials().ok()?;
+    if parsed.realm != credentials.realm {
+        return None;
+    }
+    let device_id = parsed.device_id()?;
+    if device_id != credentials.node_id.as_str() {
+        return None;
+    }
+    credentials.user_id().ok().map(ToString::to_string)
 }
 
-fn safe_read(ability: &str, action: AccessAction) -> bool {
+pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
+    crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability).map_err(
+        |err| {
+            Status::invalid_argument(format!(
+                "ABILITY_URA_PROJECTION_FAILED: callee={callee_ura} ability={ability}: {err}"
+            ))
+        },
+    )
+}
+
+pub(crate) fn safe_read(ability: &str, action: AccessAction) -> bool {
     if action != AccessAction::Read {
         return false;
     }
@@ -499,6 +527,27 @@ mod tests {
         assert!(
             !safe_read("fs.list", AccessAction::Read),
             "filesystem topology is private read, not hub safe-read"
+        );
+    }
+
+    #[test]
+    fn policy_ability_projection_accepts_descriptor_ref_without_rewrapping() {
+        let callee = "easynet:///r/test/hub";
+        let ability_ura = crate::core::ura::owner_ability_ura(callee, "identity.register_pubkey")
+            .expect("hub ability URA");
+        let descriptor_ref = format!("{ability_ura}@1.0.0");
+
+        let projected = ability_ura_for(callee, &descriptor_ref)
+            .expect("descriptor ref projects to ability URA");
+
+        assert_eq!(projected, ability_ura);
+        assert!(
+            !projected.contains("@"),
+            "policy input ability_ura must not carry descriptor version"
+        );
+        assert!(
+            !projected.contains("hub.easynet:///"),
+            "descriptor ref must not be treated as a public ability name"
         );
     }
 }

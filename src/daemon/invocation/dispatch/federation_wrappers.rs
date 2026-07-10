@@ -742,7 +742,10 @@ fn device_owner_projection_values(owner_ura: &str) -> Vec<serde_json::Value> {
 
 // ─── federation.resolve_key ────────────────────────────────────────
 
-fn resolve_key_response(public_key_b64: &str, all_keys_b64: Vec<String>) -> ResolveKeyResponse {
+pub(crate) fn resolve_key_response(
+    public_key_b64: &str,
+    all_keys_b64: Vec<String>,
+) -> ResolveKeyResponse {
     let public_key_hex = BASE64_STANDARD
         .decode(public_key_b64.as_bytes())
         .map(hex::encode)

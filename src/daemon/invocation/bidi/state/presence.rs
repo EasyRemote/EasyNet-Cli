@@ -130,6 +130,21 @@ pub type DispatchSender = mpsc::Sender<Result<DispatchFrame, tonic::Status>>;
 /// with displacement/reconnect.
 pub type PresenceSessionId = u64;
 
+/// Session down-frame scheduling class.
+///
+/// The reverse channel carries both data-plane ability replies and
+/// control-plane frames that unblock runtime admission work such as
+/// session Request/RequestResult trust sync. Those control frames must
+/// not sit behind a burst of large payload replies for unrelated
+/// call_ids; otherwise admission can time out while the answer is
+/// already queued. Priority is transport-local scheduling metadata, not
+/// an Invocation tuple field.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum DispatchPriority {
+    Normal,
+    Control,
+}
+
 /// One frame heading down a `session.open` reverse channel.
 ///
 /// A thin newtype around the proto-generated `InvokeBidiDown` so
@@ -141,6 +156,30 @@ pub struct DispatchFrame {
     /// dispatcher does not hold references across the channel
     /// boundary.
     pub frame: easynet_axon::pb::axon::v1::InvokeBidiDown,
+    pub priority: DispatchPriority,
+}
+
+impl DispatchFrame {
+    #[must_use]
+    pub fn normal(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> Self {
+        Self {
+            frame,
+            priority: DispatchPriority::Normal,
+        }
+    }
+
+    #[must_use]
+    pub fn control(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> Self {
+        Self {
+            frame,
+            priority: DispatchPriority::Control,
+        }
+    }
+
+    #[must_use]
+    pub fn is_control(&self) -> bool {
+        self.priority == DispatchPriority::Control
+    }
 }
 
 /// Reason a session was removed from the registry. Distinct variants

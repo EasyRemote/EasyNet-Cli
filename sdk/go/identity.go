@@ -668,10 +668,29 @@ func marshalSigningKeyRegistrationRequest(req SigningKeyRegistrationRequest) ([]
 		strings.TrimSpace(req.PrincipalOwnerUserID) != req.PrincipalOwnerUserID {
 		return nil, invalidProfilePayload(directoryIdentityProfile, "principal owner fields must already be trimmed", nil)
 	}
-	if containsPrivateKeyMetadata(req.Metadata) {
+	metadata, err := mergedIdentityCarrierMetadata(req.IdentityCarrierBase.Metadata, req.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	if containsPrivateKeyMetadata(metadata) {
 		return nil, invalidProfilePayload(directoryIdentityProfile, "private key material must not be supplied to identity facade", nil)
 	}
-	return marshalIdentityRequest(req, "signing-key registration request")
+	value := identityCarrierBaseMap(req.IdentityCarrierBase, metadata)
+	value["owner_ura"] = req.OwnerURA
+	value["key_id"] = req.KeyID
+	value["algorithm"] = req.Algorithm
+	value["public_key_base64"] = req.PublicKeyBase64
+	if req.Role != "" {
+		value["role"] = req.Role
+	}
+	value["usage"] = req.Usage
+	if req.PrincipalOwnerURA != "" {
+		value["principal_owner_ura"] = req.PrincipalOwnerURA
+	}
+	if req.PrincipalOwnerUserID != "" {
+		value["principal_owner_user_id"] = req.PrincipalOwnerUserID
+	}
+	return marshalIdentityRequest(value, "signing-key registration request")
 }
 
 func marshalSigningKeyListRequest(req SigningKeyListRequest) ([]byte, error) {
@@ -709,10 +728,20 @@ func marshalSignerRequest(req SignerRequest) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if containsPrivateKeyMetadata(req.Metadata) {
+	metadata, err := mergedIdentityCarrierMetadata(req.IdentityCarrierBase.Metadata, req.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	if containsPrivateKeyMetadata(metadata) {
 		return nil, invalidProfilePayload(directoryIdentityProfile, "private key material must not be supplied to identity facade", nil)
 	}
-	return marshalIdentityRequest(req, "signer request")
+	value := identityCarrierBaseMap(req.IdentityCarrierBase, metadata)
+	value["owner_ura"] = req.OwnerURA
+	value["key_id"] = req.KeyID
+	if req.Usage != "" {
+		value["usage"] = req.Usage
+	}
+	return marshalIdentityRequest(value, "signer request")
 }
 
 func marshalIdentityRequest(req any, label string) ([]byte, error) {
@@ -721,6 +750,35 @@ func marshalIdentityRequest(req any, label string) ([]byte, error) {
 		return nil, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("encode %s: %v", label, err), err)
 	}
 	return requestJSON, nil
+}
+
+func identityCarrierBaseMap(base IdentityCarrierBase, metadata map[string]any) map[string]any {
+	value := map[string]any{
+		"caller_ura":         base.CallerURA,
+		"callee_ura":         base.CalleeURA,
+		"subject_ura":        base.SubjectURA,
+		"descriptor_version": base.DescriptorVersion,
+		"nonce_base64":       base.NonceBase64,
+		"causal_context":     base.CausalContext,
+	}
+	if len(metadata) > 0 {
+		value["metadata"] = metadata
+	}
+	return value
+}
+
+func mergedIdentityCarrierMetadata(carrier map[string]any, request map[string]any) (map[string]any, error) {
+	metadata := map[string]any{}
+	for key, value := range request {
+		metadata[key] = value
+	}
+	for key, value := range carrier {
+		if existing, ok := metadata[key]; ok && existing != value {
+			return nil, invalidProfilePayload(directoryIdentityProfile, fmt.Sprintf("conflicting identity metadata value for %s", key), nil)
+		}
+		metadata[key] = value
+	}
+	return metadata, nil
 }
 
 func requiredCleanIdentityField(value string, field string) error {

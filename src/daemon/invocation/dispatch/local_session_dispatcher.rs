@@ -33,6 +33,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::descriptor_binding::RuntimeBoundAbility;
 use super::invocation_wire::target_ura_from_envelope;
+use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::bidi::invoke_remote_initiator::{
     call_id_hex, SessionContentEnvelope, SessionDispatch,
 };
@@ -92,11 +93,15 @@ pub struct LocalAxonSessionDispatcher {
     /// declarations are projected into this table at boot so the dispatcher
     /// does not query package state through process-global helpers.
     ability_wire: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
-    /// On-miss caller key sync for device and same-realm user
-    /// origin-caller claims (see `device_trust_sync`). `None` outside
-    /// device-mode boot.
+    /// On-miss caller key sync for external signed device and same-realm
+    /// user callers (see `device_trust_sync`). `None` outside device-mode
+    /// boot.
     device_trust_sync:
         Option<Arc<crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync>>,
+    /// RFC-014 runtime policy gate for hub-pushed session dispatch frames.
+    /// Transport/session admission proves the carrier can reach this device;
+    /// this gate proves the inner ability/subject/action may execute.
+    admission: Option<AdmissionFacade>,
 }
 
 type LocalBidiWireKind = crate::daemon::ability::wire::AbilityBidiWireKind;
@@ -115,6 +120,29 @@ fn local_is_bidi_wire_ability(
     ability: &str,
 ) -> bool {
     local_bidi_wire_kind_for(registry, ability).is_some()
+}
+
+fn carried_hub_caller_ura(callee_ura: &str) -> Result<String, String> {
+    let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|err| {
+        format!("session.open: carried runtime policy callee `{callee_ura}` is invalid: {err}")
+    })?;
+    Ok(crate::core::ura::hub_ura(&parsed.realm))
+}
+
+fn carried_origin_role_for_ura(caller_ura: &str) -> crate::daemon::trust::anchor::TrustedAgentRole {
+    match crate::core::ura::parse_ura(caller_ura)
+        .map(|parsed| parsed.kind)
+        .ok()
+    {
+        Some(crate::core::ura::URAKind::User) => {
+            crate::daemon::trust::anchor::TrustedAgentRole::User
+        }
+        Some(crate::core::ura::URAKind::Hub) => crate::daemon::trust::anchor::TrustedAgentRole::Hub,
+        Some(crate::core::ura::URAKind::Device) => {
+            crate::daemon::trust::anchor::TrustedAgentRole::Device
+        }
+        _ => crate::daemon::trust::anchor::TrustedAgentRole::Device,
+    }
 }
 
 #[derive(Clone)]
@@ -270,6 +298,7 @@ impl LocalAxonSessionDispatcher {
         let function_name = request.function_name.clone();
         let target_ura = target_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
             .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
+        self.sync_external_signed_caller_key(&envelope).await?;
         let bound_ability = RuntimeBoundAbility::from_wire_target(
             "carrier-v1 DispatchCall",
             &runtime,
@@ -655,6 +684,7 @@ impl LocalAxonSessionDispatcher {
             local_runtime: None,
             ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
             device_trust_sync: None,
+            admission: None,
         }
     }
 
@@ -758,6 +788,61 @@ impl LocalAxonSessionDispatcher {
     ) -> Self {
         self.device_trust_sync = Some(sync);
         self
+    }
+
+    #[must_use]
+    pub fn with_admission_policy(mut self, admission: AdmissionFacade) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
+    async fn sync_external_signed_caller_key(
+        &self,
+        envelope: &easynet_axon::pb::axon::v1::Envelope,
+    ) -> Result<(), SessionDispatchError> {
+        let Some(caller_ura) = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.as_str())
+            .map(str::trim)
+            .filter(|caller| !caller.is_empty())
+        else {
+            return Ok(());
+        };
+        let Ok(parsed) = crate::core::ura::parse_ura(caller_ura) else {
+            return Ok(());
+        };
+        if !matches!(
+            parsed.kind,
+            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::User
+        ) {
+            return Ok(());
+        }
+        if self.admission.is_none() {
+            return Ok(());
+        }
+        let Some(sync) = self.device_trust_sync.as_ref() else {
+            return Err(SessionDispatchError::Other(format!(
+                "carrier-v1 external signed caller `{caller_ura}` cannot warm trust anchor: DeviceTrustSync is not wired"
+            )));
+        };
+        let presented_pubkey_b64 = envelope
+            .caller_signature
+            .as_ref()
+            .map(|signature| signature.key_id_hint.trim())
+            .filter(|key| !key.is_empty());
+        let status = sync
+            .ensure_caller_key_status(caller_ura, presented_pubkey_b64)
+            .await;
+        if status.trusted() {
+            return Ok(());
+        }
+        let diagnostic = status
+            .diagnostic()
+            .unwrap_or_else(|| "trust sync did not produce a trusted key".to_string());
+        Err(SessionDispatchError::Other(format!(
+            "carrier-v1 external signed caller `{caller_ura}` is not trusted after resolve_key sync: {diagnostic}"
+        )))
     }
 
     /// Builder seam: attach a device-mode escalation correlation
@@ -891,6 +976,23 @@ impl LocalAxonSessionDispatcher {
                     ),
                 ));
             }
+            if let Some(admission) = self.admission.as_ref() {
+                let trusted_role = carried_origin_role_for_ura(&origin.caller_ura);
+                if let Err(err) = admission.verify_carried_runtime_policy(
+                    &origin.caller_ura,
+                    trusted_role,
+                    inner_callee,
+                    inner_subject.as_str(),
+                    &runtime_ability,
+                    origin.public_ability(),
+                    None,
+                ) {
+                    return Some(Self::session_error_result(
+                        call_id,
+                        format!("session.open: {err}"),
+                    ));
+                }
+            }
             let wire = match origin.into_wire_dispatch(
                 inner_callee,
                 inner_subject.as_str(),
@@ -916,6 +1018,26 @@ impl LocalAxonSessionDispatcher {
                 Ok(subject) => subject,
                 Err(err) => return Some(Self::session_error_result(call_id, err)),
             };
+            if let Some(admission) = self.admission.as_ref() {
+                let carrier_caller_ura = match carried_hub_caller_ura(callee) {
+                    Ok(caller) => caller,
+                    Err(err) => return Some(Self::session_error_result(call_id, err)),
+                };
+                if let Err(err) = admission.verify_carried_runtime_policy(
+                    &carrier_caller_ura,
+                    crate::daemon::trust::anchor::TrustedAgentRole::Hub,
+                    callee,
+                    subject.as_str(),
+                    &runtime_ability,
+                    ability,
+                    None,
+                ) {
+                    return Some(Self::session_error_result(
+                        call_id,
+                        format!("session.open: {err}"),
+                    ));
+                }
+            }
             crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
                 runtime,
                 callee,
@@ -1361,6 +1483,14 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
+        if let Err(err) = self.sync_external_signed_caller_key(&envelope).await {
+            return Self::send_bidi_result(
+                outbound,
+                &Self::session_error_result(call_id, err.to_string()),
+                None,
+            )
+            .await;
+        }
         let bound_ability = match RuntimeBoundAbility::from_wire_target(
             "carrier-v1 BidiOpen",
             runtime,
@@ -1858,9 +1988,24 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
         // DispatchCall for v1-negotiated sessions — the complete
         // canonical InvokeRequest, dispatched without re-projection.
         if let Some(DownPayload::DispatchCall(call)) = frame.payload.as_ref() {
-            return self
-                .handle_carrier_v1_dispatch(call.clone(), outbound)
-                .await;
+            if call.open_bidi {
+                return self
+                    .handle_carrier_v1_dispatch(call.clone(), outbound)
+                    .await;
+            }
+            let dispatcher = self.clone();
+            let outbound = outbound.clone();
+            let call = call.clone();
+            tokio::spawn(async move {
+                if let Err(err) = dispatcher.handle_carrier_v1_dispatch(call, &outbound).await {
+                    crate::op_event!(
+                        component = local_session_dispatcher,
+                        kind = carrier_v1_dispatch_task_failed,
+                        error = err.to_string(),
+                    );
+                }
+            });
+            return Ok(());
         }
 
         // Only `BinaryChunk` frames carry SessionDispatch; ignore

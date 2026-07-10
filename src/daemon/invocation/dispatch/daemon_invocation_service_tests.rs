@@ -22,6 +22,12 @@ use crate::daemon::invocation::admission::peer_envelope_signer::sign_peer_reques
 use crate::daemon::invocation::admission::quota_meter::quota_meters_function;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::admission::target_gate::ROUTE_NEGATIVE_CODE;
+use crate::daemon::invocation::admission::{
+    decision::{AccessAction, PrincipalKind, TokenClass},
+    grant_matcher::{
+        PermissionEffect, PermissionGrant, PermissionGrantLifetime, PermissionGrantState,
+    },
+};
 use crate::daemon::invocation::bidi::bidi_dispatcher::{
     build_bidi_terminal_receipt, build_remote_bidi_open_dispatch_frame,
     build_remote_bidi_open_frame_for_contract, build_session_request_result_frame,
@@ -47,6 +53,7 @@ use crate::daemon::invocation::receipts::ledger_projection::{
     invocation_resource_ura, ledger_authority_form_for_request, ledger_record_from_remote_receipt,
 };
 use crate::daemon::invocation::ProtoEnvelope;
+use crate::daemon::persistence::access_control::AccessControlStore;
 use easynet_axon::invocation::{AbilityFrame, BidiInputFrame};
 use easynet_axon::pb::axon::v1::Error;
 use easynet_axon::pb::axon::v1::{
@@ -480,12 +487,25 @@ fn forward_invoke_args_for_ability(
     ability: &str,
     args: serde_json::Value,
 ) -> Vec<u8> {
+    let ability_ura = test_owner_ability_ura(target_ura, ability);
+    forward_invoke_args_for_ability_subject(
+        target_ura,
+        &ability_ura,
+        default_forward_test_subject_ura(target_ura, &ability_ura).as_str(),
+        args,
+    )
+}
+
+fn forward_invoke_args_for_ability_subject(
+    target_ura: &str,
+    ability_ura: &str,
+    subject_ura: &str,
+    args: serde_json::Value,
+) -> Vec<u8> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
-    let public_ability = crate::core::ura::owner_local_ability_name(target_ura, ability);
-    let ability_ura = crate::core::ura::owner_ability_ura(target_ura, &public_ability)
-        .unwrap_or_else(|| panic!("derive test ability URA for {target_ura} {public_ability}"));
     let inner = serde_json::json!({
         "ability_ura": ability_ura,
+        "subject_ura": subject_ura,
         "args": args,
         "call_id": "test-call-id-1",
     });
@@ -501,11 +521,82 @@ fn forward_invoke_args_for_ability_ura(
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let inner = serde_json::json!({
         "ability_ura": ability_ura,
+        "subject_ura": default_forward_test_subject_ura(target_ura, ability_ura),
         "args": args,
         "call_id": "test-call-id-1",
     });
     let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
     format!(r#"{{"target_ura":"{target_ura}","inner_envelope_b64":"{inner_b64}"}}"#).into_bytes()
+}
+
+fn default_forward_test_subject_ura(target_ura: &str, ability_ura: &str) -> String {
+    match crate::core::ura::parse_ura(target_ura) {
+        Ok(parsed) if parsed.kind == crate::core::ura::URAKind::Hub => ability_ura.to_string(),
+        Ok(_) => target_ura.to_string(),
+        Err(_) => ability_ura.to_string(),
+    }
+}
+
+fn test_owner_ability_ura(target_ura: &str, ability: &str) -> String {
+    let public_ability = crate::core::ura::owner_local_ability_name(target_ura, ability);
+    crate::core::ura::owner_ability_ura(target_ura, &public_ability)
+        .unwrap_or_else(|| panic!("derive test ability URA for {target_ura} {public_ability}"))
+}
+
+fn test_user_invoke_subject_ura(owner_user_id: &str, ability: &str) -> String {
+    crate::daemon::persistence::resources::build_resource_ura(
+        "test-realm",
+        &format!("user.{owner_user_id}/invoke/{ability}"),
+    )
+}
+
+fn grant_child_access_for_test(
+    owner_user_id: &str,
+    principal_kind: PrincipalKind,
+    principal_ura: &str,
+    token_class: Option<TokenClass>,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    action: AccessAction,
+) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static GRANT_COUNTER: AtomicU64 = AtomicU64::new(1);
+    let n = GRANT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let token_id = token_class.map(|_| principal_ura.to_string());
+    let mut store =
+        AccessControlStore::open_or_create(owner_user_id).expect("open test access-control store");
+    store
+        .create_grant(
+            PermissionGrant {
+                grant_id: format!("test-grant-{n}"),
+                owner_user_id: owner_user_id.to_string(),
+                principal_kind,
+                principal_id: principal_ura.to_string(),
+                token_id,
+                token_class,
+                callee_ura: Some(callee_ura.to_string()),
+                subject_ura_pattern: Some(subject_ura.to_string()),
+                ability_ura_pattern: Some(ability_ura.to_string()),
+                actions: vec![action],
+                constraints: None,
+                effect: PermissionEffect::Allow,
+                lifetime: PermissionGrantLifetime::Session,
+                state: PermissionGrantState::Active,
+                expires_at: None,
+                review_required_after: None,
+                last_reviewed_at: None,
+                last_used_at: None,
+                created_by: crate::core::ura::user_ura("test-realm", owner_user_id),
+                created_at: "2026-07-09T00:00:00Z".to_string(),
+                updated_at: None,
+                revoked_at: None,
+                reason: Some("forward-invoke test fixture".to_string()),
+            },
+            &crate::core::ura::user_ura("test-realm", owner_user_id),
+        )
+        .expect("create test child access grant");
 }
 
 /// Test fixture: a `FederationClient` that records every

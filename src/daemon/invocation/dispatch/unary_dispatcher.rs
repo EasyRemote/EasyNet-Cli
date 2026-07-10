@@ -459,7 +459,7 @@ impl UnaryDispatcher {
             Err(status) => return (Err(status), false),
         };
         let selected_ability_ura = selected_route.ability_ura.clone();
-        let selected_descriptor_ref = match bound_ability.descriptor_ref_for_mode(
+        let runtime_descriptor_ref = match bound_ability.descriptor_ref_for_mode(
             "easynet-daemon",
             &selected_route.callee_ura,
             easynet_axon::invocation::CallMode::Rpc,
@@ -502,7 +502,7 @@ impl UnaryDispatcher {
                 };
                 crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
                     envelope,
-                    selected_descriptor_ref,
+                    runtime_descriptor_ref,
                     arguments.to_vec(),
                     metadata,
                 )
@@ -517,9 +517,28 @@ impl UnaryDispatcher {
                     Ok(metadata) => metadata,
                     Err(status) => return (Err(status), false),
                 };
+                let signed_descriptor_ref = match bound_ability.signed_descriptor_ref_from_metadata(
+                    "Invoke",
+                    &selected_route.callee_ura,
+                    easynet_axon::invocation::CallMode::Rpc,
+                    &metadata,
+                ) {
+                    Ok(Some(ref_)) => ref_.into_descriptor_ref(),
+                    Ok(None) => {
+                        return (
+                            Err(Status::invalid_argument(format!(
+                                "Invoke: signed public Invoke for `{ability}` is missing `{}`; \
+                                 route name and descriptor-bound signature target must be explicit",
+                                crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                            ))),
+                            false,
+                        );
+                    }
+                    Err(status) => return (Err(status), false),
+                };
                 crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
                     envelope,
-                    selected_descriptor_ref,
+                    signed_descriptor_ref,
                     arguments.to_vec(),
                     metadata,
                 )
@@ -754,10 +773,34 @@ impl UnaryDispatcher {
         let trust_anchor = self.admission.trust_anchor_snapshot();
         match federation_wrappers::handle_resolve_key(&request, &trust_anchor) {
             Some(response) => wrap_json_response(&response),
-            None => Err(Status::not_found(format!(
-                "federation.resolve_key: agent_ura `{}` not in this hub's trust set",
-                request.agent_ura
-            ))),
+            None => {
+                let presented_pubkey_b64 = request
+                    .presented_pubkey_b64
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        request
+                            .presented_pubkey_hex
+                            .as_deref()
+                            .filter(|value| !value.is_empty())
+                            .and_then(|hex| hex::decode(hex).ok())
+                            .map(|raw| B64.encode(raw))
+                    });
+                let resolved = self.admission.resolve_federated_key_b64(
+                    &request.agent_ura,
+                    presented_pubkey_b64.as_deref(),
+                )?;
+                match resolved {
+                    Some(public_key_b64) => wrap_json_response(
+                        &federation_wrappers::resolve_key_response(&public_key_b64, Vec::new()),
+                    ),
+                    None => Err(Status::not_found(format!(
+                        "federation.resolve_key: agent_ura `{}` not in this hub's trust set",
+                        request.agent_ura
+                    ))),
+                }
+            }
         }
     }
 
@@ -1213,6 +1256,8 @@ impl UnaryDispatcher {
                             &inner_payload,
                             &selected_route,
                             &correlation_call_id,
+                            request.origin_caller.as_ref(),
+                            caller_envelope,
                         )
                         .await;
                 }
@@ -1729,7 +1774,7 @@ impl UnaryDispatcher {
                     _ => build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
                         call_id,
                         callee_ura: &selected_route.callee_ura,
-                        subject_ura: &selected_route.callee_ura,
+                        subject_ura: &inner_payload.subject_ura,
                         ability: &dispatch_ability,
                         args: &inner_payload.args_bytes,
                         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1795,6 +1840,69 @@ impl UnaryDispatcher {
         wrap_json_response(&response)
     }
 
+    fn verify_forward_child_policy(
+        &self,
+        inner_payload: &InnerPayload,
+        selected_route: &SelectedInvokeRoute,
+        origin_caller: Option<
+            &crate::daemon::invocation::admission::origin_caller::OriginCallerClaim,
+        >,
+        caller_envelope: Option<&Envelope>,
+    ) -> Result<(), Status> {
+        let descriptor_subject_ura = inner_payload.subject_ura.trim();
+        if descriptor_subject_ura.is_empty() {
+            return Err(Status::invalid_argument(
+                "federation.forward_invoke: missing inner subject_ura",
+            ));
+        }
+
+        if let Some(origin) =
+            crate::daemon::invocation::admission::origin_caller::OriginCaller::resolve(
+                origin_caller,
+            )
+            .map_err(|err| {
+                Status::permission_denied(format!(
+                    "federation.forward_invoke: invalid origin caller claim: {err}"
+                ))
+            })?
+        {
+            self.admission.verify_carried_runtime_policy(
+                &origin.caller_ura,
+                carried_origin_role_for_ura(&origin.caller_ura),
+                &selected_route.callee_ura,
+                descriptor_subject_ura,
+                &selected_route.ability_ura,
+                origin.public_ability(),
+                None,
+            )
+        } else if let Some(caller_ura) = caller_envelope
+            .and_then(|envelope| envelope.caller.as_ref())
+            .map(|caller| caller.ura.trim())
+            .filter(|caller| !caller.is_empty())
+        {
+            self.admission.verify_carried_runtime_policy(
+                caller_ura,
+                carried_origin_role_for_ura(caller_ura),
+                &selected_route.callee_ura,
+                descriptor_subject_ura,
+                &selected_route.ability_ura,
+                &selected_route.dispatch_name,
+                None,
+            )
+        } else {
+            let carrier_caller_ura = carried_hub_caller_ura(&selected_route.callee_ura)?;
+            self.admission.verify_carried_runtime_policy(
+                &carrier_caller_ura,
+                TrustedAgentRole::Hub,
+                &selected_route.callee_ura,
+                descriptor_subject_ura,
+                &selected_route.ability_ura,
+                &selected_route.dispatch_name,
+                None,
+            )
+        }
+    }
+
     /// **PR-1 commit 7/9 (LB-56)**. Synchronous self-targeted
     /// `federation.forward_invoke` dispatch.
     ///
@@ -1814,6 +1922,10 @@ impl UnaryDispatcher {
         inner_payload: &InnerPayload,
         selected_route: &SelectedInvokeRoute,
         correlation_call_id: &str,
+        origin_caller: Option<
+            &crate::daemon::invocation::admission::origin_caller::OriginCallerClaim,
+        >,
+        caller_envelope: Option<&Envelope>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let Some(runtime) = self.runtime.local_runtime.as_ref() else {
             return Err(Status::failed_precondition(
@@ -1831,20 +1943,31 @@ impl UnaryDispatcher {
             )));
         }
 
-        let descriptor_subject_ura =
-            self.default_self_target_subject_ura(&selected_route.callee_ura)?;
+        let descriptor_subject_ura = inner_payload.subject_ura.trim();
+        if descriptor_subject_ura.is_empty() {
+            return Err(Status::invalid_argument(
+                "federation.forward_invoke: missing inner subject_ura",
+            ));
+        }
 
         crate::op_event!(
             component = daemon_invocation,
             kind = forward_invoke_self_target_dispatch,
             callee_ura = selected_route.callee_ura.as_str(),
-            descriptor_subject_ura = descriptor_subject_ura.as_str(),
+            descriptor_subject_ura = descriptor_subject_ura,
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             ability = selected_route.dispatch_name.as_str(),
             route_ura = selected_route.route_ura.as_str(),
             dispatch_ability = dispatch_ability.as_str(),
             call_id = correlation_call_id,
         );
+
+        self.verify_forward_child_policy(
+            inner_payload,
+            selected_route,
+            origin_caller,
+            caller_envelope,
+        )?;
 
         let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
             runtime,
@@ -1989,6 +2112,20 @@ impl UnaryDispatcher {
                     &selected_route.route_ura,
                 ));
             }
+            let trusted_role = carried_origin_role_for_ura(&origin.caller_ura);
+            if let Err(err) = self.admission.verify_carried_runtime_policy(
+                &origin.caller_ura,
+                trusted_role,
+                &selected_route.callee_ura,
+                inner_subject.as_str(),
+                &selected_route.ability_ura,
+                origin.public_ability(),
+                None,
+            ) {
+                return invoke_remote_inband_error_response(format!(
+                    "runtime.invoke_remote: {err}"
+                ));
+            }
             let wire = match origin.into_wire_dispatch(
                 &selected_route.callee_ura,
                 inner_subject.as_str(),
@@ -2003,6 +2140,27 @@ impl UnaryDispatcher {
             };
             crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc(runtime, wire).await
         } else {
+            let carrier_caller_ura = match carried_hub_caller_ura(&selected_route.callee_ura) {
+                Ok(caller) => caller,
+                Err(err) => {
+                    return invoke_remote_inband_error_response(format!(
+                        "runtime.invoke_remote: {err}"
+                    ));
+                }
+            };
+            if let Err(err) = self.admission.verify_carried_runtime_policy(
+                &carrier_caller_ura,
+                TrustedAgentRole::Hub,
+                &selected_route.callee_ura,
+                inner_subject.as_str(),
+                &selected_route.ability_ura,
+                &selected_route.dispatch_name,
+                None,
+            ) {
+                return invoke_remote_inband_error_response(format!(
+                    "runtime.invoke_remote: {err}"
+                ));
+            }
             crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_local_with_subject(
                 runtime,
                 &selected_route.callee_ura,
@@ -2125,6 +2283,27 @@ fn is_admission_denial_message(message: &str) -> bool {
         || message.contains("AXON_CALLER_SIGNATURE_INVALID")
         || message.contains("SIGNED_DESCRIPTOR_REF_")
         || message.contains("SIGNED_ENVELOPE_ROUTE_MUTATION")
+}
+
+fn carried_hub_caller_ura(callee_ura: &str) -> Result<String, Status> {
+    let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|err| {
+        Status::invalid_argument(format!(
+            "carried runtime policy callee `{callee_ura}` is not a valid URA: {err}"
+        ))
+    })?;
+    Ok(crate::core::ura::hub_ura(&parsed.realm))
+}
+
+fn carried_origin_role_for_ura(caller_ura: &str) -> TrustedAgentRole {
+    match crate::core::ura::parse_ura(caller_ura)
+        .map(|parsed| parsed.kind)
+        .ok()
+    {
+        Some(crate::core::ura::URAKind::User) => TrustedAgentRole::User,
+        Some(crate::core::ura::URAKind::Hub) => TrustedAgentRole::Hub,
+        Some(crate::core::ura::URAKind::Device) => TrustedAgentRole::Device,
+        _ => TrustedAgentRole::Device,
+    }
 }
 
 fn sorted_non_empty_urls(urls: Vec<String>) -> Vec<String> {

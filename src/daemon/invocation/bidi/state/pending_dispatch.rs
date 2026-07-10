@@ -318,6 +318,7 @@ struct PendingStreamDispatchInner {
 struct PendingStreamEntry {
     sender: mpsc::Sender<DispatchStreamEvent>,
     target_ura: String,
+    delivery_policy: StreamDeliveryPolicy,
 }
 
 impl std::fmt::Debug for PendingStreamEntry {
@@ -334,6 +335,12 @@ pub struct PendingStreamDispatchMap {
     inner: Arc<PendingStreamDispatchInner>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamDeliveryPolicy {
+    BoundedNoWait,
+    LosslessBackpressure,
+}
+
 impl PendingStreamDispatchMap {
     const CHANNEL_CAPACITY: usize = 32;
 
@@ -346,6 +353,21 @@ impl PendingStreamDispatchMap {
     }
 
     pub fn register_pending_for(&self, target_ura: &str) -> PendingStreamHandle {
+        self.register_pending_for_policy(target_ura, StreamDeliveryPolicy::BoundedNoWait)
+    }
+
+    /// Register a lossless streamed dispatch. Remote bidi/file-transfer carries
+    /// user bytes, so a full per-call queue must apply backpressure instead of
+    /// evicting the entry and truncating the stream before its terminal receipt.
+    pub fn register_lossless_pending_for(&self, target_ura: &str) -> PendingStreamHandle {
+        self.register_pending_for_policy(target_ura, StreamDeliveryPolicy::LosslessBackpressure)
+    }
+
+    fn register_pending_for_policy(
+        &self,
+        target_ura: &str,
+        delivery_policy: StreamDeliveryPolicy,
+    ) -> PendingStreamHandle {
         // SessionDispatch::Result frames share one session-wide
         // keyspace across unary and streaming paths. Reserve odd
         // call_ids for streaming so a late terminal/chunk frame cannot
@@ -358,6 +380,7 @@ impl PendingStreamDispatchMap {
             PendingStreamEntry {
                 sender: tx,
                 target_ura: target_ura.to_string(),
+                delivery_policy,
             },
         );
         PendingStreamHandle {
@@ -390,6 +413,58 @@ impl PendingStreamDispatchMap {
                 .await
                 .is_ok(),
             None => false,
+        }
+    }
+
+    /// Deliver a chunk according to the entry's explicit lifecycle policy.
+    /// Lossless entries await downstream capacity; bounded entries keep the
+    /// existing no-wait stall isolation semantics.
+    pub async fn deliver_chunk(&self, call_id: u64, payload: Vec<u8>) -> StreamDeliver {
+        let Some((sender, delivery_policy)) = self
+            .inner
+            .entries
+            .get(&call_id)
+            .map(|entry| (entry.sender.clone(), entry.delivery_policy))
+        else {
+            return StreamDeliver::NoMatch;
+        };
+        match delivery_policy {
+            StreamDeliveryPolicy::BoundedNoWait => self.try_push_chunk(call_id, payload),
+            StreamDeliveryPolicy::LosslessBackpressure => {
+                match sender.send(DispatchStreamEvent::Chunk(payload)).await {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(_) => {
+                        self.inner.entries.remove(&call_id);
+                        StreamDeliver::NoMatch
+                    }
+                }
+            }
+        }
+    }
+
+    /// Deliver the terminal event according to the entry's policy. Lossless
+    /// streams must not drop the terminal receipt behind buffered chunks.
+    pub async fn deliver_terminal(&self, call_id: u64, result: DispatchResult) -> StreamDeliver {
+        match self.inner.entries.remove(&call_id) {
+            Some((_, entry)) => match entry.delivery_policy {
+                StreamDeliveryPolicy::BoundedNoWait => match entry
+                    .sender
+                    .try_send(DispatchStreamEvent::Terminal(Box::new(result)))
+                {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(mpsc::error::TrySendError::Full(_)) => StreamDeliver::ConsumerStalled,
+                    Err(mpsc::error::TrySendError::Closed(_)) => StreamDeliver::NoMatch,
+                },
+                StreamDeliveryPolicy::LosslessBackpressure => match entry
+                    .sender
+                    .send(DispatchStreamEvent::Terminal(Box::new(result)))
+                    .await
+                {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(_) => StreamDeliver::NoMatch,
+                },
+            },
+            None => StreamDeliver::NoMatch,
         }
     }
 
@@ -734,6 +809,83 @@ mod tests {
             None,
             "stream handle must close after terminal failure"
         );
+    }
+
+    #[tokio::test]
+    async fn pending_stream_lossless_entry_backpressures_instead_of_evicting() {
+        let map = PendingStreamDispatchMap::new();
+        let mut handle = map.register_lossless_pending_for("easynet:///r/realm/device/file-target");
+        let id = handle.call_id();
+
+        for i in 0..PendingStreamDispatchMap::CHANNEL_CAPACITY {
+            assert_eq!(
+                map.deliver_chunk(id, vec![i as u8]).await,
+                StreamDeliver::Delivered
+            );
+        }
+        assert_eq!(map.outstanding(), 1);
+
+        let map_for_writer = map.clone();
+        let blocked_writer = tokio::spawn(async move {
+            map_for_writer
+                .deliver_chunk(id, b"after-capacity".to_vec())
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(
+            map.outstanding(),
+            1,
+            "lossless delivery must keep the pending entry while waiting for capacity"
+        );
+
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Chunk(vec![0]))
+        );
+        assert_eq!(
+            blocked_writer.await.expect("writer joined"),
+            StreamDeliver::Delivered
+        );
+        assert_eq!(map.outstanding(), 1);
+
+        let map_for_terminal = map.clone();
+        let terminal_writer = tokio::spawn(async move {
+            map_for_terminal
+                .deliver_terminal(
+                    id,
+                    DispatchResult {
+                        payload: br#"{"sha256":"abc"}"#.to_vec(),
+                        error: None,
+                        failure: None,
+                        request_id: None,
+                        receipt: None,
+                    },
+                )
+                .await
+        });
+
+        for _ in 1..PendingStreamDispatchMap::CHANNEL_CAPACITY {
+            let _ = handle.recv().await.expect("buffered chunk");
+        }
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Chunk(b"after-capacity".to_vec()))
+        );
+        assert_eq!(
+            terminal_writer.await.expect("terminal writer joined"),
+            StreamDeliver::Delivered
+        );
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
+                payload: br#"{"sha256":"abc"}"#.to_vec(),
+                error: None,
+                failure: None,
+                request_id: None,
+                receipt: None,
+            })))
+        );
+        assert_eq!(map.outstanding(), 0);
     }
 
     #[tokio::test]

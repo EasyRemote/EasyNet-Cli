@@ -120,17 +120,33 @@ impl DaemonInvocation {
         }
     }
 
+    fn wire_metadata(&self) -> Result<HashMap<String, String>> {
+        let mut metadata = self.metadata.clone();
+        let key = crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY;
+        if let Some(existing) = metadata.get(key).map(String::as_str).map(str::trim) {
+            if !existing.is_empty() && existing != self.descriptor_ref {
+                return Err(DaemonError::InvalidInvocation(format!(
+                    "{key} metadata `{existing}` does not match invocation descriptor_ref `{}`",
+                    self.descriptor_ref
+                )));
+            }
+        }
+        metadata.insert(key.to_string(), self.descriptor_ref.clone());
+        Ok(metadata)
+    }
+
     pub(crate) fn into_request(self) -> Result<easynet_axon::pb::axon::v1::InvokeRequest> {
         use easynet_axon::pb::axon::v1::InvokeRequest;
         let function_name = self.descriptor_ref.clone();
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
+        let metadata = self.wire_metadata()?;
         Ok(InvokeRequest {
             envelope: Some(envelope),
             function_name,
             arguments: self.args,
             content_type: self.content_type,
-            metadata: self.metadata,
+            metadata,
             content_envelope: Some(content_envelope),
             timeout_seconds: self.timeout_seconds.unwrap_or(0),
             ..InvokeRequest::default()
@@ -148,12 +164,13 @@ impl DaemonInvocation {
         let function_name = self.descriptor_ref.clone();
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
+        let metadata = self.wire_metadata()?;
         Ok(InvokeServerStreamRequest {
             envelope: Some(envelope),
             function_name,
             arguments: self.args,
             content_type: self.content_type,
-            metadata: self.metadata,
+            metadata,
             content_envelope: Some(content_envelope),
             ..InvokeServerStreamRequest::default()
         })
@@ -175,6 +192,7 @@ impl DaemonInvocation {
         let ability_name = self.descriptor_ref.clone();
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
+        let metadata = self.wire_metadata()?;
         let mac = envelope
             .caller_signature
             .as_ref()
@@ -192,7 +210,7 @@ impl DaemonInvocation {
                 initial_args: self.args,
                 args_content_type: self.content_type.clone(),
                 streams,
-                metadata: self.metadata,
+                metadata,
                 content_envelope: Some(content_envelope),
                 // No session-resume semantics on the SDK frame-0 path;
                 // the session extension is the transport supervisor's
@@ -1070,6 +1088,44 @@ mod tests {
             envelope.causal_context.is_some(),
             "stream request must carry causal context"
         );
+        assert_eq!(
+            request.metadata
+                [crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY],
+            watch_ref,
+            "SDK wire requests must carry the descriptor ref used for canonical signing"
+        );
+    }
+
+    #[test]
+    fn invocation_builder_rejects_conflicting_signed_descriptor_metadata() {
+        let hub = crate::core::ura::hub_ura("acme");
+        let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
+        let other_ref = descriptor_ref(&hub, "observe.health", "9.9.9");
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+                .to_string(),
+            other_ref,
+        );
+        let err = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &hub,
+            &observe_ref,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap()
+        .metadata(metadata)
+        .args_json(&serde_json::json!({"ok": true}))
+        .unwrap()
+        .build()
+        .into_request()
+        .expect_err("conflicting descriptor metadata must reject");
+
+        assert!(
+            err.to_string()
+                .contains("does not match invocation descriptor_ref"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1121,6 +1177,11 @@ mod tests {
         assert_eq!(open.initial_args, br#"{"session_id":"pty-1"}"#);
         assert_eq!(open.args_content_type, "application/json");
         assert_eq!(open.metadata["x-easynet-delegation"], "producer");
+        assert_eq!(
+            open.metadata
+                [crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY],
+            pty_ref
+        );
         assert_eq!(open.streams.len(), 1);
         assert_eq!(open.streams[0].stream_id, 1);
         assert_eq!(
