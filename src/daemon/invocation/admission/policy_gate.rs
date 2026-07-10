@@ -16,7 +16,7 @@ use crate::daemon::invocation::admission::decision::{
     AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PrincipalKind, TokenClass,
 };
 use crate::daemon::invocation::admission::owner_resolution::{
-    OwnerFact, OwnerResolutionInput, OwnerResolver,
+    local_device_owner_fact, OwnerFact, OwnerResolutionInput, OwnerResolver,
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
 use crate::daemon::persistence::access_control::AccessControlStore;
@@ -136,8 +136,9 @@ pub(crate) fn principal_for(
         TrustedAgentRole::Device => {
             let owner_user_id = trust_anchor
                 .lookup_principal_owner(caller_ura)
-                .map(|owner| owner.owner_user_id.clone())
-                .or_else(|| local_device_owner_user_id(caller_ura));
+                .map(|owner| OwnerFact::user(owner.owner_user_id.clone(), owner.owner_ura.clone()))
+                .or_else(|| local_device_owner_fact(caller_ura))
+                .and_then(|owner| owner.owner_user_id);
             PrincipalProjection {
                 kind: PrincipalKind::Device,
                 id: caller_ura.to_string(),
@@ -176,6 +177,9 @@ fn owner_fact_from_ura(
     daemon_ura: Option<&str>,
     trust_anchor: &RealmTrustAnchor,
 ) -> Option<OwnerFact> {
+    if let Some(owner) = owner_fact_from_trust_anchor(ura, trust_anchor) {
+        return Some(owner);
+    }
     let parsed = parse_ura(ura).ok()?;
     match parsed.kind {
         URAKind::User => parsed
@@ -185,10 +189,16 @@ fn owner_fact_from_ura(
             OwnerFact::user(user_id, crate::core::ura::user_ura(&parsed.realm, user_id))
         }),
         URAKind::Ability => parsed.ability().and_then(|ability| match ability.owner {
-            AbilityOwner::Agent { user_id, .. } => Some(OwnerFact::user(
-                user_id.clone(),
-                crate::core::ura::user_ura(&parsed.realm, &user_id),
-            )),
+            AbilityOwner::Agent { user_id, agent_id } => owner_fact_from_trust_anchor(
+                &crate::core::ura::agent_ura(&parsed.realm, &user_id, &agent_id),
+                trust_anchor,
+            )
+            .or_else(|| {
+                Some(OwnerFact::user(
+                    user_id.clone(),
+                    crate::core::ura::user_ura(&parsed.realm, &user_id),
+                ))
+            }),
             AbilityOwner::Device { device_id } => owner_fact_from_trust_anchor(
                 &crate::core::ura::device_ura(&parsed.realm, &device_id),
                 trust_anchor,
@@ -263,22 +273,6 @@ fn user_id_from_ura(ura: &str) -> Option<String> {
     (parsed.kind == URAKind::User)
         .then(|| parsed.user_id().map(ToString::to_string))
         .flatten()
-}
-
-fn local_device_owner_user_id(caller_ura: &str) -> Option<String> {
-    let parsed = parse_ura(caller_ura).ok()?;
-    if parsed.kind != URAKind::Device {
-        return None;
-    }
-    let credentials = crate::daemon::persistence::config::load_credentials().ok()?;
-    if parsed.realm != credentials.realm {
-        return None;
-    }
-    let device_id = parsed.device_id()?;
-    if device_id != credentials.node_id.as_str() {
-        return None;
-    }
-    credentials.user_id().ok().map(ToString::to_string)
 }
 
 pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
@@ -363,6 +357,7 @@ mod tests {
                 principal_ura: "easynet:///r/test/device/dev-1".to_string(),
                 owner_user_id: "alice".to_string(),
                 owner_ura: "easynet:///r/test/user/alice".to_string(),
+                owner_username: Some("alice".to_string()),
                 added_at_unix_ms: 1,
             }],
             Vec::new(),
@@ -423,6 +418,7 @@ mod tests {
 
     #[test]
     fn user_subject_projects_owner_policy_allow() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/test/user/alice")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
@@ -450,6 +446,7 @@ mod tests {
 
     #[test]
     fn hub_link_principal_gets_descriptor_safe_read_default() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/test/hub")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
@@ -480,6 +477,7 @@ mod tests {
 
     #[test]
     fn hub_link_principal_cannot_stream_without_grant() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         let envelope = Envelope {
             caller: Some(identity("easynet:///r/test/hub")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
@@ -515,6 +513,14 @@ mod tests {
         assert!(
             safe_read("meta.list_resources", AccessAction::Read),
             "descriptor-safe metadata stays hub safe-read eligible"
+        );
+        assert!(
+            safe_read("namespace.resolve", AccessAction::Read),
+            "namespace.resolve is the RFC-014 descriptor-safe route read"
+        );
+        assert!(
+            safe_read("federation.resolve", AccessAction::Read),
+            "federation.resolve is the RFC-014 descriptor-safe directory read"
         );
         assert!(
             !safe_read("terminal.list", AccessAction::Read),

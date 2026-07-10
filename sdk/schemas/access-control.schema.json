@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/access-control.schema.json",
+  "title": "AccessControlProjection",
+  "description": "Typed daemon-owned access-control projections shared by every language facade.",
+  "type": "object",
+  "oneOf": [
+    {"required": ["invocation_id", "root_invocation_id", "caller_ura", "callee_ura", "subject_ura", "ability_ura", "action", "stage"]},
+    {"required": ["observer_ura", "redacted"]},
+    {"required": ["proof_id", "owner_user_id", "principal_kind", "principal_id", "issuer_ura", "audience_ura", "signature"]},
+    {"required": ["grant_id", "owner_user_id", "principal_kind", "principal_id", "actions", "effect", "lifetime", "state"]},
+    {"required": ["request_id", "owner_user_id", "principal_kind", "principal_id", "requested_lifetimes", "status"]},
+    {"required": ["decision", "reason", "owner_source", "caller_ura", "callee_ura", "subject_ura", "ability_ura", "action"]},
+    {"required": ["decision", "reason", "verifier_ura", "caller_ura", "callee_ura", "subject_ura", "ability_ura", "canonical_hash"]}
+  ],
+  "properties": {
+    "caller_ura": {"type": "string", "minLength": 1},
+    "callee_ura": {"type": "string", "minLength": 1},
+    "subject_ura": {"type": "string", "minLength": 1},
+    "ability_ura": {"type": "string", "minLength": 1},
+    "owner_user_id": {"type": "string", "minLength": 1},
+    "principal_kind": {"type": "string", "minLength": 1},
+    "principal_id": {"type": "string", "minLength": 1},
+    "action": {"type": "string", "minLength": 1},
+    "decision": {"type": "string", "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "redacted": {"type": "boolean"}
+  },
+  "additionalProperties": true
+}

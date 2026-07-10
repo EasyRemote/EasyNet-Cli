@@ -30,7 +30,8 @@ use crate::daemon::ability::catalog::system_manifest::registry_manifest;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::invocation::admission::decision::{
     AbilityCallTrace, AdmissionExplainResult, OwnerResolution, OwnerSource,
-    PermissionRequestStatus, RedactionReason, TraceStage,
+    PermissionRequestStatus, PolicyDecision, RedactionReason, SignatureDecision,
+    SignatureDecisionOutcome, SignatureDecisionReason, TraceStage,
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
 use crate::daemon::persistence::access_control::AccessControlStore;
@@ -342,6 +343,10 @@ impl AdmissionExplainReader {
                     error.code.clone()
                 }
             });
+            let failure = record
+                .error
+                .as_ref()
+                .map(|error| project_failure(error, &record));
             let trace = AbilityCallTrace {
                 invocation_id: record.request_id.clone(),
                 parent_invocation_id: None,
@@ -353,11 +358,19 @@ impl AdmissionExplainReader {
                 action: access_action_for(record.ability_name.as_str()),
                 route_ref: None,
                 execution_host_ura: None,
-                rejector_ura: None,
+                rejector_ura: failure
+                    .as_ref()
+                    .and_then(|failure| failure.rejector_ura.clone()),
                 stage: trace_stage_for(record.state.as_str()),
-                signature_decision: None,
-                policy_decision: None,
-                authority_proof_id: None,
+                signature_decision: failure
+                    .as_ref()
+                    .and_then(|failure| failure.signature_decision.clone()),
+                policy_decision: failure
+                    .as_ref()
+                    .and_then(|failure| failure.policy_decision.clone()),
+                authority_proof_id: failure
+                    .as_ref()
+                    .and_then(|failure| failure.authority_proof_id.clone()),
                 redacted: false,
                 child_failure_class: None,
                 redaction_reason: None,
@@ -367,11 +380,15 @@ impl AdmissionExplainReader {
                 observer_ura: observer.to_string(),
                 redacted: false,
                 root_trace: Some(trace),
-                signature_decision: None,
-                policy_decision: None,
+                signature_decision: failure
+                    .as_ref()
+                    .and_then(|failure| failure.signature_decision.clone()),
+                policy_decision: failure
+                    .as_ref()
+                    .and_then(|failure| failure.policy_decision.clone()),
                 authority_reason,
                 route_ref: None,
-                rejector_ura: None,
+                rejector_ura: failure.and_then(|failure| failure.rejector_ura),
                 redaction_reason: None,
             }
         } else {
@@ -389,6 +406,69 @@ impl AdmissionExplainReader {
         };
         Ok(serde_json::to_value(result)?)
     }
+}
+
+#[derive(Default)]
+struct FailureProjection {
+    signature_decision: Option<SignatureDecision>,
+    policy_decision: Option<PolicyDecision>,
+    rejector_ura: Option<String>,
+    authority_proof_id: Option<String>,
+}
+
+/// Decode only the structured denial that admission already persisted in the
+/// ledger error. This is a projection, not a second policy engine and never
+/// trusts caller-supplied explain fields.
+fn project_failure(
+    error: &easynet_axon::invocation::LedgerErrorRecord,
+    record: &easynet_axon::invocation::InvocationLedgerRecord,
+) -> FailureProjection {
+    let Some((prefix, encoded)) = error.message.split_once(": ") else {
+        return FailureProjection::default();
+    };
+    let Ok(value) = serde_json::from_str::<Value>(encoded) else {
+        return FailureProjection::default();
+    };
+    let mut projection = FailureProjection::default();
+    projection.rejector_ura = value
+        .get("rejector_ura")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    if prefix == "POLICY_DENIED" {
+        if let Ok(policy) = serde_json::from_value::<PolicyDecision>(value.clone()) {
+            projection.rejector_ura = policy.rejector_ura.clone();
+            projection.authority_proof_id = policy.authority_proof_id.clone();
+            projection.policy_decision = Some(policy);
+        }
+    } else if prefix == "SIGNATURE_DENIED" {
+        let reason = value
+            .get("target_reason")
+            .and_then(Value::as_str)
+            .unwrap_or(error.code.as_str());
+        let canonical_hash = value
+            .get("canonical_hash")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !canonical_hash.is_empty() {
+            projection.signature_decision = Some(SignatureDecision {
+                decision: SignatureDecisionOutcome::Invalid,
+                reason: SignatureDecisionReason::from_admission_detail(reason),
+                caller_ura: record.caller_ura.clone(),
+                callee_ura: record.callee_ura.clone(),
+                ability_ura: record.ability_ura.clone(),
+                subject_ura: record.subject_ura.clone(),
+                canonical_hash: canonical_hash.to_string(),
+                signature_key_id: value
+                    .get("signature_key_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                presented_pubkey_fingerprint: None,
+                verifier_ura: projection.rejector_ura.clone().unwrap_or_default(),
+            });
+        }
+    }
+    projection
 }
 
 fn access_action_for(
@@ -752,6 +832,32 @@ mod tests {
                     .ability_ura("easynet:///r/test/ability/device.dev-a.terminal.create")
                     .ability_name("terminal.create")
                     .state("failed")
+                    .error(easynet_axon::invocation::LedgerErrorRecord {
+                        source: "daemon_invocation_service".to_string(),
+                        code: "POLICY_DENIED".to_string(),
+                        message: format!(
+                            "POLICY_DENIED: {}",
+                            serde_json::json!({
+                                "decision": "deny",
+                                "reason": "TOKEN_SCOPE_DENIED",
+                                "owner_user_id": "alice",
+                                "owner_source": "subject",
+                                "caller_ura": "easynet:///r/test/hub",
+                                "principal_kind": "token",
+                                "principal_id": "token-1",
+                                "callee_ura": "easynet:///r/test/device/dev-a",
+                                "subject_ura": "easynet:///r/test/user/alice",
+                                "ability_ura": "easynet:///r/test/ability/device.dev-a.terminal.create",
+                                "action": "stream",
+                                "canonical_hash": "sha256:abc",
+                                "signature_key_id": "ed25519:key",
+                                "authority_proof_id": "proof-1",
+                                "rejector_ura": "easynet:///r/test/device/dev-a"
+                            })
+                        ),
+                        retryable: false,
+                        context: std::collections::BTreeMap::new(),
+                    })
                     .started_unix_ms(1)
                     .args(easynet_axon::invocation::LedgerEventPayload::digest(
                         "application/json",
@@ -774,6 +880,12 @@ mod tests {
         assert_eq!(visible["redacted"], false);
         assert_eq!(visible["root_trace"]["invocation_id"], "req-1");
         assert_eq!(visible["root_trace"]["stage"], "execution_failed");
+        assert_eq!(
+            visible["root_trace"]["policy_decision"]["reason"],
+            "TOKEN_SCOPE_DENIED"
+        );
+        assert_eq!(visible["root_trace"]["authority_proof_id"], "proof-1");
+        assert_eq!(visible["rejector_ura"], "easynet:///r/test/device/dev-a");
 
         let hidden = reader
             .explain(json!({

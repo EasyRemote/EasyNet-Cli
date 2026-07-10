@@ -14,6 +14,34 @@
       "schema": "authority.schema.json"
     },
     {
+      "fixture": "access-control-ability-call-trace.v4.json",
+      "schema": "access-control.schema.json"
+    },
+    {
+      "fixture": "access-control-admission-explain-result.v4.json",
+      "schema": "access-control.schema.json"
+    },
+    {
+      "fixture": "access-control-authority-proof.v4.json",
+      "schema": "access-control.schema.json"
+    },
+    {
+      "fixture": "access-control-permission-grant.v4.json",
+      "schema": "access-control.schema.json"
+    },
+    {
+      "fixture": "access-control-permission-request.v4.json",
+      "schema": "access-control.schema.json"
+    },
+    {
+      "fixture": "access-control-policy-decision.v4.json",
+      "schema": "access-control.schema.json"
+    },
+    {
+      "fixture": "access-control-signature-decision.v4.json",
+      "schema": "access-control.schema.json"
+    },
+    {
       "fixture": "admin-agent-lifecycle-result.v4.json",
       "schema": "admin.schema.json"
     },

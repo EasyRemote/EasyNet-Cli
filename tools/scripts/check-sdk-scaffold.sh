@@ -660,6 +660,7 @@ schema_files=(
   stream-event.schema.json
   bidi-frame.schema.json
   authority.schema.json
+  access-control.schema.json
   lifecycle-status.schema.json
 )
 
@@ -800,6 +801,13 @@ fixture_files=(
   wrapper-browser-session.v4.json
   wrapper-media-session.v4.json
   authority-metadata.v4.json
+  access-control-ability-call-trace.v4.json
+  access-control-admission-explain-result.v4.json
+  access-control-authority-proof.v4.json
+  access-control-permission-grant.v4.json
+  access-control-permission-request.v4.json
+  access-control-policy-decision.v4.json
+  access-control-signature-decision.v4.json
 )
 
 for fixture in "${fixture_files[@]}"; do
@@ -866,6 +874,7 @@ case_files=(
   memc-consumer-coverage.yaml
   memc-semantic-alignment.yaml
   memc-no-core-bloat.yaml
+  access-control-runtime-transport.yaml
 )
 
 for case_file in "${case_files[@]}"; do
