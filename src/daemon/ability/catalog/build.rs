@@ -737,13 +737,8 @@ fn build_registry_with_services_result_inner(
     // own self-bundle, scoped under the literal owner `device`.
     // The daemon publishes its 10 keyring abilities under this
     // namespace so any local agent can call them through the
-    // standard dispatch path. Auto-init the on-disk store when
-    // absent — passphrase comes from EASYNET_KEYRING_PASS or
-    // falls back to a fixed deterministic local pass for the
-    // local-fast default. Failures here MUST NOT block daemon
-    // boot; we log the error and skip keyring registration. The
-    // resolver layer copes with absence by treating every URA
-    // as Unknown.
+    // standard dispatch path. The ability provider is the daemon-local key
+    // service; this process never opens key storage or derives a master key.
     //
     // The legacy owner string was `legacy self alias` — a "this device"
     // alias. v4.1.5 onward names the actor explicitly: keyring
@@ -752,25 +747,11 @@ fn build_registry_with_services_result_inner(
     // matching the URA `callee = device/<id>` that already
     // covers them.
     //
-    // EASYNET_KEYRING_DISABLE=1 skips auto-init entirely. Tests
-    // that don't want side effects on the user's real keyring
-    // file set this; production daemons leave it unset.
-    if std::env::var("EASYNET_KEYRING_DISABLE").is_err() {
-        match init_keyring_for_daemon() {
-            Ok(handle) => {
-                crate::daemon::keyring::abilities::register_for_owner(&mut reg, "device", handle);
-            }
-            Err(e) => {
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = device_keyring,
-                    kind = auto_init_failed,
-                    level = "warn",
-                    error = err_msg,
-                );
-            }
-        }
-    }
+    crate::daemon::keyring::abilities::register_for_owner(
+        &mut reg,
+        "device",
+        key_service_for_daemon(),
+    );
     // meta.{describe,list_abilities} — Agent self-introspection on
     // the same descriptor catalogue PLUS the live registry. describe
     // is the lightweight identity+summary surface; list_abilities
@@ -1022,35 +1003,14 @@ pub fn build_registry_with_services(config: RegistryBuildConfig<'_>) -> Arc<Axon
 ///   caller hand-build the chain or get silently empty
 ///   `context_used`.
 ///
-/// RFC-002 §3.2 keyring auto-init for the daemon. Locates the
-/// keyring file at `$XDG_CONFIG_HOME/easynet/keyring.json` (or
-/// platform fallback), opens it under the passphrase from
-/// `EASYNET_KEYRING_PASS` env var, and falls back to a deterministic
-/// local-only passphrase when none is set. The local fallback is
-/// fine for the `.localhost` default — federation peers never see
-/// the master key, and the file is mode 0o600.
-///
-/// Returns `Err` only on filesystem / decode / KDF errors; absence
-/// of an existing file is the happy path (creates a fresh ring).
-fn init_keyring_for_daemon() -> anyhow::Result<std::sync::Arc<crate::daemon::keyring::KeyringHandle>>
-{
-    use crate::daemon::keyring::store::default_keyring_path;
-    use crate::daemon::keyring::KeyringHandle;
-    let path = std::env::var("EASYNET_KEYRING_PATH")
-        .map(std::path::PathBuf::from)
-        .ok()
-        .map_or_else(default_keyring_path, Ok)?;
-    let pass = std::env::var("EASYNET_KEYRING_PASS").unwrap_or_else(|_| {
-        // Local-fast default. Operators wanting stronger isolation
-        // set EASYNET_KEYRING_PASS to a real secret. The literal
-        // here is NOT a security boundary — the threat model for
-        // local-fast assumes the host filesystem is the trust
-        // boundary anyway. RFC-002 §3.2.
-        "easynet-local-default-passphrase-v1".into()
-    });
-    Ok(std::sync::Arc::new(KeyringHandle::open_or_create(
-        path, &pass,
-    )?))
+/// Build the daemon ability provider against the canonical local key service.
+/// Registry shape is stable regardless of sidecar health. Invocation returns
+/// the typed transport failure when the lifecycle supervisor reports the key
+/// service unavailable; assembly never falls back to a local store or omits
+/// the capability.
+fn key_service_for_daemon(
+) -> std::sync::Arc<dyn crate::daemon::keyring::abilities::ManagedSigningProvider> {
+    std::sync::Arc::new(crate::daemon::identity::self_identity::KeyringClient::default_path())
 }
 
 /// Exists so `bin/easynet-daemon.rs` does not have to reach into the

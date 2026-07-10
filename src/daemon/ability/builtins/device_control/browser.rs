@@ -334,15 +334,14 @@ impl BrowserSessionService {
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_IDLE_TIMEOUT_S);
 
-        // session URA: easynet:///r/local/resource/daemon.browser/<ulid>
+        // session URA: easynet:///r/local/resource/daemon.browser/<id>
         // v0 uses "local" as realm; RFC-013 will anchor realm/device from
         // the daemon's self-identity. The id segment reuses the existing
-        // process-wide ULID minter (`daemon::keyring::store::ulid_like`)
-        // so we don't fork a second generator with weaker uniqueness.
+        // standard UUID generator keeps identity ownership out of key custody.
         // The URA literal is built through `crate::core::ura::resource_dot_ura`
         // so the centralised URA construction lint
         // (`tests/scripts/test_no_raw_ura_construction.sh`) keeps passing.
-        let id = crate::daemon::keyring::store::ulid_like();
+        let id = uuid::Uuid::new_v4().to_string();
         let session_ura = crate::core::ura::resource_dot_ura("local", "daemon.browser", &id);
         let created_at_ms = now_ms();
 

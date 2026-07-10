@@ -28,14 +28,135 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 use super::federated_bindings::{FederatedBindingsStore, FederatedUserBinding};
-use super::handle::KeyringHandle;
-use super::store::{Entry, KeyStatus, PeerStatus};
 use super::user_binding_chain::{
     verify_user_binding_signature, UserBindingError, UserBindingToken, ED25519_PUBKEY_LEN,
     USER_BINDING_FRESHNESS_MS, USER_BINDING_NONCE_LEN,
 };
+use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::identity::self_identity::KeyringClient;
+
+/// Provider boundary used by daemon abilities. Production is always backed by
+/// the daemon-local key-service endpoint; tests use the same state-machine
+/// implementation in memory without introducing a second persistence model.
+pub trait ManagedSigningProvider: Send + Sync {
+    fn create(
+        &self,
+        purpose: String,
+        bound_subject: Option<String>,
+    ) -> Result<ManagedSigningKeyProjection>;
+    fn list(
+        &self,
+        purpose: Option<String>,
+        status: Option<ManagedSigningStatus>,
+    ) -> Result<Vec<ManagedSigningKeyProjection>>;
+    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection>;
+    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature>;
+    fn rotate(&self, key_id: &str) -> Result<ManagedSigningKeyProjection>;
+    fn revoke(&self, key_id: &str) -> Result<i64>;
+    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> Result<()>;
+    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> Result<()>;
+    fn peer_add(
+        &self,
+        peer_ura: &str,
+        public_key_b64: &str,
+        via_hub: Option<String>,
+    ) -> Result<bool>;
+    fn peer_list(&self) -> Result<Vec<ManagedPeer>>;
+}
+
+impl<T: ManagedSigningProvider + ?Sized> ManagedSigningProvider for Arc<T> {
+    fn create(
+        &self,
+        purpose: String,
+        bound_subject: Option<String>,
+    ) -> Result<ManagedSigningKeyProjection> {
+        (**self).create(purpose, bound_subject)
+    }
+    fn list(
+        &self,
+        purpose: Option<String>,
+        status: Option<ManagedSigningStatus>,
+    ) -> Result<Vec<ManagedSigningKeyProjection>> {
+        (**self).list(purpose, status)
+    }
+    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
+        (**self).public_key(key_id)
+    }
+    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature> {
+        (**self).sign(key_id, canonical_bytes)
+    }
+    fn rotate(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
+        (**self).rotate(key_id)
+    }
+    fn revoke(&self, key_id: &str) -> Result<i64> {
+        (**self).revoke(key_id)
+    }
+    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> Result<()> {
+        (**self).set_expiry(key_id, expires_unix_ms)
+    }
+    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> Result<()> {
+        (**self).bind_subject(key_id, subject_ura)
+    }
+    fn peer_add(
+        &self,
+        peer_ura: &str,
+        public_key_b64: &str,
+        via_hub: Option<String>,
+    ) -> Result<bool> {
+        (**self).peer_add(peer_ura, public_key_b64, via_hub)
+    }
+    fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
+        (**self).peer_list()
+    }
+}
+
+impl ManagedSigningProvider for KeyringClient {
+    fn create(
+        &self,
+        purpose: String,
+        bound_subject: Option<String>,
+    ) -> Result<ManagedSigningKeyProjection> {
+        Ok(self.inventory_create(purpose, bound_subject)?)
+    }
+    fn list(
+        &self,
+        purpose: Option<String>,
+        status: Option<ManagedSigningStatus>,
+    ) -> Result<Vec<ManagedSigningKeyProjection>> {
+        Ok(self.inventory_list(purpose, status)?)
+    }
+    fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
+        Ok(self.inventory_public_key(key_id)?)
+    }
+    fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature> {
+        Ok(self.inventory_sign(key_id, canonical_bytes)?)
+    }
+    fn rotate(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
+        Ok(self.inventory_rotate(key_id)?)
+    }
+    fn revoke(&self, key_id: &str) -> Result<i64> {
+        Ok(self.inventory_revoke(key_id)?)
+    }
+    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> Result<()> {
+        Ok(self.inventory_set_expiry(key_id, expires_unix_ms)?)
+    }
+    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> Result<()> {
+        Ok(self.inventory_bind_subject(key_id, subject_ura)?)
+    }
+    fn peer_add(
+        &self,
+        peer_ura: &str,
+        public_key_b64: &str,
+        via_hub: Option<String>,
+    ) -> Result<bool> {
+        Ok(self.inventory_peer_add(peer_ura, public_key_b64, via_hub)?)
+    }
+    fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
+        Ok(self.inventory_peer_list()?)
+    }
+}
 
 fn b64_encode(bytes: &[u8]) -> String {
     use base64::engine::general_purpose::STANDARD;
@@ -51,12 +172,12 @@ fn b64_decode(s: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("base64 decode: {e}"))
 }
 
-fn entry_view(e: &Entry, full: bool) -> Value {
+fn entry_view(e: &ManagedSigningKeyProjection, full: bool) -> Value {
     let mut v = json!({
         "key_id":         e.key_id,
-        "algo":           e.algo,
+        "algo":           "ed25519",
         "purpose":        e.purpose,
-        "status":         match e.status { KeyStatus::Active => "active", KeyStatus::Retired => "retired", KeyStatus::Revoked => "revoked" },
+        "status":         match e.status { ManagedSigningStatus::Active => "active", ManagedSigningStatus::Retired => "retired", ManagedSigningStatus::Revoked => "revoked" },
         "rotation_epoch": e.rotation_epoch,
         "bound_subject":  e.bound_subject,
         "rotated_from":   e.rotated_from,
@@ -66,9 +187,8 @@ fn entry_view(e: &Entry, full: bool) -> Value {
     });
     if full {
         v["public_key"] = json!(e.public_key_b64);
-        // fingerprint is computed on demand
-        if let Ok(fp) = super::store::entry_fingerprint(e) {
-            v["fingerprint"] = json!(b64_encode(&fp));
+        if let Ok(public_key) = b64_decode(&e.public_key_b64) {
+            v["fingerprint"] = json!(b64_encode(&super::public_key_fingerprint(&public_key)));
         }
     }
     v
@@ -80,14 +200,14 @@ fn require_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow!("missing required string field `{key}`"))
 }
 
-pub fn handle_create(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_create(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let purpose = require_str(&args, "purpose")?.to_string();
     let bound_subject = args
         .get("bound_subject")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let entry = handle.create_entry(&purpose, bound_subject)?;
-    let fp = super::store::entry_fingerprint(&entry)?;
+    let entry = provider.create(purpose, bound_subject)?;
+    let fp = super::public_key_fingerprint(&b64_decode(&entry.public_key_b64)?);
     Ok(json!({
         "key_id":         entry.key_id,
         "public_key":     entry.public_key_b64,
@@ -96,7 +216,7 @@ pub fn handle_create(handle: &KeyringHandle, args: Value) -> Result<Value> {
     }))
 }
 
-pub fn handle_list(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_list(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let purpose_filter = args
         .get("filter")
         .and_then(|f| f.get("purpose"))
@@ -106,54 +226,43 @@ pub fn handle_list(handle: &KeyringHandle, args: Value) -> Result<Value> {
         .get("filter")
         .and_then(|f| f.get("status"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let entries: Vec<Value> = handle
-        .list_entries()
+        .map(parse_status)
+        .transpose()?;
+    let entries: Vec<Value> = provider
+        .list(purpose_filter, status_filter)?
         .into_iter()
-        .filter(|e| {
-            purpose_filter
-                .as_deref()
-                .map(|p| e.purpose == p)
-                .unwrap_or(true)
-        })
-        .filter(|e| {
-            status_filter
-                .as_deref()
-                .map(|s| {
-                    matches!(
-                        (s, &e.status),
-                        ("active", KeyStatus::Active)
-                            | ("retired", KeyStatus::Retired)
-                            | ("revoked", KeyStatus::Revoked)
-                    )
-                })
-                .unwrap_or(true)
-        })
         .map(|e| entry_view(&e, false))
         .collect();
     Ok(json!({ "entries": entries }))
 }
 
-pub fn handle_get_public(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_get_public(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
-    let entry = handle
-        .find_entry_by_id(key_id)
-        .ok_or_else(|| anyhow!("key_id {key_id} not found"))?;
-    let fp = super::store::entry_fingerprint(&entry)?;
+    let entry = provider.public_key(key_id)?;
+    let fp = super::public_key_fingerprint(&b64_decode(&entry.public_key_b64)?);
     Ok(json!({
         "public_key":     entry.public_key_b64,
         "fingerprint":    b64_encode(&fp),
-        "status":         match entry.status { KeyStatus::Active => "active", KeyStatus::Retired => "retired", KeyStatus::Revoked => "revoked" },
+        "status":         match entry.status { ManagedSigningStatus::Active => "active", ManagedSigningStatus::Retired => "retired", ManagedSigningStatus::Revoked => "revoked" },
         "rotation_epoch": entry.rotation_epoch,
     }))
 }
 
-pub fn handle_sign(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_sign(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let payload_b64 = require_str(&args, "payload_b64")?;
     let payload = b64_decode(payload_b64)?;
-    let sig = handle.sign(key_id, &payload)?;
-    Ok(json!({ "signature_b64": b64_encode(&sig) }))
+    let sig = provider.sign(key_id, &payload)?;
+    Ok(json!({ "signature_b64": b64_encode(&sig.to_bytes()) }))
+}
+
+fn parse_status(value: &str) -> Result<ManagedSigningStatus> {
+    match value {
+        "active" => Ok(ManagedSigningStatus::Active),
+        "retired" => Ok(ManagedSigningStatus::Retired),
+        "revoked" => Ok(ManagedSigningStatus::Revoked),
+        other => Err(anyhow!("unknown managed signing status {other:?}")),
+    }
 }
 
 /// **PR-N4 commit 2/N**. `device.keyring.federate_user_identity_token`
@@ -176,7 +285,10 @@ pub fn handle_sign(handle: &KeyringHandle, args: Value) -> Result<Value> {
 /// pin a fixed timestamp; production callers pass the current
 /// epoch-ms. The handler MAY round to seconds in a future commit
 /// for backend JWT-encoding compatibility, but v1 keeps ms.
-pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_federate_user_identity_token(
+    provider: &dyn ManagedSigningProvider,
+    args: Value,
+) -> Result<Value> {
     let target_realm = require_str(&args, "target_realm")?.to_string();
     if target_realm.is_empty() {
         return Err(anyhow!("target_realm must be non-empty"));
@@ -185,18 +297,17 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
         .get("issued_at_unix_ms")
         .and_then(|v| v.as_u64())
         .ok_or_else(|| anyhow!("missing required u64 field `issued_at_unix_ms`"))?;
-
-    // Source identity comes from the daemon's bound device-
-    // subject. INV-1 is enforced by construction: the signing
-    // key (purpose=agent_signing) is the daemon's own backend
-    // identity, and that's the same key the consuming realm
-    // resolves via FederatedKeyResolver / federation.resolve_key.
-    let source_user_ura = handle.device_subject().ok_or_else(|| {
-        anyhow!(
-            "daemon has no bound device-subject; \
-             call device.keyring.bind_subject before raising user binding tokens"
-        )
-    })?;
+    let source_user_ura = require_str(&args, "source_user_ura")?.to_string();
+    let managed_key_id = require_str(&args, "managed_key_id")?;
+    let signing_entry = provider.public_key(managed_key_id)?;
+    if signing_entry.status != ManagedSigningStatus::Active
+        || signing_entry.purpose != "agent_signing"
+        || signing_entry.bound_subject.as_deref() != Some(source_user_ura.as_str())
+    {
+        return Err(anyhow!(
+            "managed signing authority does not bind active agent_signing key to source_user_ura"
+        ));
+    }
     let source_realm = parse_realm_from_user_ura(&source_user_ura).ok_or_else(|| {
         anyhow!(
             "device-subject {source_user_ura:?} is not a canonical \
@@ -210,19 +321,6 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
         ));
     }
 
-    // Pick the active agent_signing entry — the daemon's backend
-    // identity. RFC-002 single-key model means there's exactly
-    // one such active entry per ring.
-    let signing_entry = handle
-        .list_entries()
-        .into_iter()
-        .find(|e| e.purpose == "agent_signing" && e.status == KeyStatus::Active)
-        .ok_or_else(|| {
-            anyhow!(
-                "no active agent_signing entry in keyring; \
-             call device.keyring.create with purpose=agent_signing first"
-            )
-        })?;
     let pubkey_raw = b64_decode(&signing_entry.public_key_b64)?;
     let mut source_user_pubkey = [0u8; ED25519_PUBKEY_LEN];
     if pubkey_raw.len() != ED25519_PUBKEY_LEN {
@@ -250,8 +348,8 @@ pub fn handle_federate_user_identity_token(handle: &KeyringHandle, args: Value) 
         nonce,
     );
     let canonical = super::user_binding_chain::canonical_user_binding_bytes(&token);
-    let sig = handle.sign(&signing_entry.key_id, &canonical)?;
-    token.signature = sig.to_vec();
+    let sig = provider.sign(&signing_entry.key_id, &canonical)?;
+    token.signature = sig.to_bytes().to_vec();
 
     Ok(json!({
         "token": token,
@@ -395,59 +493,66 @@ pub fn handle_consume_federate_user_token(
     }))
 }
 
-pub fn handle_rotate(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_rotate(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
-    let (new_id, retired_id, epoch) = handle.rotate(key_id)?;
+    let successor = provider.rotate(key_id)?;
     Ok(json!({
-        "new_key_id":     new_id,
-        "retired_key_id": retired_id,
-        "rotation_epoch": epoch,
+        "new_key_id":     successor.key_id,
+        "retired_key_id": key_id,
+        "rotation_epoch": successor.rotation_epoch,
     }))
 }
 
-pub fn handle_revoke(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_revoke(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
-    let reason = args.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-    let ts = handle.revoke(key_id, reason)?;
+    let ts = provider.revoke(key_id)?;
     Ok(json!({ "tombstone_unix_ms": ts }))
 }
 
-pub fn handle_expire_set(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_expire_set(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let expires_unix_ms = args
         .get("expires_unix_ms")
         .and_then(|v| v.as_i64())
         .ok_or_else(|| anyhow!("missing required i64 field `expires_unix_ms`"))?;
-    handle.set_expiry(key_id, expires_unix_ms)?;
+    provider.set_expiry(key_id, expires_unix_ms)?;
     Ok(json!({ "ok": true }))
 }
 
-pub fn handle_bind_subject(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_bind_subject(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let key_id = require_str(&args, "key_id")?;
     let subject_id = require_str(&args, "subject_id")?;
-    handle.bind_subject(key_id, subject_id)?;
+    provider.bind_subject(key_id, subject_id)?;
     Ok(json!({ "ok": true }))
 }
 
-pub fn handle_peer_add(handle: &KeyringHandle, args: Value) -> Result<Value> {
+pub fn handle_peer_add(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
     let peer_ura = require_str(&args, "peer_ura")?;
     let public_key = require_str(&args, "public_key")?;
-    let fingerprint = args.get("fingerprint").and_then(|v| v.as_str());
-    let via_hub = args.get("via_hub").and_then(|v| v.as_str());
-    let added = handle.peer_add(peer_ura, public_key, fingerprint, via_hub)?;
+    if let Some(asserted) = args.get("fingerprint").and_then(Value::as_str) {
+        let derived = b64_encode(&super::public_key_fingerprint(&b64_decode(public_key)?));
+        if asserted != derived {
+            return Err(anyhow!("peer fingerprint does not match public key"));
+        }
+    }
+    let via_hub = args
+        .get("via_hub")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let added = provider.peer_add(peer_ura, public_key, via_hub)?;
     Ok(json!({ "added": added }))
 }
 
-pub fn handle_peer_list(handle: &KeyringHandle, _args: Value) -> Result<Value> {
-    let peers: Vec<Value> = handle
-        .list_peers()
+pub fn handle_peer_list(provider: &dyn ManagedSigningProvider, _args: Value) -> Result<Value> {
+    let peers: Vec<Value> = provider
+        .peer_list()?
         .into_iter()
         .map(|p| {
             json!({
                 "peer_ura":       p.peer_ura,
                 "fingerprint":    p.fingerprint_b64,
                 "public_key":     p.public_key_b64,
-                "status":         match p.status { PeerStatus::Trusted => "trusted", PeerStatus::Suspended => "suspended", PeerStatus::Revoked => "revoked" },
+                "status":         "trusted",
                 "via_hub":        p.via_hub,
                 "added_unix_ms":  p.added_unix_ms,
                 "last_seen_unix_ms": p.last_seen_unix_ms,
@@ -461,54 +566,58 @@ pub fn handle_peer_list(handle: &KeyringHandle, _args: Value) -> Result<Value> {
 ///
 /// `owner` is the agent name they publish under (typically `"legacy self alias"`
 /// for the daemon's self-bundle).
-pub fn register_for_owner(reg: &mut AxonAbilityCatalog, owner: &str, handle: Arc<KeyringHandle>) {
+pub fn register_for_owner(
+    reg: &mut AxonAbilityCatalog,
+    owner: &str,
+    provider: Arc<dyn ManagedSigningProvider>,
+) {
     let name = |verb: &str| format!("{owner}.keyring.{verb}");
 
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("create"),
         Arc::new(move |args| handle_create(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(name("list"), Arc::new(move |args| handle_list(&h, args)));
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("get_public"),
         Arc::new(move |args| handle_get_public(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(name("sign"), Arc::new(move |args| handle_sign(&h, args)));
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("rotate"),
         Arc::new(move |args| handle_rotate(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("revoke"),
         Arc::new(move |args| handle_revoke(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("expire_set"),
         Arc::new(move |args| handle_expire_set(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("bind_subject"),
         Arc::new(move |args| handle_bind_subject(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("peer_add"),
         Arc::new(move |args| handle_peer_add(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("peer_list"),
         Arc::new(move |args| handle_peer_list(&h, args)),
     );
-    let h = handle.clone();
+    let h = provider.clone();
     reg.register_rpc(
         name("federate_user_identity_token"),
         Arc::new(move |args| handle_federate_user_identity_token(&h, args)),
@@ -539,10 +648,87 @@ pub fn register_federated_consume_for_owner(
 mod tests {
     use super::*;
 
-    fn handle() -> (Arc<KeyringHandle>, tempfile::TempDir) {
+    struct TestProvider(std::sync::Mutex<super::super::Vault>);
+
+    impl ManagedSigningProvider for TestProvider {
+        fn create(
+            &self,
+            purpose: String,
+            bound_subject: Option<String>,
+        ) -> Result<ManagedSigningKeyProjection> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .inventory_create(purpose, bound_subject)?)
+        }
+        fn list(
+            &self,
+            purpose: Option<String>,
+            status: Option<ManagedSigningStatus>,
+        ) -> Result<Vec<ManagedSigningKeyProjection>> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .inventory_list(purpose.as_deref(), status))
+        }
+        fn public_key(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
+            Ok(self.0.lock().unwrap().inventory_public_key(key_id)?)
+        }
+        fn sign(&self, key_id: &str, canonical_bytes: &[u8]) -> Result<ed25519_dalek::Signature> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .inventory_sign(key_id, canonical_bytes)?)
+        }
+        fn rotate(&self, key_id: &str) -> Result<ManagedSigningKeyProjection> {
+            Ok(self.0.lock().unwrap().inventory_rotate(key_id)?)
+        }
+        fn revoke(&self, key_id: &str) -> Result<i64> {
+            Ok(self.0.lock().unwrap().inventory_revoke(key_id)?)
+        }
+        fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> Result<()> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .inventory_set_expiry(key_id, expires_unix_ms)?)
+        }
+        fn bind_subject(&self, key_id: &str, subject_ura: &str) -> Result<()> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .inventory_bind_subject(key_id, subject_ura.to_string())?)
+        }
+        fn peer_add(
+            &self,
+            peer_ura: &str,
+            public_key_b64: &str,
+            via_hub: Option<String>,
+        ) -> Result<bool> {
+            Ok(self.0.lock().unwrap().inventory_peer_add(
+                peer_ura.to_string(),
+                public_key_b64.to_string(),
+                via_hub,
+            )?)
+        }
+        fn peer_list(&self) -> Result<Vec<ManagedPeer>> {
+            Ok(self.0.lock().unwrap().inventory_peer_list())
+        }
+    }
+
+    fn handle() -> (Arc<dyn ManagedSigningProvider>, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("keyring.json");
-        let h = Arc::new(KeyringHandle::open_or_create(path, "p").unwrap());
+        let vault = super::super::Vault::open_or_init(
+            &dir.path().join("keyring.enc"),
+            &super::super::MasterKeySource::Explicit("p".into()),
+        )
+        .unwrap();
+        let h: Arc<dyn ManagedSigningProvider> =
+            Arc::new(TestProvider(std::sync::Mutex::new(vault)));
         (h, dir)
     }
 
@@ -658,25 +844,35 @@ mod tests {
 
     // ── PR-N4 commit 2/N — federate_user_identity_token ──────
 
-    fn handle_with_subject_and_signing_key() -> (Arc<KeyringHandle>, tempfile::TempDir) {
+    fn handle_with_subject_and_signing_key(
+    ) -> (Arc<dyn ManagedSigningProvider>, String, tempfile::TempDir) {
         let (h, d) = handle();
-        h.set_device_subject("easynet:///r/realm-a/user/user-c".to_string())
-            .unwrap();
-        // Create the agent_signing entry the federate token
-        // handler picks up.
-        handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
-        (h, d)
+        let created = handle_create(
+            &h,
+            json!({
+                "purpose": "agent_signing",
+                "bound_subject": "easynet:///r/realm-a/user/user-c"
+            }),
+        )
+        .unwrap();
+        (h, created["key_id"].as_str().unwrap().to_string(), d)
+    }
+
+    fn issuer_args(key_id: &str, target_realm: &str, issued_at_unix_ms: u64) -> Value {
+        json!({
+            "source_user_ura": "easynet:///r/realm-a/user/user-c",
+            "managed_key_id": key_id,
+            "target_realm": target_realm,
+            "issued_at_unix_ms": issued_at_unix_ms,
+        })
     }
 
     #[test]
     fn federate_user_identity_token_happy_path() {
-        let (h, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_subject_and_signing_key();
         let resp = handle_federate_user_identity_token(
             &h,
-            json!({
-                "target_realm": "realm-b",
-                "issued_at_unix_ms": 1_714_500_000_000_u64,
-            }),
+            issuer_args(&key_id, "realm-b", 1_714_500_000_000),
         )
         .expect("token issued");
         assert_eq!(resp["transport_hint"], json!("jwt-custom-claim"));
@@ -711,13 +907,10 @@ mod tests {
         // The token issued by this handler must verify with the
         // user_binding_chain::verify_user_binding_signature
         // function — the consuming realm's gate.
-        let (h, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_subject_and_signing_key();
         let resp = handle_federate_user_identity_token(
             &h,
-            json!({
-                "target_realm": "realm-b",
-                "issued_at_unix_ms": 1_714_500_000_000_u64,
-            }),
+            issuer_args(&key_id, "realm-b", 1_714_500_000_000),
         )
         .unwrap();
         let token: super::super::user_binding_chain::UserBindingToken =
@@ -732,11 +925,8 @@ mod tests {
         // with the same target_realm + issued_at MUST have
         // distinct nonces, so the consuming realm's replay
         // store can dedup them as separate calls.
-        let (h, _d) = handle_with_subject_and_signing_key();
-        let args = json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": 1_714_500_000_000_u64,
-        });
+        let (h, key_id, _d) = handle_with_subject_and_signing_key();
+        let args = issuer_args(&key_id, "realm-b", 1_714_500_000_000);
         let r1 = handle_federate_user_identity_token(&h, args.clone()).unwrap();
         let r2 = handle_federate_user_identity_token(&h, args).unwrap();
         assert_ne!(r1["token"]["nonce"], r2["token"]["nonce"]);
@@ -747,13 +937,10 @@ mod tests {
         // INV-3 unidirectional: the source realm cannot issue a
         // binding for itself; that's not a federated assertion,
         // just self-loop noise. Reject early.
-        let (h, _d) = handle_with_subject_and_signing_key();
+        let (h, key_id, _d) = handle_with_subject_and_signing_key();
         let err = handle_federate_user_identity_token(
             &h,
-            json!({
-                "target_realm": "realm-a", // = source realm
-                "issued_at_unix_ms": 1_714_500_000_000_u64,
-            }),
+            issuer_args(&key_id, "realm-a", 1_714_500_000_000),
         )
         .expect_err("must reject self-realm target");
         assert!(
@@ -767,17 +954,19 @@ mod tests {
         // Without `set_device_subject`, the daemon has no
         // identity to issue tokens about. Reject.
         let (h, _d) = handle();
-        handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
+        let created = handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
         let err = handle_federate_user_identity_token(
             &h,
             json!({
+                "source_user_ura": "easynet:///r/realm-a/user/user-c",
+                "managed_key_id": created["key_id"],
                 "target_realm": "realm-b",
                 "issued_at_unix_ms": 1_714_500_000_000_u64,
             }),
         )
         .expect_err("must reject without device-subject");
         assert!(
-            err.to_string().contains("bound device-subject"),
+            err.to_string().contains("does not bind"),
             "rejection must explain missing identity; got: {err}"
         );
     }
@@ -786,18 +975,13 @@ mod tests {
     fn federate_user_identity_token_requires_active_signing_entry() {
         // Subject set but no agent_signing entry. Reject.
         let (h, _d) = handle();
-        h.set_device_subject("easynet:///r/realm-a/user/user-c".to_string())
-            .unwrap();
         let err = handle_federate_user_identity_token(
             &h,
-            json!({
-                "target_realm": "realm-b",
-                "issued_at_unix_ms": 1_714_500_000_000_u64,
-            }),
+            issuer_args("missing", "realm-b", 1_714_500_000_000),
         )
         .expect_err("must reject without agent_signing entry");
         assert!(
-            err.to_string().contains("agent_signing"),
+            err.to_string().contains("not found"),
             "rejection must explain missing entry; got: {err}"
         );
     }
@@ -806,12 +990,19 @@ mod tests {
     fn federate_user_identity_token_requires_canonical_ura() {
         // Subject set to a non-canonical URA. Reject.
         let (h, _d) = handle();
-        h.set_device_subject("not-a-canonical-ura".to_string())
-            .unwrap();
-        handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
+        let created = handle_create(
+            &h,
+            json!({
+                "purpose": "agent_signing",
+                "bound_subject": "not-a-canonical-ura"
+            }),
+        )
+        .unwrap();
         let err = handle_federate_user_identity_token(
             &h,
             json!({
+                "source_user_ura": "not-a-canonical-ura",
+                "managed_key_id": created["key_id"],
                 "target_realm": "realm-b",
                 "issued_at_unix_ms": 1_714_500_000_000_u64,
             }),
@@ -822,15 +1013,10 @@ mod tests {
 
     #[test]
     fn federate_user_identity_token_rejects_empty_target_realm() {
-        let (h, _d) = handle_with_subject_and_signing_key();
-        let err = handle_federate_user_identity_token(
-            &h,
-            json!({
-                "target_realm": "",
-                "issued_at_unix_ms": 1_714_500_000_000_u64,
-            }),
-        )
-        .expect_err("must reject empty target_realm");
+        let (h, key_id, _d) = handle_with_subject_and_signing_key();
+        let err =
+            handle_federate_user_identity_token(&h, issuer_args(&key_id, "", 1_714_500_000_000))
+                .expect_err("must reject empty target_realm");
         assert!(err.to_string().contains("non-empty"));
     }
 
@@ -841,12 +1027,19 @@ mod tests {
     /// the test driver can wire up the consumer side.
     fn issue_token_from_realm_a(target_realm: &str, issued_at_ms: u64) -> Value {
         let (h, _d) = handle();
-        h.set_device_subject("easynet:///r/realm-a/user/user-c".to_string())
-            .unwrap();
-        handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
+        let created = handle_create(
+            &h,
+            json!({
+                "purpose": "agent_signing",
+                "bound_subject": "easynet:///r/realm-a/user/user-c"
+            }),
+        )
+        .unwrap();
         let resp = handle_federate_user_identity_token(
             &h,
             json!({
+                "source_user_ura": "easynet:///r/realm-a/user/user-c",
+                "managed_key_id": created["key_id"],
                 "target_realm": target_realm,
                 "issued_at_unix_ms": issued_at_ms,
             }),

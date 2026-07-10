@@ -220,13 +220,13 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
         } => {
             let mut guard = vault.lock().await;
             if !guard.contains(&primary_self) {
-                use rand::RngCore;
-                let mut seed = [0u8; 32];
-                rand::rngs::OsRng.fill_bytes(&mut seed);
-                if let Err(err) = guard.put(&primary_self, role_overlays, hex::encode(seed)) {
-                    return vault_error_to_response(err);
-                }
-                if let Err(err) = guard.seal() {
+                let result = guard.mutate_and_seal(|vault| {
+                    use rand::RngCore;
+                    let mut seed = [0u8; 32];
+                    rand::rngs::OsRng.fill_bytes(&mut seed);
+                    vault.put(&primary_self, role_overlays, hex::encode(seed))
+                });
+                if let Err(err) = result {
                     return vault_error_to_response(err);
                 }
             }
@@ -238,20 +238,6 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
                     },
                 },
                 Err(err) => vault_error_to_response(err),
-            }
-        }
-        KeyringRequest::Put {
-            primary_self,
-            role_overlays,
-            seed_hex,
-        } => {
-            let mut guard = vault.lock().await;
-            match guard.put(&primary_self, role_overlays, seed_hex) {
-                Ok(()) => match guard.seal() {
-                    Ok(()) => KeyringResponse::Ok,
-                    Err(e) => vault_error_to_response(e),
-                },
-                Err(e) => vault_error_to_response(e),
             }
         }
         KeyringRequest::Sign {
@@ -294,8 +280,10 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
         }
         KeyringRequest::Forget { primary_self } => {
             let mut guard = vault.lock().await;
-            guard.forget(&primary_self);
-            match guard.seal() {
+            match guard.mutate_and_seal(|vault| {
+                vault.forget(&primary_self);
+                Ok(())
+            }) {
                 Ok(()) => KeyringResponse::Ok,
                 Err(e) => vault_error_to_response(e),
             }
@@ -305,11 +293,8 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
             bound_subject,
         } => {
             let mut guard = vault.lock().await;
-            match guard.inventory_create(purpose, bound_subject) {
-                Ok(entry) => match guard.seal() {
-                    Ok(()) => KeyringResponse::InventoryKey { entry },
-                    Err(err) => vault_error_to_response(err),
-                },
+            match guard.mutate_and_seal(|vault| vault.inventory_create(purpose, bound_subject)) {
+                Ok(entry) => KeyringResponse::InventoryKey { entry },
                 Err(err) => vault_error_to_response(err),
             }
         }
@@ -349,21 +334,15 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
         }
         KeyringRequest::InventoryRotate { key_id } => {
             let mut guard = vault.lock().await;
-            match guard.inventory_rotate(&key_id) {
-                Ok(entry) => match guard.seal() {
-                    Ok(()) => KeyringResponse::InventoryKey { entry },
-                    Err(err) => vault_error_to_response(err),
-                },
+            match guard.mutate_and_seal(|vault| vault.inventory_rotate(&key_id)) {
+                Ok(entry) => KeyringResponse::InventoryKey { entry },
                 Err(err) => vault_error_to_response(err),
             }
         }
         KeyringRequest::InventoryRevoke { key_id } => {
             let mut guard = vault.lock().await;
-            match guard.inventory_revoke(&key_id) {
-                Ok(revoked_unix_ms) => match guard.seal() {
-                    Ok(()) => KeyringResponse::InventoryRevoked { revoked_unix_ms },
-                    Err(err) => vault_error_to_response(err),
-                },
+            match guard.mutate_and_seal(|vault| vault.inventory_revoke(&key_id)) {
+                Ok(revoked_unix_ms) => KeyringResponse::InventoryRevoked { revoked_unix_ms },
                 Err(err) => vault_error_to_response(err),
             }
         }
@@ -372,11 +351,10 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
             expires_unix_ms,
         } => {
             let mut guard = vault.lock().await;
-            match guard.inventory_set_expiry(&key_id, expires_unix_ms) {
-                Ok(()) => match guard.seal() {
-                    Ok(()) => KeyringResponse::Ok,
-                    Err(err) => vault_error_to_response(err),
-                },
+            match guard
+                .mutate_and_seal(|vault| vault.inventory_set_expiry(&key_id, expires_unix_ms))
+            {
+                Ok(()) => KeyringResponse::Ok,
                 Err(err) => vault_error_to_response(err),
             }
         }
@@ -385,11 +363,9 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
             subject_ura,
         } => {
             let mut guard = vault.lock().await;
-            match guard.inventory_bind_subject(&key_id, subject_ura) {
-                Ok(()) => match guard.seal() {
-                    Ok(()) => KeyringResponse::Ok,
-                    Err(err) => vault_error_to_response(err),
-                },
+            match guard.mutate_and_seal(|vault| vault.inventory_bind_subject(&key_id, subject_ura))
+            {
+                Ok(()) => KeyringResponse::Ok,
                 Err(err) => vault_error_to_response(err),
             }
         }
@@ -399,11 +375,10 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
             via_hub,
         } => {
             let mut guard = vault.lock().await;
-            match guard.inventory_peer_add(peer_ura, public_key_b64, via_hub) {
-                Ok(added) => match guard.seal() {
-                    Ok(()) => KeyringResponse::InventoryPeerAdded { added },
-                    Err(err) => vault_error_to_response(err),
-                },
+            match guard.mutate_and_seal(|vault| {
+                vault.inventory_peer_add(peer_ura, public_key_b64, via_hub)
+            }) {
+                Ok(added) => KeyringResponse::InventoryPeerAdded { added },
                 Err(err) => vault_error_to_response(err),
             }
         }

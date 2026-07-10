@@ -43,6 +43,7 @@ fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
         call_mode: CallMode::Rpc,
         subject: None,
         causal_context: None,
+        request_metadata: Default::default(),
     }
 }
 
@@ -85,15 +86,7 @@ fn build_registry_with_invoke(self_agent: &str, agents: AgentRegistry) -> Produc
 fn user_join_two_devices_chat_round_trip() {
     let _g = product_test_lock();
 
-    // ── Step 1: simulate "create user, get key" (Hub web does
-    //    this in production; here we just generate a keypair via
-    //    the CLI's keyring crypto primitives — same code path).
-    use easynet_cli::daemon::keyring::crypto::fresh_ed25519_keypair;
-    let (_seed, _pk) = fresh_ed25519_keypair().unwrap();
-    // The seed/public key are what Hub would issue. They are
-    // attached to the per-device credentials below.
-
-    // ── Step 2: simulate `easynet device join` for device1 +
+    // ── Step 1: simulate `easynet device join` for device1 +
     //    device2. Both belong to the SAME user/tenant
     //    `silan.localhost`. In production this is the post-
     //    pairing state written to ~/.easynet/credentials.json.

@@ -60,6 +60,7 @@ fn target(ability: &str, args: Value) -> InvocationTarget {
         call_mode: CallMode::Rpc,
         subject: None,
         causal_context: None,
+        request_metadata: Default::default(),
     }
 }
 
@@ -440,6 +441,7 @@ fn main() -> anyhow::Result<()> {
                     call_mode: CallMode::Rpc,
                     subject: None,
                     causal_context: None,
+                    request_metadata: Default::default(),
                 })
             })
             .await
@@ -482,6 +484,7 @@ fn main() -> anyhow::Result<()> {
                     call_mode: CallMode::Rpc,
                     subject: None,
                     causal_context: None,
+                    request_metadata: Default::default(),
                 })
             })
             .await
@@ -517,6 +520,7 @@ fn main() -> anyhow::Result<()> {
                 call_mode: CallMode::Stream,
                 subject: None,
                 causal_context: None,
+                request_metadata: Default::default(),
             };
             match dispatcher_for_codex.execute_stream(codex_target) {
                 Ok(stream) => print_stream_frames(&rt, "Codex", stream),
@@ -541,6 +545,7 @@ fn main() -> anyhow::Result<()> {
             call_mode: CallMode::Stream,
             subject: None,
             causal_context: None,
+            request_metadata: Default::default(),
         };
         {
             let _mission_ctx =

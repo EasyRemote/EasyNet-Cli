@@ -41,36 +41,141 @@ use serde_json::{json, Value};
 
 use easynet_cli::daemon::keyring::abilities::{
     handle_consume_federate_user_token, handle_create, handle_federate_user_identity_token,
+    ManagedSigningProvider,
 };
 use easynet_cli::daemon::keyring::federated_bindings::FederatedBindingsStore;
-use easynet_cli::daemon::keyring::handle::KeyringHandle;
 use easynet_cli::daemon::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
+use easynet_cli::daemon::keyring::{
+    ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus, MasterKeySource, Vault,
+};
+
+struct TestProvider(std::sync::Mutex<Vault>);
+
+impl ManagedSigningProvider for TestProvider {
+    fn create(
+        &self,
+        purpose: String,
+        bound_subject: Option<String>,
+    ) -> anyhow::Result<ManagedSigningKeyProjection> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .inventory_create(purpose, bound_subject)?)
+    }
+    fn list(
+        &self,
+        purpose: Option<String>,
+        status: Option<ManagedSigningStatus>,
+    ) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .inventory_list(purpose.as_deref(), status))
+    }
+    fn public_key(&self, key_id: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
+        Ok(self.0.lock().unwrap().inventory_public_key(key_id)?)
+    }
+    fn sign(
+        &self,
+        key_id: &str,
+        canonical_bytes: &[u8],
+    ) -> anyhow::Result<ed25519_dalek::Signature> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .inventory_sign(key_id, canonical_bytes)?)
+    }
+    fn rotate(&self, key_id: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
+        Ok(self.0.lock().unwrap().inventory_rotate(key_id)?)
+    }
+    fn revoke(&self, key_id: &str) -> anyhow::Result<i64> {
+        Ok(self.0.lock().unwrap().inventory_revoke(key_id)?)
+    }
+    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> anyhow::Result<()> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .inventory_set_expiry(key_id, expires_unix_ms)?)
+    }
+    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> anyhow::Result<()> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .inventory_bind_subject(key_id, subject_ura.to_string())?)
+    }
+    fn peer_add(
+        &self,
+        peer_ura: &str,
+        public_key_b64: &str,
+        via_hub: Option<String>,
+    ) -> anyhow::Result<bool> {
+        Ok(self.0.lock().unwrap().inventory_peer_add(
+            peer_ura.to_string(),
+            public_key_b64.to_string(),
+            via_hub,
+        )?)
+    }
+    fn peer_list(&self) -> anyhow::Result<Vec<ManagedPeer>> {
+        Ok(self.0.lock().unwrap().inventory_peer_list())
+    }
+}
 
 /// Stand up realm A's daemon: keyring + agent_signing entry +
-/// bound device subject. Returns the handle plus the user URI
+/// bound user subject. Returns the provider plus the user URA
 /// so the test driver can pass it to the consumer side later.
-fn boot_realm_a_daemon() -> (Arc<KeyringHandle>, String, tempfile::TempDir) {
+fn boot_realm_a_daemon() -> (
+    Arc<dyn ManagedSigningProvider>,
+    String,
+    String,
+    tempfile::TempDir,
+) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("realm_a_keyring.json");
-    let h = Arc::new(KeyringHandle::open_or_create(path, "passphrase-a").unwrap());
+    let vault = Vault::open_or_init(
+        &dir.path().join("realm-a-key-service.enc"),
+        &MasterKeySource::Explicit("passphrase-a".into()),
+    )
+    .unwrap();
+    let h: Arc<dyn ManagedSigningProvider> = Arc::new(TestProvider(std::sync::Mutex::new(vault)));
     let user_ura = "easynet:///r/realm-a/user/user-c".to_string();
-    h.set_device_subject(user_ura.clone()).unwrap();
-    handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
-    (h, user_ura, dir)
+    let created = handle_create(
+        &h,
+        json!({
+            "purpose": "agent_signing",
+            "bound_subject": user_ura,
+        }),
+    )
+    .unwrap();
+    (
+        h,
+        user_ura,
+        created["key_id"].as_str().unwrap().to_string(),
+        dir,
+    )
+}
+
+fn issuer_args(source_user_ura: &str, key_id: &str, target_realm: &str, issued_at: u64) -> Value {
+    json!({
+        "source_user_ura": source_user_ura,
+        "managed_key_id": key_id,
+        "target_realm": target_realm,
+        "issued_at_unix_ms": issued_at,
+    })
 }
 
 #[test]
 fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
     // ── Realm A: issue token ──
-    let (a_keyring, source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
 
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": issued_at_ms,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", issued_at_ms),
     )
     .expect("realm A issues token");
     assert_eq!(token_resp["transport_hint"], json!("jwt-custom-claim"));
@@ -108,11 +213,11 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
         FederatedUserOutcome::BoundLocalUser(local_user_id_on_b.clone())
     );
 
-    // Cross-check: a different user URI in realm A is NOT bound.
+    // Cross-check: a different user URA in realm A is NOT bound.
     let unbound_outcome = resolver.resolve_user("easynet:///r/realm-a/user/user-other");
     assert_eq!(unbound_outcome, FederatedUserOutcome::NotBound);
 
-    // Realm B's own URI is `Local` (no federated lookup
+    // Realm B's own URA is `Local` (no federated lookup
     // needed — INV-3).
     let local_outcome = resolver.resolve_user("easynet:///r/realm-b/user/user-on-b");
     assert_eq!(local_outcome, FederatedUserOutcome::Local);
@@ -122,14 +227,11 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
 fn replay_attempt_after_successful_consume_rejected() {
     // Same flow as above, but try to consume the SAME token
     // twice. Second attempt must reject with replay detected.
-    let (a_keyring, _source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": issued_at_ms,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", issued_at_ms),
     )
     .unwrap();
     let token = token_resp["token"].clone();
@@ -156,13 +258,10 @@ fn token_for_wrong_realm_rejected_at_target_check() {
     // Realm A issues a token targeting realm B; realm C tries
     // to consume — must reject at target_realm check before
     // any expensive crypto runs.
-    let (a_keyring, _source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": 1_714_500_000_000_u64,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", 1_714_500_000_000),
     )
     .unwrap();
 
@@ -188,14 +287,11 @@ fn binding_persists_across_resolver_construction() {
     // Once written to the store, the binding survives
     // constructing a fresh resolver — readers don't need to be
     // alive at consume time.
-    let (a_keyring, source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
     let token = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": issued_at_ms,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", issued_at_ms),
     )
     .unwrap()["token"]
         .clone();

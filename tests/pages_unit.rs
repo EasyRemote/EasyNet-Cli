@@ -186,6 +186,7 @@ fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
         call_mode: CallMode::Rpc,
         subject: None,
         causal_context: None,
+        request_metadata: Default::default(),
     }
 }
 

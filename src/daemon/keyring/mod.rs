@@ -74,17 +74,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod abilities;
 pub mod bridge_forward;
-pub mod crypto;
 pub mod federated_bindings;
 pub mod forward;
-pub mod handle;
 pub mod resolver;
-pub mod store;
 pub mod user_binding_chain;
-
-pub use handle::KeyringHandle;
-pub use resolver::{ChainResolver, KeyResolveError, LocalKeyringResolver, PeerKeyringResolver};
-pub use store::{Entry, KeyRing, KeyStatus, MasterKeyKind, PeerEntry, PeerStatus};
 
 /// Ed25519 seed length (32 bytes per RFC 8032 §5.1.5).
 pub const ED25519_SEED_LEN: usize = 32;
@@ -615,6 +608,35 @@ impl Vault {
         Ok(())
     }
 
+    /// Apply one mutation as an atomic in-memory + durable transaction.
+    ///
+    /// The mutation is published in memory only when the encrypted vault was
+    /// atomically replaced on disk. Any domain error or persistence failure
+    /// restores the prior state, preventing a process from signing with a key
+    /// state that clients were told had failed to commit.
+    pub fn mutate_and_seal<T>(
+        &mut self,
+        mutation: impl FnOnce(&mut Self) -> Result<T, VaultError>,
+    ) -> Result<T, VaultError> {
+        let entries_before = self.entries.clone();
+        let inventory_before = self.managed_signing.clone();
+        match mutation(self) {
+            Ok(output) => match self.seal() {
+                Ok(()) => Ok(output),
+                Err(error) => {
+                    self.entries = entries_before;
+                    self.managed_signing = inventory_before;
+                    Err(error)
+                }
+            },
+            Err(error) => {
+                self.entries = entries_before;
+                self.managed_signing = inventory_before;
+                Err(error)
+            }
+        }
+    }
+
     /// Return whether an entry exists. Cheap; does not unseal the
     /// keypair.
     pub fn contains(&self, self_ura: &str) -> bool {
@@ -812,7 +834,7 @@ impl Vault {
             ))
         })?;
         let now = chrono::Utc::now().timestamp_millis();
-        let fingerprint_b64 = encode_b64(&crypto::fingerprint(&public_key));
+        let fingerprint_b64 = encode_b64(&public_key_fingerprint(&public_key));
         if let Some(peer) = self
             .managed_signing
             .peers
@@ -913,6 +935,13 @@ fn next_managed_key_id() -> String {
     let mut bytes = [0u8; 16];
     OsRng.fill_bytes(&mut bytes);
     format!("msk-{}", hex::encode(bytes))
+}
+
+/// SHA-256 fingerprint over a public key projection.
+pub fn public_key_fingerprint(public_key: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(public_key);
+    digest.into()
 }
 
 impl Drop for Vault {
@@ -1026,13 +1055,6 @@ pub enum KeyringRequest {
         primary_self: String,
         #[serde(default)]
         role_overlays: Vec<String>,
-    },
-    /// Insert a fresh entry. Pairing flow only.
-    Put {
-        primary_self: String,
-        #[serde(default)]
-        role_overlays: Vec<String>,
-        seed_hex: String,
     },
     /// Sign canonical bytes with the keypair indexed by
     /// `self_ura`.
@@ -1216,6 +1238,10 @@ pub fn export_seed_from_default_vault(
 
 /// Default transport endpoint for the keyring daemon.
 pub fn default_socket_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("EASYNET_KEYRING_SOCKET_PATH") {
+        return PathBuf::from(path);
+    }
+
     #[cfg(windows)]
     {
         return PathBuf::from(crate::support::platform::named_pipe::scoped_pipe_name(
@@ -1230,16 +1256,6 @@ pub fn default_socket_path() -> PathBuf {
 /// Default path of the auto-generated passphrase file.
 pub fn default_passphrase_path() -> PathBuf {
     home_relative(DEFAULT_PASSPHRASE_REL)
-}
-
-/// Open the daemon SDK's default keyring for local signing.
-pub fn open_default_keyring_handle() -> anyhow::Result<std::sync::Arc<handle::KeyringHandle>> {
-    let path = store::default_keyring_path()?;
-    let (passphrase, _) = load_or_create_passphrase()?;
-    Ok(std::sync::Arc::new(handle::KeyringHandle::open_or_create(
-        path,
-        &passphrase,
-    )?))
 }
 
 /// Resolve the keyring master-key passphrase, generating and
@@ -1633,6 +1649,34 @@ mod tests {
         assert_eq!(vault.inventory_list(None, None).len(), 1);
         assert!(vault
             .inventory_sign(&key_id, b"canonical invocation")
+            .is_ok());
+    }
+
+    #[test]
+    fn failed_persistence_rolls_back_managed_signing_mutation() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("keyring.enc");
+        let mut vault = Vault::init(&path, &explicit_pass()).unwrap();
+        let original = vault
+            .inventory_create("invocation".into(), Some("easynet:///r/r/agent/a".into()))
+            .unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        let error = vault
+            .mutate_and_seal(|candidate| candidate.inventory_rotate(&original.key_id))
+            .expect_err("renaming a file over a directory must fail");
+        assert!(matches!(error, VaultError::Io(_)));
+
+        let keys = vault.inventory_list(None, None);
+        assert_eq!(
+            keys.len(),
+            1,
+            "failed transaction must not append successor"
+        );
+        assert_eq!(keys[0].key_id, original.key_id);
+        assert_eq!(keys[0].status, ManagedSigningStatus::Active);
+        assert!(vault
+            .inventory_sign(&original.key_id, b"canonical invocation")
             .is_ok());
     }
 

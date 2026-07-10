@@ -197,6 +197,7 @@ async fn reflective_path_directly_through_mcp_service_round_trip() {
             call_mode: CallMode::Stream,
             subject: None,
             causal_context: None,
+            request_metadata: Default::default(),
         },
     )
     .await

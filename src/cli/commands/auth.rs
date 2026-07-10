@@ -34,11 +34,11 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
-use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::core::ura;
-use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentity, SelfIdentityError};
+use crate::daemon::identity::self_identity::KeyringClient;
+use crate::daemon::keyring::{ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::daemon::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
 };
@@ -997,8 +997,9 @@ pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
 // Wrapper→CLI thesis: a user signing key is a long-lived identity
 // credential, so the DAEMON (the runtime trust source) owns it — not the
 // browser and not the product backend. This command is the CLI facade for
-// that: it generates a fresh user keypair locally and registers the public
-// key by invoking the daemon's `identity.register_pubkey` ability directly
+// that: it asks the daemon key service to create or project a managed user
+// signing key and registers that public projection through
+// the daemon's `identity.register_pubkey` ability directly
 // over the local UDS socket. The backend's `POST /me/signing-keys` is the
 // browser's equivalent facade onto the same daemon ability — neither one
 // is the source of truth.
@@ -1020,8 +1021,6 @@ pub struct SigningKeyRegisterArgs {
 }
 
 pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<()> {
-    use rand::RngCore as _;
-
     // The user URA's realm MUST equal the daemon realm (the trust-anchor
     // writer pins user-row realm to the daemon realm; only device rows may
     // be cross-realm). The credentials realm is the realm this host paired
@@ -1031,14 +1030,7 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
     let user_ura = creds.user_ura()?;
 
     let keyring = KeyringClient::default_path();
-    let key = ensure_user_signing_key(&keyring, &user_ura, |seed| {
-        // Random ed25519 keypair. Unlike the device key
-        // (deterministically derived from realm+node_id), the user key
-        // MUST be random: the user UUID/username is not secret, so a
-        // deterministic user key would let anyone holding the
-        // realm+user-id forge the user's signature.
-        rand::rngs::OsRng.fill_bytes(seed);
-    })?;
+    let key = ensure_user_signing_key(&keyring, &user_ura)?;
     let public_key_b64 = key.public_key_b64;
 
     // Register the PUBLIC key with the daemon trust anchor
@@ -1085,62 +1077,40 @@ struct UserSigningKey {
 }
 
 trait UserSigningKeyStore {
-    fn public_key(&self, user_ura: &str) -> Result<VerifyingKey, SelfIdentityError>;
-    fn put_seed(&self, user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError>;
+    fn list(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>>;
+    fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection>;
 }
 
 impl UserSigningKeyStore for KeyringClient {
-    fn public_key(&self, user_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
-        SelfIdentity::public_key(self, user_ura)
+    fn list(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
+        Ok(self.inventory_list(
+            Some("user_signing.cli".into()),
+            Some(ManagedSigningStatus::Active),
+        )?)
     }
 
-    fn put_seed(&self, user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError> {
-        self.put(user_ura, Vec::new(), seed_hex)
+    fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
+        Ok(self.inventory_create("user_signing.cli", Some(user_ura.to_string()))?)
     }
 }
 
 fn ensure_user_signing_key(
     store: &impl UserSigningKeyStore,
     user_ura: &str,
-    fill_seed: impl FnOnce(&mut [u8; 32]),
 ) -> anyhow::Result<UserSigningKey> {
-    match store.public_key(user_ura) {
-        Ok(public_key) => {
-            return Ok(UserSigningKey {
-                public_key_b64: public_key_b64(public_key),
-            });
-        }
-        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "not_found" => {}
-        Err(err) => {
-            return Err(anyhow::anyhow!(
-                "read existing user signing key from keyring: {err}"
-            ));
-        }
+    let mut matching = store
+        .list()?
+        .into_iter()
+        .filter(|entry| entry.bound_subject.as_deref() == Some(user_ura));
+    if let Some(existing) = matching.next() {
+        return Ok(UserSigningKey {
+            public_key_b64: existing.public_key_b64,
+        });
     }
-
-    let mut seed = [0u8; 32];
-    fill_seed(&mut seed);
-    let generated_public_key = SigningKey::from_bytes(&seed).verifying_key();
-    match store.put_seed(user_ura, hex::encode(seed)) {
-        Ok(()) => Ok(UserSigningKey {
-            public_key_b64: public_key_b64(generated_public_key),
-        }),
-        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => {
-            let public_key = store.public_key(user_ura).map_err(|err| {
-                anyhow::anyhow!(
-                    "keyring reported an existing user signing key but could not derive it: {err}"
-                )
-            })?;
-            Ok(UserSigningKey {
-                public_key_b64: public_key_b64(public_key),
-            })
-        }
-        Err(err) => Err(anyhow::anyhow!("store user signing key in keyring: {err}")),
-    }
-}
-
-fn public_key_b64(public_key: VerifyingKey) -> String {
-    B64.encode(public_key.to_bytes())
+    let created = store.create(user_ura)?;
+    Ok(UserSigningKey {
+        public_key_b64: created.public_key_b64,
+    })
 }
 
 fn registered_user_pubkey(user_ura: &str, public_key_b64: &str) -> anyhow::Result<bool> {
@@ -1163,50 +1133,54 @@ fn registered_user_pubkey(user_ura: &str, public_key_b64: &str) -> anyhow::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
-
-    fn rejected(kind: &str) -> SelfIdentityError {
-        SelfIdentityError::Rejected {
-            kind: kind.to_string(),
-            message: format!("{kind} from fake keyring"),
-        }
-    }
-
-    fn verifying_key(seed: [u8; 32]) -> VerifyingKey {
-        SigningKey::from_bytes(&seed).verifying_key()
-    }
+    use std::cell::{Cell, RefCell};
 
     struct FakeUserSigningKeyStore {
-        public_key_results: RefCell<VecDeque<Result<VerifyingKey, SelfIdentityError>>>,
-        put_results: RefCell<VecDeque<Result<(), SelfIdentityError>>>,
-        put_seeds: RefCell<Vec<String>>,
+        entries: Vec<ManagedSigningKeyProjection>,
+        created: ManagedSigningKeyProjection,
+        create_calls: Cell<usize>,
+        create_subjects: RefCell<Vec<String>>,
     }
 
     impl FakeUserSigningKeyStore {
         fn new(
-            public_key_results: impl IntoIterator<Item = Result<VerifyingKey, SelfIdentityError>>,
-            put_results: impl IntoIterator<Item = Result<(), SelfIdentityError>>,
+            entries: Vec<ManagedSigningKeyProjection>,
+            created: ManagedSigningKeyProjection,
         ) -> Self {
             Self {
-                public_key_results: RefCell::new(public_key_results.into_iter().collect()),
-                put_results: RefCell::new(put_results.into_iter().collect()),
-                put_seeds: RefCell::new(Vec::new()),
+                entries,
+                created,
+                create_calls: Cell::new(0),
+                create_subjects: RefCell::new(Vec::new()),
             }
         }
     }
 
     impl UserSigningKeyStore for FakeUserSigningKeyStore {
-        fn public_key(&self, _user_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
-            self.public_key_results
-                .borrow_mut()
-                .pop_front()
-                .unwrap_or_else(|| Err(rejected("not_found")))
+        fn list(&self) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
+            Ok(self.entries.clone())
         }
 
-        fn put_seed(&self, _user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError> {
-            self.put_seeds.borrow_mut().push(seed_hex);
-            self.put_results.borrow_mut().pop_front().unwrap_or(Ok(()))
+        fn create(&self, user_ura: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
+            self.create_calls.set(self.create_calls.get() + 1);
+            self.create_subjects.borrow_mut().push(user_ura.to_string());
+            Ok(self.created.clone())
+        }
+    }
+
+    fn managed_key(key_id: &str, subject: &str, byte: u8) -> ManagedSigningKeyProjection {
+        ManagedSigningKeyProjection {
+            key_id: key_id.into(),
+            purpose: "user_signing.cli".into(),
+            public_key_b64: B64.encode([byte; 32]),
+            status: ManagedSigningStatus::Active,
+            rotation_epoch: 0,
+            bound_subject: Some(subject.into()),
+            signer_policy_ref: None,
+            rotated_from: None,
+            created_unix_ms: 1,
+            expires_unix_ms: None,
+            revoked_unix_ms: None,
         }
     }
 
@@ -1249,59 +1223,42 @@ mod tests {
 
     #[test]
     fn ensure_user_signing_key_reuses_keyring_key_without_generation() {
-        let existing_key = verifying_key([0x11; 32]);
-        let expected_public_key_b64 = B64.encode(existing_key.to_bytes());
-        let store = FakeUserSigningKeyStore::new([Ok(existing_key)], []);
+        let user = "easynet:///r/local/user/alice";
+        let existing = managed_key("existing", user, 0x11);
+        let store =
+            FakeUserSigningKeyStore::new(vec![existing.clone()], managed_key("unused", user, 0x22));
 
-        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |_| {
-            panic!("existing key must not generate a replacement seed");
-        })
-        .unwrap();
+        let key = ensure_user_signing_key(&store, user).unwrap();
 
-        assert_eq!(key.public_key_b64, expected_public_key_b64);
-        assert!(
-            store.put_seeds.borrow().is_empty(),
-            "existing key must not write a replacement seed"
-        );
+        assert_eq!(key.public_key_b64, existing.public_key_b64);
+        assert_eq!(store.create_calls.get(), 0);
     }
 
     #[test]
-    fn ensure_user_signing_key_generates_and_persists_missing_key() {
-        let generated_seed = [0x22; 32];
-        let expected_public_key_b64 = B64.encode(verifying_key(generated_seed).to_bytes());
-        let store = FakeUserSigningKeyStore::new([Err(rejected("not_found"))], [Ok(())]);
+    fn ensure_user_signing_key_creates_missing_key_inside_provider() {
+        let user = "easynet:///r/local/user/alice";
+        let created = managed_key("created", user, 0x22);
+        let store = FakeUserSigningKeyStore::new(Vec::new(), created.clone());
 
-        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |seed| {
-            *seed = generated_seed;
-        })
-        .unwrap();
+        let key = ensure_user_signing_key(&store, user).unwrap();
 
-        assert_eq!(key.public_key_b64, expected_public_key_b64);
-        assert_eq!(
-            store.put_seeds.borrow().as_slice(),
-            &[hex::encode(generated_seed)]
-        );
+        assert_eq!(key.public_key_b64, created.public_key_b64);
+        assert_eq!(store.create_calls.get(), 1);
+        assert_eq!(store.create_subjects.borrow().as_slice(), &[user]);
     }
 
     #[test]
-    fn ensure_user_signing_key_uses_existing_key_after_concurrent_insert() {
-        let existing_key = verifying_key([0x33; 32]);
-        let expected_public_key_b64 = B64.encode(existing_key.to_bytes());
-        let discarded_seed = [0x44; 32];
+    fn ensure_user_signing_key_does_not_reuse_another_subjects_key() {
+        let user = "easynet:///r/local/user/alice";
+        let created = managed_key("created", user, 0x44);
         let store = FakeUserSigningKeyStore::new(
-            [Err(rejected("not_found")), Ok(existing_key)],
-            [Err(rejected("already_exists"))],
+            vec![managed_key("bob", "easynet:///r/local/user/bob", 0x33)],
+            created.clone(),
         );
 
-        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |seed| {
-            *seed = discarded_seed;
-        })
-        .unwrap();
+        let key = ensure_user_signing_key(&store, user).unwrap();
 
-        assert_eq!(key.public_key_b64, expected_public_key_b64);
-        assert_eq!(
-            store.put_seeds.borrow().as_slice(),
-            &[hex::encode(discarded_seed)]
-        );
+        assert_eq!(key.public_key_b64, created.public_key_b64);
+        assert_eq!(store.create_calls.get(), 1);
     }
 }

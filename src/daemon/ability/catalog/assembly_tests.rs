@@ -844,41 +844,10 @@ fn registry_includes_chat_handler_per_registered_agent() {
 }
 
 #[test]
-fn build_registry_registers_keyring_abilities_when_not_disabled() {
-    // Run in a child-process-style isolation: redirect the
-    // keyring file path to a tempdir + clear DISABLE so the
-    // auto-init path runs. The default tests set DISABLE.
-    // NOTE: this test already serialises via env_lock() directly — do
-    // NOT also take a HomeGuard (it acquires the same non-reentrant
-    // env_lock and would deadlock).
-    let _env_lock = crate::cli::commands::test_support::env_lock();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("keyring.json");
-    let prev_disable = std::env::var_os("EASYNET_KEYRING_DISABLE");
-    let prev_path = std::env::var_os("EASYNET_KEYRING_PATH");
-    let prev_pass = std::env::var_os("EASYNET_KEYRING_PASS");
-    std::env::remove_var("EASYNET_KEYRING_DISABLE");
-    std::env::set_var("EASYNET_KEYRING_PATH", &path);
-    std::env::set_var("EASYNET_KEYRING_PASS", "test-pass-keyring-init");
-
+fn build_registry_always_registers_key_service_abilities() {
     let agents = AgentRegistry::default();
     let reg = build_registry_with_services(registry_config_for_agents(&agents));
     let names = reg.list_abilities();
-
-    // Restore env before assertions so a panic doesn't leak
-    // environment changes into other tests in the same binary.
-    match prev_disable {
-        Some(v) => std::env::set_var("EASYNET_KEYRING_DISABLE", v),
-        None => std::env::remove_var("EASYNET_KEYRING_DISABLE"),
-    }
-    match prev_path {
-        Some(v) => std::env::set_var("EASYNET_KEYRING_PATH", v),
-        None => std::env::remove_var("EASYNET_KEYRING_PATH"),
-    }
-    match prev_pass {
-        Some(v) => std::env::set_var("EASYNET_KEYRING_PASS", v),
-        None => std::env::remove_var("EASYNET_KEYRING_PASS"),
-    }
 
     // All 10 abilities must be present under device.keyring.*.
     for verb in [
@@ -899,7 +868,6 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
             "{want} must be registered; got {names:?}"
         );
     }
-    assert!(path.exists(), "keyring file must have been auto-created");
 }
 
 /// RFC-005 lint: public catalogue names are owner-local names.

@@ -5190,8 +5190,7 @@ fn protocol_error_json(error: &easynet_axon::pb::axon::v1::Error) -> serde_json:
 mod tests {
     use super::*;
     use crate::ffi::client::handle::{alloc, test_session};
-    use std::ffi::{c_void, CStr, CString, OsString};
-    use std::path::PathBuf;
+    use std::ffi::{c_void, CStr, CString};
 
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
@@ -5222,29 +5221,20 @@ mod tests {
         .unwrap()
     }
 
-    fn with_isolated_default_keyring<F>(f: F)
+    #[cfg(unix)]
+    fn with_test_key_service<F>(expected_connections: usize, f: F)
     where
-        F: FnOnce(PathBuf),
+        F: FnOnce(crate::daemon::keyring::ManagedSigningKeyProjection),
     {
         struct EnvRestore {
-            home: Option<OsString>,
-            config: Option<OsString>,
-            passphrase: Option<OsString>,
+            socket: Option<std::ffi::OsString>,
         }
 
         impl Drop for EnvRestore {
             fn drop(&mut self) {
-                match self.home.take() {
-                    Some(value) => std::env::set_var("HOME", value),
-                    None => std::env::remove_var("HOME"),
-                }
-                match self.config.take() {
-                    Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-                    None => std::env::remove_var("XDG_CONFIG_HOME"),
-                }
-                match self.passphrase.take() {
-                    Some(value) => std::env::set_var("EASYNET_KEYRING_PASSPHRASE", value),
-                    None => std::env::remove_var("EASYNET_KEYRING_PASSPHRASE"),
+                match self.socket.take() {
+                    Some(value) => std::env::set_var("EASYNET_KEYRING_SOCKET_PATH", value),
+                    None => std::env::remove_var("EASYNET_KEYRING_SOCKET_PATH"),
                 }
             }
         }
@@ -5255,26 +5245,70 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let config = temp.path().join("config");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(&config).unwrap();
-
+        let socket = temp.path().join("key-service.sock");
         let _restore = EnvRestore {
-            home: std::env::var_os("HOME"),
-            config: std::env::var_os("XDG_CONFIG_HOME"),
-            passphrase: std::env::var_os("EASYNET_KEYRING_PASSPHRASE"),
+            socket: std::env::var_os("EASYNET_KEYRING_SOCKET_PATH"),
         };
+        std::env::set_var("EASYNET_KEYRING_SOCKET_PATH", &socket);
 
-        std::env::set_var("HOME", &home);
-        std::env::set_var("XDG_CONFIG_HOME", &config);
-        std::env::set_var(
-            "EASYNET_KEYRING_PASSPHRASE",
-            "test-local-daemon-signing-passphrase",
-        );
+        let mut vault = crate::daemon::keyring::Vault::init(
+            &temp.path().join("key-service.enc"),
+            &crate::daemon::keyring::MasterKeySource::Explicit("test-passphrase".into()),
+        )
+        .unwrap();
+        let caller = "easynet:///r/acme/device/dev-a";
+        let entry = vault
+            .inventory_create("agent_signing".into(), Some(caller.into()))
+            .unwrap();
+        let vault = std::sync::Arc::new(std::sync::Mutex::new(vault));
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for _ in 0..expected_connections {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut len = [0u8; 4];
+                stream.read_exact(&mut len).unwrap();
+                let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+                stream.read_exact(&mut body).unwrap();
+                let request: crate::daemon::keyring::KeyringRequest =
+                    serde_json::from_slice(&body).unwrap();
+                let response = match request {
+                    crate::daemon::keyring::KeyringRequest::InventoryPublicKey { key_id } => {
+                        match vault.lock().unwrap().inventory_public_key(&key_id) {
+                            Ok(entry) => {
+                                crate::daemon::keyring::KeyringResponse::InventoryKey { entry }
+                            }
+                            Err(error) => crate::daemon::keyring::vault_error_to_response(error),
+                        }
+                    }
+                    crate::daemon::keyring::KeyringRequest::InventorySign {
+                        key_id,
+                        canonical_bytes_b64,
+                    } => {
+                        use base64::Engine;
+                        let canonical = base64::engine::general_purpose::STANDARD
+                            .decode(canonical_bytes_b64)
+                            .unwrap();
+                        match vault.lock().unwrap().inventory_sign(&key_id, &canonical) {
+                            Ok(signature) => crate::daemon::keyring::KeyringResponse::Signature {
+                                signature_b64: base64::engine::general_purpose::STANDARD
+                                    .encode(signature.to_bytes()),
+                            },
+                            Err(error) => crate::daemon::keyring::vault_error_to_response(error),
+                        }
+                    }
+                    other => panic!("unexpected key-service request: {other:?}"),
+                };
+                let encoded = serde_json::to_vec(&response).unwrap();
+                stream
+                    .write_all(&(encoded.len() as u32).to_be_bytes())
+                    .unwrap();
+                stream.write_all(&encoded).unwrap();
+            }
+        });
 
-        let keyring_path = crate::daemon::keyring::store::default_keyring_path().unwrap();
-        f(keyring_path);
+        f(entry);
+        server.join().unwrap();
     }
 
     fn valid_bidi_invocation_json() -> CString {
@@ -5862,19 +5896,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn invocation_sign_prepared_local_uses_default_daemon_keyring() {
-        with_isolated_default_keyring(|_| {
-            let keyring = crate::daemon::keyring::open_default_keyring_handle().unwrap();
+        with_test_key_service(2, |entry| {
             let caller = "easynet:///r/acme/device/dev-a";
-            let entry = keyring
-                .create_entry("agent_signing", Some(caller.to_string()))
-                .unwrap();
             let signer_id = format!("signer-{}", entry.key_id);
-            let policy_ref = crate::protocol::identity_contract::signer_policy_ref(
-                caller,
-                &entry.key_id,
-                &entry.public_key_b64,
-            );
+            let policy_ref = entry.signer_policy_ref.unwrap();
             let (handle, _session) = alloc(test_session());
             let raw = CString::new(canonical_invocation_json(serde_json::json!({
                 "caller_ura": caller,
@@ -5939,13 +5966,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn invocation_sign_prepared_local_failure_preserves_prepared_handle() {
-        with_isolated_default_keyring(|_| {
-            let keyring = crate::daemon::keyring::open_default_keyring_handle().unwrap();
+        with_test_key_service(1, |entry| {
             let caller = "easynet:///r/acme/device/dev-a";
-            let entry = keyring
-                .create_entry("agent_signing", Some(caller.to_string()))
-                .unwrap();
             let signer_id = format!("signer-{}", entry.key_id);
             let (handle, _session) = alloc(test_session());
             let raw = CString::new(canonical_invocation_json(serde_json::json!({

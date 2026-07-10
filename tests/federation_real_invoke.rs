@@ -6,7 +6,6 @@
 //! real schemas, and real production functions:
 //!
 //!   * real `Credentials` struct
-//!   * real `KeyringHandle` (AES-GCM-encrypted on a tempfile)
 //!   * real `try_install_federation_routing` decision logic
 //!   * real `forward_invoke` ability-call shaping +
 //!     `unwrap_result_json` receipt unwrapping
@@ -32,37 +31,22 @@
 //!     for the CLI's local segment).
 //!   * `forward_invoke`'s receipt unwrapping handles the production
 //!     `{result_json: {ok, result_b64, ...}}` envelope shape.
-//!   * `BridgeForwardInvoker::knows_target` honours the keyring's
-//!     peer table.
 //!   * `federation_init` decisions match the operator-visible
 //!     contract (Disabled / Failed / would-Install).
-
-use std::cell::RefCell;
-use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Value};
+use std::cell::RefCell;
 
 use easynet_cli::daemon::federation::advertise::{forward_invoke, AbilityInvoker};
 use easynet_cli::daemon::federation::init::{
     try_install_federation_routing, FederationInitInputs, FederationInitOutcome, FederationStage,
 };
 use easynet_cli::daemon::federation::resolver as tenant_resolver;
-use easynet_cli::daemon::keyring::KeyringHandle;
 use easynet_cli::daemon::persistence::config::Credentials;
 
 // ── Fixtures ───────────────────────────────────────────────────────
-
-fn ephemeral_keyring() -> Arc<KeyringHandle> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("keyring.json");
-    let h = Arc::new(KeyringHandle::open_or_create(path, "test-pass").unwrap());
-    // Persist the tempdir until process exit so the keyring file
-    // survives test calls. Forget is acceptable in tests.
-    std::mem::forget(dir);
-    h
-}
 
 fn creds(tenant: &str, node: &str) -> Credentials {
     Credentials {
@@ -80,10 +64,9 @@ fn creds(tenant: &str, node: &str) -> Credentials {
     }
 }
 
-fn inputs<'a>(creds: &'a Credentials, keyring: &'a Arc<KeyringHandle>) -> FederationInitInputs<'a> {
+fn inputs(creds: &Credentials) -> FederationInitInputs<'_> {
     FederationInitInputs {
         creds,
-        keyring,
         bridge: None,
         disabled_by_operator: false,
         resolver_config: tenant_resolver::ResolverConfig::default(),
@@ -273,11 +256,9 @@ fn forward_invoke_propagates_typed_remote_error() {
 fn federation_init_outcome_matches_operator_facing_contract() {
     // Each terminal state of the init function maps to an
     // operator-visible diagnostic. Pin all four:
-    let k = ephemeral_keyring();
-
     // Disabled by env (boot-time read of EASYNET_FEDERATION_DISABLE).
     let c = creds("acme.com", "node-1");
-    let mut i = inputs(&c, &k);
+    let mut i = inputs(&c);
     i.disabled_by_operator = true;
     let out = try_install_federation_routing(i);
     assert_eq!(out.code(), "disabled");
@@ -285,7 +266,7 @@ fn federation_init_outcome_matches_operator_facing_contract() {
 
     // Disabled by *.localhost suffix (LocalFast resolver mode).
     let c = creds("silan.localhost", "node-1");
-    let out = try_install_federation_routing(inputs(&c, &k));
+    let out = try_install_federation_routing(inputs(&c));
     assert_eq!(out.code(), "disabled");
     match out {
         FederationInitOutcome::Disabled { reason } => {
@@ -296,12 +277,12 @@ fn federation_init_outcome_matches_operator_facing_contract() {
 
     // Disabled by missing credentials (`easynet device join` not run).
     let c = creds("", "");
-    let out = try_install_federation_routing(inputs(&c, &k));
+    let out = try_install_federation_routing(inputs(&c));
     assert_eq!(out.code(), "disabled");
 
     // Failed by missing bridge for a federated tenant.
     let c = creds("acme.com", "node-1");
-    let out = try_install_federation_routing(inputs(&c, &k));
+    let out = try_install_federation_routing(inputs(&c));
     assert_eq!(out.code(), "failed");
     match out {
         FederationInitOutcome::Failed { stage, .. } => {
@@ -309,37 +290,4 @@ fn federation_init_outcome_matches_operator_facing_contract() {
         }
         other => panic!("expected Failed, got {other:?}"),
     }
-}
-
-#[test]
-fn keyring_peer_table_drives_knows_target() {
-    // BridgeForwardInvoker::knows_target consults the keyring peer
-    // table (TOFU-recorded peers) and the locally-bound subjects.
-    // Pin both lookup paths.
-    let k = ephemeral_keyring();
-
-    // Insert an entry for the daemon's own device subject.
-    let bound = "easynet:///r/silan.localhost/device/this-device";
-    let _entry = k
-        .create_entry("agent_signing", Some(bound.into()))
-        .expect("create entry");
-    assert!(
-        k.find_active_entry_by_subject(bound).is_some(),
-        "local subject lookup hits"
-    );
-
-    // Insert a peer.
-    let peer_ura = "easynet:///r/silan.localhost/device/peer-laptop";
-    let entry = k.create_entry("peer-fingerprint", None).unwrap();
-    k.peer_add(peer_ura, &entry.public_key_b64, None, None)
-        .expect("peer_add");
-    assert!(
-        k.find_peer_by_ura(peer_ura).is_some(),
-        "peer table lookup hits"
-    );
-
-    // A genuinely unknown URA must miss both paths.
-    let unknown = "easynet:///r/silan.localhost/device/never-seen";
-    assert!(k.find_active_entry_by_subject(unknown).is_none());
-    assert!(k.find_peer_by_ura(unknown).is_none());
 }

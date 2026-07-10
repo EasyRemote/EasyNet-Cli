@@ -282,20 +282,6 @@ async fn dispatch_test_keyring(
     vault: &Arc<tokio::sync::Mutex<Vault>>,
 ) -> KeyringResponse {
     match req {
-        KeyringRequest::Put {
-            primary_self,
-            role_overlays,
-            seed_hex,
-        } => {
-            let mut guard = vault.lock().await;
-            match guard.put(&primary_self, role_overlays, seed_hex) {
-                Ok(()) => match guard.seal() {
-                    Ok(()) => KeyringResponse::Ok,
-                    Err(e) => vault_error_to_response(e),
-                },
-                Err(e) => vault_error_to_response(e),
-            }
-        }
         KeyringRequest::Sign {
             self_ura,
             canonical_bytes_b64,
@@ -332,12 +318,15 @@ async fn dispatch_test_keyring(
         }
         KeyringRequest::Forget { primary_self } => {
             let mut guard = vault.lock().await;
-            guard.forget(&primary_self);
-            match guard.seal() {
+            match guard.mutate_and_seal(|vault| {
+                vault.forget(&primary_self);
+                Ok(())
+            }) {
                 Ok(()) => KeyringResponse::Ok,
                 Err(e) => vault_error_to_response(e),
             }
         }
+        _ => KeyringResponse::err("unsupported", "test fixture does not implement request"),
     }
 }
 

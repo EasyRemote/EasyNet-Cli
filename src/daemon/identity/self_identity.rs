@@ -116,6 +116,25 @@ pub struct KeyringClient {
 }
 
 impl KeyringClient {
+    /// Ensure a runtime identity exists inside the daemon custody boundary and
+    /// return only its public projection.
+    pub fn ensure(
+        &self,
+        primary_self: &str,
+        role_overlays: Vec<String>,
+    ) -> Result<VerifyingKey, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::Ensure {
+            primary_self: primary_self.to_string(),
+            role_overlays,
+        })? {
+            KeyringResponse::PublicKey { public_key_b64 } => decode_public_key(public_key_b64),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
     /// Construct against an explicit socket path. Operators with
     /// a non-default keyring layout (e.g. Phase 3E's
     /// per-device-uuid path) build via this constructor.
@@ -240,20 +259,7 @@ impl SelfIdentity for KeyringClient {
             self_ura: self_ura.to_string(),
         };
         match self.rpc(&req)? {
-            KeyringResponse::PublicKey { public_key_b64 } => {
-                use base64::Engine;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(public_key_b64)
-                    .map_err(|e| SelfIdentityError::PublicKeyDecode(format!("base64: {e}")))?;
-                let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
-                    SelfIdentityError::PublicKeyDecode(format!(
-                        "ed25519 pubkey must be 32 bytes, got {}",
-                        bytes.len()
-                    ))
-                })?;
-                VerifyingKey::from_bytes(&arr)
-                    .map_err(|e| SelfIdentityError::PublicKeyDecode(format!("from_bytes: {e}")))
-            }
+            KeyringResponse::PublicKey { public_key_b64 } => decode_public_key(public_key_b64),
             KeyringResponse::Error { kind, message } => {
                 Err(SelfIdentityError::Rejected { kind, message })
             }
@@ -273,32 +279,7 @@ impl SelfIdentity for KeyringClient {
     }
 }
 
-/// Convenience: helper for the join flow that needs to put a fresh
-/// keypair into the vault. Not part of the `SelfIdentity` trait
-/// because routine signing callers must NOT have access to the
-/// put/forget surface (principle of least privilege at the API
-/// layer).
 impl KeyringClient {
-    pub fn put(
-        &self,
-        primary_self: &str,
-        role_overlays: Vec<String>,
-        seed_hex: String,
-    ) -> Result<(), SelfIdentityError> {
-        let req = KeyringRequest::Put {
-            primary_self: primary_self.to_string(),
-            role_overlays,
-            seed_hex,
-        };
-        match self.rpc(&req)? {
-            KeyringResponse::Ok => Ok(()),
-            KeyringResponse::Error { kind, message } => {
-                Err(SelfIdentityError::Rejected { kind, message })
-            }
-            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
-        }
-    }
-
     pub fn forget(&self, primary_self: &str) -> Result<(), SelfIdentityError> {
         let req = KeyringRequest::Forget {
             primary_self: primary_self.to_string(),
@@ -488,6 +469,21 @@ fn decode_signature(signature_b64: String) -> Result<Signature, SelfIdentityErro
         ))
     })?;
     Ok(Signature::from_bytes(&arr))
+}
+
+fn decode_public_key(public_key_b64: String) -> Result<VerifyingKey, SelfIdentityError> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(public_key_b64)
+        .map_err(|e| SelfIdentityError::PublicKeyDecode(format!("base64: {e}")))?;
+    let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+        SelfIdentityError::PublicKeyDecode(format!(
+            "ed25519 pubkey must be 32 bytes, got {}",
+            bytes.len()
+        ))
+    })?;
+    VerifyingKey::from_bytes(&arr)
+        .map_err(|e| SelfIdentityError::PublicKeyDecode(format!("from_bytes: {e}")))
 }
 
 // ── InMemoryVault (test + in-process boot path) ────────────────

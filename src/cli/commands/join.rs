@@ -490,8 +490,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
     }
 
     let membership_device_id = membership_ura_device_id(membership_ura)?;
-    let seed = derive_device_seed_hex(&target.realm, &membership_device_id)?;
-    let signer = DeterministicJoinSigner::from_seed_hex(&seed)?;
+    let (_, signer, _) = ensure_device_runtime_identity(&target.realm, &membership_device_id)?;
     let resolve_args = crate::daemon::federation::client::ability_contract::ResolveKeyArgs {
         agent_ura: target.hub_ura.clone(),
     };
@@ -590,45 +589,6 @@ fn membership_ura_device_id(membership_ura: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("membership URA `{membership_ura}` is not a device URA"))
 }
 
-#[cfg(feature = "axon-pb")]
-struct DeterministicJoinSigner {
-    seed: [u8; 32],
-}
-
-#[cfg(feature = "axon-pb")]
-impl DeterministicJoinSigner {
-    fn from_seed_hex(seed_hex: &str) -> anyhow::Result<Self> {
-        let raw = hex::decode(seed_hex).context("decode deterministic device seed")?;
-        let seed: [u8; 32] = raw.try_into().map_err(|raw: Vec<u8>| {
-            anyhow::anyhow!("device seed must be 32 bytes, got {}", raw.len())
-        })?;
-        Ok(Self { seed })
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl crate::daemon::identity::self_identity::SelfIdentity for DeterministicJoinSigner {
-    fn sign(
-        &self,
-        _self_ura: &str,
-        canonical_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, crate::daemon::identity::self_identity::SelfIdentityError>
-    {
-        use ed25519_dalek::Signer as _;
-        Ok(ed25519_dalek::SigningKey::from_bytes(&self.seed).sign(canonical_bytes))
-    }
-
-    fn public_key(
-        &self,
-        _self_ura: &str,
-    ) -> Result<
-        ed25519_dalek::VerifyingKey,
-        crate::daemon::identity::self_identity::SelfIdentityError,
-    > {
-        Ok(ed25519_dalek::SigningKey::from_bytes(&self.seed).verifying_key())
-    }
-}
-
 fn render_pairing_summary(title: &str, creds: &config::Credentials, peer_hub: Option<&str>) {
     // Final summary block — same `kv_section` styling as `start`
     // so the two commands look like siblings, not strangers.
@@ -698,35 +658,45 @@ fn run_join_stages(
     };
 
     renderer.set_active("validate-token");
-    let mut creds = match validate_pairing_token(token, validate_base, &preflight) {
-        Ok(c) => {
-            renderer.stage_ok("validate-token");
-            record_snapshot(JoinConnectionSnapshot::from_credentials(
-                JoinConnectionState::DeviceValidatedJoining,
-                Some(JoinTransition::ValidateToken),
-                &c,
-                "cli.join",
-            ));
-            c
-        }
-        Err(e) => {
-            record_snapshot(JoinConnectionSnapshot::failed_from_parts(
-                JoinFailureParts {
-                    failure_code: JoinFailureCode::JoinFailedValidate,
-                    transition: JoinTransition::ValidateToken,
-                    realm: preflight.realm.clone(),
-                    node_id: preflight.node_id.clone(),
-                    hub_endpoint: Some(validate_base.to_string()),
-                    message: e.to_string(),
-                    retryable: false,
-                    source: "cli.join".to_string(),
-                },
-            ));
-            renderer.stage_failed("validate-token", &format!("{e}"));
+    let device_public_key = match derive_device_public_key_hex(&preflight.realm, &preflight.node_id)
+    {
+        Ok(public_key) => public_key,
+        Err(error) => {
+            renderer.stage_failed("validate-token", &error.to_string());
             renderer.finish();
-            return Err(e);
+            return Err(error);
         }
     };
+    let mut creds =
+        match validate_pairing_token(token, validate_base, &preflight, &device_public_key) {
+            Ok(c) => {
+                renderer.stage_ok("validate-token");
+                record_snapshot(JoinConnectionSnapshot::from_credentials(
+                    JoinConnectionState::DeviceValidatedJoining,
+                    Some(JoinTransition::ValidateToken),
+                    &c,
+                    "cli.join",
+                ));
+                c
+            }
+            Err(e) => {
+                record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+                    JoinFailureParts {
+                        failure_code: JoinFailureCode::JoinFailedValidate,
+                        transition: JoinTransition::ValidateToken,
+                        realm: preflight.realm.clone(),
+                        node_id: preflight.node_id.clone(),
+                        hub_endpoint: Some(validate_base.to_string()),
+                        message: e.to_string(),
+                        retryable: false,
+                        source: "cli.join".to_string(),
+                    },
+                ));
+                renderer.stage_failed("validate-token", &format!("{e}"));
+                renderer.finish();
+                return Err(e);
+            }
+        };
     let _ = rewrite_local_docker_session_endpoint(&mut creds, validate_base);
     creds.hub_api_base =
         persisted_hub_api_base_for_pairing(&creds, validate_base, has_explicit_hub_api_override);
@@ -775,12 +745,13 @@ fn persist_join_credentials(
     }
 
     renderer.set_active("keyring");
-    match put_device_keypair_to_keyring(&creds) {
-        Ok(()) => renderer.stage_ok("keyring"),
-        Err(e) => renderer.stage_skipped(
-            "keyring",
-            &format!("(offline: {e}; deterministic key fallback)"),
-        ),
+    match ensure_device_runtime_identity(&creds.realm, &creds.node_id) {
+        Ok(_) => renderer.stage_ok("keyring"),
+        Err(error) => {
+            renderer.stage_failed("keyring", &error.to_string());
+            renderer.finish();
+            return Err(error);
+        }
     }
 
     renderer.set_active("realm-trust");
@@ -803,9 +774,6 @@ fn persist_join_credentials(
     Ok(creds)
 }
 
-/// Push a fresh device keypair into the keyring under the
-/// canonical self URA + hub-role overlay. Phase 3C bridge: when
-/// the keyring is reachable, this is the production secret
 /// When the operator paired AFTER starting the local runtime, the
 /// initial boot missed the joined credentials and therefore never ran
 /// the bootstrap/advertise/register sequence that requires realm +
@@ -849,21 +817,21 @@ fn refresh_running_runtime_after_join(creds: &config::Credentials) {
     }
 }
 
-/// surface; when offline, the caller logs + continues, and the
-/// daemon falls back to deterministic key derivation per
-/// `boot.rs::load_daemon_identity`.
-///
-/// Returns `Ok(())` when the put landed (or when the entry
-/// already existed — pairing the same node twice is a noop, the
-/// pre-existing entry stays). Errors only on transport faults
-/// the operator should see.
-fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
-    use crate::daemon::identity::self_identity::{
-        canonical_self_uras, KeyringClient, SelfIdentityError,
-    };
+/// Ensure the joined device identity exists in the daemon custody service.
+/// Join is fail-closed when the service cannot create or project the identity;
+/// there is no deterministic private-key fallback.
+fn ensure_device_runtime_identity(
+    realm: &str,
+    node_id: &str,
+) -> anyhow::Result<(
+    String,
+    crate::daemon::identity::self_identity::KeyringClient,
+    ed25519_dalek::VerifyingKey,
+)> {
+    use crate::daemon::identity::self_identity::{canonical_self_uras, KeyringClient};
 
-    let realm = creds.realm.trim();
-    let node_id = creds.node_id.trim();
+    let realm = realm.trim();
+    let node_id = node_id.trim();
     if realm.is_empty() || node_id.is_empty() {
         anyhow::bail!("credentials missing realm or node_id");
     }
@@ -872,21 +840,17 @@ fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<
     let client = KeyringClient::default_path();
     // Probe reachability with a lightweight `list` first. When the
     // daemon is already up (operator started it, or a prior join
-    // spawned it) we go straight to `put`. When it is down we
+    // spawned it) we go straight to `ensure`. When it is down we
     // auto-provision it below so the encrypted vault is the default
     // posture rather than something only `dev-backend.sh` sets up.
     if client.list().is_err() {
         ensure_keyring_daemon_running()?;
     }
 
-    let seed_hex = derive_device_seed_hex(realm, node_id)?;
-    match client.put(&primary_self, role_overlays, seed_hex) {
-        Ok(()) => Ok(()),
-        // already_exists is benign — re-pairing the same device
-        // keeps the existing keypair. Any other error is real.
-        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => Ok(()),
-        Err(e) => Err(anyhow::anyhow!("keyring put: {e}")),
-    }
+    let public_key = client
+        .ensure(&primary_self, role_overlays)
+        .map_err(|error| anyhow::anyhow!("ensure runtime identity: {error}"))?;
+    Ok((primary_self, client, public_key))
 }
 
 /// Spawn the `easynet-keyring` daemon and wait until its socket
@@ -1251,8 +1215,9 @@ fn validate_pairing_token(
     token: &str,
     hub_base: &str,
     preflight: &PairingPreflight,
+    device_public_key: &str,
 ) -> anyhow::Result<config::Credentials> {
-    let payload = build_validate_pairing_payload(preflight)?;
+    let payload = build_validate_pairing_payload(preflight, device_public_key.to_string());
     let base = hub_base.trim_end_matches('/');
     let url = format!("{base}/api/v1/devices/pairing/{token}/validate");
 
@@ -1324,37 +1289,22 @@ fn validate_pairing_token(
 
 fn build_validate_pairing_payload(
     preflight: &PairingPreflight,
-) -> anyhow::Result<ValidatePairingPayload> {
-    Ok(ValidatePairingPayload {
+    device_public_key: String,
+) -> ValidatePairingPayload {
+    ValidatePairingPayload {
         info: sysinfo::collect_system_info(),
         node_id: preflight.node_id.clone(),
-        device_public_key: derive_device_public_key_hex(&preflight.realm, &preflight.node_id)?,
+        device_public_key,
         // Best-effort: a failure to read/persist the install id (e.g. an
         // unwritable state dir) must not block pairing — the hub then simply
         // mints a fresh node_id as before.
         install_id: config::load_or_create_install_id().ok(),
-    })
+    }
 }
 
 fn derive_device_public_key_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
-    use anyhow::Context as _;
-    use base64::Engine as _;
-
-    let (_seed, public_key_b64) = derive_device_keypair(realm, node_id);
-    let public_key = base64::engine::general_purpose::STANDARD
-        .decode(public_key_b64.as_bytes())
-        .context("decode derived device public key")?;
-    Ok(hex::encode(public_key))
-}
-
-fn derive_device_seed_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
-    let (seed, _public_key_b64) = derive_device_keypair(realm, node_id);
-    Ok(hex::encode(seed))
-}
-
-fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
-    let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
-    crate::daemon::federation::publish::derive_subject_keypair(realm, &subject_id)
+    let (_, _, public_key) = ensure_device_runtime_identity(realm, node_id)?;
+    Ok(hex::encode(public_key.to_bytes()))
 }
 
 // Deregister the previously-paired device from the hub before a re-pair
@@ -1635,36 +1585,6 @@ mod tests {
     }
 
     #[test]
-    fn derive_device_public_key_hex_matches_runtime_derivation() {
-        let realm = "tenant-a";
-        let node_id = "en-test-node";
-        let got = derive_device_public_key_hex(realm, node_id).expect("derive hex");
-        let want_b64 =
-            crate::daemon::federation::publish::derive_owner_public_key_b64(realm, node_id);
-        let want = hex::encode(
-            base64::engine::general_purpose::STANDARD
-                .decode(want_b64.as_bytes())
-                .expect("decode owner b64"),
-        );
-        assert_eq!(got, want);
-    }
-
-    #[test]
-    fn derive_device_seed_hex_matches_pairing_public_key() {
-        let realm = "tenant-a";
-        let node_id = "en-test-node";
-        let seed_hex = derive_device_seed_hex(realm, node_id).expect("derive seed");
-        let seed_bytes = hex::decode(seed_hex).expect("decode seed hex");
-        let seed: [u8; 32] = seed_bytes.as_slice().try_into().expect("seed length");
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-
-        assert_eq!(
-            hex::encode(signing_key.verifying_key().to_bytes()),
-            derive_device_public_key_hex(realm, node_id).expect("derive public key")
-        );
-    }
-
-    #[test]
     fn pairing_preflight_accepts_current_realm_schema() {
         let preflight: PairingPreflight = serde_json::from_value(serde_json::json!({
             "realm": "tenant-a",
@@ -1703,7 +1623,7 @@ mod tests {
             hub_tls_ca_pem_b64: String::new(),
             _hub_agent_ura: String::new(),
         };
-        let payload = build_validate_pairing_payload(&preflight).expect("build payload");
+        let payload = build_validate_pairing_payload(&preflight, "ab".repeat(32));
         assert_eq!(payload.node_id, "en-test-node");
         assert_eq!(payload.device_public_key.len(), 64);
     }
@@ -1732,7 +1652,7 @@ mod tests {
             hub_tls_ca_pem_b64: String::new(),
             _hub_agent_ura: String::new(),
         };
-        let err = validate_pairing_token("token_1234", &base, &preflight)
+        let err = validate_pairing_token("token_1234", &base, &preflight, &"ab".repeat(32))
             .expect_err("transport failure should error");
         assert!(err.to_string().contains("cannot reach Hub"));
     }
