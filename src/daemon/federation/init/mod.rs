@@ -17,8 +17,8 @@
 //
 // Design contract
 // ---------------
-// The init function is a *pure decision* over (`Credentials`,
-// `KeyringHandle`, optional `Bridge`):
+// The init function is a *pure decision* over joined `Credentials` and an
+// optional `Bridge`:
 //
 //   ```
 //   try_install_federation_routing(...) -> FederationInitOutcome
@@ -70,7 +70,6 @@ use std::sync::Arc;
 
 use super::resolver as tenant_resolver;
 use crate::daemon::keyring::bridge_forward::BridgeForwardInvoker;
-use crate::daemon::keyring::KeyringHandle;
 use crate::daemon::persistence::config::Credentials;
 
 /// Environment opt-out. When set to "1" / "true", the daemon
@@ -91,7 +90,6 @@ pub const ENV_FEDERATION_DISABLE: &str = "EASYNET_FEDERATION_DISABLE";
 /// call.
 pub struct FederationInitInputs<'a> {
     pub creds: &'a Credentials,
-    pub keyring: &'a Arc<KeyringHandle>,
     pub bridge: Option<&'a Arc<easynet_axon::dendrite_bridge::DendriteBridge>>,
     /// Operator opt-out — boot reads `EASYNET_FEDERATION_DISABLE`
     /// here. When true, init returns `Disabled` regardless of
@@ -108,7 +106,6 @@ pub struct FederationInitInputs<'a> {
 /// process-global env var.
 pub fn read_inputs_from_env<'a>(
     creds: &'a Credentials,
-    keyring: &'a Arc<KeyringHandle>,
     bridge: Option<&'a Arc<easynet_axon::dendrite_bridge::DendriteBridge>>,
 ) -> FederationInitInputs<'a> {
     let disabled_by_operator = std::env::var(ENV_FEDERATION_DISABLE)
@@ -118,7 +115,6 @@ pub fn read_inputs_from_env<'a>(
         .unwrap_or(false);
     FederationInitInputs {
         creds,
-        keyring,
         bridge,
         disabled_by_operator,
         resolver_config: tenant_resolver::ResolverConfig::from_env_and_file(),
@@ -137,7 +133,6 @@ pub fn read_inputs_from_env<'a>(
 pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> FederationInitOutcome {
     let FederationInitInputs {
         creds,
-        keyring,
         bridge,
         disabled_by_operator,
         resolver_config,
@@ -181,22 +176,16 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
         }
     };
 
-    // ── Prereq: keyring must hold a device subject ─────────────
-    let device_ura = match ensure_device_subject(keyring, creds) {
-        Ok(ura) => ura,
-        Err(reason) => {
-            return FederationInitOutcome::Failed {
-                stage: FederationStage::KeyringBind,
-                reason,
-            };
-        }
-    };
+    // The joined node ID and realm are the one authoritative source for the
+    // daemon caller URA. A key inventory must never be a second identity
+    // registry or a routing prerequisite.
+    let device_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
 
     // ── Install (set-once). A second call after a successful
     //    first call is the AlreadyInstalled outcome.
     let installed = BridgeForwardInvoker::install_for_daemon(
         bridge,
-        Arc::clone(keyring),
+        device_ura.clone(),
         creds.realm.clone(),
         creds.realm.clone(),
     );
@@ -211,24 +200,6 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
         tenant: creds.realm.clone(),
         realm: creds.realm.clone(),
         device_ura,
-    }
-}
-
-fn ensure_device_subject(
-    keyring: &Arc<KeyringHandle>,
-    creds: &Credentials,
-) -> Result<String, String> {
-    match keyring.device_subject() {
-        Some(ura) => Ok(ura),
-        None => {
-            // Synthesise + bind on first install. Subsequent calls
-            // re-use the bound subject so re-installs are idempotent.
-            let synth = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
-            keyring
-                .set_device_subject(synth.clone())
-                .map_err(|e| format!("keyring.set_device_subject({synth}): {e}"))?;
-            Ok(synth)
-        }
     }
 }
 
@@ -255,15 +226,6 @@ mod tests {
         }
     }
 
-    fn keyring() -> Arc<KeyringHandle> {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("keyring.json");
-        let h = Arc::new(KeyringHandle::open_or_create(path, "p").unwrap());
-        // Persist for the test's lifetime.
-        std::mem::forget(dir);
-        h
-    }
-
     /// Build inputs without touching env vars. Tests pass
     /// `disabled_by_operator` and `resolver_config` directly,
     /// which is the whole point of the FederationInitInputs split:
@@ -271,13 +233,11 @@ mod tests {
     /// state.
     fn inputs_for<'a>(
         creds: &'a Credentials,
-        keyring: &'a Arc<KeyringHandle>,
         bridge: Option<&'a Arc<easynet_axon::dendrite_bridge::DendriteBridge>>,
         disabled_by_operator: bool,
     ) -> FederationInitInputs<'a> {
         FederationInitInputs {
             creds,
-            keyring,
             bridge,
             disabled_by_operator,
             resolver_config: tenant_resolver::ResolverConfig::default(),
@@ -287,8 +247,7 @@ mod tests {
     #[test]
     fn disabled_when_operator_opted_out() {
         let c = creds("acme.com", "node-1");
-        let k = keyring();
-        let out = try_install_federation_routing(inputs_for(&c, &k, None, true));
+        let out = try_install_federation_routing(inputs_for(&c, None, true));
         match out {
             FederationInitOutcome::Disabled { reason } => {
                 assert!(reason.contains(ENV_FEDERATION_DISABLE), "{reason}");
@@ -300,8 +259,7 @@ mod tests {
     #[test]
     fn disabled_when_credentials_unjoined() {
         let c = creds("", "");
-        let k = keyring();
-        let out = try_install_federation_routing(inputs_for(&c, &k, None, false));
+        let out = try_install_federation_routing(inputs_for(&c, None, false));
         match out {
             FederationInitOutcome::Disabled { reason } => {
                 assert!(reason.contains("credentials.json"), "{reason}");
@@ -316,8 +274,7 @@ mod tests {
         // default resolver config — federation routes are
         // deliberately not installed.
         let c = creds("silan.localhost", "node-1");
-        let k = keyring();
-        let out = try_install_federation_routing(inputs_for(&c, &k, None, false));
+        let out = try_install_federation_routing(inputs_for(&c, None, false));
         match out {
             FederationInitOutcome::Disabled { reason } => {
                 assert!(reason.contains("Local-fast"), "{reason}");
@@ -332,8 +289,7 @@ mod tests {
         // Daemon should keep running; the operator gets a
         // diagnostic via the status probe.
         let c = creds("acme.com", "node-1");
-        let k = keyring();
-        let out = try_install_federation_routing(inputs_for(&c, &k, None, false));
+        let out = try_install_federation_routing(inputs_for(&c, None, false));
         match out {
             FederationInitOutcome::Failed { stage, reason } => {
                 assert_eq!(stage, FederationStage::BridgeUnavailable);
@@ -344,13 +300,10 @@ mod tests {
     }
 
     #[test]
-    fn synthesised_device_subject_uses_canonical_device_ura() {
+    fn federation_caller_uses_canonical_device_ura() {
         let c = creds("acme.com", "node-1");
-        let k = keyring();
         let expected = crate::core::ura::device_ura(&c.realm, &c.node_id);
-        let got = ensure_device_subject(&k, &c).expect("subject synthesised");
-        assert_eq!(got, expected);
-        assert_eq!(k.device_subject().as_deref(), Some(expected.as_str()));
+        assert_eq!(crate::core::ura::device_ura(&c.realm, &c.node_id), expected);
     }
 
     // Note: the Installed and AlreadyInstalled paths require a

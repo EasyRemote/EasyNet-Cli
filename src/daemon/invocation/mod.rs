@@ -89,7 +89,7 @@ pub use dispatch::daemon_invocation_service::DaemonInvocationService;
 pub use dispatch::invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
 pub use dispatch::{
     CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
-    InvocationTuple, KeyringLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
+    InvocationTuple, KeyServiceLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
     PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy, SignerPolicyMode,
     SigningMaterial,
 };

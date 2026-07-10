@@ -300,6 +300,119 @@ async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResp
                 Err(e) => vault_error_to_response(e),
             }
         }
+        KeyringRequest::InventoryCreate {
+            purpose,
+            bound_subject,
+        } => {
+            let mut guard = vault.lock().await;
+            match guard.inventory_create(purpose, bound_subject) {
+                Ok(entry) => match guard.seal() {
+                    Ok(()) => KeyringResponse::InventoryKey { entry },
+                    Err(err) => vault_error_to_response(err),
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventoryList { purpose, status } => {
+            let guard = vault.lock().await;
+            KeyringResponse::InventoryKeys {
+                entries: guard.inventory_list(purpose.as_deref(), status),
+            }
+        }
+        KeyringRequest::InventoryPublicKey { key_id } => {
+            let guard = vault.lock().await;
+            match guard.inventory_public_key(&key_id) {
+                Ok(entry) => KeyringResponse::InventoryKey { entry },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventorySign {
+            key_id,
+            canonical_bytes_b64,
+        } => {
+            use base64::Engine;
+            let bytes = match base64::engine::general_purpose::STANDARD.decode(&canonical_bytes_b64)
+            {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    return KeyringResponse::err("base64", format!("canonical_bytes_b64: {err}"));
+                }
+            };
+            let guard = vault.lock().await;
+            match guard.inventory_sign(&key_id, &bytes) {
+                Ok(signature) => KeyringResponse::Signature {
+                    signature_b64: base64::engine::general_purpose::STANDARD
+                        .encode(signature.to_bytes()),
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventoryRotate { key_id } => {
+            let mut guard = vault.lock().await;
+            match guard.inventory_rotate(&key_id) {
+                Ok(entry) => match guard.seal() {
+                    Ok(()) => KeyringResponse::InventoryKey { entry },
+                    Err(err) => vault_error_to_response(err),
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventoryRevoke { key_id } => {
+            let mut guard = vault.lock().await;
+            match guard.inventory_revoke(&key_id) {
+                Ok(revoked_unix_ms) => match guard.seal() {
+                    Ok(()) => KeyringResponse::InventoryRevoked { revoked_unix_ms },
+                    Err(err) => vault_error_to_response(err),
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventorySetExpiry {
+            key_id,
+            expires_unix_ms,
+        } => {
+            let mut guard = vault.lock().await;
+            match guard.inventory_set_expiry(&key_id, expires_unix_ms) {
+                Ok(()) => match guard.seal() {
+                    Ok(()) => KeyringResponse::Ok,
+                    Err(err) => vault_error_to_response(err),
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventoryBindSubject {
+            key_id,
+            subject_ura,
+        } => {
+            let mut guard = vault.lock().await;
+            match guard.inventory_bind_subject(&key_id, subject_ura) {
+                Ok(()) => match guard.seal() {
+                    Ok(()) => KeyringResponse::Ok,
+                    Err(err) => vault_error_to_response(err),
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventoryPeerAdd {
+            peer_ura,
+            public_key_b64,
+            via_hub,
+        } => {
+            let mut guard = vault.lock().await;
+            match guard.inventory_peer_add(peer_ura, public_key_b64, via_hub) {
+                Ok(added) => match guard.seal() {
+                    Ok(()) => KeyringResponse::InventoryPeerAdded { added },
+                    Err(err) => vault_error_to_response(err),
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
+        KeyringRequest::InventoryPeerList => {
+            let guard = vault.lock().await;
+            KeyringResponse::InventoryPeers {
+                peers: guard.inventory_peer_list(),
+            }
+        }
     }
 }
 

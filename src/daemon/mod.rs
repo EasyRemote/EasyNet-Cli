@@ -60,7 +60,7 @@ pub use invocation::dispatch::client::{
 #[cfg(feature = "axon-pb")]
 pub use invocation::{
     CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
-    InvocationTuple, KeyringLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
+    InvocationTuple, KeyServiceLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
     PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy, SignerPolicyMode,
     SigningMaterial,
 };

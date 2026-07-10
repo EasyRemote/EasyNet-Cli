@@ -147,6 +147,11 @@ impl KeyringFile {
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct VaultPlaintext {
     pub entries: Vec<KeyringEntry>,
+    /// The rotatable, subject-bound signing inventory.  It is stored in the
+    /// same encrypted daemon vault as runtime identities but deliberately has
+    /// a different record model and lifecycle.
+    #[serde(default)]
+    pub managed_signing: ManagedSigningInventory,
 }
 
 /// One key entry. `primary_self` is the canonical URA this key was
@@ -164,6 +169,102 @@ pub struct KeyringEntry {
     #[serde(default)]
     pub role_overlays: Vec<String>,
     pub seed_hex: String,
+}
+
+/// Lifecycle status of a subject-bound managed signing key.
+///
+/// The state graph is `active -> retired -> revoked` plus
+/// `active -> revoked`.  It is intentionally not shared with runtime identity
+/// records: runtime identity is an ownership anchor, while managed signing is
+/// an explicitly rotatable policy inventory.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedSigningStatus {
+    Active,
+    Retired,
+    Revoked,
+}
+
+/// Encrypted private record for one managed signing key. `seed_hex` never
+/// crosses the daemon protocol; it exists only inside `VaultPlaintext`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ManagedSigningKey {
+    pub key_id: String,
+    pub purpose: String,
+    pub public_key_b64: String,
+    pub seed_hex: String,
+    pub status: ManagedSigningStatus,
+    pub rotation_epoch: u64,
+    pub bound_subject: Option<String>,
+    pub rotated_from: Option<String>,
+    pub created_unix_ms: i64,
+    pub expires_unix_ms: Option<i64>,
+    pub revoked_unix_ms: Option<i64>,
+}
+
+/// Public projection of a managed signing key. This is the only managed key
+/// shape exposed by the daemon protocol and SDK consumers.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ManagedSigningKeyProjection {
+    pub key_id: String,
+    pub purpose: String,
+    pub public_key_b64: String,
+    pub status: ManagedSigningStatus,
+    pub rotation_epoch: u64,
+    pub bound_subject: Option<String>,
+    /// Daemon-derived policy binding for this key and its immutable subject.
+    /// It is absent until the key is subject-bound.
+    pub signer_policy_ref: Option<String>,
+    pub rotated_from: Option<String>,
+    pub created_unix_ms: i64,
+    pub expires_unix_ms: Option<i64>,
+    pub revoked_unix_ms: Option<i64>,
+}
+
+impl From<&ManagedSigningKey> for ManagedSigningKeyProjection {
+    fn from(key: &ManagedSigningKey) -> Self {
+        Self {
+            key_id: key.key_id.clone(),
+            purpose: key.purpose.clone(),
+            public_key_b64: key.public_key_b64.clone(),
+            status: key.status,
+            rotation_epoch: key.rotation_epoch,
+            bound_subject: key.bound_subject.clone(),
+            signer_policy_ref: key.bound_subject.as_ref().map(|subject_ura| {
+                crate::protocol::identity_contract::signer_policy_ref(
+                    subject_ura,
+                    &key.key_id,
+                    &key.public_key_b64,
+                )
+            }),
+            rotated_from: key.rotated_from.clone(),
+            created_unix_ms: key.created_unix_ms,
+            expires_unix_ms: key.expires_unix_ms,
+            revoked_unix_ms: key.revoked_unix_ms,
+        }
+    }
+}
+
+/// A trusted public peer projection used by federation resolution. It has no
+/// relationship to local private-key lifecycle beyond sharing the service's
+/// custody and audit boundary.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ManagedPeer {
+    pub peer_ura: String,
+    pub fingerprint_b64: String,
+    pub public_key_b64: String,
+    pub via_hub: Option<String>,
+    pub added_unix_ms: i64,
+    pub last_seen_unix_ms: i64,
+}
+
+/// Managed-signing domain persisted inside the daemon vault.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ManagedSigningInventory {
+    #[serde(default)]
+    keys: Vec<ManagedSigningKey>,
+    #[serde(default)]
+    peers: Vec<ManagedPeer>,
 }
 
 /// Errors surfaced by the vault crypto layer. Wire layer (the
@@ -188,6 +289,10 @@ pub enum VaultError {
     Corrupt(String),
     #[error("keyring seed length: expected {ED25519_SEED_LEN}, got {got}")]
     BadSeedLen { got: usize },
+    #[error("managed signing lifecycle: {0}")]
+    Lifecycle(String),
+    #[error("managed signing policy: {0}")]
+    Policy(String),
 }
 
 /// Where the master key passphrase comes from. The v1 vault
@@ -275,6 +380,7 @@ pub struct Vault {
     master_key: [u8; AES_KEY_LEN],
     salt: [u8; KDF_SALT_LEN],
     entries: HashMap<String, KeyringEntry>,
+    managed_signing: ManagedSigningInventory,
 }
 
 // Manual `Debug` so the master key never lands in a log line. The
@@ -290,6 +396,11 @@ impl std::fmt::Debug for Vault {
             .field("master_key", &"<redacted>")
             .field("salt_len", &self.salt.len())
             .field("entry_uras", &self.entries.keys().collect::<Vec<_>>())
+            .field(
+                "managed_signing_key_count",
+                &self.managed_signing.keys.len(),
+            )
+            .field("managed_peer_count", &self.managed_signing.peers.len())
             .finish()
     }
 }
@@ -349,6 +460,7 @@ impl Vault {
             master_key,
             salt,
             entries,
+            managed_signing: plaintext.managed_signing,
         })
     }
 
@@ -372,6 +484,7 @@ impl Vault {
             master_key,
             salt,
             entries: HashMap::new(),
+            managed_signing: ManagedSigningInventory::default(),
         })
     }
 
@@ -481,6 +594,7 @@ impl Vault {
     pub fn seal(&self) -> Result<(), VaultError> {
         let plaintext = VaultPlaintext {
             entries: self.entries.values().cloned().collect(),
+            managed_signing: self.managed_signing.clone(),
         };
         let plaintext_bytes = serde_json::to_vec(&plaintext)?;
 
@@ -511,6 +625,265 @@ impl Vault {
                 .any(|e| e.role_overlays.iter().any(|o| o == self_ura))
     }
 
+    /// Create one subject-bound, rotatable managed signing key. The seed is
+    /// generated inside the daemon vault and is never a request or response
+    /// field. The returned value is a public projection.
+    pub fn inventory_create(
+        &mut self,
+        purpose: String,
+        bound_subject: Option<String>,
+    ) -> Result<ManagedSigningKeyProjection, VaultError> {
+        if purpose.trim().is_empty() {
+            return Err(VaultError::Policy(
+                "managed signing purpose must not be empty".into(),
+            ));
+        }
+        let mut seed = [0u8; ED25519_SEED_LEN];
+        OsRng.fill_bytes(&mut seed);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let key = ManagedSigningKey {
+            key_id: next_managed_key_id(),
+            purpose,
+            public_key_b64: encode_b64(&signing_key.verifying_key().to_bytes()),
+            seed_hex: hex::encode(seed),
+            status: ManagedSigningStatus::Active,
+            rotation_epoch: 0,
+            bound_subject,
+            rotated_from: None,
+            created_unix_ms: chrono::Utc::now().timestamp_millis(),
+            expires_unix_ms: None,
+            revoked_unix_ms: None,
+        };
+        let projection = ManagedSigningKeyProjection::from(&key);
+        self.managed_signing.keys.push(key);
+        Ok(projection)
+    }
+
+    /// Return public metadata only. No inventory caller can observe a seed.
+    pub fn inventory_list(
+        &self,
+        purpose: Option<&str>,
+        status: Option<ManagedSigningStatus>,
+    ) -> Vec<ManagedSigningKeyProjection> {
+        let mut keys = self
+            .managed_signing
+            .keys
+            .iter()
+            .filter(|key| purpose.map(|p| key.purpose == p).unwrap_or(true))
+            .filter(|key| status.map(|s| key.status == s).unwrap_or(true))
+            .map(ManagedSigningKeyProjection::from)
+            .collect::<Vec<_>>();
+        keys.sort_by(|a, b| a.key_id.cmp(&b.key_id));
+        keys
+    }
+
+    pub fn inventory_public_key(
+        &self,
+        key_id: &str,
+    ) -> Result<ManagedSigningKeyProjection, VaultError> {
+        self.inventory_key(key_id)
+            .map(ManagedSigningKeyProjection::from)
+    }
+
+    /// Sign only with an active and unexpired managed key.
+    pub fn inventory_sign(
+        &self,
+        key_id: &str,
+        canonical_bytes: &[u8],
+    ) -> Result<Signature, VaultError> {
+        let key = self.inventory_key(key_id)?;
+        self.ensure_inventory_signable(key)?;
+        Ok(managed_signing_key_from(key)?.sign(canonical_bytes))
+    }
+
+    /// Atomically retire an active predecessor and append its successor.
+    pub fn inventory_rotate(
+        &mut self,
+        key_id: &str,
+    ) -> Result<ManagedSigningKeyProjection, VaultError> {
+        let predecessor_index = self.inventory_key_index(key_id)?;
+        let predecessor = self.managed_signing.keys[predecessor_index].clone();
+        if predecessor.status != ManagedSigningStatus::Active {
+            return Err(VaultError::Lifecycle(
+                "only active managed signing keys can rotate".into(),
+            ));
+        }
+        let mut seed = [0u8; ED25519_SEED_LEN];
+        OsRng.fill_bytes(&mut seed);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let successor = ManagedSigningKey {
+            key_id: next_managed_key_id(),
+            purpose: predecessor.purpose.clone(),
+            public_key_b64: encode_b64(&signing_key.verifying_key().to_bytes()),
+            seed_hex: hex::encode(seed),
+            status: ManagedSigningStatus::Active,
+            rotation_epoch: predecessor.rotation_epoch.checked_add(1).ok_or_else(|| {
+                VaultError::Lifecycle("managed signing rotation epoch overflow".into())
+            })?,
+            bound_subject: predecessor.bound_subject.clone(),
+            rotated_from: Some(predecessor.key_id.clone()),
+            created_unix_ms: chrono::Utc::now().timestamp_millis(),
+            expires_unix_ms: predecessor.expires_unix_ms,
+            revoked_unix_ms: None,
+        };
+        self.managed_signing.keys[predecessor_index].status = ManagedSigningStatus::Retired;
+        let projection = ManagedSigningKeyProjection::from(&successor);
+        self.managed_signing.keys.push(successor);
+        Ok(projection)
+    }
+
+    /// Move an active or retired key to its terminal revoked state.
+    pub fn inventory_revoke(&mut self, key_id: &str) -> Result<i64, VaultError> {
+        let key = self.inventory_key_mut(key_id)?;
+        if key.status == ManagedSigningStatus::Revoked {
+            return Err(VaultError::Lifecycle(
+                "managed signing key is already revoked".into(),
+            ));
+        }
+        key.status = ManagedSigningStatus::Revoked;
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        key.revoked_unix_ms = Some(timestamp);
+        Ok(timestamp)
+    }
+
+    pub fn inventory_set_expiry(
+        &mut self,
+        key_id: &str,
+        expires_unix_ms: i64,
+    ) -> Result<(), VaultError> {
+        let key = self.inventory_key_mut(key_id)?;
+        if key.status == ManagedSigningStatus::Revoked {
+            return Err(VaultError::Lifecycle(
+                "cannot set expiry on a revoked managed signing key".into(),
+            ));
+        }
+        key.expires_unix_ms = Some(expires_unix_ms);
+        Ok(())
+    }
+
+    /// Bind a key exactly once. Rebinding requires a successor key.
+    pub fn inventory_bind_subject(
+        &mut self,
+        key_id: &str,
+        subject_ura: String,
+    ) -> Result<(), VaultError> {
+        if subject_ura.trim().is_empty() {
+            return Err(VaultError::Policy(
+                "managed signing subject must not be empty".into(),
+            ));
+        }
+        let key = self.inventory_key_mut(key_id)?;
+        if key.status != ManagedSigningStatus::Active {
+            return Err(VaultError::Lifecycle(
+                "only active managed signing keys can bind a subject".into(),
+            ));
+        }
+        match &key.bound_subject {
+            None => key.bound_subject = Some(subject_ura),
+            Some(existing) if existing == &subject_ura => {}
+            Some(_) => {
+                return Err(VaultError::Policy(
+                    "managed signing subject is immutable; rotate before rebinding".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Add or refresh a trusted peer's public projection. The fingerprint is
+    /// derived by the daemon; callers cannot assert one for arbitrary bytes.
+    pub fn inventory_peer_add(
+        &mut self,
+        peer_ura: String,
+        public_key_b64: String,
+        via_hub: Option<String>,
+    ) -> Result<bool, VaultError> {
+        use base64::Engine;
+        if peer_ura.trim().is_empty() {
+            return Err(VaultError::Policy("peer URA must not be empty".into()));
+        }
+        let public_key = base64::engine::general_purpose::STANDARD
+            .decode(&public_key_b64)
+            .map_err(|err| VaultError::Base64(format!("managed peer public key: {err}")))?;
+        let _: [u8; 32] = public_key.as_slice().try_into().map_err(|_| {
+            VaultError::Policy(format!(
+                "managed peer public key length must be 32, got {}",
+                public_key.len()
+            ))
+        })?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let fingerprint_b64 = encode_b64(&crypto::fingerprint(&public_key));
+        if let Some(peer) = self
+            .managed_signing
+            .peers
+            .iter_mut()
+            .find(|peer| peer.peer_ura == peer_ura)
+        {
+            peer.public_key_b64 = public_key_b64;
+            peer.fingerprint_b64 = fingerprint_b64;
+            peer.via_hub = via_hub;
+            peer.last_seen_unix_ms = now;
+            return Ok(false);
+        }
+        self.managed_signing.peers.push(ManagedPeer {
+            peer_ura,
+            fingerprint_b64,
+            public_key_b64,
+            via_hub,
+            added_unix_ms: now,
+            last_seen_unix_ms: now,
+        });
+        Ok(true)
+    }
+
+    pub fn inventory_peer_list(&self) -> Vec<ManagedPeer> {
+        let mut peers = self.managed_signing.peers.clone();
+        peers.sort_by(|a, b| a.peer_ura.cmp(&b.peer_ura));
+        peers
+    }
+
+    fn inventory_key(&self, key_id: &str) -> Result<&ManagedSigningKey, VaultError> {
+        self.managed_signing
+            .keys
+            .iter()
+            .find(|key| key.key_id == key_id)
+            .ok_or_else(|| VaultError::NotFound(format!("managed signing key {key_id}")))
+    }
+
+    fn inventory_key_mut(&mut self, key_id: &str) -> Result<&mut ManagedSigningKey, VaultError> {
+        self.managed_signing
+            .keys
+            .iter_mut()
+            .find(|key| key.key_id == key_id)
+            .ok_or_else(|| VaultError::NotFound(format!("managed signing key {key_id}")))
+    }
+
+    fn inventory_key_index(&self, key_id: &str) -> Result<usize, VaultError> {
+        self.managed_signing
+            .keys
+            .iter()
+            .position(|key| key.key_id == key_id)
+            .ok_or_else(|| VaultError::NotFound(format!("managed signing key {key_id}")))
+    }
+
+    fn ensure_inventory_signable(&self, key: &ManagedSigningKey) -> Result<(), VaultError> {
+        if key.status != ManagedSigningStatus::Active {
+            return Err(VaultError::Lifecycle(
+                "only active managed signing keys can sign".into(),
+            ));
+        }
+        if key
+            .expires_unix_ms
+            .map(|expires| expires <= chrono::Utc::now().timestamp_millis())
+            .unwrap_or(false)
+        {
+            return Err(VaultError::Lifecycle(
+                "managed signing key is expired".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn lookup(&self, self_ura: &str) -> Result<&KeyringEntry, VaultError> {
         if let Some(entry) = self.entries.get(self_ura) {
             return Ok(entry);
@@ -524,6 +897,22 @@ impl Vault {
         }
         Err(VaultError::NotFound(self_ura.to_string()))
     }
+}
+
+fn managed_signing_key_from(key: &ManagedSigningKey) -> Result<SigningKey, VaultError> {
+    let seed = hex::decode(&key.seed_hex)
+        .map_err(|err| VaultError::Corrupt(format!("managed signing seed decode: {err}")))?;
+    let seed: [u8; ED25519_SEED_LEN] = seed
+        .as_slice()
+        .try_into()
+        .map_err(|_| VaultError::BadSeedLen { got: seed.len() })?;
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+fn next_managed_key_id() -> String {
+    let mut bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    format!("msk-{}", hex::encode(bytes))
 }
 
 impl Drop for Vault {
@@ -657,6 +1046,56 @@ pub enum KeyringRequest {
     List,
     /// Remove an entry.
     Forget { primary_self: String },
+    /// Create a subject-bound key in the managed signing inventory.
+    #[serde(rename = "inventory.create")]
+    InventoryCreate {
+        purpose: String,
+        #[serde(default)]
+        bound_subject: Option<String>,
+    },
+    /// List public managed key projections.
+    #[serde(rename = "inventory.list")]
+    InventoryList {
+        #[serde(default)]
+        purpose: Option<String>,
+        #[serde(default)]
+        status: Option<ManagedSigningStatus>,
+    },
+    /// Return one managed key's public projection.
+    #[serde(rename = "inventory.public_key")]
+    InventoryPublicKey { key_id: String },
+    /// Sign canonical bytes with one managed key.
+    #[serde(rename = "inventory.sign")]
+    InventorySign {
+        key_id: String,
+        canonical_bytes_b64: String,
+    },
+    /// Retire one key and create its successor atomically.
+    #[serde(rename = "inventory.rotate")]
+    InventoryRotate { key_id: String },
+    /// Terminally revoke one managed key.
+    #[serde(rename = "inventory.revoke")]
+    InventoryRevoke { key_id: String },
+    /// Set an explicit sign-expiry timestamp.
+    #[serde(rename = "inventory.set_expiry")]
+    InventorySetExpiry {
+        key_id: String,
+        expires_unix_ms: i64,
+    },
+    /// Bind an unbound active key to its immutable subject URA.
+    #[serde(rename = "inventory.bind_subject")]
+    InventoryBindSubject { key_id: String, subject_ura: String },
+    /// Add or refresh a trusted peer public projection.
+    #[serde(rename = "inventory.peer_add")]
+    InventoryPeerAdd {
+        peer_ura: String,
+        public_key_b64: String,
+        #[serde(default)]
+        via_hub: Option<String>,
+    },
+    /// List trusted peer public projections.
+    #[serde(rename = "inventory.peer_list")]
+    InventoryPeerList,
 }
 
 /// Response to a `KeyringRequest`. Errors are typed so the client
@@ -665,10 +1104,34 @@ pub enum KeyringRequest {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum KeyringResponse {
     Ok,
-    Signature { signature_b64: String },
-    PublicKey { public_key_b64: String },
-    List { entries: Vec<String> },
-    Error { kind: String, message: String },
+    Signature {
+        signature_b64: String,
+    },
+    PublicKey {
+        public_key_b64: String,
+    },
+    List {
+        entries: Vec<String>,
+    },
+    InventoryKey {
+        entry: ManagedSigningKeyProjection,
+    },
+    InventoryKeys {
+        entries: Vec<ManagedSigningKeyProjection>,
+    },
+    InventoryRevoked {
+        revoked_unix_ms: i64,
+    },
+    InventoryPeerAdded {
+        added: bool,
+    },
+    InventoryPeers {
+        peers: Vec<ManagedPeer>,
+    },
+    Error {
+        kind: String,
+        message: String,
+    },
 }
 
 impl KeyringResponse {
@@ -692,6 +1155,8 @@ pub fn vault_error_to_response(err: VaultError) -> KeyringResponse {
         VaultError::AlreadyExists(_) => "already_exists",
         VaultError::Corrupt(_) => "corrupt",
         VaultError::BadSeedLen { .. } => "bad_seed_len",
+        VaultError::Lifecycle(_) => "lifecycle",
+        VaultError::Policy(_) => "policy",
     };
     KeyringResponse::err(kind, err.to_string())
 }
@@ -831,6 +1296,7 @@ fn mint_passphrase() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use ed25519_dalek::Verifier;
     use tempfile::TempDir;
 
@@ -1073,6 +1539,104 @@ mod tests {
     }
 
     #[test]
+    fn managed_signing_state_machine_preserves_subject_and_blocks_retired_keys() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("keyring.enc");
+        let subject = "easynet:///r/test.local/agent/alice".to_string();
+        let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
+        let first = vault
+            .inventory_create("invocation".into(), Some(subject.clone()))
+            .unwrap();
+        let first_key = first.key_id.clone();
+        let first_public = first.public_key_b64.clone();
+        let signature = vault
+            .inventory_sign(&first_key, b"canonical invocation")
+            .unwrap();
+        let public = base64::engine::general_purpose::STANDARD
+            .decode(first_public)
+            .unwrap();
+        let public: [u8; 32] = public.as_slice().try_into().unwrap();
+        VerifyingKey::from_bytes(&public)
+            .unwrap()
+            .verify(b"canonical invocation", &signature)
+            .unwrap();
+
+        let successor = vault.inventory_rotate(&first_key).unwrap();
+        assert_eq!(successor.rotation_epoch, 1);
+        assert_eq!(successor.rotated_from.as_deref(), Some(first_key.as_str()));
+        assert_eq!(successor.bound_subject.as_deref(), Some(subject.as_str()));
+        assert!(matches!(
+            vault.inventory_sign(&first_key, b"canonical invocation"),
+            Err(VaultError::Lifecycle(_))
+        ));
+        assert!(vault
+            .inventory_sign(&successor.key_id, b"canonical invocation")
+            .is_ok());
+    }
+
+    #[test]
+    fn managed_signing_revoke_expiry_and_binding_are_terminal_or_immutable() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("keyring.enc");
+        let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
+        let key = vault.inventory_create("invocation".into(), None).unwrap();
+        vault
+            .inventory_bind_subject(&key.key_id, "easynet:///r/test.local/agent/alice".into())
+            .unwrap();
+        assert!(matches!(
+            vault.inventory_bind_subject(&key.key_id, "easynet:///r/test.local/agent/bob".into()),
+            Err(VaultError::Policy(_))
+        ));
+        vault
+            .inventory_set_expiry(&key.key_id, chrono::Utc::now().timestamp_millis() - 1)
+            .unwrap();
+        assert!(matches!(
+            vault.inventory_sign(&key.key_id, b"canonical invocation"),
+            Err(VaultError::Lifecycle(_))
+        ));
+        let successor = vault.inventory_rotate(&key.key_id).unwrap();
+        assert!(
+            matches!(
+                vault.inventory_sign(&successor.key_id, b"canonical invocation"),
+                Err(VaultError::Lifecycle(_))
+            ),
+            "an inherited expired key cannot sign"
+        );
+        let revoked = vault.inventory_revoke(&successor.key_id).unwrap();
+        assert!(revoked > 0);
+        assert!(matches!(
+            vault.inventory_revoke(&successor.key_id),
+            Err(VaultError::Lifecycle(_))
+        ));
+        assert!(matches!(
+            vault.inventory_set_expiry(&successor.key_id, chrono::Utc::now().timestamp_millis()),
+            Err(VaultError::Lifecycle(_))
+        ));
+    }
+
+    #[test]
+    fn managed_signing_inventory_is_encrypted_and_persists_public_projection_only() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("keyring.enc");
+        let key_id = {
+            let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
+            let key = vault.inventory_create("invocation".into(), None).unwrap();
+            vault.seal().unwrap();
+            key.key_id
+        };
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !raw.contains(&key_id),
+            "managed metadata is inside ciphertext"
+        );
+        let vault = Vault::open(&path, &explicit_pass()).unwrap();
+        assert_eq!(vault.inventory_list(None, None).len(), 1);
+        assert!(vault
+            .inventory_sign(&key_id, b"canonical invocation")
+            .is_ok());
+    }
+
+    #[test]
     fn pre_derived_master_key_path() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
@@ -1120,6 +1684,8 @@ mod tests {
             (VaultError::AlreadyExists("u".into()), "already_exists"),
             (VaultError::BadSeedLen { got: 5 }, "bad_seed_len"),
             (VaultError::Crypto("decrypt".into()), "crypto"),
+            (VaultError::Lifecycle("expired".into()), "lifecycle"),
+            (VaultError::Policy("subject".into()), "policy"),
         ];
         for (err, want_kind) in cases {
             match vault_error_to_response(err) {

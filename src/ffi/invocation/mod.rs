@@ -1960,18 +1960,7 @@ fn sign_prepared_local_with_axon_pb(
             );
         }
     };
-    let keyring = match crate::daemon::keyring::open_default_keyring_handle() {
-        Ok(keyring) => keyring,
-        Err(err) => {
-            return record_invocation_error(
-                ERR_PERMISSION_DENIED,
-                format!(
-                    "easynet_invocation_sign_prepared_local: open daemon keyring failed: {err}"
-                ),
-            );
-        }
-    };
-    let signer = crate::daemon::KeyringLocalDaemonInvocationSigner::new(keyring);
+    let signer = crate::daemon::KeyServiceLocalDaemonInvocationSigner::at_default_endpoint();
     let signed = match prepared.sign_with_local_daemon_signer(&signer) {
         Ok(signed) => signed,
         Err(err) => {

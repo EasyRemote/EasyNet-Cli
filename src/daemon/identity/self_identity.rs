@@ -42,7 +42,8 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use std::os::unix::net::UnixStream;
 
 use crate::daemon::keyring::{
-    default_socket_path, KeyringRequest, KeyringResponse, MasterKeySource, Vault,
+    default_socket_path, KeyringRequest, KeyringResponse, ManagedPeer, ManagedSigningKeyProjection,
+    ManagedSigningStatus, MasterKeySource, Vault,
 };
 
 /// Errors surfaced by `SelfIdentity` callers. Most are 1:1 with
@@ -226,18 +227,7 @@ impl SelfIdentity for KeyringClient {
             canonical_bytes_b64: base64::engine::general_purpose::STANDARD.encode(canonical_bytes),
         };
         match self.rpc(&req)? {
-            KeyringResponse::Signature { signature_b64 } => {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(signature_b64)
-                    .map_err(|e| SelfIdentityError::SignatureDecode(format!("base64: {e}")))?;
-                let arr: [u8; 64] = bytes.as_slice().try_into().map_err(|_| {
-                    SelfIdentityError::SignatureDecode(format!(
-                        "ed25519 signature must be 64 bytes, got {}",
-                        bytes.len()
-                    ))
-                })?;
-                Ok(Signature::from_bytes(&arr))
-            }
+            KeyringResponse::Signature { signature_b64 } => decode_signature(signature_b64),
             KeyringResponse::Error { kind, message } => {
                 Err(SelfIdentityError::Rejected { kind, message })
             }
@@ -331,6 +321,173 @@ impl KeyringClient {
             other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
         }
     }
+
+    /// Create a managed signing key wholly inside the daemon service.
+    pub fn inventory_create(
+        &self,
+        purpose: impl Into<String>,
+        bound_subject: Option<String>,
+    ) -> Result<ManagedSigningKeyProjection, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::InventoryCreate {
+            purpose: purpose.into(),
+            bound_subject,
+        })? {
+            KeyringResponse::InventoryKey { entry } => Ok(entry),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    pub fn inventory_list(
+        &self,
+        purpose: Option<String>,
+        status: Option<ManagedSigningStatus>,
+    ) -> Result<Vec<ManagedSigningKeyProjection>, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::InventoryList { purpose, status })? {
+            KeyringResponse::InventoryKeys { entries } => Ok(entries),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    pub fn inventory_public_key(
+        &self,
+        key_id: &str,
+    ) -> Result<ManagedSigningKeyProjection, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::InventoryPublicKey {
+            key_id: key_id.to_string(),
+        })? {
+            KeyringResponse::InventoryKey { entry } => Ok(entry),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    pub fn inventory_sign(
+        &self,
+        key_id: &str,
+        canonical_bytes: &[u8],
+    ) -> Result<Signature, SelfIdentityError> {
+        use base64::Engine;
+        match self.rpc(&KeyringRequest::InventorySign {
+            key_id: key_id.to_string(),
+            canonical_bytes_b64: base64::engine::general_purpose::STANDARD.encode(canonical_bytes),
+        })? {
+            KeyringResponse::Signature { signature_b64 } => decode_signature(signature_b64),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    pub fn inventory_rotate(
+        &self,
+        key_id: &str,
+    ) -> Result<ManagedSigningKeyProjection, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::InventoryRotate {
+            key_id: key_id.to_string(),
+        })? {
+            KeyringResponse::InventoryKey { entry } => Ok(entry),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    pub fn inventory_revoke(&self, key_id: &str) -> Result<i64, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::InventoryRevoke {
+            key_id: key_id.to_string(),
+        })? {
+            KeyringResponse::InventoryRevoked { revoked_unix_ms } => Ok(revoked_unix_ms),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    pub fn inventory_set_expiry(
+        &self,
+        key_id: &str,
+        expires_unix_ms: i64,
+    ) -> Result<(), SelfIdentityError> {
+        self.inventory_ok(KeyringRequest::InventorySetExpiry {
+            key_id: key_id.to_string(),
+            expires_unix_ms,
+        })
+    }
+
+    pub fn inventory_bind_subject(
+        &self,
+        key_id: &str,
+        subject_ura: &str,
+    ) -> Result<(), SelfIdentityError> {
+        self.inventory_ok(KeyringRequest::InventoryBindSubject {
+            key_id: key_id.to_string(),
+            subject_ura: subject_ura.to_string(),
+        })
+    }
+
+    pub fn inventory_peer_add(
+        &self,
+        peer_ura: &str,
+        public_key_b64: &str,
+        via_hub: Option<String>,
+    ) -> Result<bool, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::InventoryPeerAdd {
+            peer_ura: peer_ura.to_string(),
+            public_key_b64: public_key_b64.to_string(),
+            via_hub,
+        })? {
+            KeyringResponse::InventoryPeerAdded { added } => Ok(added),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    pub fn inventory_peer_list(&self) -> Result<Vec<ManagedPeer>, SelfIdentityError> {
+        match self.rpc(&KeyringRequest::InventoryPeerList)? {
+            KeyringResponse::InventoryPeers { peers } => Ok(peers),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+
+    fn inventory_ok(&self, request: KeyringRequest) -> Result<(), SelfIdentityError> {
+        match self.rpc(&request)? {
+            KeyringResponse::Ok => Ok(()),
+            KeyringResponse::Error { kind, message } => {
+                Err(SelfIdentityError::Rejected { kind, message })
+            }
+            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
+        }
+    }
+}
+
+fn decode_signature(signature_b64: String) -> Result<Signature, SelfIdentityError> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64)
+        .map_err(|e| SelfIdentityError::SignatureDecode(format!("base64: {e}")))?;
+    let arr: [u8; 64] = bytes.as_slice().try_into().map_err(|_| {
+        SelfIdentityError::SignatureDecode(format!(
+            "ed25519 signature must be 64 bytes, got {}",
+            bytes.len()
+        ))
+    })?;
+    Ok(Signature::from_bytes(&arr))
 }
 
 // ── InMemoryVault (test + in-process boot path) ────────────────

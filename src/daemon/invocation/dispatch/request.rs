@@ -660,23 +660,79 @@ pub trait LocalDaemonInvocationSigner {
     ) -> Result<CallerSignatureMaterial>;
 }
 
-/// Keyring-backed local daemon signer. It signs only the canonical
-/// material already produced by `PreparedInvocation`.
+/// Minimal managed-signing provider boundary. Production uses the daemon UDS
+/// client; an in-memory provider is permitted only in unit tests so signing
+/// policy can be verified without starting a process.
 #[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone)]
-pub struct KeyringLocalDaemonInvocationSigner {
-    keyring: std::sync::Arc<crate::daemon::keyring::KeyringHandle>,
+pub trait ManagedSigningKeyService: Send + Sync {
+    fn public_key(
+        &self,
+        key_id: &str,
+    ) -> std::result::Result<
+        crate::daemon::keyring::ManagedSigningKeyProjection,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    >;
+
+    fn sign(
+        &self,
+        key_id: &str,
+        canonical_bytes: &[u8],
+    ) -> std::result::Result<
+        ed25519_dalek::Signature,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    >;
 }
 
 #[cfg(feature = "axon-pb")]
-impl KeyringLocalDaemonInvocationSigner {
-    pub fn new(keyring: std::sync::Arc<crate::daemon::keyring::KeyringHandle>) -> Self {
-        Self { keyring }
+impl ManagedSigningKeyService for crate::daemon::identity::self_identity::KeyringClient {
+    fn public_key(
+        &self,
+        key_id: &str,
+    ) -> std::result::Result<
+        crate::daemon::keyring::ManagedSigningKeyProjection,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    > {
+        self.inventory_public_key(key_id)
+    }
+
+    fn sign(
+        &self,
+        key_id: &str,
+        canonical_bytes: &[u8],
+    ) -> std::result::Result<
+        ed25519_dalek::Signature,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    > {
+        self.inventory_sign(key_id, canonical_bytes)
+    }
+}
+
+/// Daemon-key-service-backed local signer. It validates the daemon-issued
+/// public projection before asking the same daemon service to sign the
+/// canonical material already produced by `PreparedInvocation`.
+///
+/// This object deliberately owns no vault path, master key, seed, or inventory
+/// record. The UDS service is the only private-key custody boundary.
+#[cfg(feature = "axon-pb")]
+pub struct KeyServiceLocalDaemonInvocationSigner {
+    key_service: std::sync::Arc<dyn ManagedSigningKeyService>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl KeyServiceLocalDaemonInvocationSigner {
+    pub fn new(key_service: std::sync::Arc<dyn ManagedSigningKeyService>) -> Self {
+        Self { key_service }
+    }
+
+    pub fn at_default_endpoint() -> Self {
+        Self::new(std::sync::Arc::new(
+            crate::daemon::identity::self_identity::KeyringClient::default_path(),
+        ))
     }
 }
 
 #[cfg(feature = "axon-pb")]
-impl LocalDaemonInvocationSigner for KeyringLocalDaemonInvocationSigner {
+impl LocalDaemonInvocationSigner for KeyServiceLocalDaemonInvocationSigner {
     fn sign_local_daemon_invocation(
         &self,
         prepared: &PreparedInvocation,
@@ -688,12 +744,12 @@ impl LocalDaemonInvocationSigner for KeyringLocalDaemonInvocationSigner {
             )
         })?;
         let tuple = prepared.tuple();
-        let entry = self.keyring.find_entry_by_id(key_id).ok_or_else(|| {
-            DaemonError::InvalidInvocation(
-                "local daemon signer key was not present in daemon key inventory".to_string(),
-            )
+        let entry = self.key_service.public_key(key_id).map_err(|err| {
+            DaemonError::InvalidInvocation(format!(
+                "local daemon signer key service could not resolve managed key: {err}"
+            ))
         })?;
-        if entry.status != crate::daemon::keyring::store::KeyStatus::Active {
+        if entry.status != crate::daemon::keyring::ManagedSigningStatus::Active {
             return Err(DaemonError::InvalidInvocation(
                 "local daemon signer key must be active".to_string(),
             ));
@@ -703,18 +759,14 @@ impl LocalDaemonInvocationSigner for KeyringLocalDaemonInvocationSigner {
                 "local daemon signer key owner does not match invocation caller".to_string(),
             ));
         }
-        let expected_policy_ref = crate::protocol::identity_contract::signer_policy_ref(
-            &tuple.caller_ura,
-            key_id,
-            &entry.public_key_b64,
-        );
-        if policy.policy_ref != expected_policy_ref {
+        if entry.signer_policy_ref.as_deref() != Some(policy.policy_ref.as_str()) {
             return Err(DaemonError::InvalidInvocation(
-                "local daemon signer policy_ref does not match daemon key inventory".to_string(),
+                "local daemon signer policy_ref does not match daemon-issued key policy"
+                    .to_string(),
             ));
         }
         let signature = self
-            .keyring
+            .key_service
             .sign(key_id, prepared.signing_material().canonical_bytes())
             .map_err(|err| {
                 DaemonError::InvalidInvocation(format!("local daemon signing failed: {err}"))
@@ -1016,6 +1068,73 @@ fn causal_context_json(context: &easynet_axon::pb::axon::v1::CausalContext) -> s
 #[cfg(all(test, feature = "axon-pb"))]
 mod tests {
     use super::*;
+
+    struct TestManagedSigningKeyService {
+        vault: std::sync::Mutex<crate::daemon::keyring::Vault>,
+    }
+
+    impl ManagedSigningKeyService for TestManagedSigningKeyService {
+        fn public_key(
+            &self,
+            key_id: &str,
+        ) -> std::result::Result<
+            crate::daemon::keyring::ManagedSigningKeyProjection,
+            crate::daemon::identity::self_identity::SelfIdentityError,
+        > {
+            self.vault
+                .lock()
+                .unwrap()
+                .inventory_public_key(key_id)
+                .map_err(|err| {
+                    crate::daemon::identity::self_identity::SelfIdentityError::Rejected {
+                        kind: "test_vault".into(),
+                        message: err.to_string(),
+                    }
+                })
+        }
+
+        fn sign(
+            &self,
+            key_id: &str,
+            canonical_bytes: &[u8],
+        ) -> std::result::Result<
+            ed25519_dalek::Signature,
+            crate::daemon::identity::self_identity::SelfIdentityError,
+        > {
+            self.vault
+                .lock()
+                .unwrap()
+                .inventory_sign(key_id, canonical_bytes)
+                .map_err(|err| {
+                    crate::daemon::identity::self_identity::SelfIdentityError::Rejected {
+                        kind: "test_vault".into(),
+                        message: err.to_string(),
+                    }
+                })
+        }
+    }
+
+    fn test_managed_key_service(
+        subject: &str,
+    ) -> (
+        std::sync::Arc<dyn ManagedSigningKeyService>,
+        crate::daemon::keyring::ManagedSigningKeyProjection,
+    ) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut vault = crate::daemon::keyring::Vault::open_or_init(
+            &temp.path().join("keyring.enc"),
+            &crate::daemon::keyring::MasterKeySource::Explicit("test-pass".into()),
+        )
+        .unwrap();
+        let entry = vault
+            .inventory_create("agent_signing".into(), Some(subject.to_string()))
+            .unwrap();
+        let service: std::sync::Arc<dyn ManagedSigningKeyService> =
+            std::sync::Arc::new(TestManagedSigningKeyService {
+                vault: std::sync::Mutex::new(vault),
+            });
+        (service, entry)
+    }
 
     fn descriptor_ref(owner_ura: &str, public_name: &str, version: &str) -> String {
         format!(
@@ -1416,24 +1535,10 @@ mod tests {
 
     #[test]
     fn sdk_local_daemon_signer_uses_keyring_inventory() {
-        let temp = tempfile::tempdir().unwrap();
-        let keyring = std::sync::Arc::new(
-            crate::daemon::keyring::KeyringHandle::open_or_create(
-                temp.path().join("keyring.json"),
-                "test-pass",
-            )
-            .unwrap(),
-        );
         let caller = "easynet:///r/acme/device/dev-a";
-        let entry = keyring
-            .create_entry("agent_signing", Some(caller.to_string()))
-            .unwrap();
+        let (key_service, entry) = test_managed_key_service(caller);
         let signer_id = format!("signer-{}", entry.key_id);
-        let policy_ref = crate::protocol::identity_contract::signer_policy_ref(
-            caller,
-            &entry.key_id,
-            &entry.public_key_b64,
-        );
+        let policy_ref = entry.signer_policy_ref.clone().unwrap();
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
         let prepared = DaemonInvocation::builder(caller, &hub, &observe_ref, caller)
@@ -1451,7 +1556,7 @@ mod tests {
             })
             .unwrap();
 
-        let signer = KeyringLocalDaemonInvocationSigner::new(keyring);
+        let signer = KeyServiceLocalDaemonInvocationSigner::new(key_service);
         let signed = prepared.sign_with_local_daemon_signer(&signer).unwrap();
 
         assert_eq!(signed.signer_id(), signer_id);
@@ -1464,18 +1569,8 @@ mod tests {
 
     #[test]
     fn sdk_local_daemon_signer_rejects_policy_ref_mismatch() {
-        let temp = tempfile::tempdir().unwrap();
-        let keyring = std::sync::Arc::new(
-            crate::daemon::keyring::KeyringHandle::open_or_create(
-                temp.path().join("keyring.json"),
-                "test-pass",
-            )
-            .unwrap(),
-        );
         let caller = "easynet:///r/acme/device/dev-a";
-        let entry = keyring
-            .create_entry("agent_signing", Some(caller.to_string()))
-            .unwrap();
+        let (key_service, entry) = test_managed_key_service(caller);
         let hub = crate::core::ura::hub_ura("acme");
         let observe_ref = descriptor_ref(&hub, "observe.health", "2.4.0");
         let prepared = DaemonInvocation::builder(caller, &hub, &observe_ref, caller)
@@ -1493,7 +1588,7 @@ mod tests {
             })
             .unwrap();
 
-        let signer = KeyringLocalDaemonInvocationSigner::new(keyring);
+        let signer = KeyServiceLocalDaemonInvocationSigner::new(key_service);
         let err = prepared.sign_with_local_daemon_signer(&signer).unwrap_err();
 
         assert!(format!("{err}").contains("policy_ref"));

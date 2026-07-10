@@ -14,7 +14,7 @@ pub(crate) mod unary_dispatcher;
 
 pub use request::{
     CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
-    InvocationTuple, KeyringLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
+    InvocationTuple, KeyServiceLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,
     PrepareOptions, PreparedInvocation, SignedInvocation, SignerPolicy, SignerPolicyMode,
     SigningMaterial,
 };
