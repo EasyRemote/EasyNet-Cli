@@ -1,233 +1,159 @@
 package easynet
 
 import (
-	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
+	"encoding/binary"
 	"encoding/json"
-	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"golang.org/x/crypto/argon2"
+	"time"
 )
 
-func TestLoadRuntimeSigningIdentityPrimary(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "keyring.enc")
-	seed := runtimeIdentitySeedForTest(t)
-	ownerURA := "easynet:///r/acme/device/dev-a"
-	sealRuntimeIdentityVaultForTest(t, path, "passphrase", []runtimeIdentityEntry{{
-		PrimarySelf: ownerURA,
-		SeedHex:     hex.EncodeToString(seed),
-	}})
+func TestLoadRuntimeSigningIdentityUsesDaemonKeyringProjection(t *testing.T) {
+	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+		if request["method"] != "derive_pubkey" || request["self_ura"] != "easynet:///r/acme/hub" {
+			t.Fatalf("unexpected request: %#v", request)
+		}
+		if _, containsVaultField := request["vault_path"]; containsVaultField {
+			t.Fatal("SDK must not send a vault path to the daemon keyring")
+		}
+		return map[string]any{
+			"result":         "public_key",
+			"public_key_b64": base64.StdEncoding.EncodeToString(publicKey),
+		}
+	})
 
 	identity, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA:   ownerURA,
-		VaultPath:  path,
-		Passphrase: "passphrase",
+		OwnerURA:   "easynet:///r/acme/hub",
+		SocketPath: socketPath,
 	})
 	if err != nil {
 		t.Fatalf("LoadRuntimeSigningIdentity: %v", err)
 	}
-	if identity.OwnerURA != ownerURA || identity.PrimaryURA != ownerURA || identity.MatchedURA != ownerURA {
-		t.Fatalf("identity URAs = %#v", identity)
-	}
-	wantPublic := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
-	gotPublic := identity.PrivateKey.Public().(ed25519.PublicKey)
-	if !gotPublic.Equal(wantPublic) {
-		t.Fatal("runtime signing identity public key mismatch")
+	if !identity.PublicKey.Equal(publicKey) {
+		t.Fatal("identity public key did not match daemon projection")
 	}
 }
 
-func TestLoadRuntimeSigningIdentityRoleOverlay(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "keyring.enc")
-	seed := runtimeIdentitySeedForTest(t)
-	primaryURA := "easynet:///r/acme/device/dev-a"
-	hubURA := "easynet:///r/acme/hub"
-	sealRuntimeIdentityVaultForTest(t, path, "passphrase", []runtimeIdentityEntry{{
-		PrimarySelf:  primaryURA,
-		RoleOverlays: []string{hubURA},
-		SeedHex:      hex.EncodeToString(seed),
-	}})
-
-	primary, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA:   primaryURA,
-		VaultPath:  path,
-		Passphrase: "passphrase",
+func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
+	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	message := []byte("canonical invocation bytes")
+	signature := ed25519.Sign(ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)), message)
+	requests := 0
+	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+		requests++
+		switch requests {
+		case 1:
+			return map[string]any{
+				"result":         "public_key",
+				"public_key_b64": base64.StdEncoding.EncodeToString(publicKey),
+			}
+		case 2:
+			if request["method"] != "sign" || request["self_ura"] != "easynet:///r/acme/hub" {
+				t.Fatalf("unexpected signing request: %#v", request)
+			}
+			if request["canonical_bytes_b64"] != base64.StdEncoding.EncodeToString(message) {
+				t.Fatalf("canonical bytes were not forwarded exactly: %#v", request)
+			}
+			return map[string]any{
+				"result":        "signature",
+				"signature_b64": base64.StdEncoding.EncodeToString(signature),
+			}
+		default:
+			t.Fatalf("unexpected extra keyring request: %#v", request)
+			return nil
+		}
 	})
-	if err != nil {
-		t.Fatalf("LoadRuntimeSigningIdentity primary: %v", err)
-	}
-	overlay, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA:   hubURA,
-		VaultPath:  path,
-		Passphrase: "passphrase",
-	})
-	if err != nil {
-		t.Fatalf("LoadRuntimeSigningIdentity overlay: %v", err)
-	}
-	if overlay.PrimaryURA != primaryURA || overlay.MatchedURA != hubURA {
-		t.Fatalf("overlay identity = %#v", overlay)
-	}
-	message := []byte("canonical authority bytes")
-	if string(ed25519.Sign(primary.PrivateKey, message)) != string(ed25519.Sign(overlay.PrivateKey, message)) {
-		t.Fatal("role overlay must sign with the same keypair as primary")
-	}
-}
-
-func TestLoadRuntimeSigningIdentityMissingOwnerFailsClosed(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "keyring.enc")
-	seed := runtimeIdentitySeedForTest(t)
-	sealRuntimeIdentityVaultForTest(t, path, "passphrase", []runtimeIdentityEntry{{
-		PrimarySelf: "easynet:///r/acme/device/dev-a",
-		SeedHex:     hex.EncodeToString(seed),
-	}})
-
-	_, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA:   "easynet:///r/acme/hub",
-		VaultPath:  path,
-		Passphrase: "passphrase",
-	})
-	if !errors.Is(err, ErrRuntimeIdentityNotFound) {
-		t.Fatalf("error = %v, want ErrRuntimeIdentityNotFound", err)
-	}
-}
-
-func TestLoadRuntimeSigningIdentityMissingVaultFailsClosed(t *testing.T) {
-	_, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA:   "easynet:///r/acme/hub",
-		VaultPath:  filepath.Join(t.TempDir(), "missing.enc"),
-		Passphrase: "passphrase",
-	})
-	if !errors.Is(err, ErrRuntimeIdentityVaultMissing) {
-		t.Fatalf("error = %v, want ErrRuntimeIdentityVaultMissing", err)
-	}
-}
-
-func TestEnsureRuntimeSigningIdentityCreatesLoadableVault(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "keyring.enc")
-	ownerURA := "easynet:///r/acme/hub"
-
-	created, err := EnsureRuntimeSigningIdentity(EnsureRuntimeSigningIdentityRequest{
-		OwnerURA:   ownerURA,
-		VaultPath:  path,
-		Passphrase: "passphrase",
-	})
-	if err != nil {
-		t.Fatalf("EnsureRuntimeSigningIdentity: %v", err)
-	}
-	if created.OwnerURA != ownerURA || created.PrimaryURA != ownerURA {
-		t.Fatalf("created identity = %#v", created)
-	}
-	loaded, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA:   ownerURA,
-		VaultPath:  path,
-		Passphrase: "passphrase",
-	})
+	identity, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{OwnerURA: "easynet:///r/acme/hub", SocketPath: socketPath})
 	if err != nil {
 		t.Fatalf("LoadRuntimeSigningIdentity: %v", err)
 	}
-	message := []byte("canonical runtime bytes")
-	if !bytes.Equal(ed25519.Sign(created.PrivateKey, message), ed25519.Sign(loaded.PrivateKey, message)) {
-		t.Fatal("ensured runtime identity did not persist")
+	actual, err := identity.Sign(message)
+	if err != nil {
+		t.Fatalf("identity.Sign: %v", err)
+	}
+	if string(actual) != string(signature) {
+		t.Fatal("signature did not match daemon response")
 	}
 }
 
-func TestEnsureRuntimeSigningIdentityReturnsExistingOverlay(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "keyring.enc")
-	seed := runtimeIdentitySeedForTest(t)
-	primaryURA := "easynet:///r/acme/device/dev-a"
-	hubURA := "easynet:///r/acme/hub"
-	sealRuntimeIdentityVaultForTest(t, path, "passphrase", []runtimeIdentityEntry{{
-		PrimarySelf:  primaryURA,
-		RoleOverlays: []string{hubURA},
-		SeedHex:      hex.EncodeToString(seed),
-	}})
-
+func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
+	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
+	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
+		if request["method"] != "ensure" || request["primary_self"] != "easynet:///r/acme/hub" {
+			t.Fatalf("unexpected ensure request: %#v", request)
+		}
+		if _, containsSeed := request["seed_hex"]; containsSeed {
+			t.Fatal("SDK must not generate or transmit key seeds")
+		}
+		return map[string]any{
+			"result":         "public_key",
+			"public_key_b64": base64.StdEncoding.EncodeToString(publicKey),
+		}
+	})
 	identity, err := EnsureRuntimeSigningIdentity(EnsureRuntimeSigningIdentityRequest{
-		OwnerURA:   hubURA,
-		VaultPath:  path,
-		Passphrase: "passphrase",
+		OwnerURA:     "easynet:///r/acme/hub",
+		RoleOverlays: []string{"easynet:///r/acme/device/node-a"},
+		SocketPath:   socketPath,
 	})
 	if err != nil {
 		t.Fatalf("EnsureRuntimeSigningIdentity: %v", err)
 	}
-	if identity.PrimaryURA != primaryURA || identity.MatchedURA != hubURA {
-		t.Fatalf("identity = %#v", identity)
-	}
-	wantPublic := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
-	gotPublic := identity.PrivateKey.Public().(ed25519.PublicKey)
-	if !gotPublic.Equal(wantPublic) {
-		t.Fatal("ensure must return existing overlay keypair")
+	if !identity.PublicKey.Equal(publicKey) {
+		t.Fatal("ensure returned the wrong public key")
 	}
 }
 
-func runtimeIdentitySeedForTest(t *testing.T) []byte {
+func startRuntimeKeyringTestServer(t *testing.T, handle func(map[string]any) map[string]any) string {
 	t.Helper()
-	seed := make([]byte, runtimeIdentityEd25519SeedLen)
-	if _, err := rand.Read(seed); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	return seed
-}
-
-func sealRuntimeIdentityVaultForTest(
-	t *testing.T,
-	path string,
-	passphrase string,
-	entries []runtimeIdentityEntry,
-) {
-	t.Helper()
-	salt := make([]byte, runtimeIdentityKDFSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		t.Fatalf("salt: %v", err)
-	}
-	nonce := make([]byte, runtimeIdentityAESNonceLen)
-	if _, err := rand.Read(nonce); err != nil {
-		t.Fatalf("nonce: %v", err)
-	}
-	masterKey := argon2.IDKey(
-		[]byte(passphrase),
-		salt,
-		runtimeIdentityKDFTimeCost,
-		runtimeIdentityKDFMemoryKiB,
-		runtimeIdentityKDFParallelism,
-		runtimeIdentityKDFKeyLen,
-	)
-	plaintext, err := json.Marshal(runtimeIdentityVaultPlaintext{Entries: entries})
+	dir, err := os.MkdirTemp("/tmp", "easynet-keyring-")
 	if err != nil {
-		t.Fatalf("marshal plaintext: %v", err)
+		t.Fatalf("create keyring test directory: %v", err)
 	}
-	block, err := aes.NewCipher(masterKey)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "keyring.sock")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
 	if err != nil {
-		t.Fatalf("aes: %v", err)
+		t.Fatalf("listen keyring test socket: %v", err)
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		t.Fatalf("gcm: %v", err)
-	}
-	file := runtimeIdentityVaultFile{
-		Version:            runtimeIdentityCurrentVersion,
-		KDFSaltB64:         base64.StdEncoding.EncodeToString(salt),
-		VaultNonceB64:      base64.StdEncoding.EncodeToString(nonce),
-		VaultCiphertextB64: base64.StdEncoding.EncodeToString(gcm.Seal(nil, nonce, plaintext, nil)),
-	}
-	raw, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal file: %v", err)
-	}
-	raw = append(raw, '\n')
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatalf("write vault: %v", err)
-	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			connection, err := listener.AcceptUnix()
+			if err != nil {
+				return
+			}
+			func() {
+				defer connection.Close()
+				_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+				var length [4]byte
+				if _, err := io.ReadFull(connection, length[:]); err != nil {
+					return
+				}
+				body := make([]byte, binary.BigEndian.Uint32(length[:]))
+				if _, err := io.ReadFull(connection, body); err != nil {
+					return
+				}
+				var request map[string]any
+				if err := json.Unmarshal(body, &request); err != nil {
+					t.Errorf("decode keyring request: %v", err)
+					return
+				}
+				response, err := json.Marshal(handle(request))
+				if err != nil {
+					t.Errorf("encode keyring response: %v", err)
+					return
+				}
+				binary.BigEndian.PutUint32(length[:], uint32(len(response)))
+				_, _ = connection.Write(length[:])
+				_, _ = connection.Write(response)
+			}()
+		}
+	}()
+	return socketPath
 }

@@ -630,6 +630,14 @@ pub fn fresh_salt_string() -> SaltString {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum KeyringRequest {
+    /// Ensure a runtime owner has a signing identity. The keyring generates
+    /// the seed itself when absent and returns only the corresponding public
+    /// key. Callers never provide or receive private key material.
+    Ensure {
+        primary_self: String,
+        #[serde(default)]
+        role_overlays: Vec<String>,
+    },
     /// Insert a fresh entry. Pairing flow only.
     Put {
         primary_self: String,

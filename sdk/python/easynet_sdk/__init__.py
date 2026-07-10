@@ -425,6 +425,13 @@ from .signing import (
     SigningMaterial,
     StaticSignatureProvider,
 )
+from .runtime_identity import (
+    DaemonKeyringSignatureProvider,
+    RuntimeSigningIdentity,
+    default_runtime_keyring_socket_path,
+    ensure_runtime_signing_identity,
+    load_runtime_signing_identity,
+)
 from .stream import (
     MAX_STREAM_BUFFERED_EVENTS,
     StreamCancel,
@@ -621,6 +628,7 @@ __all__ = [
     "DaemonMode",
     "DaemonStatus",
     "DaemonTransport",
+    "DaemonKeyringSignatureProvider",
     "CompanionTransport",
     "DesktopCompanionActionResult",
     "DesktopCompanionList",
@@ -819,6 +827,7 @@ __all__ = [
     "RuntimeConnector",
     "RuntimeEndpoint",
     "RuntimeHealth",
+    "RuntimeSigningIdentity",
     "RuntimeReceipt",
     "RuntimeError",
     "RuntimeTransport",
@@ -835,6 +844,9 @@ __all__ = [
     "SignerPolicy",
     "SigningMaterial",
     "StaticSignatureProvider",
+    "default_runtime_keyring_socket_path",
+    "ensure_runtime_signing_identity",
+    "load_runtime_signing_identity",
     "SigningKeyListRequest",
     "SigningKeyPage",
     "SigningKeyRecord",

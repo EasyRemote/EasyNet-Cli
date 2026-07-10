@@ -1,402 +1,282 @@
 package easynet
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"golang.org/x/crypto/argon2"
+	"time"
 )
 
-const (
-	runtimeIdentityKDFMemoryKiB    uint32 = 64 * 1024
-	runtimeIdentityKDFTimeCost     uint32 = 3
-	runtimeIdentityKDFParallelism  uint8  = 4
-	runtimeIdentityKDFKeyLen       uint32 = 32
-	runtimeIdentityKDFSaltLen      int    = 16
-	runtimeIdentityAESNonceLen     int    = 12
-	runtimeIdentityEd25519SeedLen  int    = 32
-	runtimeIdentityCurrentVersion  uint32 = 1
-	runtimeIdentityDefaultVaultRel string = ".easynet/keyring.enc"
-)
+const runtimeKeyringMaxFrameBytes = 64 * 1024
 
 var (
-	ErrRuntimeIdentityNotFound     = errors.New("runtime identity: owner URA not in keyring")
-	ErrRuntimeIdentityVaultMissing = errors.New("runtime identity: keyring vault missing")
+	ErrRuntimeIdentityNotFound    = errors.New("runtime identity: owner URA not in daemon keyring")
+	ErrRuntimeIdentityUnavailable = errors.New("runtime identity: daemon keyring unavailable")
 )
 
-// RuntimeSigningIdentity is SDK-owned signing material for one runtime owner.
-// It is generic runtime identity, not a product-specific backend or hub type.
+// RuntimeSigningIdentity is an opaque daemon-owned signing capability. It
+// intentionally exposes the public key and signing operation, never seed or
+// private-key bytes.
 type RuntimeSigningIdentity struct {
-	OwnerURA   string
-	MatchedURA string
-	PrimaryURA string
-	PrivateKey ed25519.PrivateKey
+	OwnerURA  string
+	PublicKey ed25519.PublicKey
+	signer    runtimeKeyringSigner
 }
 
-// RuntimeSigningIdentityRequest describes a keyring-backed signing identity
-// lookup. OwnerURA may match either the primary runtime identity or an
-// authorized role overlay.
+// CanonicalSigner is a narrow signing capability for canonical payloads. It
+// is shared by invocation and authority projections so facades never need an
+// Ed25519 private key merely to attach a signature.
+type CanonicalSigner interface {
+	SignCanonical(canonicalBytes []byte) ([]byte, error)
+	SigningPublicKey() (ed25519.PublicKey, error)
+}
+
+// Sign attaches an Ed25519 signature to canonical bytes through the daemon
+// keyring. Canonicalization remains the caller's domain; key custody does not.
+func (i RuntimeSigningIdentity) Sign(canonicalBytes []byte) ([]byte, error) {
+	if i.signer == nil {
+		return nil, invalidRuntimeClient("runtime signing identity is not initialized")
+	}
+	return i.signer.sign(i.OwnerURA, canonicalBytes)
+}
+
+func (i RuntimeSigningIdentity) SignCanonical(canonicalBytes []byte) ([]byte, error) {
+	return i.Sign(canonicalBytes)
+}
+
+func (i RuntimeSigningIdentity) SigningPublicKey() (ed25519.PublicKey, error) {
+	if len(i.PublicKey) != ed25519.PublicKeySize {
+		return nil, invalidRuntimeClient("runtime signing identity has no valid public key")
+	}
+	return append(ed25519.PublicKey(nil), i.PublicKey...), nil
+}
+
+// RuntimeSigningIdentityRequest resolves an existing daemon-owned identity.
+// VaultPath and Passphrase are intentionally not part of this API: the SDK
+// never opens the vault and the keyring daemon owns its lifecycle.
 type RuntimeSigningIdentityRequest struct {
 	OwnerURA   string
-	VaultPath  string
-	Passphrase string
+	SocketPath string
+	Timeout    time.Duration
 }
 
-// EnsureRuntimeSigningIdentityRequest describes a runtime identity provisioning
-// request. OwnerURA becomes the primary runtime identity when a new key is
-// created; RoleOverlays are additional URAs authorized to sign with the same
-// keypair.
+// EnsureRuntimeSigningIdentityRequest provisions an identity in the daemon
+// keyring. The daemon generates the key and returns only its public projection.
 type EnsureRuntimeSigningIdentityRequest struct {
 	OwnerURA     string
 	RoleOverlays []string
-	VaultPath    string
-	Passphrase   string
+	SocketPath   string
+	Timeout      time.Duration
 }
 
-// DefaultRuntimeIdentityVaultPath returns the EasyNet-Cli SDK keyring vault
-// path used by the local daemon runtime.
-func DefaultRuntimeIdentityVaultPath() (string, error) {
-	if p := os.Getenv("EASYNET_KEYRING_VAULT_PATH"); p != "" {
-		return p, nil
+// DefaultRuntimeIdentitySocketPath resolves the canonical daemon keyring UDS
+// endpoint. It is an endpoint locator, not a vault-file fallback.
+func DefaultRuntimeIdentitySocketPath() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("EASYNET_KEYRING_SOCKET_PATH")); path != "" {
+		return path, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("user home dir: %w", err)
+		return "", fmt.Errorf("resolve user home for keyring socket: %w", err)
 	}
-	return filepath.Join(home, runtimeIdentityDefaultVaultRel), nil
+	return filepath.Join(home, ".easynet", "keyring.sock"), nil
 }
 
-// LoadRuntimeSigningIdentity resolves one owner signing identity from the
-// daemon SDK keyring provider. It never creates keys and never falls back to a
-// product-owned identity file.
+// LoadRuntimeSigningIdentity resolves an existing identity without reading a
+// keyring file or materializing private-key bytes in the facade process.
 func LoadRuntimeSigningIdentity(req RuntimeSigningIdentityRequest) (RuntimeSigningIdentity, error) {
-	ownerURA, path, passphrase, err := normalizeRuntimeIdentityRequest(req.OwnerURA, req.VaultPath, req.Passphrase)
+	owner, signer, err := newRuntimeKeyringSigner(req.OwnerURA, req.SocketPath, req.Timeout)
 	if err != nil {
 		return RuntimeSigningIdentity{}, err
 	}
-	vault, err := openRuntimeIdentityVault(path, passphrase)
+	publicKey, err := signer.publicKey(owner)
 	if err != nil {
 		return RuntimeSigningIdentity{}, err
 	}
-	return vault.lookup(ownerURA)
+	return RuntimeSigningIdentity{OwnerURA: owner, PublicKey: publicKey, signer: signer}, nil
 }
 
-// EnsureRuntimeSigningIdentity returns the existing runtime identity for
-// OwnerURA, or creates one in the daemon SDK keyring when the owner is absent.
-// It is a generic runtime provisioning primitive; product-specific concepts
-// such as "backend", "hub", or "remote" do not belong here.
+// EnsureRuntimeSigningIdentity asks the daemon keyring to provision the owner
+// when absent. The facade never participates in seed generation or storage.
 func EnsureRuntimeSigningIdentity(req EnsureRuntimeSigningIdentityRequest) (RuntimeSigningIdentity, error) {
-	ownerURA, path, passphrase, err := normalizeRuntimeIdentityRequest(req.OwnerURA, req.VaultPath, req.Passphrase)
+	owner, signer, err := newRuntimeKeyringSigner(req.OwnerURA, req.SocketPath, req.Timeout)
 	if err != nil {
 		return RuntimeSigningIdentity{}, err
 	}
-	vault, err := openOrInitRuntimeIdentityVault(path, passphrase)
+	publicKey, err := signer.ensure(owner, req.RoleOverlays)
 	if err != nil {
 		return RuntimeSigningIdentity{}, err
 	}
-	if identity, err := vault.lookup(ownerURA); err == nil {
-		return identity, nil
-	} else if !errors.Is(err, ErrRuntimeIdentityNotFound) {
-		return RuntimeSigningIdentity{}, err
-	}
-	seed := make([]byte, runtimeIdentityEd25519SeedLen)
-	if _, err := rand.Read(seed); err != nil {
-		return RuntimeSigningIdentity{}, fmt.Errorf("generate runtime signing seed: %w", err)
-	}
-	entry := runtimeIdentityEntry{
-		PrimarySelf:  ownerURA,
-		RoleOverlays: normalizeRuntimeIdentityOverlays(req.RoleOverlays, ownerURA),
-		SeedHex:      hex.EncodeToString(seed),
-	}
-	vault.entries = append(vault.entries, entry)
-	if err := vault.seal(); err != nil {
-		return RuntimeSigningIdentity{}, err
-	}
-	return runtimeIdentityFromEntry(&entry, entry.PrimarySelf, entry.PrimarySelf)
+	return RuntimeSigningIdentity{OwnerURA: owner, PublicKey: publicKey, signer: signer}, nil
 }
 
-func normalizeRuntimeIdentityRequest(ownerURA string, vaultPath string, passphrase string) (string, string, string, error) {
+type runtimeKeyringSigner interface {
+	sign(ownerURA string, canonicalBytes []byte) ([]byte, error)
+	publicKey(ownerURA string) (ed25519.PublicKey, error)
+	ensure(ownerURA string, roleOverlays []string) (ed25519.PublicKey, error)
+}
+
+type runtimeKeyringClient struct {
+	socketPath string
+	timeout    time.Duration
+}
+
+func newRuntimeKeyringSigner(ownerURA, socketPath string, timeout time.Duration) (string, runtimeKeyringSigner, error) {
 	ownerURA = strings.TrimSpace(ownerURA)
 	if ownerURA == "" {
-		return "", "", "", invalidRuntimeClient("runtime signing identity owner URA is required")
+		return "", nil, invalidRuntimeClient("runtime signing identity owner URA is required")
 	}
-	if passphrase == "" {
-		passphrase = os.Getenv("EASYNET_KEYRING_PASSPHRASE")
-	}
-	if passphrase == "" {
-		return "", "", "", invalidRuntimeClient("EASYNET_KEYRING_PASSPHRASE is required to open the runtime keyring")
-	}
-	if vaultPath == "" {
+	if socketPath == "" {
 		var err error
-		vaultPath, err = DefaultRuntimeIdentityVaultPath()
+		socketPath, err = DefaultRuntimeIdentitySocketPath()
 		if err != nil {
-			return "", "", "", err
+			return "", nil, err
 		}
 	}
-	return ownerURA, vaultPath, passphrase, nil
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return ownerURA, runtimeKeyringClient{socketPath: socketPath, timeout: timeout}, nil
+}
+
+func (c runtimeKeyringClient) sign(ownerURA string, canonicalBytes []byte) ([]byte, error) {
+	if len(canonicalBytes) == 0 {
+		return nil, invalidRuntimeClient("canonical bytes are required for runtime signing")
+	}
+	response, err := c.call(map[string]any{
+		"method":              "sign",
+		"self_ura":            ownerURA,
+		"canonical_bytes_b64": base64.StdEncoding.EncodeToString(canonicalBytes),
+	})
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := runtimeKeyringResponseString(response, "signature_b64")
+	if err != nil {
+		return nil, err
+	}
+	signature, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return nil, invalidRuntimePayload("daemon keyring returned an invalid Ed25519 signature", err)
+	}
+	return signature, nil
+}
+
+func (c runtimeKeyringClient) publicKey(ownerURA string) (ed25519.PublicKey, error) {
+	response, err := c.call(map[string]any{"method": "derive_pubkey", "self_ura": ownerURA})
+	if err != nil {
+		return nil, err
+	}
+	return runtimeKeyringPublicKey(response)
+}
+
+func (c runtimeKeyringClient) ensure(ownerURA string, roleOverlays []string) (ed25519.PublicKey, error) {
+	response, err := c.call(map[string]any{
+		"method":        "ensure",
+		"primary_self":  ownerURA,
+		"role_overlays": normalizeRuntimeIdentityOverlays(roleOverlays, ownerURA),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return runtimeKeyringPublicKey(response)
+}
+
+func (c runtimeKeyringClient) call(request map[string]any) (map[string]json.RawMessage, error) {
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return nil, invalidRuntimeClient(fmt.Sprintf("encode daemon keyring request: %v", err))
+	}
+	if len(encoded) > runtimeKeyringMaxFrameBytes {
+		return nil, invalidRuntimeClient("daemon keyring request exceeds frame limit")
+	}
+	connection, err := net.DialTimeout("unix", c.socketPath, c.timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%w at %s: %v", ErrRuntimeIdentityUnavailable, c.socketPath, err)
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(c.timeout)); err != nil {
+		return nil, fmt.Errorf("set daemon keyring deadline: %w", err)
+	}
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(encoded)))
+	if _, err := connection.Write(length[:]); err != nil {
+		return nil, fmt.Errorf("write daemon keyring frame length: %w", err)
+	}
+	if _, err := connection.Write(encoded); err != nil {
+		return nil, fmt.Errorf("write daemon keyring frame: %w", err)
+	}
+	if _, err := io.ReadFull(connection, length[:]); err != nil {
+		return nil, fmt.Errorf("read daemon keyring frame length: %w", err)
+	}
+	responseLen := binary.BigEndian.Uint32(length[:])
+	if responseLen > runtimeKeyringMaxFrameBytes {
+		return nil, invalidRuntimePayload("daemon keyring response exceeds frame limit", nil)
+	}
+	response := make([]byte, responseLen)
+	if _, err := io.ReadFull(connection, response); err != nil {
+		return nil, fmt.Errorf("read daemon keyring frame: %w", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(response, &decoded); err != nil {
+		return nil, invalidRuntimePayload("decode daemon keyring response", err)
+	}
+	if result, _ := runtimeKeyringResponseString(decoded, "result"); result == "error" {
+		kind, _ := runtimeKeyringResponseString(decoded, "kind")
+		message, _ := runtimeKeyringResponseString(decoded, "message")
+		if kind == "not_found" {
+			return nil, fmt.Errorf("%w: %s", ErrRuntimeIdentityNotFound, message)
+		}
+		return nil, fmt.Errorf("daemon keyring rejected request (%s): %s", kind, message)
+	}
+	return decoded, nil
+}
+
+func runtimeKeyringPublicKey(response map[string]json.RawMessage) (ed25519.PublicKey, error) {
+	encoded, err := runtimeKeyringResponseString(response, "public_key_b64")
+	if err != nil {
+		return nil, err
+	}
+	publicKey, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return nil, invalidRuntimePayload("daemon keyring returned an invalid Ed25519 public key", err)
+	}
+	return ed25519.PublicKey(publicKey), nil
+}
+
+func runtimeKeyringResponseString(response map[string]json.RawMessage, field string) (string, error) {
+	raw, ok := response[field]
+	if !ok {
+		return "", invalidRuntimePayload(fmt.Sprintf("daemon keyring response missing %s", field), nil)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", invalidRuntimePayload(fmt.Sprintf("daemon keyring response field %s is not a string", field), err)
+	}
+	return value, nil
 }
 
 func normalizeRuntimeIdentityOverlays(overlays []string, ownerURA string) []string {
-	out := make([]string, 0, len(overlays))
 	seen := map[string]struct{}{ownerURA: {}}
+	out := make([]string, 0, len(overlays))
 	for _, overlay := range overlays {
 		overlay = strings.TrimSpace(overlay)
 		if overlay == "" {
 			continue
 		}
-		if _, ok := seen[overlay]; ok {
+		if _, exists := seen[overlay]; exists {
 			continue
 		}
 		seen[overlay] = struct{}{}
 		out = append(out, overlay)
 	}
 	return out
-}
-
-type runtimeIdentityVaultFile struct {
-	Version            uint32 `json:"version"`
-	KDFSaltB64         string `json:"kdf_salt_b64"`
-	VaultNonceB64      string `json:"vault_nonce_b64"`
-	VaultCiphertextB64 string `json:"vault_ciphertext_b64"`
-}
-
-type runtimeIdentityVaultPlaintext struct {
-	Entries []runtimeIdentityEntry `json:"entries"`
-}
-
-type runtimeIdentityEntry struct {
-	PrimarySelf  string   `json:"primary_self"`
-	RoleOverlays []string `json:"role_overlays"`
-	SeedHex      string   `json:"seed_hex"`
-}
-
-type runtimeIdentityVault struct {
-	path      string
-	salt      []byte
-	masterKey []byte
-	entries   []runtimeIdentityEntry
-}
-
-func openRuntimeIdentityVault(path string, passphrase string) (*runtimeIdentityVault, error) {
-	return openRuntimeIdentityVaultMode(path, passphrase, false)
-}
-
-func openOrInitRuntimeIdentityVault(path string, passphrase string) (*runtimeIdentityVault, error) {
-	return openRuntimeIdentityVaultMode(path, passphrase, true)
-}
-
-func openRuntimeIdentityVaultMode(path string, passphrase string, initIfMissing bool) (*runtimeIdentityVault, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if initIfMissing {
-				return initRuntimeIdentityVault(path, passphrase)
-			}
-			return nil, ErrRuntimeIdentityVaultMissing
-		}
-		return nil, fmt.Errorf("read runtime keyring: %w", err)
-	}
-	var file runtimeIdentityVaultFile
-	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, fmt.Errorf("parse runtime keyring %q: %w", path, err)
-	}
-	if file.Version != runtimeIdentityCurrentVersion {
-		return nil, fmt.Errorf(
-			"runtime keyring version %d unsupported (expected %d)",
-			file.Version,
-			runtimeIdentityCurrentVersion,
-		)
-	}
-	salt, err := decodeRuntimeIdentityFixed(file.KDFSaltB64, runtimeIdentityKDFSaltLen, "kdf_salt")
-	if err != nil {
-		return nil, err
-	}
-	nonce, err := decodeRuntimeIdentityFixed(file.VaultNonceB64, runtimeIdentityAESNonceLen, "vault_nonce")
-	if err != nil {
-		return nil, err
-	}
-	ciphertext, err := base64.StdEncoding.DecodeString(file.VaultCiphertextB64)
-	if err != nil {
-		return nil, fmt.Errorf("base64 vault_ciphertext: %w", err)
-	}
-	masterKey := argon2.IDKey(
-		[]byte(passphrase),
-		salt,
-		runtimeIdentityKDFTimeCost,
-		runtimeIdentityKDFMemoryKiB,
-		runtimeIdentityKDFParallelism,
-		runtimeIdentityKDFKeyLen,
-	)
-	plaintext, err := decryptRuntimeIdentityAESGCM(masterKey, nonce, ciphertext)
-	if err != nil {
-		zeroRuntimeIdentityBytes(masterKey)
-		return nil, fmt.Errorf("runtime keyring decrypt: %w", err)
-	}
-	var decoded runtimeIdentityVaultPlaintext
-	if err := json.Unmarshal(plaintext, &decoded); err != nil {
-		zeroRuntimeIdentityBytes(masterKey)
-		return nil, fmt.Errorf("parse decrypted runtime keyring: %w", err)
-	}
-	return &runtimeIdentityVault{
-		path:      path,
-		salt:      salt,
-		masterKey: masterKey,
-		entries:   decoded.Entries,
-	}, nil
-}
-
-func initRuntimeIdentityVault(path string, passphrase string) (*runtimeIdentityVault, error) {
-	salt := make([]byte, runtimeIdentityKDFSaltLen)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("generate runtime keyring salt: %w", err)
-	}
-	masterKey := deriveRuntimeIdentityMasterKey(passphrase, salt)
-	return &runtimeIdentityVault{
-		path:      path,
-		salt:      salt,
-		masterKey: masterKey,
-		entries:   nil,
-	}, nil
-}
-
-func (v *runtimeIdentityVault) lookup(ownerURA string) (RuntimeSigningIdentity, error) {
-	for i := range v.entries {
-		entry := &v.entries[i]
-		if strings.TrimSpace(entry.PrimarySelf) == ownerURA {
-			return runtimeIdentityFromEntry(entry, entry.PrimarySelf, entry.PrimarySelf)
-		}
-		for _, overlay := range entry.RoleOverlays {
-			if strings.TrimSpace(overlay) == ownerURA {
-				return runtimeIdentityFromEntry(entry, overlay, entry.PrimarySelf)
-			}
-		}
-	}
-	return RuntimeSigningIdentity{}, ErrRuntimeIdentityNotFound
-}
-
-func runtimeIdentityFromEntry(
-	entry *runtimeIdentityEntry,
-	matchedURA string,
-	primaryURA string,
-) (RuntimeSigningIdentity, error) {
-	seed, err := hex.DecodeString(entry.SeedHex)
-	if err != nil {
-		return RuntimeSigningIdentity{}, fmt.Errorf("runtime keyring seed_hex decode: %w", err)
-	}
-	if len(seed) != runtimeIdentityEd25519SeedLen {
-		return RuntimeSigningIdentity{}, fmt.Errorf(
-			"runtime keyring seed length: expected %d, got %d",
-			runtimeIdentityEd25519SeedLen,
-			len(seed),
-		)
-	}
-	return RuntimeSigningIdentity{
-		OwnerURA:   strings.TrimSpace(matchedURA),
-		MatchedURA: strings.TrimSpace(matchedURA),
-		PrimaryURA: strings.TrimSpace(primaryURA),
-		PrivateKey: ed25519.NewKeyFromSeed(seed),
-	}, nil
-}
-
-func (v *runtimeIdentityVault) seal() error {
-	if v.path == "" {
-		return invalidRuntimeClient("runtime keyring path is required")
-	}
-	nonce := make([]byte, runtimeIdentityAESNonceLen)
-	if _, err := rand.Read(nonce); err != nil {
-		return fmt.Errorf("generate runtime keyring nonce: %w", err)
-	}
-	plaintext, err := json.Marshal(runtimeIdentityVaultPlaintext{Entries: v.entries})
-	if err != nil {
-		return fmt.Errorf("encode runtime keyring plaintext: %w", err)
-	}
-	ciphertext, err := encryptRuntimeIdentityAESGCM(v.masterKey, nonce, plaintext)
-	if err != nil {
-		return fmt.Errorf("runtime keyring encrypt: %w", err)
-	}
-	file := runtimeIdentityVaultFile{
-		Version:            runtimeIdentityCurrentVersion,
-		KDFSaltB64:         base64.StdEncoding.EncodeToString(v.salt),
-		VaultNonceB64:      base64.StdEncoding.EncodeToString(nonce),
-		VaultCiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
-	}
-	raw, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode runtime keyring file: %w", err)
-	}
-	raw = append(raw, '\n')
-	if err := os.MkdirAll(filepath.Dir(v.path), 0o700); err != nil {
-		return fmt.Errorf("create runtime keyring directory: %w", err)
-	}
-	tmp := v.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return fmt.Errorf("write runtime keyring: %w", err)
-	}
-	if err := os.Rename(tmp, v.path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("commit runtime keyring: %w", err)
-	}
-	return nil
-}
-
-func decodeRuntimeIdentityFixed(value string, size int, field string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return nil, fmt.Errorf("base64 %s: %w", field, err)
-	}
-	if len(raw) != size {
-		return nil, fmt.Errorf("%s length: expected %d, got %d", field, size, len(raw))
-	}
-	return raw, nil
-}
-
-func deriveRuntimeIdentityMasterKey(passphrase string, salt []byte) []byte {
-	return argon2.IDKey(
-		[]byte(passphrase),
-		salt,
-		runtimeIdentityKDFTimeCost,
-		runtimeIdentityKDFMemoryKiB,
-		runtimeIdentityKDFParallelism,
-		runtimeIdentityKDFKeyLen,
-	)
-}
-
-func decryptRuntimeIdentityAESGCM(key []byte, nonce []byte, ciphertext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("aes: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("gcm: %w", err)
-	}
-	return gcm.Open(nil, nonce, ciphertext, nil)
-}
-
-func encryptRuntimeIdentityAESGCM(key []byte, nonce []byte, plaintext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("aes: %w", err)
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("gcm: %w", err)
-	}
-	return gcm.Seal(nil, nonce, plaintext, nil), nil
-}
-
-func zeroRuntimeIdentityBytes(value []byte) {
-	for i := range value {
-		value[i] = 0
-	}
 }

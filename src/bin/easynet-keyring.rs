@@ -214,6 +214,32 @@ where
 
 async fn dispatch(req: KeyringRequest, vault: &Arc<Mutex<Vault>>) -> KeyringResponse {
     match req {
+        KeyringRequest::Ensure {
+            primary_self,
+            role_overlays,
+        } => {
+            let mut guard = vault.lock().await;
+            if !guard.contains(&primary_self) {
+                use rand::RngCore;
+                let mut seed = [0u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut seed);
+                if let Err(err) = guard.put(&primary_self, role_overlays, hex::encode(seed)) {
+                    return vault_error_to_response(err);
+                }
+                if let Err(err) = guard.seal() {
+                    return vault_error_to_response(err);
+                }
+            }
+            match guard.derive_pubkey(&primary_self) {
+                Ok(pk) => KeyringResponse::PublicKey {
+                    public_key_b64: {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD.encode(pk.to_bytes())
+                    },
+                },
+                Err(err) => vault_error_to_response(err),
+            }
+        }
         KeyringRequest::Put {
             primary_self,
             role_overlays,

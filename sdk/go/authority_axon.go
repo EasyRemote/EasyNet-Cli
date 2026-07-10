@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	axonsdk "easynet.run/axon/sdk/go/easynet"
@@ -43,6 +44,30 @@ func (p *DelegationProof) Sign(privateKey ed25519.PrivateKey) error {
 		return err
 	}
 	p.Signature = append(p.Signature[:0], proof.Signature...)
+	p.metadataValue = ""
+	return nil
+}
+
+// SignWith signs this delegated authority through an opaque runtime signer.
+func (p *DelegationProof) SignWith(signer CanonicalSigner) error {
+	if p == nil {
+		return invalidInvocation("delegation authority is required", nil)
+	}
+	if signer == nil {
+		return invalidInvocation("delegation signer is required", nil)
+	}
+	payload, err := p.CanonicalPayload()
+	if err != nil {
+		return err
+	}
+	signature, err := signer.SignCanonical(payload)
+	if err != nil {
+		return fmt.Errorf("sign delegation authority: %w", err)
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return invalidInvocation("delegation signer returned an invalid Ed25519 signature", nil)
+	}
+	p.Signature = append(p.Signature[:0], signature...)
 	p.metadataValue = ""
 	return nil
 }
@@ -154,6 +179,30 @@ func (a *SessionAuthority) Sign(privateKey ed25519.PrivateKey) error {
 		return err
 	}
 	a.Signature = append(a.Signature[:0], ed25519.Sign(privateKey, payload)...)
+	a.metadataValue = ""
+	return nil
+}
+
+// SignWith signs this session authority through an opaque runtime signer.
+func (a *SessionAuthority) SignWith(signer CanonicalSigner) error {
+	if a == nil {
+		return invalidInvocation("session authority is required", nil)
+	}
+	if signer == nil {
+		return invalidInvocation("session authority signer is required", nil)
+	}
+	payload, err := a.CanonicalPayload()
+	if err != nil {
+		return err
+	}
+	signature, err := signer.SignCanonical(payload)
+	if err != nil {
+		return fmt.Errorf("sign session authority: %w", err)
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return invalidInvocation("session authority signer returned an invalid Ed25519 signature", nil)
+	}
+	a.Signature = append(a.Signature[:0], signature...)
 	a.metadataValue = ""
 	return nil
 }

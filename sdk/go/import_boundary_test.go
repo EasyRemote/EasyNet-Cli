@@ -139,7 +139,7 @@ func TestPublicGoSDKDoesNotAliasAxonBridgeTypes(t *testing.T) {
 	}
 }
 
-func TestTrackedGoSDKSourcesKeepKeyringPersistenceInRuntimeIdentityProvider(t *testing.T) {
+func TestTrackedGoSDKSourcesDoNotOwnKeyringPersistence(t *testing.T) {
 	root := gitRepositoryRoot(t)
 	cmd := exec.Command("git", "-C", root, "ls-files", "-z", "--", "sdk/go/*.go")
 	output, err := cmd.Output()
@@ -158,9 +158,6 @@ func TestTrackedGoSDKSourcesKeepKeyringPersistenceInRuntimeIdentityProvider(t *t
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		if filepath.Base(path) == "runtime_identity.go" {
-			continue
-		}
 		for _, marker := range []string{
 			"keyring.enc",
 			"VaultCiphertextB64",
@@ -168,7 +165,7 @@ func TestTrackedGoSDKSourcesKeepKeyringPersistenceInRuntimeIdentityProvider(t *t
 			"argon2.IDKey(",
 		} {
 			if strings.Contains(string(body), marker) {
-				t.Fatalf("%s owns runtime keyring persistence marker %q; keep key custody in runtime_identity.go", path, marker)
+				t.Fatalf("%s owns runtime keyring persistence marker %q; key custody belongs to the daemon keyring service", path, marker)
 			}
 		}
 	}

@@ -119,9 +119,9 @@
       },
       "python": {
         "status": "provider-backed",
-        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_signing.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
+        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_signing.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_runtime_identity.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "SDK-owned signer workflow acquisition plus signer-handle provenance and policy-proof guardrails exist; daemon-core keyring-backed local signing now preserves signer policy proof on SignedInvocation; C ABI exposes a daemon-keyring sign_prepared_local transition; Go/Python C ABI transports select caller-signing vs local-daemon signing from SignedInvocation.policy.mode; and Go/Python direct runtimes can compose an SDK-owned handle transport for prepare/submit/handle operations with explicit ownership. Backend SDK-only runtime cutover and Python non-CABI live daemon keyring transport cutover remain incomplete."
+      "remaining": "Go and Python expose daemon-keyring public-key, ensure, and canonical-byte signing providers over the shared local protocol. C ABI still owns local prepare/submit execution, and the remaining cutover is replacing its legacy keyring inventory implementation with that canonical service."
     },
     {
       "capability_id": "unary_invoke",
