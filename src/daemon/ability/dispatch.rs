@@ -101,6 +101,8 @@ pub struct EnvelopeContext {
     causal_context: Value,
     caller_signature: EnvelopeCallerSignature,
     hosted_agent_delegation: Option<HostedAgentDelegationContext>,
+    session_authority:
+        Option<crate::daemon::invocation::admission::authority_metadata::SessionAuthorityPayload>,
 }
 
 pub struct EnvelopeContextParts {
@@ -182,6 +184,7 @@ impl EnvelopeContext {
             causal_context: parts.causal_context,
             caller_signature: parts.caller_signature,
             hosted_agent_delegation: None,
+            session_authority: None,
         })
     }
 
@@ -192,6 +195,19 @@ impl EnvelopeContext {
         hosted_agent_delegation: Option<HostedAgentDelegationContext>,
     ) -> Self {
         self.hosted_agent_delegation = hosted_agent_delegation;
+        self
+    }
+
+    /// Attach the post-admission session authority projection. The adapter
+    /// owns construction; handlers receive only typed binding facts.
+    #[must_use]
+    pub(crate) fn with_session_authority(
+        mut self,
+        session_authority: Option<
+            crate::daemon::invocation::admission::authority_metadata::SessionAuthorityPayload,
+        >,
+    ) -> Self {
+        self.session_authority = session_authority;
         self
     }
 
@@ -276,6 +292,14 @@ impl EnvelopeContext {
     #[must_use]
     pub fn hosted_agent_delegation(&self) -> Option<&HostedAgentDelegationContext> {
         self.hosted_agent_delegation.as_ref()
+    }
+
+    #[must_use]
+    pub(crate) fn session_authority(
+        &self,
+    ) -> Option<&crate::daemon::invocation::admission::authority_metadata::SessionAuthorityPayload>
+    {
+        self.session_authority.as_ref()
     }
 }
 
@@ -812,6 +836,10 @@ async fn envelope_context_from_axon(
     })?;
     let hosted_agent_delegation =
         parse_hosted_agent_delegation_context(&ctx.request_metadata, &hosted_agent_envelope)?;
+    let session_authority = crate::daemon::invocation::admission::authority_metadata::project_admitted_session_authority(
+        &ctx.request_metadata,
+    )
+    .map_err(|err| AxonError::invalid_argument(format!("session_authority: {err}")))?;
     EnvelopeContext::new(EnvelopeContextParts {
         invocation_id: ctx.invocation_id.clone(),
         caller,
@@ -822,7 +850,11 @@ async fn envelope_context_from_axon(
         causal_context: causal_context_to_json(&envelope.causal_context),
         caller_signature,
     })
-    .map(|context| context.with_hosted_agent_delegation(hosted_agent_delegation))
+    .map(|context| {
+        context
+            .with_hosted_agent_delegation(hosted_agent_delegation)
+            .with_session_authority(session_authority)
+    })
     .map_err(|err| {
         AxonError::internal(format!(
             "local_runtime_adapter: incomplete Axon envelope projection: {err}"
@@ -4019,6 +4051,25 @@ impl AxonAbilityCatalog {
         DynamicRegistration::rpc_with_spec(ability, owner, manifest, handler).commit(self)
     }
 
+    /// Hot-register an RPC handler under an already-resolved authority root.
+    ///
+    /// Hosted runtime owners must use this surface: their canonical Agent URA
+    /// is lifecycle state, not a value that can be reconstructed from the
+    /// hosting device identity. The supplied scope is committed atomically
+    /// with the execution row and LocalRuntime binding.
+    pub fn hot_register_rpc_with_spec_and_authority_scope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        authority_scope: AuthorityScope,
+        manifest: crate::core::ability::spec::AbilityManifest,
+        handler: LocalRpcHandler,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::rpc_with_spec(ability, owner, manifest, handler)
+            .with_authority_scope(authority_scope)
+            .commit(self)
+    }
+
     /// Hot-register an RPC handler without a manifest. Used by
     /// the dynamic side when an upstream tool's input schema isn't
     /// declared (rare but legal — the upstream tool may have only a
@@ -4048,6 +4099,25 @@ impl AxonAbilityCatalog {
         self.hot_register_stream_with_spec_and_impl(
             ability,
             owner,
+            manifest,
+            handler,
+            ControlPlaneImplementation::native_daemon(),
+        )
+    }
+
+    /// Hot-register a stream handler under an already-resolved authority root.
+    pub fn hot_register_stream_with_spec_and_authority_scope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        authority_scope: AuthorityScope,
+        manifest: crate::core::ability::spec::AbilityManifest,
+        handler: LocalStreamHandler,
+    ) -> anyhow::Result<()> {
+        self.hot_register_stream_with_spec_impl_and_authority_scope(
+            ability,
+            owner,
+            authority_scope,
             manifest,
             handler,
             ControlPlaneImplementation::native_daemon(),
@@ -4166,6 +4236,27 @@ impl AxonAbilityCatalog {
             handler,
             ControlPlaneImplementation::native_daemon(),
         )
+    }
+
+    /// Hot-register an envelope-aware stream handler under an
+    /// already-resolved authority root.
+    pub fn hot_register_stream_with_envelope_and_spec_and_authority_scope(
+        &self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        authority_scope: AuthorityScope,
+        manifest: crate::core::ability::spec::AbilityManifest,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) -> anyhow::Result<()> {
+        DynamicRegistration::stream_with_envelope_and_spec_and_impl(
+            ability,
+            owner,
+            manifest,
+            handler,
+            ControlPlaneImplementation::native_daemon(),
+        )
+        .with_authority_scope(authority_scope)
+        .commit(self)
     }
 
     pub fn hot_register_stream_with_envelope_and_spec_and_impl(

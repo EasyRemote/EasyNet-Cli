@@ -24,15 +24,17 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use crate::daemon::ability::catalog::system_manifest::registry_manifest;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::invocation::admission::decision::{
     AbilityCallTrace, AdmissionExplainResult, OwnerResolution, OwnerSource,
-    PermissionRequestStatus, PolicyDecision, SignatureDecision,
+    PermissionRequestStatus, RedactionReason, TraceStage,
 };
 use crate::daemon::invocation::admission::policy_engine::{PolicyEngine, PolicyInput};
 use crate::daemon::persistence::access_control::AccessControlStore;
+use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
 
 pub const AUTHORITY_BINDING_GRANT: &str =
     crate::daemon::ability::names::governance::AUTHORITY_BINDING_GRANT;
@@ -51,6 +53,10 @@ pub const POLICY_REQUEST_LIST: &str =
 pub const ADMISSION_EXPLAIN: &str = crate::daemon::ability::names::governance::ADMISSION_EXPLAIN;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    register_with_ledger(reg, None);
+}
+
+pub fn register_with_ledger(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
     for ability in [
         AUTHORITY_BINDING_GRANT,
         AUTHORITY_BINDING_REVOKE,
@@ -59,7 +65,6 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         POLICY_REQUEST_CREATE,
         POLICY_REQUEST_RESOLVE,
         POLICY_REQUEST_LIST,
-        ADMISSION_EXPLAIN,
     ] {
         let handler = match ability {
             AUTHORITY_BINDING_GRANT => grant_handler,
@@ -69,7 +74,6 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
             POLICY_REQUEST_CREATE => request_create_handler,
             POLICY_REQUEST_RESOLVE => request_resolve_handler,
             POLICY_REQUEST_LIST => request_list_handler,
-            ADMISSION_EXPLAIN => explain_handler,
             _ => unreachable!("static RFC-014 ability list"),
         };
         reg.register_rpc_with_spec(
@@ -79,6 +83,18 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
             std::sync::Arc::new(handler),
         );
     }
+
+    let reader = Arc::new(AdmissionExplainReader { ledger });
+    reg.register_rpc_with_spec(
+        ADMISSION_EXPLAIN,
+        OwnerKind::Device,
+        registry_manifest(
+            ADMISSION_EXPLAIN,
+            description_for(ADMISSION_EXPLAIN),
+            input_schema_for(ADMISSION_EXPLAIN),
+        ),
+        Arc::new(move |args| reader.explain(args)),
+    );
 }
 
 fn grant_handler(args: Value) -> anyhow::Result<Value> {
@@ -298,20 +314,114 @@ fn creation_time_matches(
     true
 }
 
-fn explain_handler(args: Value) -> anyhow::Result<Value> {
-    let request: ExplainRequest = serde_json::from_value(args)?;
-    let result = AdmissionExplainResult {
-        observer_ura: request.observer_ura,
-        redacted: request.redacted,
-        root_trace: request.root_trace,
-        signature_decision: request.signature_decision,
-        policy_decision: request.policy_decision,
-        authority_reason: request.authority_reason,
-        route_ref: request.route_ref,
-        rejector_ura: request.rejector_ura,
-        redaction_reason: request.redaction_reason,
-    };
-    Ok(serde_json::to_value(result)?)
+struct AdmissionExplainReader {
+    ledger: Option<Arc<InvocationLedger>>,
+}
+
+impl AdmissionExplainReader {
+    fn explain(&self, args: Value) -> anyhow::Result<Value> {
+        let request: ExplainRequest = serde_json::from_value(args)?;
+        let key = request.selector()?;
+        let ledger = self
+            .ledger
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("admission.explain: invocation ledger unavailable"))?;
+        let record = ledger
+            .fetch_one(InvocationLedgerQuery::new().key(key).limit(1))?
+            .ok_or_else(|| anyhow::anyhow!("admission.explain: invocation record not found"))?;
+
+        let observer = request.observer_ura.trim();
+        let observer_can_read = observer == record.caller_ura
+            || observer == record.subject_ura
+            || observer == record.callee_ura;
+        let result = if observer_can_read {
+            let authority_reason = record.error.as_ref().map(|error| {
+                if error.code.trim().is_empty() {
+                    error.message.clone()
+                } else {
+                    error.code.clone()
+                }
+            });
+            let trace = AbilityCallTrace {
+                invocation_id: record.request_id.clone(),
+                parent_invocation_id: None,
+                root_invocation_id: record.trace_id.clone(),
+                caller_ura: record.caller_ura.clone(),
+                callee_ura: record.callee_ura.clone(),
+                subject_ura: record.subject_ura.clone(),
+                ability_ura: record.ability_ura.clone(),
+                action: access_action_for(record.ability_name.as_str()),
+                route_ref: None,
+                execution_host_ura: None,
+                rejector_ura: None,
+                stage: trace_stage_for(record.state.as_str()),
+                signature_decision: None,
+                policy_decision: None,
+                authority_proof_id: None,
+                redacted: false,
+                child_failure_class: None,
+                redaction_reason: None,
+                children: Vec::new(),
+            };
+            AdmissionExplainResult {
+                observer_ura: observer.to_string(),
+                redacted: false,
+                root_trace: Some(trace),
+                signature_decision: None,
+                policy_decision: None,
+                authority_reason,
+                route_ref: None,
+                rejector_ura: None,
+                redaction_reason: None,
+            }
+        } else {
+            AdmissionExplainResult {
+                observer_ura: observer.to_string(),
+                redacted: true,
+                root_trace: None,
+                signature_decision: None,
+                policy_decision: None,
+                authority_reason: None,
+                route_ref: None,
+                rejector_ura: None,
+                redaction_reason: Some(RedactionReason::SubjectPrivate),
+            }
+        };
+        Ok(serde_json::to_value(result)?)
+    }
+}
+
+fn access_action_for(
+    ability: &str,
+) -> crate::daemon::invocation::admission::decision::AccessAction {
+    use crate::daemon::invocation::admission::decision::AccessAction;
+    if ability.starts_with("terminal.")
+        || ability.starts_with("remote_desktop.")
+        || ability.starts_with("camera.")
+        || ability.starts_with("mic.")
+        || ability.starts_with("screen.")
+        || ability.starts_with("voice.")
+    {
+        AccessAction::Stream
+    } else if ability.ends_with(".list")
+        || ability.ends_with(".get")
+        || ability.ends_with(".read")
+        || ability.starts_with("meta.")
+    {
+        AccessAction::Read
+    } else {
+        AccessAction::Invoke
+    }
+}
+
+fn trace_stage_for(state: &str) -> TraceStage {
+    if state.eq_ignore_ascii_case("completed") {
+        TraceStage::Receipted
+    } else if state.eq_ignore_ascii_case("failed") {
+        TraceStage::ExecutionFailed
+    } else {
+        TraceStage::Executed
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -431,21 +541,40 @@ struct ListRequestsRequest {
 struct ExplainRequest {
     observer_ura: String,
     #[serde(default)]
-    redacted: bool,
+    invocation_id: Option<String>,
     #[serde(default)]
-    root_trace: Option<AbilityCallTrace>,
+    request_id: Option<String>,
     #[serde(default)]
-    signature_decision: Option<SignatureDecision>,
+    trace_id: Option<String>,
     #[serde(default)]
-    policy_decision: Option<PolicyDecision>,
-    #[serde(default)]
-    authority_reason: Option<String>,
-    #[serde(default)]
-    route_ref: Option<String>,
-    #[serde(default)]
-    rejector_ura: Option<String>,
-    #[serde(default)]
-    redaction_reason: Option<crate::daemon::invocation::admission::decision::RedactionReason>,
+    root_id: Option<String>,
+}
+
+impl ExplainRequest {
+    fn selector(&self) -> anyhow::Result<InvocationLedgerFetchKey> {
+        let selectors = [
+            self.invocation_id.as_deref(),
+            self.request_id.as_deref(),
+            self.trace_id.as_deref(),
+            self.root_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+        if selectors.len() != 1 {
+            anyhow::bail!("admission.explain: exactly one invocation_id, request_id, trace_id, or root_id is required");
+        }
+        let value = selectors[0].to_string();
+        if self.trace_id.as_deref().is_some() || self.root_id.as_deref().is_some() {
+            Ok(InvocationLedgerFetchKey::TraceId(value))
+        } else if self.invocation_id.as_deref().is_some() && value.starts_with("easynet:") {
+            Ok(InvocationLedgerFetchKey::InvocationUra(value))
+        } else {
+            Ok(InvocationLedgerFetchKey::RequestId(value))
+        }
+    }
 }
 
 pub fn description_for(name: &str) -> &'static str {
@@ -570,14 +699,10 @@ pub fn input_schema_for(name: &str) -> Value {
             "required": ["observer_ura"],
             "properties": {
                 "observer_ura": {"type": "string"},
-                "redacted": {"type": "boolean"},
-                "root_trace": {"type": "object"},
-                "signature_decision": {"type": "object"},
-                "policy_decision": {"type": "object"},
-                "authority_reason": {"type": "string"},
-                "route_ref": {"type": "string"},
-                "rejector_ura": {"type": "string"},
-                "redaction_reason": {"type": "string"}
+                "invocation_id": {"type": "string"},
+                "request_id": {"type": "string"},
+                "trace_id": {"type": "string"},
+                "root_id": {"type": "string"}
             },
             "additionalProperties": false
         }),
@@ -610,16 +735,68 @@ mod tests {
     }
 
     #[test]
-    fn admission_explain_is_read_only_projection() {
-        let output = explain_handler(json!({
-            "observer_ura": "easynet:///r/test/user/alice",
-            "redacted": true,
-            "authority_reason": "AUTHORITY_PROOF_MISSING"
-        }))
-        .expect("explain");
-        assert_eq!(output["observer_ura"], "easynet:///r/test/user/alice");
-        assert_eq!(output["redacted"], true);
-        assert_eq!(output["authority_reason"], "AUTHORITY_PROOF_MISSING");
+    fn admission_explain_reads_ledger_and_redacts_unrelated_observers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger =
+            Arc::new(InvocationLedger::open(dir.path().join("invocations.redb")).expect("ledger"));
+        ledger
+            .put(
+                &easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+                    .invocation_ura("easynet:///r/test/resource/alice.invocations/req-1")
+                    .request_id("req-1")
+                    .trace_id("trace-1")
+                    .span_id("span-1")
+                    .caller_ura("easynet:///r/test/hub")
+                    .callee_ura("easynet:///r/test/device/dev-a")
+                    .subject_ura("easynet:///r/test/user/alice")
+                    .ability_ura("easynet:///r/test/ability/device.dev-a.terminal.create")
+                    .ability_name("terminal.create")
+                    .state("failed")
+                    .started_unix_ms(1)
+                    .args(easynet_axon::invocation::LedgerEventPayload::digest(
+                        "application/json",
+                        b"{}",
+                    ))
+                    .build()
+                    .expect("record"),
+            )
+            .expect("put record");
+
+        let reader = AdmissionExplainReader {
+            ledger: Some(ledger),
+        };
+        let visible = reader
+            .explain(json!({
+                "observer_ura": "easynet:///r/test/user/alice",
+                "request_id": "req-1"
+            }))
+            .expect("visible explain");
+        assert_eq!(visible["redacted"], false);
+        assert_eq!(visible["root_trace"]["invocation_id"], "req-1");
+        assert_eq!(visible["root_trace"]["stage"], "execution_failed");
+
+        let hidden = reader
+            .explain(json!({
+                "observer_ura": "easynet:///r/test/user/bob",
+                "request_id": "req-1"
+            }))
+            .expect("hidden explain");
+        assert_eq!(hidden["redacted"], true);
+        assert!(hidden.get("root_trace").is_none());
+    }
+
+    #[test]
+    fn admission_explain_rejects_client_supplied_projection_fields() {
+        let err = ExplainRequest::selector(
+            &serde_json::from_value(json!({
+                "observer_ura": "easynet:///r/test/user/alice",
+                "redacted": true,
+                "authority_reason": "forged"
+            }))
+            .expect("request"),
+        )
+        .expect_err("selector is required");
+        assert!(err.to_string().contains("exactly one"));
     }
 
     #[test]

@@ -37,6 +37,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::ability::canonical_json_bytes;
 
@@ -143,6 +145,53 @@ struct AuthoritySignature {
 struct SignedAuthorityWire<T> {
     payload: T,
     signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SignedSessionAuthorityWire {
+    payload: SessionAuthorityPayload,
+    signature: String,
+}
+
+/// Project an authority that has already passed the transport admission gate
+/// into the generic runtime context. This function deliberately does not
+/// verify cryptography: the caller is the post-admission LocalRuntime
+/// adapter, and admission remains the single signature/trust authority.
+pub(crate) fn project_admitted_session_authority(
+    metadata: &HashMap<String, String>,
+) -> Result<Option<SessionAuthorityPayload>, AuthorityMetadataError> {
+    let Some(raw) = metadata
+        .get(SESSION_AUTHORITY_METADATA_KEY)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let wire_bytes = BASE64_STANDARD.decode(raw).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("admitted session authority base64 decode failed: {err}"),
+        )
+    })?;
+    let wire: SignedSessionAuthorityWire = serde_json::from_slice(&wire_bytes).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("admitted session authority JSON parse failed: {err}"),
+        )
+    })?;
+    if wire.signature.trim().is_empty() {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            "admitted session authority signature is empty",
+        ));
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    validate_session_authority_payload_shape(&wire.payload, Some(now_ms))?;
+    Ok(Some(wire.payload))
 }
 
 pub(crate) fn prepare_delegation_from_json(

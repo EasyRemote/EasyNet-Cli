@@ -2200,21 +2200,21 @@ fn real_policy_request_create_list_and_resolve_round_trip() {
 }
 
 #[test]
-fn real_admission_explain_returns_redacted_projection() {
+fn real_admission_explain_requires_authoritative_ledger() {
     let (reg, _g) = registry_with_temp_home();
-    let explained = dispatcher_for(reg)
+    let err = dispatcher_for(reg)
         .execute_rpc(target(
             "admission.explain",
             json!({
                 "observer_ura": "easynet:///r/test/user/alice",
-                "redacted": true,
-                "authority_reason": "AUTHORITY_PROOF_MISSING"
+                "request_id": "req-missing"
             }),
         ))
-        .expect("admission.explain must project diagnostics");
-    assert_eq!(explained["observer_ura"], "easynet:///r/test/user/alice");
-    assert_eq!(explained["redacted"], true);
-    assert_eq!(explained["authority_reason"], "AUTHORITY_PROOF_MISSING");
+        .expect_err("admission.explain must not fabricate diagnostics");
+    assert!(
+        err.to_string().contains("invocation ledger unavailable"),
+        "{err}"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════

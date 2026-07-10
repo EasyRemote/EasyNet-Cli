@@ -142,9 +142,15 @@ pub fn register(
     reg.register_rpc_with_owner("terminal.list", OwnerKind::Device, list_h);
 
     let pty_for_close = pty;
-    let close_h: LocalRpcHandler =
-        Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args));
-    reg.register_rpc_with_owner("terminal.close", OwnerKind::Device, close_h);
+    let close_h = Arc::new(move |env, args: Value| {
+        let session_id = args
+            .get("session_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("`session_id` required"))?;
+        super::authority::require_session_authority(&env, session_id, "terminal.close", "manage")?;
+        close_handler(&pty_for_close, io.as_ref(), args)
+    });
+    reg.register_rpc_with_envelope_and_owner("terminal.close", OwnerKind::Device, close_h);
 }
 
 /// `terminal.create` handler.
@@ -386,7 +392,9 @@ mod tests {
         register(&mut reg, fresh_service(), None);
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_CREATE).is_some());
         assert!(reg.get_rpc(ABILITY_PTY_SESSION_LIST).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_CLOSE).is_some());
+        assert!(reg
+            .resolve_rpc_with_env(ABILITY_PTY_SESSION_CLOSE)
+            .is_some());
     }
 
     #[test]

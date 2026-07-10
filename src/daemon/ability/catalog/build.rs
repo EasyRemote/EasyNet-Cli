@@ -426,12 +426,12 @@ fn build_registry_with_services_result_inner(
     // the Axon invocation ledger. The ledger is written by the
     // gRPC invocation service; these handlers only expose persisted
     // URA-complete records for UI/backend tracing.
-    invocation_history_ability::register(&mut reg, invocation_ledger);
+    invocation_history_ability::register(&mut reg, invocation_ledger.clone());
     // RFC-014 ability access-control governance surface.
     // These handlers are daemon policy management/read-model adapters over the
     // text-backed access-control store; they do not touch keyring secrets and
     // do not introduce a standalone policy engine.
-    access_control_ability::register(&mut reg);
+    access_control_ability::register_with_ledger(&mut reg, invocation_ledger.clone());
     // AXIOM §"Tier 2.5" Baseline Locomotion — PTY data-plane and
     // its lifecycle control-plane. terminal.create /
     // terminal.close manage the session catalog;

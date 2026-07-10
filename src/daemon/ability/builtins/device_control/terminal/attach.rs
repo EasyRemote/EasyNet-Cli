@@ -132,11 +132,16 @@ const READ_CHUNK_SIZE: usize = 4096;
 const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
-    use crate::daemon::ability::dispatch::LocalBidiHandler;
     let pty_for_attach = Arc::clone(&pty);
-    let handler: LocalBidiHandler =
-        Arc::new(move |args: Value| attach_handler(&pty_for_attach, args));
-    reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, handler);
+    let handler = Arc::new(move |env, args: Value| {
+        let session_id = args
+            .get("session_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("pty_session_attach: `session_id` required"))?;
+        super::authority::require_session_authority(&env, session_id, "terminal.attach", "stream")?;
+        attach_handler(&pty_for_attach, args)
+    });
+    reg.register_bidi_with_envelope_and_owner("terminal.attach", OwnerKind::Device, handler);
 }
 
 fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {
@@ -483,11 +488,12 @@ mod tests {
         let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, fresh_service());
         assert!(
-            reg.get_bidi(ABILITY_PTY_SESSION_ATTACH).is_some(),
+            reg.resolve_bidi_with_env(ABILITY_PTY_SESSION_ATTACH)
+                .is_some(),
             "attach must register as a BIDI handler, not RPC/Stream"
         );
         assert!(
-            reg.get_bidi("terminal.attach").is_some(),
+            reg.resolve_bidi_with_env("terminal.attach").is_some(),
             "attach must also publish the canonical runtime alias used by backend WS terminal"
         );
     }

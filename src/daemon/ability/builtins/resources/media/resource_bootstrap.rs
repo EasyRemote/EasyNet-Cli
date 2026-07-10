@@ -63,7 +63,7 @@ fn prune_stale_auto_screen_targets(
         .filter(|resource| {
             matches!(
                 resource.kind,
-                ResourceType::Application | ResourceType::Window
+                ResourceType::Display | ResourceType::Application | ResourceType::Window
             )
         })
         .map(|resource| resource.hardware_id.as_str())
@@ -87,7 +87,7 @@ fn prune_stale_auto_screen_targets(
         let auto_prunable_screen_target =
             matches!(
                 resource.kind,
-                ResourceType::Application | ResourceType::Window
+                ResourceType::Display | ResourceType::Application | ResourceType::Window
             ) && (resource.metadata.get("auto_prune").and_then(Value::as_bool) == Some(true)
                 || auto_bootstrap_screen_target
                 || legacy_bootstrap_screen_target);
@@ -222,6 +222,8 @@ fn discover_displays() -> Vec<DiscoveredResource> {
                     "width": width,
                     "height": height,
                     "is_primary": is_primary,
+                    "discovery_source": "auto_bootstrap",
+                    "auto_prune": true,
                 }),
             }
         })
@@ -931,6 +933,43 @@ mod tests {
 
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].hardware_id, "window:xcap:10:100");
+    }
+
+    #[test]
+    fn prune_stale_auto_screen_targets_removes_stale_display_rows() {
+        let mut file = ResourcesFile::default();
+        for hardware_id in ["display:xcap:live", "display:xcap:stale"] {
+            apply_discovered_resource(
+                &mut file,
+                "acme",
+                "easynet:///r/acme/device/node-1",
+                DiscoveredResource {
+                    kind: ResourceType::Display,
+                    hardware_id: hardware_id.into(),
+                    display_name: hardware_id.into(),
+                    metadata: json!({
+                        "backend": "xcap",
+                        "discovery_source": "auto_bootstrap",
+                        "auto_prune": true
+                    }),
+                },
+            );
+        }
+
+        prune_stale_auto_screen_targets(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/device/node-1",
+            &[DiscoveredResource {
+                kind: ResourceType::Display,
+                hardware_id: "display:xcap:live".into(),
+                display_name: "display:xcap:live".into(),
+                metadata: json!({"backend": "xcap"}),
+            }],
+        );
+
+        assert_eq!(file.resources.len(), 1);
+        assert_eq!(file.resources[0].hardware_id, "display:xcap:live");
     }
 
     #[test]

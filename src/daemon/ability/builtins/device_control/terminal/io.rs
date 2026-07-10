@@ -335,23 +335,49 @@ impl PtyIoService {
 /// every handler observes the same session and state tables.
 ///
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoService) {
-    use crate::daemon::ability::dispatch::LocalRpcHandler;
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        let handler: LocalRpcHandler = Arc::new(move |args: Value| input_handler(&pty, &io, args));
-        reg.register_rpc_with_owner("terminal.input", OwnerKind::Device, handler);
+        let handler = Arc::new(move |env, args: Value| {
+            let session_id = require_session_id(&args)?;
+            super::authority::require_session_authority(
+                &env,
+                &session_id,
+                "terminal.input",
+                "stream",
+            )?;
+            input_handler(&pty, &io, args)
+        });
+        reg.register_rpc_with_envelope_and_owner("terminal.input", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        let handler: LocalRpcHandler = Arc::new(move |args: Value| read_handler(&pty, &io, args));
-        reg.register_rpc_with_owner("terminal.read", OwnerKind::Device, handler);
+        let handler = Arc::new(move |env, args: Value| {
+            let session_id = require_session_id(&args)?;
+            super::authority::require_session_authority(
+                &env,
+                &session_id,
+                "terminal.read",
+                "stream",
+            )?;
+            read_handler(&pty, &io, args)
+        });
+        reg.register_rpc_with_envelope_and_owner("terminal.read", OwnerKind::Device, handler);
     }
     {
         let pty = Arc::clone(&pty);
-        let handler: LocalRpcHandler = Arc::new(move |args: Value| resize_handler(&pty, args));
-        reg.register_rpc_with_owner("terminal.resize", OwnerKind::Device, handler);
+        let handler = Arc::new(move |env, args: Value| {
+            let session_id = require_session_id(&args)?;
+            super::authority::require_session_authority(
+                &env,
+                &session_id,
+                "terminal.resize",
+                "stream",
+            )?;
+            resize_handler(&pty, args)
+        });
+        reg.register_rpc_with_envelope_and_owner("terminal.resize", OwnerKind::Device, handler);
     }
 }
 
@@ -687,9 +713,13 @@ mod tests {
         let mut reg = AxonAbilityCatalog::new();
         let (pty, io) = fresh();
         register(&mut reg, pty, io);
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_INPUT).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_READ).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_RESIZE).is_some());
+        assert!(reg
+            .resolve_rpc_with_env(ABILITY_PTY_SESSION_INPUT)
+            .is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_PTY_SESSION_READ).is_some());
+        assert!(reg
+            .resolve_rpc_with_env(ABILITY_PTY_SESSION_RESIZE)
+            .is_some());
     }
 
     #[test]
