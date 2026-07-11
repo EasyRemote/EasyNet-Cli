@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use easynet_cli::daemon::persistence::config::Credentials;
 use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use rcgen::{
@@ -29,6 +30,8 @@ const REALM: &str = "localhost";
 const HUB_URA: &str = "easynet:///r/localhost/hub";
 const ADMIN_URA: &str = "easynet:///r/localhost/user/admin";
 const ALICE_URA: &str = "easynet:///r/localhost/user/alice";
+const BOB_URA: &str = "easynet:///r/localhost/user/bob";
+const PRINCIPAL_DELETE: &str = "principal.lifecycle.delete";
 
 #[test]
 fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend() {
@@ -38,7 +41,7 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
     let certs = write_test_ca_and_leaf(hub_home.path());
     write_hub_daemon_config(hub_home.path(), port, &certs.cert_pem, &certs.key_pem);
 
-    let mut hub = HubDaemon::spawn(hub_home.path(), port);
+    let hub = HubDaemon::spawn(hub_home.path(), port);
 
     let admin = easynet_json(
         hub_home.path(),
@@ -161,6 +164,359 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
     assert_eq!(owner.owner_ura, ALICE_URA);
     assert_eq!(owner.owner_user_id, "alice");
 
+    let alice = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "enroll",
+            "--principal-ura",
+            ALICE_URA,
+            "--enrollment-id",
+            &enrollment_id,
+            "--create-idempotency-key",
+            "tls-alice-create",
+            "--bind-idempotency-key",
+            "tls-alice-bind",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(alice["principal"]["principal_ura"], ALICE_URA);
+    assert_eq!(alice["principal"]["state"], "active");
+    assert_eq!(active_binding_count(&alice), 1);
+    assert!(alice["principal"].get("username").is_none());
+    assert!(alice["principal"].get("user_id").is_none());
+    let alice_initial_binding_id = binding_id_at(&alice, 0);
+    let alice_initial_pubkey = public_key_at(&alice, 0);
+
+    let bob_enrollment = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "issue-enrollment",
+            "--issuer-ura",
+            ADMIN_URA,
+            "--subject-principal-ura",
+            BOB_URA,
+            "--proof-ref",
+            &admin_binding_id,
+            "--idempotency-key",
+            "tls-bob-enrollment",
+            "--expected-version",
+            "4",
+            "--json",
+        ],
+        &hub,
+    );
+    let bob_enrollment_id = newest_enrollment_id(&bob_enrollment);
+
+    let bob = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "enroll",
+            "--principal-ura",
+            BOB_URA,
+            "--enrollment-id",
+            &bob_enrollment_id,
+            "--create-idempotency-key",
+            "tls-bob-create",
+            "--bind-idempotency-key",
+            "tls-bob-bind",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(bob["principal"]["principal_ura"], BOB_URA);
+    assert_eq!(bob["principal"]["state"], "active");
+    assert_eq!(active_binding_count(&bob), 1);
+    let bob_initial_binding_id = binding_id_at(&bob, 0);
+
+    let alice_phone = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "add-key",
+            "--principal-ura",
+            ALICE_URA,
+            "--proof-ref",
+            &alice_initial_binding_id,
+            "--idempotency-key",
+            "tls-alice-phone",
+            "--expected-version",
+            "2",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(active_binding_count(&alice_phone), 2);
+    let alice_phone_binding_id = binding_id_at(&alice_phone, 1);
+    let alice_phone_pubkey = public_key_at(&alice_phone, 1);
+
+    let alice_rotated_pubkey = pubkey(42);
+    let alice_rotated = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "rotate-key",
+            "--principal-ura",
+            ALICE_URA,
+            "--binding-id",
+            &alice_initial_binding_id,
+            "--proof-ref",
+            &alice_phone_binding_id,
+            "--replacement-public-key-b64",
+            &alice_rotated_pubkey,
+            "--replacement-key-id",
+            "tls-alice-laptop-rotated",
+            "--idempotency-key",
+            "tls-alice-rotate",
+            "--expected-version",
+            "3",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(active_binding_count(&alice_rotated), 2);
+    let alice_rotated_binding_id = binding_id_at(&alice_rotated, 2);
+
+    let alice_revoked_phone = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "revoke-key",
+            "--principal-ura",
+            ALICE_URA,
+            "--binding-id",
+            &alice_phone_binding_id,
+            "--proof-ref",
+            &alice_rotated_binding_id,
+            "--idempotency-key",
+            "tls-alice-revoke-phone",
+            "--expected-version",
+            "4",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(active_binding_count(&alice_revoked_phone), 1);
+
+    easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "configure-recovery",
+            "--principal-ura",
+            ALICE_URA,
+            "--policy-ref",
+            "recovery-policy:tls-alice",
+            "--proof-ref",
+            &alice_rotated_binding_id,
+            "--idempotency-key",
+            "tls-alice-recovery-policy",
+            "--expected-version",
+            "5",
+            "--json",
+        ],
+        &hub,
+    );
+
+    let alice_recovery_pubkey = pubkey(43);
+    let alice_recovered = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "recover",
+            "--principal-ura",
+            ALICE_URA,
+            "--proof-ref",
+            "recovery-policy:tls-alice",
+            "--public-key-b64",
+            &alice_recovery_pubkey,
+            "--key-id",
+            "tls-alice-recovery-key",
+            "--idempotency-key",
+            "tls-alice-recover",
+            "--expected-version",
+            "6",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(active_binding_count(&alice_recovered), 2);
+
+    let alice_suspended = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "suspend",
+            "--principal-ura",
+            ALICE_URA,
+            "--proof-kind",
+            "active-key",
+            "--proof-ref",
+            &alice_rotated_binding_id,
+            "--idempotency-key",
+            "tls-alice-suspend",
+            "--expected-version",
+            "7",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(alice_suspended["principal"]["state"], "suspended");
+
+    let alice_reactivated = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "reactivate",
+            "--principal-ura",
+            ALICE_URA,
+            "--proof-kind",
+            "recovery",
+            "--proof-ref",
+            "recovery-policy:tls-alice",
+            "--idempotency-key",
+            "tls-alice-reactivate",
+            "--expected-version",
+            "8",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(alice_reactivated["principal"]["state"], "active");
+
+    let bob_phone = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "add-key",
+            "--principal-ura",
+            BOB_URA,
+            "--proof-ref",
+            &bob_initial_binding_id,
+            "--idempotency-key",
+            "tls-bob-phone",
+            "--expected-version",
+            "2",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(active_binding_count(&bob_phone), 2);
+
+    let delete_grant = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "issue-grant",
+            "--principal-ura",
+            ADMIN_URA,
+            "--action",
+            PRINCIPAL_DELETE,
+            "--proof-ref",
+            &admin_binding_id,
+            "--idempotency-key",
+            "tls-admin-delete-grant",
+            "--expected-version",
+            "6",
+            "--json",
+        ],
+        &hub,
+    );
+    let delete_grant_id = delete_grant["principal"]["grants"][0]["grant_id"]
+        .as_str()
+        .expect("delete grant id")
+        .to_string();
+
+    let bob_deleted = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "delete",
+            "--principal-ura",
+            BOB_URA,
+            "--actor-ura",
+            ADMIN_URA,
+            "--proof-kind",
+            "grant",
+            "--proof-ref",
+            &delete_grant_id,
+            "--idempotency-key",
+            "tls-bob-delete",
+            "--expected-version",
+            "3",
+            "--json",
+        ],
+        &hub,
+    );
+    assert_eq!(bob_deleted["principal"]["state"], "deleted");
+
+    drop(hub);
+    let mut hub = HubDaemon::spawn(hub_home.path(), port);
+
+    let alice_after_restart = easynet_json(
+        hub_home.path(),
+        ["principal", "get", "--principal-ura", ALICE_URA, "--json"],
+        &hub,
+    );
+    assert_eq!(alice_after_restart["principal"]["state"], "active");
+    assert_eq!(active_binding_count(&alice_after_restart), 2);
+
+    let bob_after_restart = easynet_json(
+        hub_home.path(),
+        ["principal", "get", "--principal-ura", BOB_URA, "--json"],
+        &hub,
+    );
+    assert_eq!(bob_after_restart["principal"]["state"], "deleted");
+
+    let admin_after_restart = easynet_json(
+        hub_home.path(),
+        ["principal", "get", "--principal-ura", ADMIN_URA, "--json"],
+        &hub,
+    );
+    assert_eq!(admin_after_restart["principal"]["state"], "active");
+    assert!(
+        admin_after_restart["principal"]["grants"]
+            .as_array()
+            .expect("admin grants")
+            .iter()
+            .any(|grant| grant["grant_id"] == delete_grant_id),
+        "admin delete grant must persist across Hub restart"
+    );
+
+    let hub_trust =
+        RealmTrustAnchor::try_load_strict(&hub_trust_path).expect("reload hub trust anchor");
+    let owner = hub_trust
+        .lookup_principal_owner(&device_ura)
+        .expect("Hub owner binding must persist across restart");
+    assert_eq!(owner.owner_ura, ALICE_URA);
+    assert!(
+        hub_trust
+            .lookup_user_by_pubkey(ALICE_URA, &alice_initial_pubkey)
+            .is_none(),
+        "rotated Alice key must no longer be active in RuntimeTrust"
+    );
+    assert!(
+        hub_trust
+            .lookup_user_by_pubkey(ALICE_URA, &alice_phone_pubkey)
+            .is_none(),
+        "revoked Alice sibling key must no longer be active in RuntimeTrust"
+    );
+    assert!(
+        hub_trust
+            .lookup_user_by_pubkey(ALICE_URA, &alice_rotated_pubkey)
+            .is_some(),
+        "rotated Alice key must remain active after Hub restart"
+    );
+    assert!(
+        hub_trust
+            .lookup_user_by_pubkey(ALICE_URA, &alice_recovery_pubkey)
+            .is_some(),
+        "recovery key must remain active after Hub restart"
+    );
+
     hub.assert_still_running();
 }
 
@@ -265,12 +621,14 @@ fn run_easynet<const N: usize>(home: &Path, args: [&str; N], hub: &HubDaemon) ->
 
 fn easynet_json<const N: usize>(home: &Path, args: [&str; N], hub: &HubDaemon) -> Value {
     let stdout = run_easynet(home, args, hub);
-    serde_json::from_slice(&stdout).unwrap_or_else(|error| {
+    let value: Value = serde_json::from_slice(&stdout).unwrap_or_else(|error| {
         panic!(
             "parse easynet JSON: {error}\nstdout:\n{}",
             String::from_utf8_lossy(&stdout)
         )
-    })
+    });
+    assert_no_private_key_material(&value, "$");
+    value
 }
 
 fn binding_id_at(snapshot: &Value, index: usize) -> String {
@@ -278,6 +636,83 @@ fn binding_id_at(snapshot: &Value, index: usize) -> String {
         .as_str()
         .expect("binding id")
         .to_string()
+}
+
+fn newest_enrollment_id(snapshot: &Value) -> String {
+    snapshot["principal"]["enrollments"]
+        .as_array()
+        .expect("enrollments")
+        .last()
+        .expect("newest enrollment")
+        .get("enrollment_id")
+        .and_then(Value::as_str)
+        .expect("enrollment id")
+        .to_string()
+}
+
+fn public_key_at(snapshot: &Value, index: usize) -> String {
+    snapshot["principal"]["bindings"][index]["public_key_b64"]
+        .as_str()
+        .expect("public key")
+        .to_string()
+}
+
+fn active_binding_count(snapshot: &Value) -> usize {
+    snapshot["principal"]["bindings"]
+        .as_array()
+        .expect("bindings")
+        .iter()
+        .filter(|binding| binding["state"] == "active")
+        .count()
+}
+
+fn pubkey(seed: u8) -> String {
+    let signing = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+    B64.encode(signing.verifying_key().to_bytes())
+}
+
+fn assert_no_private_key_material(value: &Value, path: &str) {
+    const FORBIDDEN_FIELD_TOKENS: &[&str] = &[
+        "seed",
+        "private",
+        "secret",
+        "vault",
+        "passphrase",
+        "master_key",
+        "ciphertext",
+        "keyring",
+        "storage_path",
+    ];
+    const FORBIDDEN_VALUE_MARKERS: &[&str] = &["BEGIN PRIVATE KEY", "PRIVATE KEY-----"];
+
+    match value {
+        Value::Object(object) => {
+            for (field, nested) in object {
+                let normalized = field.to_ascii_lowercase();
+                assert!(
+                    !FORBIDDEN_FIELD_TOKENS
+                        .iter()
+                        .any(|token| normalized.contains(token)),
+                    "CLI JSON output leaked private-key custody field at {path}.{field}"
+                );
+                assert_no_private_key_material(nested, &format!("{path}.{field}"));
+            }
+        }
+        Value::Array(items) => {
+            for (index, nested) in items.iter().enumerate() {
+                assert_no_private_key_material(nested, &format!("{path}[{index}]"));
+            }
+        }
+        Value::String(text) => {
+            assert!(
+                !FORBIDDEN_VALUE_MARKERS
+                    .iter()
+                    .any(|marker| text.contains(marker)),
+                "CLI JSON output leaked private-key material marker at {path}"
+            );
+        }
+        _ => {}
+    }
 }
 
 struct TestCerts {

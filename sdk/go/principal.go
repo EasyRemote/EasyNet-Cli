@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"fmt"
 	"strings"
 )
 
@@ -26,6 +27,18 @@ const (
 	principalAbilityRevokeGrant       = "principal.lifecycle.revoke_grant"
 	principalAbilityGet               = "principal.lifecycle.get"
 )
+
+var principalPrivateProjectionFieldTokens = []string{
+	"seed",
+	"private",
+	"secret",
+	"vault",
+	"passphrase",
+	"master_key",
+	"ciphertext",
+	"keyring",
+	"storage_path",
+}
 
 // PrincipalState is the durable lifecycle state of a runtime principal.
 // Deleted is terminal; suspension preserves identity and audit history while
@@ -581,6 +594,9 @@ func principalCommandWire(command PrincipalCommand) map[string]any {
 }
 
 func principalSnapshotFromMap(raw map[string]any) (PrincipalSnapshot, error) {
+	if err := rejectPrincipalPrivateProjectionFields(raw, "principal"); err != nil {
+		return PrincipalSnapshot{}, err
+	}
 	snapshot := PrincipalSnapshot{
 		PrincipalURA:    principalStringFromMap(raw, "principal_ura"),
 		State:           PrincipalState(principalStringFromMap(raw, "state")),
@@ -597,6 +613,33 @@ func principalSnapshotFromMap(raw map[string]any) (PrincipalSnapshot, error) {
 		return PrincipalSnapshot{}, invalidPrincipal("principal_ura is required in Principal snapshot", nil)
 	}
 	return snapshot, nil
+}
+
+func rejectPrincipalPrivateProjectionFields(value any, path string) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		for field, nested := range typed {
+			normalized := strings.ToLower(field)
+			for _, token := range principalPrivateProjectionFieldTokens {
+				if strings.Contains(normalized, token) {
+					return invalidPrincipal(
+						fmt.Sprintf("Principal projection %s contains forbidden private field %q", path, field),
+						nil,
+					)
+				}
+			}
+			if err := rejectPrincipalPrivateProjectionFields(nested, path+"."+field); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for index, nested := range typed {
+			if err := rejectPrincipalPrivateProjectionFields(nested, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func principalProofRefFromMap(raw map[string]any, key string) *PrincipalProofRef {

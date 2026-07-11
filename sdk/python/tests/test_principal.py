@@ -139,6 +139,32 @@ class PrincipalTests(unittest.TestCase):
             ability.arguments["principal_ura"], "easynet:///r/example/user/alice"
         )
 
+    def test_runtime_principal_provider_rejects_private_projection_fields(self) -> None:
+        tests = {
+            "top-level private seed": lambda principal: principal.update(
+                {"private_key_seed": "forbidden"}
+            ),
+            "binding vault material": lambda principal: principal["bindings"][0].update(  # type: ignore[index,union-attr]
+                {"vault_ciphertext": "forbidden"}
+            ),
+            "recovery master key": lambda principal: principal["recovery"].update(  # type: ignore[union-attr]
+                {"master_key": "forbidden"}
+            ),
+            "enrollment keyring path": lambda principal: principal["enrollments"][0].update(  # type: ignore[index,union-attr]
+                {"keyring_storage_path": "/tmp/forbidden"}
+            ),
+            "grant passphrase": lambda principal: principal["grants"][0].update(  # type: ignore[index,union-attr]
+                {"passphrase": "forbidden"}
+            ),
+        }
+        for name, mutate in tests.items():
+            with self.subTest(name=name):
+                provider = RuntimePrincipalProvider(
+                    _PrivateProjectionAbility(mutate), _call()
+                )
+                with self.assertRaisesRegex(Exception, "forbidden private field"):
+                    provider.get("easynet:///r/example/user/alice")
+
 
 class _MemoryAbility:
     def __init__(self) -> None:
@@ -205,6 +231,21 @@ class _MemoryAbility:
                 ],
             }
         }
+
+
+class _PrivateProjectionAbility(_MemoryAbility):
+    def __init__(self, mutate) -> None:  # type: ignore[no-untyped-def]
+        super().__init__()
+        self._mutate = mutate
+
+    def invoke(
+        self, call: RuntimeCallContext, ability_name: str, arguments: object
+    ) -> dict[str, object]:
+        output = super().invoke(call, ability_name, arguments)
+        principal = output["principal"]
+        assert isinstance(principal, dict)
+        self._mutate(principal)
+        return output
 
 
 def _command() -> PrincipalCommand:

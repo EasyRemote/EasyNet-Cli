@@ -537,8 +537,22 @@ backend-free `federation.join`, empty HTTP credential token, persisted
 issues a product-neutral enrollment capability, joins a Device over the Hub URA
 with `--principal-ura` plus `--principal-enrollment-id`, and verifies the Hub
 RuntimeTrust owner binding from Device URA to User Principal URA. It is still
-not standalone-Hub cutover-ready until the remaining lifecycle UX and the
-standalone/backend-present E2E gates pass.
+not standalone-Hub cutover-ready until recovery UX edge cases,
+receipt-history continuity, Backend/EasyRemote private-key process audits and
+the Backend-present E2E gate pass. The same real two-HOME CLI binary
+E2E now extends the TCP+TLS Hub daemon path to the multi-user lifecycle
+scenario: Alice and Bob are enrolled through product-neutral capabilities,
+both receive at least two public-key bindings, Alice exercises add-key,
+rotate-key, revoke-key, recovery, suspend and reactivate, Bob is deleted
+through an admin grant, the Hub daemon is restarted, and the test verifies
+persisted PrincipalLifecycle state, grant state, RuntimeTrust revocation
+projection and Device-to-Principal owner binding without Backend HTTP state.
+Go and Python PrincipalLifecycle projection decoders now reject forbidden
+custody fields recursively, matching the managed-signing public-projection
+guard, and the real CLI TLS lifecycle E2E scans PrincipalLifecycle JSON output
+for private-key custody fields. Backend-present mapping to the same runtime,
+stable receipt-history/cursor evidence and Backend/EasyRemote process-level
+private-key audits still remain before section 14.3 is cutover-ready.
 Directory
 is still a seam; receipt/history now has a symmetric bounded seam but no
 stable cursor or downstream cutover; runtime events and runtime administration
@@ -624,10 +638,10 @@ The current remaining work is:
   including receipt, event, administration and principal lifecycle paths;
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,
   Directory, receipt and event capabilities;
-- extend the real CLI binary-to-hub-daemon TCP+TLS Hub URA principal-join
-  evidence to the full standalone-Hub lifecycle scenario;
-- prove URA-only `federation.join` plus Principal enrollment without Backend
-  HTTP in the complete standalone-Hub acceptance gate;
+- close the remaining standalone-Hub acceptance evidence that is not covered by
+  the real TCP+TLS lifecycle E2E and SDK/CLI projection audit yet, especially
+  stable receipt-history/cursor persistence and Backend/EasyRemote private-key
+  process audits;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates
   only after their consumers have migrated;
 - run the full Rust default/`axon-pb`, Go, Python, Backend and EasyRemote

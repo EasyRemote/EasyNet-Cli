@@ -62,6 +62,18 @@ _ABILITY_ISSUE_GRANT = "principal.lifecycle.issue_grant"
 _ABILITY_REVOKE_GRANT = "principal.lifecycle.revoke_grant"
 _ABILITY_GET = "principal.lifecycle.get"
 
+_PRIVATE_PROJECTION_FIELD_TOKENS = (
+    "seed",
+    "private",
+    "secret",
+    "vault",
+    "passphrase",
+    "master_key",
+    "ciphertext",
+    "keyring",
+    "storage_path",
+)
+
 
 class PrincipalState(str, Enum):
     PENDING = "pending"
@@ -512,6 +524,7 @@ def _command_wire(command: PrincipalCommand) -> dict[str, object]:
 
 
 def _snapshot_from_mapping(raw: Mapping[str, object]) -> PrincipalSnapshot:
+    _reject_private_projection_fields(raw, "principal")
     principal_ura = _required_text(raw.get("principal_ura"), "principal_ura")
     return PrincipalSnapshot(
         principal_ura=principal_ura,
@@ -536,6 +549,22 @@ def _snapshot_from_mapping(raw: Mapping[str, object]) -> PrincipalSnapshot:
             for item in _sequence(raw.get("enrollments"))
         ),
     )
+
+
+def _reject_private_projection_fields(value: object, path: str) -> None:
+    if isinstance(value, Mapping):
+        for field, nested in value.items():
+            if not isinstance(field, str):
+                raise _invalid(f"{path} projection field names must be strings")
+            normalized = field.lower()
+            if any(token in normalized for token in _PRIVATE_PROJECTION_FIELD_TOKENS):
+                raise _invalid(
+                    f"{path} projection contains forbidden private field {field}"
+                )
+            _reject_private_projection_fields(nested, f"{path}.{field}")
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, nested in enumerate(value):
+            _reject_private_projection_fields(nested, f"{path}[{index}]")
 
 
 def _proof_from_mapping(raw: Mapping[str, object]) -> PrincipalProofRef:

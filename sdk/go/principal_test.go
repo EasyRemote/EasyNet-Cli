@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -201,6 +202,75 @@ func TestRuntimePrincipalProviderUsesGenericGetAbility(t *testing.T) {
 	if transport.ability != principalAbilityGet || transport.args["principal_ura"] != "easynet:///r/example/user/alice" {
 		t.Fatalf("get was not lowered through generic ability: ability=%s args=%#v", transport.ability, transport.args)
 	}
+}
+
+func TestRuntimePrincipalProviderRejectsPrivateProjectionFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "top-level private seed",
+			mutate: func(principal map[string]any) {
+				principal["private_key_seed"] = "forbidden"
+			},
+		},
+		{
+			name: "binding vault material",
+			mutate: func(principal map[string]any) {
+				bindings := principal["bindings"].([]any)
+				bindings[0].(map[string]any)["vault_ciphertext"] = "forbidden"
+			},
+		},
+		{
+			name: "recovery master key",
+			mutate: func(principal map[string]any) {
+				principal["recovery"].(map[string]any)["master_key"] = "forbidden"
+			},
+		},
+		{
+			name: "enrollment keyring path",
+			mutate: func(principal map[string]any) {
+				enrollments := principal["enrollments"].([]any)
+				enrollments[0].(map[string]any)["keyring_storage_path"] = "/tmp/forbidden"
+			},
+		},
+		{
+			name: "grant passphrase",
+			mutate: func(principal map[string]any) {
+				grants := principal["grants"].([]any)
+				grants[0].(map[string]any)["passphrase"] = "forbidden"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider, err := NewRuntimePrincipalProvider(&privateProjectionAbility{mutate: test.mutate}, principalCallFixture())
+			if err != nil {
+				t.Fatalf("NewRuntimePrincipalProvider: %v", err)
+			}
+			_, err = provider.Get(context.Background(), "easynet:///r/example/user/alice")
+			if err == nil || !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "forbidden private field") {
+				t.Fatalf("private projection error = %v, want INVALID_ARGUMENT forbidden private field", err)
+			}
+		})
+	}
+}
+
+type privateProjectionAbility struct {
+	mutate func(map[string]any)
+}
+
+func (p *privateProjectionAbility) Invoke(ctx context.Context, call RuntimeCallContext, ability string, args any) (map[string]any, error) {
+	base := &memoryPrincipalAbility{}
+	output, err := base.Invoke(ctx, call, ability, args)
+	if err != nil {
+		return nil, err
+	}
+	if p.mutate != nil {
+		p.mutate(output["principal"].(map[string]any))
+	}
+	return output, nil
 }
 
 func principalCommandFixture() PrincipalCommand {
