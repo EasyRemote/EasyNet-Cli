@@ -29,13 +29,20 @@ The matrix may contain only product-neutral capabilities from these families:
 | Invocation | complete draft, prepare/sign/submit, result and handle lifecycle |
 | transport | unary, server stream and bidi |
 | authority | canonical authority metadata projection/materialization |
-| identity material | generic signer/runtime signing identity, not product key administration |
+| identity material | runtime identity, public projection and sign-only capability |
+| managed signing | subject-bound create/list/rotate/revoke/expiry through key-service |
+| principal lifecycle | enrollment, public-key binding, recovery, suspension and grants |
+| Directory | canonical resolve and subscription, not product dashboard rows |
+| receipts | verifiable receipt/causal facts and continuation references |
+| runtime events | bounded streams, typed cursors and resume semantics |
+| runtime administration | product-neutral daemon/runtime lifecycle and readiness control |
 | health | runtime readiness and diagnostics |
 | errors | shared code/class/retry semantics |
 
-Directory pages, hosted-agent admin, Mission, publication, pages, OpenAI
-compatibility, host binding, product events, wrappers and companion lifecycle
-are not capability rows. They are downstream product behavior.
+Product Directory pages, hosted-agent workflow, Mission, publication, pages,
+OpenAI compatibility, host binding, product events, wrappers and companion
+lifecycle are not capability rows. They are downstream product behavior over
+the generic capabilities above.
 
 ## Language requirements
 
@@ -46,7 +53,8 @@ are not capability rows. They are downstream product behavior.
 - delegate Addressing to the same Axon grammar;
 - use only generic C ABI v5 when native;
 - cite language-specific tests for each non-unsupported state;
-- do not publish product profile modules, factories or compatibility aliases.
+- do not publish product workflow modules, parallel canonical models or
+  compatibility aliases that preserve a second provider/state machine.
 
 ### Node, Java and Swift
 

@@ -1,0 +1,13 @@
+id: receipt/history_seam
+profile: receipts
+required_for:
+  - go
+  - python
+description: Receipt, causal, history and trace queries use one generic runtime contract.
+steps:
+  - action: require_receipt_reference
+  - action: require_causal_link
+  - action: require_bounded_history_query
+expect:
+  result: receipt_history_contract
+  provider_required: true

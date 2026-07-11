@@ -22,7 +22,11 @@ CASE_ID = "sdk/go_python_parity_matrix"
 SPEC_REF = "docs/spec/daemon-sdk-requirements-v1.md#10-capability-state-matrix"
 LANGUAGES = ("go", "python")
 STATUS_ORDER = ("unsupported", "seam", "provider-backed", "cutover-ready")
-PROFILES = {"runtime_core", "addressing", "authority", "managed_signing", "conformance"}
+PROFILES = {
+    "runtime_core", "addressing", "authority", "managed_signing",
+    "principal", "directory", "receipts", "runtime_events",
+    "runtime_administration", "conformance",
+}
 EVIDENCE_KINDS = {"go_test", "python_test", "sdk_conformance_case", "static_gate", "manifest", "doc"}
 REQUIRED_CAPABILITIES = (
     "abi_version_discovery",
@@ -36,6 +40,11 @@ REQUIRED_CAPABILITIES = (
     "complete_invocation_draft",
     "prepare_sign_submit",
     "managed_signing",
+    "principal_lifecycle",
+    "directory_resolution",
+    "receipt_history",
+    "runtime_events",
+    "runtime_administration",
     "unary_invoke",
     "stream",
     "bidi",
@@ -43,9 +52,9 @@ REQUIRED_CAPABILITIES = (
     "conformance_runner",
 )
 FORBIDDEN_TOKENS = (
-    "admin", "gateway", "directory", "identity", "mission", "publication",
-    "host_binding", "surface", "compatibility", "wrapper", "companion",
-    "easyremote", "backend", "product",
+    "gateway", "mission", "publication", "host_binding", "surface",
+    "compatibility", "wrapper", "companion", "easyremote", "backend",
+    "product",
 )
 ACTION_REPORTS = {
     "go": os.environ.get("EASYNET_SDK_PARITY_GO_REPORT", "sdk/conformance/runner/go-action-adapter-report.json"),

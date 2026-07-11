@@ -1,0 +1,16 @@
+id: runtime/ability_lowering
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Typed capability providers share one Addressing-backed lowering path into a complete Runtime Core Invocation.
+steps:
+  - action: require_explicit_caller
+  - action: require_explicit_nonce_and_causal_context
+  - action: delegate_descriptor_and_subject_projection
+  - action: preserve_metadata_without_profile_injection
+  - action: preserve_typed_runtime_failure
+expect:
+  result: canonical_runtime_ability_lowering
+  manufactured_caller: false
+  product_metadata: false

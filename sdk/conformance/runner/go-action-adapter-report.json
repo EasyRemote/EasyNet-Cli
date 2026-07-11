@@ -63,6 +63,18 @@
       "status": "passed"
     },
     {
+      "case_id": "runtime/ability_lowering",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go"
+        }
+      ],
+      "message": "Go capability providers share one Addressing-backed lowering path that preserves explicit caller, nonce, causal context, metadata, and typed runtime failures.",
+      "profile": "runtime_core",
+      "status": "passed"
+    },
+    {
       "case_id": "authority/mutual_exclusion",
       "evidence": [
         {

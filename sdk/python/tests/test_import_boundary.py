@@ -10,6 +10,7 @@ class ImportBoundaryTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         private_cabi = root / "_cabi.py"
         axon_addressing = root / "axon_addressing.py"
+        directory = root / "directory.py"
         forbidden = [
             "import ctypes",
             "from ctypes",
@@ -28,7 +29,7 @@ class ImportBoundaryTests(unittest.TestCase):
                 continue
             body = path.read_text()
             for needle in forbidden:
-                if path == axon_addressing and needle == "easynet_":
+                if path in {axon_addressing, directory} and needle == "easynet_":
                     continue
                 self.assertNotIn(needle, body, f"{path} contains {needle!r}")
 
@@ -56,13 +57,12 @@ class ImportBoundaryTests(unittest.TestCase):
             "ChatCompletionRequest",
             "StreamChatCompletionRequest",
             "GatewayLifecycleFacade",
-            "DirectoryClient",
             "ReceiptClient",
             "MissionClient",
         ):
             self.assertNotIn(name, exported)
             self.assertFalse(hasattr(easynet_sdk, name), name)
-        for name in ("AddressingClient", "RuntimeClient", "InvocationDraft"):
+        for name in ("AddressingClient", "DirectoryClient", "RuntimeClient", "InvocationDraft"):
             self.assertIn(name, exported)
             self.assertTrue(hasattr(easynet_sdk, name), name)
 

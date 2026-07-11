@@ -14,7 +14,6 @@ for path in \
   sdk/go/admin.go \
   sdk/go/companion.go \
   sdk/go/compatibility.go \
-  sdk/go/directory.go \
   sdk/go/events.go \
   sdk/go/host_binding.go \
   sdk/go/identity.go \
@@ -26,7 +25,6 @@ for path in \
   sdk/python/easynet_sdk/companion.py \
   sdk/python/easynet_sdk/compatibility.py \
   sdk/python/easynet_sdk/daemon_profiles.py \
-  sdk/python/easynet_sdk/directory.py \
   sdk/python/easynet_sdk/events.py \
   sdk/python/easynet_sdk/host_binding.py \
   sdk/python/easynet_sdk/identity.py \
@@ -55,25 +53,21 @@ if ((${#production_sources[@]} == 0)); then
   fail "no SDK production sources found"
 fi
 
-forbidden_type_pattern='\b(Mission(Client|Transport|Status|Run|Event|Plan)?|Admin(Client|Transport|Carrier|Gateway|Agent|Session)?|Gateway(Status|Client|Transport|Lifecycle)?|Directory(Client|Transport|Query|Page|Subscription)?|IdentityClient|Publication(Client|Transport|Catalog|Resource)?|HostBinding(Client|Transport|Lifecycle)?|Surface(Client|Transport|Page|Manifest|Health)?|Compatibility(Client|Transport|Carrier|Model|Chat|File)?|Wrapper(Client|Transport|Carrier|File|Terminal|Browser|Media|RemoteDesktop)?|Companion(Client|Transport|Desired|Observed|Projected|Supervisor|Boot|Stop)?|AccessControl(Client|Transport|Carrier)?|EventClient|EventsCarrierBase|ReceiptClient|RuntimeProfileBundle|DaemonProfileBridge|DaemonHandleProfiles)\b'
+forbidden_type_pattern='\b(Mission(Client|Transport|Status|Run|Event|Plan)?|Admin(Client|Transport|Carrier|Gateway|Agent|Session)?|Gateway(Status|Client|Transport|Lifecycle)?|IdentityClient|Publication(Client|Transport|Catalog|Resource)?|HostBinding(Client|Transport|Lifecycle)?|Surface(Client|Transport|Page|Manifest|Health)?|Compatibility(Client|Transport|Carrier|Model|Chat|File)?|Wrapper(Client|Transport|Carrier|File|Terminal|Browser|Media|RemoteDesktop)?|Companion(Client|Transport|Desired|Observed|Projected|Supervisor|Boot|Stop)?|AccessControl(Client|Transport|Carrier)?|EventClient|EventsCarrierBase|RuntimeProfileBundle|DaemonProfileBridge|DaemonHandleProfiles)\b'
 
 if rg -n "$forbidden_type_pattern" "${production_sources[@]}"; then
   fail "product type or profile bundle leaked into runtime SDK production source"
 fi
 
-forbidden_ability_pattern="[\"'](mission\\.|agent\\.(start|stop|refresh|list)|openai\\.|pages\\.|project_list[\"']|invocation\\.history\\.|federation\\.subscribe_directory|namespace\\.resolve)"
+forbidden_ability_pattern="[\"'](mission\\.|agent\\.(start|stop|refresh|list)|openai\\.|pages\\.|project_list[\"']|invocation\\.history\\.)"
 if rg -n "$forbidden_ability_pattern" "${production_sources[@]}"; then
   fail "product ability literal leaked into runtime SDK production source"
 fi
 
 for path in \
-  sdk/schemas/access-control.schema.json \
   sdk/schemas/admin.schema.json \
   sdk/schemas/compatibility.schema.json \
-  sdk/schemas/directory-page.schema.json \
-  sdk/schemas/events.schema.json \
   sdk/schemas/gateway.schema.json \
-  sdk/schemas/identity.schema.json \
   sdk/schemas/publication.schema.json
 do
   [[ ! -e "$path" ]] || fail "retired product schema still exists: $path"
@@ -83,8 +77,6 @@ if find sdk/schemas -maxdepth 1 -type f \( \
   -name 'admin-*' -o \
   -name 'compatibility-*' -o \
   -name 'desktop-companion-*' -o \
-  -name 'directory-*' -o \
-  -name 'events-*' -o \
   -name 'host-stream-*' -o \
   -name 'mission-*' -o \
   -name 'surface-*' -o \
@@ -96,7 +88,7 @@ if find sdk/schemas -maxdepth 1 -type f \( \
 \) -print -quit | grep -q .; then
   find sdk/schemas -maxdepth 1 -type f \( \
     -name 'admin-*' -o -name 'compatibility-*' -o -name 'desktop-companion-*' -o \
-    -name 'directory-*' -o -name 'events-*' -o -name 'host-stream-*' -o \
+    -name 'host-stream-*' -o \
     -name 'mission-*' -o -name 'surface-*' -o -name 'browser-session.schema.json' -o \
     -name 'file.schema.json' -o -name 'media-session.schema.json' -o \
     -name 'remote-desktop.schema.json' -o -name 'terminal.schema.json' \
@@ -105,11 +97,8 @@ if find sdk/schemas -maxdepth 1 -type f \( \
 fi
 
 if find sdk/conformance/cases -maxdepth 1 -type f \( \
-  -name 'access-control-*' -o \
   -name 'admin-*' -o \
   -name 'compatibility-*' -o \
-  -name 'directory-*' -o \
-  -name 'events-*' -o \
   -name 'host-binding-*' -o \
   -name 'mission-*' -o \
   -name 'publication-*' -o \
@@ -118,8 +107,8 @@ if find sdk/conformance/cases -maxdepth 1 -type f \( \
   -name 'runtime-companion-*' \
 \) -print -quit | grep -q .; then
   find sdk/conformance/cases -maxdepth 1 -type f \( \
-    -name 'access-control-*' -o -name 'admin-*' -o -name 'compatibility-*' -o \
-    -name 'directory-*' -o -name 'events-*' -o -name 'host-binding-*' -o \
+    -name 'admin-*' -o -name 'compatibility-*' -o \
+    -name 'host-binding-*' -o \
     -name 'mission-*' -o -name 'publication-*' -o -name 'surface-*' -o \
     -name 'wrapper-*' -o -name 'runtime-companion-*' \
   \) -print >&2

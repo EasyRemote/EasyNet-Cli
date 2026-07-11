@@ -249,13 +249,17 @@ value → existing HTTP flow (kept until Phase 3).
 - **Phase 1 (P0, this branch, reversible):** the above. URA flow added; HTTP
   flow untouched; nothing deleted. Verify a self-hosted URA join end-to-end
   with `federation gen-cert` + `--hub-ca`.
-- **Phase 2 (Axon-coordinated):** move multi-user account binding into a
-  `federation.join` arg + receipt (so `easynet.run`'s `username`/`user_id`
-  binding survives without HTTP); rewrite the backend HTTP pairing as a facade
-  over `federation.join`.
+- **Phase 2 (Axon-coordinated):** implement the product-neutral
+  `PrincipalLifecycle` from `daemon-sdk-requirements-v1.md` and allow
+  `federation.join` to carry an admitted principal-enrollment proof. Do not put
+  product `username`/`user_id` fields into the canonical join contract. Rewrite
+  backend HTTP pairing as a facade that maps the authenticated account to a
+  Principal URA through the Go SDK and then invokes the same lifecycle/join
+  transitions used by a backend-free Hub.
 - **Phase 3 (IRREVERSIBLE):** delete `preflight`/`validate`/`pick_validate_base`,
   `credential_token`, `hub_api_base`, the verify-credential calls. Only after
-  Phase 2 multi-user parity is proven.
+  Phase 2 multi-user parity and the standalone-Hub acceptance in
+  `daemon-sdk-requirements-v1.md` section 14.3 are proven.
 
 ### Acceptance (Phase 1)
 
@@ -273,8 +277,9 @@ value → existing HTTP flow (kept until Phase 3).
 The cold-start trust bootstrap is fully solved for public-WebPKI hubs and for
 self-hosted hubs that pin `--hub-ca`. The one unsafe configuration (private
 cert, no `--hub-ca`, non-public domain) is closed by the hard-fail ruling, not
-by making it work. Multi-user account binding genuinely breaks if HTTP is
-removed without Phase 2 — which is why Phase 1 keeps both paths.
+by making it work. Multi-user enrollment genuinely breaks if HTTP is removed
+before the canonical PrincipalLifecycle and admitted enrollment proof exist —
+which is why Phase 1 keeps both paths.
 
 ---
 

@@ -15,8 +15,9 @@ Axon             URA/DescriptorRef grammar, canonical Invocation, signatures,
 EasyNet daemon   device/Hub lifecycle, descriptor projection, authority and
                  implementation binding, local policy, plugins, Mission/EAL,
                  resources, and local dispatch
-CLI / FFI / SDK  product-neutral lifecycle, Addressing and complete-Invocation
-                 clients of the daemon
+CLI / FFI / SDK  product-neutral lifecycle, Addressing, identity/signing,
+                 PrincipalLifecycle, Directory, complete Invocation,
+                 receipt/causal facts, runtime events and administration
 Backend          EasyNet product DTOs, read models, HTTP/UI/session/DB policy
 EasyRemote       Mission, hosting, publication and remote-control ergonomics
 ```
@@ -66,15 +67,18 @@ envelopes, and caller reconstruction are not protocol paths.
 
 Language facades consume the generic daemon runtime model: daemon lifecycle,
 complete Invocation, stream/bidi, typed error, Axon-delegated Addressing,
-authority and opaque terminal receipt facts. Product-shaped convenience APIs,
-directory views and receipt-history projections belong in EasyNet backend,
-EasyRemote or another downstream product—not in the runtime SDK—and must not
-introduce another transport, URA grammar or canonical model.
+identity/signing, PrincipalLifecycle, canonical Directory resolution,
+authority, receipt/causal facts, runtime event cursors and administration.
+Product-shaped workflows, dashboard Directory views, receipt-history pages and
+event presentation belong in EasyNet backend, EasyRemote or another downstream
+product. Those projections must not introduce another transport, URA grammar,
+principal lifecycle, trust store or canonical model.
 
 The current native surface is generic C ABI v5 with an exact 54-symbol
 allowlist. Go and Python expose the same product-neutral capability-state
 matrix. Node, Java and Swift expose supported subsets; they do not publish
-placeholder product clients. Removed product profiles have no aliases and no
+placeholder product clients. Product-specific profiles are removed only after
+their generic capability has been extracted and consumers have migrated; no
 binding probes a retired C symbol.
 
 The normative SDK contract is

@@ -78,7 +78,7 @@
     {
       "capability_id": "complete_invocation_draft",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-builder-handle-state.yaml", "sdk/conformance/cases/authority-mutual-exclusion.yaml"],
+      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-builder-handle-state.yaml", "sdk/conformance/cases/authority-mutual-exclusion.yaml", "sdk/conformance/cases/runtime-ability-lowering.yaml"],
       "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/invocation_test.go"}]},
       "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_invocation.py"}]},
       "remaining": "Product argument DTO validation remains downstream."
@@ -98,6 +98,46 @@
       "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/managed_signing_test.go"}]},
       "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_managed_signing.py"}]},
       "remaining": "Product key-administration workflows remain downstream."
+    },
+    {
+      "capability_id": "principal_lifecycle",
+      "profile": "principal",
+      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
+      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
+      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
+      "remaining": "Implement the single persistent provider, admitted proof construction, replay protection and standalone-Hub cutover."
+    },
+    {
+      "capability_id": "directory_resolution",
+      "profile": "directory",
+      "shared_cases": ["sdk/conformance/cases/directory-resolution-seam.yaml"],
+      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/directory_test.go"}]},
+      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_directory.py"}]},
+      "remaining": "Resolve and stream projection exist; implement stable daemon list cursors and resumable subscription provider before provider-backed status."
+    },
+    {
+      "capability_id": "receipt_history",
+      "profile": "receipts",
+      "shared_cases": ["sdk/conformance/cases/receipt-history-seam.yaml"],
+      "go": {"status": "unsupported"},
+      "python": {"status": "unsupported"},
+      "remaining": "Restore verifiable receipt, causal, history and trace query contracts beyond terminal invocation facts."
+    },
+    {
+      "capability_id": "runtime_events",
+      "profile": "runtime_events",
+      "shared_cases": ["sdk/conformance/cases/runtime-events-seam.yaml"],
+      "go": {"status": "unsupported"},
+      "python": {"status": "unsupported"},
+      "remaining": "Restore typed cursors and bounded generic runtime event subscriptions."
+    },
+    {
+      "capability_id": "runtime_administration",
+      "profile": "runtime_administration",
+      "shared_cases": ["sdk/conformance/cases/runtime-administration-seam.yaml"],
+      "go": {"status": "unsupported"},
+      "python": {"status": "unsupported"},
+      "remaining": "Restore typed product-neutral runtime administration without hosted-agent or account workflows."
     },
     {
       "capability_id": "unary_invoke",

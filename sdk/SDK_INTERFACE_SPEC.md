@@ -17,8 +17,8 @@ requirements are in
 | --- | --- |
 | Axon | URA grammar and typed builders, descriptor-reference grammar, Invocation canonical bytes, admission, transport call modes, receipt cryptography |
 | daemon | process lifecycle, catalog assembly, governed ability execution, routing, persistence and transport providers |
-| runtime SDK | product-neutral lifecycle, Addressing, complete Invocation, signing, handle, stream, bidi, health and typed-error projections |
-| products | concrete ability names and arguments, directory/read models, publication, Mission/EAL ergonomics, hosted-agent administration, pages, OpenAI compatibility, host bindings and UI/application state |
+| runtime SDK | product-neutral lifecycle, Addressing, identity/signing, PrincipalLifecycle, Directory resolution, complete Invocation, receipt/causal facts, runtime events, administration, health and typed errors |
+| products | concrete workflows and arguments, product directory/read-model views, publication UX, Mission/EAL ergonomics, hosted-agent workflows, pages, OpenAI compatibility, host bindings and UI/application state |
 
 The SDK may project an Axon-owned value, but it must not independently parse,
 canonicalize or sign that value. A product may invoke a governed ability
@@ -33,11 +33,25 @@ SdkEnvironment
        -> RuntimeClient
        -> HealthClient
        -> Addressing
+       -> RuntimeIdentityClient
+       -> ManagedSigningClient
+       -> PrincipalClient
+       -> DirectoryClient
+       -> ReceiptClient
+       -> RuntimeEventClient
+       -> RuntimeAdminClient
   -> DaemonControl
        -> DaemonHandle
             -> RuntimeClient
             -> HealthClient
             -> Addressing
+            -> RuntimeIdentityClient
+            -> ManagedSigningClient
+            -> PrincipalClient
+            -> DirectoryClient
+            -> ReceiptClient
+            -> RuntimeEventClient
+            -> RuntimeAdminClient
 
 RuntimeClient
   -> InvocationBuilder
@@ -60,6 +74,10 @@ return `nil`/`None` to represent a missing required provider.
 | Concept | Responsibility | Prohibited responsibility |
 | --- | --- | --- |
 | `Addressing` | Delegate URA, AbilityDescriptorRef and descriptor-bound subject build/parse to Axon | local grammar, string-prefix inference, product labels |
+| `RuntimeIdentityClient` | Project runtime identities and owner-bound sign-only capabilities | private-key export, account records, role aliases |
+| `ManagedSigningClient` | Create/list/rotate/revoke subject-bound managed keys through key-service | vault access, user enrollment policy |
+| `PrincipalClient` | Operate the admitted PrincipalLifecycle and public-key bindings | passwords, OAuth sessions, private-key custody |
+| `DirectoryClient` | Resolve and subscribe to canonical URA/ability reachability facts | product dashboard rows, UI aggregation |
 | `AbilityDescriptorProjection` | Project the governed descriptor aggregate | deployment configuration, handler binding, product catalog rows |
 | `AuthorityClient` | Project or materialize canonical delegation/session-authority metadata | authorization policy, local signing grammar, product account state |
 | `RuntimeClient` | Execute a complete Invocation through one runtime provider | product ability methods, caller reconstruction, service location |
@@ -68,14 +86,20 @@ return `nil`/`None` to represent a missing required provider.
 | `SignedInvocation` | Hold submit-ready caller- or daemon-signed material | mutation after signing |
 | `InvocationHandle` | Observe, cancel and close a submitted Invocation | product job lifecycle |
 | `InvocationResult` | Project terminal output, error and receipt facts | product response normalization |
+| `ReceiptClient` | Project verifiable receipt/causal facts and continuation references | product ledger pages, invented receipt identities |
+| `RuntimeEventClient` | Consume bounded runtime event streams with typed cursors | product event buses and UI events |
+| `RuntimeAdminClient` | Control product-neutral daemon/runtime lifecycle and readiness | hosted-agent product workflow, account administration |
 | `StreamHandle` | Ordered server-stream state and bounded buffering | product event buses |
 | `BidiSession` | Bidirectional frame lifecycle and terminal state | terminal/browser/media product sessions |
 | `HealthClient` | Runtime readiness and diagnostics | product route health |
 
-Generic receipt facts that are already present in an `InvocationResult` may be
-represented as opaque typed values for causal continuation. Fetching invocation
-history, projecting a product ledger page or inventing receipt resource names
-is not a runtime SDK profile.
+Generic receipt facts, verification inputs and causal continuation references
+are runtime SDK concepts. Product ledger pages, display aggregation and
+invented receipt resource names remain downstream product concerns.
+
+Generic Directory reachability is also an SDK concept. A concrete device
+dashboard, federated user-device table or product catalog page remains a
+product projection over those facts.
 
 ## Complete Invocation
 
@@ -146,22 +170,27 @@ The stable C boundary contains only:
 - health/diagnostics and canonical Addressing operations required by bindings;
 - opaque memory/handle management.
 
-There are no Admin, Directory, Mission, Publication, Surface, OpenAI,
-HostBinding, Events, Wrappers or other product-domain symbols. Typed product
-helpers live downstream and lower to generic Invocation.
+There are no one-method-per-ability or product-domain C symbols. Identity,
+PrincipalLifecycle, Directory, receipt, events and runtime administration use
+generic handle/Invocation operations at the ABI boundary; language clients may
+provide typed provider-backed projections. Mission, Publication, Surface,
+OpenAI, HostBinding, Wrappers and other product helpers live downstream.
 
 ## Forbidden SDK surfaces
 
 The following are architecture violations in any language binding:
 
 - product profile bundles or service locators;
-- `MissionClient`, `AdminClient`, `DirectoryClient`, `PublicationClient`,
-  `SurfaceClient`, `CompatibilityClient`, `HostBindingClient`, product
-  `EventClient`, convenience wrapper clients or equivalents;
+- `MissionClient`, product account/admin clients, `PublicationClient`,
+  `SurfaceClient`, `CompatibilityClient`, `HostBindingClient`, product event
+  clients, convenience wrapper clients or equivalents;
+- product Directory rows or product event/receipt presentations inside the
+  generic `DirectoryClient`, `RuntimeEventClient` or `ReceiptClient`;
 - product ability literals such as `mission.run`, `agent.start`,
   `openai.chat_completions` or `pages.publish`;
-- product-specific directory, receipt-history, account, pairing, page, model,
-  file-transfer, terminal or desktop-companion DTOs;
+- product-specific directory views, receipt-history pages, account, pairing,
+  page, model, file-transfer, terminal or desktop-companion DTOs;
+- a second PrincipalLifecycle, trust store, key inventory or recovery truth;
 - a second URA/descriptor parser, Invocation envelope or call-mode enum;
 - raw C ABI product symbols or a compatibility alias for removed symbols;
 - optional-provider return values for capabilities declared always available;
@@ -182,7 +211,8 @@ A binding is stable only when:
 - the complete Invocation and lifecycle conformance cases pass;
 - all URA/descriptor operations delegate to Axon;
 - its capability states match the Go/Python matrix;
-- no product profile module, product ability literal, domain C symbol, legacy
-  alias or fallback provider is reachable;
+- no product workflow module, product ability literal, domain C symbol,
+  parallel principal/key model, legacy parser or fallback provider is
+  reachable;
 - downstream product tests prove their local typed facades lower to generic
   Invocation without owning canonical protocol logic.

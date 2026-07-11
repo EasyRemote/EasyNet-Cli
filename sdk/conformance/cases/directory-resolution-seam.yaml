@@ -1,0 +1,18 @@
+id: directory/resolution_seam
+profile: directory
+required_for:
+  - go
+  - python
+description: Canonical directory resolution and subscriptions share one product-neutral contract.
+steps:
+  - action: require_ura_input
+  - action: require_bounded_page
+  - action: require_typed_resume_cursor
+  - action: require_snapshot_before_live_events
+  - action: delegate_directory_event_wire_to_axon
+expect:
+  result: directory_resolution_contract
+  provider_state: seam
+  resolve_provider: true
+  list_cursor_provider: false
+  resume_provider: false

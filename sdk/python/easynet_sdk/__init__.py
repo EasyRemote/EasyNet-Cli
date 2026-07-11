@@ -35,13 +35,16 @@ from .client import Client, DiscoveryTransport, FeatureSet, Version
 from .connection import *
 from .control_ipc import *
 from .daemon import *
+from .directory import *
 from .environment import NativeRuntimeHandle, SdkEnvironment, default_environment
 from .errors import *
 from .health import *
 from .invocation import *
 from .managed_signing import *
+from .principal import *
 from .invocation_state import InvocationLifecycleState
 from .runtime import *
+from .runtime_ability import *
 from .runtime_identity import *
 from .signer_handle import SignerHandle
 from .signing import *

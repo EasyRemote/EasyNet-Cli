@@ -25,6 +25,38 @@ auditing, and lifecycle rules; they do not share record semantics.
 rotatable policy key inventory. Runtime-role aliases are invalid: Device and
 Hub owners on the same host still have distinct keys.
 
+## Relationship to PrincipalLifecycle
+
+The key service is a custody provider, not a user registry, login system,
+principal lifecycle or authorization database. Supporting many owners and many
+subject-bound keys does not by itself complete backend-free multi-user Hub
+behavior.
+
+The canonical `PrincipalLifecycle` is specified in
+`daemon-sdk-requirements-v1.md` and owns:
+
+- first-principal enrollment authority;
+- stable Principal/User URA state;
+- public-key binding membership;
+- authorization grants;
+- recovery policy and single-use recovery proofs;
+- suspend/reactivate/delete transitions and their receipts.
+
+The key service owns only the private-key side of those transitions. It may
+create or operate a key after receiving a typed, authorized intent and may
+return the public projection needed for a principal binding. It does not decide
+who may create a user, add a device, replace a key, recover an account or grant
+administrative authority.
+
+One User URA may bind multiple managed-signing keys. Each key keeps its own
+identifier, immutable subject binding, epoch and lifecycle state. Revoking one
+key cannot revoke the Principal or sibling keys unless an admitted
+PrincipalLifecycle transition explicitly changes those separate facts.
+
+EasyNet backend account authentication and backend-free CLI enrollment both
+map to the same daemon PrincipalLifecycle. Neither path may introduce a second
+private-key store, trust aggregate, admission verifier or recovery authority.
+
 ## Authority boundary
 
 The service exposes length-prefixed JSON over the daemon-local endpoint. Every
@@ -155,4 +187,8 @@ Completion requires:
 - Go and Python provider conformance for public key and canonical-byte sign;
 - import gates forbidding `keyring.json`, `KeyringHandle`, and private-key
   fields in product/SDK production code;
-- Hub and EasyRemote end-to-end runtime checks.
+- Hub and EasyRemote end-to-end runtime checks;
+- one backend-free Hub test with two User URAs, at least two keys per user,
+  single-key revocation, sibling-key survival and restart persistence; and
+- one Backend-present test proving account enrollment maps to the same daemon
+  principal/key truth without a second key-service or trust store.

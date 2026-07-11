@@ -25,16 +25,22 @@ are in
 
 - environment and daemon/runtime lifecycle;
 - canonical Addressing delegated to Axon;
+- runtime identity and sign-only capabilities;
+- managed-signing lifecycle through the daemon key-service;
+- product-neutral PrincipalLifecycle and public-key bindings;
+- canonical Directory resolution/subscription;
 - governed AbilityDescriptor and authority metadata projection;
 - complete Invocation build, prepare, sign, invoke, submit and handle state;
 - ordered server streams and bidirectional sessions;
 - typed errors, runtime health and diagnostics;
-- opaque terminal receipt facts needed for causal continuation.
+- receipt/causal facts and runtime event cursors;
+- product-neutral runtime administration.
 
-The SDK does not expose Directory, Mission, Admin, Publication, Pages/Surface,
-OpenAI compatibility, HostBinding, product Events, convenience wrappers,
-desktop companions or other product profiles. Those concepts live with the
-product that owns their behavior and lower through `RuntimeClient`.
+The SDK does not expose product Directory views, Mission workflows, product
+account/admin APIs, Publication UX, Pages/Surface, OpenAI compatibility,
+HostBinding, product event presentations, convenience wrappers, desktop
+companions or other product workflows. Those concepts live with the product
+that owns their behavior and consume the generic capabilities above.
 
 ## ABI
 
@@ -78,6 +84,7 @@ consumer release stability remain separate delivery concerns.
 - no parallel Invocation or call-mode taxonomy;
 - no product ability literals in public bindings;
 - no product-domain C symbols;
+- no parallel PrincipalLifecycle, trust store, key inventory or recovery truth;
 - no service locator or optional-provider fallback;
 - no load-error-to-empty/default behavior;
 - no legacy address-era names for URA semantic identity.
