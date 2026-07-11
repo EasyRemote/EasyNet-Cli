@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Lock
 from typing import Protocol, TypeVar
 
@@ -19,6 +20,12 @@ from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
 from .axon_addressing import AddressingClient
 from .runtime import RuntimeClient
+from .runtime_environment import (
+    RuntimeIdentityProjection,
+    read_runtime_identity_projection,
+    runtime_credentials_path,
+    runtime_state_root,
+)
 from .transport import DaemonInvocationTransport
 
 
@@ -338,6 +345,27 @@ class SdkEnvironment:
 
         self._require_open()
         return self.control_path or str(default_control_path())
+
+    def runtime_state_root(self) -> Path:
+        """Return the SDK-owned local runtime state directory."""
+
+        return runtime_state_root(self.resolved_control_path())
+
+    def runtime_credentials_path(self) -> Path:
+        """Return the paired runtime identity projection path."""
+
+        return runtime_credentials_path(self.resolved_control_path())
+
+    def runtime_identity_projection(
+        self,
+        credentials_path: str | Path = "",
+    ) -> RuntimeIdentityProjection:
+        """Read the paired runtime identity projection for this environment."""
+
+        return read_runtime_identity_projection(
+            credentials_path,
+            control_path=self.resolved_control_path(),
+        )
 
     def _connect_options(self, options: ConnectOptions) -> ConnectOptions:
         control_path = options.control_path or self.resolved_control_path()

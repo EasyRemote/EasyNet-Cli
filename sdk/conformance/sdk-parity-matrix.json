@@ -71,7 +71,7 @@
           }
         ]
       },
-      "remaining": "Lifecycle is provider-backed; product orchestration remains downstream."
+      "remaining": "Lifecycle is provider-backed, and Go/Python now expose a generic runtime environment projection for state root, credentials path and paired runtime identity. EasyRemote consumes that SDK projection for LocalIdentity instead of parsing daemon credentials directly. Product orchestration remains downstream."
     },
     {
       "capability_id": "runtime_connection",
@@ -367,7 +367,7 @@
           }
         ]
       },
-      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI lifecycle surface now has real CLI binary-to-daemon UDS E2E evidence for bootstrap, enrollment-consume, add-key, rotate, revoke, recovery, suspend/reactivate, grant and delete, and Hub URA join accepts an enrollment-id shorthand for device principal binding. Backend now has a tested single SDK profile graph proving PrincipalLifecycle, receipt, directory, events, admin and access-control clients derive from one Go SDK native runtime provider, and Backend account signing-key logic is tested through the real Go SDK PrincipalLifecycle adapter for get/create/bind-first-key lowering. Standalone-Hub recovery UX and live Backend-present account-flow E2E remain before cutover-ready."
+      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI lifecycle surface now has real CLI binary-to-daemon UDS E2E evidence for bootstrap, enrollment-consume, add-key, rotate, revoke, recovery, suspend/reactivate, grant and delete, and Hub URA join accepts an enrollment-id shorthand for device principal binding. Backend now has a tested single SDK profile graph proving PrincipalLifecycle, receipt, directory, events, admin and access-control clients derive from one Go SDK native runtime provider, Backend account signing-key logic is tested through the real Go SDK PrincipalLifecycle adapter for get/create/bind-first-key lowering, and the Backend process-level HTTP E2E registers browser signing keys through /api/v1/user/me/signing-keys before signed invocation admission reads the same lifecycle projection. Standalone-Hub recovery UX and live daemon-backed Backend-present account-flow E2E remain before cutover-ready."
     },
     {
       "capability_id": "principal_enrollment",
@@ -394,7 +394,7 @@
           }
         ]
       },
-      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation. The CLI now exposes first-principal bootstrap and enrollment-consume as product-neutral create plus bind-first-key facades with real CLI binary-to-daemon UDS E2E evidence, and Hub URA join lowers --principal-enrollment-id into the same federation.join PrincipalLifecycle proof seam. federation.join has daemon-side RuntimeTrust owner binding, real daemon UDS E2E evidence, and real CLI binary-to-hub-daemon TCP+TLS E2E evidence for backend-free Hub URA join, Hub key import and principal enrollment proof owner binding. Backend single-runtime profile graph and account signing-key SDK-adapter evidence now prove the account adapter can consume PrincipalLifecycle from the same SDK runtime provider; full standalone-Hub recovery UX and live Backend-present E2E remain incomplete."
+      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation. The CLI now exposes first-principal bootstrap and enrollment-consume as product-neutral create plus bind-first-key facades with real CLI binary-to-daemon UDS E2E evidence, and Hub URA join lowers --principal-enrollment-id into the same federation.join PrincipalLifecycle proof seam. federation.join has daemon-side RuntimeTrust owner binding, real daemon UDS E2E evidence, and real CLI binary-to-hub-daemon TCP+TLS E2E evidence for backend-free Hub URA join, Hub key import and principal enrollment proof owner binding. Backend single-runtime profile graph, account signing-key SDK-adapter evidence and process-level HTTP signing-key route evidence now prove the account adapter can consume PrincipalLifecycle from the same SDK runtime provider; full standalone-Hub recovery UX and live daemon-backed Backend-present E2E remain incomplete."
     },
     {
       "capability_id": "principal_public_key_bindings",

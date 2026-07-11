@@ -46,6 +46,7 @@ from .principal import *
 from .invocation_state import InvocationLifecycleState
 from .receipt import *
 from .runtime import *
+from .runtime_environment import *
 from .runtime_admin import *
 from .runtime_ability import *
 from .runtime_events import *
@@ -283,6 +284,7 @@ __all__ = [
     "RuntimeEventSubscriptionRequest",
     "RuntimeHandleEventProvider",
     "RuntimeHealth",
+    "RuntimeIdentityProjection",
     "RuntimePrincipalProvider",
     "RuntimeReadiness",
     "RuntimeReceipt",
@@ -349,8 +351,12 @@ __all__ = [
     "project_ability_descriptor",
     "project_descriptor_ref",
     "read_control_discovery",
+    "read_runtime_identity_projection",
     "resource_ura",
     "retryable_for_hint",
+    "runtime_credentials_path",
+    "runtime_identity_projection_from_json",
+    "runtime_state_root",
     "runtime_event_subscription_ability",
     "signer_handle_provenance_error",
     "start_daemon",

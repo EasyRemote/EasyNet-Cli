@@ -224,6 +224,30 @@ def check_backend() -> None:
     ]:
         forbid_contains(user_key_flow_test, forbidden, "backend:user_signing_key_sdk_flow")
 
+    http_user_key_flow_test = require_file(
+        backend,
+        "internal/handler/bridge_http_e2e_test.go",
+        "backend:http_user_signing_key_sdk_flow",
+    )
+    for required in [
+        "TestBridge_HTTP_E2E_RegisterPairTwoDevicesAndSignedTargetedInvoke",
+        "registerHTTPSigningKey",
+        '"/api/v1/user/me/signing-keys"',
+        "newBridgeHTTPTestPrincipal",
+        "principalprofile.NewClient",
+        "easynetsdk.NewRuntimeClient",
+        '"principal.lifecycle.get"',
+        '"principal.lifecycle.create"',
+        '"principal.lifecycle.bind_first_key"',
+        "requirePrincipalAbilitySubsequence",
+    ]:
+        require_contains(http_user_key_flow_test, required, "backend:http_user_signing_key_sdk_flow")
+    for forbidden in [
+        "PrincipalFixture",
+        "AddBinding(",
+    ]:
+        forbid_contains(http_user_key_flow_test, forbidden, "backend:http_user_signing_key_sdk_flow")
+
     user_key_list = require_file(
         backend,
         "internal/logic/auth/list_user_pubkeys.go",
@@ -278,8 +302,24 @@ def check_easyremote() -> None:
         "easynet_sdk.default_control_path().parent",
         "easynet_sdk.SdkEnvironment",
         "easynet_sdk.read_control_discovery",
+        "runtime_identity_projection",
+        "sdk_environment().runtime_identity_projection",
     ]:
         require_contains(config, required, "easyremote:config")
+    forbid_contains(config, "json.loads", "easyremote:config")
+
+    local_identity = require_file(easyremote, "easyremote/identity.py", "easyremote:local_identity")
+    for required in [
+        "from_runtime_projection",
+        "runtime_identity_projection()",
+        "projection.device_id",
+    ]:
+        require_contains(local_identity, required, "easyremote:local_identity")
+    for forbidden in [
+        "from .config import read_credentials",
+        "read_credentials()",
+    ]:
+        forbid_contains(local_identity, forbidden, "easyremote:local_identity")
 
     identity = require_file(easyremote, "easyremote/_sdk_identity.py", "easyremote:identity")
     for required in [
@@ -382,6 +422,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
     "$good_backend/internal/sdkadmin" \
     "$good_backend/internal/sdkaccesscontrol" \
     "$good_backend/internal/sdkprincipal" \
+    "$good_backend/internal/handler" \
     "$good_remote/easyremote/_sdk_transport"
   printf '%s\n' 'module easynet-backend' >"$good_backend/go.mod"
   cat >"$good_backend/internal/sdkdirectory/directory.go" <<'EOF'
@@ -460,6 +501,22 @@ var _ = []string{
   "principal.lifecycle.bind_first_key",
 }
 EOF
+  cat >"$good_backend/internal/handler/bridge_http_e2e_test.go" <<'EOF'
+package handler_test
+
+var _ = []string{
+  "TestBridge_HTTP_E2E_RegisterPairTwoDevicesAndSignedTargetedInvoke",
+  "registerHTTPSigningKey",
+  "/api/v1/user/me/signing-keys",
+  "newBridgeHTTPTestPrincipal",
+  "principalprofile.NewClient",
+  "easynetsdk.NewRuntimeClient",
+  "principal.lifecycle.get",
+  "principal.lifecycle.create",
+  "principal.lifecycle.bind_first_key",
+  "requirePrincipalAbilitySubsequence",
+}
+EOF
   cat >"$good_backend/internal/logic/auth/list_user_pubkeys.go" <<'EOF'
 package auth
 
@@ -477,6 +534,20 @@ import easynet_sdk
 ROOT = easynet_sdk.default_control_path().parent
 ENV = easynet_sdk.SdkEnvironment
 READ = easynet_sdk.read_control_discovery
+PROJECTION = "runtime_identity_projection"
+LOAD = "sdk_environment().runtime_identity_projection"
+def runtime_identity_projection(): pass
+def read_credentials(): pass
+read_credentials = read_credentials
+EOF
+  cat >"$good_remote/easyremote/identity.py" <<'EOF'
+from .config import runtime_identity_projection
+
+def from_runtime_projection(projection):
+    return projection.device_id
+
+def load():
+    return runtime_identity_projection()
 EOF
   cat >"$good_remote/easyremote/_sdk_identity.py" <<'EOF'
 import easynet_sdk

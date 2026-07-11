@@ -642,6 +642,12 @@ Directory/Receipt/runtime consumer cutover is now guarded by
 `tools/scripts/check-downstream-sdk-consumer-cutover.sh`, and product key
 custody/process/FFI escapes are guarded by
 `tools/scripts/check-product-key-custody-boundary.sh`.
+The SDK runtime environment projection now covers the local state root,
+credentials path and paired runtime identity in both Go and Python, and
+EasyRemote `LocalIdentity` consumes that projection instead of directly
+parsing daemon credentials. Those projection symbols and `SdkEnvironment`
+members are now tracked by the complete canonical public API inventory so
+future refactors cannot silently drop the public runtime model surface.
 They are intermediate convergence evidence, not completion of the
 Backend-present PrincipalLifecycle E2E or standalone-Hub recovery UX closure.
 
@@ -652,8 +658,12 @@ SDK native runtime provider and not from parallel daemon/key-service/trust-store
 construction. The account signing-key product flow now also has an in-process
 test through the real Go SDK PrincipalLifecycle adapter proving
 `get -> create -> bind_first_key` lowering for a Backend account User URA. This
-is necessary evidence for section 14.3, but it is not yet the live
-Backend-present account-flow E2E gate.
+has been extended to the Backend process-level HTTP E2E: the browser-facing
+`POST /api/v1/user/me/signing-keys` route now registers the public key through
+the same Go SDK PrincipalLifecycle adapter before signed invocation admission
+reads the same lifecycle projection. This is necessary evidence for section
+14.3, but it is not yet the live daemon-backed Backend-present account-flow E2E
+gate.
 
 The current remaining work is:
 
@@ -661,7 +671,7 @@ The current remaining work is:
   authentication to the same daemon runtime, Principal URA, key-service,
   grants, admission state and receipts without a second daemon/key-service or
   trust store. The single SDK profile graph is now pinned; the remaining proof
-  is a live account-flow E2E against the same daemon runtime;
+  is a live daemon-backed account-flow E2E against the same daemon runtime;
 - close the remaining standalone-Hub recovery UX edge cases beyond the
   existing TCP+TLS two-HOME lifecycle E2E. Provider and CLI evidence now pin
   replayed recovery proofs, suspended-principal recovery and deleted-principal
