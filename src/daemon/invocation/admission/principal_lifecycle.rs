@@ -276,6 +276,7 @@ impl<'a> PrincipalLifecycle<'a> {
             bindings: Vec::new(),
             enrollment_proof: Some(request.command.proof.clone()),
             recovery: None,
+            consumed_recovery_proofs: BTreeMap::new(),
             enrollments: Vec::new(),
             grants: Vec::new(),
             created_unix_ms: now,
@@ -591,6 +592,11 @@ impl<'a> PrincipalLifecycle<'a> {
             &request.replacement_key,
             ABILITY_PRINCIPAL_RECOVER,
         )?;
+        principal.consume_recovery_proof(
+            ABILITY_PRINCIPAL_RECOVER,
+            &request.principal_ura,
+            &request.command.proof.reference,
+        )?;
         principal.state = PrincipalState::Active;
         principal.bump(&request.command)?;
         self.register_key(
@@ -898,6 +904,8 @@ struct PrincipalRecord {
     enrollment_proof: Option<PrincipalProofRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<RecoveryPolicy>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    consumed_recovery_proofs: BTreeMap<String, i64>,
     #[serde(default)]
     enrollments: Vec<EnrollmentCapability>,
     #[serde(default)]
@@ -932,6 +940,25 @@ impl PrincipalRecord {
             return Err(Status::already_exists(format!(
                 "principal lifecycle idempotency_key `{}` was already used",
                 command.idempotency_key
+            )));
+        }
+        Ok(())
+    }
+
+    fn consume_recovery_proof(
+        &mut self,
+        ability: &'static str,
+        principal_ura: &str,
+        proof_reference: &str,
+    ) -> Result<(), Status> {
+        let proof_hash = recovery_proof_hash(principal_ura, proof_reference);
+        if self
+            .consumed_recovery_proofs
+            .insert(proof_hash, now_unix_ms() as i64)
+            .is_some()
+        {
+            return Err(Status::permission_denied(format!(
+                "{ability}: recovery proof reference has already been consumed"
             )));
         }
         Ok(())
@@ -1374,11 +1401,18 @@ impl<'a> PrincipalProofVerifier<'a> {
         command: &PrincipalCommand,
         accepted: &[PrincipalProofRequirement],
     ) -> Result<(), Status> {
-        if accepted.iter().any(|requirement| {
-            self.verify_one(*requirement, ability, principal_ura, command)
-                .is_ok()
-        }) {
-            return Ok(());
+        let mut direct_rejection = None;
+        for requirement in accepted {
+            match self.verify_one(*requirement, ability, principal_ura, command) {
+                Ok(()) => return Ok(()),
+                Err(status) if command.proof.kind == requirement.label() => {
+                    direct_rejection = Some(status);
+                }
+                Err(_) => {}
+            }
+        }
+        if let Some(status) = direct_rejection {
+            return Err(status);
         }
         let expected = accepted
             .iter()
@@ -1546,6 +1580,18 @@ impl<'a> PrincipalProofVerifier<'a> {
             .as_ref()
             .is_some_and(|policy| policy.enabled && policy.policy_ref == command.proof.reference)
         {
+            if ability == ABILITY_PRINCIPAL_RECOVER
+                && principal
+                    .consumed_recovery_proofs
+                    .contains_key(&recovery_proof_hash(
+                        principal_ura,
+                        &command.proof.reference,
+                    ))
+            {
+                return Err(Status::permission_denied(format!(
+                    "{ability}: recovery proof reference has already been consumed"
+                )));
+            }
             Ok(())
         } else {
             Err(Status::permission_denied(format!(
@@ -1699,6 +1745,11 @@ fn grant_id(principal_ura: &str, idempotency_key: &str) -> String {
 fn enrollment_id(principal_ura: &str, idempotency_key: &str) -> String {
     let digest = Sha256::digest(format!("{principal_ura}\0{idempotency_key}").as_bytes());
     format!("enroll_{}", hex::encode(&digest[..16]))
+}
+
+fn recovery_proof_hash(principal_ura: &str, proof_reference: &str) -> String {
+    let digest = Sha256::digest(format!("{principal_ura}\0{proof_reference}").as_bytes());
+    format!("recovery_{}", hex::encode(&digest[..16]))
 }
 
 fn required_text(
@@ -2235,6 +2286,112 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn recovery_proof_reference_is_single_use() {
+        let (_dir, ctx) = context();
+        let user = "easynet:///r/realm/user/alice";
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command("create", "bootstrap", None),
+                "principal_ura": user
+            }),
+        );
+        let first = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref("bind1", "bootstrap", "proof:create", Some(1)),
+                "principal_ura": user,
+                "public_key_b64": b64_pubkey(1)
+            }),
+        );
+        let first_binding_id = binding_id_at(&first, 0);
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "recovery-policy",
+                    "active_key",
+                    &first_binding_id,
+                    Some(2)
+                ),
+                "principal_ura": user,
+                "policy_ref": "recovery-policy:single-use"
+            }),
+        );
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_RECOVER,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "recover-once",
+                    "recovery",
+                    "recovery-policy:single-use",
+                    Some(3)
+                ),
+                "principal_ura": user,
+                "replacement_key": {
+                    "command": command("ignored-child", "recovery", None),
+                    "principal_ura": user,
+                    "public_key_b64": b64_pubkey(2)
+                }
+            }),
+        );
+
+        let err = ctx
+            .handle(
+                ABILITY_PRINCIPAL_RECOVER,
+                serde_json::to_vec(&json!({
+                    "request": {
+                        "command": command_for_actor_with_ref(
+                            user,
+                            "recover-replay",
+                            "recovery",
+                            "recovery-policy:single-use",
+                            Some(4)
+                        ),
+                        "principal_ura": user,
+                        "replacement_key": {
+                            "command": command("ignored-replay-child", "recovery", None),
+                            "principal_ura": user,
+                            "public_key_b64": b64_pubkey(3)
+                        }
+                    }
+                }))
+                .unwrap()
+                .as_slice(),
+            )
+            .expect_err("recovery proof replay must reject");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(err.message().contains("already been consumed"));
+
+        let loaded = PrincipalStore::load(&ctx.store_path, ABILITY_PRINCIPAL_GET).unwrap();
+        let principal = loaded.principals.get(user).unwrap();
+        assert_eq!(
+            principal
+                .bindings
+                .iter()
+                .filter(|binding| binding.state == KeyBindingState::Active)
+                .count(),
+            2
+        );
+        assert_eq!(principal.consumed_recovery_proofs.len(), 1);
+        assert!(principal
+            .consumed_recovery_proofs
+            .contains_key(&recovery_proof_hash(user, "recovery-policy:single-use")));
+        assert!(ctx
+            .runtime_trust
+            .cell
+            .snapshot()
+            .lookup_user_by_pubkey(user, &b64_pubkey(3))
+            .is_none());
     }
 
     #[test]

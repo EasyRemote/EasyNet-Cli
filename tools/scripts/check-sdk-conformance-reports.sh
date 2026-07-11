@@ -3,11 +3,18 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+CARGO_BIN="${CARGO:-cargo}"
+
+if ! command -v "$CARGO_BIN" >/dev/null 2>&1; then
+  if [[ -x "$HOME/.cargo/bin/cargo" ]]; then
+    CARGO_BIN="$HOME/.cargo/bin/cargo"
+  fi
+fi
 
 run_report() {
   local language="$1"
   local report="$2"
-  cargo run --quiet --bin sdk-conformance-runner -- \
+  "$CARGO_BIN" run --quiet --bin sdk-conformance-runner -- \
     --root "$REPO_ROOT" \
     --language "$language" \
     --adapter-report "$report" \

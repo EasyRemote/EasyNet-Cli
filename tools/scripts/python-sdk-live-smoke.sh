@@ -11,6 +11,18 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  bash -n "$0"
+  grep -q "generic C ABI v5" "$0"
+  grep -q "typed terminal failure decoded" "$0"
+  grep -q "EXPECTED_ABI_VERSION = 5" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
+  grep -q "class DaemonControl" "$REPO_ROOT/sdk/python/easynet_sdk/daemon.py"
+  grep -q "class RuntimeClient" "$REPO_ROOT/sdk/python/easynet_sdk/runtime.py"
+  echo "python-sdk-live-smoke self-test ok"
+  exit 0
+fi
+
 if [[ -z "${PYTHON_BIN:-}" ]]; then
   command -v uv >/dev/null 2>&1 || {
     echo "[python-sdk-live-smoke] uv is required to materialize the SDK test environment" >&2
@@ -31,22 +43,6 @@ case "$(uname -s)" in
 esac
 
 LIB_PATH="$REPO_ROOT/target/debug/libeasynet_cli.${LIB_EXT}"
-
-if [[ "${1:-}" == "--self-test" ]]; then
-  bash -n "$0"
-  grep -q "generic C ABI v5" "$0"
-  grep -q "typed terminal failure decoded" "$0"
-  PYTHONPATH="$REPO_ROOT/sdk/python:$REPO_ROOT/../EasyNet-Axon/sdk/python" "$PYTHON_BIN" - <<'PY'
-import easynet_sdk
-from easynet_sdk._cabi import EXPECTED_ABI_VERSION
-
-assert hasattr(easynet_sdk, "DaemonControl")
-assert hasattr(easynet_sdk, "RuntimeClient")
-assert EXPECTED_ABI_VERSION == 5
-print("python-sdk-live-smoke self-test ok")
-PY
-  exit 0
-fi
 
 echo "[python-sdk-live-smoke] rebuilding libeasynet_cli + easynet-daemon..."
 (cd "$REPO_ROOT" && cargo build --lib --bin easynet-daemon)

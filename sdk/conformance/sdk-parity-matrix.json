@@ -448,7 +448,7 @@
           }
         ]
       },
-      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and daemon lifecycle state now records recovery policy plus recovery-key addition; replay-protected single-use recovery proof verification and recovery E2E remain incomplete."
+      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and the daemon lifecycle provider now records recovery policy, consumes recovery proof references through a persisted single-use replay ledger, and projects recovered public keys through RuntimeTrust; downstream recovery UX edge cases and standalone/backend-present cutover evidence remain incomplete."
     },
     {
       "capability_id": "principal_authorization_grants",

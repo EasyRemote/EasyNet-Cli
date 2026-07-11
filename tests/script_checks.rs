@@ -64,6 +64,23 @@ fn sdk_parity_matrix_script_contract_holds() {
 }
 
 #[test]
+fn daemon_key_service_boundary_script_contract_holds() {
+    // Pins daemon key-service custody as the only private-key authority:
+    // no legacy keyring inventory, seed-shaped egress, SDK private-key input,
+    // caller-selected vault path, or raw signing Invocation surface may return.
+    run_bash_script("tests/scripts/test_check_daemon_key_service_boundary.sh");
+}
+
+#[test]
+fn sdk_cutover_readiness_script_contract_holds() {
+    // Pins the aggregate cutover-readiness gate wiring. The wrapper runs the
+    // source-of-truth self-test so Backend/EasyRemote boundary checks stay
+    // reachable from the normal Cargo script-check path without duplicating
+    // product boundary logic in Rust.
+    run_bash_script("tests/scripts/test_check_sdk_cutover_readiness.sh");
+}
+
+#[test]
 fn trace_parity_script_contract_holds() {
     // Covers happy, failure (missing fixture, extra key, removed key)
     // and edge cases (idempotence, path-only payload invariant).
