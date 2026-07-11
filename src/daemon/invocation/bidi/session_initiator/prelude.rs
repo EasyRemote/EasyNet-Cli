@@ -533,6 +533,7 @@ async fn send_federation_join_prelude(
         membership_ura: caller_ura.to_string(),
         public_key_hex: federation_join_public_key_hex(signer)?,
         pairing_secret: None,
+        principal_enrollment: None,
     };
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.join prelude serialize: {e}")))?;

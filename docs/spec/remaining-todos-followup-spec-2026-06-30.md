@@ -551,9 +551,19 @@ plus enrollment-capability enforcement have landed in the provider. The
 product-neutral CLI facade now covers the provider-backed lifecycle transition
 surface through the same daemon abilities, including create, bind-first-key,
 add-key, rotate-key, revoke-key, configure-recovery, recover, suspend,
-reactivate, delete, issue/revoke enrollment, issue/revoke grant and get. The
-backend-free URA join/user-lifecycle flow and the two end-to-end gates remain
-required.
+reactivate, delete, issue/revoke enrollment, issue/revoke grant and get. A
+provider-level backend-free scenario gate proves multi-user, multi-key
+enrollment, rotation, revocation, recovery, lifecycle state changes and
+persisted trust/lifecycle reload at the daemon aggregate boundary. A real
+daemon gRPC descriptor-ref E2E now drives the same `principal.lifecycle.*`
+surface through `DaemonInvocationService`, restarts the daemon, and verifies
+persisted PrincipalLifecycle plus trust-anchor public-key state without
+Backend, HTTP account state or a second auth store. The `federation.join`
+contract now has a product-neutral optional PrincipalLifecycle proof seam, and
+the Hub daemon validates that proof before atomically binding the joined Device
+URA to the User Principal in RuntimeTrust. The CLI/SDK first-user enrollment
+flow, full URA-only `federation.join` end-to-end gate, user lifecycle UX and
+the two standalone/backend-present end-to-end gates remain required.
 
 ---
 

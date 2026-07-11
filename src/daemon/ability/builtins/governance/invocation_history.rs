@@ -38,7 +38,7 @@ pub const ABILITY_HISTORY_PATH: &str =
     crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH;
 
 /// Daemon-internal, side-effect-free read RPC: fetch one ledger record by
-/// `request_id`.
+/// `request_id` or canonical invocation URA.
 ///
 /// Distinct from [`ABILITY_HISTORY_GET`]: this is NOT dispatched through the
 /// Axon LocalRuntime (which would append a second ledger row and corrupt the
@@ -65,9 +65,64 @@ pub fn record_by_request_id(
     if request_id.is_empty() {
         anyhow::bail!("invocation.record.get: request_id must not be empty");
     }
-    let query = InvocationLedgerQuery::new()
-        .key(InvocationLedgerFetchKey::RequestId(request_id.to_string()))
-        .limit(1);
+    record_by_query(
+        ledger,
+        InvocationLedgerQuery::new()
+            .key(InvocationLedgerFetchKey::RequestId(request_id.to_string()))
+            .limit(1),
+    )
+}
+
+/// Fetch one ledger record from the daemon-held ledger handle using the same
+/// key shape as `invocation.history.get`, without dispatching an Axon ability
+/// and without appending an observation row.
+pub fn record_by_args(ledger: &InvocationLedger, args: &Value) -> anyhow::Result<Option<Value>> {
+    let query = record_query_from_args(args)?;
+    record_by_query(ledger, query)
+}
+
+/// Fetch one trace graph from the daemon-held ledger handle using the same key
+/// shape as `invocation.trace.get`, without dispatching an Axon ability and
+/// without appending an observation row.
+pub fn trace_by_args(ledger: &InvocationLedger, args: &Value) -> anyhow::Result<Value> {
+    let query = query_from_args(args)?;
+    let trace_id = match query.key.as_ref() {
+        Some(InvocationLedgerFetchKey::TraceId(trace_id)) => Some(trace_id.clone()),
+        _ => ledger
+            .fetch_one(query)?
+            .and_then(|record| (!record.trace_id.is_empty()).then_some(record.trace_id)),
+    };
+    let Some(trace_id) = trace_id else {
+        anyhow::bail!("expected key.trace_id, key.ura, or key.request_id");
+    };
+    let graph = ledger.trace_graph(&trace_id)?;
+    Ok(json!({
+        "ledger_ura": ledger_resource_ura(),
+        "ledger_path": ledger_path_from_config().display().to_string(),
+        "trace_id": graph.trace_id,
+        "nodes": graph.records,
+        "edges": graph.edges,
+        "edge_semantics": "Axon causal links: source receipt URA/hash -> target invocation URA",
+    }))
+}
+
+fn record_query_from_args(args: &Value) -> anyhow::Result<InvocationLedgerQuery> {
+    if let Some(request_id) = args.get("request_id").and_then(non_empty_str) {
+        return Ok(InvocationLedgerQuery::new()
+            .key(InvocationLedgerFetchKey::RequestId(request_id.to_string()))
+            .limit(1));
+    }
+    let query = query_from_args(args)?.limit(1);
+    if query.key.is_none() {
+        anyhow::bail!("expected request_id or key.ura, key.request_id, or key.trace_id");
+    }
+    Ok(query)
+}
+
+fn record_by_query(
+    ledger: &InvocationLedger,
+    query: InvocationLedgerQuery,
+) -> anyhow::Result<Option<Value>> {
     let Some(record) = ledger.fetch_one(query)? else {
         return Ok(None);
     };

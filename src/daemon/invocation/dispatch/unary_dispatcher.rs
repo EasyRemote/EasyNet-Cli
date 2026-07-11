@@ -79,7 +79,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalInvokeRouteSelection, DelegatedInvokeRoute, ResolveRouteFailure, SelectedInvokeRoute,
 };
-use crate::daemon::trust::anchor::TrustedAgentRole;
+use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
 
 fn rpc_dispatch_outcome_response(
     ability: &str,
@@ -161,6 +161,56 @@ fn validate_federation_join_request(
     Ok(())
 }
 
+fn admitted_join_principal_owner(
+    request: &federation_wrappers::JoinRequest,
+    lifecycle: Option<
+        &crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleContext,
+    >,
+) -> Result<Option<TrustedPrincipalOwner>, Status> {
+    let Some(principal_enrollment) = request.principal_enrollment.as_ref() else {
+        return Ok(None);
+    };
+    let principal_ura = principal_enrollment.principal_ura.trim();
+    let parsed_principal = crate::core::ura::parse_ura(principal_ura).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation.join: principal_enrollment.principal_ura is not canonical: {err}"
+        ))
+    })?;
+    if parsed_principal.kind != crate::core::ura::URAKind::User {
+        return Err(Status::invalid_argument(format!(
+            "federation.join: principal_enrollment.principal_ura must identify a User URA"
+        )));
+    }
+    if parsed_principal.realm != request.realm.trim() {
+        return Err(Status::permission_denied(format!(
+            "federation.join: principal realm `{}` must match join realm `{}`",
+            parsed_principal.realm, request.realm
+        )));
+    }
+    let Some(owner_user_id) = parsed_principal.user_id().map(str::to_string) else {
+        return Err(Status::invalid_argument(
+            "federation.join: principal_enrollment.principal_ura missing user id",
+        ));
+    };
+    let lifecycle = lifecycle.ok_or_else(|| {
+        Status::failed_precondition(
+            "federation.join: principal enrollment proof supplied but PrincipalLifecycle is not wired",
+        )
+    })?;
+    lifecycle.reader().verify_join_enrollment_proof(
+        principal_ura,
+        principal_enrollment.proof.kind.trim(),
+        principal_enrollment.proof.reference.trim(),
+    )?;
+    Ok(Some(TrustedPrincipalOwner {
+        principal_ura: request.membership_ura.trim().to_string(),
+        owner_user_id,
+        owner_ura: principal_ura.to_string(),
+        owner_username: None,
+        added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
+    }))
+}
+
 fn public_key_hex_to_b64(public_key_hex: &str) -> Result<String, Status> {
     let raw = hex::decode(public_key_hex.trim()).map_err(|err| {
         Status::invalid_argument(format!("federation.join: public_key_hex is not hex: {err}"))
@@ -231,11 +281,15 @@ impl UnaryDispatcher {
         })?;
         validate_federation_join_request(&request, &ctx.daemon_realm)?;
         let public_key_b64 = public_key_hex_to_b64(&request.public_key_hex)?;
-        RuntimeTrust::new(&ctx.daemon_realm, &ctx.trust_anchor_path, &ctx.cell).register_pubkey(
-            request.membership_ura.clone(),
-            public_key_b64,
-            TrustedAgentRole::Device,
-        )?;
+        let owner =
+            admitted_join_principal_owner(&request, self.identity.principal_lifecycle.as_ref())?;
+        RuntimeTrust::new(&ctx.daemon_realm, &ctx.trust_anchor_path, &ctx.cell)
+            .register_pubkey_with_owner(
+                request.membership_ura.clone(),
+                public_key_b64,
+                TrustedAgentRole::Device,
+                owner,
+            )?;
         let response = federation_wrappers::handle_join(&request);
         wrap_json_response(&response)
     }

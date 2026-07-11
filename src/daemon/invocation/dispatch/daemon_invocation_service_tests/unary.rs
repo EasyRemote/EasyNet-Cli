@@ -68,6 +68,108 @@ async fn invoke_dispatches_federation_join_to_wrapper() {
 }
 
 #[tokio::test]
+async fn federation_join_with_principal_proof_binds_device_owner_in_runtime_trust() {
+    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+    let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+    let trust_dir = tempfile::tempdir().expect("trust tempdir");
+    let trust_path = trust_dir.path().join("realm-trust.toml");
+    let runtime_trust = crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext {
+        daemon_realm: "realm".to_string(),
+        trust_anchor_path: trust_path.clone(),
+        cell: cell.clone(),
+    };
+    let lifecycle =
+        crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleContext::from_runtime_trust(runtime_trust);
+    let user_ura = "easynet:///r/realm/user/alice";
+    lifecycle
+        .handle(
+            crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_CREATE,
+            serde_json::to_vec(&serde_json::json!({
+                "request": {
+                    "command": {
+                        "actor_ura": user_ura,
+                        "idempotency_key": "create-alice",
+                        "proof": {"kind": "bootstrap", "reference": "proof:create-alice"}
+                    },
+                    "principal_ura": user_ura
+                }
+            }))
+            .expect("create args")
+            .as_slice(),
+        )
+        .expect("create principal");
+    let user_pubkey = BASE64_STANDARD.encode(
+        ed25519_dalek::SigningKey::from_bytes(&[0x51; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
+    let bound = lifecycle
+        .handle(
+            crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            serde_json::to_vec(&serde_json::json!({
+                "request": {
+                    "command": {
+                        "actor_ura": user_ura,
+                        "idempotency_key": "bind-alice",
+                        "expected_version": 1,
+                        "proof": {"kind": "bootstrap", "reference": "proof:create-alice"}
+                    },
+                    "principal_ura": user_ura,
+                    "public_key_b64": user_pubkey
+                }
+            }))
+            .expect("bind args")
+            .as_slice(),
+        )
+        .expect("bind first key");
+    let bound: serde_json::Value = serde_json::from_slice(&bound).expect("bound json");
+    let binding_id = bound["principal"]["bindings"][0]["binding_id"]
+        .as_str()
+        .expect("binding id");
+
+    let svc = make_service().with_register_pubkey("realm", trust_path, cell.clone());
+    let public_key_hex = hex::encode(
+        ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+            .verifying_key()
+            .to_bytes(),
+    );
+    let membership_ura = "easynet:///r/realm/device/n1";
+    let args = serde_json::to_vec(&serde_json::json!({
+        "membership_ura": membership_ura,
+        "realm": "realm",
+        "public_key_hex": public_key_hex,
+        "principal_enrollment": {
+            "principal_ura": user_ura,
+            "proof": {"kind": "active_key", "reference": binding_id}
+        }
+    }))
+    .expect("join args");
+    let provisional = crate::core::ura::provisional::provisional_ura_for_pubkey(
+        &hex::decode(&public_key_hex).expect("public key hex"),
+    );
+    let request = crate::daemon::invocation::ProtoEnvelope::federation_join_genesis(
+        provisional,
+        crate::core::ura::hub_ura("realm"),
+        membership_ura,
+    )
+    .expect("genesis envelope")
+    .invoke_request(ABILITY_FEDERATION_JOIN, args)
+    .expect("join request");
+
+    svc.invoke(Request::new(request))
+        .await
+        .expect("principal-bound join succeeds");
+
+    let anchor = cell.snapshot();
+    let owner = anchor
+        .lookup_principal_owner(membership_ura)
+        .expect("device owner binding");
+    assert_eq!(owner.owner_ura, user_ura);
+    assert_eq!(owner.owner_user_id, "alice");
+}
+
+#[tokio::test]
 async fn invoke_dispatches_federation_advertise_agent() {
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};

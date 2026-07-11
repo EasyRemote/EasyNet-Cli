@@ -119,6 +119,15 @@ pub struct JoinArgs {
     /// Override the daemon TLS port derived from a hub URA.
     #[arg(long)]
     pub hub_port: Option<u16>,
+    /// Principal URA to bind this joined device to on the Hub URA path.
+    #[arg(long)]
+    pub principal_ura: Option<String>,
+    /// PrincipalLifecycle proof kind for --principal-ura.
+    #[arg(long)]
+    pub principal_proof_kind: Option<String>,
+    /// PrincipalLifecycle proof reference for --principal-ura.
+    #[arg(long)]
+    pub principal_proof_ref: Option<String>,
     /// Skip confirmation prompts (for non-interactive use)
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -175,8 +184,27 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     let target = args.token.trim().to_string();
     let peer_hub = args.peer_hub.as_deref();
     let creds = if target.starts_with(crate::core::ura::URA_SCHEME) {
-        run_ura_join_stages(&target, args.hub_port, args.hub_ca.as_deref(), peer_hub)?
+        let principal_enrollment = join_principal_enrollment_from_args(
+            args.principal_ura.as_deref(),
+            args.principal_proof_kind.as_deref(),
+            args.principal_proof_ref.as_deref(),
+        )?;
+        run_ura_join_stages(
+            &target,
+            args.hub_port,
+            args.hub_ca.as_deref(),
+            peer_hub,
+            principal_enrollment,
+        )?
     } else {
+        if args.principal_ura.is_some()
+            || args.principal_proof_kind.is_some()
+            || args.principal_proof_ref.is_some()
+        {
+            anyhow::bail!(
+                "principal enrollment proof is supported only for hub URA joins; use easynet:///r/<realm>/hub"
+            );
+        }
         let hub_api_override = args
             .hub_api
             .as_ref()
@@ -324,6 +352,9 @@ fn run_ura_join_stages(
     hub_port: Option<u16>,
     hub_ca: Option<&Path>,
     peer_hub: Option<&str>,
+    principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<config::Credentials> {
     let mut renderer = crate::cli::presentation::stage::StageRenderer::new();
 
@@ -350,6 +381,7 @@ fn run_ura_join_stages(
         &membership_ura,
         &public_key_hex,
         hub_ca,
+        principal_enrollment,
     ) {
         Ok(join) => {
             renderer.stage_ok("federation-join");
@@ -384,6 +416,46 @@ fn run_ura_join_stages(
     persist_join_credentials(renderer, creds, peer_hub, "cli.join.ura")
 }
 
+fn join_principal_enrollment_from_args(
+    principal_ura: Option<&str>,
+    proof_kind: Option<&str>,
+    proof_ref: Option<&str>,
+) -> anyhow::Result<
+    Option<crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof>,
+> {
+    match (principal_ura, proof_kind, proof_ref) {
+        (None, None, None) => Ok(None),
+        (Some(principal_ura), Some(kind), Some(reference)) => {
+            let principal_ura = principal_ura.trim();
+            let kind = kind.trim();
+            let reference = reference.trim();
+            if principal_ura.is_empty() || kind.is_empty() || reference.is_empty() {
+                anyhow::bail!(
+                    "--principal-ura, --principal-proof-kind and --principal-proof-ref must not be empty"
+                );
+            }
+            let parsed = crate::core::ura::parse_ura(principal_ura).map_err(|err| {
+                anyhow::anyhow!("invalid --principal-ura `{principal_ura}`: {err}")
+            })?;
+            if parsed.kind != crate::core::ura::URAKind::User {
+                anyhow::bail!("--principal-ura must identify a User URA");
+            }
+            Ok(Some(
+                crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof {
+                    principal_ura: principal_ura.to_string(),
+                    proof: crate::daemon::federation::client::ability_contract::PrincipalProofRef {
+                        kind: kind.to_string(),
+                        reference: reference.to_string(),
+                    },
+                },
+            ))
+        }
+        _ => anyhow::bail!(
+            "--principal-ura, --principal-proof-kind and --principal-proof-ref must be supplied together"
+        ),
+    }
+}
+
 #[derive(Debug)]
 struct UraJoinResult {
     receipt: crate::daemon::federation::client::ability_contract::JoinReceipt,
@@ -409,6 +481,9 @@ fn do_federation_join_and_resolve_hub_key(
     membership_ura: &str,
     public_key_hex: &str,
     hub_ca: Option<&Path>,
+    principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<UraJoinResult> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -419,6 +494,7 @@ fn do_federation_join_and_resolve_hub_key(
         membership_ura,
         public_key_hex,
         hub_ca,
+        principal_enrollment,
     ))
 }
 
@@ -428,6 +504,9 @@ fn do_federation_join_and_resolve_hub_key(
     _membership_ura: &str,
     _public_key_hex: &str,
     _hub_ca: Option<&Path>,
+    _principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<UraJoinResult> {
     Err(crate::support::platform::local_invoke::federation_not_wired_error("joining hub by URA"))
 }
@@ -438,6 +517,9 @@ async fn do_federation_join_and_resolve_hub_key_async(
     membership_ura: &str,
     public_key_hex: &str,
     hub_ca: Option<&Path>,
+    principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<UraJoinResult> {
     use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 
@@ -451,6 +533,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         membership_ura: membership_ura.to_string(),
         public_key_hex: public_key_hex.to_string(),
         pairing_secret: None,
+        principal_enrollment,
     };
     let join_request = crate::daemon::invocation::ProtoEnvelope::federation_join_genesis(
         provisional_caller,
@@ -1526,6 +1609,35 @@ mod tests {
         let payload = build_validate_pairing_payload(&preflight, "ab".repeat(32));
         assert_eq!(payload.node_id, "en-test-node");
         assert_eq!(payload.device_public_key.len(), 64);
+    }
+
+    #[test]
+    fn join_principal_enrollment_requires_complete_product_neutral_proof() {
+        let err = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant-a/user/alice"),
+            Some("active_key"),
+            None,
+        )
+        .expect_err("partial proof must fail");
+        assert!(err.to_string().contains("must be supplied together"));
+    }
+
+    #[test]
+    fn join_principal_enrollment_lowers_without_product_account_fields() {
+        let proof = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant-a/user/alice"),
+            Some("active_key"),
+            Some("binding-1"),
+        )
+        .expect("proof")
+        .expect("present");
+        let value = serde_json::to_value(&proof).expect("json");
+
+        assert_eq!(value["principal_ura"], "easynet:///r/tenant-a/user/alice");
+        assert_eq!(value["proof"]["kind"], "active_key");
+        assert_eq!(value["proof"]["reference"], "binding-1");
+        assert!(value.get("username").is_none());
+        assert!(value.get("user_id").is_none());
     }
 
     #[test]

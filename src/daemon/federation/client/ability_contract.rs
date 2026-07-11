@@ -81,6 +81,23 @@ pub struct JoinArgs {
     /// validate but accepts the field for forward compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pairing_secret: Option<String>,
+    /// Optional product-neutral PrincipalLifecycle proof. When present, the
+    /// hub validates it against daemon-owned PrincipalLifecycle state before
+    /// binding the joined Device URA to the Principal URA in RuntimeTrust.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_enrollment: Option<PrincipalEnrollmentProof>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrincipalEnrollmentProof {
+    pub principal_ura: String,
+    pub proof: PrincipalProofRef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrincipalProofRef {
+    pub kind: String,
+    pub reference: String,
 }
 
 /// Receipt body returned by a successful `federation.join`. The
@@ -344,6 +361,7 @@ mod tests {
             membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "deadbeef".into(),
             pairing_secret: None,
+            principal_enrollment: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["realm"], "acme");
@@ -362,9 +380,38 @@ mod tests {
             membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "00".into(),
             pairing_secret: Some("token-xyz".into()),
+            principal_enrollment: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["pairing_secret"], "token-xyz");
+    }
+
+    #[test]
+    fn join_args_can_carry_product_neutral_principal_enrollment_proof() {
+        let args = JoinArgs {
+            realm: "acme".into(),
+            membership_ura: "easynet:///r/acme/device/dev-a".into(),
+            public_key_hex: "00".into(),
+            pairing_secret: None,
+            principal_enrollment: Some(PrincipalEnrollmentProof {
+                principal_ura: "easynet:///r/acme/user/alice".into(),
+                proof: PrincipalProofRef {
+                    kind: "active_key".into(),
+                    reference: "binding-1".into(),
+                },
+            }),
+        };
+        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
+        assert_eq!(
+            v["principal_enrollment"]["principal_ura"],
+            "easynet:///r/acme/user/alice"
+        );
+        assert_eq!(v["principal_enrollment"]["proof"]["kind"], "active_key");
+        assert_eq!(v["principal_enrollment"]["proof"]["reference"], "binding-1");
+        assert!(
+            v.get("username").is_none() && v.get("user_id").is_none(),
+            "federation.join must not grow product account fields"
+        );
     }
 
     #[test]

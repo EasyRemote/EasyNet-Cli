@@ -394,7 +394,7 @@
           }
         ]
       },
-      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation; CLI enrollment flows and standalone-Hub enrollment E2E remain incomplete."
+      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation. federation.join now has a product-neutral optional PrincipalLifecycle proof seam with daemon-side RuntimeTrust owner binding; CLI first-user enrollment UX and standalone-Hub enrollment/join E2E remain incomplete."
     },
     {
       "capability_id": "principal_public_key_bindings",

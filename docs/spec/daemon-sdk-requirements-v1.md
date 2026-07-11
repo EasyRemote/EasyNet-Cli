@@ -518,8 +518,19 @@ operator facade now covers the provider-backed lifecycle transition surface
 through daemon `principal.lifecycle.*` abilities, including create,
 bind-first-key, add-key, rotate-key, revoke-key, configure-recovery, recover,
 suspend, reactivate, delete, issue/revoke enrollment, issue/revoke grant and
-get. It is still not standalone-Hub cutover-ready until the no-Backend URA
-join/user-lifecycle flow and the two E2E gates pass.
+get. A provider-level backend-free scenario gate proves multi-user, multi-key
+enrollment, rotation, revocation, recovery, lifecycle state changes and
+persisted trust/lifecycle reload at the daemon aggregate boundary. A real
+daemon gRPC descriptor-ref E2E now drives the same `principal.lifecycle.*`
+surface through `DaemonInvocationService`, restarts the daemon, and verifies
+persisted PrincipalLifecycle and trust-anchor public-key state without Backend,
+HTTP account state or a second auth store. The `federation.join` contract now
+has a product-neutral optional PrincipalLifecycle proof seam, and the Hub daemon
+validates that proof before atomically binding the joined Device URA to the User
+Principal in RuntimeTrust. It is still not standalone-Hub cutover-ready until
+the CLI/SDK first-user enrollment flow, full URA-only `federation.join`
+end-to-end gate, user lifecycle UX and the standalone/backend-present E2E gates
+pass.
 Directory
 is still a seam; receipt/history now has a symmetric bounded seam but no
 stable cursor or downstream cutover; runtime events and runtime administration
@@ -605,8 +616,8 @@ The current remaining work is:
   including receipt, event, administration and principal lifecycle paths;
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,
   Directory, receipt and event capabilities;
-- prove the completed `easynet principal` lifecycle facade in a backend-free
-  Hub flow with first-user bootstrap, additional-key authorization, key
+- lift the real daemon gRPC PrincipalLifecycle evidence into a CLI/SDK Hub flow
+  with first-user bootstrap, additional-key authorization, key
   rotation/revocation, recovery, suspension/reactivation/deletion and grants;
 - prove URA-only `federation.join` plus Principal enrollment without Backend
   HTTP;

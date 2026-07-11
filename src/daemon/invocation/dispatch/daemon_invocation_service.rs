@@ -104,7 +104,7 @@ use futures::StreamExt as _;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::daemon::ability::builtins::governance::invocation_history::{
-    record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
+    record_by_args, trace_by_args, ABILITY_INVOCATION_RECORD_GET, ABILITY_TRACE_GET,
 };
 use crate::daemon::ability::CallMode;
 use crate::daemon::federation::client::FederationClient;
@@ -559,7 +559,8 @@ impl DaemonInvocationService {
     }
 
     /// Side-effect-free `invocation.record.get`: fetch one ledger record by
-    /// `request_id` off the in-process ledger handle and return it as JSON.
+    /// request id or invocation URA off the in-process ledger handle and return
+    /// it as JSON.
     ///
     /// Services the out-of-process CLI's observe-my-own-request read without
     /// dispatching a second invocation (which would corrupt the audit trail)
@@ -571,11 +572,7 @@ impl DaemonInvocationService {
         &self,
         arguments: &[u8],
     ) -> Result<Response<InvokeResponse>, Status> {
-        #[derive(serde::Deserialize)]
-        struct RecordGetRequest {
-            request_id: String,
-        }
-        let request: RecordGetRequest = serde_json::from_slice(arguments).map_err(|err| {
+        let request: serde_json::Value = serde_json::from_slice(arguments).map_err(|err| {
             Status::invalid_argument(format!(
                 "invocation.record.get: failed to decode JSON arguments: {err}"
             ))
@@ -585,13 +582,46 @@ impl DaemonInvocationService {
                 "invocation.record.get: daemon has no invocation ledger wired",
             ));
         };
-        let record = record_by_request_id(ledger, &request.request_id).map_err(|err| match err
-            .to_string()
-        {
-            msg if msg.contains("request_id must not be empty") => Status::invalid_argument(msg),
-            msg => Status::internal(msg),
+        let record = record_by_args(ledger, &request).map_err(|err| {
+            let msg = err.to_string();
+            if msg.contains("request_id must not be empty")
+                || msg.starts_with("expected ")
+                || msg.contains("key must")
+            {
+                Status::invalid_argument(msg)
+            } else {
+                Status::internal(msg)
+            }
         })?;
         wrap_json_response(&serde_json::json!({ "record": record }))
+    }
+
+    /// Side-effect-free `invocation.trace.get`: fetch one ledger trace graph
+    /// without dispatching an Axon ability and without appending an observation
+    /// row to the ledger being watched.
+    fn dispatch_invocation_trace_get(
+        &self,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let request: serde_json::Value = serde_json::from_slice(arguments).map_err(|err| {
+            Status::invalid_argument(format!(
+                "invocation.trace.get: failed to decode JSON arguments: {err}"
+            ))
+        })?;
+        let Some(ledger) = self.runtime.invocation_ledger.as_ref() else {
+            return Err(Status::failed_precondition(
+                "invocation.trace.get: daemon has no invocation ledger wired",
+            ));
+        };
+        let trace = trace_by_args(ledger, &request).map_err(|err| {
+            let msg = err.to_string();
+            if msg.starts_with("expected ") || msg.contains("key must") {
+                Status::invalid_argument(msg)
+            } else {
+                Status::internal(msg)
+            }
+        })?;
+        wrap_json_response(&trace)
     }
 
     /// Resolve-first gate shared by the unary/stream/bidi dispatch
@@ -1004,6 +1034,9 @@ impl Invocation for DaemonInvocationService {
         let result = if route_function == ABILITY_INVOCATION_RECORD_GET {
             skip_ledger_record = true;
             self.dispatch_invocation_record_get(&inner.arguments)
+        } else if route_function == ABILITY_TRACE_GET {
+            skip_ledger_record = true;
+            self.dispatch_invocation_trace_get(&inner.arguments)
         } else {
             match DaemonUnaryRoute::from_function(&route_function) {
                 Some(DaemonUnaryRoute::FederationJoin) => {

@@ -1032,11 +1032,12 @@ impl<'a> DaemonRouteResolver<'a> {
         target_ura: &str,
         ability_ura: &str,
     ) -> Result<CanonicalInvokeRouteSelection, ResolveRouteFailure> {
-        let selector =
-            route_selector_from_query(ability_ura, "").ok_or_else(|| ResolveRouteFailure {
+        let selector = route_selector_from_query(ability_ura, "")
+            .or_else(|| route_selector_from_query(target_ura, ability_ura))
+            .ok_or_else(|| ResolveRouteFailure {
                 query_name: ability_ura.to_string(),
                 reason: axon_pb::NegativeReason::Refused,
-                detail: "remote Invoke requires a full canonical ability URA or descriptor ref"
+                detail: "Invoke requires a full canonical ability URA, descriptor ref, or an owner-local ability name with an explicit callee"
                     .to_string(),
             })?;
         let owner_is_agent = crate::core::ura::parse_ura(&selector.owner_ura)
@@ -1052,7 +1053,8 @@ impl<'a> DaemonRouteResolver<'a> {
             });
         }
 
-        match self.resolve_route(ability_ura, "") {
+        let canonical_query = selector.ability_ura.clone();
+        match self.resolve_route(&canonical_query, "") {
             Ok(selected_route) => {
                 let target_matches = selected_route.owner_ura == target_ura
                     || selected_route.execution_host_ura == target_ura;
@@ -1062,7 +1064,7 @@ impl<'a> DaemonRouteResolver<'a> {
                         reason: axon_pb::NegativeReason::Refused,
                         detail: route_owner_mismatch_detail(
                             &selected_route.execution_host_ura,
-                            ability_ura,
+                            &canonical_query,
                             target_ura,
                         ),
                     });
@@ -1084,7 +1086,7 @@ impl<'a> DaemonRouteResolver<'a> {
                 if parsed_owner.realm == peer_source.local_realm {
                     return Err(local_failure);
                 }
-                self.resolve_delegation(ability_ura, "")?
+                self.resolve_delegation(&canonical_query, "")?
                     .map(CanonicalInvokeRouteSelection::Peer)
                     .ok_or(ResolveRouteFailure {
                         query_name: selector.query_name,

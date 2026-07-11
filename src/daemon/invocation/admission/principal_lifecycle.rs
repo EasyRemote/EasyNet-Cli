@@ -78,6 +78,45 @@ impl PrincipalLifecycleReader {
             })
             .unwrap_or(PrincipalAdmissionState::Missing))
     }
+
+    pub(crate) fn verify_join_enrollment_proof(
+        &self,
+        principal_ura: &str,
+        proof_kind: &str,
+        proof_reference: &str,
+    ) -> Result<(), Status> {
+        let ability = "federation.join";
+        let store = PrincipalStore::load(&self.store_path, ability)?;
+        if let Some(principal) = store.principals.get(principal_ura) {
+            if principal.state != PrincipalState::Active {
+                return Err(Status::permission_denied(format!(
+                    "{ability}: principal_ura `{principal_ura}` is {} and cannot bind a joining device",
+                    principal_state_label(&principal.state)
+                )));
+            }
+        }
+        let command = PrincipalCommand {
+            actor_ura: principal_ura.trim().to_string(),
+            idempotency_key: "federation.join".to_string(),
+            expected_version: None,
+            proof: PrincipalProofRef {
+                kind: proof_kind.trim().to_string(),
+                reference: proof_reference.trim().to_string(),
+            },
+        };
+        validate_command(ability, &command)?;
+        PrincipalProofVerifier::new(&store).verify_any(
+            ability,
+            principal_ura,
+            &command,
+            &[
+                PrincipalProofRequirement::EnrollmentCapability,
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+                PrincipalProofRequirement::RecoveryPolicy,
+            ],
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +147,6 @@ impl PrincipalLifecycleContext {
         PrincipalLifecycle::new(self).handle(ability, arguments)
     }
 
-    #[cfg(test)]
     pub(crate) fn reader(&self) -> PrincipalLifecycleReader {
         PrincipalLifecycleReader::new(self.store_path.clone())
     }
@@ -839,6 +877,15 @@ enum PrincipalState {
     Active,
     Suspended,
     Deleted,
+}
+
+fn principal_state_label(state: &PrincipalState) -> &'static str {
+    match state {
+        PrincipalState::Pending => "pending",
+        PrincipalState::Active => "active",
+        PrincipalState::Suspended => "suspended",
+        PrincipalState::Deleted => "deleted",
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1889,6 +1936,49 @@ mod tests {
     }
 
     #[test]
+    fn join_enrollment_reader_admits_active_key_and_rejects_suspended_principal() {
+        let (_dir, ctx) = context();
+        let user = "easynet:///r/realm/user/alice";
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command("create", "bootstrap", None),
+                "principal_ura": user
+            }),
+        );
+        let first = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref("bind", "bootstrap", "proof:create", Some(1)),
+                "principal_ura": user,
+                "public_key_b64": b64_pubkey(1)
+            }),
+        );
+        let binding_id = binding_id_at(&first, 0);
+
+        ctx.reader()
+            .verify_join_enrollment_proof(user, "active_key", &binding_id)
+            .expect("active user binding can authorize device join binding");
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_SUSPEND,
+            json!({
+                "command": command_for_actor_with_ref(user, "suspend", "active_key", &binding_id, Some(2)),
+                "principal_ura": user
+            }),
+        );
+
+        let err = ctx
+            .reader()
+            .verify_join_enrollment_proof(user, "active_key", &binding_id)
+            .expect_err("suspended principal cannot bind a joining device");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    }
+
+    #[test]
     fn revoke_key_updates_lifecycle_and_trust_without_removing_sibling_key() {
         let (_dir, ctx) = context();
         let user = "easynet:///r/realm/user/alice";
@@ -2145,5 +2235,348 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn backend_free_principal_lifecycle_scenario_persists_multi_user_state() {
+        let (_dir, ctx) = context();
+        let admin = "easynet:///r/realm/user/admin";
+        let bob = "easynet:///r/realm/user/bob";
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command("admin-create", "bootstrap", None),
+                "principal_ura": admin
+            }),
+        );
+        let admin_bound = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref(
+                    "admin-bind",
+                    "bootstrap",
+                    "proof:admin-create",
+                    Some(1)
+                ),
+                "principal_ura": admin,
+                "public_key_b64": b64_pubkey(20)
+            }),
+        );
+        let admin_binding_id = binding_id_at(&admin_bound, 0);
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ADD_KEY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    admin,
+                    "admin-backup-key",
+                    "active_key",
+                    &admin_binding_id,
+                    Some(2)
+                ),
+                "principal_ura": admin,
+                "public_key_b64": b64_pubkey(25)
+            }),
+        );
+
+        let issued_enrollment = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
+            json!({
+                "command": command_for_actor_with_ref(
+                    admin,
+                    "bob-enrollment",
+                    "active_key",
+                    &admin_binding_id,
+                    Some(3)
+                ),
+                "principal_ura": admin,
+                "subject_principal_ura": bob
+            }),
+        );
+        let enrollment_id = issued_enrollment["principal"]["enrollments"][0]["enrollment_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-create",
+                    "enrollment",
+                    &enrollment_id,
+                    None
+                ),
+                "principal_ura": bob
+            }),
+        );
+        let bob_bound = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-laptop",
+                    "enrollment",
+                    &enrollment_id,
+                    Some(1)
+                ),
+                "principal_ura": bob,
+                "public_key_b64": b64_pubkey(21)
+            }),
+        );
+        let bob_laptop_binding_id = binding_id_at(&bob_bound, 0);
+
+        let bob_with_phone = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ADD_KEY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-phone",
+                    "active_key",
+                    &bob_laptop_binding_id,
+                    Some(2)
+                ),
+                "principal_ura": bob,
+                "public_key_b64": b64_pubkey(23)
+            }),
+        );
+        let bob_phone_binding_id = binding_id_at(&bob_with_phone, 1);
+
+        let bob_rotated = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ROTATE_KEY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-laptop-rotate",
+                    "active_key",
+                    &bob_phone_binding_id,
+                    Some(3)
+                ),
+                "principal_ura": bob,
+                "binding_id": bob_laptop_binding_id,
+                "replacement": {
+                    "command": command_for_actor_with_ref(
+                        bob,
+                        "ignored-replacement-command",
+                        "active_key",
+                        &bob_phone_binding_id,
+                        None
+                    ),
+                    "principal_ura": bob,
+                    "public_key_b64": b64_pubkey(22)
+                }
+            }),
+        );
+        let bob_rotated_laptop_binding_id = binding_id_at(&bob_rotated, 2);
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_REVOKE_KEY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-phone-revoke",
+                    "active_key",
+                    &bob_rotated_laptop_binding_id,
+                    Some(4)
+                ),
+                "principal_ura": bob,
+                "binding_id": bob_phone_binding_id
+            }),
+        );
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-recovery-policy",
+                    "active_key",
+                    &bob_rotated_laptop_binding_id,
+                    Some(5)
+                ),
+                "principal_ura": bob,
+                "policy_ref": "recovery-policy:bob"
+            }),
+        );
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_RECOVER,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-recover",
+                    "recovery",
+                    "recovery-policy:bob",
+                    Some(6)
+                ),
+                "principal_ura": bob,
+                "replacement_key": {
+                    "command": command_for_actor_with_ref(
+                        bob,
+                        "ignored-recovery-child-command",
+                        "recovery",
+                        "recovery-policy:bob",
+                        None
+                    ),
+                    "principal_ura": bob,
+                    "public_key_b64": b64_pubkey(24)
+                }
+            }),
+        );
+
+        let bob_suspended = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_SUSPEND,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-suspend",
+                    "active_key",
+                    &bob_rotated_laptop_binding_id,
+                    Some(7)
+                ),
+                "principal_ura": bob
+            }),
+        );
+        assert_eq!(bob_suspended["principal"]["state"], "suspended");
+
+        let bob_reactivated = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_REACTIVATE,
+            json!({
+                "command": command_for_actor_with_ref(
+                    bob,
+                    "bob-reactivate",
+                    "recovery",
+                    "recovery-policy:bob",
+                    Some(8)
+                ),
+                "principal_ura": bob
+            }),
+        );
+        assert_eq!(bob_reactivated["principal"]["state"], "active");
+
+        let admin_grant = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ISSUE_GRANT,
+            json!({
+                "command": command_for_actor_with_ref(
+                    admin,
+                    "admin-delete-grant",
+                    "active_key",
+                    &admin_binding_id,
+                    Some(5)
+                ),
+                "principal_ura": admin,
+                "actions": [ABILITY_PRINCIPAL_DELETE]
+            }),
+        );
+        let delete_grant_id = admin_grant["principal"]["grants"][0]["grant_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let bob_deleted = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_DELETE,
+            json!({
+                "command": command_for_actor_with_ref(
+                    admin,
+                    "bob-delete",
+                    "grant",
+                    &delete_grant_id,
+                    Some(9)
+                ),
+                "principal_ura": bob
+            }),
+        );
+        assert_eq!(bob_deleted["principal"]["state"], "deleted");
+
+        let reloaded = PrincipalStore::load(&ctx.store_path, ABILITY_PRINCIPAL_GET).unwrap();
+        let admin_record = reloaded.principals.get(admin).unwrap();
+        let bob_record = reloaded.principals.get(bob).unwrap();
+        assert_eq!(admin_record.state, PrincipalState::Active);
+        assert_eq!(
+            admin_record
+                .bindings
+                .iter()
+                .filter(|binding| binding.state == KeyBindingState::Active)
+                .count(),
+            2
+        );
+        assert_eq!(bob_record.state, PrincipalState::Deleted);
+        assert_eq!(bob_record.version, 10);
+        assert_eq!(
+            admin_record.enrollments[0]
+                .consumed_by_principal_ura
+                .as_deref(),
+            Some(bob)
+        );
+        assert_eq!(
+            bob_record
+                .bindings
+                .iter()
+                .filter(|binding| binding.state == KeyBindingState::Rotated)
+                .count(),
+            1
+        );
+        assert_eq!(
+            bob_record
+                .bindings
+                .iter()
+                .filter(|binding| binding.state == KeyBindingState::Revoked)
+                .count(),
+            1
+        );
+        assert_eq!(
+            bob_record
+                .bindings
+                .iter()
+                .filter(|binding| binding.state == KeyBindingState::Active)
+                .count(),
+            2
+        );
+        assert_eq!(
+            PrincipalLifecycleReader::new(ctx.store_path.clone())
+                .admission_state(bob)
+                .unwrap(),
+            PrincipalAdmissionState::Deleted
+        );
+
+        let persisted_trust =
+            RealmTrustAnchor::load_or_empty(&ctx.runtime_trust.trust_anchor_path).unwrap();
+        assert!(persisted_trust
+            .lookup_user_by_pubkey(bob, &b64_pubkey(21))
+            .is_none());
+        assert!(persisted_trust
+            .lookup_user_by_pubkey(bob, &b64_pubkey(23))
+            .is_none());
+        assert!(persisted_trust
+            .lookup_user_by_pubkey(bob, &b64_pubkey(22))
+            .is_some());
+        assert!(persisted_trust
+            .lookup_user_by_pubkey(bob, &b64_pubkey(24))
+            .is_some());
+        assert_eq!(persisted_trust.revoked_user_pubkey_count(bob), 2);
+    }
+
+    fn binding_id_at(snapshot: &serde_json::Value, index: usize) -> String {
+        snapshot["principal"]["bindings"][index]["binding_id"]
+            .as_str()
+            .expect("binding id")
+            .to_string()
     }
 }

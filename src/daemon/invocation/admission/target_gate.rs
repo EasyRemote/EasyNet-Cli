@@ -161,6 +161,9 @@ impl TargetGate {
         {
             return true;
         }
+        if crate::daemon::identity::local_invocation::local_device_ura() == target_ura {
+            return true;
+        }
         if let Some(agent_target) = parse_agent_target_identity(target_ura) {
             if self.local_agent_targets.hosts_target(&agent_target) {
                 return true;
@@ -305,6 +308,23 @@ fn local_runtime_authority_ura(
     session_realm: Option<&str>,
 ) -> Option<String> {
     if let Some(daemon_ura) = daemon_ura.map(str::trim).filter(|ura| !ura.is_empty()) {
+        if let Some(hub_realm) = crate::core::ura::parse_ura(daemon_ura)
+            .ok()
+            .and_then(|parsed| {
+                (parsed.kind == crate::core::ura::URAKind::Hub).then_some(parsed.realm)
+            })
+        {
+            let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+            if crate::core::ura::parse_ura(&local_device_ura)
+                .ok()
+                .is_some_and(|parsed| {
+                    parsed.realm == hub_realm
+                        && session_realm.is_none_or(|realm| realm == parsed.realm)
+                })
+            {
+                return Some(local_device_ura);
+            }
+        }
         return Some(daemon_ura.to_string());
     }
     session_realm
@@ -318,7 +338,7 @@ mod tests {
     use super::local_runtime_authority_ura;
 
     #[test]
-    fn local_runtime_authority_prefers_daemon_ura() {
+    fn local_runtime_authority_prefers_device_daemon_ura() {
         let device_ura = "easynet:///r/test-realm/device/dev-1";
 
         assert_eq!(
@@ -328,10 +348,41 @@ mod tests {
     }
 
     #[test]
-    fn local_runtime_authority_falls_back_to_hub_ura_for_hub_mode_daemon() {
+    fn local_runtime_authority_falls_back_to_hub_ura_without_daemon_identity() {
         assert_eq!(
             local_runtime_authority_ura(None, Some("test-realm")),
             Some(crate::core::ura::hub_ura("test-realm"))
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_executes_same_realm_hub_through_local_device() {
+        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+        let local_realm = crate::core::ura::parse_ura(&local_device_ura)
+            .expect("local device URA parses")
+            .realm;
+
+        assert_eq!(
+            local_runtime_authority_ura(
+                Some(&crate::core::ura::hub_ura(&local_realm)),
+                Some(&local_realm)
+            ),
+            Some(local_device_ura)
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_keeps_cross_realm_hub_as_callee_authority() {
+        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+        let local_realm = crate::core::ura::parse_ura(&local_device_ura)
+            .expect("local device URA parses")
+            .realm;
+        let remote_realm = format!("{local_realm}-remote");
+        let hub_ura = crate::core::ura::hub_ura(&remote_realm);
+
+        assert_eq!(
+            local_runtime_authority_ura(Some(&hub_ura), Some(&local_realm)),
+            Some(hub_ura)
         );
     }
 

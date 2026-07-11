@@ -234,6 +234,24 @@ pub struct JoinRequest {
     /// Lowercase hex-encoded Ed25519 public key the joining device
     /// will use for descriptor-bound membership calls after genesis.
     pub public_key_hex: String,
+    /// Optional product-neutral PrincipalLifecycle proof used to bind this
+    /// Device membership to a User Principal. The hub dispatcher validates the
+    /// proof before mutating RuntimeTrust; the pure receipt wrapper only echoes
+    /// membership facts.
+    #[serde(default)]
+    pub principal_enrollment: Option<PrincipalEnrollmentProof>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrincipalEnrollmentProof {
+    pub principal_ura: String,
+    pub proof: PrincipalProofRef,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrincipalProofRef {
+    pub kind: String,
+    pub reference: String,
 }
 
 /// Response payload for `federation.join`.
@@ -1264,6 +1282,7 @@ mod tests {
                     .verifying_key()
                     .to_bytes(),
             ),
+            principal_enrollment: None,
         };
         let resp = handle_join(&req);
         assert_eq!(resp.membership_ura, req.membership_ura);
