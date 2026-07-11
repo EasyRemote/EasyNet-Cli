@@ -6,7 +6,12 @@ from easynet_sdk.access_control import (
     AccessControlGrant,
     AccessControlGrantRequest,
     AccessControlGrantState,
+    AccessControlAdmissionExplainRequest,
     AccessControlListRequest,
+    AccessControlPermissionRequest,
+    AccessControlPermissionRequestCreateRequest,
+    AccessControlPermissionRequestListRequest,
+    AccessControlPermissionRequestResolveRequest,
     AccessControlPrincipalKind,
     RuntimeAccessControlProvider,
 )
@@ -33,7 +38,11 @@ class _MemoryAbility:
         self.ability = ability_name
         self.arguments = dict(arguments)  # type: ignore[arg-type]
         if ability_name == "authority.binding.grant":
-            return {"grant": self.arguments["grant"], "audit_record_id": "audit-1"}
+            return {
+                "grant": self.arguments["grant"],
+                "idempotent_replay": True,
+                "audit_record_id": "audit-1",
+            }
         if ability_name == "authority.binding.list":
             return {
                 "grants": [
@@ -41,11 +50,19 @@ class _MemoryAbility:
                         "grant_id": "grant-1",
                         "owner_ura": "easynet:///r/example/user/alice",
                         "principal_kind": "user",
+                        "principal_id": "bob",
                         "principal_ura": "easynet:///r/example/user/bob",
+                        "token_class": "service",
                         "actions": ["invoke"],
                         "effect": "allow",
+                        "lifetime": "session",
                         "state": "active",
                         "created_by": "easynet:///r/example/user/alice",
+                        "updated_at": "2026-07-11T00:00:00Z",
+                        "review_required_after": "2026-08-11T00:00:00Z",
+                        "last_reviewed_at": "2026-07-10T00:00:00Z",
+                        "last_used_at": "2026-07-11T01:00:00Z",
+                        "reason": "operator-approved",
                     }
                 ]
             }
@@ -58,6 +75,52 @@ class _MemoryAbility:
                     "principal_ura": "easynet:///r/example/user/bob",
                     "action": "invoke",
                 }
+            }
+        if ability_name == "policy.request.create":
+            return {"request": self.arguments["request"]}
+        if ability_name == "policy.request.resolve":
+            return {
+                "request": self.arguments["request"],
+                "created_grant": self.arguments["created_grant"],
+                "authority_proof": {
+                    "proof_id": "proof-1",
+                    "owner_ura": "easynet:///r/example/user/alice",
+                    "principal_kind": "user",
+                    "principal_id": "bob",
+                    "principal_ura": "easynet:///r/example/user/bob",
+                },
+                "idempotent_replay": True,
+            }
+        if ability_name == "policy.request.list":
+            return {
+                "requests": [
+                    {
+                        "request_id": "request-1",
+                        "owner_ura": "easynet:///r/example/user/alice",
+                        "principal_kind": "user",
+                        "principal_id": "bob",
+                        "principal_ura": "easynet:///r/example/user/bob",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
+                        "ability_ura": "easynet:///r/example/device/dev-a/ability/device.observe.health",
+                        "action": "invoke",
+                        "status": "pending",
+                    }
+                ]
+            }
+        if ability_name == "admission.explain":
+            return {
+                "observer_ura": "easynet:///r/example/user/alice",
+                "redacted": True,
+                "redaction_reason": "not_owner",
+                "authority_reason": "observer redacted",
+                "root_trace": {
+                    "invocation_id": "inv-1",
+                    "stage": "admission",
+                    "redacted": True,
+                },
+                "policy_decision": {"decision": "deny", "reason": "not_owner"},
+                "signature_decision": {"decision": "allow"},
             }
         raise AssertionError(f"unexpected ability {ability_name}")
 
@@ -75,9 +138,14 @@ class AccessControlTests(unittest.TestCase):
                     owner_ura="easynet:///r/example/user/alice",
                     principal_kind=AccessControlPrincipalKind.USER,
                     principal_ura="easynet:///r/example/user/bob",
+                    token_class="service",
                     ability_ura_pattern="easynet:///r/example/device/dev-a/ability/device.observe.health",
                     actions=("invoke",),
+                    lifetime="session",
                     created_by="easynet:///r/example/user/alice",
+                    updated_at="2026-07-11T00:00:00Z",
+                    last_used_at="2026-07-11T01:00:00Z",
+                    reason="operator-approved",
                 ),
             )
         )
@@ -89,8 +157,13 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(ability.arguments["principal_ura"], "easynet:///r/example/user/bob")
         self.assertEqual(grant["owner_user_id"], "alice")  # type: ignore[index]
         self.assertEqual(grant["principal_id"], "bob")  # type: ignore[index]
+        self.assertEqual(grant["token_class"], "service")  # type: ignore[index]
+        self.assertEqual(grant["lifetime"], "session")  # type: ignore[index]
+        self.assertEqual(grant["last_used_at"], "2026-07-11T01:00:00Z")  # type: ignore[index]
+        self.assertEqual(grant["reason"], "operator-approved")  # type: ignore[index]
         self.assertEqual(result.grant.owner_ura, "easynet:///r/example/user/alice")
         self.assertEqual(result.grant.principal_ura, "easynet:///r/example/user/bob")
+        self.assertTrue(result.idempotent_replay)
         self.assertNotIn("backend_account_id", ability.arguments)
 
     def test_runtime_provider_lists_and_checks_canonical_policy(self) -> None:
@@ -103,10 +176,13 @@ class AccessControlTests(unittest.TestCase):
                 owner_ura="easynet:///r/example/user/alice",
                 principal_kind=AccessControlPrincipalKind.USER,
                 principal_ura="easynet:///r/example/user/bob",
+                ability_ura="easynet:///r/example/device/dev-a/ability/device.observe.health",
+                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                 action="invoke",
                 effect=AccessControlEffect.ALLOW,
                 state=AccessControlGrantState.ACTIVE,
                 limit=10,
+                cursor="cursor-1",
             )
         )
 
@@ -115,6 +191,10 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(ability.arguments["owner_user_id"], "alice")
         self.assertEqual(ability.arguments["principal_id"], "bob")
         self.assertEqual(ability.arguments["limit"], 10)
+        self.assertEqual(ability.arguments["cursor"], "cursor-1")
+        self.assertEqual(page.grants[0].token_class, "service")
+        self.assertEqual(page.grants[0].lifetime, "session")
+        self.assertEqual(page.grants[0].reason, "operator-approved")
 
         result = provider.check(
             AccessControlCheckRequest(
@@ -144,6 +224,79 @@ class AccessControlTests(unittest.TestCase):
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+    def test_runtime_provider_manages_permission_requests(self) -> None:
+        ability = _MemoryAbility()
+        provider = RuntimeAccessControlProvider(ability)
+
+        created = provider.create_request(
+            AccessControlPermissionRequestCreateRequest(
+                call=_call(),
+                request=_permission_request(),
+                actor_ura="easynet:///r/example/user/alice",
+            )
+        )
+
+        self.assertEqual(created.request_id, "request-1")
+        self.assertEqual(ability.ability, "policy.request.create")
+        request_wire = ability.arguments["request"]
+        self.assertIsInstance(request_wire, dict)
+        self.assertEqual(request_wire["owner_user_id"], "alice")  # type: ignore[index]
+        self.assertEqual(request_wire["principal_id"], "bob")  # type: ignore[index]
+        self.assertEqual(ability.arguments["actor_ura"], "easynet:///r/example/user/alice")
+
+        resolved = provider.resolve_request(
+            AccessControlPermissionRequestResolveRequest(
+                call=_call(),
+                request=_permission_request(),
+                created_grant=AccessControlGrant(
+                    grant_id="grant-1",
+                    owner_ura="easynet:///r/example/user/alice",
+                    principal_kind=AccessControlPrincipalKind.USER,
+                    principal_ura="easynet:///r/example/user/bob",
+                    actions=("invoke",),
+                    created_by="easynet:///r/example/user/alice",
+                ),
+                actor_ura="easynet:///r/example/user/alice",
+            )
+        )
+
+        self.assertTrue(resolved.idempotent_replay)
+        self.assertIsNotNone(resolved.created_grant)
+        self.assertIsNotNone(resolved.authority_proof)
+
+        listed = provider.list_requests(
+            AccessControlPermissionRequestListRequest(
+                call=_call(),
+                owner_ura="easynet:///r/example/user/alice",
+                principal_kind=AccessControlPrincipalKind.USER,
+                principal_ura="easynet:///r/example/user/bob",
+                status="pending",
+                limit=10,
+                cursor="cursor-1",
+            )
+        )
+
+        self.assertEqual(len(listed.requests), 1)
+        self.assertEqual(listed.requests[0].request_id, "request-1")
+        self.assertEqual(ability.arguments["cursor"], "cursor-1")
+
+    def test_runtime_provider_explains_admission(self) -> None:
+        ability = _MemoryAbility()
+        provider = RuntimeAccessControlProvider(ability)
+
+        result = provider.explain(
+            AccessControlAdmissionExplainRequest(
+                call=_call(),
+                observer_ura="easynet:///r/example/user/alice",
+                invocation_id="inv-1",
+            )
+        )
+
+        self.assertEqual(ability.ability, "admission.explain")
+        self.assertTrue(result.redacted)
+        self.assertIsNotNone(result.root_trace)
+        self.assertIsNotNone(result.policy_decision)
+
 
 def _call() -> RuntimeCallContext:
     return RuntimeCallContext(
@@ -152,6 +305,21 @@ def _call() -> RuntimeCallContext:
         subject_ura="easynet:///r/example/resource/user.alice/access-control",
         nonce_base64="bm9uY2U=",
         causal_context={"kind": "none"},
+    )
+
+
+def _permission_request() -> AccessControlPermissionRequest:
+    return AccessControlPermissionRequest(
+        request_id="request-1",
+        owner_ura="easynet:///r/example/user/alice",
+        principal_kind=AccessControlPrincipalKind.USER,
+        principal_ura="easynet:///r/example/user/bob",
+        callee_ura="easynet:///r/example/device/dev-a",
+        subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+        ability_ura="easynet:///r/example/device/dev-a/ability/device.observe.health",
+        action="invoke",
+        requested_lifetimes=("session",),
+        status="pending",
     )
 
 
