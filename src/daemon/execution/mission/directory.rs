@@ -44,8 +44,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::ability::spec::{default_chat_manifest, AbilityManifest};
 use crate::core::agent::spec::AgentSpec;
+use crate::daemon::ability::manifest::{default_chat_manifest, AbilityManifest};
 use crate::daemon::persistence::config;
 
 /// File-name suffix for ability manifests inside

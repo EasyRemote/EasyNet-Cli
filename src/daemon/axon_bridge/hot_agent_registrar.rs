@@ -468,7 +468,7 @@ impl HotAgentRegistrar {
                 &mut sync_ctx,
                 &chat_ability,
                 owner.clone(),
-                crate::core::ability::spec::default_chat_manifest(),
+                crate::daemon::ability::manifest::default_chat_manifest(),
                 chat_handler,
             )
             .await
@@ -485,7 +485,7 @@ impl HotAgentRegistrar {
                 &mut sync_ctx,
                 &chat_ability,
                 owner.clone(),
-                crate::core::ability::spec::default_chat_manifest(),
+                crate::daemon::ability::manifest::default_chat_manifest(),
                 chat_stream_handler,
             )
             .await
@@ -553,7 +553,7 @@ impl HotAgentRegistrar {
                     continue;
                 };
                 match exec {
-                    crate::core::ability::spec::AbilityExec::HostStream(stream_spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
                         let h = build_host_stream_handler(stream_spec.clone());
                         if Self::register_stream_with_envelope_and_spec(
                             &mut sync_ctx,
@@ -683,7 +683,7 @@ impl HotAgentRegistrar {
         ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: crate::daemon::ability::dispatch::LocalRpcHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -726,7 +726,7 @@ impl HotAgentRegistrar {
         ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: crate::daemon::ability::dispatch::LocalStreamHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -771,7 +771,7 @@ impl HotAgentRegistrar {
         ctx: &mut HotAgentRuntimeSyncContext<'_>,
         ability_name: &str,
         owner: OwnerKind,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -980,7 +980,7 @@ mod tests {
                 "liangbing.ghost_op",
                 OwnerKind::Agent("liangbing".to_string()),
                 ghost_authority,
-                crate::core::ability::spec::default_chat_manifest(),
+                crate::daemon::ability::manifest::default_chat_manifest(),
                 Arc::new(|_args| Ok(serde_json::Value::Null)),
             )
             .expect("seed dynamic ghost ability");

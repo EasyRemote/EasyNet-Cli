@@ -51,7 +51,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use crate::cli::commands::mission_runs::{run_mission_inproc, MissionRunOpts};
-use crate::core::ability::spec::EalExec;
+use crate::daemon::ability::manifest::EalExec;
 use crate::daemon::execution::mission::context::ParentInvocationContext;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};

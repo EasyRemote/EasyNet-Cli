@@ -172,10 +172,10 @@ fn run_mcp_add_writes_mcp_exec_manifest_for_agent() {
         .join("mcp_echo_server_echo_text.ability.toml");
     let body = fs::read_to_string(&manifest_path).expect("manifest written");
     let manifest =
-        crate::core::ability::spec::AbilityManifest::from_toml_str(&body).expect("parse");
+        crate::daemon::ability::manifest::AbilityManifest::from_toml_str(&body).expect("parse");
     assert_eq!(manifest.name(), "mcp_echo_server_echo_text");
     match manifest.exec().expect("exec") {
-        crate::core::ability::spec::AbilityExec::Mcp(exec) => {
+        crate::daemon::ability::manifest::AbilityExec::Mcp(exec) => {
             assert_eq!(exec.server, "Echo Server");
             assert_eq!(exec.tool, "echo-text");
         }
@@ -195,7 +195,7 @@ fn normalize_mcp_input_schema_removes_toml_unsupported_nulls() {
             "q": {"type": ["string", null], "default": null}
         }
     })));
-    let manifest = crate::core::ability::spec::AbilityManifest::new(
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
         "mcp_null_schema",
         "schema with upstream nulls",
         normalized,
@@ -857,7 +857,7 @@ fn existing_mcp_binding_returns_none_for_malformed_toml() {
 
 #[test]
 fn mcp_manifest_for_emits_mcp_exec_with_pinned_server_tool() {
-    use crate::core::ability::spec::{AbilityExec, AbilityManifest};
+    use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
     let plan = McpAbilityPlan {
         server: "echo".into(),
         tool: "ping".into(),
@@ -950,10 +950,10 @@ fn assert_tools_filter_satisfied_lists_every_missing_tool() {
 fn cost_kind_arg_round_trips_to_core_cost_kind() {
     // Pins the CLI ↔ core enum lockstep documented on
     // `CostKindArg`. If a future variant lands on
-    // `core::ability_spec::CostKind` and someone forgets the
+    // `daemon::ability::manifest::CostKind` and someone forgets the
     // mirror, this test fails loud instead of leaving operators
     // with an unreachable flag.
-    use crate::core::ability::spec::CostKind;
+    use crate::daemon::ability::manifest::CostKind;
     assert_eq!(CostKindArg::Free.into_core(), CostKind::Free);
     assert_eq!(
         CostKindArg::ExternalMetered.into_core(),
@@ -980,7 +980,7 @@ fn build_cost_meta_normalises_blank_label_to_none() {
     // label outright. Treat empty-ish input as "label omitted" so
     // the kind still lands without dragging a useless blank
     // string onto disk.
-    use crate::core::ability::spec::CostKind;
+    use crate::daemon::ability::manifest::CostKind;
     let meta = build_cost_meta(Some(CostKindArg::ExternalMetered), Some("   "))
         .unwrap()
         .expect("kind set => meta present");
@@ -990,7 +990,7 @@ fn build_cost_meta_normalises_blank_label_to_none() {
 
 #[test]
 fn build_cost_meta_carries_kind_and_trimmed_label() {
-    use crate::core::ability::spec::CostKind;
+    use crate::daemon::ability::manifest::CostKind;
     let meta = build_cost_meta(
         Some(CostKindArg::ExternalMetered),
         Some("  Google Maps API — $5 per 1000 requests  "),
@@ -1014,7 +1014,7 @@ fn mcp_manifest_for_stamps_declared_cost_on_disk() {
     // carry that `[cost]` table verbatim, and re-parsing it must
     // surface the same `CostMeta` — that is what `profiles::mcp`
     // reads to stop reporting `cost: unknown` on this row.
-    use crate::core::ability::spec::{AbilityManifest, CostKind, CostMeta};
+    use crate::daemon::ability::manifest::{AbilityManifest, CostKind, CostMeta};
     let plan = McpAbilityPlan {
         server: "Google Maps MCP".into(),
         tool: "geocode-address".into(),

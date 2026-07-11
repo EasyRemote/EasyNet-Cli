@@ -367,7 +367,7 @@ struct AbilityBundle {
     /// (`category`, `command`, `tool_name`, …); `AbilityManifest` has no
     /// `deny_unknown_fields`, so they are ignored, and the canonical
     /// `name` / `input_schema` / `exec` come through typed.
-    manifest: crate::core::ability::spec::AbilityManifest,
+    manifest: crate::daemon::ability::manifest::AbilityManifest,
     /// Verb-only local name (`generate`); namespace is separate.
     public_name: String,
     /// Namespace segment (`er`) when the manifest declares one.
@@ -392,10 +392,11 @@ impl AbilityBundle {
         }
 
         let manifest_bytes = std::fs::read(&manifest_file)?;
-        let manifest = crate::core::ability::spec::AbilityManifest::from_json_slice(
-            &manifest_bytes,
-        )
-        .map_err(|e| anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}"))?;
+        let manifest =
+            crate::daemon::ability::manifest::AbilityManifest::from_json_slice(&manifest_bytes)
+                .map_err(|e| {
+                    anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: {e}")
+                })?;
 
         // EasyRemote may carry the namespace separately; the manifest
         // `name` is the verb only (AbilityManifest.name forbids dots).

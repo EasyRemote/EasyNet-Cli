@@ -43,6 +43,10 @@ jobs:
           ./tools/scripts/check-project-structure-v1.sh
           ./tests/scripts/test_check_project_structure_v1.sh
 
+      - name: Ability model convergence
+        run: |
+          ./tools/scripts/check-ability-model-convergence.sh
+
       - name: URA construction valve (F-055 — facade builders only)
         run: |
           ./tools/scripts/check-ura-construction.sh

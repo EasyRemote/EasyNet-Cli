@@ -27,9 +27,10 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 | ABI/version discovery | Runtime Core | provider-backed | provider-backed | Package metadata is machine-checked; non-P0 provider bindings and publish/release stability gates remain incomplete. |
 | daemon start/attach/discover/stop/detach | Runtime Core | provider-backed | provider-backed | External product repositories still need lower-layer deletion gates before their own cutover claims. |
 | runtime connection state | Runtime Core | provider-backed | provider-backed | Remote TCP/TLS daemon endpoint policy is still outside the stable SDK gate. |
+| native Runtime + Health + Identity provider | Runtime Core | provider-backed | provider-backed | Both P0 SDKs expose one owned native provider lifecycle; Health borrows Runtime transport and Identity remains an explicit daemon profile. |
 | runtime health | Runtime Core | provider-backed | provider-backed | Product health route shaping remains outside the daemon SDK and is not SDK stability evidence. |
 | typed errors | Runtime Core | provider-backed | provider-backed | Go/Python expose stable error classes and package-level source refs; package metadata is machine-checked, while non-P0 provider bindings and publish/release stability gates remain incomplete. |
-| complete invocation draft | Runtime Core | provider-backed | provider-backed | Full package stability claim still depends on all shipped profile gates. |
+| complete invocation draft | Runtime Core | provider-backed | provider-backed | Go builds and inspects typed drafts directly; Python additionally exposes a lifecycle-free host-object wire projector over the same Addressing and draft semantics. Full package stability claim still depends on all shipped profile gates. |
 | prepare/sign/submit | Runtime Core | provider-backed | provider-backed | SDK-owned signer workflow acquisition plus signer-handle provenance and policy-proof guardrails exist; daemon-core keyring-backed local signing now preserves signer policy proof on `SignedInvocation`; C ABI exposes a daemon-keyring `sign_prepared_local` transition; Go/Python C ABI transports select caller-signing vs local-daemon signing from `SignedInvocation.policy.mode`; and Go/Python direct runtimes can compose an SDK-owned handle transport for prepare/submit/handle operations with explicit ownership. Backend SDK-only runtime cutover and Python non-CABI live daemon keyring transport cutover remain incomplete. |
 | unary invoke | Runtime Core | provider-backed | provider-backed | External product dispatch imports still need repository-local boundary audits. |
 | stream | Runtime Core | provider-backed | provider-backed | C ABI terminal and bounded backpressure projections exist; Node exposes the same bounded backpressure seam; product stream cutovers remain incomplete outside the daemon SDK. |
@@ -164,7 +165,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   bridges, storage policy, and product cutovers remain incomplete outside the
   daemon SDK facade.
 - Go package exposes Runtime Core feature/version discovery with `SdkEnvironment`
-  process root, default daemon discovery/connect policy, explicit
+  process root, default daemon discovery/connect policy, an SDK-owned
+  `NativeRuntimeHandle` with matched Runtime/Health/Identity facades, explicit
   `DaemonControl` access, local runtime connect, idempotent environment close,
   root client close, and optional
   `easynet_cabi,cgo` C ABI v4 feature-discovery, daemon lifecycle/open-runtime,
@@ -280,7 +282,9 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   resolution over direct control-plane UDS boot/status IPC, private C ABI v4 discovery/daemon lifecycle/open-runtime/runtime health/unary/stream/bidi/prepare-submit handle transport, and direct daemon Axon gRPC-over-UDS unary/server-stream transport plus control-discovery-backed RuntimeConnection endpoint resolution with C ABI-backed or direct daemon handshake, runtime
   direct daemon Axon gRPC-over-UDS handle operations composed through an explicit
   RuntimeTransport delegate, runtime connection state, DaemonHandle lifecycle status/endpoints/invocation-endpoint lookup/start/attach/
-  discover/stop/detach/open-runtime/connect-local state seams, runtime health readiness
+  discover/stop/detach/open-runtime/connect-local state seams, an SDK-owned
+  `NativeRuntimeHandle` that owns matched Runtime/Health/Identity facades,
+  runtime health readiness
   facts, SDK-owned `DaemonStartProjection` and
   `DaemonLifecycleFacade` start-wire/status/open-client
   projection, schema-backed typed SDK error projection, complete Invocation draft

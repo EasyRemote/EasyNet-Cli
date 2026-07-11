@@ -1059,10 +1059,10 @@ pub fn build_registry_with_services(config: RegistryBuildConfig<'_>) -> Arc<Axon
     build_registry_with_services_result(config).catalog
 }
 
-/// Daemon-side convenience wrapper. Loads the agent registry and
-/// builds the full `AxonAbilityCatalog` in one call, swallowing a
-/// load failure into the empty-registry case (so a brand-new install
-/// without `~/.easynet/agents.json` still boots).
+/// Daemon-side assembly entry point. Loads the agent registry and builds the
+/// full `AxonAbilityCatalog` in one call. A brand-new installation receives
+/// the empty registry from `load_agents`; malformed or inaccessible durable
+/// state is a boot error rather than a fabricated empty catalog.
 ///
 /// `loaders`:
 /// * `Some(vec)` — caller-provided context-loader chain. Tests
@@ -1117,20 +1117,13 @@ pub fn build_registry_for_daemon_result(
         .unwrap_or(true);
     let agents = if hosts_device_authority {
         recover_descriptor_import_transactions_before_daemon_registry_boot()?;
-        match crate::daemon::persistence::agent_registry::load_agents() {
-            Ok(r) => r,
-            Err(e) => {
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = agent_registry,
-                    kind = load_failed,
-                    level = "warn",
-                    error = err_msg,
-                    fallback = "empty_registry",
-                );
-                AgentRegistry::default()
-            }
-        }
+        // `load_agents` already defines the one legitimate empty state: a
+        // missing registry on a brand-new installation. Any other failure is
+        // corrupt or inaccessible durable daemon state and must abort boot;
+        // replacing it with an empty registry would silently withdraw hosted
+        // abilities from the control plane.
+        crate::daemon::persistence::agent_registry::load_agents()
+            .map_err(|error| anyhow::anyhow!("load daemon agent registry: {error:#}"))?
     } else {
         AgentRegistry::default()
     };

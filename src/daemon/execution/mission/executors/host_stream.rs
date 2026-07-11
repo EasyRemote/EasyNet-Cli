@@ -18,7 +18,7 @@
 // always reaches an explicit terminal, never a silent drop).
 //
 // Wire protocol: the single source of truth is the doc comment on
-// `crate::core::ability::spec::HostStreamExec`. Summary, with the five
+// `crate::daemon::ability::manifest::HostStreamExec`. Summary, with the five
 // load-bearing invariants enforced here:
 //
 //   1. `seq` strictly increasing from 0 (reorder/gap = truncation).
@@ -37,8 +37,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 
-use crate::core::ability::spec::HostStreamExec;
 use crate::daemon::ability::dispatch::StreamSource;
+use crate::daemon::ability::manifest::HostStreamExec;
 use crate::protocol::host_stream_contract::{
     decode_host_frame, verify_terminal, HostFrame, HostStreamFailure, HostStreamFailureKind,
     HostStreamHashState,

@@ -68,8 +68,8 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::{AbilityManifest, Visibility};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
@@ -821,7 +821,7 @@ fn resolve_via_federation(
 }
 
 /// Where the call wants to look. Mirrors the `[access].visibility`
-/// tiers exposed in `core::ability_spec::Visibility` but is a
+/// tiers exposed in `daemon::ability::manifest::ManifestAccessScope` but is a
 /// caller-side concept: "search at most this far".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -966,7 +966,7 @@ struct Candidate {
     ability: String,
     description: String,
     input_schema: Value,
-    visibility: Visibility,
+    visibility: ManifestAccessScope,
     scope_matched: Scope,
     score: f64,
     reason: String,
@@ -1051,7 +1051,7 @@ fn candidate_from_federated_summary(
         ability: public_name,
         description: summary.callable_summary.description.clone(),
         input_schema,
-        visibility: Visibility::Public,
+        visibility: ManifestAccessScope::Public,
         scope_matched: scope,
         score: 0.0,
         reason: String::new(),
@@ -1069,7 +1069,7 @@ fn push_candidate(
     self_agent: &str,
     peer_name: &str,
     _peer_entry: &AgentEntry,
-    manifest: &crate::core::ability::spec::AbilityManifest,
+    manifest: &crate::daemon::ability::manifest::AbilityManifest,
     scope: Scope,
 ) {
     let access = manifest.access();
@@ -1081,9 +1081,9 @@ fn push_candidate(
         // A peer ability with `visibility = "self"` is invisible to
         // other agents regardless of caller scope — the access policy
         // strictly trumps the caller's reach.
-        (false, Visibility::Selfish) => return,
-        (false, Visibility::Device) => Scope::Device,
-        (false, Visibility::Public) => Scope::Device,
+        (false, ManifestAccessScope::Selfish) => return,
+        (false, ManifestAccessScope::Device) => Scope::Device,
+        (false, ManifestAccessScope::Public) => Scope::Device,
     };
 
     // Skip candidates whose `scope_matched` exceeds the caller's
@@ -1147,9 +1147,9 @@ fn push_candidate(
 /// manifest without `[exec]` is an unbound declaration, not a callable
 /// route.
 fn classify_fulfilled_by(
-    manifest: &crate::core::ability::spec::AbilityManifest,
+    manifest: &crate::daemon::ability::manifest::AbilityManifest,
 ) -> Option<&'static str> {
-    use crate::core::ability::spec::AbilityExec;
+    use crate::daemon::ability::manifest::AbilityExec;
     match manifest.exec() {
         Some(AbilityExec::Shell(_)) => Some("shell"),
         Some(AbilityExec::Http(_)) => Some("http"),
@@ -1355,7 +1355,7 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ability::spec::{AbilityManifest, AccessPolicy, Visibility};
+    use crate::daemon::ability::manifest::{AbilityManifest, AccessPolicy, ManifestAccessScope};
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -1722,7 +1722,7 @@ mod tests {
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Device,
+                visibility: ManifestAccessScope::Device,
                 ..Default::default()
             })
             .unwrap();
@@ -1772,7 +1772,7 @@ mod tests {
         let private = AbilityManifest::new("internal", "private helper", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Selfish,
+                visibility: ManifestAccessScope::Selfish,
                 ..Default::default()
             })
             .unwrap();
@@ -2125,7 +2125,7 @@ mod tests {
         assert_eq!(candidate.qualified_name, ability_ura);
         assert_eq!(candidate.owner, "easynet:///r/acme/agent/alice.bot");
         assert_eq!(candidate.ability, "chat");
-        assert_eq!(candidate.visibility, Visibility::Public);
+        assert_eq!(candidate.visibility, ManifestAccessScope::Public);
         assert_eq!(candidate.fulfilled_by, Some("federation"));
     }
 
@@ -2198,7 +2198,7 @@ mod tests {
             ability: "fs.read".to_string(),
             description: "read a file from disk".to_string(),
             input_schema: json!({"type": "object"}),
-            visibility: Visibility::Device,
+            visibility: ManifestAccessScope::Device,
             scope_matched: Scope::Device,
             score: 0.0,
             reason: String::new(),

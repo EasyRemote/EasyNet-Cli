@@ -277,7 +277,7 @@ pub fn abilities_for(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySp
 /// exists, so operator-edited descriptions and schemas are preserved.
 pub fn abilities_for_publication(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
     let mut specs = abilities_for(agent_name, entry);
-    let default_chat = crate::core::ability::spec::default_chat_manifest();
+    let default_chat = crate::daemon::ability::manifest::default_chat_manifest();
     let qualified_chat = default_chat.qualified_name(agent_name);
     if specs.iter().any(|spec| spec.name() == qualified_chat) {
         return specs;
@@ -339,7 +339,7 @@ pub fn public_agent_ability_name(
 pub fn manifests_for(
     agent_name: &str,
     entry: &AgentEntry,
-) -> Vec<crate::core::ability::spec::AbilityManifest> {
+) -> Vec<crate::daemon::ability::manifest::AbilityManifest> {
     (*manifests_for_shared(agent_name, entry)).clone()
 }
 
@@ -357,7 +357,7 @@ pub fn manifests_for(
 // for roots that leave the registry linger until process exit —
 // bounded by the number of distinct roots ever served.
 
-type SharedManifests = std::sync::Arc<Vec<crate::core::ability::spec::AbilityManifest>>;
+type SharedManifests = std::sync::Arc<Vec<crate::daemon::ability::manifest::AbilityManifest>>;
 
 #[derive(PartialEq, Eq)]
 struct ManifestDirSignature(Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)>);
@@ -531,8 +531,8 @@ mod tests {
     //! operator which promise just broke.
 
     use super::*;
-    use crate::core::ability::spec::AbilityManifest;
     use crate::core::agent::spec::AgentSpec;
+    use crate::daemon::ability::manifest::AbilityManifest;
     use crate::daemon::execution::mission::directory::{
         AgentDirectory, Location, ABILITY_MANIFEST_SUFFIX,
     };

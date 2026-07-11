@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
-use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{CallMode, PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::package::PluginPackage;
 
 /// Validate that a package kind can be installed by this release.
@@ -89,7 +89,7 @@ fn validate_declarative_rpc_only(package: &PluginPackage, kind: &'static str) ->
     if manifest
         .abilities()
         .iter()
-        .all(|ability| ability.call_mode() == PluginCallMode::Rpc)
+        .all(|ability| ability.call_mode() == CallMode::Rpc)
     {
         Ok(())
     } else {

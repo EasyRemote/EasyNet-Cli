@@ -35,7 +35,6 @@ use easynet_axon::invocation::{
 };
 use serde::Serialize;
 
-use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::builtins::agents::chat::build_host_stream_handler;
 use crate::daemon::ability::builtins::device_control::ability_management::store::{
     manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
@@ -44,6 +43,7 @@ use crate::daemon::ability::dispatch::{
     stream_env_ability_with_options, AxonAbilityCatalog, ControlPlaneAuthorityModeTxn,
     ControlPlaneAuthorityRebind, ControlPlaneImplementation,
 };
+use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::{
     AbilityControlPlaneRecord, AbilityDescriptorKey, AbilityImplSource, AuthorityScope,
     CallMode as DescriptorCallMode, RuntimeEnv,
@@ -1184,7 +1184,7 @@ pub enum ReplayOutcomeStatus {
 /// not" decision — a security-relevant gate — cannot diverge between the two
 /// consumers or grow two different error strings for the same condition.
 enum DeployableExec<'a> {
-    HostStream(&'a crate::core::ability::spec::HostStreamExec),
+    HostStream(&'a crate::daemon::ability::manifest::HostStreamExec),
 }
 
 impl<'a> DeployableExec<'a> {
@@ -1367,7 +1367,7 @@ mod tests {
         );
     }
 
-    use crate::core::ability::spec::{AbilityExec, HostStreamExec, ShellExec};
+    use crate::daemon::ability::manifest::{AbilityExec, HostStreamExec, ShellExec};
 
     fn host_stream_manifest(socket: &str, function: &str) -> AbilityManifest {
         AbilityManifest::new(

@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::manifest::{
-    validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginCallMode,
+    validate_builtin_entrypoint, CallMode, PluginAbilityLayer, PluginBidiWireKind,
     PluginPackageManifest, PluginRuntimeLimits,
 };
 use crate::daemon::plugins::provider::ProviderBackedBuiltinBinding;
@@ -72,7 +72,7 @@ impl PackageHash {
 pub struct BuiltinPluginAbilitySpec {
     pub name: &'static str,
     pub layer: PluginAbilityLayer,
-    pub call_mode: PluginCallMode,
+    pub call_mode: CallMode,
     pub bidi_wire_kind: Option<PluginBidiWireKind>,
     pub description: fn() -> &'static str,
     pub input_schema: fn() -> Value,
@@ -86,14 +86,16 @@ impl BuiltinPluginAbilitySpec {
     /// (`remote_desktop.create_session`), while `AbilityManifest` names are
     /// verb-local. The catalog key remains the full ability name at
     /// registration; only the manifest body stores the local verb.
-    pub fn to_registry_manifest(&self) -> Result<crate::core::ability::spec::AbilityManifest> {
+    pub fn to_registry_manifest(
+        &self,
+    ) -> Result<crate::daemon::ability::manifest::AbilityManifest> {
         let verb = self.name.rsplit('.').next().ok_or_else(|| {
             PluginHostError::DescriptorProjectionFailed {
                 ability: self.name.to_string(),
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        crate::core::ability::spec::AbilityManifest::new(
+        crate::daemon::ability::manifest::AbilityManifest::new(
             verb,
             (self.description)(),
             (self.input_schema)(),
@@ -147,14 +149,16 @@ impl PluginAbilityDescriptor {
     /// names are verb-local, so plugin ability names such as
     /// `plugin.echo` project to `echo` while the catalog key remains the
     /// full ability name.
-    pub fn to_registry_manifest(&self) -> Result<crate::core::ability::spec::AbilityManifest> {
+    pub fn to_registry_manifest(
+        &self,
+    ) -> Result<crate::daemon::ability::manifest::AbilityManifest> {
         let verb = self.name.rsplit('.').next().ok_or_else(|| {
             PluginHostError::DescriptorProjectionFailed {
                 ability: self.name.clone(),
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        let mut manifest = crate::core::ability::spec::AbilityManifest::new(
+        let mut manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             verb,
             self.description.clone(),
             self.input_schema.clone(),
@@ -322,7 +326,7 @@ impl PluginPackage {
     pub fn ability_registry_manifest(
         &self,
         ability: &str,
-    ) -> Result<crate::core::ability::spec::AbilityManifest> {
+    ) -> Result<crate::daemon::ability::manifest::AbilityManifest> {
         let descriptor = self.ability_descriptor(ability).ok_or_else(|| {
             PluginHostError::InvalidAbilityDescriptor {
                 path: self.manifest_path.clone(),
@@ -678,7 +682,7 @@ fn validate_package_child_path(root: &Path, allowed_root: &Path, path: &Path) ->
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginCallMode};
+    use crate::daemon::plugins::manifest::{CallMode, PluginAbilityLayer};
     use crate::daemon::plugins::provider::{PluginProvider, PluginProviderKind};
 
     struct TestBuiltinProvider {
@@ -753,7 +757,7 @@ pub(crate) mod tests {
             vec![BuiltinPluginAbilitySpec {
                 name: "test.echo",
                 layer: PluginAbilityLayer::Observation,
-                call_mode: PluginCallMode::Rpc,
+                call_mode: CallMode::Rpc,
                 bidi_wire_kind: None,
                 description,
                 input_schema,

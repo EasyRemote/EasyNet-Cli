@@ -86,15 +86,18 @@ class DiagnosticsReport:
 class HealthClient:
     """Python Runtime Core health facade."""
 
-    def __init__(self, transport: HealthTransport) -> None:
+    def __init__(
+        self, transport: HealthTransport, *, owns_transport: bool = True
+    ) -> None:
         if transport is None:
             raise SDKError(
                 code=ErrorCode.INVALID_ARGUMENT,
                 stage="sdk",
                 retry=RetryHint.NEVER,
                 message="health transport is required",
-        )
+            )
         self._transport = transport
+        self._owns_transport = owns_transport
         self._closed = False
 
     def runtime_health(self) -> RuntimeHealth:
@@ -151,7 +154,7 @@ class HealthClient:
             return
         self._closed = True
         close = getattr(self._transport, "close", None)
-        if close is not None:
+        if self._owns_transport and close is not None:
             close()
 
     def _require_open(self) -> None:

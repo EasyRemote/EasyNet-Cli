@@ -4783,6 +4783,7 @@ class SharedConformanceFixtureTests(unittest.TestCase):
         self._require_case_action(no_codec_case, "inspect_sdk_invocation_dto_usage")
         for sdk_type in (
             "InvocationObjectAdapter",
+            "InvocationWireProjector",
             "InvocationDraft",
             "PreparedInvocation",
             "SignedInvocation",

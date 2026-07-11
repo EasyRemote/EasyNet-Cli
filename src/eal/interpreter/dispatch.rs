@@ -392,32 +392,32 @@ pub(super) fn dispatch_to_agent(
                 }
             }
             return (match exec {
-                crate::core::ability::spec::AbilityExec::Shell(spec) => {
+                crate::daemon::ability::manifest::AbilityExec::Shell(spec) => {
                     crate::daemon::execution::mission::executors::shell::run_shell_exec(
                         spec, arguments, timeout,
                     )
                     .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
                 }
-                crate::core::ability::spec::AbilityExec::Http(spec) => {
+                crate::daemon::ability::manifest::AbilityExec::Http(spec) => {
                     crate::daemon::execution::mission::executors::http::run_http_exec(
                         spec, arguments, timeout,
                     )
                     .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
                 }
-                crate::core::ability::spec::AbilityExec::Eal(spec) => {
+                crate::daemon::ability::manifest::AbilityExec::Eal(spec) => {
                     crate::daemon::execution::mission::executors::eal::run_eal_exec(
                         spec, arguments, timeout,
                     )
                     .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
                 }
-                crate::core::ability::spec::AbilityExec::Mcp(spec) => {
+                crate::daemon::ability::manifest::AbilityExec::Mcp(spec) => {
                     let _ = timeout;
                     crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
                         spec, arguments,
                     )
                     .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
                 }
-                crate::core::ability::spec::AbilityExec::HostStream(_) => {
+                crate::daemon::ability::manifest::AbilityExec::HostStream(_) => {
                     // host_stream is a server-stream executor; an EAL step
                     // is a unary child invocation and cannot carry its
                     // many-frame output. Such an ability registers as

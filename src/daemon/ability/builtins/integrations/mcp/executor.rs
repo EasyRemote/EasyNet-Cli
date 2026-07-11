@@ -66,7 +66,7 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::McpExec;
+use crate::daemon::ability::manifest::McpExec;
 use crate::daemon::execution::mcp::McpClientService;
 use crate::support::platform::process_singleton::ProcessSingleton;
 

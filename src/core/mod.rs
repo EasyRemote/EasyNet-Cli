@@ -29,7 +29,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod ability;
 pub mod agent;
 /// Pure domain identifier types (TenantId/NodeId/ScheduleId).
 /// These have zero internal dependencies; keeping them in `core`
@@ -39,12 +38,11 @@ pub mod domain;
 pub mod identity;
 pub mod ura;
 
-pub use ability::spec as ability_spec;
 pub use agent::id as agent_id;
 pub use agent::spec as agent_spec;
 
 // Public module aliases preserve the pre-structure Rust API paths
-// (`core::agent_id`, `core::agent_spec`, `core::ability_spec`) while
+// (`core::agent_id`, `core::agent_spec`, `daemon::ability::manifest`) while
 // the source owner remains the semantic directory underneath
 // `core/{agent,ability}`. Do not glob-reexport the contents here:
 // callers should still import concrete types from the semantic owner

@@ -43,9 +43,9 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::AbilityManifest;
 use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
+use crate::daemon::ability::manifest::AbilityManifest;
 use crate::daemon::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::daemon::execution::mcp::McpClientService;
 

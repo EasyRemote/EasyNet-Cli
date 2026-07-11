@@ -683,7 +683,7 @@ impl AuthorityBindingRecord {
         descriptor_version: impl Into<String>,
         call_mode: CallMode,
         scope: AuthorityScope,
-        manifest: Option<&crate::core::ability::spec::AbilityManifest>,
+        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
     ) -> Result<Self, AbilityControlPlaneError> {
         let ability = ability.into();
         let descriptor_version = descriptor_version.into();
@@ -757,10 +757,10 @@ impl AuthorityBindingRecord {
 }
 
 fn invoke_policy_hash_for_manifest(
-    manifest: Option<&crate::core::ability::spec::AbilityManifest>,
+    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
 ) -> [u8; 32] {
     let access = manifest
-        .map(crate::core::ability::spec::AbilityManifest::access)
+        .map(crate::daemon::ability::manifest::AbilityManifest::access)
         .unwrap_or_default();
     let payload = serde_json::json!({
         "policy_ref": DEFAULT_INVOKE_POLICY_REF,
@@ -901,16 +901,17 @@ mod tests {
     fn invoke_policy_hash_changes_with_manifest_access() {
         let input = serde_json::json!({"type": "object"});
         let base =
-            crate::core::ability::spec::AbilityManifest::new("quote", "quote", input.clone())
+            crate::daemon::ability::manifest::AbilityManifest::new("quote", "quote", input.clone())
                 .unwrap();
-        let restricted = crate::core::ability::spec::AbilityManifest::new("quote", "quote", input)
-            .unwrap()
-            .with_access(crate::core::ability::spec::AccessPolicy {
-                visibility: crate::core::ability::spec::Visibility::Selfish,
-                allow_callers: None,
-                deny_callers: None,
-            })
-            .unwrap();
+        let restricted =
+            crate::daemon::ability::manifest::AbilityManifest::new("quote", "quote", input)
+                .unwrap()
+                .with_access(crate::daemon::ability::manifest::AccessPolicy {
+                    visibility: crate::daemon::ability::manifest::ManifestAccessScope::Selfish,
+                    allow_callers: None,
+                    deny_callers: None,
+                })
+                .unwrap();
 
         let base_record = AuthorityBindingRecord::local_self_with_manifest_policy(
             "mentor.quote",

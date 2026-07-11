@@ -236,7 +236,7 @@ pub enum McpAction {
     Add(McpAddArgs),
 }
 
-/// CLI adapter for [`crate::core::ability::spec::CostKind`].
+/// CLI adapter for [`crate::daemon::ability::manifest::CostKind`].
 ///
 /// **Why a separate enum.** `CostKind` lives in `core/`, which is the
 /// zero-dependency ontology layer — it must not pull in `clap`. So we
@@ -252,8 +252,8 @@ pub enum CostKindArg {
 }
 
 impl CostKindArg {
-    pub(crate) fn into_core(self) -> crate::core::ability::spec::CostKind {
-        use crate::core::ability::spec::CostKind;
+    pub(crate) fn into_core(self) -> crate::daemon::ability::manifest::CostKind {
+        use crate::daemon::ability::manifest::CostKind;
         match self {
             CostKindArg::Free => CostKind::Free,
             CostKindArg::ExternalMetered => CostKind::ExternalMetered,

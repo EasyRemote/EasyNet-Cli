@@ -38,7 +38,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::core::ability::spec::ShellExec;
+use crate::daemon::ability::manifest::ShellExec;
 use serde_json::{json, Value};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

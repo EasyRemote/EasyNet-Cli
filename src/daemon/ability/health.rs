@@ -65,7 +65,7 @@ use std::process::Stdio;
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::core::ability::spec::{AbilityManifest, BootSpec, CostKind, HealthSpec};
+use crate::daemon::ability::manifest::{AbilityManifest, BootSpec, CostKind, HealthSpec};
 
 /// Scan cadence. The tick only *checks due-ness*; per-record cadence
 /// is owned by `next_probe_unix_ms`, so a shorter tick sharpens

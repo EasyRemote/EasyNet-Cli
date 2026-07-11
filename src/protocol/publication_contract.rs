@@ -37,9 +37,9 @@ use std::path::{Component, Path};
 use easynet_axon::invocation::{ability_ura_from_descriptor_ref, canonical_ability_descriptor_ref};
 use serde_json::{json, Map, Value};
 
-use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 use crate::core::ura;
 use crate::daemon::ability::builtins::device_control::ability_management::store::manifest_digest;
+use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 use crate::daemon::resources::files::{self as filesystem, FilesystemResourceCapability};
 use crate::protocol::sdk_contract::{
     build_system_invocation, object, optional_string_field, required_string, validate_ura,

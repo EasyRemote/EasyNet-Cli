@@ -58,8 +58,8 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::{AbilityManifest, Visibility};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
 use crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error;
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 use crate::daemon::persistence::agent_registry::AgentRegistry;
@@ -121,12 +121,12 @@ pub fn dispatch(
     // Determine the caller's scope relative to the target ability.
     // self when the call stays inside one agent's own bundle,
     // device otherwise. Federation targets aren't recognised yet —
-    // when they arrive they'll resolve into a `Visibility::Public`
+    // when they arrive they'll resolve into a `ManifestAccessScope::Public`
     // caller scope here.
     let caller_scope = if target == caller {
-        Visibility::Selfish
+        ManifestAccessScope::Selfish
     } else {
-        Visibility::Device
+        ManifestAccessScope::Device
     };
 
     // Validate the target agent exists. Returning `target_not_registered`
@@ -435,7 +435,7 @@ fn lookup_access_policy(
     agents: &AgentRegistry,
     target_agent: &str,
     bare_ability: &str,
-) -> Option<crate::core::ability::spec::AccessPolicy> {
+) -> Option<crate::daemon::ability::manifest::AccessPolicy> {
     let entry = agents.agents.get(target_agent)?;
     let manifests = crate::daemon::execution::mission::agent_ability_specs::manifests_for_shared(
         target_agent,
@@ -621,7 +621,7 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ability::spec::{AbilityManifest, AccessPolicy, Visibility};
+    use crate::daemon::ability::manifest::{AbilityManifest, AccessPolicy, ManifestAccessScope};
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -963,7 +963,7 @@ mod tests {
         let private = AbilityManifest::new("internal", "private", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Selfish,
+                visibility: ManifestAccessScope::Selfish,
                 ..Default::default()
             })
             .unwrap();
@@ -989,7 +989,7 @@ mod tests {
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Device,
+                visibility: ManifestAccessScope::Device,
                 ..Default::default()
             })
             .unwrap();
@@ -1017,7 +1017,7 @@ mod tests {
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Device,
+                visibility: ManifestAccessScope::Device,
                 deny_callers: Some(vec!["claude".into()]),
                 allow_callers: None,
             })
@@ -1043,7 +1043,7 @@ mod tests {
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Device,
+                visibility: ManifestAccessScope::Device,
                 allow_callers: Some(vec!["alice".into(), "bob".into()]),
                 deny_callers: None,
             })
@@ -1067,7 +1067,7 @@ mod tests {
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Device,
+                visibility: ManifestAccessScope::Device,
                 // claude is the caller in the test fixture (the
                 // `claude.invoke` registration). Putting it in the
                 // allow list should let the call through.

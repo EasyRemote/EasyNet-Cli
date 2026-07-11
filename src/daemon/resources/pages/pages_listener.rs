@@ -652,7 +652,7 @@ mod tests {
 
     use crate::daemon::ability::builtins::resources::pages::sandbox::open_directory;
     use crate::daemon::ability::builtins::resources::pages::state::{
-        ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+        PageVisibility, ProjectHandle, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
     };
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 
@@ -711,7 +711,7 @@ mod tests {
                 project_id: project_id.to_string(),
                 folder_handle,
                 canonical_root,
-                visibility: Visibility::Public,
+                visibility: PageVisibility::Public,
                 file_size_cap: DEFAULT_FILE_SIZE_CAP,
                 started_at: SystemTime::now(),
             }),

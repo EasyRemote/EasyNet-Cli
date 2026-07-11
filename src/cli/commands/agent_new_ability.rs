@@ -29,7 +29,9 @@ use clap::{error::ErrorKind, Args, Parser, Subcommand};
 use serde_json::{json, Value};
 
 use crate::cli::commands::agent::{CostKindArg, McpAddArgs};
-use crate::core::ability::spec::{AbilityExec, AbilityManifest, CostMeta, HttpExec, ShellExec};
+use crate::daemon::ability::manifest::{
+    AbilityExec, AbilityManifest, CostMeta, HttpExec, ShellExec,
+};
 use crate::daemon::execution::mission::directory::AgentDirectory;
 use crate::daemon::persistence::agent_registry as agents;
 use crate::daemon::persistence::config;

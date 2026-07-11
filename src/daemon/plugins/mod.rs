@@ -51,7 +51,7 @@ pub use index::{PluginPackageIndex, PluginPackageIndexError, PluginPackageIndexL
 pub use install::{InstalledPluginRecord, PluginInstaller, PluginStateToml};
 pub use load_plan::{PluginLoadPlan, PluginLoadPlanner, PluginLoadStatus};
 pub use manifest::{
-    PluginAbilityLayer, PluginBidiWireKind, PluginCallMode, PluginDeclarativeBinding, PluginKind,
+    CallMode, PluginAbilityLayer, PluginBidiWireKind, PluginDeclarativeBinding, PluginKind,
     PluginPackageManifest, PluginRealtimeCapability, PluginRealtimeKind, PluginRealtimeMode,
     PluginRealtimeTransport, PluginRuntimeLimits,
 };

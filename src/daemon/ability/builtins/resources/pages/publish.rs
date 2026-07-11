@@ -29,7 +29,8 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use super::sandbox::open_directory;
 use super::state::{
-    persist_registry_for_user, ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+    persist_registry_for_user, PageVisibility, ProjectHandle, DEFAULT_FILE_SIZE_CAP,
+    PUBLISHED_PROJECTS,
 };
 
 /// Handler invoked when a user calls `pages.publish`. The
@@ -85,7 +86,7 @@ pub fn handle_publish(
         .unwrap_or("public");
 
     validate_project_id(project_id)?;
-    let visibility = Visibility::parse(visibility_str)?;
+    let visibility = PageVisibility::parse(visibility_str)?;
 
     let folder = PathBuf::from(folder_str);
     if !folder.is_absolute() {

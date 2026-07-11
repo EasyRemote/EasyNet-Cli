@@ -8,6 +8,10 @@ file records the staged public API shape that language bindings must project.
 
 ```text
 SdkEnvironment
+  -> NativeRuntimeHandle
+       -> RuntimeClient
+       -> HealthClient
+       -> IdentityClient
   -> DaemonHandle
        -> RuntimeClient
             -> InvocationBuilder
@@ -38,6 +42,7 @@ No public object in this graph may expose raw Axon client/proto/runtime types.
 | Object | Owns | Terminal operation |
 | --- | --- | --- |
 | `SdkEnvironment` | process-level SDK initialization and feature discovery | `close` |
+| `NativeRuntimeHandle` | one SDK-owned native Runtime, Health, and Identity provider lifecycle | `close` |
 | `DaemonHandle` | start, attach, discover, endpoints, stop, detach | `stop`, `detach` |
 | `RuntimeClient` | daemon Invocation endpoint session and runtime health | `close` |
 | `InvocationBuilder` | mutable seven-tuple construction | `inspect`, `prepare`, `invoke` |
@@ -51,6 +56,13 @@ No public object in this graph may expose raw Axon client/proto/runtime types.
 
 `PreparedInvocation` is not executable. `SignedInvocation` is the only
 submit-ready pre-runtime object.
+
+Python's `InvocationWireProjector` is a stateless binding adapter over
+`AddressingClient`: it may project a host seven-tuple object to an
+`InvocationDraft` or wire DTO, but owns neither Runtime transport nor lifecycle.
+It is the object-shaped counterpart of constructing and inspecting an
+`InvocationDraft` through the typed Go builder; it does not define a separate
+runtime capability.
 
 ## Profile Clients
 

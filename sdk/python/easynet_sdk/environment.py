@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Protocol, TypeVar
 
 from .ability_invocation import AbilityInvocationClient
@@ -37,6 +38,79 @@ class _Closable(Protocol):
 
 
 _TClosable = TypeVar("_TClosable", bound=_Closable)
+
+
+@dataclass
+class NativeRuntimeHandle:
+    """One SDK-owned native Runtime, Health, and Identity provider lifecycle.
+
+    The three facades are generic canonical-runtime concepts. Health borrows
+    Runtime's transport, while Identity owns its independent daemon profile
+    transport. Callers receive facades without ownership transfer; closing the
+    handle releases them in reverse dependency order exactly once.
+    """
+
+    _runtime: RuntimeClient
+    _health: HealthClient
+    _identity: IdentityClient
+    _closed: bool = field(default=False, init=False, repr=False)
+    _lock: Lock = field(default_factory=Lock, init=False, repr=False)
+
+    def client(self) -> RuntimeClient:
+        """Return the provider's Runtime Core facade."""
+
+        self._require_open()
+        return self._runtime
+
+    def health(self) -> HealthClient:
+        """Return the provider's borrowed Health facade."""
+
+        self._require_open()
+        return self._health
+
+    def identity(self) -> IdentityClient:
+        """Return the provider's canonical Identity facade."""
+
+        self._require_open()
+        return self._identity
+
+    def close(self) -> None:
+        """Close all provider-owned facades exactly once."""
+
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        first_error: SDKError | None = None
+        for client in (self._health, self._identity, self._runtime):
+            try:
+                client.close()
+            except SDKError as exc:
+                if first_error is None:
+                    first_error = exc
+            except Exception as exc:
+                if first_error is None:
+                    first_error = SDKError(
+                        code=ErrorCode.ROUTE_UNAVAILABLE,
+                        stage="sdk",
+                        retry=RetryHint.SAFE,
+                        retryable=True,
+                        message="native runtime provider close failed",
+                        cause=exc,
+                    )
+        if first_error is not None:
+            raise first_error
+
+    def _require_open(self) -> None:
+        with self._lock:
+            if self._closed:
+                raise SDKError(
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    stage="sdk",
+                    retry=RetryHint.NEVER,
+                    retryable=False,
+                    message="native runtime provider is closed",
+                )
 
 
 @dataclass
@@ -153,6 +227,39 @@ class SdkEnvironment:
             library_path=self.library_path,
         )
         return self._track(RuntimeClient(transport))
+
+    def native_runtime(
+        self, options: ConnectOptions = ConnectOptions()
+    ) -> NativeRuntimeHandle:
+        """Open one owned native Runtime, Health, and Identity provider.
+
+        This mirrors the Go SDK native provider shape. Runtime and Health share
+        a transport; Identity opens the daemon's dedicated canonical identity
+        profile using the same resolved control endpoint and library options.
+        """
+
+        self._require_open()
+        from . import _cabi
+
+        resolved = self._connect_options(options)
+        runtime_transport = _cabi.open_cabi_runtime_transport(
+            control_path=resolved.control_path,
+            library_path=self.library_path,
+        )
+        runtime = RuntimeClient(runtime_transport)
+        health = HealthClient(runtime_transport, owns_transport=False)
+        try:
+            identity = IdentityClient(
+                _cabi.open_cabi_identity_transport(
+                    control_path=resolved.control_path,
+                    library_path=self.library_path,
+                )
+            )
+        except Exception:
+            health.close()
+            runtime.close()
+            raise
+        return self._track(NativeRuntimeHandle(runtime, health, identity))
 
     def runtime_client_direct(
         self, options: ConnectOptions = ConnectOptions()

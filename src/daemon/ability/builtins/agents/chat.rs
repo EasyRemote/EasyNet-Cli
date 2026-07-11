@@ -95,7 +95,7 @@ use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 /// fully-qualified ability name is always `<agent>.chat`. A future
 /// rename here would have to ripple through:
 ///   * the parity test in `daemon::execution::mission::agent_ability_specs`
-///   * the manifest seed in `core::ability_spec::default_chat_manifest`
+///   * the manifest seed in `daemon::ability::manifest::default_chat_manifest`
 ///   * the EasyNet backend's frontend that synthesizes / renders chat
 ///
 /// Pinning the constant in one place lets that future PR find the
@@ -203,7 +203,7 @@ pub fn register_for_agent(
     reg.register_rpc_with_spec(
         &ability,
         owner.clone(),
-        crate::core::ability::spec::default_chat_manifest(),
+        crate::daemon::ability::manifest::default_chat_manifest(),
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
@@ -239,7 +239,7 @@ pub fn register_for_agent(
             continue;
         };
         match exec {
-            crate::core::ability::spec::AbilityExec::HostStream(stream_spec) => {
+            crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
                 let h = build_host_stream_handler(stream_spec.clone());
                 reg.register_stream_with_envelope_and_owner(&ability_name, owner.clone(), h);
             }
@@ -263,7 +263,7 @@ pub fn register_for_agent(
     reg.register_stream_with_spec(
         &ability,
         owner,
-        crate::core::ability::spec::default_chat_manifest(),
+        crate::daemon::ability::manifest::default_chat_manifest(),
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }
@@ -279,7 +279,7 @@ pub fn register_for_agent(
 /// immediately; anything that can fail the open surfaces as `Err` so a
 /// failed open never produces a half-live session.
 pub(crate) fn build_host_stream_handler(
-    spec: crate::core::ability::spec::HostStreamExec,
+    spec: crate::daemon::ability::manifest::HostStreamExec,
 ) -> crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope {
     Arc::new(
         move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
@@ -334,28 +334,28 @@ pub(crate) fn build_agent_ability_handler(
                     .timeout_seconds()
                     .map(std::time::Duration::from_secs);
                 return match exec {
-                    crate::core::ability::spec::AbilityExec::Shell(spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::Shell(spec) => {
                         crate::daemon::execution::mission::executors::shell::run_shell_exec(
                             spec, &args, timeout,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::Http(spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::Http(spec) => {
                         crate::daemon::execution::mission::executors::http::run_http_exec(
                             spec, &args, timeout,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::Eal(spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::Eal(spec) => {
                         crate::daemon::execution::mission::executors::eal::run_eal_exec(
                             spec, &args, timeout,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::Mcp(spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::Mcp(spec) => {
                         let _ = timeout;
                         crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
                             spec, &args,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::HostStream(_) => {
+                    crate::daemon::ability::manifest::AbilityExec::HostStream(_) => {
                         // host_stream registers as a stream-mode ability
                         // (see register_for_agent): it is dispatched
                         // through the stream handler, never this unary RPC
@@ -1907,7 +1907,7 @@ mod tests {
             "name = \"alice\"\nruntime = \"claude-code\"\n",
         )
         .expect("agent.toml");
-        let manifest = crate::core::ability::spec::AbilityManifest::new(
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "echo",
             "Unbound manifest.",
             json!({"type": "object"}),
@@ -2899,7 +2899,7 @@ mod tests {
     /// any latency probe got a chance to run.
     #[test]
     fn build_agent_ability_handler_routes_shell_exec_manifest_through_shell_executor() {
-        use crate::core::ability::spec::{AbilityExec, AbilityManifest, ShellExec};
+        use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest, ShellExec};
         use crate::daemon::persistence::agent_registry::AgentEntry;
 
         let _g = crate::cli::commands::test_support::HomeGuard::new();

@@ -80,9 +80,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::AbilityManifest;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::manifest::AbilityManifest;
 use crate::daemon::execution::mission::directory::ABILITY_MANIFEST_SUFFIX;
 use crate::daemon::persistence::agent_registry as agents;
 

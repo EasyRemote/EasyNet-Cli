@@ -283,7 +283,9 @@ pub fn input_schema(name: &str) -> Option<Value> {
 /// registration must project through this helper instead of registering a
 /// handler-only control-plane row and letting `meta.list_abilities` degrade to
 /// a schema-less descriptor.
-pub(crate) fn registry_manifest(name: &'static str) -> crate::core::ability::spec::AbilityManifest {
+pub(crate) fn registry_manifest(
+    name: &'static str,
+) -> crate::daemon::ability::manifest::AbilityManifest {
     let row = row(name).unwrap_or_else(|| panic!("{name} must be a registered media ability"));
     crate::daemon::ability::catalog::system_manifest::registry_manifest(
         row.name,

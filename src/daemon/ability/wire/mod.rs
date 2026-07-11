@@ -16,9 +16,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use crate::daemon::plugins::{
-    PluginBidiWireKind, PluginCallMode, PluginHostError, PluginRuntimeState,
-};
+use crate::daemon::plugins::{CallMode, PluginBidiWireKind, PluginHostError, PluginRuntimeState};
 
 /// Bidi wire codec used when an ability crosses the daemon/Axon session bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +110,7 @@ fn plugin_bidi_from_state(state: &PluginRuntimeState) -> BTreeMap<String, Abilit
             continue;
         }
         for ability in entry.package().manifest().abilities() {
-            if ability.call_mode() != PluginCallMode::Bidi {
+            if ability.call_mode() != CallMode::Bidi {
                 continue;
             }
             if let Some(kind) = ability.bidi_wire_kind() {

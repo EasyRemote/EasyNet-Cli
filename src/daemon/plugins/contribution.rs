@@ -13,7 +13,7 @@ use crate::daemon::ability::dispatch::{
 use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::manifest::{
-    PluginCallMode, PluginKind, PluginRealtimeCapability, PluginRuntimeLimits,
+    CallMode, PluginKind, PluginRealtimeCapability, PluginRuntimeLimits,
 };
 
 /// Resource and permission declarations supplied by a plugin package.
@@ -87,11 +87,11 @@ pub enum PluginAbilityHandler {
 }
 
 impl PluginAbilityHandler {
-    pub const fn call_mode(&self) -> PluginCallMode {
+    pub const fn call_mode(&self) -> CallMode {
         match self {
-            Self::Rpc(_) => PluginCallMode::Rpc,
-            Self::Stream(_) => PluginCallMode::Stream,
-            Self::Bidi(_) => PluginCallMode::Bidi,
+            Self::Rpc(_) => CallMode::Rpc,
+            Self::Stream(_) => CallMode::Stream,
+            Self::Bidi(_) => CallMode::Bidi,
         }
     }
 }
@@ -100,16 +100,16 @@ impl PluginAbilityHandler {
 #[derive(Clone)]
 pub struct PluginAbilityContribution {
     name: String,
-    call_mode: PluginCallMode,
-    manifest: crate::core::ability::spec::AbilityManifest,
+    call_mode: CallMode,
+    manifest: crate::daemon::ability::manifest::AbilityManifest,
     implementation: PluginImplementationBinding,
 }
 
 impl PluginAbilityContribution {
     pub fn new(
         name: impl Into<String>,
-        call_mode: PluginCallMode,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        call_mode: CallMode,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         implementation: PluginImplementationBinding,
     ) -> Result<Self> {
         let name = name.into();
@@ -135,11 +135,11 @@ impl PluginAbilityContribution {
         &self.name
     }
 
-    pub const fn call_mode(&self) -> PluginCallMode {
+    pub const fn call_mode(&self) -> CallMode {
         self.call_mode
     }
 
-    pub fn manifest(&self) -> &crate::core::ability::spec::AbilityManifest {
+    pub fn manifest(&self) -> &crate::daemon::ability::manifest::AbilityManifest {
         &self.manifest
     }
 
@@ -250,14 +250,14 @@ impl PluginContributionBuilder {
     pub fn rpc(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalRpcHandlerWithEnvelope,
     ) -> Result<()> {
         self.push(
             ability,
-            PluginCallMode::Rpc,
+            CallMode::Rpc,
             manifest,
             PluginImplementationBinding::new(
                 source,
@@ -270,14 +270,14 @@ impl PluginContributionBuilder {
     pub fn stream(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalStreamHandlerWithEnvelope,
     ) -> Result<()> {
         self.push(
             ability,
-            PluginCallMode::Stream,
+            CallMode::Stream,
             manifest,
             PluginImplementationBinding::new(
                 source,
@@ -290,14 +290,14 @@ impl PluginContributionBuilder {
     pub fn bidi(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalBidiHandlerWithEnvelope,
     ) -> Result<()> {
         self.push(
             ability,
-            PluginCallMode::Bidi,
+            CallMode::Bidi,
             manifest,
             PluginImplementationBinding::new(
                 source,
@@ -310,8 +310,8 @@ impl PluginContributionBuilder {
     fn push(
         &mut self,
         ability: impl Into<String>,
-        call_mode: PluginCallMode,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        call_mode: CallMode,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         implementation: PluginImplementationBinding,
     ) -> Result<()> {
         let ability = ability.into();

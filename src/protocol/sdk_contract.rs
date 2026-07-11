@@ -213,7 +213,7 @@ pub(crate) fn validate_ura(raw: &str, field: &'static str) -> Result<(), SdkCont
 }
 
 pub(crate) fn validate_descriptor_version(raw: &str) -> Result<(), SdkContractError> {
-    if crate::core::ability::spec::is_valid_descriptor_version(raw) {
+    if crate::daemon::ability::manifest::is_valid_descriptor_version(raw) {
         return Ok(());
     }
     Err(SdkContractError::InvalidField(

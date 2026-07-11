@@ -492,7 +492,7 @@ pub(crate) fn validate_authored_ability(
     body: &str,
     catalog: &[CatalogEntry],
 ) -> Result<(), String> {
-    use crate::core::ability::spec::{AbilityExec, AbilityManifest};
+    use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 
     let manifest =
         AbilityManifest::from_toml_str(body).map_err(|e| format!("manifest parse failed: {e}"))?;

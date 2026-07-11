@@ -34,6 +34,7 @@ from easynet_sdk import (
     LocalResourceRefRequest,
     MissionCarrierBase,
     MissionRunRequest,
+    NativeRuntimeHandle,
     PublishedAbilityQuery,
     ReceiptClient,
     ReceiptFetchRequest,
@@ -77,6 +78,43 @@ def _load_patch(raw: FakeRawCABI):
 
 
 class SdkEnvironmentTests(unittest.TestCase):
+    def test_native_runtime_owns_runtime_health_and_identity(self) -> None:
+        raw = FakeRawCABI()
+        with _load_patch(raw):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            provider = env.native_runtime()
+            self.assertIsInstance(provider, NativeRuntimeHandle)
+            self.assertIsInstance(provider.client(), RuntimeClient)
+            self.assertIsInstance(provider.health(), HealthClient)
+            self.assertIsInstance(provider.identity(), IdentityClient)
+            self.assertTrue(provider.health().runtime_health().ready())
+
+            provider.close()
+            with self.assertRaises(SDKError) as caught:
+                provider.identity()
+            self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+            env.close()
+
+        # Runtime and identity own distinct C ABI handles. Health borrows the
+        # Runtime handle, so provider close must not double-close it.
+        self.assertEqual(raw.shutdown_handles, [42, 42])
+
+    def test_native_runtime_identity_open_failure_releases_runtime(self) -> None:
+        raw = FakeRawCABI()
+        with (
+            _load_patch(raw),
+            patch(
+                "easynet_sdk._cabi.open_cabi_identity_transport",
+                side_effect=OSError("identity unavailable"),
+            ),
+        ):
+            env = SdkEnvironment(control_path="/tmp/control.json")
+            with self.assertRaises(OSError):
+                env.native_runtime()
+            env.close()
+
+        self.assertEqual(raw.shutdown_handles, [42])
+
     def test_feature_set_uses_private_runtime_boundary(self) -> None:
         raw = FakeRawCABI()
         with _load_patch(raw):

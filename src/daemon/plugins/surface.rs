@@ -12,7 +12,7 @@ use crate::daemon::plugins::companion::DesktopCompanionManager;
 use crate::daemon::plugins::index::PluginPackageIndex;
 use crate::daemon::plugins::index::PluginPackageIndexError;
 use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadStatus};
-use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginCallMode, PluginKind};
+use crate::daemon::plugins::manifest::{CallMode, PluginAbilityLayer, PluginKind};
 use crate::daemon::plugins::realtime::{
     activation_plans_for_manifest, PluginRealtimeActivationPlan,
 };
@@ -71,7 +71,7 @@ pub struct PluginAbilitySurfaceRecord {
     pub ability: String,
     pub kind: PluginKindView,
     pub layer: PluginAbilityLayerView,
-    pub call_mode: PluginCallModeView,
+    pub call_mode: CallModeView,
     pub planned_load_status: String,
     pub daemon_runtime_status: String,
     #[serde(default)]
@@ -108,7 +108,7 @@ pub enum PluginAbilityLayerView {
 /// Serializable ability call mode for CLI/API output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PluginCallModeView {
+pub enum CallModeView {
     Rpc,
     Stream,
     Bidi,
@@ -309,7 +309,7 @@ impl PluginSurfaceProjector {
                 ability: "<package>".to_string(),
                 kind: PluginKindView::Unknown,
                 layer: PluginAbilityLayerView::Unknown,
-                call_mode: PluginCallModeView::Unknown,
+                call_mode: CallModeView::Unknown,
                 planned_load_status: "index_error".to_string(),
                 daemon_runtime_status: daemon_abilities
                     .map(|_| "not_loaded")
@@ -378,12 +378,12 @@ impl From<PluginAbilityLayer> for PluginAbilityLayerView {
     }
 }
 
-impl From<PluginCallMode> for PluginCallModeView {
-    fn from(value: PluginCallMode) -> Self {
+impl From<CallMode> for CallModeView {
+    fn from(value: CallMode) -> Self {
         match value {
-            PluginCallMode::Rpc => Self::Rpc,
-            PluginCallMode::Stream => Self::Stream,
-            PluginCallMode::Bidi => Self::Bidi,
+            CallMode::Rpc => Self::Rpc,
+            CallMode::Stream => Self::Stream,
+            CallMode::Bidi => Self::Bidi,
         }
     }
 }

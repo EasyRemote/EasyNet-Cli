@@ -10,22 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 
-/// Axon invocation mode required by one plugin-owned ability.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginCallMode {
-    /// Unary invoke: one JSON argument object, one JSON result object.
-    Rpc,
-    /// Server-stream invoke: one JSON argument object, many JSON result frames.
-    ///
-    /// Sidecar v1 implements this as a finite snapshot stream collected until a
-    /// terminal frame. Long-running live sidecar transports must declare `bidi`
-    /// so the daemon can own cancellation, backpressure, and a single terminal
-    /// close path.
-    Stream,
-    /// Bidirectional invoke: both sides exchange frames until one terminal close.
-    Bidi,
-}
+/// Plugin package metadata declares the same governed invocation mode used by
+/// descriptors and routing. A plugin never owns a parallel transport taxonomy.
+pub use crate::daemon::ability::CallMode;
 
 /// Wire adapter a bidi plugin ability expects when it crosses the
 /// `session.open` bridge.
@@ -407,7 +394,7 @@ pub struct PluginAbilityManifest {
     name: String,
     descriptor_path: String,
     layer: PluginAbilityLayer,
-    call_mode: PluginCallMode,
+    call_mode: CallMode,
     bidi_wire_kind: Option<PluginBidiWireKind>,
 }
 
@@ -428,7 +415,7 @@ impl PluginAbilityManifest {
     }
 
     /// Invocation mode callers must use for this ability.
-    pub const fn call_mode(&self) -> PluginCallMode {
+    pub const fn call_mode(&self) -> CallMode {
         self.call_mode
     }
 
@@ -582,7 +569,7 @@ struct RawPluginAbilityMetadata {
     name: String,
     layer: PluginAbilityLayer,
     #[serde(default = "default_call_mode")]
-    call_mode: PluginCallMode,
+    call_mode: CallMode,
     #[serde(default)]
     bidi_wire_kind: Option<PluginBidiWireKind>,
 }
@@ -1017,8 +1004,8 @@ fn descriptor_dir_from_ability_patterns(
     Ok(format!("{package_dir}/{relative_dir}"))
 }
 
-fn default_call_mode() -> PluginCallMode {
-    PluginCallMode::Rpc
+fn default_call_mode() -> CallMode {
+    CallMode::Rpc
 }
 
 fn validate_ability_name(name: &str) -> Result<()> {

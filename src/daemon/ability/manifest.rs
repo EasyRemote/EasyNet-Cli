@@ -1,7 +1,7 @@
 // EasyNet CLI — Ability Manifest (abilities/*.ability.toml)
 // ==========================================================
 //
-// File: src/core/ability_spec.rs
+// File: src/daemon/ability/manifest.rs
 // Description: On-disk schema for one file under
 //              `<agent-root>/abilities/<name>.ability.toml`. One
 //              manifest per file; the stem of the file name is
@@ -9,7 +9,8 @@
 //
 // Where this fits in the stack
 // ----------------------------
-// An `AbilityManifest` is the typed representation of a single
+// An `AbilityManifest` is the daemon persistence/import representation of a
+// single
 // `abilities/<verb>.ability.toml`. One agent has many manifests,
 // kept as independent files rather than one combined manifest so
 // that adding, editing, and removing a single ability is a
@@ -26,14 +27,12 @@
 // * `a2a_labels` emits the discovery JSON under
 //   `a2a.agents_json[*].skills` from the same manifests.
 //
-// Why this lives in `core/`
-// -------------------------
-// `core/` is the zero-dependency ontology layer. `AbilityManifest`
-// is a pure data type; every other subsystem reads it. Layering
-// any higher (e.g. under `runtime/`) would make `registry/` and
-// `publish/` import-cycle against `runtime/`. Everything typed
-// ends up funneling through this struct, so it belongs at the
-// bottom.
+// Why this lives in `daemon::ability`
+// -----------------------------------
+// A manifest describes an executable package: executor selection, boot and
+// health probes, and daemon-local access policy. Those are deployment facts,
+// not core ontology. The daemon normalizes a manifest into the governed
+// descriptor, authority binding, and implementation binding at registration.
 //
 // What is NOT in this file
 // ------------------------
@@ -50,7 +49,7 @@
 //
 // Layering rule
 // -------------
-// `core::ability_spec` must not import any other `crate::` module
+// `daemon::ability::manifest` must not import any other `crate::` module
 // and must not pull in external crates beyond `serde` + `toml` +
 // `serde_json` (for the embedded JSON Schema fields).
 //
@@ -354,7 +353,7 @@ impl CostMeta {
 /// An author who wants stricter scoping ticks `visibility = "self"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum Visibility {
+pub enum ManifestAccessScope {
     /// Only the owning agent can discover or invoke. Useful for
     /// internal helpers an agent uses inside its own chat loop and
     /// does not want peers to call.
@@ -373,7 +372,7 @@ pub enum Visibility {
 
 /// Per-ability access policy.
 ///
-/// Visibility is the coarse "who can see / call this at all" knob;
+/// ManifestAccessScope is the coarse "who can see / call this at all" knob;
 /// `allow_callers` / `deny_callers` are the fine-grained "of those
 /// allowed by visibility, which specific peer agents are pinned in
 /// (or out)" knobs. Order of evaluation:
@@ -390,10 +389,10 @@ pub enum Visibility {
 /// in v1 — it's just an unusual literal name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct AccessPolicy {
-    /// Discoverability + invocation tier. Default `Visibility::Device`.
-    /// See `Visibility` doc for the trust model.
+    /// Discoverability + invocation tier. Default `ManifestAccessScope::Device`.
+    /// See `ManifestAccessScope` doc for the trust model.
     #[serde(default)]
-    pub visibility: Visibility,
+    pub visibility: ManifestAccessScope,
     /// Optional whitelist of caller agent names. When non-empty, ONLY
     /// these callers may invoke; everyone else is rejected with
     /// `permission_denied`. Empty (default) = no whitelist applied.
@@ -413,7 +412,7 @@ impl AccessPolicy {
     ///
     /// This check ignores caller identity — pair with
     /// `allows_caller_name` when the caller is named.
-    pub fn allows_caller(&self, caller_scope: Visibility) -> bool {
+    pub fn allows_caller(&self, caller_scope: ManifestAccessScope) -> bool {
         // Monotonic tier check: caller's scope must be ≤ ability's
         // visibility. `self` is the strictest, `public` is the
         // broadest.
@@ -444,15 +443,15 @@ impl AccessPolicy {
     }
 }
 
-impl Visibility {
+impl ManifestAccessScope {
     /// Numeric tier so `allows_caller` can compare. The values are
     /// intentionally not part of the serialised TOML — TOML carries
     /// the snake_case names and `tier()` is private numeric form.
     fn tier(self) -> u8 {
         match self {
-            Visibility::Selfish => 0,
-            Visibility::Device => 1,
-            Visibility::Public => 2,
+            ManifestAccessScope::Selfish => 0,
+            ManifestAccessScope::Device => 1,
+            ManifestAccessScope::Public => 2,
         }
     }
 
@@ -462,9 +461,9 @@ impl Visibility {
     /// form agree.
     pub fn as_wire_str(self) -> &'static str {
         match self {
-            Visibility::Selfish => "self",
-            Visibility::Device => "device",
-            Visibility::Public => "public",
+            ManifestAccessScope::Selfish => "self",
+            ManifestAccessScope::Device => "device",
+            ManifestAccessScope::Public => "public",
         }
     }
 }
@@ -2034,7 +2033,7 @@ argv = []
         // default policy so downstream consumers never have to repeat
         // the "if None then device" branch.
         let m = AbilityManifest::new("chat", "x", object_schema()).unwrap();
-        assert_eq!(m.access().visibility, Visibility::Device);
+        assert_eq!(m.access().visibility, ManifestAccessScope::Device);
     }
 
     #[test]
@@ -2052,9 +2051,12 @@ type = "object"
 visibility = "self"
 "#;
         let m = AbilityManifest::from_toml_str(toml).unwrap();
-        assert_eq!(m.access().visibility, Visibility::Selfish);
+        assert_eq!(m.access().visibility, ManifestAccessScope::Selfish);
         let round_tripped = AbilityManifest::from_toml_str(&m.to_toml_string().unwrap()).unwrap();
-        assert_eq!(round_tripped.access().visibility, Visibility::Selfish);
+        assert_eq!(
+            round_tripped.access().visibility,
+            ManifestAccessScope::Selfish
+        );
     }
 
     #[test]
@@ -2073,7 +2075,7 @@ type = "object"
 visibility = "public"
 "#;
         let m = AbilityManifest::from_toml_str(toml).unwrap();
-        assert_eq!(m.access().visibility, Visibility::Public);
+        assert_eq!(m.access().visibility, ManifestAccessScope::Public);
     }
 
     #[test]
@@ -2107,7 +2109,7 @@ visibility = "publik"
     #[test]
     fn allows_caller_name_respects_deny_list() {
         let p = AccessPolicy {
-            visibility: Visibility::Device,
+            visibility: ManifestAccessScope::Device,
             deny_callers: Some(vec!["mallory".into()]),
             allow_callers: None,
         };
@@ -2121,7 +2123,7 @@ visibility = "publik"
         // direction here so a future refactor that flips the order
         // (allow-then-deny) trips the test loud.
         let p = AccessPolicy {
-            visibility: Visibility::Device,
+            visibility: ManifestAccessScope::Device,
             allow_callers: Some(vec!["alice".into()]),
             deny_callers: Some(vec!["alice".into()]),
         };
@@ -2131,7 +2133,7 @@ visibility = "publik"
     #[test]
     fn allows_caller_name_respects_non_empty_allow_list() {
         let p = AccessPolicy {
-            visibility: Visibility::Device,
+            visibility: ManifestAccessScope::Device,
             allow_callers: Some(vec!["alice".into(), "bob".into()]),
             deny_callers: None,
         };
@@ -2147,7 +2149,7 @@ visibility = "publik"
         // ergonomics of "I cleared the list" doesn't accidentally
         // become "I locked everyone out".
         let p = AccessPolicy {
-            visibility: Visibility::Device,
+            visibility: ManifestAccessScope::Device,
             allow_callers: Some(vec![]),
             deny_callers: None,
         };
@@ -2185,16 +2187,52 @@ deny_callers = ["mallory"]
         // callers; a looser ability admits stricter callers. Spelled
         // out as a small matrix so a regression that flips the
         // direction (or treats Public as the strictest) trips loud.
-        let cases: &[(Visibility, Visibility, bool)] = &[
-            (Visibility::Selfish, Visibility::Selfish, true),
-            (Visibility::Selfish, Visibility::Device, false),
-            (Visibility::Selfish, Visibility::Public, false),
-            (Visibility::Device, Visibility::Selfish, true),
-            (Visibility::Device, Visibility::Device, true),
-            (Visibility::Device, Visibility::Public, false),
-            (Visibility::Public, Visibility::Selfish, true),
-            (Visibility::Public, Visibility::Device, true),
-            (Visibility::Public, Visibility::Public, true),
+        let cases: &[(ManifestAccessScope, ManifestAccessScope, bool)] = &[
+            (
+                ManifestAccessScope::Selfish,
+                ManifestAccessScope::Selfish,
+                true,
+            ),
+            (
+                ManifestAccessScope::Selfish,
+                ManifestAccessScope::Device,
+                false,
+            ),
+            (
+                ManifestAccessScope::Selfish,
+                ManifestAccessScope::Public,
+                false,
+            ),
+            (
+                ManifestAccessScope::Device,
+                ManifestAccessScope::Selfish,
+                true,
+            ),
+            (
+                ManifestAccessScope::Device,
+                ManifestAccessScope::Device,
+                true,
+            ),
+            (
+                ManifestAccessScope::Device,
+                ManifestAccessScope::Public,
+                false,
+            ),
+            (
+                ManifestAccessScope::Public,
+                ManifestAccessScope::Selfish,
+                true,
+            ),
+            (
+                ManifestAccessScope::Public,
+                ManifestAccessScope::Device,
+                true,
+            ),
+            (
+                ManifestAccessScope::Public,
+                ManifestAccessScope::Public,
+                true,
+            ),
         ];
         for (ability_vis, caller_scope, expected) in cases {
             let policy = AccessPolicy {

@@ -10,6 +10,7 @@ from .ability_invocation import (
     AbilityInvocationClient,
     AbilityTargetRequest,
     InvocationObjectAdapter,
+    InvocationWireProjector,
     ResolvedAbilityTarget,
 )
 from .access_control import (
@@ -215,7 +216,7 @@ from .errors import (
     is_code,
     profile_source_ref,
 )
-from .environment import SdkEnvironment, default_environment
+from .environment import NativeRuntimeHandle, SdkEnvironment, default_environment
 from .events import (
     DEFAULT_EVENT_PAGE_SIZE,
     MAX_EVENT_PAGE_SIZE,
@@ -583,6 +584,7 @@ __all__ = [
     "PolicyRequestResolveRequest",
     "RuntimeAccessControlTransport",
     "InvocationObjectAdapter",
+    "InvocationWireProjector",
     "AdminAgentListRequest",
     "AdminAgentPage",
     "AdminAgentRecord",
@@ -806,6 +808,7 @@ __all__ = [
     "MissionStatus",
     "MissionSystemAbility",
     "MissionTrackRequest",
+    "NativeRuntimeHandle",
     "MissionTransport",
     "RuntimeMissionTransport",
     "PageQuery",

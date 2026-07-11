@@ -174,29 +174,7 @@ class AbilityInvocationClient:
         """Build a complete `InvocationDraft` without dispatching it."""
 
         self._require_open()
-        descriptor_ref = self._descriptor_ref(request)
-        builder = (
-            InvocationBuilder()
-            .with_caller_ura(_required_string(request.caller_ura, "caller_ura"))
-            .with_callee_ura(_required_string(request.callee_ura, "callee_ura"))
-            .with_descriptor_ref(descriptor_ref)
-            .with_subject_ura(_required_string(request.subject_ura, "subject_ura"))
-            .with_nonce_base64(_required_string(request.nonce_base64, "nonce_base64"))
-            .with_causal_context(
-                _required_mapping(request.causal_context, "causal_context")
-            )
-            .with_content_type(_required_string(request.content_type, "content_type"))
-            .with_metadata(dict(request.metadata))
-        )
-        if request.arguments_base64 is None:
-            builder.with_json_args(request.args)
-        else:
-            builder.with_arguments_base64(
-                _required_string(request.arguments_base64, "arguments_base64")
-            )
-        if request.caller_signature is not None:
-            builder.with_caller_signature(request.caller_signature)
-        return builder.build()
+        return _build_direct_ability_invocation(self.addressing, request)
 
     def resolve_target(self, request: AbilityTargetRequest) -> ResolvedAbilityTarget:
         """Resolve a generic ability target through daemon/Axon identity helpers."""
@@ -425,28 +403,6 @@ class AbilityInvocationClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _descriptor_ref(self, request: AbilityCallRequest) -> str:
-        descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
-        ability_ura = _selector_string(request.ability_ura, "ability_ura")
-        selectors = tuple(
-            value for value in (descriptor_ref, ability_ura) if value
-        )
-        if len(selectors) != 1:
-            raise _invalid_ability_invocation(
-                "exactly one of descriptor_ref or ability_ura is required"
-            )
-        if descriptor_ref:
-            return self.addressing.canonical_ability_descriptor_ref(
-                descriptor_ref
-            )
-        version = _required_string(request.descriptor_version, "descriptor_version")
-        if ability_ura:
-            return self.addressing.canonical_ability_descriptor_ref(
-                ability_ura,
-                version,
-            )
-        raise _invalid_ability_invocation("unknown ability invocation selector")
-
     def _target_selector(self, request: AbilityTargetRequest) -> str:
         descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
         ability_ura = _selector_string(request.ability_ura, "ability_ura")
@@ -479,6 +435,63 @@ class AbilityInvocationClient:
 
 
 @dataclass(frozen=True)
+class InvocationWireProjector:
+    """Project a tuple-like object to a canonical Invocation wire DTO.
+
+    Projection is intentionally independent of Runtime lifecycle. It needs only
+    the daemon-owned Addressing facade to bind descriptor identity; dispatch is
+    owned by :class:`InvocationObjectAdapter` or Runtime Core clients.
+    """
+
+    addressing: AddressingClient
+    descriptor_version: str = "1.0.0"
+
+    def build_invocation(
+        self,
+        tuple_: object,
+        *,
+        metadata: Mapping[str, object] | None = None,
+        caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
+        descriptor_version: str = "",
+    ) -> InvocationDraft:
+        """Build an SDK draft without opening or owning Runtime transport."""
+
+        version = descriptor_version or self.descriptor_version
+        return _build_direct_ability_invocation(
+            self.addressing,
+            _object_ability_request(
+                tuple_,
+                metadata=metadata,
+                caller_signature=caller_signature,
+                descriptor_version=version,
+            ),
+        )
+
+    def to_wire_dict(
+        self,
+        tuple_: object,
+        *,
+        metadata: Mapping[str, object] | None = None,
+        caller_signature: InvocationSignature | Mapping[str, object] | object | None = None,
+        bidi_streams: Sequence[Mapping[str, object] | BidiStreamDescriptor | object] | None = None,
+        descriptor_version: str = "",
+    ) -> dict[str, object]:
+        """Return the canonical daemon Invocation JSON DTO."""
+
+        value = self.build_invocation(
+            tuple_,
+            metadata=metadata,
+            caller_signature=caller_signature,
+            descriptor_version=descriptor_version,
+        ).to_json_dict()
+        if bidi_streams:
+            value["bidi_streams"] = [
+                _stream_descriptor_dict(stream) for stream in bidi_streams
+            ]
+        return value
+
+
+@dataclass(frozen=True)
 class InvocationObjectAdapter:
     """Adapt invocation tuple-like objects into SDK Invocation DTOs.
 
@@ -500,15 +513,13 @@ class InvocationObjectAdapter:
     ) -> InvocationDraft:
         """Build a complete SDK `InvocationDraft` from an invocation object."""
 
-        version = descriptor_version or self.descriptor_version
-        direct_request = self._request_from_tuple(
+        self.invoker._require_open()
+        return self._wire_projector().build_invocation(
             tuple_,
             metadata=metadata,
             caller_signature=caller_signature,
-            descriptor_version=version,
-            selector="descriptor_ref",
+            descriptor_version=descriptor_version,
         )
-        return self.invoker.build_invocation(direct_request)
 
     def to_wire_dict(
         self,
@@ -521,17 +532,14 @@ class InvocationObjectAdapter:
     ) -> dict[str, object]:
         """Return the daemon Invocation JSON DTO."""
 
-        value = self.build_invocation(
+        self.invoker._require_open()
+        return self._wire_projector().to_wire_dict(
             tuple_,
             metadata=metadata,
             caller_signature=caller_signature,
+            bidi_streams=bidi_streams,
             descriptor_version=descriptor_version,
-        ).to_json_dict()
-        if bidi_streams:
-            value["bidi_streams"] = [
-                _stream_descriptor_dict(stream) for stream in bidi_streams
-            ]
-        return value
+        )
 
     def invoke(
         self,
@@ -592,40 +600,83 @@ class InvocationObjectAdapter:
             tuple(_coerce_bidi_stream_descriptor(stream) for stream in streams),
         )
 
-    def _request_from_tuple(
-        self,
-        tuple_: object,
-        *,
-        metadata: Mapping[str, object] | None,
-        caller_signature: InvocationSignature | Mapping[str, object] | object | None,
-        descriptor_version: str,
-        selector: str,
-    ) -> AbilityCallRequest:
-        arguments = _tuple_value(tuple_, "arguments")
-        argument_kwargs = _argument_kwargs(arguments)
-        ability = _required_string(_tuple_value(tuple_, "ability"), "ability")
-        selector_kwargs: dict[str, str] = {}
-        if selector == "descriptor_ref":
-            if _is_ability_ura_text(ability):
-                selector_kwargs["ability_ura"] = ability
-            else:
-                selector_kwargs["descriptor_ref"] = ability
-        else:
-            raise _invalid_ability_invocation("unknown invocation object selector")
-        return AbilityCallRequest(
-            caller_ura=_required_string(_tuple_value(tuple_, "caller"), "caller"),
-            callee_ura=_required_string(_tuple_value(tuple_, "callee"), "callee"),
-            subject_ura=_required_string(_tuple_value(tuple_, "subject"), "subject"),
-            nonce_base64=_nonce_base64(_tuple_value(tuple_, "nonce")),
-            causal_context=_causal_context(_tuple_value(tuple_, "causal")),
-            descriptor_version=_required_string(
-                descriptor_version, "descriptor_version"
-            ),
-            metadata=dict(metadata or {}),
-            caller_signature=_coerce_invocation_signature(caller_signature),
-            **selector_kwargs,
-            **argument_kwargs,
+    def _wire_projector(self) -> InvocationWireProjector:
+        return InvocationWireProjector(
+            self.invoker.addressing,
+            self.descriptor_version,
         )
+
+def _object_ability_request(
+    tuple_: object,
+    *,
+    metadata: Mapping[str, object] | None,
+    caller_signature: InvocationSignature | Mapping[str, object] | object | None,
+    descriptor_version: str,
+) -> AbilityCallRequest:
+    arguments = _tuple_value(tuple_, "arguments")
+    argument_kwargs = _argument_kwargs(arguments)
+    ability = _required_string(_tuple_value(tuple_, "ability"), "ability")
+    selector_kwargs: dict[str, str] = {}
+    if _is_ability_ura_text(ability):
+        selector_kwargs["ability_ura"] = ability
+    else:
+        selector_kwargs["descriptor_ref"] = ability
+    return AbilityCallRequest(
+        caller_ura=_required_string(_tuple_value(tuple_, "caller"), "caller"),
+        callee_ura=_required_string(_tuple_value(tuple_, "callee"), "callee"),
+        subject_ura=_required_string(_tuple_value(tuple_, "subject"), "subject"),
+        nonce_base64=_nonce_base64(_tuple_value(tuple_, "nonce")),
+        causal_context=_causal_context(_tuple_value(tuple_, "causal")),
+        descriptor_version=_required_string(descriptor_version, "descriptor_version"),
+        metadata=dict(metadata or {}),
+        caller_signature=_coerce_invocation_signature(caller_signature),
+        **selector_kwargs,
+        **argument_kwargs,
+    )
+
+
+def _build_direct_ability_invocation(
+    addressing: AddressingClient, request: AbilityCallRequest
+) -> InvocationDraft:
+    descriptor_ref = _ability_descriptor_ref(addressing, request)
+    builder = (
+        InvocationBuilder()
+        .with_caller_ura(_required_string(request.caller_ura, "caller_ura"))
+        .with_callee_ura(_required_string(request.callee_ura, "callee_ura"))
+        .with_descriptor_ref(descriptor_ref)
+        .with_subject_ura(_required_string(request.subject_ura, "subject_ura"))
+        .with_nonce_base64(_required_string(request.nonce_base64, "nonce_base64"))
+        .with_causal_context(_required_mapping(request.causal_context, "causal_context"))
+        .with_content_type(_required_string(request.content_type, "content_type"))
+        .with_metadata(dict(request.metadata))
+    )
+    if request.arguments_base64 is None:
+        builder.with_json_args(request.args)
+    else:
+        builder.with_arguments_base64(
+            _required_string(request.arguments_base64, "arguments_base64")
+        )
+    if request.caller_signature is not None:
+        builder.with_caller_signature(request.caller_signature)
+    return builder.build()
+
+
+def _ability_descriptor_ref(
+    addressing: AddressingClient, request: AbilityCallRequest
+) -> str:
+    descriptor_ref = _selector_string(request.descriptor_ref, "descriptor_ref")
+    ability_ura = _selector_string(request.ability_ura, "ability_ura")
+    selectors = tuple(value for value in (descriptor_ref, ability_ura) if value)
+    if len(selectors) != 1:
+        raise _invalid_ability_invocation(
+            "exactly one of descriptor_ref or ability_ura is required"
+        )
+    if descriptor_ref:
+        return addressing.canonical_ability_descriptor_ref(descriptor_ref)
+    return addressing.canonical_ability_descriptor_ref(
+        ability_ura,
+        _required_string(request.descriptor_version, "descriptor_version"),
+    )
 
 
 def _required_string(value: object, field_name: str) -> str:

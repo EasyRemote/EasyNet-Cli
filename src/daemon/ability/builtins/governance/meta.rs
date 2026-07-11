@@ -851,7 +851,7 @@ fn synthesize_hot_hosted_agent_descriptors(
         }
 
         let default_chat_name =
-            crate::core::ability::spec::default_chat_manifest().qualified_name(&agent_name);
+            crate::daemon::ability::manifest::default_chat_manifest().qualified_name(&agent_name);
         for spec in
             crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
                 &agent_name,
@@ -885,7 +885,7 @@ fn synthesize_hot_hosted_agent_descriptors(
                 descriptor = descriptor.with_metadata_entry("host_node_id", node_id.clone());
             }
             if spec.name() == default_chat_name {
-                let chat_manifest = crate::core::ability::spec::default_chat_manifest();
+                let chat_manifest = crate::daemon::ability::manifest::default_chat_manifest();
                 if let Some(output_schema) = chat_manifest.output_schema() {
                     descriptor = descriptor.with_output_schema(output_schema.clone());
                 }
@@ -1551,7 +1551,7 @@ mod tests {
         live_reg.register_stream_with_spec(
             "alice.chat",
             OwnerKind::Agent("alice".to_string()),
-            crate::core::ability::spec::default_chat_manifest(),
+            crate::daemon::ability::manifest::default_chat_manifest(),
             Arc::new(|_args| {
                 Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
@@ -1561,7 +1561,7 @@ mod tests {
         live_reg.register_stream_with_spec(
             "bob.chat",
             OwnerKind::Agent("bob".to_string()),
-            crate::core::ability::spec::default_chat_manifest(),
+            crate::daemon::ability::manifest::default_chat_manifest(),
             Arc::new(|_args| {
                 Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
@@ -1589,7 +1589,7 @@ mod tests {
             .hot_register_stream_with_spec(
                 "alice.mcp_search",
                 OwnerKind::Agent("alice".to_string()),
-                crate::core::ability::spec::AbilityManifest::new(
+                crate::daemon::ability::manifest::AbilityManifest::new(
                     "mcp_search",
                     "Search reflected MCP content",
                     json!({
@@ -1756,7 +1756,7 @@ mod tests {
         .expect("seed local-agents.json");
 
         let live_reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::core::ability::spec::AbilityManifest::new(
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "hot_echo",
             "Echo a hot-reloaded MCP payload.",
             json!({
@@ -1902,7 +1902,7 @@ mod tests {
                 .hot_register_rpc_with_spec(
                     format!("{agent_name}.chat"),
                     OwnerKind::Agent(agent_name.to_string()),
-                    crate::core::ability::spec::default_chat_manifest(),
+                    crate::daemon::ability::manifest::default_chat_manifest(),
                     std::sync::Arc::new(|_| Ok(Value::Null)),
                 )
                 .expect("commit hosted Agent chat authority row");
@@ -1940,7 +1940,7 @@ mod tests {
         );
         assert_eq!(
             chat["description"],
-            crate::core::ability::spec::default_chat_manifest().description()
+            crate::daemon::ability::manifest::default_chat_manifest().description()
         );
         assert!(
             chat["schema_summary"]["input"]["properties"]["prompt"].is_object(),
@@ -1982,7 +1982,7 @@ mod tests {
                 .hot_register_rpc_with_spec(
                     format!("{agent_name}.chat"),
                     OwnerKind::Agent(agent_name.to_string()),
-                    crate::core::ability::spec::default_chat_manifest(),
+                    crate::daemon::ability::manifest::default_chat_manifest(),
                     std::sync::Arc::new(|_| Ok(Value::Null)),
                 )
                 .expect("commit hosted Agent chat authority row");

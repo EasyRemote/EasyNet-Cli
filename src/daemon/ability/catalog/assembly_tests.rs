@@ -787,6 +787,28 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
 }
 
 #[test]
+fn device_daemon_builder_refuses_corrupt_agent_registry() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let state_dir = crate::daemon::persistence::config::state_dir();
+    std::fs::create_dir_all(&state_dir).expect("create isolated state directory");
+    std::fs::write(state_dir.join("agents.json"), b"not-json")
+        .expect("write corrupt agent registry");
+
+    let result = build_registry_for_daemon_result(RegistryDaemonBuildConfig::new(
+        RegistryBuildServices::fresh(),
+    ));
+    assert!(
+        result.is_err(),
+        "device daemon boot must not hide corrupt durable agent state"
+    );
+    let error = result.err().expect("checked above");
+    assert!(
+        error.to_string().contains("load daemon agent registry"),
+        "unexpected daemon registry boot error: {error:#}"
+    );
+}
+
+#[test]
 fn published_abilities_includes_skill_list_with_real_metadata() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     // Load-bearing for the EasyNet frontend's Skills page: the

@@ -9,6 +9,8 @@ from easynet_sdk import (
     ErrorCode,
     InvocationResult,
     InvocationSignature,
+    InvocationObjectAdapter,
+    InvocationWireProjector,
     PrepareOptions,
     ReceiptClient,
     RuntimeClient,
@@ -28,6 +30,52 @@ DESCRIPTOR_REF = f"{ABILITY_URA}@1.0.0"
 
 
 class AbilityInvocationClientTests(unittest.TestCase):
+    def test_wire_projector_builds_without_runtime_lifecycle(self) -> None:
+        identity = _identity_transport()
+        projector = InvocationWireProjector(AddressingClient(identity))
+
+        wire = projector.to_wire_dict(
+            {
+                "caller": "easynet:///r/example/agent/alice.sdk",
+                "callee": "easynet:///r/example/device/dev-a",
+                "ability": ABILITY_URA,
+                "subject": "easynet:///r/example/device/dev-a",
+                "nonce": bytes(range(1, 17)),
+                "causal": None,
+                "arguments": {"args": {"city": "Singapore"}},
+            }
+        )
+
+        self.assertEqual(wire["descriptor_ref"], DESCRIPTOR_REF)
+        self.assertEqual(wire["args"], {"city": "Singapore"})
+        self.assertEqual(
+            identity.seen_requests,
+            [{"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"}],
+        )
+
+    def test_runtime_adapter_keeps_its_lifecycle_guard(self) -> None:
+        client = AbilityInvocationClient(
+            runtime=RuntimeClient(MemoryRuntimeTransport()),
+            addressing=AddressingClient(_identity_transport()),
+        )
+        adapter = InvocationObjectAdapter(client)
+        client.close()
+
+        with self.assertRaises(SDKError) as caught:
+            adapter.to_wire_dict(
+                {
+                    "caller": "easynet:///r/example/agent/alice.sdk",
+                    "callee": "easynet:///r/example/device/dev-a",
+                    "ability": ABILITY_URA,
+                    "subject": "easynet:///r/example/device/dev-a",
+                    "nonce": bytes(range(1, 17)),
+                    "causal": None,
+                    "arguments": {"args": {"city": "Singapore"}},
+                }
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.CANCELLED))
+
     def test_build_invocation_from_ability_ura_delegates_descriptor_ref(self) -> None:
         identity = _identity_transport()
         runtime = MemoryRuntimeTransport()

@@ -219,18 +219,12 @@ pub enum TargetScope {
     Remote { node: NodeId },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallMode {
-    /// Single-shot request/response.
-    Rpc,
-    /// Streaming: one request, multiple response frames, explicit
-    /// terminal frame at the end.
-    Stream,
-    /// Bidirectional session: long-lived, both ends may push frames
-    /// at any time until either closes. See C-M3a design doc and
-    /// `LocalBidiHandler` for the contract.
-    Bidi,
-}
+/// The daemon control-plane transport mode selected for this invocation.
+///
+/// Routing does not define a parallel mode taxonomy. The mode is a governed
+/// descriptor fact and is converted to Axon's canonical mode only at the
+/// Axon boundary.
+pub use crate::daemon::ability::descriptors::CallMode;
 
 /// Trait for the resolver. Concrete impl: `LocalNodeResolver`.
 pub trait TargetResolver: Send + Sync {

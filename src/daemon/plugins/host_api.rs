@@ -10,11 +10,11 @@ use std::sync::{Arc, RwLock};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::core::ability::spec::{EalExec, McpExec};
 use crate::daemon::ability::dispatch::{
     EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
     LocalStreamHandlerWithEnvelope,
 };
+use crate::daemon::ability::manifest::{EalExec, McpExec};
 use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
 use crate::daemon::execution::mission::context::ParentInvocationContext;
 use crate::daemon::plugins::contribution::{
@@ -22,7 +22,7 @@ use crate::daemon::plugins::contribution::{
 };
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::load_plan::PluginLoadPlan;
-use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{CallMode, PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::realtime::PluginRealtimeActivationPlan;
 use crate::daemon::plugins::sidecar::{
     sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,
@@ -243,7 +243,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_rpc(
         &mut self,
         ability: String,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.rpc(
@@ -258,7 +258,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_stream(
         &mut self,
         ability: String,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.stream(
@@ -273,7 +273,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_bidi(
         &mut self,
         ability: String,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.bidi(
@@ -374,7 +374,7 @@ fn ensure_declarative_rpc_only(
     label: &'static str,
 ) -> Result<()> {
     for ability in package.manifest().abilities() {
-        if ability.call_mode() != PluginCallMode::Rpc {
+        if ability.call_mode() != CallMode::Rpc {
             return Err(PluginHostError::InvalidDeclarativeBinding {
                 id: package.id().as_str().to_string(),
                 reason: format!(
@@ -398,21 +398,21 @@ fn contribute_json_frame_process_package(
         let ability_name = ability.name().to_string();
         let manifest = package.ability_registry_manifest(&ability_name)?;
         match ability.call_mode() {
-            PluginCallMode::Rpc => {
+            CallMode::Rpc => {
                 sink.contribute_rpc(
                     ability_name.clone(),
                     manifest,
                     rpc_process_handler(command.clone(), ability_name),
                 )?;
             }
-            PluginCallMode::Stream => {
+            CallMode::Stream => {
                 sink.contribute_stream(
                     ability_name.clone(),
                     manifest,
                     stream_process_handler(command.clone(), ability_name),
                 )?;
             }
-            PluginCallMode::Bidi => {
+            CallMode::Bidi => {
                 sink.contribute_bidi(
                     ability_name.clone(),
                     manifest,

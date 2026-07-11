@@ -393,7 +393,7 @@ fn short_ability_hash(ability_name: &str) -> String {
 
 fn metadata_for_agent_ability(
     agent_name: &str,
-    manifest: Option<&crate::core::ability::spec::AbilityManifest>,
+    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
 ) -> Vec<(&'static str, String)> {
     let mut metadata = vec![
         ("owner_agent", agent_name.to_string()),
@@ -409,25 +409,25 @@ fn metadata_for_agent_ability(
     // local (the honesty rule that replaced the older "free for
     // everything we don't recognise" lie).
     let (heur_kind, heur_label): (&str, &str) = match manifest.and_then(|m| m.exec()) {
-        Some(crate::core::ability::spec::AbilityExec::Mcp(exec)) => {
+        Some(crate::daemon::ability::manifest::AbilityExec::Mcp(exec)) => {
             metadata.push(("exec_kind", "mcp".to_string()));
             metadata.push(("mcp_server", exec.server.clone()));
             metadata.push(("mcp_tool", exec.tool.clone()));
             ("unknown", "upstream cost declared by operator")
         }
-        Some(crate::core::ability::spec::AbilityExec::Http(_)) => {
+        Some(crate::daemon::ability::manifest::AbilityExec::Http(_)) => {
             metadata.push(("exec_kind", "http".to_string()));
             ("external_metered", "HTTP/API billing may apply")
         }
-        Some(crate::core::ability::spec::AbilityExec::Shell(_)) => {
+        Some(crate::daemon::ability::manifest::AbilityExec::Shell(_)) => {
             metadata.push(("exec_kind", "shell".to_string()));
             ("free", "free/local")
         }
-        Some(crate::core::ability::spec::AbilityExec::Eal(_)) => {
+        Some(crate::daemon::ability::manifest::AbilityExec::Eal(_)) => {
             metadata.push(("exec_kind", "eal".to_string()));
             ("unknown", "composed ability cost depends on steps")
         }
-        Some(crate::core::ability::spec::AbilityExec::HostStream(_)) => {
+        Some(crate::daemon::ability::manifest::AbilityExec::HostStream(_)) => {
             metadata.push(("exec_kind", "host_stream".to_string()));
             ("free", "free/local")
         }
@@ -745,7 +745,7 @@ fn per_agent_workspace_descriptors(
     // invite infinite recursion).
     let own_manifests: std::collections::BTreeMap<
         String,
-        crate::core::ability::spec::AbilityManifest,
+        crate::daemon::ability::manifest::AbilityManifest,
     > = crate::daemon::execution::mission::agent_ability_specs::manifests_for(agent_name, entry)
         .into_iter()
         .map(|manifest| (manifest.qualified_name(agent_name), manifest))
@@ -836,7 +836,7 @@ fn per_agent_workspace_descriptors(
         let other_owner = format!("agent://{other_name}");
         let other_manifests: std::collections::BTreeMap<
             String,
-            crate::core::ability::spec::AbilityManifest,
+            crate::daemon::ability::manifest::AbilityManifest,
         > = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
             other_name,
             other_entry,

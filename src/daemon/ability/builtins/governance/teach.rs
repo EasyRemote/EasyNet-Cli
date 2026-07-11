@@ -28,10 +28,10 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::core::ability::spec::{AbilityExec, AbilityManifest};
 use crate::core::ura::AbilitySelector;
 use crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
+use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar, HotAgentRuntimeSyncOutcome,

@@ -10,7 +10,7 @@ use crate::daemon::ability::descriptors::AbilityHints;
 use crate::daemon::plugins::errors::PluginHostError;
 use crate::daemon::plugins::errors::Result;
 use crate::daemon::plugins::index::PluginPackageIndex;
-use crate::daemon::plugins::manifest::PluginCallMode;
+use crate::daemon::plugins::manifest::CallMode;
 
 /// Descriptor-generation metadata for one plugin-owned ability.
 #[derive(Debug, Clone)]
@@ -53,14 +53,14 @@ impl PluginDescriptorProjector {
     }
 }
 
-fn hints_for_call_mode(call_mode: PluginCallMode) -> AbilityHints {
+fn hints_for_call_mode(call_mode: CallMode) -> AbilityHints {
     match call_mode {
-        PluginCallMode::Rpc => AbilityHints::default(),
-        PluginCallMode::Stream => AbilityHints {
+        CallMode::Rpc => AbilityHints::default(),
+        CallMode::Stream => AbilityHints {
             streaming_only: true,
             ..AbilityHints::default()
         },
-        PluginCallMode::Bidi => AbilityHints {
+        CallMode::Bidi => AbilityHints {
             bidi_only: true,
             ..AbilityHints::default()
         },

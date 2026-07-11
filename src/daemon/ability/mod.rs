@@ -24,6 +24,9 @@ pub mod descriptors;
 pub mod dispatch;
 pub mod health;
 pub mod impl_bindings;
+/// Daemon-owned executable Ability package manifest. This is an import and
+/// persistence DTO, not the governed interface exposed to callers.
+pub mod manifest;
 pub mod names;
 pub mod wire;
 

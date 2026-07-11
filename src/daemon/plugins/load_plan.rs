@@ -8,7 +8,7 @@ use crate::daemon::plugins::companion::{
     DesktopCompanionPlan, DesktopCompanionPlanner, DesktopCompanionSessionProbe,
 };
 use crate::daemon::plugins::index::PluginPackageIndex;
-use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{CallMode, PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::package::SharedPluginPackage;
 
 /// Per-boot load state for one package.
@@ -258,7 +258,7 @@ fn declarative_load_status(
                 .manifest()
                 .abilities()
                 .iter()
-                .all(|ability| ability.call_mode() == PluginCallMode::Rpc) =>
+                .all(|ability| ability.call_mode() == CallMode::Rpc) =>
         {
             (PluginLoadStatus::Loaded, None)
         }

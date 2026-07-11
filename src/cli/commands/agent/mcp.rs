@@ -84,8 +84,8 @@ struct McpAdditionOutcome {
 pub(super) fn build_cost_meta(
     cost_kind: Option<CostKindArg>,
     cost_label: Option<&str>,
-) -> anyhow::Result<Option<crate::core::ability::spec::CostMeta>> {
-    use crate::core::ability::spec::CostMeta;
+) -> anyhow::Result<Option<crate::daemon::ability::manifest::CostMeta>> {
+    use crate::daemon::ability::manifest::CostMeta;
     let Some(kind) = cost_kind else {
         return Ok(None);
     };
@@ -111,7 +111,7 @@ fn plan_mcp_additions(
     tool_filter: &[String],
     prefix: &str,
     skip_unreachable: bool,
-    declared_cost: Option<&crate::core::ability::spec::CostMeta>,
+    declared_cost: Option<&crate::daemon::ability::manifest::CostMeta>,
 ) -> anyhow::Result<McpAdditionPlan> {
     let selected_servers = select_mcp_servers(svc, server_filter)?;
     if selected_servers.is_empty() {
@@ -312,7 +312,7 @@ pub(super) struct McpAbilityPlan {
     /// `--cost-kind`/`--cost-label`. `None` writes a manifest with no
     /// `[cost]` table; the runtime falls back to the per-exec
     /// inference at metadata-emit time.
-    pub(super) cost: Option<crate::core::ability::spec::CostMeta>,
+    pub(super) cost: Option<crate::daemon::ability::manifest::CostMeta>,
 }
 
 fn select_mcp_servers(
@@ -427,8 +427,8 @@ fn toml_safe_json_value(value: Value) -> Value {
 
 pub(super) fn mcp_manifest_for(
     plan: &McpAbilityPlan,
-) -> anyhow::Result<crate::core::ability::spec::AbilityManifest> {
-    use crate::core::ability::spec::{AbilityExec, AbilityManifest, McpExec};
+) -> anyhow::Result<crate::daemon::ability::manifest::AbilityManifest> {
+    use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest, McpExec};
     let mut manifest = AbilityManifest::new(
         plan.verb.clone(),
         plan.description.clone(),
@@ -454,8 +454,8 @@ pub(super) fn mcp_manifest_for(
 }
 
 pub(super) fn existing_mcp_binding(body: &str) -> Option<(String, String)> {
-    use crate::core::ability::spec::AbilityExec;
-    let manifest = crate::core::ability::spec::AbilityManifest::from_toml_str(body).ok()?;
+    use crate::daemon::ability::manifest::AbilityExec;
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::from_toml_str(body).ok()?;
     match manifest.exec()? {
         AbilityExec::Mcp(exec) => Some((exec.server.clone(), exec.tool.clone())),
         _ => None,

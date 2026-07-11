@@ -31,17 +31,17 @@ use serde::{Deserialize, Serialize};
 
 use super::sandbox::PublishedFolderHandle;
 
-/// Visibility marker. v0 supports PUBLIC only; PRIVATE/SCOPED
+/// PageVisibility marker. v0 supports PUBLIC only; PRIVATE/SCOPED
 /// reject at the publish boundary with a clear error and are
 /// reserved for a later phase (RFC-006-B §post-MVP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Visibility {
+pub enum PageVisibility {
     Public,
     // Private,    // post-MVP
     // Scoped,     // post-MVP
 }
 
-impl Visibility {
+impl PageVisibility {
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         match s.to_ascii_lowercase().as_str() {
             "public" | "" => Ok(Self::Public),
@@ -74,7 +74,7 @@ pub struct ProjectHandle {
     pub project_id: String,
     pub folder_handle: PublishedFolderHandle,
     pub canonical_root: PathBuf,
-    pub visibility: Visibility,
+    pub visibility: PageVisibility,
     pub file_size_cap: u64,
     pub started_at: SystemTime,
 }
@@ -201,7 +201,7 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
         if PUBLISHED_PROJECTS.contains_key(&key) {
             continue;
         }
-        let visibility = match Visibility::parse(&record.visibility) {
+        let visibility = match PageVisibility::parse(&record.visibility) {
             Ok(v) => v,
             Err(_) => {
                 cleaned_snapshot_needed = true;
