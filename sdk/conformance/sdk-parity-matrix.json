@@ -367,7 +367,7 @@
           }
         ]
       },
-      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI now has product-neutral first-principal bootstrap and enrollment-consume facades over create plus bind-first-key with real CLI binary-to-daemon UDS E2E evidence, and Hub URA join accepts an enrollment-id shorthand for device principal binding; additional CLI flows and standalone-Hub/backend-present E2E remain before cutover-ready."
+      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI lifecycle surface now has real CLI binary-to-daemon UDS E2E evidence for bootstrap, enrollment-consume, add-key, rotate, revoke, recovery, suspend/reactivate, grant and delete, and Hub URA join accepts an enrollment-id shorthand for device principal binding; standalone-Hub/backend-present E2E remain before cutover-ready."
     },
     {
       "capability_id": "principal_enrollment",
@@ -394,7 +394,7 @@
           }
         ]
       },
-      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation. The CLI now exposes first-principal bootstrap and enrollment-consume as product-neutral create plus bind-first-key facades with real CLI binary-to-daemon UDS E2E evidence, and Hub URA join lowers --principal-enrollment-id into the same federation.join PrincipalLifecycle proof seam. federation.join has daemon-side RuntimeTrust owner binding and real daemon UDS E2E evidence; full cross-device/TLS standalone-Hub enrollment/join E2E remains incomplete."
+      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation. The CLI now exposes first-principal bootstrap and enrollment-consume as product-neutral create plus bind-first-key facades with real CLI binary-to-daemon UDS E2E evidence, and Hub URA join lowers --principal-enrollment-id into the same federation.join PrincipalLifecycle proof seam. federation.join has daemon-side RuntimeTrust owner binding, real daemon UDS E2E evidence, and real CLI binary-to-hub-daemon TCP+TLS E2E evidence for backend-free Hub URA join, Hub key import and principal enrollment proof owner binding. Full standalone-Hub lifecycle and Backend-present E2E remain incomplete."
     },
     {
       "capability_id": "principal_public_key_bindings",

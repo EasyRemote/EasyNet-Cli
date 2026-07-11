@@ -563,9 +563,8 @@ contract now has a product-neutral optional PrincipalLifecycle proof seam, and
 the Hub daemon validates that proof before atomically binding the joined Device
 URA to the User Principal in RuntimeTrust; a real daemon UDS E2E now proves that
 binding persists through the same Backend-free PrincipalLifecycle test fixture.
-The CLI/SDK first-user enrollment flow, full cross-device/TLS URA-only
-`federation.join` end-to-end gate, user lifecycle UX and the two
-standalone/backend-present end-to-end gates remain required. The CLI
+The recovery UX and the two standalone/backend-present end-to-end gates remain
+required. The CLI
 `principal bootstrap` facade now composes `principal.lifecycle.create` and
 `principal.lifecycle.bind_first_key` with one bootstrap proof reference,
 separate idempotency keys, fixed bind expected-version `1`, and daemon
@@ -577,13 +576,24 @@ These close the first-principal and enrollment-consume CLI entrypoints. The
 Hub URA join CLI now also accepts `--principal-enrollment-id` as a
 product-neutral shorthand for `proof.kind = enrollment`, reducing device join
 proof assembly to `--principal-ura` plus the issued enrollment id. This closes
-the CLI proof-lowering UX for device enrollment but does not close the full
-cross-device/TLS standalone-Hub E2E, recovery UX, standalone-Hub E2E or
-Backend-present E2E. A real CLI binary E2E now executes
-`principal bootstrap`, `principal issue-enrollment`, `principal enroll` and
+the CLI proof-lowering UX for device enrollment. A real CLI binary E2E now
+starts a hub-mode `easynet-daemon` with a TCP+TLS Invocation listener,
+bootstraps a Hub-side administrator, issues a product-neutral enrollment
+capability, joins a Device by Hub URA with `--hub-ca`, `--principal-ura` and
+`--principal-enrollment-id`, and verifies backend-free `federation.join`, empty
+HTTP credential token, persisted `join_receipt_hash`, pinned CA persistence,
+in-band Hub key import through `federation.resolve_key`, and the Hub
+RuntimeTrust owner binding from Device URA to User Principal URA. Recovery UX,
+the complete standalone-Hub E2E and Backend-present E2E remain required. A real
+CLI binary E2E
+now executes
+`principal bootstrap`, `principal issue-enrollment`, `principal enroll`,
+`principal add-key`, `principal rotate-key`, `principal revoke-key`,
+`principal configure-recovery`, `principal recover`, `principal suspend`,
+`principal reactivate`, `principal issue-grant`, `principal delete` and
 `principal get` against the in-process daemon UDS fixture plus daemon
-key-service, proving the first-principal and enrollment-consume facades lower
-to the daemon-owned aggregate without Backend account state.
+key-service, proving the user lifecycle CLI facades lower to the daemon-owned
+aggregate and RuntimeTrust projection without Backend account state.
 
 ---
 
