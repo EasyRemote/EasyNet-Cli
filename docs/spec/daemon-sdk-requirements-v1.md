@@ -651,11 +651,14 @@ The current remaining work is:
   authentication to the same daemon runtime, Principal URA, key-service,
   grants, admission state and receipts without a second daemon/key-service or
   trust store;
-- close standalone-Hub recovery UX edge cases beyond the existing TCP+TLS
-  two-HOME lifecycle E2E, especially failed recovery proofs, replayed recovery
-  proofs and recovery after suspension/deletion boundaries;
-- finish runtime event durable subscription cursor evidence before promoting
-  runtime events to cutover-ready;
+- close the remaining standalone-Hub recovery UX edge cases beyond the
+  existing TCP+TLS two-HOME lifecycle E2E. Provider and CLI evidence now pin
+  replayed recovery proofs, suspended-principal recovery and deleted-principal
+  terminality as daemon-owned state-machine facts; remaining UX work is
+  broader login/recovery flow packaging rather than a second authentication
+  model;
+- run final cross-repository runtime event E2E before promoting runtime events
+  to cutover-ready;
 - close the remaining standalone-Hub acceptance evidence that is not covered by
   the real TCP+TLS lifecycle E2E and SDK/CLI projection audit yet;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates

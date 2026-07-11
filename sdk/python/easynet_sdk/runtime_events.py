@@ -213,6 +213,7 @@ class RuntimeAbilityEventSubscriptionProvider:
         if request.heartbeat_interval_ms > 0:
             args["heartbeat_interval_ms"] = request.heartbeat_interval_ms
         if request.resume_cursor is not None:
+            _validate_resume_cursor(request.stream, request.resume_cursor)
             if request.stream is RuntimeEventStreamKind.SESSION:
                 args["since_seq"] = request.resume_cursor.sequence
             else:
@@ -254,6 +255,22 @@ def _normalize_limit(limit: int) -> int:
     if limit < 0 or limit > MAX_RUNTIME_EVENT_PAGE_LIMIT:
         raise _invalid_events("runtime event page limit exceeds maximum")
     return limit
+
+
+def _validate_resume_cursor(
+    stream: RuntimeEventStreamKind, cursor: RuntimeEventSubscriptionCursor
+) -> None:
+    cursor_stream = cursor.stream.strip()
+    if not cursor_stream:
+        raise _invalid_events("runtime event resume cursor stream is required")
+    if cursor_stream != stream.value:
+        raise _invalid_events(
+            "runtime event resume cursor stream does not match subscription stream"
+        )
+    if cursor.sequence < 0:
+        raise _invalid_events("runtime event resume cursor sequence must be non-negative")
+    if cursor.token and cursor.token.strip() != cursor.token:
+        raise _invalid_events("runtime event resume cursor token must be canonical")
 
 
 def _put_text(values: dict[str, object], key: str, value: str) -> None:

@@ -175,6 +175,39 @@ func TestRuntimeEventSubscriptionProviderBuildsSessionDraftWithSinceSequence(t *
 	}
 }
 
+func TestRuntimeEventSubscriptionProviderRejectsMismatchedResumeCursor(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	ability, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	provider, err := NewRuntimeAbilityEventSubscriptionProvider(ability)
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityEventSubscriptionProvider: %v", err)
+	}
+
+	_, err = provider.BuildSubscription(context.Background(), RuntimeEventSubscriptionRequest{
+		Call:         runtimeEventTestCall(),
+		Stream:       RuntimeEventStreamDevice,
+		ResumeCursor: &RuntimeEventSubscriptionCursor{Stream: "invocation", Sequence: 42},
+	})
+	if err == nil {
+		t.Fatal("BuildSubscription accepted cross-stream resume cursor")
+	}
+
+	_, err = provider.BuildSubscription(context.Background(), RuntimeEventSubscriptionRequest{
+		Call:         runtimeEventTestCall(),
+		Stream:       RuntimeEventStreamDevice,
+		ResumeCursor: &RuntimeEventSubscriptionCursor{Stream: "device", Sequence: 42, Token: " device:42 "},
+	})
+	if err == nil {
+		t.Fatal("BuildSubscription accepted non-canonical resume token")
+	}
+}
+
 func TestRuntimeEventSubscriptionAbilityRejectsUnsupportedStream(t *testing.T) {
 	if _, err := RuntimeEventSubscriptionAbility(RuntimeEventStreamKind("legacy")); err == nil {
 		t.Fatal("RuntimeEventSubscriptionAbility accepted unsupported stream")

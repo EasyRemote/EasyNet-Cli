@@ -334,7 +334,7 @@
           "ref_path": "sdk/python/tests/test_runtime_events.py"
         }
       ],
-      "message": "Python runtime events preserve bounded cursor/resume projection through the generic runtime contract without product event naming.",
+      "message": "Python runtime events preserve bounded stream-scoped cursor/resume projection through the generic runtime contract without product event naming.",
       "profile": "runtime_events",
       "status": "passed"
     },

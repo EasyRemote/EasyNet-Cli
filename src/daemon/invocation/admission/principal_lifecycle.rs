@@ -2395,6 +2395,172 @@ mod tests {
     }
 
     #[test]
+    fn recovery_restores_suspended_principal_and_deleted_state_is_terminal() {
+        let (_dir, ctx) = context();
+        let user = "easynet:///r/realm/user/alice";
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command("create", "bootstrap", None),
+                "principal_ura": user
+            }),
+        );
+        let first = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref("bind", "bootstrap", "proof:create", Some(1)),
+                "principal_ura": user,
+                "public_key_b64": b64_pubkey(4)
+            }),
+        );
+        let first_binding_id = binding_id_at(&first, 0);
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "configure-recovery",
+                    "active_key",
+                    &first_binding_id,
+                    Some(2)
+                ),
+                "principal_ura": user,
+                "policy_ref": "recovery-policy:suspended"
+            }),
+        );
+        let suspended = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_SUSPEND,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "suspend",
+                    "active_key",
+                    &first_binding_id,
+                    Some(3)
+                ),
+                "principal_ura": user
+            }),
+        );
+        assert_eq!(suspended["principal"]["state"], "suspended");
+
+        let recovered = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_RECOVER,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "recover-from-suspended",
+                    "recovery",
+                    "recovery-policy:suspended",
+                    Some(4)
+                ),
+                "principal_ura": user,
+                "replacement_key": {
+                    "command": command("ignored-recovery-child", "recovery", None),
+                    "principal_ura": user,
+                    "public_key_b64": b64_pubkey(5)
+                }
+            }),
+        );
+        assert_eq!(recovered["principal"]["state"], "active");
+        assert!(ctx
+            .runtime_trust
+            .cell
+            .snapshot()
+            .lookup_user_by_pubkey(user, &b64_pubkey(5))
+            .is_some());
+
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "configure-deleted-recovery",
+                    "active_key",
+                    &first_binding_id,
+                    Some(5)
+                ),
+                "principal_ura": user,
+                "policy_ref": "recovery-policy:deleted"
+            }),
+        );
+
+        let delete_grant = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ISSUE_GRANT,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "issue-delete-grant",
+                    "active_key",
+                    &first_binding_id,
+                    Some(6)
+                ),
+                "principal_ura": user,
+                "actions": [ABILITY_PRINCIPAL_DELETE]
+            }),
+        );
+        let delete_grant_id = delete_grant["principal"]["grants"][0]["grant_id"]
+            .as_str()
+            .unwrap();
+        let deleted = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_DELETE,
+            json!({
+                "command": command_for_actor_with_ref(
+                    user,
+                    "delete",
+                    "grant",
+                    delete_grant_id,
+                    Some(7)
+                ),
+                "principal_ura": user
+            }),
+        );
+        assert_eq!(deleted["principal"]["state"], "deleted");
+
+        let err = ctx
+            .handle(
+                ABILITY_PRINCIPAL_RECOVER,
+                serde_json::to_vec(&json!({
+                    "request": {
+                        "command": command_for_actor_with_ref(
+                            user,
+                            "recover-deleted",
+                            "recovery",
+                            "recovery-policy:deleted",
+                            Some(8)
+                        ),
+                        "principal_ura": user,
+                        "replacement_key": {
+                            "command": command("ignored-deleted-recovery-child", "recovery", None),
+                            "principal_ura": user,
+                            "public_key_b64": b64_pubkey(6)
+                        }
+                    }
+                }))
+                .unwrap()
+                .as_slice(),
+            )
+            .expect_err("deleted principal recovery must reject");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err
+            .message()
+            .contains("principal must be active or suspended"));
+        assert!(ctx
+            .runtime_trust
+            .cell
+            .snapshot()
+            .lookup_user_by_pubkey(user, &b64_pubkey(6))
+            .is_none());
+    }
+
+    #[test]
     fn backend_free_principal_lifecycle_scenario_persists_multi_user_state() {
         let (_dir, ctx) = context();
         let admin = "easynet:///r/realm/user/admin";

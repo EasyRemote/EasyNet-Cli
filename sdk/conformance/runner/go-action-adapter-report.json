@@ -358,7 +358,7 @@
           "ref_path": "sdk/go/runtime_events_test.go"
         }
       ],
-      "message": "Go runtime events preserve bounded cursor/resume projection through the generic runtime contract without product event naming.",
+      "message": "Go runtime events preserve bounded stream-scoped cursor/resume projection through the generic runtime contract without product event naming.",
       "profile": "runtime_events",
       "status": "passed"
     },

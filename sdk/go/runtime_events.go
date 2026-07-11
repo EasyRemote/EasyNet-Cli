@@ -236,6 +236,9 @@ func (p *RuntimeAbilityEventSubscriptionProvider) BuildSubscription(ctx context.
 		args["heartbeat_interval_ms"] = request.HeartbeatIntervalMS
 	}
 	if request.ResumeCursor != nil {
+		if err := validateRuntimeEventResumeCursor(request.Stream, *request.ResumeCursor); err != nil {
+			return InvocationDraft{}, err
+		}
 		if request.Stream == RuntimeEventStreamSession {
 			args["since_seq"] = request.ResumeCursor.Sequence
 		} else if token := request.ResumeCursor.ResumeToken(); token != "" {
@@ -273,6 +276,20 @@ func normalizeRuntimeEventLimit(limit uint32) (uint32, error) {
 		return 0, invalidRuntimePayload("runtime event page limit exceeds maximum", nil)
 	}
 	return limit, nil
+}
+
+func validateRuntimeEventResumeCursor(stream RuntimeEventStreamKind, cursor RuntimeEventSubscriptionCursor) error {
+	cursorStream := strings.TrimSpace(cursor.Stream)
+	if cursorStream == "" {
+		return invalidRuntimePayload("runtime event resume cursor stream is required", nil)
+	}
+	if cursorStream != string(stream) {
+		return invalidRuntimePayload("runtime event resume cursor stream does not match subscription stream", nil)
+	}
+	if cursor.Token != "" && strings.TrimSpace(cursor.Token) != cursor.Token {
+		return invalidRuntimePayload("runtime event resume cursor token must be canonical", nil)
+	}
+	return nil
 }
 
 func cloneRuntimeEventMetadata(input map[string]any) map[string]any {

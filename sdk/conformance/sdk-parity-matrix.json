@@ -448,7 +448,7 @@
           }
         ]
       },
-      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and the daemon lifecycle provider now records recovery policy, consumes recovery proof references through a persisted single-use replay ledger, and projects recovered public keys through RuntimeTrust; downstream recovery UX edge cases and standalone/backend-present cutover evidence remain incomplete."
+      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and the daemon lifecycle provider now records recovery policy, consumes recovery proof references through a persisted single-use replay ledger, projects recovered public keys through RuntimeTrust, allows explicit suspended-principal recovery, and rejects deleted-principal recovery as terminal. The CLI facade now surfaces recovery replay and deleted-principal terminality without local fallback. Broader login/recovery UX packaging and standalone/backend-present cutover evidence remain incomplete."
     },
     {
       "capability_id": "principal_authorization_grants",
@@ -573,7 +573,7 @@
           }
         ]
       },
-      "remaining": "Generic bounded handle-event reads are provider-backed, and Backend runtime-event adapter cutover is guarded. Durable subscription cursors and final cross-repository event E2E remain before cutover-ready."
+      "remaining": "Generic bounded handle-event reads are provider-backed, Backend runtime-event adapter cutover is guarded, and Go/Python subscription cursors are stream-scoped durable continuation facts. Final cross-repository event E2E remains before cutover-ready."
     },
     {
       "capability_id": "runtime_administration",

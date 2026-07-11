@@ -123,6 +123,50 @@ def test_runtime_event_subscription_provider_builds_session_draft_with_since_seq
     assert draft.args["since_seq"] == 42
 
 
+def test_runtime_event_subscription_provider_rejects_mismatched_resume_cursor() -> None:
+    client = RuntimeEventSubscriptionClient(
+        RuntimeAbilityEventSubscriptionProvider(
+            RuntimeAbilityClient(
+                RuntimeClient(MemoryRuntimeTransport()),
+                AddressingClient(AxonAddressingTransport()),
+            )
+        )
+    )
+
+    with pytest.raises(SDKError, match="does not match subscription stream"):
+        client.build(
+            RuntimeEventSubscriptionRequest(
+                call=_call(),
+                stream=RuntimeEventStreamKind.DEVICE,
+                resume_cursor=RuntimeEventSubscriptionCursor(
+                    stream="invocation", sequence=42
+                ),
+            )
+        )
+
+    with pytest.raises(SDKError, match="sequence must be non-negative"):
+        client.build(
+            RuntimeEventSubscriptionRequest(
+                call=_call(),
+                stream=RuntimeEventStreamKind.DEVICE,
+                resume_cursor=RuntimeEventSubscriptionCursor(
+                    stream="device", sequence=-1
+                ),
+            )
+        )
+
+    with pytest.raises(SDKError, match="token must be canonical"):
+        client.build(
+            RuntimeEventSubscriptionRequest(
+                call=_call(),
+                stream=RuntimeEventStreamKind.DEVICE,
+                resume_cursor=RuntimeEventSubscriptionCursor(
+                    stream="device", sequence=42, token=" device:42 "
+                ),
+            )
+        )
+
+
 def test_runtime_event_subscription_ability_rejects_unsupported_stream() -> None:
     with pytest.raises(SDKError, match="unsupported runtime event stream"):
         runtime_event_subscription_ability("unknown")  # type: ignore[arg-type]

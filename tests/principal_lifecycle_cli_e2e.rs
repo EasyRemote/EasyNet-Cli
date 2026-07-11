@@ -170,6 +170,31 @@ fn principal_cli_facades_run_through_real_daemon() {
     ]);
     assert_eq!(active_binding_count(&bob_recovered), 2);
 
+    let replay_recovery_pubkey = pubkey(44);
+    let replay_recovery_error = easynet_failure([
+        "principal",
+        "recover",
+        "--principal-ura",
+        BOB,
+        "--proof-ref",
+        "recovery-policy:cli-bob",
+        "--public-key-b64",
+        &replay_recovery_pubkey,
+        "--key-id",
+        "cli-bob-recovery-replay-key",
+        "--idempotency-key",
+        "cli-bob-recover-replay",
+        "--expected-version",
+        "7",
+        "--json",
+    ]);
+    assert!(
+        replay_recovery_error.contains("already been consumed"),
+        "CLI must surface daemon recovery replay denial, got: {replay_recovery_error}"
+    );
+    let bob_after_replay = easynet_json(["principal", "get", "--principal-ura", BOB, "--json"]);
+    assert_eq!(active_binding_count(&bob_after_replay), 2);
+
     let bob_suspended = easynet_json([
         "principal",
         "suspend",
@@ -203,6 +228,22 @@ fn principal_cli_facades_run_through_real_daemon() {
         "--json",
     ]);
     assert_eq!(bob_reactivated["principal"]["state"], "active");
+
+    easynet_json([
+        "principal",
+        "configure-recovery",
+        "--principal-ura",
+        BOB,
+        "--policy-ref",
+        "recovery-policy:cli-bob-deleted",
+        "--proof-ref",
+        &bob_rotated_laptop_binding_id,
+        "--idempotency-key",
+        "cli-bob-deleted-recovery-policy",
+        "--expected-version",
+        "9",
+        "--json",
+    ]);
 
     let grant = easynet_json([
         "principal",
@@ -238,10 +279,33 @@ fn principal_cli_facades_run_through_real_daemon() {
         "--idempotency-key",
         "cli-bob-delete",
         "--expected-version",
-        "9",
+        "10",
         "--json",
     ]);
     assert_eq!(bob_deleted["principal"]["state"], "deleted");
+
+    let deleted_recovery_pubkey = pubkey(45);
+    let deleted_recovery_error = easynet_failure([
+        "principal",
+        "recover",
+        "--principal-ura",
+        BOB,
+        "--proof-ref",
+        "recovery-policy:cli-bob-deleted",
+        "--public-key-b64",
+        &deleted_recovery_pubkey,
+        "--key-id",
+        "cli-bob-deleted-recovery-key",
+        "--idempotency-key",
+        "cli-bob-recover-deleted",
+        "--expected-version",
+        "11",
+        "--json",
+    ]);
+    assert!(
+        deleted_recovery_error.contains("principal must be active or suspended"),
+        "CLI must surface daemon deleted-principal terminality, got: {deleted_recovery_error}"
+    );
 
     let bob_snapshot = easynet_json(["principal", "get", "--principal-ura", BOB, "--json"]);
     assert_eq!(bob_snapshot["principal"]["state"], "deleted");
@@ -264,6 +328,18 @@ fn principal_cli_facades_run_through_real_daemon() {
         trust.lookup_user_by_pubkey(BOB, &recovery_pubkey).is_some(),
         "recovery public key must be projected into RuntimeTrust"
     );
+    assert!(
+        trust
+            .lookup_user_by_pubkey(BOB, &replay_recovery_pubkey)
+            .is_none(),
+        "replayed recovery key must not be projected into RuntimeTrust"
+    );
+    assert!(
+        trust
+            .lookup_user_by_pubkey(BOB, &deleted_recovery_pubkey)
+            .is_none(),
+        "deleted-principal recovery key must not be projected into RuntimeTrust"
+    );
 }
 
 fn easynet_json<const N: usize>(args: [&str; N]) -> Value {
@@ -284,6 +360,24 @@ fn easynet_json<const N: usize>(args: [&str; N]) -> Value {
             String::from_utf8_lossy(&output.stdout)
         )
     })
+}
+
+fn easynet_failure<const N: usize>(args: [&str; N]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_easynet"))
+        .args(args)
+        .output()
+        .expect("run easynet");
+    assert!(
+        !output.status.success(),
+        "easynet unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
 }
 
 fn binding_id_at(snapshot: &Value, index: usize) -> String {
