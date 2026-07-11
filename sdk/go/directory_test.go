@@ -13,7 +13,7 @@ func TestRuntimeDirectoryProviderResolvesThroughCanonicalAbility(t *testing.T) {
 		if err := json.Unmarshal(raw, &seen); err != nil {
 			return nil, err
 		}
-		output := `{"answer_kind":"RESOLVE_ANSWER_KIND_NON_DISPATCHABLE","canonical_name":"easynet:///r/example/user/alice","records":[{"kind":"ID","ura":"easynet:///r/example/user/alice"}],"release_profile":"RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL","authority":{},"cache_policy":{}}`
+		output := `{"answer":{"answer_kind":"RESOLVE_ANSWER_KIND_NON_DISPATCHABLE","canonical_name":"easynet:///r/example/user/alice","next_hop":{"node_id":"node-1"},"selected_route":{"route_ura":"easynet:///r/example/device/node-1"},"route_candidates":[{"node_id":"node-1"}],"records":[{"kind":"ID","ura":"easynet:///r/example/user/alice"}],"release_profile":"RESOLVER_RELEASE_PROFILE_AUTHORITATIVE_LOCAL","authority":{},"cache_policy":{}}}`
 		return runtimeAbilityResultJSON(true, output, "", false), nil
 	}})
 	if err != nil {
@@ -30,7 +30,7 @@ func TestRuntimeDirectoryProviderResolvesThroughCanonicalAbility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if resolution.CanonicalURA != "easynet:///r/example/user/alice" || len(resolution.Records) != 1 {
+	if resolution.CanonicalURA != "easynet:///r/example/user/alice" || len(resolution.Records) != 1 || resolution.NextHop["node_id"] != "node-1" || len(resolution.RouteCandidates) != 1 {
 		t.Fatalf("unexpected resolution: %#v", resolution)
 	}
 	args := seen["args"].(map[string]any)

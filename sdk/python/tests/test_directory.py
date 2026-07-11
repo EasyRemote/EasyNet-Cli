@@ -33,6 +33,15 @@ def _provider() -> tuple[RuntimeDirectoryProvider, RuntimeTransportFake]:
 
 def test_runtime_directory_resolves_through_canonical_ability() -> None:
     provider, transport = _provider()
+    transport.output_json = {
+        "answer": {
+            "answer_kind": "positive",
+            "next_hop": {"node_id": "node-1"},
+            "selected_route": {"route_ura": "easynet:///r/example/device/node-1"},
+            "route_candidates": [{"node_id": "node-1"}],
+            "records": [],
+        }
+    }
     resolution = provider.resolve(
         DirectoryResolveRequest(
             call=_call(),
@@ -41,6 +50,8 @@ def test_runtime_directory_resolves_through_canonical_ability() -> None:
         )
     )
     assert resolution.answer_kind == "positive"
+    assert resolution.next_hop == {"node_id": "node-1"}
+    assert resolution.route_candidates == ({"node_id": "node-1"},)
     assert transport.seen["args"] == {
         "query_name": "easynet:///r/example/user/alice",
         "qtype": "RESOLVE_TYPE_CANONICAL_IDENTITY",

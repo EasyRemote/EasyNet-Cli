@@ -1,10 +1,12 @@
 # Remaining Follow-up TODOs — Execution Spec (2026-06-30)
 
-Status tracker for the five work items left open after the wrapper→CLI
+Execution tracker for the original five follow-up items after the wrapper→CLI
 runtime-refactor push (see `easynet-wrapper-cli-runtime-refactor-spec-2026-06-28.md`)
-and the device-identity / trust hardening that followed it. Each item below is
-self-contained: background, current on-disk state, the exact change, and an
-acceptance gate.
+and the canonical-runtime convergence work discovered while completing them.
+Each item below is self-contained: background, current on-disk state, the exact
+change, and an acceptance gate. Section 6 is a binding expansion of the target,
+not an optional feature: it closes the standalone-Hub principal lifecycle that
+must exist before the staged HTTP pairing path can be removed.
 
 The thirteen completed items (conformance §7.3 model, the three latent bugs,
 §9.1.A registry convergence, §9.2 backend→product-wrapper, CLI user
@@ -13,7 +15,9 @@ fix, the stale-JWT existence gate) are NOT repeated here — they are done,
 built, and tested.
 
 Execution update: §1, §2, §3 Phase 1, and §5 have been landed. §4 remains
-deferred because vectors without SDK runners would be dead fixtures.
+deferred because vectors without SDK runners would be dead fixtures. Section 6
+is in progress and is governed normatively by
+`daemon-sdk-requirements-v1.md` section 14.
 
 Conventions: `realm` is the federation/DNS namespace; owner-prefixed URAs
 (`<username>.<agent>`) carry the **username slug**, subject/trust URAs carry the
@@ -393,6 +397,143 @@ Authorize deletion, or keep the dead package. It is not blocking anything.
 
 ---
 
+## §6. Complete the standalone-Hub PrincipalLifecycle
+
+**Status: IN PROGRESS** — the multi-key and admission substrate exists; the
+backend-free user lifecycle is not yet a complete product flow.
+
+This section records a binding delivery target. The detailed runtime contract,
+transition invariants and cross-repository ownership rules are normative in
+`daemon-sdk-requirements-v1.md` section 14.
+
+### Current capability baseline
+
+The correct conclusion is: the multi-key substrate is present, but a complete
+multi-user lifecycle without EasyNet Backend is not.
+
+| Capability | Current state |
+|---|---|
+| One Hub manages multiple runtime owners | implemented |
+| One User URA binds multiple public keys | implemented |
+| Key create, query, rotate, revoke and expiry | implemented |
+| Private keys are held only by the daemon key-service | implemented |
+| Multi-user signature verification and admission | implemented |
+| Create the first user without Backend | incomplete workflow |
+| User login, authentication and recovery without Backend | incomplete lifecycle |
+| A user adds a second device/key without Backend | substrate exists; complete authorization flow and CLI/SDK API are missing |
+| Multi-user administration and permission governance without Backend | partial capabilities; no standalone-Hub closure |
+
+The implementation already establishes these lower-level facts:
+
+- `RealmTrustAnchor` maps one User URA to multiple public keys, allowing one
+  principal to use distinct device keys;
+- `identity.register_pubkey`, `identity.list_user_pubkeys` and
+  `identity.revoke_user_pubkey` exist;
+- the daemon key-service supports create, list, public projection, rotate,
+  revoke, expiry and subject binding;
+- a managed key may bind to a User URA, while private material never enters
+  Backend, an SDK consumer or EasyRemote; and
+- cross-realm user-binding tokens and replay protection exist.
+
+These facts are necessary but do not constitute a user lifecycle. The current
+`easynet auth signing-key register` flow derives the User URA from existing
+credentials containing `user_id`/`username`. Pure-URA `federation.join`
+establishes Device membership and does not implicitly create a user. A local
+operator can invoke loopback administration abilities to register multiple
+users and public keys, but an ordinary user cannot yet complete registration,
+authentication, additional-device enrollment or recovery without Backend.
+
+### Required canonical state machine
+
+The missing capability is one product-neutral lifecycle shared by standalone
+and Backend-present deployments:
+
+```text
+CreateUser
+  -> BindFirstKey
+  -> Active
+  -> AddKey
+  -> RotateKey | RevokeKey
+  -> Recover
+  -> Suspend
+  -> Active | Delete
+```
+
+The aggregate is generic runtime state, never a Backend account model:
+
+```text
+Principal URA
+  -> enrollment authority
+  -> public-key bindings
+  -> key rotation/revocation state
+  -> recovery policy
+  -> authorization grants
+```
+
+Every transition must be an admitted Invocation with a replay-protected proof,
+atomic durable mutation and verifiable receipt. A failed transition leaves the
+previous principal and key-binding state unchanged.
+
+### Cross-repository actions
+
+1. **EasyNet-Cli daemon:** implement the durable PrincipalLifecycle provider,
+   explicit first-principal bootstrap, invitation/enrollment proofs,
+   additional-key authorization, recovery, suspension/reactivation, deletion
+   and grant enforcement on the existing admission and key-service roots.
+2. **Go and Python SDKs:** expose the same typed lifecycle commands,
+   projections and errors; providers lower those operations once. SDK
+   consumers never receive private keys or construct lifecycle wire payloads
+   by hand.
+3. **EasyNet Backend:** map PostgreSQL/OAuth/Passkey account results to the same
+   Principal URA and lifecycle through the Go SDK. Backend remains an optional
+   account/HTTP adapter and must not own another trust store, key inventory,
+   recovery truth, daemon process tree or runtime authentication path.
+4. **EasyRemote:** consume public principal, identity and signing projections
+   through the Python SDK. It keeps only Remote product workflow and
+   presentation state.
+5. **URA join:** `federation.join` continues to create Device membership and
+   may bind a principal only when it carries an admitted enrollment proof. It
+   must never infer a User URA from HTTP/product account fields.
+
+Standalone administration may use a local administrator capability, an
+invitation capability or a signed enrollment/recovery proof. Backend-present
+and Backend-free deployments must converge on the same User URA, key-service,
+admission, grants, replay state and receipts. A second authentication system is
+prohibited.
+
+### Acceptance
+
+A backend-free end-to-end gate must:
+
+1. start one Hub and its single daemon key-service;
+2. bootstrap the first administrator through a one-time authority;
+3. enroll at least two User URAs and at least two keys per user;
+4. admit every active key, revoke one key and prove its sibling remains valid;
+5. exercise rotation, recovery, suspension/reactivation and delete
+   terminality;
+6. restart the Hub and prove lifecycle, grants, revocation and receipt state
+   persist; and
+7. join a Device through a Hub URA without a Backend HTTP dependency.
+
+A second gate must attach EasyNet Backend to that same runtime and prove an
+account flow maps into the same principal/admission truth without spawning a
+second daemon/key-service or writing a parallel trust source.
+
+### Recovery-state audit note
+
+The interrupted restoration that preceded this convergence effort temporarily
+left the worktree in an uncommitted state with Go SDK type conflicts. That
+snapshot was not deliverable. Before the interruption, key-service and SDK
+boundary tests were green, but the backend-free multi-user lifecycle was still
+only partially complete as described above.
+
+The compilation conflict is historical, not a current delivery blocker: the
+baseline was restored and re-audited on 2026-07-11. Current green compilation
+must not be mistaken for section 6 completion; standalone PrincipalLifecycle
+and its two end-to-end gates remain required.
+
+---
+
 ## Summary table
 
 | § | Item | Status | Gate to start |
@@ -402,7 +543,10 @@ Authorize deletion, or keep the dead package. It is not blocking anything.
 | 3 | `--hub` URA addressing | DONE for Phase 1 | Verified |
 | 4 | Axon §9.3 cross-language vectors | DEFERRED | owner authorizes the runner |
 | 5 | Delete dead `internal/registry` | DONE | Verified |
+| 6 | Standalone-Hub PrincipalLifecycle | IN PROGRESS | canonical provider, SDK parity and standalone/backend-present E2E gates |
 
-§4 is the only intentionally open item. It should remain open until the
-cross-language runner work is authorized; adding fixture JSON alone is not an
-acceptable completion.
+§4 remains intentionally deferred until cross-language runners are authorized;
+adding fixture JSON alone is not acceptable completion. Section 6 is required
+for architecture convergence and for the irreversible Phase 3 removal of HTTP
+pairing. The execution target is therefore not complete until section 6 and
+its normative `daemon-sdk-requirements-v1.md` acceptance gates pass.

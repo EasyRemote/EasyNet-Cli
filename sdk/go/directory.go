@@ -30,6 +30,7 @@ const (
 type DirectoryResolveRequest struct {
 	Call        RuntimeCallContext   `json:"call"`
 	QueryURA    string               `json:"query_ura"`
+	RealmHint   string               `json:"realm_hint,omitempty"`
 	AbilityName string               `json:"ability_name,omitempty"`
 	Kind        DirectoryResolveKind `json:"kind,omitempty"`
 }
@@ -44,16 +45,19 @@ type DirectoryRecord struct {
 }
 
 type DirectoryResolution struct {
-	AnswerKind     string            `json:"answer_kind"`
-	CanonicalURA   string            `json:"canonical_ura,omitempty"`
-	OwnerURA       string            `json:"owner_ura,omitempty"`
-	AbilityURA     string            `json:"ability_ura,omitempty"`
-	RouteURA       string            `json:"route_ura,omitempty"`
-	Records        []DirectoryRecord `json:"records"`
-	Negative       map[string]any    `json:"negative,omitempty"`
-	ReleaseProfile string            `json:"release_profile,omitempty"`
-	Authority      map[string]any    `json:"authority,omitempty"`
-	CachePolicy    map[string]any    `json:"cache_policy,omitempty"`
+	AnswerKind      string            `json:"answer_kind"`
+	CanonicalURA    string            `json:"canonical_ura,omitempty"`
+	OwnerURA        string            `json:"owner_ura,omitempty"`
+	AbilityURA      string            `json:"ability_ura,omitempty"`
+	RouteURA        string            `json:"route_ura,omitempty"`
+	NextHop         map[string]any    `json:"next_hop,omitempty"`
+	SelectedRoute   map[string]any    `json:"selected_route,omitempty"`
+	RouteCandidates []map[string]any  `json:"route_candidates,omitempty"`
+	Records         []DirectoryRecord `json:"records"`
+	Negative        map[string]any    `json:"negative,omitempty"`
+	ReleaseProfile  string            `json:"release_profile,omitempty"`
+	Authority       map[string]any    `json:"authority,omitempty"`
+	CachePolicy     map[string]any    `json:"cache_policy,omitempty"`
 }
 
 type DirectoryListRequest struct {
@@ -159,14 +163,21 @@ func (p *RuntimeDirectoryProvider) Resolve(ctx context.Context, request Director
 		return DirectoryResolution{}, invalidDirectory("runtime Directory provider is not initialized", nil)
 	}
 	queryURA := strings.TrimSpace(request.QueryURA)
-	if queryURA == "" {
-		return DirectoryResolution{}, invalidDirectory("query_ura is required", nil)
+	realmHint := strings.TrimSpace(request.RealmHint)
+	if queryURA == "" && realmHint == "" {
+		return DirectoryResolution{}, invalidDirectory("query_ura or realm_hint is required", nil)
 	}
 	kind := request.Kind
 	if kind == "" {
 		kind = DirectoryResolveRoute
 	}
-	args := map[string]any{"query_name": queryURA, "qtype": string(kind)}
+	args := map[string]any{"qtype": string(kind)}
+	if queryURA != "" {
+		args["query_name"] = queryURA
+	}
+	if realmHint != "" {
+		args["realm_hint"] = realmHint
+	}
 	if ability := strings.TrimSpace(request.AbilityName); ability != "" {
 		args["ability_name"] = ability
 	}
@@ -293,7 +304,13 @@ func (s *DirectorySubscription) transition(event DirectoryEvent) error {
 }
 
 func projectDirectoryResolution(output map[string]any) (DirectoryResolution, error) {
+	if answer, ok := output["answer"].(map[string]any); ok {
+		output = answer
+	}
 	answerKind := directoryString(output, "answer_kind")
+	if answerKind == "" && len(directoryMap(output["negative"])) > 0 {
+		answerKind = "RESOLVE_ANSWER_KIND_NEGATIVE"
+	}
 	if answerKind == "" {
 		return DirectoryResolution{}, invalidDirectory("Directory answer_kind is required", nil)
 	}
@@ -308,17 +325,36 @@ func projectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 		}
 	}
 	return DirectoryResolution{
-		AnswerKind:     answerKind,
-		CanonicalURA:   directoryString(output, "canonical_name"),
-		OwnerURA:       directoryString(output, "owner_ura"),
-		AbilityURA:     directoryString(output, "ability_ura"),
-		RouteURA:       directoryString(output, "route_ura"),
-		Records:        records,
-		Negative:       directoryMap(output["negative"]),
-		ReleaseProfile: directoryString(output, "release_profile"),
-		Authority:      directoryMap(output["authority"]),
-		CachePolicy:    directoryMap(output["cache_policy"]),
+		AnswerKind:      answerKind,
+		CanonicalURA:    directoryString(output, "canonical_name"),
+		OwnerURA:        directoryString(output, "owner_ura"),
+		AbilityURA:      directoryString(output, "ability_ura"),
+		RouteURA:        directoryString(output, "route_ura"),
+		NextHop:         directoryMap(output["next_hop"]),
+		SelectedRoute:   directoryMap(output["selected_route"]),
+		RouteCandidates: directoryMapSlice(output["route_candidates"]),
+		Records:         records,
+		Negative:        directoryMap(output["negative"]),
+		ReleaseProfile:  directoryString(output, "release_profile"),
+		Authority:       directoryMap(output["authority"]),
+		CachePolicy:     directoryMap(output["cache_policy"]),
 	}, nil
+}
+
+func directoryMapSlice(value any) []map[string]any {
+	rows, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		object, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		result = append(result, directoryMap(object))
+	}
+	return result
 }
 
 func projectDirectoryRecord(raw map[string]any) DirectoryRecord {

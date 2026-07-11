@@ -557,19 +557,28 @@ Migration follows dependency direction. Destructive deletion is last.
 | 9 | all three | Delete only proven-obsolete product modules, duplicate DTO/wire code and invalid gates after consumers migrate | architecture converges without capability loss |
 | 10 | all three | Run public-API compatibility, Go/Python parity, Rust, Backend, EasyRemote and cross-repository E2E suites; commit by feature | cutover-ready evidence is complete |
 
+The interrupted restoration conflict described in section 14.4 has been
+resolved. Public API inventory, the symmetric capability matrix, generic
+PrincipalLifecycle seams, canonical Invocation lowering and the first
+Directory provider migration have landed. They are intermediate convergence
+evidence, not completion of the provider-backed runtime model.
+
 The current remaining work is:
 
-- resolve the uncommitted Go SDK restoration type conflicts;
-- restore and verify necessary Go/Python canonical capability clients;
-- update `sdk/conformance/sdk-parity-matrix.json` and neutrality gates so they
-  reject product semantics and parallel models rather than file names;
-- migrate Backend off duplicated `internal/runtimeprofile` lowering;
-- migrate EasyRemote back to canonical typed SDK capabilities;
+- complete symmetric Go/Python receipt/causal/history/trace, runtime-event,
+  administration and access-control clients and providers;
+- finish migrating Backend off duplicated `internal/runtimeprofile` lowering,
+  including receipt, event, administration and principal lifecycle paths;
+- migrate EasyRemote to canonical typed Python SDK configuration, identity,
+  Directory, receipt and event capabilities;
 - implement first-user bootstrap, additional-key authorization, recovery,
   suspension/deletion and grants for backend-free Hub mode;
 - prove URA-only `federation.join` plus Principal enrollment without Backend
   HTTP;
-- close the currently failing Rust regression set; and
+- delete obsolete product modules, duplicate wire/DTO code and legacy gates
+  only after their consumers have migrated;
+- run the full Rust default/`axon-pb`, Go, Python, Backend and EasyRemote
+  regression suites; and
 - run the two standalone/backend-present E2E scenarios from section 14.3.
 
 ## 18. Source of truth

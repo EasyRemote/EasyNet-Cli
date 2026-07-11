@@ -56,6 +56,7 @@ class DirectoryResolveKind(StrEnum):
 class DirectoryResolveRequest:
     call: RuntimeCallContext
     query_ura: str
+    realm_hint: str = ""
     ability_name: str = ""
     kind: DirectoryResolveKind = DirectoryResolveKind.ROUTE
 
@@ -78,6 +79,9 @@ class DirectoryResolution:
     owner_ura: str = ""
     ability_ura: str = ""
     route_ura: str = ""
+    next_hop: Mapping[str, object] = field(default_factory=dict)
+    selected_route: Mapping[str, object] = field(default_factory=dict)
+    route_candidates: tuple[Mapping[str, object], ...] = ()
     negative: Mapping[str, object] = field(default_factory=dict)
     release_profile: str = ""
     authority: Mapping[str, object] = field(default_factory=dict)
@@ -162,11 +166,15 @@ class RuntimeDirectoryProvider:
         self._ability = ability
 
     def resolve(self, request: DirectoryResolveRequest) -> DirectoryResolution:
-        query_ura = _required_text(request.query_ura, "query_ura")
-        arguments: dict[str, object] = {
-            "query_name": query_ura,
-            "qtype": request.kind.value,
-        }
+        query_ura = request.query_ura.strip()
+        realm_hint = request.realm_hint.strip()
+        if not query_ura and not realm_hint:
+            raise _invalid("query_ura or realm_hint is required")
+        arguments: dict[str, object] = {"qtype": request.kind.value}
+        if query_ura:
+            arguments["query_name"] = query_ura
+        if realm_hint:
+            arguments["realm_hint"] = realm_hint
         if request.ability_name.strip():
             arguments["ability_name"] = request.ability_name.strip()
         output = self._ability.invoke(request.call, "namespace.resolve", arguments)
@@ -255,7 +263,12 @@ class DirectorySubscription:
 
 
 def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
+    nested = output.get("answer")
+    if isinstance(nested, Mapping):
+        output = nested
     answer_kind = _mapping_text(output, "answer_kind")
+    if not answer_kind and _mapping(output.get("negative")):
+        answer_kind = "RESOLVE_ANSWER_KIND_NEGATIVE"
     if not answer_kind:
         raise _invalid("Directory answer_kind is required")
     records_raw = output.get("records", [])
@@ -268,6 +281,9 @@ def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
         owner_ura=_mapping_text(output, "owner_ura"),
         ability_ura=_mapping_text(output, "ability_ura"),
         route_ura=_mapping_text(output, "route_ura"),
+        next_hop=_mapping(output.get("next_hop")),
+        selected_route=_mapping(output.get("selected_route")),
+        route_candidates=_mapping_sequence(output.get("route_candidates")),
         records=records,
         negative=_mapping(output.get("negative")),
         release_profile=_mapping_text(output, "release_profile"),
@@ -309,6 +325,17 @@ def _mapping_text(value: Mapping[str, object], *keys: str) -> str:
 
 def _mapping(value: object) -> Mapping[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _mapping_sequence(value: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(value, list):
+        return ()
+    projected: list[Mapping[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise _invalid("Directory route candidate must be an object")
+        projected.append(dict(item))
+    return tuple(projected)
 
 
 def _required_text(value: object, name: str) -> str:

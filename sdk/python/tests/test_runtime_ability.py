@@ -14,6 +14,7 @@ from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 class RuntimeTransportFake:
     def __init__(self) -> None:
         self.seen: dict[str, object] = {}
+        self.output_json: dict[str, object] = {"answer_kind": "positive"}
 
     def invoke(self, draft_json: bytes) -> bytes:
         self.seen = json.loads(draft_json)
@@ -24,7 +25,7 @@ class RuntimeTransportFake:
                 "invocation_id": "inv-1",
                 "terminal_state": "Completed",
                 "output_content_type": "application/json",
-                "output_json": {"answer_kind": "positive"},
+                "output_json": self.output_json,
                 "elapsed_ms": 1,
                 "error": None,
             }
