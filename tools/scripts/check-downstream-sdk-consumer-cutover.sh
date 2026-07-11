@@ -173,6 +173,28 @@ def check_backend() -> None:
     ]:
         forbid_contains(principal, forbidden, "backend:principal")
 
+    user_key_registration = require_file(
+        backend,
+        "internal/logic/auth/register_user_pubkey.go",
+        "backend:user_signing_key_principal",
+    )
+    for required in [
+        "svcCtx.Principal.Get",
+        "svcCtx.Principal.Create",
+        "svcCtx.Principal.BindFirstKey",
+        "svcCtx.Principal.AddKey",
+        "PrincipalCarrierBase",
+        "PrincipalProofBootstrap",
+        "PrincipalProofActiveKey",
+    ]:
+        require_contains(user_key_registration, required, "backend:user_signing_key_principal")
+    for forbidden in [
+        "Identity.RegisterSigningKey",
+        "identityprofile.SigningKeyRegistrationRequest",
+        '"identity.register_pubkey"',
+    ]:
+        forbid_contains(user_key_registration, forbidden, "backend:user_signing_key_principal")
+
 
 def check_easyremote() -> None:
     if not easyremote.exists() or not (easyremote / "pyproject.toml").is_file():
@@ -244,7 +266,11 @@ def check_easyremote() -> None:
         require_contains(client, required, "easyremote:client")
 
     mission = require_file(easyremote, "easyremote/mission.py", "easyremote:mission")
-    require_contains(mission, "easynet_sdk.ReceiptReference", "easyremote:mission")
+    require_contains(
+        mission,
+        "easynet_sdk.ReceiptReference.from_runtime_receipt",
+        "easyremote:mission",
+    )
     forbid_contains(mission, "namespace.resolve", "easyremote:mission")
 
     package = easyremote / "easyremote"
@@ -340,6 +366,12 @@ package sdkprincipal
 // metadata["backend_adapter"] = "sdkprincipal"
 var _ = []string{"easynetsdk.NewRuntimeAbilityClient", "easynetsdk.NewRuntimePrincipalProvider", "easynetsdk.NewPrincipalClient", "client.Create", "client.BindFirstKey", "client.IssueEnrollment", "client.IssueGrant", "metadata[\"backend_adapter\"] = \"sdkprincipal\""}
 EOF
+  mkdir -p "$good_backend/internal/logic/auth"
+  cat >"$good_backend/internal/logic/auth/register_user_pubkey.go" <<'EOF'
+package auth
+
+var _ = []string{"svcCtx.Principal.Get", "svcCtx.Principal.Create", "svcCtx.Principal.BindFirstKey", "svcCtx.Principal.AddKey", "PrincipalCarrierBase", "PrincipalProofBootstrap", "PrincipalProofActiveKey"}
+EOF
   printf '%s\n' '[project]' 'name = "easyremote"' >"$good_remote/pyproject.toml"
   cat >"$good_remote/easyremote/config.py" <<'EOF'
 import easynet_sdk
@@ -389,7 +421,7 @@ EOF
   cat >"$good_remote/easyremote/mission.py" <<'EOF'
 import easynet_sdk
 
-_ = easynet_sdk.ReceiptReference
+_ = easynet_sdk.ReceiptReference.from_runtime_receipt
 EOF
   run_audit "$good_backend" "$good_remote" >/dev/null
 
