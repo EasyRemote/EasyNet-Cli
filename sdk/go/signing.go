@@ -9,6 +9,19 @@ import (
 	"strings"
 )
 
+const signingProfile = "signing"
+
+// SignerHandle is a provider-authorized signer reference, never key material.
+type SignerHandle struct {
+	Profile   string         `json:"profile"`
+	SignerID  string         `json:"signer_id"`
+	OwnerURA  string         `json:"owner_ura"`
+	KeyID     string         `json:"key_id"`
+	Algorithm string         `json:"algorithm"`
+	Policy    map[string]any `json:"policy"`
+	Metadata  map[string]any `json:"metadata"`
+}
+
 // SignerPolicy describes who is allowed to attach a signature.
 type SignerPolicy struct {
 	mode            string
@@ -552,8 +565,8 @@ func decodeBase64Field(value string, fieldName string) ([]byte, error) {
 }
 
 func validateSignerHandle(handle SignerHandle) error {
-	if strings.TrimSpace(handle.Profile) != directoryIdentityProfile {
-		return invalidInvocation("signer handle profile must be directory_identity", nil)
+	if strings.TrimSpace(handle.Profile) != signingProfile {
+		return invalidInvocation("signer handle profile must be signing", nil)
 	}
 	if strings.TrimSpace(handle.SignerID) == "" {
 		return invalidInvocation("signer handle signer_id is required", nil)

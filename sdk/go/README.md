@@ -1,93 +1,20 @@
-# Go Daemon SDK
+# Go Runtime SDK
 
-Go is the P0 facade for the EasyNet backend/Hub. It must expose daemon
-lifecycle, Runtime Core, Directory + Identity, Receipt, Events, Admin +
-Gateway, Surface, Compatibility, and selected wrapper profiles without
-importing Axon packages or generated Axon protobufs in public APIs.
+This package is the Go implementation of the canonical, product-neutral
+runtime model. It exposes only the shared seams used by downstream products:
 
-## Signing custody
+- daemon discovery, lifecycle, connection and health;
+- Axon-backed canonical URA and descriptor-reference addressing;
+- authority metadata and policy-safe invocation drafts;
+- prepare/sign/submit with daemon-owned key custody;
+- unary, server-stream and bidirectional invocation state machines;
+- typed errors and terminal receipt facts.
 
-`SignatureProvider` is the generic seam for signatures produced by an
-external signer selected by the consumer. The Go SDK never accepts or stores a
-private key or seed. Keys managed by the local EasyNet runtime are available
-only through the daemon-backed `RuntimeSigningIdentity` and `ManagedSigner`
-surfaces; `StaticSignatureProvider` adapts a signature that was already
-produced outside the SDK. These provider surfaces require an explicit daemon
-endpoint; the SDK neither discovers product directories nor reads product
-environment variables to infer one.
+EasyNet, EasyRemote and future products own their ability names, DTOs,
+directory views, account policy, HTTP routes and other workflows. They lower
+those workflows through `RuntimeClient` and `Addressing`; no product profile
+clients, profile bundles, product C symbols or local key vaults belong here.
 
-Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
-errors/connect-local lifecycle composition/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
-Directory + Identity, Receipt, Publication, Host Binding, Mission,
-Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compatibility
-OpenAI adapter seam, and Convenience Wrapper execution seam
-provider-backed. The package exposes typed
-feature/version discovery with root client close and optional `easynet_cabi,cgo`
-C ABI v4 feature-discovery, daemon lifecycle/open-runtime, runtime-health,
-unary invoke, stream/bidi callback, prepare/sign/submit-handle,
-await/cancel/events/free-handle adapters, runtime connection state, runtime health readiness
-facts, DaemonHandle lifecycle status/endpoints/start/attach/discover/stop/
-detach/open-runtime/connect-local/open-runtime-profiles state seams,
-control-discovery-backed RuntimeConnection endpoint resolution,
-RuntimeProfileBundle factories for Runtime Core-backed Directory, Receipt,
-Publication, Mission, Admin + Gateway, Events, Surface, Compatibility, and
-Wrapper clients, schema-backed SDK error projection
-with stable error classes and profile source-ref accessors, complete Invocation
-draft construction, prepared/signed Invocation DTOs, unary
-InvocationResult projection, a generic external-signer provider seam plus
-daemon-backed runtime and managed signers, typed authority metadata projections with
-mutually-exclusive InvocationBuilder attachment guardrails, StreamHandle state observation with schema-shaped
-terminal event projection, BidiSession frame ordering, half-close, cancel,
-terminal-frame projection, and terminal-close observation, InvocationHandle
-await/cancel/events/close observation, and RuntimeClient
-invoke/invoke-stream/open-bidi/prepare/submit-signed/close
-methods behind narrow JSON transport seams, SDK-internal direct daemon
-Axon gRPC-over-UDS unary/server-stream/bidi transport, plus DirectoryClient resolve/list
-read-model pages, Runtime Core-backed directory subscription streams, directory
-subscription state seams, and close state seams plus
-IdentityClient descriptor/resource projection, Axon-delegated
-URA/DescriptorRef helper seams, signing-key lifecycle, signer workflow
-acquisition, and signer-handle provenance/policy-proof guardrails.
-It also exposes ReceiptClient fetch/project/verify/verify-chain/causal-ref projection,
-invocation-history list/get/trace read-model methods, explicit daemon/Axon
-projection provider seams for Runtime-backed project/verify/verify-chain/causal-ref,
-optional C ABI v4 concrete transport over Runtime Core invoke, and close state
-seams over opaque `ReceiptRef`/`ReceiptChain` anchors,
-plus PublicationClient resource-ref,
-package-validation, deploy/unpublish Invocation carrier, deploy-result, plugin
-install projection, explicit daemon-local provider seams for Runtime-backed
-package validation and plugin install, published-ability read-model seams, and close state seams. HostBindingClient
-exposes binding DTO, envelope decode, item/error/terminal frame encoding,
-output-hash folding seams, and hash cursor invariant guardrails plus close state
-seams. MissionClient exposes run/run-file/track/cancel
-Invocation carrier builders, Runtime Core-backed run/run-file/track/cancel/events
-execution and event streams, daemon MissionStatus and MissionEventPage
-projection, bounded Mission event tailing, MissionPlan EAL rendering, complete
-child Invocation fact conformance, and close state seams. AdminClient
-exposes agent list/start/stop/refresh and session-list Invocation carrier
-builders, explicit daemon-owned GatewayStatus provider seams, GatewayStatus,
-AdminAgentPage, lifecycle-result, pairing token, device credential, credential
-verification, and typed device-session projection seams plus close state seams.
-EventClient exposes directory/device/session/invocation subscription
-Invocation carriers, device event history pages, explicit daemon-owned
-projection provider seams for Runtime-backed directory/drop/terminal frames,
-and EventFrame cursor/resume/drop-report/terminal projection seams plus close state seams. SurfaceClient
-exposes page list/create/delete/manifest Invocation carriers plus
-SurfacePageRecord, SurfacePagePage, SurfaceManifest, SurfacePublicPageRef, and
-SurfaceMutationResult projection seams plus SurfaceHealth readiness and surface
-status operation seams plus close state seams. CompatibilityClient exposes
-OpenAI-compatible list-models/chat/stream-chat and file upload/get/delete
-Invocation carriers plus model, chat, stream, file, and file-delete projection
-seams and close state seams. WrapperClient exposes
-file, terminal, remote desktop, browser, and media session Invocation carrier
-builders, Runtime Core stream/bidi session entry points, transport-backed helper
-close state seams, and record projections. Direct daemon UDS RuntimeConnection
-endpoint discovery and concrete direct UDS unary/stream/bidi transport exist;
-Axon-backed receipt verification,
-concrete publication/host-binding
-carriers, concrete Admin trust/session carriers,
-certificate policy, Events daemon filtering/live adapters, concrete surface health
-carriers, backend rendering/auth/cache cutover, Compatibility API-key/quota/HTTP/SSE,
-multipart storage execution, and product cutovers, wrapper backend HTTP/WebSocket bridges,
-and backend cutover gates remain incomplete. See
-`../SDK_PARITY.md` before claiming package stability.
+The SDK never accepts or stores private key material. Runtime signing is an
+opaque capability backed by the daemon key service, and all endpoint paths are
+explicitly supplied by the embedding runtime.

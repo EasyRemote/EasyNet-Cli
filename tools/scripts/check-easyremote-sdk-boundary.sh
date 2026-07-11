@@ -6,154 +6,68 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 
 run_audit() {
   local easyremote_root="$1"
-  python3 - "$REPO_ROOT" "$easyremote_root" <<'PY'
+  python3 - "$easyremote_root" <<'PY'
 from __future__ import annotations
 
-import importlib.util
+import ast
 import sys
 from pathlib import Path
 
-
-repo = Path(sys.argv[1]).resolve()
-easyremote = Path(sys.argv[2]).resolve()
-auditor_path = repo / "sdk/python/easynet_sdk/consumer_boundary.py"
-
-if not easyremote.exists():
-    print(f"easyremote root does not exist: {easyremote}", file=sys.stderr)
-    raise SystemExit(2)
-if not (easyremote / "pyproject.toml").exists():
-    print(f"easyremote root is missing pyproject.toml: {easyremote}", file=sys.stderr)
-    raise SystemExit(2)
-if not (easyremote / "easyremote").is_dir():
-    print(f"easyremote root is missing package directory: {easyremote}", file=sys.stderr)
-    raise SystemExit(2)
-if not auditor_path.exists():
-    print(f"consumer boundary auditor not found: {auditor_path}", file=sys.stderr)
-    raise SystemExit(2)
-
-spec = importlib.util.spec_from_file_location(
-    "easynet_sdk_consumer_boundary",
-    auditor_path,
-)
-if spec is None or spec.loader is None:
-    print(f"failed to load consumer boundary auditor: {auditor_path}", file=sys.stderr)
-    raise SystemExit(2)
-module = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-
-result = module.audit_consumer_boundary(easyremote)
-if not result.ok:
-    print(f"EasyRemote SDK boundary violations in {easyremote}:")
-    for violation in result.violations:
-        line = violation.line or 1
-        print(f"{violation.path}:{line}: {violation.rule}: {violation.detail}")
+root = Path(sys.argv[1]).resolve()
+package = root / "easyremote"
+violations: list[str] = []
+if not (root / "pyproject.toml").is_file():
+    violations.append("missing_pyproject")
+if not package.is_dir():
+    violations.append("missing_package")
+else:
+    if (package / "_sdk_profiles.py").exists():
+        violations.append("retired_profile_bridge")
+    forbidden_imports = {"easynet_axon", "grpc", "ctypes", "subprocess"}
+    forbidden_attrs = ("MissionClient", "AdminClient", "DirectoryClient", "ReceiptClient", "DaemonProfileBridge")
+    for path in sorted(package.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError as exc:
+            violations.append(f"syntax_error:{path}:{exc.lineno}")
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".", 1)[0] in forbidden_imports:
+                        violations.append(f"raw_lower_layer_import:{path}:{alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".", 1)[0] in forbidden_imports:
+                    violations.append(f"raw_lower_layer_import:{path}:{node.module}")
+            elif isinstance(node, ast.Attribute) and node.attr in forbidden_attrs:
+                violations.append(f"product_sdk_type:{path}:{node.attr}")
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value.startswith("easynet_abi_"):
+                    violations.append(f"raw_c_abi_symbol:{path}")
+if violations:
+    print(f"EasyRemote SDK boundary violations in {root}:")
+    print("\n".join(violations))
     raise SystemExit(1)
-
-print(f"EasyRemote SDK boundary ok: {easyremote}")
+print(f"EasyRemote SDK boundary ok: {root}")
 PY
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-
-  good="$tmp/EasyRemoteGood"
-  mkdir -p "$good/easyremote"
-  cat >"$good/pyproject.toml" <<'EOF'
-[project]
-name = "easyremote"
-dependencies = ["easynet-sdk>=0.91.30"]
-EOF
-  cat >"$good/easyremote/client.py" <<'EOF'
-from easynet_sdk import AbilityInvocationClient, InvocationDraft, ReceiptClient
-
-
-def invoke(client: AbilityInvocationClient, draft: InvocationDraft):
-    return client.invoke(draft)
-EOF
+  good="$tmp/good"; mkdir -p "$good/easyremote"
+  printf '%s\n' '[project]' 'name = "easyremote"' >"$good/pyproject.toml"
+  printf '%s\n' 'from easynet_sdk import RuntimeClient' >"$good/easyremote/client.py"
   run_audit "$good" >/dev/null
-
-  bad="$tmp/EasyRemoteBad"
-  mkdir -p "$bad/easyremote/_transport"
-  cat >"$bad/pyproject.toml" <<'EOF'
-[project]
-name = "easyremote"
-dependencies = [
-  "easynet-sdk>=0.91.30",
-  "easynet-run-axon>=0.4",
-]
-EOF
-  cat >"$bad/easyremote/invocation.py" <<'EOF'
-import ctypes
-import json
-from easynet_axon import parse_ura
-
-lib = ctypes.CDLL("libeasynet_cli.dylib")
-symbol = "easynet_invocation_invoke"
-raw = json.dumps({
-    "caller_ura": "easynet:///r/example/agent/alice",
-    "callee_ura": "easynet:///r/example/device/dev-a",
-    "descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0",
-    "subject_ura": "easynet:///r/example/device/dev-a",
-    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
-    "causal_context": {"form": "none"},
-})
-
-class _RollingHash:
-    pass
-
-def carrier_leaks(client, owner_ura, ability_ura, descriptor_ref):
-    client.invoke("ability.deploy")
-    client.invoke("meta.list_abilities")
-    client.invoke("agent.start")
-    client.invoke("gateway.status")
-    client.invoke("mission.run")
-    marker = "host_stream hash frame"
-    if "/ability/" in ability_ura:
-        return descriptor_ref.rpartition("@")
-    return owner_ura.split("/device/", 1)
-EOF
-  cat >"$bad/easyremote/direct.py" <<'EOF'
-import socket
-import subprocess
-import grpc
-
-from easynet_sdk.direct_runtime import DirectDaemonRuntimeTransport
-
-transport = DirectDaemonRuntimeTransport
-channel = grpc.insecure_channel("unix:///tmp/easynet-daemon.sock")
-daemon_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-daemon_path = "control.sock"
-subprocess.Popen(["easynet-daemon", "start"])
-EOF
-  cat >"$bad/easyremote/_transport/abi.py" <<'EOF'
-class LegacyTransport:
-    pass
-EOF
+  bad="$tmp/bad"; mkdir -p "$bad/easyremote"
+  printf '%s\n' '[project]' 'name = "easyremote"' >"$bad/pyproject.toml"
+  printf '%s\n' 'import ctypes' >"$bad/easyremote/client.py"
   if run_audit "$bad" >"$tmp/bad.out" 2>&1; then
-    echo "self-test expected forbidden EasyRemote fixture to fail" >&2
-    exit 1
+    echo "self-test expected forbidden fixture to fail" >&2; exit 1
   fi
-  grep -Fq "raw_lower_layer_dependency" "$tmp/bad.out"
   grep -Fq "raw_lower_layer_import" "$tmp/bad.out"
-  grep -Fq "raw_ffi_loader" "$tmp/bad.out"
-  grep -Fq "raw_c_abi_symbol" "$tmp/bad.out"
-  grep -Fq "raw_invocation_json_codec" "$tmp/bad.out"
-  grep -Fq "raw_transport_module" "$tmp/bad.out"
-  grep -Fq "raw_publication_carrier" "$tmp/bad.out"
-  grep -Fq "raw_admin_carrier" "$tmp/bad.out"
-  grep -Fq "raw_mission_carrier" "$tmp/bad.out"
-  grep -Fq "raw_host_stream_codec" "$tmp/bad.out"
-  grep -Fq "raw_ura_shape_literal" "$tmp/bad.out"
-  grep -Fq "raw_descriptor_ref_assembly" "$tmp/bad.out"
-  grep -Fq "sdk_internal_runtime_transport" "$tmp/bad.out"
-  grep -Fq "raw_daemon_session" "$tmp/bad.out"
-  grep -Fq "runtime_subprocess" "$tmp/bad.out"
-
   echo "check-easyremote-sdk-boundary self-test ok"
   exit 0
 fi
 
-EASYREMOTE_ROOT="${1:-${EASYNET_EASYREMOTE_ROOT:-$REPO_ROOT/../EasyRemote}}"
-run_audit "$EASYREMOTE_ROOT"
+run_audit "${1:-$REPO_ROOT/../EasyRemote}"

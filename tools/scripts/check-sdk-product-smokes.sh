@@ -102,7 +102,10 @@ EASYREMOTE_ROOT="${EASYNET_EASYREMOTE_ROOT:-$REPO_ROOT/../EasyRemote}"
 BACKEND_INPUT_ROOT="${EASYNET_BACKEND_ROOT:-$REPO_ROOT/../EasyNet}"
 BACKEND_ROOT="$(resolve_backend_root "$BACKEND_INPUT_ROOT")"
 
-EASYREMOTE_SMOKE_CMD="${EASYNET_EASYREMOTE_SMOKE_CMD:-uv run pytest -q}"
+# The repository smoke must exercise the sibling SDK checkout. Resolving the
+# published easynet-sdk wheel would pull its Axon dependency from the public
+# index and hides local cutover failures behind registry version skew.
+EASYREMOTE_SMOKE_CMD="${EASYNET_EASYREMOTE_SMOKE_CMD:-PYTHONPATH=.:../EasyNet-Cli/sdk/python pytest -q}"
 BACKEND_SMOKE_CMD="${EASYNET_BACKEND_SMOKE_CMD:-go test ./...}"
 
 status=0

@@ -2,11 +2,23 @@ package easynet
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"time"
 )
+
+func identitySignerPolicyRef(ownerURA string, keyID string, publicKeyBase64 string) string {
+	hasher := sha256.New()
+	hasher.Write([]byte(ownerURA))
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(keyID))
+	hasher.Write([]byte{0})
+	hasher.Write([]byte(publicKeyBase64))
+	return "daemon-key-inventory:sha256:" + hex.EncodeToString(hasher.Sum(nil)[:16])
+}
 
 var (
 	// ErrRuntimeIdentityNotFound is retained as the runtime-identity domain

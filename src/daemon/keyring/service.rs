@@ -20,13 +20,13 @@ use tokio::time::{timeout, timeout_at, Instant};
 use crate::support::platform::named_pipe::PipeListener;
 
 use super::passphrase::PassphraseStore;
+#[cfg(test)]
+use super::ManagedSigningKeyProjection;
 use super::{
     default_passphrase_path, default_socket_path, default_vault_path, vault_error_to_response,
     KeyringRequest, KeyringResponse, MasterKeySource, Vault, KEY_SERVICE_PROTOCOL_VERSION,
     MAX_KEY_SERVICE_CANONICAL_BYTES, MAX_KEY_SERVICE_FRAME_BYTES,
 };
-#[cfg(test)]
-use super::ManagedSigningKeyProjection;
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 
 const MAX_CONCURRENT_KEY_SERVICE_CONNECTIONS: usize = 4;
@@ -583,9 +583,9 @@ pub(crate) fn run_test_unix_key_service(
         ready
             .send(Ok(entry))
             .map_err(|_| "test key-service caller dropped".to_string())?;
-        let listener = tokio::net::UnixListener::from_std(listener)
-            .map_err(|error| format!("adopt test key-service listener: {error}"))?;
         runtime_driver.block_on(async move {
+            let listener = tokio::net::UnixListener::from_std(listener)
+                .map_err(|error| format!("adopt test key-service listener: {error}"))?;
             for _ in 0..expected_connections {
                 let (stream, _) = listener
                     .accept()
