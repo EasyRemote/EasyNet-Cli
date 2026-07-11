@@ -78,10 +78,6 @@ struct RegisterArgs {
     role: String,
     #[serde(default)]
     principal_owner_ura: Option<String>,
-    #[serde(default)]
-    principal_owner_user_id: Option<String>,
-    #[serde(default)]
-    principal_owner_username: Option<String>,
 }
 
 /// Narrow policy view of an `identity.register_pubkey` request.
@@ -149,7 +145,7 @@ pub fn handle(
 ) -> Result<Vec<u8>, Status> {
     let (args, role) = decode_register_args(arguments)?;
 
-    let owner = trusted_principal_owner_from_args(&args);
+    let owner = trusted_principal_owner_from_args(&args)?;
     RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_with_owner(
         args.agent_ura,
         args.public_key_b64,
@@ -191,56 +187,43 @@ fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustedAgentR
             "identity.register_pubkey: public_key_b64 is required",
         ));
     }
-    let has_owner_ura = args
-        .principal_owner_ura
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
-    let has_owner_user_id = args
-        .principal_owner_user_id
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
-    if has_owner_ura != has_owner_user_id {
-        return Err(Status::invalid_argument(
-            "identity.register_pubkey: principal_owner_ura and principal_owner_user_id must be supplied together",
-        ));
-    }
-    let has_owner_username = args
-        .principal_owner_username
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty());
-    if has_owner_username && !has_owner_user_id {
-        return Err(Status::invalid_argument(
-            "identity.register_pubkey: principal_owner_username requires principal_owner_ura and principal_owner_user_id",
-        ));
-    }
-
     let role = parse_role(&args.role)?;
     Ok((args, role))
 }
 
-fn trusted_principal_owner_from_args(args: &RegisterArgs) -> Option<TrustedPrincipalOwner> {
+fn trusted_principal_owner_from_args(
+    args: &RegisterArgs,
+) -> Result<Option<TrustedPrincipalOwner>, Status> {
     let owner_ura = args
         .principal_owner_ura
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let owner_user_id = args
-        .principal_owner_user_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    Some(TrustedPrincipalOwner {
+        .filter(|value| !value.is_empty());
+    let Some(owner_ura) = owner_ura else {
+        return Ok(None);
+    };
+    let parsed_owner = crate::core::ura::parse_ura(owner_ura).map_err(|err| {
+        Status::invalid_argument(format!(
+            "identity.register_pubkey: principal_owner_ura must be a canonical User URA: {err}"
+        ))
+    })?;
+    if parsed_owner.kind != crate::core::ura::URAKind::User {
+        return Err(Status::invalid_argument(
+            "identity.register_pubkey: principal_owner_ura must be a User URA",
+        ));
+    }
+    let owner_user_id = parsed_owner.user_id().ok_or_else(|| {
+        Status::invalid_argument(
+            "identity.register_pubkey: principal_owner_ura must include a user id",
+        )
+    })?;
+    Ok(Some(TrustedPrincipalOwner {
         principal_ura: args.agent_ura.clone(),
         owner_user_id: owner_user_id.to_string(),
         owner_ura: owner_ura.to_string(),
-        owner_username: args
-            .principal_owner_username
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string),
+        owner_username: None,
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
-    })
+    }))
 }
 
 /// Parse a `TrustedAgentRole` from a wire-string. The wire shape
@@ -287,6 +270,16 @@ mod tests {
             "agent_ura": ura,
             "public_key_b64": key,
             "role": role
+        }))
+        .expect("encode")
+    }
+
+    fn args_bytes_with_owner_ura(ura: &str, key: &str, role: &str, owner_ura: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "agent_ura": ura,
+            "public_key_b64": key,
+            "role": role,
+            "principal_owner_ura": owner_ura
         }))
         .expect("encode")
     }
@@ -356,6 +349,45 @@ mod tests {
             .expect("disk load")
             .lookup("easynet:///r/r2/device/intruder")
             .is_some());
+    }
+
+    #[test]
+    fn principal_owner_is_derived_from_owner_ura_only() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let args = args_bytes_with_owner_ura(
+            "easynet:///r/r1/device/owned",
+            &test_pub_b64(),
+            "device",
+            "easynet:///r/r1/user/user-1",
+        );
+
+        handle(&args, "r1", &path, &cell).expect("owned device ok");
+        let snap = cell.snapshot();
+        let owner = snap
+            .lookup_principal_owner("easynet:///r/r1/device/owned")
+            .expect("owner binding");
+        assert_eq!(owner.owner_ura, "easynet:///r/r1/user/user-1");
+        assert_eq!(owner.owner_user_id, "user-1");
+        assert!(owner.owner_username.is_none());
+    }
+
+    #[test]
+    fn principal_owner_ura_must_be_user_ura() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let args = args_bytes_with_owner_ura(
+            "easynet:///r/r1/device/owned",
+            &test_pub_b64(),
+            "device",
+            "easynet:///r/r1/device/not-user",
+        );
+
+        let err = handle(&args, "r1", &path, &cell).expect_err("owner must be user URA");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err
+            .message()
+            .contains("principal_owner_ura must be a User URA"));
     }
 
     #[test]

@@ -15,6 +15,14 @@ type NativeRuntimeOptions struct {
 	DialTimeoutMS   int64
 	InvokeTimeoutMS int64
 	MaxMessageBytes int
+	// StartConfig requests an explicit daemon lifecycle start/adopt operation
+	// before opening the runtime. When nil, OpenNativeRuntime only discovers
+	// and attaches to an existing daemon.
+	StartConfig *StartConfig
+	// StopDaemonOnClose stops the lifecycle handle opened from StartConfig when
+	// the native runtime handle is closed. When false, the daemon is detached
+	// after the runtime transport opens and keeps running.
+	StopDaemonOnClose bool
 }
 
 // NativeRuntimeHandle owns SDK facades opened from one native daemon provider.
