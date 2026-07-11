@@ -4,6 +4,7 @@ import unittest
 import easynet_sdk.principal as principal_module
 from easynet_sdk.principal import (
     BindPrincipalKeyRequest,
+    IssueEnrollmentRequest,
     PrincipalClient,
     PrincipalCommand,
     PrincipalProofKind,
@@ -11,6 +12,7 @@ from easynet_sdk.principal import (
     PrincipalState,
     PublicKeyBinding,
     PublicKeyBindingState,
+    RevokeEnrollmentRequest,
     RuntimePrincipalProvider,
     grant_actions,
 )
@@ -82,9 +84,49 @@ class PrincipalTests(unittest.TestCase):
         self.assertEqual(result.principal_ura, "easynet:///r/example/user/alice")
         self.assertIs(result.state, PrincipalState.ACTIVE)
         self.assertEqual(len(result.bindings), 1)
+        self.assertIsNotNone(result.enrollment_proof)
+        self.assertEqual(result.enrollment_proof.kind, PrincipalProofKind.BOOTSTRAP)  # type: ignore[union-attr]
+        self.assertEqual(result.enrollment_proof.reference, "proof-1")  # type: ignore[union-attr]
         self.assertIsNotNone(result.recovery)
+        self.assertEqual(len(result.enrollments), 1)
+        self.assertEqual(result.enrollments[0].enrollment_id, "enroll-1")
+        self.assertEqual(
+            result.enrollments[0].consumed_by_principal_ura,
+            "easynet:///r/example/user/bob",
+        )
         self.assertEqual(len(result.grants), 1)
         self.assertNotIn("private_key", request)
+
+    def test_runtime_principal_provider_lowers_enrollment_authority(self) -> None:
+        ability = _MemoryAbility()
+        provider = RuntimePrincipalProvider(ability, _call())
+
+        provider.issue_enrollment(
+            IssueEnrollmentRequest(
+                command=_command(),
+                principal_ura="easynet:///r/example/user/alice",
+                subject_principal_ura="easynet:///r/example/user/bob",
+            )
+        )
+
+        self.assertEqual(ability.ability, "principal.lifecycle.issue_enrollment")
+        request = ability.arguments["request"]
+        self.assertIsInstance(request, dict)
+        self.assertEqual(request["principal_ura"], "easynet:///r/example/user/alice")  # type: ignore[index]
+        self.assertEqual(request["subject_principal_ura"], "easynet:///r/example/user/bob")  # type: ignore[index]
+
+        provider.revoke_enrollment(
+            RevokeEnrollmentRequest(
+                command=_command(),
+                principal_ura="easynet:///r/example/user/alice",
+                enrollment_id="enroll-1",
+            )
+        )
+
+        self.assertEqual(ability.ability, "principal.lifecycle.revoke_enrollment")
+        request = ability.arguments["request"]
+        self.assertIsInstance(request, dict)
+        self.assertEqual(request["enrollment_id"], "enroll-1")  # type: ignore[index]
 
     def test_runtime_principal_provider_uses_generic_get_ability(self) -> None:
         ability = _MemoryAbility()
@@ -133,11 +175,25 @@ class _MemoryAbility:
                         "created_unix_ms": 1_700_000_000_000,
                     }
                 ],
+                "enrollment_proof": {
+                    "kind": "bootstrap",
+                    "reference": "proof-1",
+                },
                 "recovery": {
                     "policy_ref": "recovery-policy-1",
                     "enabled": True,
                     "updated_unix_ms": 1_700_000_001_000,
                 },
+                "enrollments": [
+                    {
+                        "enrollment_id": "enroll-1",
+                        "issuer_ura": "easynet:///r/example/user/alice",
+                        "subject_principal_ura": "easynet:///r/example/user/bob",
+                        "created_unix_ms": 1_700_000_001_000,
+                        "consumed_by_principal_ura": "easynet:///r/example/user/bob",
+                        "consumed_unix_ms": 1_700_000_002_000,
+                    }
+                ],
                 "grants": [
                     {
                         "grant_id": "grant-1",

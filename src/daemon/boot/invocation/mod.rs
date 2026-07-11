@@ -85,6 +85,9 @@ use crate::daemon::axon_bridge::hot_agent_registrar::{
 use crate::daemon::invocation::bidi::session_wire::{RequestOutcome, SessionRequestError};
 
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use crate::daemon::invocation::admission::principal_lifecycle::{
+    principal_lifecycle_store_path_for_trust_anchor, PrincipalLifecycleReader,
+};
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::invocation::bidi::session_initiator::{
     initial_session_admission_probe, run_session_supervisor,
@@ -336,6 +339,9 @@ pub fn start_daemon_invocation_transport(
         };
     let mut admission =
         AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_ura.clone());
+    admission = admission.with_principal_lifecycle_reader(PrincipalLifecycleReader::new(
+        principal_lifecycle_store_path_for_trust_anchor(&trust_anchor_path),
+    ));
     if let Some(client) = dialer.clone() {
         admission = admission.with_federation(client, federated_peers_cell.clone());
     }

@@ -218,6 +218,10 @@ pub const ABILITY_PRINCIPAL_REACTIVATE: &str =
     crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_REACTIVATE;
 pub const ABILITY_PRINCIPAL_DELETE: &str =
     crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_DELETE;
+pub const ABILITY_PRINCIPAL_ISSUE_ENROLLMENT: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_ISSUE_ENROLLMENT;
+pub const ABILITY_PRINCIPAL_REVOKE_ENROLLMENT: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_REVOKE_ENROLLMENT;
 pub const ABILITY_PRINCIPAL_ISSUE_GRANT: &str =
     crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_ISSUE_GRANT;
 pub const ABILITY_PRINCIPAL_REVOKE_GRANT: &str =
@@ -260,6 +264,8 @@ const HUB_BASELINE: &[BaselineAbility] = &[
     daemon_rpc!(ABILITY_PRINCIPAL_SUSPEND, HubIdentity),
     daemon_rpc!(ABILITY_PRINCIPAL_REACTIVATE, HubIdentity),
     daemon_rpc!(ABILITY_PRINCIPAL_DELETE, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_ISSUE_ENROLLMENT, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_REVOKE_ENROLLMENT, HubIdentity),
     daemon_rpc!(ABILITY_PRINCIPAL_ISSUE_GRANT, HubIdentity),
     daemon_rpc!(ABILITY_PRINCIPAL_REVOKE_GRANT, HubIdentity),
     daemon_rpc!(ABILITY_PRINCIPAL_GET, HubIdentity),

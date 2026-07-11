@@ -20,6 +20,8 @@ const (
 	principalAbilitySuspend           = "principal.lifecycle.suspend"
 	principalAbilityReactivate        = "principal.lifecycle.reactivate"
 	principalAbilityDelete            = "principal.lifecycle.delete"
+	principalAbilityIssueEnrollment   = "principal.lifecycle.issue_enrollment"
+	principalAbilityRevokeEnrollment  = "principal.lifecycle.revoke_enrollment"
 	principalAbilityIssueGrant        = "principal.lifecycle.issue_grant"
 	principalAbilityRevokeGrant       = "principal.lifecycle.revoke_grant"
 	principalAbilityGet               = "principal.lifecycle.get"
@@ -111,17 +113,32 @@ type AuthorizationGrant struct {
 	RevokedUnixMS *int64   `json:"revoked_unix_ms,omitempty"`
 }
 
+// EnrollmentCapability is a durable one-time authority for creating a
+// principal through the same PrincipalLifecycle aggregate.
+type EnrollmentCapability struct {
+	EnrollmentID           string `json:"enrollment_id"`
+	IssuerURA              string `json:"issuer_ura"`
+	SubjectPrincipalURA    string `json:"subject_principal_ura"`
+	CreatedUnixMS          int64  `json:"created_unix_ms"`
+	ExpiresUnixMS          *int64 `json:"expires_unix_ms,omitempty"`
+	RevokedUnixMS          *int64 `json:"revoked_unix_ms,omitempty"`
+	ConsumedByPrincipalURA string `json:"consumed_by_principal_ura,omitempty"`
+	ConsumedUnixMS         *int64 `json:"consumed_unix_ms,omitempty"`
+}
+
 // PrincipalSnapshot is the versioned public aggregate returned after a
 // committed transition or query.
 type PrincipalSnapshot struct {
-	PrincipalURA  string               `json:"principal_ura"`
-	State         PrincipalState       `json:"state"`
-	Version       uint64               `json:"version"`
-	Bindings      []PublicKeyBinding   `json:"bindings"`
-	Recovery      *RecoveryPolicy      `json:"recovery,omitempty"`
-	Grants        []AuthorizationGrant `json:"grants"`
-	CreatedUnixMS int64                `json:"created_unix_ms"`
-	UpdatedUnixMS int64                `json:"updated_unix_ms"`
+	PrincipalURA    string                 `json:"principal_ura"`
+	State           PrincipalState         `json:"state"`
+	Version         uint64                 `json:"version"`
+	Bindings        []PublicKeyBinding     `json:"bindings"`
+	EnrollmentProof *PrincipalProofRef     `json:"enrollment_proof,omitempty"`
+	Recovery        *RecoveryPolicy        `json:"recovery,omitempty"`
+	Enrollments     []EnrollmentCapability `json:"enrollments"`
+	Grants          []AuthorizationGrant   `json:"grants"`
+	CreatedUnixMS   int64                  `json:"created_unix_ms"`
+	UpdatedUnixMS   int64                  `json:"updated_unix_ms"`
 }
 
 type CreatePrincipalRequest struct {
@@ -167,6 +184,19 @@ type ChangePrincipalStateRequest struct {
 	PrincipalURA string           `json:"principal_ura"`
 }
 
+type IssueEnrollmentRequest struct {
+	Command             PrincipalCommand `json:"command"`
+	PrincipalURA        string           `json:"principal_ura"`
+	SubjectPrincipalURA string           `json:"subject_principal_ura"`
+	ExpiresUnixMS       *int64           `json:"expires_unix_ms,omitempty"`
+}
+
+type RevokeEnrollmentRequest struct {
+	Command      PrincipalCommand `json:"command"`
+	PrincipalURA string           `json:"principal_ura"`
+	EnrollmentID string           `json:"enrollment_id"`
+}
+
 type IssueGrantRequest struct {
 	Command       PrincipalCommand `json:"command"`
 	PrincipalURA  string           `json:"principal_ura"`
@@ -191,6 +221,8 @@ type PrincipalProvider interface {
 	Suspend(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
 	Reactivate(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
 	Delete(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
+	IssueEnrollment(context.Context, IssueEnrollmentRequest) (PrincipalSnapshot, error)
+	RevokeEnrollment(context.Context, RevokeEnrollmentRequest) (PrincipalSnapshot, error)
 	IssueGrant(context.Context, IssueGrantRequest) (PrincipalSnapshot, error)
 	RevokeGrant(context.Context, RevokeGrantRequest) (PrincipalSnapshot, error)
 	Get(context.Context, string) (PrincipalSnapshot, error)
@@ -221,6 +253,8 @@ type PrincipalLifecycle interface {
 	Suspend(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
 	Reactivate(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
 	Delete(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
+	IssueEnrollment(context.Context, IssueEnrollmentRequest) (PrincipalSnapshot, error)
+	RevokeEnrollment(context.Context, RevokeEnrollmentRequest) (PrincipalSnapshot, error)
 	IssueGrant(context.Context, IssueGrantRequest) (PrincipalSnapshot, error)
 	RevokeGrant(context.Context, RevokeGrantRequest) (PrincipalSnapshot, error)
 	Get(context.Context, string) (PrincipalSnapshot, error)
@@ -296,6 +330,20 @@ func (c *PrincipalClient) Delete(ctx context.Context, request ChangePrincipalSta
 		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
 	}
 	return c.provider.Delete(ctx, request)
+}
+
+func (c *PrincipalClient) IssueEnrollment(ctx context.Context, request IssueEnrollmentRequest) (PrincipalSnapshot, error) {
+	if c == nil || c.provider == nil {
+		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
+	}
+	return c.provider.IssueEnrollment(ctx, request)
+}
+
+func (c *PrincipalClient) RevokeEnrollment(ctx context.Context, request RevokeEnrollmentRequest) (PrincipalSnapshot, error) {
+	if c == nil || c.provider == nil {
+		return PrincipalSnapshot{}, invalidPrincipal("Principal client is not initialized", nil)
+	}
+	return c.provider.RevokeEnrollment(ctx, request)
 }
 
 func (c *PrincipalClient) IssueGrant(ctx context.Context, request IssueGrantRequest) (PrincipalSnapshot, error) {
@@ -376,6 +424,14 @@ func (p *RuntimePrincipalProvider) Reactivate(ctx context.Context, request Chang
 
 func (p *RuntimePrincipalProvider) Delete(ctx context.Context, request ChangePrincipalStateRequest) (PrincipalSnapshot, error) {
 	return p.invoke(ctx, principalAbilityDelete, map[string]any{"request": principalChangeStateWire(request)})
+}
+
+func (p *RuntimePrincipalProvider) IssueEnrollment(ctx context.Context, request IssueEnrollmentRequest) (PrincipalSnapshot, error) {
+	return p.invoke(ctx, principalAbilityIssueEnrollment, map[string]any{"request": principalIssueEnrollmentWire(request)})
+}
+
+func (p *RuntimePrincipalProvider) RevokeEnrollment(ctx context.Context, request RevokeEnrollmentRequest) (PrincipalSnapshot, error) {
+	return p.invoke(ctx, principalAbilityRevokeEnrollment, map[string]any{"request": principalRevokeEnrollmentWire(request)})
 }
 
 func (p *RuntimePrincipalProvider) IssueGrant(ctx context.Context, request IssueGrantRequest) (PrincipalSnapshot, error) {
@@ -469,6 +525,26 @@ func principalChangeStateWire(request ChangePrincipalStateRequest) map[string]an
 	}
 }
 
+func principalIssueEnrollmentWire(request IssueEnrollmentRequest) map[string]any {
+	wire := map[string]any{
+		"command":               principalCommandWire(request.Command),
+		"principal_ura":         strings.TrimSpace(request.PrincipalURA),
+		"subject_principal_ura": strings.TrimSpace(request.SubjectPrincipalURA),
+	}
+	if request.ExpiresUnixMS != nil {
+		wire["expires_unix_ms"] = *request.ExpiresUnixMS
+	}
+	return wire
+}
+
+func principalRevokeEnrollmentWire(request RevokeEnrollmentRequest) map[string]any {
+	return map[string]any{
+		"command":       principalCommandWire(request.Command),
+		"principal_ura": strings.TrimSpace(request.PrincipalURA),
+		"enrollment_id": strings.TrimSpace(request.EnrollmentID),
+	}
+}
+
 func principalIssueGrantWire(request IssueGrantRequest) map[string]any {
 	wire := map[string]any{
 		"command":       principalCommandWire(request.Command),
@@ -506,19 +582,36 @@ func principalCommandWire(command PrincipalCommand) map[string]any {
 
 func principalSnapshotFromMap(raw map[string]any) (PrincipalSnapshot, error) {
 	snapshot := PrincipalSnapshot{
-		PrincipalURA:  principalStringFromMap(raw, "principal_ura"),
-		State:         PrincipalState(principalStringFromMap(raw, "state")),
-		Version:       uint64FromPrincipalMap(raw, "version"),
-		Bindings:      principalBindingsFromMap(raw, "bindings"),
-		Recovery:      principalRecoveryFromMap(raw, "recovery"),
-		Grants:        principalGrantsFromMap(raw, "grants"),
-		CreatedUnixMS: int64FromPrincipalMap(raw, "created_unix_ms"),
-		UpdatedUnixMS: int64FromPrincipalMap(raw, "updated_unix_ms"),
+		PrincipalURA:    principalStringFromMap(raw, "principal_ura"),
+		State:           PrincipalState(principalStringFromMap(raw, "state")),
+		Version:         uint64FromPrincipalMap(raw, "version"),
+		Bindings:        principalBindingsFromMap(raw, "bindings"),
+		EnrollmentProof: principalProofRefFromMap(raw, "enrollment_proof"),
+		Recovery:        principalRecoveryFromMap(raw, "recovery"),
+		Enrollments:     principalEnrollmentsFromMap(raw, "enrollments"),
+		Grants:          principalGrantsFromMap(raw, "grants"),
+		CreatedUnixMS:   int64FromPrincipalMap(raw, "created_unix_ms"),
+		UpdatedUnixMS:   int64FromPrincipalMap(raw, "updated_unix_ms"),
 	}
 	if snapshot.PrincipalURA == "" {
 		return PrincipalSnapshot{}, invalidPrincipal("principal_ura is required in Principal snapshot", nil)
 	}
 	return snapshot, nil
+}
+
+func principalProofRefFromMap(raw map[string]any, key string) *PrincipalProofRef {
+	value, ok := raw[key].(map[string]any)
+	if !ok {
+		return nil
+	}
+	proof := PrincipalProofRef{
+		Kind:      PrincipalProofKind(principalStringFromMap(value, "kind")),
+		Reference: principalStringFromMap(value, "reference"),
+	}
+	if proof.Kind == "" && proof.Reference == "" {
+		return nil
+	}
+	return &proof
 }
 
 func principalBindingsFromMap(raw map[string]any, key string) []PublicKeyBinding {
@@ -555,6 +648,28 @@ func principalRecoveryFromMap(raw map[string]any, key string) *RecoveryPolicy {
 		Enabled:       boolFromPrincipalMap(mapped, "enabled"),
 		UpdatedUnixMS: int64FromPrincipalMap(mapped, "updated_unix_ms"),
 	}
+}
+
+func principalEnrollmentsFromMap(raw map[string]any, key string) []EnrollmentCapability {
+	values, ok := raw[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]EnrollmentCapability, 0, len(values))
+	for _, item := range values {
+		mapped := requiredPrincipalMapValue(item)
+		out = append(out, EnrollmentCapability{
+			EnrollmentID:           principalStringFromMap(mapped, "enrollment_id"),
+			IssuerURA:              principalStringFromMap(mapped, "issuer_ura"),
+			SubjectPrincipalURA:    principalStringFromMap(mapped, "subject_principal_ura"),
+			CreatedUnixMS:          int64FromPrincipalMap(mapped, "created_unix_ms"),
+			ExpiresUnixMS:          optionalInt64FromPrincipalMap(mapped, "expires_unix_ms"),
+			RevokedUnixMS:          optionalInt64FromPrincipalMap(mapped, "revoked_unix_ms"),
+			ConsumedByPrincipalURA: principalStringFromMap(mapped, "consumed_by_principal_ura"),
+			ConsumedUnixMS:         optionalInt64FromPrincipalMap(mapped, "consumed_unix_ms"),
+		})
+	}
+	return out
 }
 
 func principalGrantsFromMap(raw map[string]any, key string) []AuthorizationGrant {

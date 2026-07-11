@@ -418,9 +418,9 @@ multi-user lifecycle without EasyNet Backend is not.
 | Key create, query, rotate, revoke and expiry | implemented |
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
-| Create the first user without Backend | initial daemon provider supports explicit bootstrap; CLI/E2E workflow incomplete |
-| User login, authentication and recovery without Backend | incomplete lifecycle |
-| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state; proof verifier, CLI flow and E2E incomplete |
+| Create the first user without Backend | provider enforces explicit bootstrap and bind-first-key proof continuity; CLI/E2E workflow incomplete |
+| User login, authentication and recovery without Backend | recovery policy proof is provider-enforced; login/recovery CLI flow and E2E incomplete |
+| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state with active-key, grant and recovery proof enforcement; CLI flow and E2E incomplete |
 | Multi-user administration and permission governance without Backend | partial capabilities; no standalone-Hub closure |
 
 The implementation already establishes these lower-level facts:
@@ -437,7 +437,17 @@ The implementation already establishes these lower-level facts:
 - `principal.lifecycle.*` now has an initial daemon-owned durable provider
   that records principal state, key bindings, recovery policy and grants while
   projecting active/revoked public-key facts through the existing
-  `RuntimeTrust` aggregate.
+  `RuntimeTrust` aggregate; and
+- provider-side PrincipalLifecycle proof enforcement now validates
+  active-key references against active key bindings, grant references against
+  durable authorization grants, recovery references against the configured
+  recovery policy, and bind-first-key continuity against the create-time
+  bootstrap/enrollment proof; and
+- durable PrincipalLifecycle enrollment authority now issues, revokes and
+  consumes one-time `EnrollmentCapability` records inside the same aggregate.
+  Additional principal creation no longer accepts a bare `proof.kind =
+  enrollment`; it must reference an active, unexpired, unrevoked and
+  unconsumed capability scoped to the target Principal URA.
 
 These facts are necessary but do not constitute a user lifecycle. The current
 `easynet auth signing-key register` flow derives the User URA from existing
@@ -536,8 +546,9 @@ only partially complete as described above.
 The compilation conflict is historical, not a current delivery blocker: the
 baseline was restored and re-audited on 2026-07-11. Current green compilation
 and the initial daemon `principal.lifecycle.*` provider must not be mistaken
-for section 6 completion; standalone PrincipalLifecycle proof enforcement,
-CLI flows and its two end-to-end gates remain required.
+for section 6 completion. Active-key, grant, recovery and admission-state
+plus enrollment-capability enforcement have landed in the provider, but CLI
+flows and the two end-to-end gates remain required.
 
 ---
 

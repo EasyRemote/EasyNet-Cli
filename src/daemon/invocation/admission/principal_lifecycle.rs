@@ -31,9 +31,54 @@ pub const ABILITY_PRINCIPAL_RECOVER: &str = "principal.lifecycle.recover";
 pub const ABILITY_PRINCIPAL_SUSPEND: &str = "principal.lifecycle.suspend";
 pub const ABILITY_PRINCIPAL_REACTIVATE: &str = "principal.lifecycle.reactivate";
 pub const ABILITY_PRINCIPAL_DELETE: &str = "principal.lifecycle.delete";
+pub const ABILITY_PRINCIPAL_ISSUE_ENROLLMENT: &str = "principal.lifecycle.issue_enrollment";
+pub const ABILITY_PRINCIPAL_REVOKE_ENROLLMENT: &str = "principal.lifecycle.revoke_enrollment";
 pub const ABILITY_PRINCIPAL_ISSUE_GRANT: &str = "principal.lifecycle.issue_grant";
 pub const ABILITY_PRINCIPAL_REVOKE_GRANT: &str = "principal.lifecycle.revoke_grant";
 pub const ABILITY_PRINCIPAL_GET: &str = "principal.lifecycle.get";
+
+pub(crate) fn principal_lifecycle_store_path_for_trust_anchor(trust_anchor_path: &Path) -> PathBuf {
+    trust_anchor_path.with_file_name("principal-lifecycle.json")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrincipalAdmissionState {
+    Missing,
+    Pending,
+    Active,
+    Suspended,
+    Deleted,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PrincipalLifecycleReader {
+    store_path: PathBuf,
+}
+
+impl PrincipalLifecycleReader {
+    pub(crate) fn new(store_path: impl Into<PathBuf>) -> Self {
+        Self {
+            store_path: store_path.into(),
+        }
+    }
+
+    pub(crate) fn admission_state(
+        &self,
+        principal_ura: &str,
+    ) -> Result<PrincipalAdmissionState, Status> {
+        let store = PrincipalStore::load(&self.store_path, "principal.lifecycle.admission_state")?;
+        Ok(store
+            .principals
+            .get(principal_ura)
+            .map(|record| match &record.state {
+                PrincipalState::Pending => PrincipalAdmissionState::Pending,
+                PrincipalState::Active => PrincipalAdmissionState::Active,
+                PrincipalState::Suspended => PrincipalAdmissionState::Suspended,
+                PrincipalState::Deleted => PrincipalAdmissionState::Deleted,
+            })
+            .unwrap_or(PrincipalAdmissionState::Missing))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct PrincipalLifecycleContext {
@@ -43,9 +88,8 @@ pub(crate) struct PrincipalLifecycleContext {
 
 impl PrincipalLifecycleContext {
     pub(crate) fn from_runtime_trust(runtime_trust: RuntimeTrustContext) -> Self {
-        let store_path = runtime_trust
-            .trust_anchor_path
-            .with_file_name("principal-lifecycle.json");
+        let store_path =
+            principal_lifecycle_store_path_for_trust_anchor(&runtime_trust.trust_anchor_path);
         Self {
             runtime_trust,
             store_path,
@@ -62,6 +106,11 @@ impl PrincipalLifecycleContext {
 
     pub(crate) fn handle(&self, ability: &str, arguments: &[u8]) -> Result<Vec<u8>, Status> {
         PrincipalLifecycle::new(self).handle(ability, arguments)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reader(&self) -> PrincipalLifecycleReader {
+        PrincipalLifecycleReader::new(self.store_path.clone())
     }
 }
 
@@ -130,6 +179,12 @@ impl<'a> PrincipalLifecycle<'a> {
             ABILITY_PRINCIPAL_DELETE => {
                 self.change_state(&mut store, &request, PrincipalState::Deleted)?
             }
+            ABILITY_PRINCIPAL_ISSUE_ENROLLMENT => {
+                self.issue_enrollment(&mut store, request.into_issue_enrollment()?)?
+            }
+            ABILITY_PRINCIPAL_REVOKE_ENROLLMENT => {
+                self.revoke_enrollment(&mut store, request.into_revoke_enrollment()?)?
+            }
             ABILITY_PRINCIPAL_ISSUE_GRANT => {
                 self.issue_grant(&mut store, request.into_issue_grant()?)?
             }
@@ -156,13 +211,23 @@ impl<'a> PrincipalLifecycle<'a> {
             return Ok(existing.clone());
         }
         let is_first = store.principals.is_empty();
+        let verifier = PrincipalProofVerifier::new(store);
         if is_first {
-            require_proof_kind(ABILITY_PRINCIPAL_CREATE, &request.command, "bootstrap")?;
-        } else {
-            require_one_proof_kind(
+            verifier.verify_any(
                 ABILITY_PRINCIPAL_CREATE,
+                &request.principal_ura,
                 &request.command,
-                &["grant", "enrollment"],
+                &[PrincipalProofRequirement::Bootstrap],
+            )?;
+        } else {
+            verifier.verify_any(
+                ABILITY_PRINCIPAL_CREATE,
+                &request.principal_ura,
+                &request.command,
+                &[
+                    PrincipalProofRequirement::AuthorizationGrant,
+                    PrincipalProofRequirement::EnrollmentCapability,
+                ],
             )?;
         }
         let now = now_unix_ms() as i64;
@@ -171,13 +236,24 @@ impl<'a> PrincipalLifecycle<'a> {
             state: PrincipalState::Pending,
             version: 1,
             bindings: Vec::new(),
+            enrollment_proof: Some(request.command.proof.clone()),
             recovery: None,
+            enrollments: Vec::new(),
             grants: Vec::new(),
             created_unix_ms: now,
             updated_unix_ms: now,
             command_log: BTreeMap::new(),
         };
         principal.record_command(&request.command)?;
+        if !is_first && request.command.proof.kind == "enrollment" {
+            consume_enrollment_capability(
+                store,
+                ABILITY_PRINCIPAL_CREATE,
+                &request.command.proof.reference,
+                &request.principal_ura,
+                now,
+            )?;
+        }
         store
             .principals
             .insert(principal.principal_ura.clone(), principal.clone());
@@ -189,6 +265,12 @@ impl<'a> PrincipalLifecycle<'a> {
         store: &mut PrincipalStore,
         request: BindKeyRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            &request.principal_ura,
+            &request.command,
+            &[PrincipalProofRequirement::MatchingEnrollment],
+        )?;
         let principal = principal_mut(
             store,
             ABILITY_PRINCIPAL_BIND_FIRST_KEY,
@@ -220,13 +302,18 @@ impl<'a> PrincipalLifecycle<'a> {
         store: &mut PrincipalStore,
         request: BindKeyRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_ADD_KEY,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+                PrincipalProofRequirement::RecoveryPolicy,
+            ],
+        )?;
         let principal =
             active_principal_mut(store, ABILITY_PRINCIPAL_ADD_KEY, &request.principal_ura)?;
-        require_one_proof_kind(
-            ABILITY_PRINCIPAL_ADD_KEY,
-            &request.command,
-            &["active_key", "grant", "enrollment"],
-        )?;
         self.append_active_key(principal, &request, ABILITY_PRINCIPAL_ADD_KEY)?;
         principal.bump(&request.command)?;
         self.register_key(&request.principal_ura, &request.public_key_b64)?;
@@ -238,13 +325,17 @@ impl<'a> PrincipalLifecycle<'a> {
         store: &mut PrincipalStore,
         request: RotateKeyRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_ROTATE_KEY,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+            ],
+        )?;
         let principal =
             active_principal_mut(store, ABILITY_PRINCIPAL_ROTATE_KEY, &request.principal_ura)?;
-        require_one_proof_kind(
-            ABILITY_PRINCIPAL_ROTATE_KEY,
-            &request.command,
-            &["active_key", "grant"],
-        )?;
         let now = now_unix_ms() as i64;
         let old_public_key = {
             let binding =
@@ -277,13 +368,17 @@ impl<'a> PrincipalLifecycle<'a> {
         store: &mut PrincipalStore,
         request: RevokeKeyRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_REVOKE_KEY,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+            ],
+        )?;
         let principal =
             active_principal_mut(store, ABILITY_PRINCIPAL_REVOKE_KEY, &request.principal_ura)?;
-        require_one_proof_kind(
-            ABILITY_PRINCIPAL_REVOKE_KEY,
-            &request.command,
-            &["active_key", "grant"],
-        )?;
         let now = now_unix_ms() as i64;
         let public_key = {
             let binding =
@@ -302,15 +397,19 @@ impl<'a> PrincipalLifecycle<'a> {
         store: &mut PrincipalStore,
         request: RecoveryConfigRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+            ],
+        )?;
         let principal = active_or_suspended_principal_mut(
             store,
             ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
             &request.principal_ura,
-        )?;
-        require_one_proof_kind(
-            ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
-            &request.command,
-            &["active_key", "grant"],
         )?;
         if request.policy_ref.is_empty() {
             return Err(Status::invalid_argument(
@@ -326,17 +425,120 @@ impl<'a> PrincipalLifecycle<'a> {
         Ok(principal.clone())
     }
 
+    fn issue_enrollment(
+        &self,
+        store: &mut PrincipalStore,
+        request: IssueEnrollmentRequest,
+    ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+            ],
+        )?;
+        validate_principal_ura(
+            ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
+            &request.subject_principal_ura,
+            &self.ctx.runtime_trust.daemon_realm,
+        )?;
+        if request.subject_principal_ura == request.principal_ura {
+            return Err(Status::invalid_argument(
+                "principal.lifecycle.issue_enrollment: subject_principal_ura must name a different principal",
+            ));
+        }
+        let now = now_unix_ms() as i64;
+        if request
+            .expires_unix_ms
+            .is_some_and(|expires| expires <= now)
+        {
+            return Err(Status::invalid_argument(
+                "principal.lifecycle.issue_enrollment: expires_unix_ms must be in the future",
+            ));
+        }
+        let enrollment_id = enrollment_id(&request.principal_ura, &request.command.idempotency_key);
+        let principal = active_principal_mut(
+            store,
+            ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
+            &request.principal_ura,
+        )?;
+        if principal
+            .enrollments
+            .iter()
+            .any(|enrollment| enrollment.enrollment_id == enrollment_id)
+        {
+            return Err(Status::already_exists(format!(
+                "principal.lifecycle.issue_enrollment: enrollment_id `{enrollment_id}` already exists"
+            )));
+        }
+        principal.enrollments.push(EnrollmentCapability {
+            enrollment_id,
+            issuer_ura: request.principal_ura.clone(),
+            subject_principal_ura: request.subject_principal_ura,
+            created_unix_ms: now,
+            expires_unix_ms: request.expires_unix_ms,
+            revoked_unix_ms: None,
+            consumed_by_principal_ura: None,
+            consumed_unix_ms: None,
+        });
+        principal.bump(&request.command)?;
+        Ok(principal.clone())
+    }
+
+    fn revoke_enrollment(
+        &self,
+        store: &mut PrincipalStore,
+        request: RevokeEnrollmentRequest,
+    ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_REVOKE_ENROLLMENT,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+            ],
+        )?;
+        let principal = active_or_suspended_principal_mut(
+            store,
+            ABILITY_PRINCIPAL_REVOKE_ENROLLMENT,
+            &request.principal_ura,
+        )?;
+        let enrollment = principal
+            .enrollments
+            .iter_mut()
+            .find(|enrollment| enrollment.enrollment_id == request.enrollment_id)
+            .ok_or_else(|| {
+                Status::not_found(format!(
+                    "principal.lifecycle.revoke_enrollment: enrollment_id `{}` is not registered",
+                    request.enrollment_id
+                ))
+            })?;
+        if enrollment.revoked_unix_ms.is_none() {
+            enrollment.revoked_unix_ms = Some(now_unix_ms() as i64);
+        }
+        principal.bump(&request.command)?;
+        Ok(principal.clone())
+    }
+
     fn recover(
         &self,
         store: &mut PrincipalStore,
         request: RecoverRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_RECOVER,
+            &request.principal_ura,
+            &request.command,
+            &[PrincipalProofRequirement::RecoveryPolicy],
+        )?;
         let principal = active_or_suspended_principal_mut(
             store,
             ABILITY_PRINCIPAL_RECOVER,
             &request.principal_ura,
         )?;
-        require_proof_kind(ABILITY_PRINCIPAL_RECOVER, &request.command, "recovery")?;
         if !principal
             .recovery
             .as_ref()
@@ -372,34 +574,58 @@ impl<'a> PrincipalLifecycle<'a> {
             PrincipalState::Deleted => ABILITY_PRINCIPAL_DELETE,
             PrincipalState::Pending => unreachable!("pending is not a public change-state target"),
         };
-        let principal = principal_mut(store, ability, &request.principal_ura)?;
-        if principal.state == PrincipalState::Deleted {
+        let current_state = principal_ref(store, ability, &request.principal_ura)?
+            .state
+            .clone();
+        if current_state == PrincipalState::Deleted {
             return Err(Status::failed_precondition(format!(
                 "{ability}: deleted principal is terminal"
             )));
         }
         match next {
             PrincipalState::Suspended => {
-                if principal.state != PrincipalState::Active {
+                if current_state != PrincipalState::Active {
                     return Err(Status::failed_precondition(
                         "principal.lifecycle.suspend: principal must be active",
                     ));
                 }
-                require_one_proof_kind(ability, &request.command, &["active_key", "grant"])?;
+                PrincipalProofVerifier::new(store).verify_any(
+                    ability,
+                    &request.principal_ura,
+                    &request.command,
+                    &[
+                        PrincipalProofRequirement::ActiveKeyBinding,
+                        PrincipalProofRequirement::AuthorizationGrant,
+                    ],
+                )?;
             }
             PrincipalState::Active => {
-                if principal.state != PrincipalState::Suspended {
+                if current_state != PrincipalState::Suspended {
                     return Err(Status::failed_precondition(
                         "principal.lifecycle.reactivate: principal must be suspended",
                     ));
                 }
-                require_one_proof_kind(ability, &request.command, &["grant", "recovery"])?;
+                PrincipalProofVerifier::new(store).verify_any(
+                    ability,
+                    &request.principal_ura,
+                    &request.command,
+                    &[
+                        PrincipalProofRequirement::AuthorizationGrant,
+                        PrincipalProofRequirement::RecoveryPolicy,
+                    ],
+                )?;
             }
             PrincipalState::Deleted => {
-                require_proof_kind(ability, &request.command, "grant")?;
+                PrincipalProofVerifier::new(store).verify_any(
+                    ability,
+                    &request.principal_ura,
+                    &request.command,
+                    &[PrincipalProofRequirement::AuthorizationGrant],
+                )?;
             }
             PrincipalState::Pending => {}
         }
+        let principal = principal_mut(store, ability, &request.principal_ura)?;
         principal.state = next;
         principal.bump(&request.command)?;
         Ok(principal.clone())
@@ -410,13 +636,17 @@ impl<'a> PrincipalLifecycle<'a> {
         store: &mut PrincipalStore,
         request: IssueGrantRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_ISSUE_GRANT,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+            ],
+        )?;
         let principal =
             active_principal_mut(store, ABILITY_PRINCIPAL_ISSUE_GRANT, &request.principal_ura)?;
-        require_one_proof_kind(
-            ABILITY_PRINCIPAL_ISSUE_GRANT,
-            &request.command,
-            &["grant", "active_key"],
-        )?;
         if request.actions.is_empty() {
             return Err(Status::invalid_argument(
                 "principal.lifecycle.issue_grant: actions must not be empty",
@@ -441,15 +671,19 @@ impl<'a> PrincipalLifecycle<'a> {
         store: &mut PrincipalStore,
         request: RevokeGrantRequest,
     ) -> Result<PrincipalRecord, Status> {
+        PrincipalProofVerifier::new(store).verify_any(
+            ABILITY_PRINCIPAL_REVOKE_GRANT,
+            &request.principal_ura,
+            &request.command,
+            &[
+                PrincipalProofRequirement::ActiveKeyBinding,
+                PrincipalProofRequirement::AuthorizationGrant,
+            ],
+        )?;
         let principal = active_or_suspended_principal_mut(
             store,
             ABILITY_PRINCIPAL_REVOKE_GRANT,
             &request.principal_ura,
-        )?;
-        require_one_proof_kind(
-            ABILITY_PRINCIPAL_REVOKE_GRANT,
-            &request.command,
-            &["grant", "active_key"],
         )?;
         let grant = principal
             .grants
@@ -540,6 +774,8 @@ fn canonical_lifecycle_ability(ability: &str) -> Result<&'static str, Status> {
         ABILITY_PRINCIPAL_SUSPEND => Ok(ABILITY_PRINCIPAL_SUSPEND),
         ABILITY_PRINCIPAL_REACTIVATE => Ok(ABILITY_PRINCIPAL_REACTIVATE),
         ABILITY_PRINCIPAL_DELETE => Ok(ABILITY_PRINCIPAL_DELETE),
+        ABILITY_PRINCIPAL_ISSUE_ENROLLMENT => Ok(ABILITY_PRINCIPAL_ISSUE_ENROLLMENT),
+        ABILITY_PRINCIPAL_REVOKE_ENROLLMENT => Ok(ABILITY_PRINCIPAL_REVOKE_ENROLLMENT),
         ABILITY_PRINCIPAL_ISSUE_GRANT => Ok(ABILITY_PRINCIPAL_ISSUE_GRANT),
         ABILITY_PRINCIPAL_REVOKE_GRANT => Ok(ABILITY_PRINCIPAL_REVOKE_GRANT),
         ABILITY_PRINCIPAL_GET => Ok(ABILITY_PRINCIPAL_GET),
@@ -611,8 +847,12 @@ struct PrincipalRecord {
     state: PrincipalState,
     version: u64,
     bindings: Vec<PublicKeyBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enrollment_proof: Option<PrincipalProofRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery: Option<RecoveryPolicy>,
+    #[serde(default)]
+    enrollments: Vec<EnrollmentCapability>,
     #[serde(default)]
     grants: Vec<AuthorizationGrant>,
     created_unix_ms: i64,
@@ -698,6 +938,33 @@ struct AuthorizationGrant {
     revoked_unix_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EnrollmentCapability {
+    enrollment_id: String,
+    issuer_ura: String,
+    subject_principal_ura: String,
+    created_unix_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_unix_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revoked_unix_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumed_by_principal_ura: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consumed_unix_ms: Option<i64>,
+}
+
+impl EnrollmentCapability {
+    fn is_active_for(&self, principal_ura: &str, now_unix_ms: i64) -> bool {
+        self.subject_principal_ura == principal_ura
+            && self.revoked_unix_ms.is_none()
+            && self.consumed_unix_ms.is_none()
+            && self
+                .expires_unix_ms
+                .is_none_or(|expires| expires > now_unix_ms)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RequestEnvelope {
     request: PrincipalRequest,
@@ -730,6 +997,10 @@ struct PrincipalRequest {
     actions: Vec<String>,
     #[serde(default)]
     grant_id: String,
+    #[serde(default)]
+    subject_principal_ura: String,
+    #[serde(default)]
+    enrollment_id: String,
 }
 
 impl PrincipalRequest {
@@ -740,6 +1011,8 @@ impl PrincipalRequest {
         self.binding_id = self.binding_id.trim().to_string();
         self.policy_ref = self.policy_ref.trim().to_string();
         self.grant_id = self.grant_id.trim().to_string();
+        self.subject_principal_ura = self.subject_principal_ura.trim().to_string();
+        self.enrollment_id = self.enrollment_id.trim().to_string();
         self.command.normalize();
         if let Some(replacement) = self.replacement.as_mut() {
             replacement.normalize();
@@ -837,6 +1110,31 @@ impl PrincipalRequest {
             )?,
         })
     }
+
+    fn into_issue_enrollment(self) -> Result<IssueEnrollmentRequest, Status> {
+        Ok(IssueEnrollmentRequest {
+            command: self.command,
+            principal_ura: self.principal_ura,
+            subject_principal_ura: required_text(
+                "principal.lifecycle.issue_enrollment",
+                "subject_principal_ura",
+                self.subject_principal_ura,
+            )?,
+            expires_unix_ms: self.expires_unix_ms,
+        })
+    }
+
+    fn into_revoke_enrollment(self) -> Result<RevokeEnrollmentRequest, Status> {
+        Ok(RevokeEnrollmentRequest {
+            command: self.command,
+            principal_ura: self.principal_ura,
+            enrollment_id: required_text(
+                "principal.lifecycle.revoke_enrollment",
+                "enrollment_id",
+                self.enrollment_id,
+            )?,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -892,6 +1190,21 @@ struct RevokeGrantRequest {
     grant_id: String,
 }
 
+#[derive(Debug, Clone)]
+struct IssueEnrollmentRequest {
+    command: PrincipalCommand,
+    principal_ura: String,
+    subject_principal_ura: String,
+    expires_unix_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct RevokeEnrollmentRequest {
+    command: PrincipalCommand,
+    principal_ura: String,
+    enrollment_id: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct PrincipalCommand {
     actor_ura: String,
@@ -910,7 +1223,7 @@ impl PrincipalCommand {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct PrincipalProofRef {
     kind: String,
     reference: String,
@@ -971,32 +1284,281 @@ fn validate_command(ability: &'static str, command: &PrincipalCommand) -> Result
     Ok(())
 }
 
-fn require_proof_kind(
-    ability: &'static str,
-    command: &PrincipalCommand,
-    expected: &str,
-) -> Result<(), Status> {
-    if command.proof.kind != expected {
-        return Err(Status::permission_denied(format!(
-            "{ability}: proof kind `{}` is not sufficient; expected `{expected}`",
-            command.proof.kind
-        )));
-    }
-    Ok(())
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrincipalProofRequirement {
+    Bootstrap,
+    EnrollmentCapability,
+    MatchingEnrollment,
+    ActiveKeyBinding,
+    AuthorizationGrant,
+    RecoveryPolicy,
 }
 
-fn require_one_proof_kind(
+impl PrincipalProofRequirement {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Bootstrap => "bootstrap",
+            Self::EnrollmentCapability => "enrollment",
+            Self::MatchingEnrollment => "matching_enrollment",
+            Self::ActiveKeyBinding => "active_key",
+            Self::AuthorizationGrant => "grant",
+            Self::RecoveryPolicy => "recovery",
+        }
+    }
+}
+
+struct PrincipalProofVerifier<'a> {
+    store: &'a PrincipalStore,
+    now_unix_ms: i64,
+}
+
+impl<'a> PrincipalProofVerifier<'a> {
+    fn new(store: &'a PrincipalStore) -> Self {
+        Self {
+            store,
+            now_unix_ms: now_unix_ms() as i64,
+        }
+    }
+
+    fn verify_any(
+        &self,
+        ability: &'static str,
+        principal_ura: &str,
+        command: &PrincipalCommand,
+        accepted: &[PrincipalProofRequirement],
+    ) -> Result<(), Status> {
+        if accepted.iter().any(|requirement| {
+            self.verify_one(*requirement, ability, principal_ura, command)
+                .is_ok()
+        }) {
+            return Ok(());
+        }
+        let expected = accepted
+            .iter()
+            .map(|requirement| requirement.label())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(Status::permission_denied(format!(
+            "{ability}: proof kind/reference `{}`/`{}` is not sufficient; expected one of [{expected}]",
+            command.proof.kind, command.proof.reference
+        )))
+    }
+
+    fn verify_one(
+        &self,
+        requirement: PrincipalProofRequirement,
+        ability: &'static str,
+        principal_ura: &str,
+        command: &PrincipalCommand,
+    ) -> Result<(), Status> {
+        match requirement {
+            PrincipalProofRequirement::Bootstrap => self.verify_bootstrap(command),
+            PrincipalProofRequirement::EnrollmentCapability => {
+                self.verify_enrollment_capability(ability, principal_ura, command)
+            }
+            PrincipalProofRequirement::MatchingEnrollment => {
+                self.verify_matching_enrollment(ability, principal_ura, command)
+            }
+            PrincipalProofRequirement::ActiveKeyBinding => {
+                self.verify_active_key_binding(ability, principal_ura, command)
+            }
+            PrincipalProofRequirement::AuthorizationGrant => {
+                self.verify_authorization_grant(command, ability)
+            }
+            PrincipalProofRequirement::RecoveryPolicy => {
+                self.verify_recovery_policy(ability, principal_ura, command)
+            }
+        }
+    }
+
+    fn verify_bootstrap(&self, command: &PrincipalCommand) -> Result<(), Status> {
+        if command.proof.kind == "bootstrap" {
+            Ok(())
+        } else {
+            Err(Status::permission_denied("bootstrap proof required"))
+        }
+    }
+
+    fn verify_enrollment_capability(
+        &self,
+        ability: &'static str,
+        principal_ura: &str,
+        command: &PrincipalCommand,
+    ) -> Result<(), Status> {
+        if command.proof.kind == "enrollment" {
+            if self.store.principals.values().any(|issuer| {
+                issuer.enrollments.iter().any(|enrollment| {
+                    enrollment.enrollment_id == command.proof.reference
+                        && enrollment.is_active_for(principal_ura, self.now_unix_ms)
+                })
+            }) {
+                Ok(())
+            } else {
+                Err(Status::permission_denied(format!(
+                    "{ability}: enrollment proof reference `{}` is not active for principal `{principal_ura}`",
+                    command.proof.reference
+                )))
+            }
+        } else {
+            Err(Status::permission_denied("enrollment proof required"))
+        }
+    }
+
+    fn verify_matching_enrollment(
+        &self,
+        ability: &'static str,
+        principal_ura: &str,
+        command: &PrincipalCommand,
+    ) -> Result<(), Status> {
+        let principal = principal_ref(self.store, ability, principal_ura)?;
+        if principal.enrollment_proof.as_ref() == Some(&command.proof) {
+            Ok(())
+        } else {
+            Err(Status::permission_denied(format!(
+                "{ability}: bind_first_key proof must match the principal enrollment proof"
+            )))
+        }
+    }
+
+    fn verify_active_key_binding(
+        &self,
+        ability: &'static str,
+        principal_ura: &str,
+        command: &PrincipalCommand,
+    ) -> Result<(), Status> {
+        if command.proof.kind != "active_key" {
+            return Err(Status::permission_denied("active_key proof required"));
+        }
+        if command.actor_ura != principal_ura {
+            return Err(Status::permission_denied(format!(
+                "{ability}: active_key proof actor `{}` must match principal `{principal_ura}`",
+                command.actor_ura
+            )));
+        }
+        let principal = principal_ref(self.store, ability, principal_ura)?;
+        if principal.bindings.iter().any(|binding| {
+            binding.binding_id == command.proof.reference
+                && binding.state == KeyBindingState::Active
+                && binding
+                    .expires_unix_ms
+                    .is_none_or(|expires| expires > self.now_unix_ms)
+        }) {
+            Ok(())
+        } else {
+            Err(Status::permission_denied(format!(
+                "{ability}: active_key proof reference `{}` is not an active binding",
+                command.proof.reference
+            )))
+        }
+    }
+
+    fn verify_authorization_grant(
+        &self,
+        command: &PrincipalCommand,
+        ability: &'static str,
+    ) -> Result<(), Status> {
+        if command.proof.kind != "grant" {
+            return Err(Status::permission_denied("grant proof required"));
+        }
+        if self
+            .store
+            .principals
+            .values()
+            .flat_map(|principal| principal.grants.iter())
+            .any(|grant| {
+                grant.grant_id == command.proof.reference
+                    && grant.principal_ura == command.actor_ura
+                    && grant.revoked_unix_ms.is_none()
+                    && grant
+                        .expires_unix_ms
+                        .is_none_or(|expires| expires > self.now_unix_ms)
+                    && grant_authorizes_ability(&grant.actions, ability)
+            })
+        {
+            Ok(())
+        } else {
+            Err(Status::permission_denied(format!(
+                "{ability}: grant proof reference `{}` is not active for actor `{}`",
+                command.proof.reference, command.actor_ura
+            )))
+        }
+    }
+
+    fn verify_recovery_policy(
+        &self,
+        ability: &'static str,
+        principal_ura: &str,
+        command: &PrincipalCommand,
+    ) -> Result<(), Status> {
+        if command.proof.kind != "recovery" {
+            return Err(Status::permission_denied("recovery proof required"));
+        }
+        let principal = principal_ref(self.store, ability, principal_ura)?;
+        if principal
+            .recovery
+            .as_ref()
+            .is_some_and(|policy| policy.enabled && policy.policy_ref == command.proof.reference)
+        {
+            Ok(())
+        } else {
+            Err(Status::permission_denied(format!(
+                "{ability}: recovery proof reference `{}` does not match an enabled recovery policy",
+                command.proof.reference
+            )))
+        }
+    }
+}
+
+fn grant_authorizes_ability(actions: &[String], ability: &str) -> bool {
+    actions.iter().any(|action| {
+        action == "*"
+            || action == ability
+            || action
+                .strip_suffix('*')
+                .is_some_and(|prefix| !prefix.is_empty() && ability.starts_with(prefix))
+    })
+}
+
+fn consume_enrollment_capability(
+    store: &mut PrincipalStore,
     ability: &'static str,
-    command: &PrincipalCommand,
-    expected: &[&str],
+    enrollment_id: &str,
+    principal_ura: &str,
+    now_unix_ms: i64,
 ) -> Result<(), Status> {
-    if expected.iter().any(|kind| *kind == command.proof.kind) {
-        return Ok(());
+    for issuer in store.principals.values_mut() {
+        if let Some(enrollment) = issuer
+            .enrollments
+            .iter_mut()
+            .find(|enrollment| enrollment.enrollment_id == enrollment_id)
+        {
+            if !enrollment.is_active_for(principal_ura, now_unix_ms) {
+                return Err(Status::permission_denied(format!(
+                    "{ability}: enrollment proof reference `{enrollment_id}` is not active for principal `{principal_ura}`"
+                )));
+            }
+            enrollment.consumed_by_principal_ura = Some(principal_ura.to_string());
+            enrollment.consumed_unix_ms = Some(now_unix_ms);
+            issuer.updated_unix_ms = now_unix_ms;
+            issuer.version += 1;
+            return Ok(());
+        }
     }
     Err(Status::permission_denied(format!(
-        "{ability}: proof kind `{}` is not sufficient; expected one of {:?}",
-        command.proof.kind, expected
+        "{ability}: enrollment proof reference `{enrollment_id}` is not registered"
     )))
+}
+
+fn principal_ref<'a>(
+    store: &'a PrincipalStore,
+    ability: &'static str,
+    principal_ura: &str,
+) -> Result<&'a PrincipalRecord, Status> {
+    store.principals.get(principal_ura).ok_or_else(|| {
+        Status::not_found(format!(
+            "{ability}: principal_ura `{principal_ura}` is not registered"
+        ))
+    })
 }
 
 fn principal_mut<'a>(
@@ -1087,6 +1649,11 @@ fn grant_id(principal_ura: &str, idempotency_key: &str) -> String {
     format!("grant_{}", hex::encode(&digest[..16]))
 }
 
+fn enrollment_id(principal_ura: &str, idempotency_key: &str) -> String {
+    let digest = Sha256::digest(format!("{principal_ura}\0{idempotency_key}").as_bytes());
+    format!("enroll_{}", hex::encode(&digest[..16]))
+}
+
 fn required_text(
     ability: &'static str,
     field: &'static str,
@@ -1129,10 +1696,35 @@ mod tests {
     }
 
     fn command(id: &str, kind: &str, expected_version: Option<u64>) -> serde_json::Value {
+        command_with_ref(id, kind, &format!("proof:{id}"), expected_version)
+    }
+
+    fn command_with_ref(
+        id: &str,
+        kind: &str,
+        reference: &str,
+        expected_version: Option<u64>,
+    ) -> serde_json::Value {
+        command_for_actor_with_ref(
+            "easynet:///r/realm/user/admin",
+            id,
+            kind,
+            reference,
+            expected_version,
+        )
+    }
+
+    fn command_for_actor_with_ref(
+        actor_ura: &str,
+        id: &str,
+        kind: &str,
+        reference: &str,
+        expected_version: Option<u64>,
+    ) -> serde_json::Value {
         let mut value = json!({
-            "actor_ura": "easynet:///r/realm/user/admin",
+            "actor_ura": actor_ura,
             "idempotency_key": id,
-            "proof": {"kind": kind, "reference": format!("proof:{id}")}
+            "proof": {"kind": kind, "reference": reference}
         });
         if let Some(version) = expected_version {
             value["expected_version"] = json!(version);
@@ -1172,7 +1764,7 @@ mod tests {
             &ctx,
             ABILITY_PRINCIPAL_BIND_FIRST_KEY,
             json!({
-                "command": command("bind-1", "bootstrap", Some(1)),
+                "command": command_with_ref("bind-1", "bootstrap", "proof:create-1", Some(1)),
                 "principal_ura": user,
                 "public_key_b64": b64_pubkey(1)
             }),
@@ -1197,21 +1789,35 @@ mod tests {
     #[test]
     fn additional_user_requires_enrollment_or_grant_proof() {
         let (_dir, ctx) = context();
+        let admin = "easynet:///r/realm/user/admin";
+        let bob = "easynet:///r/realm/user/bob";
         invoke(
             &ctx,
             ABILITY_PRINCIPAL_CREATE,
             json!({
                 "command": command("create-admin", "bootstrap", None),
-                "principal_ura": "easynet:///r/realm/user/admin"
+                "principal_ura": admin
             }),
         );
+        let admin_snapshot = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref("bind-admin", "bootstrap", "proof:create-admin", Some(1)),
+                "principal_ura": admin,
+                "public_key_b64": b64_pubkey(10)
+            }),
+        );
+        let admin_binding_id = admin_snapshot["principal"]["bindings"][0]["binding_id"]
+            .as_str()
+            .unwrap();
         let err = ctx
             .handle(
                 ABILITY_PRINCIPAL_CREATE,
                 serde_json::to_vec(&json!({
                     "request": {
                         "command": command("create-bob", "active_key", None),
-                        "principal_ura": "easynet:///r/realm/user/bob"
+                        "principal_ura": bob
                     }
                 }))
                 .unwrap()
@@ -1220,14 +1826,66 @@ mod tests {
             .expect_err("wrong proof rejected");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
 
+        let issued = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
+            json!({
+                "command": command_for_actor_with_ref(admin, "issue-bob", "active_key", admin_binding_id, Some(2)),
+                "principal_ura": admin,
+                "subject_principal_ura": bob
+            }),
+        );
+        let enrollment_id = issued["principal"]["enrollments"][0]["enrollment_id"]
+            .as_str()
+            .unwrap();
         invoke(
             &ctx,
             ABILITY_PRINCIPAL_CREATE,
             json!({
-                "command": command("create-bob-2", "enrollment", None),
-                "principal_ura": "easynet:///r/realm/user/bob"
+                "command": command_for_actor_with_ref(bob, "create-bob-2", "enrollment", enrollment_id, None),
+                "principal_ura": bob
             }),
         );
+        let bob_snapshot = invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_for_actor_with_ref(bob, "bind-bob", "enrollment", enrollment_id, Some(1)),
+                "principal_ura": bob,
+                "public_key_b64": b64_pubkey(11)
+            }),
+        );
+        assert_eq!(bob_snapshot["principal"]["state"], "active");
+
+        let reloaded = PrincipalStore::load(&ctx.store_path, ABILITY_PRINCIPAL_GET).unwrap();
+        let admin_record = reloaded.principals.get(admin).unwrap();
+        assert_eq!(
+            admin_record.enrollments[0]
+                .consumed_by_principal_ura
+                .as_deref(),
+            Some(bob)
+        );
+
+        let err = ctx
+            .handle(
+                ABILITY_PRINCIPAL_CREATE,
+                serde_json::to_vec(&json!({
+                    "request": {
+                        "command": command_for_actor_with_ref(
+                            "easynet:///r/realm/user/carol",
+                            "create-carol",
+                            "enrollment",
+                            enrollment_id,
+                            None
+                        ),
+                        "principal_ura": "easynet:///r/realm/user/carol"
+                    }
+                }))
+                .unwrap()
+                .as_slice(),
+            )
+            .expect_err("consumed enrollment rejected");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
     }
 
     #[test]
@@ -1246,31 +1904,31 @@ mod tests {
             &ctx,
             ABILITY_PRINCIPAL_BIND_FIRST_KEY,
             json!({
-                "command": command("bind1", "bootstrap", Some(1)),
+                "command": command_with_ref("bind1", "bootstrap", "proof:create", Some(1)),
                 "principal_ura": user,
                 "public_key_b64": b64_pubkey(1)
             }),
         );
+        let first_binding_id = first["principal"]["bindings"][0]["binding_id"]
+            .as_str()
+            .unwrap();
         invoke(
             &ctx,
             ABILITY_PRINCIPAL_ADD_KEY,
             json!({
-                "command": command("bind2", "active_key", Some(2)),
+                "command": command_for_actor_with_ref(user, "bind2", "active_key", first_binding_id, Some(2)),
                 "principal_ura": user,
                 "public_key_b64": b64_pubkey(2)
             }),
         );
-        let binding_id = first["principal"]["bindings"][0]["binding_id"]
-            .as_str()
-            .unwrap();
 
         let out = invoke(
             &ctx,
             ABILITY_PRINCIPAL_REVOKE_KEY,
             json!({
-                "command": command("revoke1", "active_key", Some(3)),
+                "command": command_for_actor_with_ref(user, "revoke1", "active_key", first_binding_id, Some(3)),
                 "principal_ura": user,
-                "binding_id": binding_id
+                "binding_id": first_binding_id
             }),
         );
 
@@ -1294,6 +1952,111 @@ mod tests {
     }
 
     #[test]
+    fn active_key_proof_requires_active_binding_reference_and_does_not_mutate() {
+        let (_dir, ctx) = context();
+        let user = "easynet:///r/realm/user/alice";
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command("create", "bootstrap", None),
+                "principal_ura": user
+            }),
+        );
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref("bind1", "bootstrap", "proof:create", Some(1)),
+                "principal_ura": user,
+                "public_key_b64": b64_pubkey(1)
+            }),
+        );
+
+        let err = ctx
+            .handle(
+                ABILITY_PRINCIPAL_ADD_KEY,
+                serde_json::to_vec(&json!({
+                    "request": {
+                        "command": command_for_actor_with_ref(
+                            user,
+                            "bind2",
+                            "active_key",
+                            "missing-binding",
+                            Some(2)
+                        ),
+                        "principal_ura": user,
+                        "public_key_b64": b64_pubkey(2)
+                    }
+                }))
+                .unwrap()
+                .as_slice(),
+            )
+            .expect_err("missing active binding must reject");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(ctx
+            .runtime_trust
+            .cell
+            .snapshot()
+            .lookup_user_by_pubkey(user, &b64_pubkey(2))
+            .is_none());
+        let loaded = PrincipalStore::load(&ctx.store_path, ABILITY_PRINCIPAL_GET).unwrap();
+        assert_eq!(loaded.principals.get(user).unwrap().bindings.len(), 1);
+    }
+
+    #[test]
+    fn grant_proof_requires_active_authorizing_grant_and_does_not_mutate() {
+        let (_dir, ctx) = context();
+        let admin = "easynet:///r/realm/user/admin";
+        let bob = "easynet:///r/realm/user/bob";
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_CREATE,
+            json!({
+                "command": command("create-admin", "bootstrap", None),
+                "principal_ura": admin
+            }),
+        );
+        invoke(
+            &ctx,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            json!({
+                "command": command_with_ref(
+                    "bind-admin",
+                    "bootstrap",
+                    "proof:create-admin",
+                    Some(1)
+                ),
+                "principal_ura": admin,
+                "public_key_b64": b64_pubkey(1)
+            }),
+        );
+
+        let err = ctx
+            .handle(
+                ABILITY_PRINCIPAL_CREATE,
+                serde_json::to_vec(&json!({
+                    "request": {
+                        "command": command_for_actor_with_ref(
+                            admin,
+                            "create-bob",
+                            "grant",
+                            "missing-grant",
+                            None
+                        ),
+                        "principal_ura": bob
+                    }
+                }))
+                .unwrap()
+                .as_slice(),
+            )
+            .expect_err("missing grant must reject");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        let loaded = PrincipalStore::load(&ctx.store_path, ABILITY_PRINCIPAL_GET).unwrap();
+        assert!(!loaded.principals.contains_key(bob));
+    }
+
+    #[test]
     fn expected_version_mismatch_does_not_mutate_store() {
         let (_dir, ctx) = context();
         let user = "easynet:///r/realm/user/alice";
@@ -1310,7 +2073,7 @@ mod tests {
                 ABILITY_PRINCIPAL_BIND_FIRST_KEY,
                 serde_json::to_vec(&json!({
                     "request": {
-                        "command": command("bind", "bootstrap", Some(99)),
+                        "command": command_with_ref("bind", "bootstrap", "proof:create", Some(99)),
                         "principal_ura": user,
                         "public_key_b64": b64_pubkey(1)
                     }
@@ -1339,20 +2102,23 @@ mod tests {
                 "principal_ura": user
             }),
         );
-        invoke(
+        let first = invoke(
             &ctx,
             ABILITY_PRINCIPAL_BIND_FIRST_KEY,
             json!({
-                "command": command("bind1", "bootstrap", Some(1)),
+                "command": command_with_ref("bind1", "bootstrap", "proof:create", Some(1)),
                 "principal_ura": user,
                 "public_key_b64": b64_pubkey(1)
             }),
         );
+        let first_binding_id = first["principal"]["bindings"][0]["binding_id"]
+            .as_str()
+            .unwrap();
         invoke(
             &ctx,
             ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
             json!({
-                "command": command("recovery-policy", "active_key", Some(2)),
+                "command": command_for_actor_with_ref(user, "recovery-policy", "active_key", first_binding_id, Some(2)),
                 "principal_ura": user,
                 "policy_ref": "recovery-policy:test"
             }),
@@ -1361,7 +2127,7 @@ mod tests {
             &ctx,
             ABILITY_PRINCIPAL_RECOVER,
             json!({
-                "command": command("recover", "recovery", Some(3)),
+                "command": command_with_ref("recover", "recovery", "recovery-policy:test", Some(3)),
                 "principal_ura": user,
                 "replacement_key": {
                     "command": command("ignored-child", "recovery", None),

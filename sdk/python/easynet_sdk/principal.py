@@ -21,6 +21,8 @@ __all__ = [
     "ChangePrincipalStateRequest",
     "ConfigureRecoveryRequest",
     "CreatePrincipalRequest",
+    "EnrollmentCapability",
+    "IssueEnrollmentRequest",
     "IssueGrantRequest",
     "PrincipalCommand",
     "PrincipalClient",
@@ -34,6 +36,7 @@ __all__ = [
     "PublicKeyBindingState",
     "RecoverPrincipalRequest",
     "RecoveryPolicy",
+    "RevokeEnrollmentRequest",
     "RevokeGrantRequest",
     "RevokePrincipalKeyRequest",
     "RuntimePrincipalProvider",
@@ -53,6 +56,8 @@ _ABILITY_RECOVER = "principal.lifecycle.recover"
 _ABILITY_SUSPEND = "principal.lifecycle.suspend"
 _ABILITY_REACTIVATE = "principal.lifecycle.reactivate"
 _ABILITY_DELETE = "principal.lifecycle.delete"
+_ABILITY_ISSUE_ENROLLMENT = "principal.lifecycle.issue_enrollment"
+_ABILITY_REVOKE_ENROLLMENT = "principal.lifecycle.revoke_enrollment"
 _ABILITY_ISSUE_GRANT = "principal.lifecycle.issue_grant"
 _ABILITY_REVOKE_GRANT = "principal.lifecycle.revoke_grant"
 _ABILITY_GET = "principal.lifecycle.get"
@@ -126,6 +131,18 @@ class AuthorizationGrant:
 
 
 @dataclass(frozen=True)
+class EnrollmentCapability:
+    enrollment_id: str
+    issuer_ura: str
+    subject_principal_ura: str
+    created_unix_ms: int
+    expires_unix_ms: int | None = None
+    revoked_unix_ms: int | None = None
+    consumed_by_principal_ura: str = ""
+    consumed_unix_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class PrincipalSnapshot:
     principal_ura: str
     state: PrincipalState
@@ -134,7 +151,9 @@ class PrincipalSnapshot:
     grants: tuple[AuthorizationGrant, ...]
     created_unix_ms: int
     updated_unix_ms: int
+    enrollment_proof: PrincipalProofRef | None = None
     recovery: RecoveryPolicy | None = None
+    enrollments: tuple[EnrollmentCapability, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -188,6 +207,21 @@ class ChangePrincipalStateRequest:
 
 
 @dataclass(frozen=True)
+class IssueEnrollmentRequest:
+    command: PrincipalCommand
+    principal_ura: str
+    subject_principal_ura: str
+    expires_unix_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class RevokeEnrollmentRequest:
+    command: PrincipalCommand
+    principal_ura: str
+    enrollment_id: str
+
+
+@dataclass(frozen=True)
 class IssueGrantRequest:
     command: PrincipalCommand
     principal_ura: str
@@ -213,6 +247,8 @@ class PrincipalProvider(Protocol):
     def suspend(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot: ...
     def reactivate(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot: ...
     def delete(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot: ...
+    def issue_enrollment(self, request: IssueEnrollmentRequest) -> PrincipalSnapshot: ...
+    def revoke_enrollment(self, request: RevokeEnrollmentRequest) -> PrincipalSnapshot: ...
     def issue_grant(self, request: IssueGrantRequest) -> PrincipalSnapshot: ...
     def revoke_grant(self, request: RevokeGrantRequest) -> PrincipalSnapshot: ...
     def get(self, principal_ura: str) -> PrincipalSnapshot: ...
@@ -256,6 +292,12 @@ class PrincipalClient:
 
     def delete(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot:
         return self._provider.delete(request)
+
+    def issue_enrollment(self, request: IssueEnrollmentRequest) -> PrincipalSnapshot:
+        return self._provider.issue_enrollment(request)
+
+    def revoke_enrollment(self, request: RevokeEnrollmentRequest) -> PrincipalSnapshot:
+        return self._provider.revoke_enrollment(request)
 
     def issue_grant(self, request: IssueGrantRequest) -> PrincipalSnapshot:
         return self._provider.issue_grant(request)
@@ -313,6 +355,16 @@ class RuntimePrincipalProvider:
 
     def delete(self, request: ChangePrincipalStateRequest) -> PrincipalSnapshot:
         return self._invoke(_ABILITY_DELETE, {"request": _change_state_wire(request)})
+
+    def issue_enrollment(self, request: IssueEnrollmentRequest) -> PrincipalSnapshot:
+        return self._invoke(
+            _ABILITY_ISSUE_ENROLLMENT, {"request": _issue_enrollment_wire(request)}
+        )
+
+    def revoke_enrollment(self, request: RevokeEnrollmentRequest) -> PrincipalSnapshot:
+        return self._invoke(
+            _ABILITY_REVOKE_ENROLLMENT, {"request": _revoke_enrollment_wire(request)}
+        )
 
     def issue_grant(self, request: IssueGrantRequest) -> PrincipalSnapshot:
         return self._invoke(_ABILITY_ISSUE_GRANT, {"request": _issue_grant_wire(request)})
@@ -407,6 +459,25 @@ def _change_state_wire(request: ChangePrincipalStateRequest) -> dict[str, object
     }
 
 
+def _issue_enrollment_wire(request: IssueEnrollmentRequest) -> dict[str, object]:
+    wire: dict[str, object] = {
+        "command": _command_wire(request.command),
+        "principal_ura": request.principal_ura.strip(),
+        "subject_principal_ura": request.subject_principal_ura.strip(),
+    }
+    if request.expires_unix_ms is not None:
+        wire["expires_unix_ms"] = request.expires_unix_ms
+    return wire
+
+
+def _revoke_enrollment_wire(request: RevokeEnrollmentRequest) -> dict[str, object]:
+    return {
+        "command": _command_wire(request.command),
+        "principal_ura": request.principal_ura.strip(),
+        "enrollment_id": request.enrollment_id.strip(),
+    }
+
+
 def _issue_grant_wire(request: IssueGrantRequest) -> dict[str, object]:
     wire: dict[str, object] = {
         "command": _command_wire(request.command),
@@ -450,11 +521,27 @@ def _snapshot_from_mapping(raw: Mapping[str, object]) -> PrincipalSnapshot:
         grants=tuple(_grant_from_mapping(_mapping(item, "grant")) for item in _sequence(raw.get("grants"))),
         created_unix_ms=_int(raw.get("created_unix_ms")),
         updated_unix_ms=_int(raw.get("updated_unix_ms")),
+        enrollment_proof=(
+            _proof_from_mapping(_mapping(raw.get("enrollment_proof"), "enrollment_proof"))
+            if isinstance(raw.get("enrollment_proof"), Mapping)
+            else None
+        ),
         recovery=(
             _recovery_from_mapping(_mapping(raw.get("recovery"), "recovery"))
             if isinstance(raw.get("recovery"), Mapping)
             else None
         ),
+        enrollments=tuple(
+            _enrollment_from_mapping(_mapping(item, "enrollment"))
+            for item in _sequence(raw.get("enrollments"))
+        ),
+    )
+
+
+def _proof_from_mapping(raw: Mapping[str, object]) -> PrincipalProofRef:
+    return PrincipalProofRef(
+        kind=PrincipalProofKind(_required_text(raw.get("kind"), "proof.kind")),
+        reference=_required_text(raw.get("reference"), "proof.reference"),
     )
 
 
@@ -490,6 +577,19 @@ def _grant_from_mapping(raw: Mapping[str, object]) -> AuthorizationGrant:
         created_unix_ms=_int(raw.get("created_unix_ms")),
         expires_unix_ms=_optional_int(raw.get("expires_unix_ms")),
         revoked_unix_ms=_optional_int(raw.get("revoked_unix_ms")),
+    )
+
+
+def _enrollment_from_mapping(raw: Mapping[str, object]) -> EnrollmentCapability:
+    return EnrollmentCapability(
+        enrollment_id=_text(raw.get("enrollment_id")),
+        issuer_ura=_text(raw.get("issuer_ura")),
+        subject_principal_ura=_text(raw.get("subject_principal_ura")),
+        created_unix_ms=_int(raw.get("created_unix_ms")),
+        expires_unix_ms=_optional_int(raw.get("expires_unix_ms")),
+        revoked_unix_ms=_optional_int(raw.get("revoked_unix_ms")),
+        consumed_by_principal_ura=_text(raw.get("consumed_by_principal_ura")),
+        consumed_unix_ms=_optional_int(raw.get("consumed_unix_ms")),
     )
 
 

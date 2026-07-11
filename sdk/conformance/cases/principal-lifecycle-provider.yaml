@@ -3,11 +3,12 @@ profile: principal
 required_for:
   - go
   - python
-description: Go and Python expose one product-neutral RuntimePrincipalProvider that lowers lifecycle transitions through generic runtime abilities without private-key or product account fields.
+description: Go and Python expose one product-neutral RuntimePrincipalProvider that lowers lifecycle and enrollment-authority transitions through generic runtime abilities without private-key or product account fields.
 steps:
   - action: require_principal_states
   - action: require_key_binding_states
   - action: require_lifecycle_operations
+  - action: require_enrollment_authority_operations
   - action: require_runtime_principal_provider
   - action: require_principal_command_lowering
   - action: reject_private_key_fields

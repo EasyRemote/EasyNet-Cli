@@ -115,9 +115,10 @@ use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LI
 use crate::daemon::invocation::admission::principal_lifecycle::{
     ABILITY_PRINCIPAL_ADD_KEY, ABILITY_PRINCIPAL_BIND_FIRST_KEY,
     ABILITY_PRINCIPAL_CONFIGURE_RECOVERY, ABILITY_PRINCIPAL_CREATE, ABILITY_PRINCIPAL_DELETE,
-    ABILITY_PRINCIPAL_GET, ABILITY_PRINCIPAL_ISSUE_GRANT, ABILITY_PRINCIPAL_REACTIVATE,
-    ABILITY_PRINCIPAL_RECOVER, ABILITY_PRINCIPAL_REVOKE_GRANT, ABILITY_PRINCIPAL_REVOKE_KEY,
-    ABILITY_PRINCIPAL_ROTATE_KEY, ABILITY_PRINCIPAL_SUSPEND,
+    ABILITY_PRINCIPAL_GET, ABILITY_PRINCIPAL_ISSUE_ENROLLMENT, ABILITY_PRINCIPAL_ISSUE_GRANT,
+    ABILITY_PRINCIPAL_REACTIVATE, ABILITY_PRINCIPAL_RECOVER, ABILITY_PRINCIPAL_REVOKE_ENROLLMENT,
+    ABILITY_PRINCIPAL_REVOKE_GRANT, ABILITY_PRINCIPAL_REVOKE_KEY, ABILITY_PRINCIPAL_ROTATE_KEY,
+    ABILITY_PRINCIPAL_SUSPEND,
 };
 use crate::daemon::invocation::admission::quota_meter::quota_meters_request;
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
@@ -185,6 +186,8 @@ pub(crate) enum DaemonUnaryRoute {
     PrincipalSuspend,
     PrincipalReactivate,
     PrincipalDelete,
+    PrincipalIssueEnrollment,
+    PrincipalRevokeEnrollment,
     PrincipalIssueGrant,
     PrincipalRevokeGrant,
     PrincipalGet,
@@ -218,6 +221,8 @@ impl DaemonUnaryRoute {
         Self::PrincipalSuspend,
         Self::PrincipalReactivate,
         Self::PrincipalDelete,
+        Self::PrincipalIssueEnrollment,
+        Self::PrincipalRevokeEnrollment,
         Self::PrincipalIssueGrant,
         Self::PrincipalRevokeGrant,
         Self::PrincipalGet,
@@ -260,6 +265,8 @@ impl DaemonUnaryRoute {
             Self::PrincipalSuspend => ABILITY_PRINCIPAL_SUSPEND,
             Self::PrincipalReactivate => ABILITY_PRINCIPAL_REACTIVATE,
             Self::PrincipalDelete => ABILITY_PRINCIPAL_DELETE,
+            Self::PrincipalIssueEnrollment => ABILITY_PRINCIPAL_ISSUE_ENROLLMENT,
+            Self::PrincipalRevokeEnrollment => ABILITY_PRINCIPAL_REVOKE_ENROLLMENT,
             Self::PrincipalIssueGrant => ABILITY_PRINCIPAL_ISSUE_GRANT,
             Self::PrincipalRevokeGrant => ABILITY_PRINCIPAL_REVOKE_GRANT,
             Self::PrincipalGet => ABILITY_PRINCIPAL_GET,
@@ -1071,6 +1078,8 @@ impl Invocation for DaemonInvocationService {
                     | DaemonUnaryRoute::PrincipalSuspend
                     | DaemonUnaryRoute::PrincipalReactivate
                     | DaemonUnaryRoute::PrincipalDelete
+                    | DaemonUnaryRoute::PrincipalIssueEnrollment
+                    | DaemonUnaryRoute::PrincipalRevokeEnrollment
                     | DaemonUnaryRoute::PrincipalIssueGrant
                     | DaemonUnaryRoute::PrincipalRevokeGrant
                     | DaemonUnaryRoute::PrincipalGet,

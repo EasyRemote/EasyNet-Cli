@@ -367,7 +367,7 @@
           }
         ]
       },
-      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has an initial durable principal.lifecycle.* provider; admitted proof verification, admission-state enforcement and standalone-Hub/backend-present E2E remain before cutover-ready."
+      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement; CLI flows and standalone-Hub/backend-present E2E remain before cutover-ready."
     },
     {
       "capability_id": "principal_enrollment",
@@ -394,7 +394,7 @@
           }
         ]
       },
-      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus enrollment/grant-gated additional principal creation; invitation proof admission and standalone-Hub enrollment E2E remain incomplete."
+      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation; CLI enrollment flows and standalone-Hub enrollment E2E remain incomplete."
     },
     {
       "capability_id": "principal_public_key_bindings",
@@ -421,7 +421,7 @@
           }
         ]
       },
-      "remaining": "SDK key binding add/rotate/revoke operations are provider-backed, and daemon lifecycle state now projects active/revoked key facts through RuntimeTrust; active-key proof verification, admission-state enforcement and Hub restart E2E remain incomplete."
+      "remaining": "SDK key binding add/rotate/revoke operations are provider-backed, and daemon lifecycle state now projects active/revoked key facts through RuntimeTrust; Hub restart and standalone multi-user E2E remain incomplete."
     },
     {
       "capability_id": "principal_recovery",

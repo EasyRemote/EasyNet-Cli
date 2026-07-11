@@ -136,6 +136,9 @@ use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::admission::policy_gate::{
     ability_ura_for, principal_for, AdmissionPolicyContext, AdmissionPolicyGate,
 };
+use crate::daemon::invocation::admission::principal_lifecycle::{
+    PrincipalAdmissionState, PrincipalLifecycleReader,
+};
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
@@ -237,6 +240,12 @@ pub struct AdmissionFacade {
     /// self calls remain exempt here because the daemon must not
     /// throttle its own `legacy self alias.*` administrative surface.
     quota: SharedUsageQuotaGate,
+    /// Read-only view of the daemon-owned PrincipalLifecycle aggregate.
+    /// Trust-anchor key presence proves a key is known; this reader proves
+    /// whether the User principal itself is currently admissible. `None` is
+    /// reserved for tests and pre-lifecycle wiring seams; production boot
+    /// derives it from the same trust-anchor path used by identity writes.
+    principal_lifecycle: Option<PrincipalLifecycleReader>,
 }
 
 impl std::fmt::Debug for AdmissionFacade {
@@ -260,6 +269,10 @@ impl std::fmt::Debug for AdmissionFacade {
             )
             .field("loopback_trusted", &self.loopback_trusted)
             .field("quota_configured", &self.quota.policy().is_some())
+            .field(
+                "principal_lifecycle",
+                &self.principal_lifecycle.as_ref().map(|_| "wired"),
+            )
             .finish()
     }
 }
@@ -311,6 +324,7 @@ impl AdmissionFacade {
             hub_signer: None,
             loopback_trusted: true,
             quota: SharedUsageQuotaGate::disabled(),
+            principal_lifecycle: None,
         }
     }
 
@@ -402,6 +416,19 @@ impl AdmissionFacade {
     #[must_use]
     pub fn with_quota_gate(mut self, gate: SharedUsageQuotaGate) -> Self {
         self.quota = gate;
+        self
+    }
+
+    /// Wire PrincipalLifecycle admission-state enforcement. This is read-only:
+    /// lifecycle writes still happen through `principal.lifecycle.*` abilities
+    /// and RuntimeTrust remains the single key projection used by signature
+    /// verification.
+    #[must_use]
+    pub(crate) fn with_principal_lifecycle_reader(
+        mut self,
+        reader: PrincipalLifecycleReader,
+    ) -> Self {
+        self.principal_lifecycle = Some(reader);
         self
     }
 
@@ -501,6 +528,7 @@ impl AdmissionFacade {
             hub_signer: None,
             loopback_trusted: true,
             quota: SharedUsageQuotaGate::disabled(),
+            principal_lifecycle: None,
         }
     }
 
@@ -790,8 +818,12 @@ impl AdmissionFacade {
             // terminal time, and rejected invocations via
             // `op_event!` audit lines + the wire-level error
             // their gRPC client sees.
-            Ok(()) if bootstrap_authority_ability(ability) => Ok(()),
             Ok(()) => {
+                self.enforce_principal_lifecycle_admission(envelope, ability, trusted_role)
+                    .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
+                if bootstrap_authority_ability(ability) {
+                    return Ok(());
+                }
                 let delegation_authority_id = verify_delegation_metadata(
                     envelope,
                     ability,
@@ -853,6 +885,31 @@ impl AdmissionFacade {
             Err(err) => {
                 Err(self.signature_denied_status(envelope, ability, axon_error_to_status(err)))
             }
+        }
+    }
+
+    fn enforce_principal_lifecycle_admission(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        trusted_role: TrustedAgentRole,
+    ) -> Result<(), Status> {
+        if trusted_role != TrustedAgentRole::User {
+            return Ok(());
+        }
+        let Some(reader) = self.principal_lifecycle.as_ref() else {
+            return Ok(());
+        };
+        let principal_ura = caller_ura_required(envelope)?;
+        let state = reader.admission_state(principal_ura)?;
+        match state {
+            PrincipalAdmissionState::Missing | PrincipalAdmissionState::Active => Ok(()),
+            PrincipalAdmissionState::Pending
+            | PrincipalAdmissionState::Suspended
+            | PrincipalAdmissionState::Deleted => Err(Status::permission_denied(format!(
+                "PRINCIPAL_LIFECYCLE_DENIED: principal_ura `{principal_ura}` is {} and cannot invoke `{ability}`",
+                principal_admission_state_label(state)
+            ))),
         }
     }
 
@@ -2054,6 +2111,16 @@ fn permission_denied_unknown_caller(caller_ura: &str) -> Status {
     ))
 }
 
+fn principal_admission_state_label(state: PrincipalAdmissionState) -> &'static str {
+    match state {
+        PrincipalAdmissionState::Missing => "missing",
+        PrincipalAdmissionState::Pending => "pending",
+        PrincipalAdmissionState::Active => "active",
+        PrincipalAdmissionState::Suspended => "suspended",
+        PrincipalAdmissionState::Deleted => "deleted",
+    }
+}
+
 fn reject_public_hosted_agent_delegation_metadata(
     metadata: Option<&HashMap<String, String>>,
 ) -> Result<(), Status> {
@@ -2264,7 +2331,13 @@ mod tests {
     use crate::daemon::invocation::admission::grant_matcher::{
         PermissionGrantLifetime, PermissionGrantState,
     };
+    use crate::daemon::invocation::admission::principal_lifecycle::{
+        PrincipalLifecycleContext, ABILITY_PRINCIPAL_BIND_FIRST_KEY, ABILITY_PRINCIPAL_CREATE,
+        ABILITY_PRINCIPAL_DELETE, ABILITY_PRINCIPAL_ISSUE_GRANT, ABILITY_PRINCIPAL_SUSPEND,
+    };
+    use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::cell::SharedTrustAnchor;
     use easynet_axon::pb::axon::v1::CallerSignature as PbCallerSignature;
     use ed25519_dalek::{Signer, SigningKey};
 
@@ -2494,6 +2567,71 @@ mod tests {
             )]),
             ..InvokeRequest::default()
         }
+    }
+
+    fn lifecycle_command(id: &str, kind: &str, expected_version: Option<u64>) -> serde_json::Value {
+        lifecycle_command_with_ref(id, kind, &format!("proof:{id}"), expected_version)
+    }
+
+    fn lifecycle_command_with_ref(
+        id: &str,
+        kind: &str,
+        reference: &str,
+        expected_version: Option<u64>,
+    ) -> serde_json::Value {
+        lifecycle_command_for_actor_with_ref(
+            "easynet:///r/realm/user/admin",
+            id,
+            kind,
+            reference,
+            expected_version,
+        )
+    }
+
+    fn lifecycle_command_for_actor_with_ref(
+        actor_ura: &str,
+        id: &str,
+        kind: &str,
+        reference: &str,
+        expected_version: Option<u64>,
+    ) -> serde_json::Value {
+        let mut command = serde_json::json!({
+            "actor_ura": actor_ura,
+            "idempotency_key": id,
+            "proof": {"kind": kind, "reference": reference},
+        });
+        if let Some(version) = expected_version {
+            command["expected_version"] = serde_json::json!(version);
+        }
+        command
+    }
+
+    fn lifecycle_handle(
+        ctx: &PrincipalLifecycleContext,
+        ability: &'static str,
+        request: serde_json::Value,
+    ) -> serde_json::Value {
+        let body = ctx
+            .handle(
+                ability,
+                serde_json::to_vec(&serde_json::json!({ "request": request }))
+                    .expect("lifecycle request json")
+                    .as_slice(),
+            )
+            .expect("lifecycle transition");
+        serde_json::from_slice(&body).expect("lifecycle response json")
+    }
+
+    fn lifecycle_context_for_admission(
+        dir: &tempfile::TempDir,
+    ) -> (RuntimeTrustContext, PrincipalLifecycleContext) {
+        let runtime_trust = RuntimeTrustContext {
+            daemon_realm: "realm".to_string(),
+            trust_anchor_path: dir.path().join("realm-trust.toml"),
+            cell: SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default())),
+        };
+        let lifecycle = PrincipalLifecycleContext::from_runtime_trust(runtime_trust.clone());
+        (runtime_trust, lifecycle)
     }
 
     fn signed_session_authority_metadata(
@@ -3172,6 +3310,205 @@ mod tests {
         assert_policy_denied(&err);
         // Signature/replay admission ran before RFC-014 policy denied.
         assert_eq!(facade.replay_store.len(), 1);
+    }
+
+    #[test]
+    fn principal_lifecycle_admission_denies_suspended_user_even_when_key_remains_trusted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (runtime_trust, lifecycle) = lifecycle_context_for_admission(&dir);
+        let signing_key = SigningKey::from_bytes(&[0x71u8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let user_ura = "easynet:///r/realm/user/alice";
+
+        lifecycle_handle(
+            &lifecycle,
+            ABILITY_PRINCIPAL_CREATE,
+            serde_json::json!({
+                "command": lifecycle_command("create-alice", "bootstrap", None),
+                "principal_ura": user_ura,
+            }),
+        );
+        let first = lifecycle_handle(
+            &lifecycle,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            serde_json::json!({
+                "command": lifecycle_command_with_ref(
+                    "bind-alice",
+                    "bootstrap",
+                    "proof:create-alice",
+                    Some(1)
+                ),
+                "principal_ura": user_ura,
+                "public_key_b64": pub_key_b64,
+            }),
+        );
+        let binding_id = first["principal"]["bindings"][0]["binding_id"]
+            .as_str()
+            .expect("binding id");
+        lifecycle_handle(
+            &lifecycle,
+            ABILITY_PRINCIPAL_SUSPEND,
+            serde_json::json!({
+                "command": lifecycle_command_for_actor_with_ref(
+                    user_ura,
+                    "suspend-alice",
+                    "active_key",
+                    binding_id,
+                    Some(2)
+                ),
+                "principal_ura": user_ura,
+            }),
+        );
+
+        assert!(
+            runtime_trust
+                .cell
+                .snapshot()
+                .lookup_user_by_pubkey(user_ura, &pub_key_b64)
+                .is_some(),
+            "suspend changes principal state; it must not masquerade as key revocation"
+        );
+
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::with_trust_anchor_cell(
+            runtime_trust.cell.clone(),
+            Some(daemon_ura.clone()),
+        )
+        .with_principal_lifecycle_reader(lifecycle.reader());
+        let mut req = signed_request_with_nonce(
+            user_ura,
+            &daemon_ura,
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x71u8; 16],
+        );
+        req.envelope
+            .as_mut()
+            .and_then(|envelope| envelope.caller_signature.as_mut())
+            .expect("caller signature")
+            .key_id_hint = pub_key_b64;
+
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("suspended principal must be denied");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("PRINCIPAL_LIFECYCLE_DENIED"),
+            "expected lifecycle denial, got: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains("AUTHORITY_DENIED"),
+            "lifecycle state is an authority/admission denial, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn principal_lifecycle_admission_denies_deleted_user_even_when_key_remains_trusted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (runtime_trust, lifecycle) = lifecycle_context_for_admission(&dir);
+        let signing_key = SigningKey::from_bytes(&[0x72u8; 32]);
+        let pub_key_b64 = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let user_ura = "easynet:///r/realm/user/bob";
+
+        lifecycle_handle(
+            &lifecycle,
+            ABILITY_PRINCIPAL_CREATE,
+            serde_json::json!({
+                "command": lifecycle_command("create-bob", "bootstrap", None),
+                "principal_ura": user_ura,
+            }),
+        );
+        let first = lifecycle_handle(
+            &lifecycle,
+            ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            serde_json::json!({
+                "command": lifecycle_command_with_ref(
+                    "bind-bob",
+                    "bootstrap",
+                    "proof:create-bob",
+                    Some(1)
+                ),
+                "principal_ura": user_ura,
+                "public_key_b64": pub_key_b64,
+            }),
+        );
+        let binding_id = first["principal"]["bindings"][0]["binding_id"]
+            .as_str()
+            .expect("binding id");
+        let grant = lifecycle_handle(
+            &lifecycle,
+            ABILITY_PRINCIPAL_ISSUE_GRANT,
+            serde_json::json!({
+                "command": lifecycle_command_for_actor_with_ref(
+                    user_ura,
+                    "grant-delete-bob",
+                    "active_key",
+                    binding_id,
+                    Some(2)
+                ),
+                "principal_ura": user_ura,
+                "actions": [ABILITY_PRINCIPAL_DELETE],
+            }),
+        );
+        let grant_id = grant["principal"]["grants"][0]["grant_id"]
+            .as_str()
+            .expect("grant id");
+        lifecycle_handle(
+            &lifecycle,
+            ABILITY_PRINCIPAL_DELETE,
+            serde_json::json!({
+                "command": lifecycle_command_for_actor_with_ref(
+                    user_ura,
+                    "delete-bob",
+                    "grant",
+                    grant_id,
+                    Some(3)
+                ),
+                "principal_ura": user_ura,
+            }),
+        );
+
+        assert!(
+            runtime_trust
+                .cell
+                .snapshot()
+                .lookup_user_by_pubkey(user_ura, &pub_key_b64)
+                .is_some(),
+            "delete is lifecycle terminality; key inventory remains a projection until explicit revocation"
+        );
+
+        let daemon_ura = hub_ura("realm");
+        let facade = AdmissionFacade::with_trust_anchor_cell(
+            runtime_trust.cell.clone(),
+            Some(daemon_ura.clone()),
+        )
+        .with_principal_lifecycle_reader(lifecycle.reader());
+        let mut req = signed_request_with_nonce(
+            user_ura,
+            &daemon_ura,
+            "self.echo",
+            b"{}",
+            &signing_key,
+            [0x72u8; 16],
+        );
+        req.envelope
+            .as_mut()
+            .and_then(|envelope| envelope.caller_signature.as_mut())
+            .expect("caller signature")
+            .key_id_hint = pub_key_b64;
+
+        let err = facade
+            .verify_invoke(&req)
+            .expect_err("deleted principal must be denied");
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("PRINCIPAL_LIFECYCLE_DENIED"),
+            "expected lifecycle denial, got: {}",
+            err.message()
+        );
     }
 
     #[test]

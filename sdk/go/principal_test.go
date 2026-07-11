@@ -20,6 +20,8 @@ func TestPrincipalLifecycleContractIsComplete(t *testing.T) {
 		Suspend(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
 		Reactivate(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
 		Delete(context.Context, ChangePrincipalStateRequest) (PrincipalSnapshot, error)
+		IssueEnrollment(context.Context, IssueEnrollmentRequest) (PrincipalSnapshot, error)
+		RevokeEnrollment(context.Context, RevokeEnrollmentRequest) (PrincipalSnapshot, error)
 		IssueGrant(context.Context, IssueGrantRequest) (PrincipalSnapshot, error)
 		RevokeGrant(context.Context, RevokeGrantRequest) (PrincipalSnapshot, error)
 		Get(context.Context, string) (PrincipalSnapshot, error)
@@ -68,11 +70,23 @@ func (m *memoryPrincipalAbility) Invoke(_ context.Context, call RuntimeCallConte
 			"state":           "active",
 			"created_unix_ms": float64(1_700_000_000_000),
 		}},
+		"enrollment_proof": map[string]any{
+			"kind":      "bootstrap",
+			"reference": "proof-1",
+		},
 		"recovery": map[string]any{
 			"policy_ref":      "recovery-policy-1",
 			"enabled":         true,
 			"updated_unix_ms": float64(1_700_000_001_000),
 		},
+		"enrollments": []any{map[string]any{
+			"enrollment_id":             "enroll-1",
+			"issuer_ura":                "easynet:///r/example/user/alice",
+			"subject_principal_ura":     "easynet:///r/example/user/bob",
+			"created_unix_ms":           float64(1_700_000_001_000),
+			"consumed_by_principal_ura": "easynet:///r/example/user/bob",
+			"consumed_unix_ms":          float64(1_700_000_002_000),
+		}},
 		"grants": []any{map[string]any{
 			"grant_id":        "grant-1",
 			"principal_ura":   "easynet:///r/example/user/alice",
@@ -118,11 +132,58 @@ func TestRuntimePrincipalProviderLowersLifecycleTransitions(t *testing.T) {
 	if result.PrincipalURA != "easynet:///r/example/user/alice" || result.State != PrincipalStateActive || len(result.Bindings) != 1 {
 		t.Fatalf("snapshot projection lost: %#v", result)
 	}
-	if result.Bindings[0].PublicKey == nil || result.Recovery == nil || len(result.Grants) != 1 {
+	if result.Bindings[0].PublicKey == nil || result.EnrollmentProof == nil || result.Recovery == nil || len(result.Grants) != 1 {
 		t.Fatalf("public aggregate projection incomplete: %#v", result)
+	}
+	if len(result.Enrollments) != 1 || result.Enrollments[0].EnrollmentID != "enroll-1" || result.Enrollments[0].ConsumedUnixMS == nil {
+		t.Fatalf("enrollment capability projection lost: %#v", result.Enrollments)
+	}
+	if result.EnrollmentProof.Kind != PrincipalProofBootstrap || result.EnrollmentProof.Reference != "proof-1" {
+		t.Fatalf("enrollment proof projection lost: %#v", result.EnrollmentProof)
 	}
 	if _, ok := request["private_key"]; ok {
 		t.Fatalf("private key leaked into principal provider args: %#v", request)
+	}
+}
+
+func TestRuntimePrincipalProviderLowersEnrollmentAuthority(t *testing.T) {
+	transport := &memoryPrincipalAbility{}
+	provider, err := NewRuntimePrincipalProvider(transport, principalCallFixture())
+	if err != nil {
+		t.Fatalf("NewRuntimePrincipalProvider: %v", err)
+	}
+
+	_, err = provider.IssueEnrollment(context.Background(), IssueEnrollmentRequest{
+		Command:             principalCommandFixture(),
+		PrincipalURA:        "easynet:///r/example/user/alice",
+		SubjectPrincipalURA: "easynet:///r/example/user/bob",
+	})
+	if err != nil {
+		t.Fatalf("IssueEnrollment: %v", err)
+	}
+	if transport.ability != principalAbilityIssueEnrollment {
+		t.Fatalf("ability = %s", transport.ability)
+	}
+	request := transport.args["request"].(map[string]any)
+	if request["principal_ura"] != "easynet:///r/example/user/alice" ||
+		request["subject_principal_ura"] != "easynet:///r/example/user/bob" {
+		t.Fatalf("issue enrollment request not lowered: %#v", request)
+	}
+
+	_, err = provider.RevokeEnrollment(context.Background(), RevokeEnrollmentRequest{
+		Command:      principalCommandFixture(),
+		PrincipalURA: "easynet:///r/example/user/alice",
+		EnrollmentID: "enroll-1",
+	})
+	if err != nil {
+		t.Fatalf("RevokeEnrollment: %v", err)
+	}
+	if transport.ability != principalAbilityRevokeEnrollment {
+		t.Fatalf("ability = %s", transport.ability)
+	}
+	request = transport.args["request"].(map[string]any)
+	if request["enrollment_id"] != "enroll-1" {
+		t.Fatalf("revoke enrollment request not lowered: %#v", request)
 	}
 }
 

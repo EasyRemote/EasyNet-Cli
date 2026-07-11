@@ -369,9 +369,9 @@ lifecycle.
 | Key create, list, public projection, rotate, revoke and expiry | implemented |
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
-| Create the first user without Backend | initial daemon provider supports explicit bootstrap; CLI/E2E workflow incomplete |
-| Login, authentication and recovery without Backend | incomplete lifecycle |
-| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state; proof verifier, CLI flow and E2E incomplete |
+| Create the first user without Backend | provider enforces explicit bootstrap and bind-first-key proof continuity; CLI/E2E workflow incomplete |
+| Login, authentication and recovery without Backend | recovery policy proof is provider-enforced; login/recovery CLI flow and E2E incomplete |
+| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state with active-key, grant and recovery proof enforcement; CLI flow and E2E incomplete |
 | Multi-user administration and permission governance without Backend | partial capabilities; no standalone Hub closure |
 
 The current substrate facts are:
@@ -389,7 +389,17 @@ The current substrate facts are:
 - `principal.lifecycle.*` now has an initial daemon-owned durable provider
   that records principal state, key bindings, recovery policy and grants while
   projecting active/revoked public-key facts through the existing
-  `RuntimeTrust` aggregate.
+  `RuntimeTrust` aggregate; and
+- provider-side PrincipalLifecycle proof enforcement now validates
+  active-key references against active key bindings, grant references against
+  durable authorization grants, recovery references against the configured
+  recovery policy, and bind-first-key continuity against the create-time
+  bootstrap/enrollment proof; and
+- durable PrincipalLifecycle enrollment authority now issues, revokes and
+  consumes one-time `EnrollmentCapability` records inside the same aggregate.
+  Additional principal creation no longer accepts a bare `proof.kind =
+  enrollment`; it must reference an active, unexpired, unrevoked and
+  unconsumed capability scoped to the target Principal URA.
 
 This substrate is not a user lifecycle. The current
 `easynet auth signing-key register` flow derives a User URA from credentials
@@ -501,9 +511,11 @@ was re-audited after the interrupted work: Go SDK tests, Python SDK tests,
 EasyNet backend tests and EasyRemote tests all passed. There is therefore no
 current Go compilation conflict to repair. The remaining defect is
 architectural and functional: PrincipalLifecycle has a provider-backed
-Go/Python SDK facade and an initial daemon durable provider, but it is not
-standalone-Hub cutover-ready until admitted proof verification,
-admission-state enforcement, CLI flows and the two E2E gates pass. Directory
+Go/Python SDK facade and a daemon durable provider. Active-key, grant,
+recovery, admission-state and enrollment-capability proof enforcement have
+landed in the daemon provider, but it is not standalone-Hub cutover-ready
+until CLI lifecycle flows and the two E2E gates pass.
+Directory
 is still a seam; receipt/history now has a symmetric bounded seam but no
 stable cursor or downstream cutover; runtime events and runtime administration
 now have symmetric provider-backed Go/Python facades; access control now has
@@ -588,9 +600,9 @@ The current remaining work is:
   including receipt, event, administration and principal lifecycle paths;
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,
   Directory, receipt and event capabilities;
-- complete CLI flows and proof verifiers for first-user bootstrap,
-  additional-key authorization, recovery, suspension/deletion and grants for
-  backend-free Hub mode;
+- complete the CLI flows on top of durable enrollment authority for first-user
+  bootstrap, additional-key authorization, recovery,
+  suspension/deletion and grants for backend-free Hub mode;
 - prove URA-only `federation.join` plus Principal enrollment without Backend
   HTTP;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates
