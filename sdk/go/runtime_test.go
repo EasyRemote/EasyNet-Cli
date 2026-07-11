@@ -106,6 +106,48 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	}
 }
 
+func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
+	receipt, err := NewRuntimeReceiptFromJSON([]byte(`{
+		"index": 1,
+		"invocation_id": "inv-1",
+		"receipt_type": "completed",
+		"state": "completed",
+		"timestamp_unix_ms": 1700000000000,
+		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
+		"self_hash_hex": "` + strings.Repeat("aa", 32) + `"
+	}`))
+	if err != nil {
+		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
+	}
+	if err := receipt.ValidateSummary(); err != nil {
+		t.Fatalf("ValidateSummary: %v", err)
+	}
+	selfHash, err := receipt.SelfReceiptHash()
+	if err != nil {
+		t.Fatalf("SelfReceiptHash: %v", err)
+	}
+	if !bytes.Equal(selfHash, bytes.Repeat([]byte{0xaa}, 32)) {
+		t.Fatalf("self hash = %x", selfHash)
+	}
+}
+
+func TestRuntimeReceiptRejectsMalformedSummaryHash(t *testing.T) {
+	receipt, err := NewRuntimeReceiptFromJSON([]byte(`{
+		"index": 1,
+		"invocation_id": "inv-1",
+		"receipt_type": "completed",
+		"timestamp_unix_ms": 1700000000000,
+		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
+		"self_hash_hex": "aa"
+	}`))
+	if err != nil {
+		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
+	}
+	if err := receipt.ValidateSummary(); err == nil {
+		t.Fatal("ValidateSummary accepted short self hash")
+	}
+}
+
 func TestRuntimeClientPrepareBuilderConsumesOnlyAfterSuccess(t *testing.T) {
 	transportPrepareCalls := 0
 	client, err := NewRuntimeClient(RuntimeTransportFunc{

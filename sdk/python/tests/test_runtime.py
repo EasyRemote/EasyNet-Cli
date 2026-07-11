@@ -283,6 +283,39 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+    def test_runtime_receipt_required_summary_validates_hashes(self) -> None:
+        receipt = RuntimeReceipt.from_required_mapping(
+            {
+                "index": 1,
+                "invocation_id": "inv-1",
+                "receipt_type": 1,
+                "state": 2,
+                "timestamp_unix_ms": 1_700_000_000_000,
+                "prev_receipt_hash_hex": "00" * 32,
+                "self_hash_hex": "aa" * 32,
+            }
+        )
+
+        self.assertEqual(receipt.receipt_type, "1")
+        self.assertEqual(receipt.state, "2")
+        self.assertEqual(receipt.prev_receipt_hash(), bytes(32))
+        self.assertEqual(receipt.self_receipt_hash(), b"\xaa" * 32)
+
+    def test_runtime_receipt_required_summary_rejects_malformed_hash(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            RuntimeReceipt.from_required_mapping(
+                {
+                    "index": 1,
+                    "invocation_id": "inv-1",
+                    "receipt_type": "completed",
+                    "timestamp_unix_ms": 1_700_000_000_000,
+                    "prev_receipt_hash_hex": "00" * 32,
+                    "self_hash_hex": "aa",
+                }
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_invoke_stream_opens_stream_handle(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)

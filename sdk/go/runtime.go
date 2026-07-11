@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -488,6 +489,30 @@ func (r RuntimeReceipt) HasCausalAnchor() bool {
 	return strings.TrimSpace(r.ReceiptURA) != "" && strings.TrimSpace(r.SelfHashHex) != ""
 }
 
+func (r RuntimeReceipt) ValidateSummary() error {
+	if strings.TrimSpace(r.InvocationID) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing invocation_id", nil)
+	}
+	if strings.TrimSpace(r.ReceiptType) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing receipt_type", nil)
+	}
+	if _, err := r.PrevReceiptHash(); err != nil {
+		return err
+	}
+	if _, err := r.SelfReceiptHash(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r RuntimeReceipt) PrevReceiptHash() ([]byte, error) {
+	return runtimeReceiptHash(r.PrevReceiptHashHex, "prev_receipt_hash_hex")
+}
+
+func (r RuntimeReceipt) SelfReceiptHash() ([]byte, error) {
+	return runtimeReceiptHash(r.SelfHashHex, "self_hash_hex")
+}
+
 func (r RuntimeReceipt) RawProjection() map[string]any {
 	encoded, err := json.Marshal(r.Raw)
 	if err != nil {
@@ -498,6 +523,21 @@ func (r RuntimeReceipt) RawProjection() map[string]any {
 		return nil
 	}
 	return clone
+}
+
+func runtimeReceiptHash(value string, field string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, invalidRuntimePayload(field+" is required", nil)
+	}
+	hash, err := hex.DecodeString(value)
+	if err != nil {
+		return nil, invalidRuntimePayload(field+" must be hexadecimal", err)
+	}
+	if len(hash) != 32 {
+		return nil, invalidRuntimePayload(field+" must be exactly 32 bytes", nil)
+	}
+	return hash, nil
 }
 
 // InvocationFailure is the runtime error embedded in a terminal invocation result.

@@ -181,9 +181,11 @@ class RuntimeReceipt:
                 decoded.get("invocation_id"), "invocation_id"
             )
             or "",
-            receipt_type=_optional_string(decoded.get("receipt_type"), "receipt_type")
+            receipt_type=_optional_runtime_summary_text(
+                decoded.get("receipt_type"), "receipt_type"
+            )
             or "",
-            state=_optional_string(decoded.get("state"), "state") or "",
+            state=_optional_runtime_summary_text(decoded.get("state"), "state") or "",
             index=_optional_non_negative_int(decoded.get("index"), "index"),
             timestamp_unix_ms=_optional_non_negative_int(
                 decoded.get("timestamp_unix_ms"), "timestamp_unix_ms"
@@ -206,10 +208,35 @@ class RuntimeReceipt:
             or "",
         )
 
+    @classmethod
+    def from_required_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
+        """Decode and validate a complete daemon runtime receipt summary."""
+
+        if not isinstance(decoded, Mapping):
+            raise _invalid_runtime("runtime receipt summary must be an object")
+        receipt = cls.from_mapping(decoded)
+        if not receipt.invocation_id:
+            raise _invalid_runtime("runtime receipt summary is missing invocation_id")
+        if not receipt.receipt_type:
+            raise _invalid_runtime("runtime receipt summary is missing receipt_type")
+        receipt.prev_receipt_hash()
+        receipt.self_receipt_hash()
+        return receipt
+
     def has_causal_anchor(self) -> bool:
         """Return whether daemon/Axon supplied enough facts for causal linkage."""
 
         return bool(self.receipt_ura and self.self_hash_hex)
+
+    def prev_receipt_hash(self) -> bytes:
+        """Return the validated previous receipt hash bytes."""
+
+        return _runtime_receipt_hash(self.prev_receipt_hash_hex, "prev_receipt_hash_hex")
+
+    def self_receipt_hash(self) -> bytes:
+        """Return the validated self receipt hash bytes."""
+
+        return _runtime_receipt_hash(self.self_hash_hex, "self_hash_hex")
 
     def to_json_dict(self) -> dict[str, object]:
         return dict(self.raw)
@@ -611,6 +638,28 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     if not isinstance(value, str):
         raise _invalid_runtime(f"{field_name} must be a string or null")
     return value
+
+
+def _optional_runtime_summary_text(value: object, field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise _invalid_runtime(f"{field_name} must be a string, integer, or null")
+    if isinstance(value, (str, int)):
+        return str(value)
+    raise _invalid_runtime(f"{field_name} must be a string, integer, or null")
+
+
+def _runtime_receipt_hash(value: object, field_name: str) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise _invalid_runtime(f"{field_name} is required")
+    try:
+        decoded = bytes.fromhex(value)
+    except ValueError as error:
+        raise _invalid_runtime(f"{field_name} must be hexadecimal", error) from error
+    if len(decoded) != 32:
+        raise _invalid_runtime(f"{field_name} must be exactly 32 bytes")
+    return decoded
 
 
 def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, object]]:

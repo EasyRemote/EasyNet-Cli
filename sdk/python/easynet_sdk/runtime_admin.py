@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Mapping
 
 from .connection import ConnectOptions
 from .daemon import (
@@ -20,6 +21,11 @@ from .daemon import (
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import DiagnosticsReport, HealthClient, RuntimeHealth
 from .runtime import RuntimeClient
+from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
+
+_RUNTIME_ADMIN_PROFILE = "runtime_admin"
+_RUNTIME_ADMIN_SESSION_LIST_ABILITY = "session.list"
+_RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY = "federation.revoke"
 
 
 class RuntimeAdminCommand(StrEnum):
@@ -46,6 +52,61 @@ class RuntimeReadiness:
     diagnostics: DiagnosticsReport | None
     ready: bool
     messages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RuntimeSessionListRequest:
+    """Runtime administration request for daemon session listing."""
+
+    call: RuntimeCallContext
+    include_terminated: bool | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeSession:
+    """One daemon runtime session projection."""
+
+    kind: str = ""
+    session_id: str = ""
+    device_ura: str = ""
+    hub_ura: str = ""
+    state: str = ""
+    session_kind: str = ""
+    created_unix_ms: int = 0
+    expires_unix_ms: int = 0
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RuntimeSessionPage:
+    """Daemon runtime session page."""
+
+    system_ability: str = ""
+    state: str = ""
+    sessions: tuple[RuntimeSession, ...] = ()
+    next_cursor: object | None = None
+    raw: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RuntimeDeviceRevokeRequest:
+    """Runtime administration request for revoking a device membership."""
+
+    call: RuntimeCallContext
+    device_ura: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class RuntimeDeviceRevokeResult:
+    """Runtime administration result for device revocation."""
+
+    system_ability: str = ""
+    device_ura: str = ""
+    ack: bool = False
+    runtime_not_ready: bool = False
+    runtime_catalog_not_ready: bool = False
+    raw: Mapping[str, object] = field(default_factory=dict)
 
 
 class RuntimeAdminClient:
@@ -123,11 +184,122 @@ class RuntimeAdminClient:
         )
 
 
+class RuntimeAdminAbilityClient:
+    """Runtime administration abilities backed by RuntimeAbilityClient."""
+
+    def __init__(self, ability: RuntimeAbilityClient) -> None:
+        if ability is None:
+            raise _invalid_admin("runtime ability client is required")
+        self._ability = ability
+
+    def list_sessions(
+        self, request: RuntimeSessionListRequest
+    ) -> RuntimeSessionPage:
+        if not isinstance(request, RuntimeSessionListRequest):
+            raise _invalid_admin("RuntimeSessionListRequest is required")
+        args: dict[str, object] = {}
+        if request.include_terminated is not None:
+            args["include_terminated"] = request.include_terminated
+        output = self._ability.invoke(
+            _runtime_admin_call(request.call, _RUNTIME_ADMIN_SESSION_LIST_ABILITY),
+            _RUNTIME_ADMIN_SESSION_LIST_ABILITY,
+            args,
+        )
+        return _runtime_session_page(output)
+
+    def revoke_device(
+        self, request: RuntimeDeviceRevokeRequest
+    ) -> RuntimeDeviceRevokeResult:
+        if not isinstance(request, RuntimeDeviceRevokeRequest):
+            raise _invalid_admin("RuntimeDeviceRevokeRequest is required")
+        device_ura = request.device_ura.strip()
+        reason = request.reason.strip()
+        if not device_ura or not reason:
+            raise _invalid_admin("device_ura and reason are required")
+        output = self._ability.invoke(
+            _runtime_admin_call(request.call, _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY),
+            _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
+            {"agent_ura": device_ura, "reason": reason},
+        )
+        return RuntimeDeviceRevokeResult(
+            system_ability=_RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
+            device_ura=device_ura,
+            ack=_admin_bool(output.get("ack"), True),
+            runtime_not_ready=_admin_bool(output.get("runtime_not_ready"), False),
+            runtime_catalog_not_ready=_admin_bool(
+                output.get("runtime_catalog_not_ready"), False
+            ),
+            raw=dict(output),
+        )
+
+
 def _runtime_ready(state: DaemonLifecycleState) -> bool:
     return state in {
         DaemonLifecycleState.INVOCATION_READY,
         DaemonLifecycleState.RUNNING,
     }
+
+
+def _runtime_admin_call(
+    call: RuntimeCallContext, ability: str
+) -> RuntimeCallContext:
+    metadata = dict(call.metadata)
+    metadata["sdk_profile"] = _RUNTIME_ADMIN_PROFILE
+    metadata["system_ability"] = ability
+    return RuntimeCallContext(
+        caller_ura=call.caller_ura,
+        callee_ura=call.callee_ura,
+        subject_ura=call.subject_ura,
+        nonce_base64=call.nonce_base64,
+        causal_context=call.causal_context,
+        descriptor_version=call.descriptor_version,
+        metadata=metadata,
+    )
+
+
+def _runtime_session_page(output: Mapping[str, object]) -> RuntimeSessionPage:
+    raw_rows = output.get("sessions")
+    if not isinstance(raw_rows, list) or not raw_rows:
+        raw_rows = output.get("items")
+    rows = raw_rows if isinstance(raw_rows, list) else []
+    sessions: list[RuntimeSession] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        sessions.append(
+            RuntimeSession(
+                kind=_admin_string(row.get("kind")),
+                session_id=_admin_string(row.get("session_id")),
+                device_ura=_admin_string(row.get("device_ura")),
+                hub_ura=_admin_string(row.get("hub_ura")),
+                state=_admin_string(row.get("state")),
+                session_kind=_admin_string(row.get("session_kind")),
+                created_unix_ms=_admin_int(row.get("created_unix_ms")),
+                expires_unix_ms=_admin_int(row.get("expires_unix_ms")),
+                metadata=dict(row.get("metadata"))
+                if isinstance(row.get("metadata"), Mapping)
+                else {},
+            )
+        )
+    return RuntimeSessionPage(
+        system_ability=_RUNTIME_ADMIN_SESSION_LIST_ABILITY,
+        state=_admin_string(output.get("state")),
+        sessions=tuple(sessions),
+        next_cursor=output.get("next_cursor"),
+        raw=dict(output),
+    )
+
+
+def _admin_string(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _admin_bool(value: object, fallback: bool) -> bool:
+    return value if isinstance(value, bool) else fallback
+
+
+def _admin_int(value: object) -> int:
+    return value if isinstance(value, int) else 0
 
 
 def _invalid_admin(message: str) -> SDKError:
