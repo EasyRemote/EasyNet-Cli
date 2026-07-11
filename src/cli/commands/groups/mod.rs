@@ -33,6 +33,7 @@ pub mod invocation;
 pub mod mcp;
 pub mod mission;
 pub mod plugin;
+pub mod principal;
 pub mod runtime;
 pub mod selfcmd;
 pub mod trust;

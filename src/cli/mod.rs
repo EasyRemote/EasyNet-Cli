@@ -227,6 +227,7 @@ const HELP_TEMPLATE: &str = "\
   \x1b[1;36m[Identity]\x1b[0m
     \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
     \x1b[1mtrust\x1b[0m                Inspect the realm trust anchor — whose keys admission accepts
+    \x1b[1mprincipal\x1b[0m            Manage runtime principals and enrollment capabilities
 
   \x1b[1;36m[Network]\x1b[0m
     \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, exec, terminal
@@ -279,6 +280,10 @@ pub enum Command {
     /// Inspect the realm trust anchor — whose keys admission accepts.
     #[command(display_order = 11)]
     Trust(groups::trust::TrustArgs),
+
+    /// Manage runtime principals and enrollment capabilities.
+    #[command(display_order = 12)]
+    Principal(groups::principal::PrincipalArgs),
 
     // ── Quickstart (1-3) ─────────────────────────────────────────────────
     // The device-lifecycle verbs (join / start / stop) are the product's
@@ -412,6 +417,7 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // Layered groups
         Command::Auth(args) => groups::auth::dispatch(args),
         Command::Trust(args) => groups::trust::run(args),
+        Command::Principal(args) => groups::principal::run(args),
         Command::Agent(args) => groups::agent::run(args),
         Command::Ability(args) => groups::ability::run(args),
         Command::Discover(args) => discover::run(args),

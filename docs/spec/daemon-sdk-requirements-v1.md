@@ -513,8 +513,13 @@ current Go compilation conflict to repair. The remaining defect is
 architectural and functional: PrincipalLifecycle has a provider-backed
 Go/Python SDK facade and a daemon durable provider. Active-key, grant,
 recovery, admission-state and enrollment-capability proof enforcement have
-landed in the daemon provider, but it is not standalone-Hub cutover-ready
-until CLI lifecycle flows and the two E2E gates pass.
+landed in the daemon provider. The product-neutral `easynet principal`
+operator facade now covers the provider-backed lifecycle transition surface
+through daemon `principal.lifecycle.*` abilities, including create,
+bind-first-key, add-key, rotate-key, revoke-key, configure-recovery, recover,
+suspend, reactivate, delete, issue/revoke enrollment, issue/revoke grant and
+get. It is still not standalone-Hub cutover-ready until the no-Backend URA
+join/user-lifecycle flow and the two E2E gates pass.
 Directory
 is still a seam; receipt/history now has a symmetric bounded seam but no
 stable cursor or downstream cutover; runtime events and runtime administration
@@ -600,9 +605,9 @@ The current remaining work is:
   including receipt, event, administration and principal lifecycle paths;
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,
   Directory, receipt and event capabilities;
-- complete the CLI flows on top of durable enrollment authority for first-user
-  bootstrap, additional-key authorization, recovery,
-  suspension/deletion and grants for backend-free Hub mode;
+- prove the completed `easynet principal` lifecycle facade in a backend-free
+  Hub flow with first-user bootstrap, additional-key authorization, key
+  rotation/revocation, recovery, suspension/reactivation/deletion and grants;
 - prove URA-only `federation.join` plus Principal enrollment without Backend
   HTTP;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates

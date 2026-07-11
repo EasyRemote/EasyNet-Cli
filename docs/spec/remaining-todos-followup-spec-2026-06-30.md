@@ -547,8 +547,13 @@ The compilation conflict is historical, not a current delivery blocker: the
 baseline was restored and re-audited on 2026-07-11. Current green compilation
 and the initial daemon `principal.lifecycle.*` provider must not be mistaken
 for section 6 completion. Active-key, grant, recovery and admission-state
-plus enrollment-capability enforcement have landed in the provider, but CLI
-flows and the two end-to-end gates remain required.
+plus enrollment-capability enforcement have landed in the provider. The
+product-neutral CLI facade now covers the provider-backed lifecycle transition
+surface through the same daemon abilities, including create, bind-first-key,
+add-key, rotate-key, revoke-key, configure-recovery, recover, suspend,
+reactivate, delete, issue/revoke enrollment, issue/revoke grant and get. The
+backend-free URA join/user-lifecycle flow and the two end-to-end gates remain
+required.
 
 ---
 
