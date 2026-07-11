@@ -14,10 +14,10 @@ class CloseTransport(Protocol):
 
 
 class ClientLifecycle:
-    """Local open/closed state for SDK facade clients."""
+    """Local open/closed state for SDK runtime capability clients."""
 
-    def __init__(self, profile: str) -> None:
-        self._profile = profile
+    def __init__(self, capability: str) -> None:
+        self._capability = capability
         self._closed = False
 
     def require_open(self) -> None:
@@ -26,7 +26,7 @@ class ClientLifecycle:
                 code=ErrorCode.INVALID_ARGUMENT,
                 stage="sdk",
                 retry=RetryHint.NEVER,
-                message=f"{self._profile} client is closed",
+                message=f"{self._capability} client is closed",
             )
 
     def close(self, transport: object) -> None:
@@ -43,6 +43,6 @@ class ClientLifecycle:
                     code=ErrorCode.ROUTE_UNAVAILABLE,
                     stage="transport",
                     retry=RetryHint.SAFE,
-                    message=f"{self._profile} close transport failed",
+                    message=f"{self._capability} close transport failed",
                     cause=exc,
                 ) from exc

@@ -56,6 +56,14 @@ fn sdk_scaffold_script_contract_holds() {
 }
 
 #[test]
+fn sdk_parity_matrix_script_contract_holds() {
+    // Pins the Go/Python canonical runtime capability ledger and the
+    // validator self-test that rejects stale capability rows, invalid
+    // states, product rows, false cutover readiness and missing evidence.
+    run_bash_script("tests/scripts/test_check_sdk_parity_matrix.sh");
+}
+
+#[test]
 fn trace_parity_script_contract_holds() {
     // Covers happy, failure (missing fixture, extra key, removed key)
     // and edge cases (idempotence, path-only payload invariant).

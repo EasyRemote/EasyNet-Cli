@@ -169,6 +169,30 @@ func TestTrackedGoSDKSourcesDoNotOwnKeyringPersistence(t *testing.T) {
 	}
 }
 
+func TestGoSDKInternalsDoNotReviveProductProfileLifecycleHelpers(t *testing.T) {
+	root := gitRepositoryRoot(t)
+	if _, err := os.Stat(filepath.Join(root, "sdk/go/profile_lifecycle.go")); !os.IsNotExist(err) {
+		t.Fatalf("sdk/go/profile_lifecycle.go must not exist; use runtime capability lifecycle helpers")
+	}
+	for _, relativePath := range []string{
+		"sdk/go/client_lifecycle.go",
+		"sdk/go/authority.go",
+	} {
+		body, err := os.ReadFile(filepath.Join(root, relativePath))
+		if err != nil {
+			t.Fatalf("read %s: %v", relativePath, err)
+		}
+		for _, marker := range []string{
+			"profileClientLifecycle",
+			"profileCloseTransport",
+		} {
+			if strings.Contains(string(body), marker) {
+				t.Fatalf("%s revives old product-profile lifecycle marker %q", relativePath, marker)
+			}
+		}
+	}
+}
+
 func gitRepositoryRoot(t *testing.T) string {
 	t.Helper()
 	output, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()

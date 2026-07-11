@@ -158,45 +158,45 @@ class ErrorTests(unittest.TestCase):
 
     def test_profile_error_details_adds_stable_profile_refs(self) -> None:
         details = profile_error_details(
-            "publication",
-            details={"reason": "resource_ref_namespace_reserved"},
-            operation="build_local_resource_ref",
+            "directory",
+            details={"reason": "canonical_projection_rejected"},
+            operation="resolve_ura",
         )
 
-        self.assertEqual(details["profile"], "publication")
-        self.assertEqual(details["source_ref"], "python_sdk.profile.publication")
-        self.assertEqual(details["reason"], "resource_ref_namespace_reserved")
-        self.assertEqual(details["operation"], "build_local_resource_ref")
+        self.assertEqual(details["profile"], "directory")
+        self.assertEqual(details["source_ref"], "python_sdk.profile.directory")
+        self.assertEqual(details["reason"], "canonical_projection_rejected")
+        self.assertEqual(details["operation"], "resolve_ura")
 
     def test_profile_error_details_preserves_caller_refs(self) -> None:
         details = profile_error_details(
-            "mission",
+            "authority",
             source_ref="fixture.profile.source",
             details={"profile": "custom", "source_ref": "custom.source"},
-            operation="run_file",
+            operation="mint_session_authority",
         )
 
         self.assertEqual(details["profile"], "custom")
         self.assertEqual(details["source_ref"], "custom.source")
-        self.assertEqual(details["operation"], "run_file")
+        self.assertEqual(details["operation"], "mint_session_authority")
 
     def test_sdk_error_profile_and_source_ref_accessors(self) -> None:
         error = SDKError(
             code=ErrorCode.INVALID_ARGUMENT,
-            stage="publication",
+            stage="directory",
             retry=RetryHint.NEVER,
-            message="invalid resource ref",
+            message="invalid directory projection",
             details=profile_error_details(
-                "publication",
-                details={"reason": "resource_ref_namespace_reserved"},
+                "directory",
+                details={"reason": "canonical_projection_rejected"},
             ),
         )
 
-        self.assertEqual(error.profile, "publication")
-        self.assertEqual(error.source_ref, "python_sdk.profile.publication")
+        self.assertEqual(error.profile, "directory")
+        self.assertEqual(error.source_ref, "python_sdk.profile.directory")
         self.assertEqual(error.error_class, ErrorClass.VALIDATION)
         self.assertEqual(
-            profile_source_ref(" publication "), "python_sdk.profile.publication"
+            profile_source_ref(" directory "), "python_sdk.profile.directory"
         )
 
 

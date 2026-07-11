@@ -169,7 +169,7 @@ func (f AuthorityTransportFunc) MintSessionAuthority(ctx context.Context, reques
 
 // AuthorityClient is the typed authority metadata minting facade.
 type AuthorityClient struct {
-	lifecycle profileClientLifecycle
+	lifecycle runtimeClientLifecycle
 	transport AuthorityTransport
 }
 

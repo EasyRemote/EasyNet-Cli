@@ -86,6 +86,13 @@ class ImportBoundaryTests(unittest.TestCase):
             self.assertIn(name, exported)
             self.assertTrue(hasattr(easynet_sdk, name), name)
 
+    def test_python_sdk_lifecycle_helper_uses_runtime_capability_terms(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "easynet_sdk"
+        body = (root / "_lifecycle.py").read_text()
+        self.assertIn("_capability", body)
+        self.assertNotIn("_profile", body)
+        self.assertNotIn("profile: str", body)
+
     def test_python_sdk_root_does_not_export_direct_runtime_internals(self) -> None:
         exported = set(getattr(easynet_sdk, "__all__", ()))
         self.assertNotIn("DirectDaemonRuntimeConnector", exported)

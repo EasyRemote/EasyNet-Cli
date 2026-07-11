@@ -196,26 +196,26 @@ func TestDecodeDaemonErrorJSONNullIsNoError(t *testing.T) {
 }
 
 func TestProfileErrorDetailsAddsStableProfileRefs(t *testing.T) {
-	details := profileErrorDetails("publication", map[string]any{
-		"reason": "resource_ref_namespace_reserved",
+	details := profileErrorDetails("directory", map[string]any{
+		"reason": "canonical_projection_rejected",
 	})
 
-	if details["profile"] != "publication" {
-		t.Fatalf("profile detail = %#v, want publication", details["profile"])
+	if details["profile"] != "directory" {
+		t.Fatalf("profile detail = %#v, want directory", details["profile"])
 	}
-	if details["source_ref"] != "go_sdk.profile.publication" {
+	if details["source_ref"] != "go_sdk.profile.directory" {
 		t.Fatalf("source_ref detail = %#v", details["source_ref"])
 	}
-	if details["reason"] != "resource_ref_namespace_reserved" {
+	if details["reason"] != "canonical_projection_rejected" {
 		t.Fatalf("reason detail not preserved: %#v", details)
 	}
 }
 
 func TestProfileErrorDetailsPreservesCallerRefs(t *testing.T) {
-	details := profileErrorDetails("mission", map[string]any{
+	details := profileErrorDetails("authority", map[string]any{
 		"profile":    "custom",
 		"source_ref": "custom.source",
-		"operation":  "run_file",
+		"operation":  "mint_session_authority",
 	})
 
 	if details["profile"] != "custom" {
@@ -224,7 +224,7 @@ func TestProfileErrorDetailsPreservesCallerRefs(t *testing.T) {
 	if details["source_ref"] != "custom.source" {
 		t.Fatalf("source_ref detail overwritten: %#v", details)
 	}
-	if details["operation"] != "run_file" {
+	if details["operation"] != "mint_session_authority" {
 		t.Fatalf("operation detail not preserved: %#v", details)
 	}
 }
@@ -232,21 +232,21 @@ func TestProfileErrorDetailsPreservesCallerRefs(t *testing.T) {
 func TestSDKErrorProfileAndSourceRefAccessors(t *testing.T) {
 	err := &SDKError{
 		Code: ErrInvalidArgument,
-		Details: profileErrorDetails("publication", map[string]any{
-			"reason": "resource_ref_namespace_reserved",
+		Details: profileErrorDetails("directory", map[string]any{
+			"reason": "canonical_projection_rejected",
 		}),
 	}
 
-	if err.Profile() != "publication" {
+	if err.Profile() != "directory" {
 		t.Fatalf("profile = %q", err.Profile())
 	}
-	if err.SourceRef() != "go_sdk.profile.publication" {
+	if err.SourceRef() != "go_sdk.profile.directory" {
 		t.Fatalf("source ref = %q", err.SourceRef())
 	}
 	if err.Class() != ErrorClassValidation {
 		t.Fatalf("class = %s", err.Class())
 	}
-	if ProfileSourceRef(" publication ") != "go_sdk.profile.publication" {
+	if ProfileSourceRef(" directory ") != "go_sdk.profile.directory" {
 		t.Fatalf("profile source helper mismatch")
 	}
 }
