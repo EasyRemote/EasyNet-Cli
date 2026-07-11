@@ -760,6 +760,25 @@ impl UnaryDispatcher {
         }))
     }
 
+    pub(crate) fn dispatch_principal_lifecycle(
+        &self,
+        ability: &str,
+        arguments: &[u8],
+    ) -> Result<Response<InvokeResponse>, Status> {
+        let ctx = self.identity.principal_lifecycle.as_ref().ok_or_else(|| {
+            Status::failed_precondition(
+                "principal.lifecycle: this daemon was booted without the durable PrincipalLifecycle provider",
+            )
+        })?;
+        let body = ctx.handle(ability, arguments)?;
+        Ok(Response::new(InvokeResponse {
+            result: body,
+            result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+            ..InvokeResponse::default()
+        }))
+    }
+
     pub(crate) fn dispatch_federation_resolve(
         &self,
         arguments: &[u8],

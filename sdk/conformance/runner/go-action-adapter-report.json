@@ -315,6 +315,18 @@
       "status": "passed"
     },
     {
+      "case_id": "principal/lifecycle_provider",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/principal_test.go"
+        }
+      ],
+      "message": "Go RuntimePrincipalProvider lowers product-neutral PrincipalLifecycle transitions through generic runtime abilities without private-key or product account fields.",
+      "profile": "principal",
+      "status": "passed"
+    },
+    {
       "case_id": "receipt/history_seam",
       "evidence": [
         {

@@ -369,9 +369,9 @@ lifecycle.
 | Key create, list, public projection, rotate, revoke and expiry | implemented |
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
-| Create the first user without Backend | incomplete workflow |
+| Create the first user without Backend | initial daemon provider supports explicit bootstrap; CLI/E2E workflow incomplete |
 | Login, authentication and recovery without Backend | incomplete lifecycle |
-| A user adds a second device/key without Backend | substrate exists; authorization flow and CLI/SDK API are missing |
+| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state; proof verifier, CLI flow and E2E incomplete |
 | Multi-user administration and permission governance without Backend | partial capabilities; no standalone Hub closure |
 
 The current substrate facts are:
@@ -385,15 +385,21 @@ The current substrate facts are:
   sign, rotate, revoke, expiry and immutable subject binding;
 - every key can bind to a User URA while private material remains outside the
   backend, SDK consumers and EasyRemote;
-- cross-realm user-binding tokens and replay protection exist.
+- cross-realm user-binding tokens and replay protection exist; and
+- `principal.lifecycle.*` now has an initial daemon-owned durable provider
+  that records principal state, key bindings, recovery policy and grants while
+  projecting active/revoked public-key facts through the existing
+  `RuntimeTrust` aggregate.
 
 This substrate is not a user lifecycle. The current
 `easynet auth signing-key register` flow derives a User URA from credentials
 containing `user_id`/`username`, while pure URA `federation.join` establishes
 Device membership and does not naturally create or bind a user. Local
-loopback administration can manually register multiple users and keys, but an
-ordinary user cannot yet complete enrollment, additional-device binding,
-authentication or recovery without Backend assistance.
+loopback administration can manually register multiple users and keys, and
+`principal.lifecycle.*` can now commit initial lifecycle facts. An ordinary
+user still cannot yet complete the full invitation/enrollment,
+additional-device binding, authentication or recovery product flow without the
+remaining CLI proof and E2E work.
 
 ### 14.2 Canonical state machine
 
@@ -494,14 +500,17 @@ This target is not currently cutover-ready. On 2026-07-11 the restored baseline
 was re-audited after the interrupted work: Go SDK tests, Python SDK tests,
 EasyNet backend tests and EasyRemote tests all passed. There is therefore no
 current Go compilation conflict to repair. The remaining defect is
-architectural and functional: PrincipalLifecycle and Directory are still seams;
-receipt/history now has a symmetric bounded seam but no stable cursor or
-downstream cutover; runtime events and runtime administration now have
-symmetric provider-backed Go/Python facades; access control now has symmetric
-provider-backed Go/Python SDK facades over daemon `authority.binding.*`
-abilities, while Backend product role mapping and standalone-Hub governance
-cutover remain incomplete; and the backend still owns product-local
-runtime-profile lowering.
+architectural and functional: PrincipalLifecycle has a provider-backed
+Go/Python SDK facade and an initial daemon durable provider, but it is not
+standalone-Hub cutover-ready until admitted proof verification,
+admission-state enforcement, CLI flows and the two E2E gates pass. Directory
+is still a seam; receipt/history now has a symmetric bounded seam but no
+stable cursor or downstream cutover; runtime events and runtime administration
+now have symmetric provider-backed Go/Python facades; access control now has
+symmetric provider-backed Go/Python SDK facades over daemon
+`authority.binding.*` abilities, while Backend product role mapping and
+standalone-Hub governance cutover remain incomplete; and the backend still
+owns product-local runtime-profile lowering.
 Backend-free multi-user closure remains partial as described above. Passing
 baseline tests must not be reported as standalone-Hub delivery evidence until
 sections 14.2 and 14.3 and the cross-language parity gates pass.
@@ -579,8 +588,9 @@ The current remaining work is:
   including receipt, event, administration and principal lifecycle paths;
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,
   Directory, receipt and event capabilities;
-- implement first-user bootstrap, additional-key authorization, recovery,
-  suspension/deletion and grants for backend-free Hub mode;
+- complete CLI flows and proof verifiers for first-user bootstrap,
+  additional-key authorization, recovery, suspension/deletion and grants for
+  backend-free Hub mode;
 - prove URA-only `federation.join` plus Principal enrollment without Backend
   HTTP;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates

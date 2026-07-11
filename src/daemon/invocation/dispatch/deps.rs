@@ -33,6 +33,7 @@ use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
 use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync;
+use crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleContext;
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle;
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
@@ -131,6 +132,9 @@ pub(crate) struct IdentityPlane {
     /// `None` ⇒ these abilities return `failed_precondition`
     /// (typically a smoke-test setup).
     pub(crate) runtime_trust: Option<RuntimeTrustContext>,
+    /// Durable PrincipalLifecycle provider using the same runtime trust
+    /// substrate. `None` ⇒ principal.lifecycle.* routes fail closed.
+    pub(crate) principal_lifecycle: Option<PrincipalLifecycleContext>,
     /// Daemon realm for `session.open` admission-time cross-realm
     /// rejection. `None` ⇒ constructed without realm context
     /// (typically a narrow unit test); the defense-in-depth check is

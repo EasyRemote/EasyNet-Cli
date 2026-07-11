@@ -418,9 +418,9 @@ multi-user lifecycle without EasyNet Backend is not.
 | Key create, query, rotate, revoke and expiry | implemented |
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
-| Create the first user without Backend | incomplete workflow |
+| Create the first user without Backend | initial daemon provider supports explicit bootstrap; CLI/E2E workflow incomplete |
 | User login, authentication and recovery without Backend | incomplete lifecycle |
-| A user adds a second device/key without Backend | substrate exists; complete authorization flow and CLI/SDK API are missing |
+| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state; proof verifier, CLI flow and E2E incomplete |
 | Multi-user administration and permission governance without Backend | partial capabilities; no standalone-Hub closure |
 
 The implementation already establishes these lower-level facts:
@@ -433,15 +433,21 @@ The implementation already establishes these lower-level facts:
   revoke, expiry and subject binding;
 - a managed key may bind to a User URA, while private material never enters
   Backend, an SDK consumer or EasyRemote; and
-- cross-realm user-binding tokens and replay protection exist.
+- cross-realm user-binding tokens and replay protection exist; and
+- `principal.lifecycle.*` now has an initial daemon-owned durable provider
+  that records principal state, key bindings, recovery policy and grants while
+  projecting active/revoked public-key facts through the existing
+  `RuntimeTrust` aggregate.
 
 These facts are necessary but do not constitute a user lifecycle. The current
 `easynet auth signing-key register` flow derives the User URA from existing
 credentials containing `user_id`/`username`. Pure-URA `federation.join`
 establishes Device membership and does not implicitly create a user. A local
 operator can invoke loopback administration abilities to register multiple
-users and public keys, but an ordinary user cannot yet complete registration,
-authentication, additional-device enrollment or recovery without Backend.
+users and public keys, and `principal.lifecycle.*` can now commit initial
+lifecycle facts. An ordinary user still cannot yet complete the full
+invitation/enrollment, authentication, additional-device enrollment or recovery
+product flow without the remaining CLI proof and E2E work.
 
 ### Required canonical state machine
 
@@ -529,8 +535,9 @@ only partially complete as described above.
 
 The compilation conflict is historical, not a current delivery blocker: the
 baseline was restored and re-audited on 2026-07-11. Current green compilation
-must not be mistaken for section 6 completion; standalone PrincipalLifecycle
-and its two end-to-end gates remain required.
+and the initial daemon `principal.lifecycle.*` provider must not be mistaken
+for section 6 completion; standalone PrincipalLifecycle proof enforcement,
+CLI flows and its two end-to-end gates remain required.
 
 ---
 

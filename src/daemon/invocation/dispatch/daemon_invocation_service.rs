@@ -112,6 +112,13 @@ use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+use crate::daemon::invocation::admission::principal_lifecycle::{
+    ABILITY_PRINCIPAL_ADD_KEY, ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+    ABILITY_PRINCIPAL_CONFIGURE_RECOVERY, ABILITY_PRINCIPAL_CREATE, ABILITY_PRINCIPAL_DELETE,
+    ABILITY_PRINCIPAL_GET, ABILITY_PRINCIPAL_ISSUE_GRANT, ABILITY_PRINCIPAL_REACTIVATE,
+    ABILITY_PRINCIPAL_RECOVER, ABILITY_PRINCIPAL_REVOKE_GRANT, ABILITY_PRINCIPAL_REVOKE_KEY,
+    ABILITY_PRINCIPAL_ROTATE_KEY, ABILITY_PRINCIPAL_SUSPEND,
+};
 use crate::daemon::invocation::admission::quota_meter::quota_meters_request;
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
@@ -168,6 +175,19 @@ pub(crate) enum DaemonUnaryRoute {
     IdentityRegisterPubkey,
     IdentityRevokeUserPubkey,
     IdentityListUserPubkeys,
+    PrincipalCreate,
+    PrincipalBindFirstKey,
+    PrincipalAddKey,
+    PrincipalRotateKey,
+    PrincipalRevokeKey,
+    PrincipalConfigureRecovery,
+    PrincipalRecover,
+    PrincipalSuspend,
+    PrincipalReactivate,
+    PrincipalDelete,
+    PrincipalIssueGrant,
+    PrincipalRevokeGrant,
+    PrincipalGet,
 }
 
 impl DaemonUnaryRoute {
@@ -188,6 +208,19 @@ impl DaemonUnaryRoute {
         Self::IdentityRegisterPubkey,
         Self::IdentityRevokeUserPubkey,
         Self::IdentityListUserPubkeys,
+        Self::PrincipalCreate,
+        Self::PrincipalBindFirstKey,
+        Self::PrincipalAddKey,
+        Self::PrincipalRotateKey,
+        Self::PrincipalRevokeKey,
+        Self::PrincipalConfigureRecovery,
+        Self::PrincipalRecover,
+        Self::PrincipalSuspend,
+        Self::PrincipalReactivate,
+        Self::PrincipalDelete,
+        Self::PrincipalIssueGrant,
+        Self::PrincipalRevokeGrant,
+        Self::PrincipalGet,
     ];
 
     #[must_use]
@@ -217,6 +250,19 @@ impl DaemonUnaryRoute {
             Self::IdentityRegisterPubkey => ABILITY_IDENTITY_REGISTER_PUBKEY,
             Self::IdentityRevokeUserPubkey => ABILITY_IDENTITY_REVOKE_USER_PUBKEY,
             Self::IdentityListUserPubkeys => ABILITY_IDENTITY_LIST_USER_PUBKEYS,
+            Self::PrincipalCreate => ABILITY_PRINCIPAL_CREATE,
+            Self::PrincipalBindFirstKey => ABILITY_PRINCIPAL_BIND_FIRST_KEY,
+            Self::PrincipalAddKey => ABILITY_PRINCIPAL_ADD_KEY,
+            Self::PrincipalRotateKey => ABILITY_PRINCIPAL_ROTATE_KEY,
+            Self::PrincipalRevokeKey => ABILITY_PRINCIPAL_REVOKE_KEY,
+            Self::PrincipalConfigureRecovery => ABILITY_PRINCIPAL_CONFIGURE_RECOVERY,
+            Self::PrincipalRecover => ABILITY_PRINCIPAL_RECOVER,
+            Self::PrincipalSuspend => ABILITY_PRINCIPAL_SUSPEND,
+            Self::PrincipalReactivate => ABILITY_PRINCIPAL_REACTIVATE,
+            Self::PrincipalDelete => ABILITY_PRINCIPAL_DELETE,
+            Self::PrincipalIssueGrant => ABILITY_PRINCIPAL_ISSUE_GRANT,
+            Self::PrincipalRevokeGrant => ABILITY_PRINCIPAL_REVOKE_GRANT,
+            Self::PrincipalGet => ABILITY_PRINCIPAL_GET,
         }
     }
 
@@ -437,6 +483,7 @@ impl DaemonInvocationService {
             },
             identity: IdentityPlane {
                 runtime_trust: None,
+                principal_lifecycle: None,
                 session_realm: None,
             },
             runtime: RuntimePlane {
@@ -698,6 +745,11 @@ impl DaemonInvocationService {
             trust_anchor_path: trust_anchor_path.into(),
             cell,
         });
+        self.identity.principal_lifecycle = self
+            .identity
+            .runtime_trust
+            .clone()
+            .map(crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleContext::from_runtime_trust);
         self
     }
 
@@ -1008,6 +1060,21 @@ impl Invocation for DaemonInvocationService {
                 Some(DaemonUnaryRoute::IdentityListUserPubkeys) => {
                     unary.dispatch_list_user_pubkeys(&inner.arguments)
                 }
+                Some(
+                    DaemonUnaryRoute::PrincipalCreate
+                    | DaemonUnaryRoute::PrincipalBindFirstKey
+                    | DaemonUnaryRoute::PrincipalAddKey
+                    | DaemonUnaryRoute::PrincipalRotateKey
+                    | DaemonUnaryRoute::PrincipalRevokeKey
+                    | DaemonUnaryRoute::PrincipalConfigureRecovery
+                    | DaemonUnaryRoute::PrincipalRecover
+                    | DaemonUnaryRoute::PrincipalSuspend
+                    | DaemonUnaryRoute::PrincipalReactivate
+                    | DaemonUnaryRoute::PrincipalDelete
+                    | DaemonUnaryRoute::PrincipalIssueGrant
+                    | DaemonUnaryRoute::PrincipalRevokeGrant
+                    | DaemonUnaryRoute::PrincipalGet,
+                ) => unary.dispatch_principal_lifecycle(&route_function, &inner.arguments),
                 None if DaemonStreamRoute::from_function(&route_function).is_some() => {
                     Err(Status::invalid_argument(format!(
                         "{route_function} is a server-stream ability and must be invoked via InvokeStream, not Invoke"

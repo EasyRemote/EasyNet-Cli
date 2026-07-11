@@ -20,6 +20,7 @@ pub mod owner_resolution;
 pub(crate) mod peer_envelope_signer;
 pub mod policy_engine;
 pub mod policy_gate;
+pub(crate) mod principal_lifecycle;
 pub(crate) mod quota_meter;
 pub mod register_device_pubkey;
 pub mod revoke_user_pubkey;

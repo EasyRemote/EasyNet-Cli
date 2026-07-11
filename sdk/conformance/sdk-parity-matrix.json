@@ -2,221 +2,726 @@
   "schema_version": 1,
   "case_id": "sdk/go_python_parity_matrix",
   "source_spec": "docs/spec/daemon-sdk-requirements-v1.md#10-capability-state-matrix",
-  "status_order": ["unsupported", "seam", "provider-backed", "cutover-ready"],
+  "status_order": [
+    "unsupported",
+    "seam",
+    "provider-backed",
+    "cutover-ready"
+  ],
   "status_definitions": {
     "unsupported": "No shipped public capability exists for this language.",
     "seam": "The public type and lifecycle contract exist, but no shipped execution provider exists.",
     "provider-backed": "One explicit provider implements the capability and executable shared evidence passes.",
     "cutover-ready": "First-class consumers use the provider and all lower-layer or product duplication has been deleted."
   },
-  "languages": ["go", "python"],
+  "languages": [
+    "go",
+    "python"
+  ],
   "capabilities": [
     {
       "capability_id": "abi_version_discovery",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/version-abi-compatible.yaml", "sdk/conformance/cases/version-abi-incompatible.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_client.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/version-abi-compatible.yaml",
+        "sdk/conformance/cases/version-abi-incompatible.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/conformance_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_client.py"
+          }
+        ]
+      },
       "remaining": "Release-channel compatibility and package publication remain separate distribution concerns."
     },
     {
       "capability_id": "daemon_lifecycle",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/environment-process-root.yaml", "sdk/conformance/cases/daemon-control-only.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/daemon_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_environment.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/environment-process-root.yaml",
+        "sdk/conformance/cases/daemon-control-only.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/daemon_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_environment.py"
+          }
+        ]
+      },
       "remaining": "Lifecycle is provider-backed; product orchestration remains downstream."
     },
     {
       "capability_id": "runtime_connection",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/environment-process-root.yaml", "sdk/conformance/cases/daemon-control-only.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/connection_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_connection.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/environment-process-root.yaml",
+        "sdk/conformance/cases/daemon-control-only.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/connection_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_connection.py"
+          }
+        ]
+      },
       "remaining": "Remote endpoint deployment policy is outside the runtime SDK contract."
     },
     {
       "capability_id": "canonical_addressing",
       "profile": "addressing",
-      "shared_cases": ["sdk/conformance/cases/canonical-addressing-provider.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/addressing_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_axon_addressing.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/canonical-addressing-provider.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/addressing_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_axon_addressing.py"
+          }
+        ]
+      },
       "remaining": "Product labels, directory views, and signing-key administration remain downstream."
     },
     {
       "capability_id": "runtime_health",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/health-api-vs-runtime.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/health_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_health.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/health-api-vs-runtime.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/health_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_health.py"
+          }
+        ]
+      },
       "remaining": "Product route health and UI presentation remain downstream."
     },
     {
       "capability_id": "typed_errors",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/error-typed-json.yaml", "sdk/conformance/cases/error-retry-hint.yaml", "sdk/conformance/cases/daemon-permission-denied.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/errors_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_errors.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/error-typed-json.yaml",
+        "sdk/conformance/cases/error-retry-hint.yaml",
+        "sdk/conformance/cases/daemon-permission-denied.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/errors_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_errors.py"
+          }
+        ]
+      },
       "remaining": "Products may map error presentation but may not redefine runtime error classes."
     },
     {
       "capability_id": "ability_descriptor_projection",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/ability-descriptor-projection.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/ability_descriptor_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_invocation.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/ability-descriptor-projection.yaml"
+      ],
+      "go": {
+        "status": "seam",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/ability_descriptor_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "seam",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_invocation.py"
+          }
+        ]
+      },
       "remaining": "The generic projection is shipped; catalog ownership and product display policy remain outside the SDK."
     },
     {
       "capability_id": "authority_metadata",
       "profile": "authority",
-      "shared_cases": ["sdk/conformance/cases/authority-metadata.yaml", "sdk/conformance/cases/authority-mutual-exclusion.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/authority_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_authority.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/authority-metadata.yaml",
+        "sdk/conformance/cases/authority-mutual-exclusion.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/authority_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_authority.py"
+          }
+        ]
+      },
       "remaining": "Product authorization policy and account state remain downstream."
     },
     {
       "capability_id": "complete_invocation_draft",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-builder-handle-state.yaml", "sdk/conformance/cases/authority-mutual-exclusion.yaml", "sdk/conformance/cases/runtime-ability-lowering.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/invocation_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_invocation.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/invocation-complete-tuple.yaml",
+        "sdk/conformance/cases/invocation-builder-handle-state.yaml",
+        "sdk/conformance/cases/authority-mutual-exclusion.yaml",
+        "sdk/conformance/cases/runtime-ability-lowering.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/invocation_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_invocation.py"
+          }
+        ]
+      },
       "remaining": "Product argument DTO validation remains downstream."
     },
     {
       "capability_id": "prepare_sign_submit",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/invocation-canonical-material.yaml", "sdk/conformance/cases/invocation-presigned-submit.yaml", "sdk/conformance/cases/invocation-local-daemon-signing-boundary.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/signing_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_signing.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/invocation-canonical-material.yaml",
+        "sdk/conformance/cases/invocation-presigned-submit.yaml",
+        "sdk/conformance/cases/invocation-local-daemon-signing-boundary.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/signing_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_signing.py"
+          }
+        ]
+      },
       "remaining": "External key custody policy remains provider configuration, not a product profile."
     },
     {
       "capability_id": "managed_signing",
       "profile": "managed_signing",
-      "shared_cases": ["sdk/conformance/cases/managed-signing-provider-lifecycle.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/managed_signing_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_managed_signing.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/managed-signing-provider-lifecycle.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/managed_signing_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_managed_signing.py"
+          }
+        ]
+      },
       "remaining": "Product key-administration workflows remain downstream."
     },
     {
       "capability_id": "access_control",
       "profile": "access_control",
-      "shared_cases": ["sdk/conformance/cases/access-control-provider.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/access_control_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_access_control.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/access-control-provider.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/access_control_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_access_control.py"
+          }
+        ]
+      },
       "remaining": "Generic grant, decision and proof projection is provider-backed; Backend product role mapping and standalone-Hub governance cutover remain downstream."
     },
     {
       "capability_id": "principal_lifecycle",
       "profile": "principal",
-      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
-      "remaining": "Implement the single persistent provider, admitted proof construction, replay protection and standalone-Hub cutover."
+      "shared_cases": [
+        "sdk/conformance/cases/principal-lifecycle-seam.yaml",
+        "sdk/conformance/cases/principal-lifecycle-provider.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/principal_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_principal.py"
+          }
+        ]
+      },
+      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has an initial durable principal.lifecycle.* provider; admitted proof verification, admission-state enforcement and standalone-Hub/backend-present E2E remain before cutover-ready."
     },
     {
       "capability_id": "principal_enrollment",
       "profile": "principal",
-      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
-      "remaining": "Public enrollment command/proof vocabulary exists; first-user bootstrap, invitation proof admission, replay-bounded durable mutation and standalone-Hub enrollment E2E are not implemented."
+      "shared_cases": [
+        "sdk/conformance/cases/principal-lifecycle-seam.yaml",
+        "sdk/conformance/cases/principal-lifecycle-provider.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/principal_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_principal.py"
+          }
+        ]
+      },
+      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus enrollment/grant-gated additional principal creation; invitation proof admission and standalone-Hub enrollment E2E remain incomplete."
     },
     {
       "capability_id": "principal_public_key_bindings",
       "profile": "principal",
-      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
-      "remaining": "The public projection models multiple keys per Principal URA; SDK provider-backed add/rotate/revoke operations, active-key authorization and Hub restart persistence remain incomplete."
+      "shared_cases": [
+        "sdk/conformance/cases/principal-lifecycle-seam.yaml",
+        "sdk/conformance/cases/principal-lifecycle-provider.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/principal_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_principal.py"
+          }
+        ]
+      },
+      "remaining": "SDK key binding add/rotate/revoke operations are provider-backed, and daemon lifecycle state now projects active/revoked key facts through RuntimeTrust; active-key proof verification, admission-state enforcement and Hub restart E2E remain incomplete."
     },
     {
       "capability_id": "principal_recovery",
       "profile": "principal",
-      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
-      "remaining": "Recovery policy and command vocabulary exists; replay-protected single-use recovery proofs, provider enforcement and recovery E2E are not implemented."
+      "shared_cases": [
+        "sdk/conformance/cases/principal-lifecycle-seam.yaml",
+        "sdk/conformance/cases/principal-lifecycle-provider.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/principal_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_principal.py"
+          }
+        ]
+      },
+      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and daemon lifecycle state now records recovery policy plus recovery-key addition; replay-protected single-use recovery proof verification and recovery E2E remain incomplete."
     },
     {
       "capability_id": "principal_authorization_grants",
       "profile": "principal",
-      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
-      "remaining": "Grant projection and command vocabulary exists; durable grant issuance/revocation, admission enforcement and standalone multi-user governance closure remain incomplete."
+      "shared_cases": [
+        "sdk/conformance/cases/principal-lifecycle-seam.yaml",
+        "sdk/conformance/cases/principal-lifecycle-provider.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/principal_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_principal.py"
+          }
+        ]
+      },
+      "remaining": "SDK grant issue/revoke operations are provider-backed, and daemon lifecycle state now records durable grant issue/revoke facts; grant admission enforcement and standalone multi-user governance closure remain incomplete."
     },
     {
       "capability_id": "directory_resolution",
       "profile": "directory",
-      "shared_cases": ["sdk/conformance/cases/directory-resolution-seam.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/directory_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_directory.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/directory-resolution-seam.yaml"
+      ],
+      "go": {
+        "status": "seam",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/directory_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "seam",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_directory.py"
+          }
+        ]
+      },
       "remaining": "Resolve and stream projection exist; implement stable daemon list cursors and resumable subscription provider before provider-backed status."
     },
     {
       "capability_id": "receipt_history",
       "profile": "receipts",
-      "shared_cases": ["sdk/conformance/cases/receipt-history-seam.yaml"],
-      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/receipt_test.go"}]},
-      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_receipt.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/receipt-history-seam.yaml"
+      ],
+      "go": {
+        "status": "seam",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/receipt_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "seam",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_receipt.py"
+          }
+        ]
+      },
       "remaining": "Bounded typed history, exact lookup, trace graph, causal references, and Axon-owned verification exist; add a stable cursor/anchor provider and migrate all downstream consumers before provider-backed or cutover-ready status."
     },
     {
       "capability_id": "runtime_events",
       "profile": "runtime_events",
-      "shared_cases": ["sdk/conformance/cases/runtime-events-seam.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_events_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_runtime_events.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/runtime-events-seam.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/runtime_events_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_runtime_events.py"
+          }
+        ]
+      },
       "remaining": "Generic bounded handle-event reads are provider-backed; downstream Backend/EasyRemote event consumers still need cutover and durable subscription cursors."
     },
     {
       "capability_id": "runtime_administration",
       "profile": "runtime_administration",
-      "shared_cases": ["sdk/conformance/cases/runtime-administration-seam.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_admin_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_runtime_admin.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/runtime-administration-seam.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/runtime_admin_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_runtime_admin.py"
+          }
+        ]
+      },
       "remaining": "Generic runtime lifecycle/readiness administration is provider-backed; product account, hosted-agent, page, and standalone-Hub governance workflows remain downstream or PrincipalLifecycle work."
     },
     {
       "capability_id": "unary_invoke",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/invocation-complete-tuple.yaml", "sdk/conformance/cases/invocation-terminal-monotonicity.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_runtime.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/invocation-complete-tuple.yaml",
+        "sdk/conformance/cases/invocation-terminal-monotonicity.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/runtime_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_runtime.py"
+          }
+        ]
+      },
       "remaining": "Typed product facades lower to this generic provider downstream."
     },
     {
       "capability_id": "stream",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/stream-order-terminal.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/stream_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_stream.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/stream-order-terminal.yaml",
+        "sdk/conformance/cases/stream-backpressure-bound.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/stream_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_stream.py"
+          }
+        ]
+      },
       "remaining": "Product event taxonomies remain downstream."
     },
     {
       "capability_id": "bidi",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/bidi-close-send-not-cancel.yaml", "sdk/conformance/cases/bidi-frame0-required.yaml", "sdk/conformance/cases/stream-backpressure-bound.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/bidi_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_bidi.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/bidi-close-send-not-cancel.yaml",
+        "sdk/conformance/cases/bidi-frame0-required.yaml",
+        "sdk/conformance/cases/stream-backpressure-bound.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/bidi_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_bidi.py"
+          }
+        ]
+      },
       "remaining": "Terminal, browser, media, and remote-control session policy remains downstream."
     },
     {
       "capability_id": "terminal_receipt_facts",
       "profile": "runtime_core",
-      "shared_cases": ["sdk/conformance/cases/terminal-receipt-facts.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_test.go"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_runtime.py"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/terminal-receipt-facts.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "go_test",
+            "ref": "sdk/go/runtime_test.go"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "python_test",
+            "ref": "sdk/python/tests/test_runtime.py"
+          }
+        ]
+      },
       "remaining": "Admission and terminal checkpoints are distinct and terminal receipt compatibility is stable; full receipt domain decoding remains Axon-owned while downstream consumers still need cutover."
     },
     {
       "capability_id": "conformance_runner",
       "profile": "conformance",
-      "shared_cases": ["sdk/conformance/cases/sdk-go-python-parity-matrix.yaml", "sdk/conformance/cases/sdk-product-neutrality.yaml"],
-      "go": {"status": "provider-backed", "evidence": [{"kind": "static_gate", "ref": "tools/scripts/check-sdk-parity-matrix.sh"}, {"kind": "static_gate", "ref": "tools/scripts/check-sdk-product-neutrality.sh"}]},
-      "python": {"status": "provider-backed", "evidence": [{"kind": "static_gate", "ref": "tools/scripts/check-sdk-parity-matrix.sh"}, {"kind": "static_gate", "ref": "tools/scripts/check-sdk-product-neutrality.sh"}]},
+      "shared_cases": [
+        "sdk/conformance/cases/sdk-go-python-parity-matrix.yaml",
+        "sdk/conformance/cases/sdk-product-neutrality.yaml"
+      ],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-sdk-parity-matrix.sh"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-sdk-product-neutrality.sh"
+          }
+        ]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-sdk-parity-matrix.sh"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-sdk-product-neutrality.sh"
+          }
+        ]
+      },
       "remaining": "Additional language subsets publish their own executable evidence without extending the Go/Python capability matrix."
     }
   ]

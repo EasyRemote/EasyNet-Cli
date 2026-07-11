@@ -198,6 +198,32 @@ pub const ABILITY_FEDERATION_REVOKE: &str = "federation.revoke";
 pub const ABILITY_IDENTITY_REGISTER_PUBKEY: &str = "identity.register_pubkey";
 pub const ABILITY_IDENTITY_LIST_USER_PUBKEYS: &str = "identity.list_user_pubkeys";
 pub const ABILITY_IDENTITY_REVOKE_USER_PUBKEY: &str = "identity.revoke_user_pubkey";
+pub const ABILITY_PRINCIPAL_CREATE: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_CREATE;
+pub const ABILITY_PRINCIPAL_BIND_FIRST_KEY: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_BIND_FIRST_KEY;
+pub const ABILITY_PRINCIPAL_ADD_KEY: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_ADD_KEY;
+pub const ABILITY_PRINCIPAL_ROTATE_KEY: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_ROTATE_KEY;
+pub const ABILITY_PRINCIPAL_REVOKE_KEY: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_REVOKE_KEY;
+pub const ABILITY_PRINCIPAL_CONFIGURE_RECOVERY: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_CONFIGURE_RECOVERY;
+pub const ABILITY_PRINCIPAL_RECOVER: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_RECOVER;
+pub const ABILITY_PRINCIPAL_SUSPEND: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_SUSPEND;
+pub const ABILITY_PRINCIPAL_REACTIVATE: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_REACTIVATE;
+pub const ABILITY_PRINCIPAL_DELETE: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_DELETE;
+pub const ABILITY_PRINCIPAL_ISSUE_GRANT: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_ISSUE_GRANT;
+pub const ABILITY_PRINCIPAL_REVOKE_GRANT: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_REVOKE_GRANT;
+pub const ABILITY_PRINCIPAL_GET: &str =
+    crate::daemon::invocation::admission::principal_lifecycle::ABILITY_PRINCIPAL_GET;
 pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
 pub const ABILITY_META_LIST_ABILITIES: &str = "meta.list_abilities";
 pub const ABILITY_FEDERATION_STATUS: &str = "federation.status";
@@ -224,6 +250,19 @@ const HUB_BASELINE: &[BaselineAbility] = &[
     daemon_rpc!(ABILITY_IDENTITY_REGISTER_PUBKEY, HubIdentity),
     daemon_rpc!(ABILITY_IDENTITY_LIST_USER_PUBKEYS, HubIdentity),
     daemon_rpc!(ABILITY_IDENTITY_REVOKE_USER_PUBKEY, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_CREATE, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_BIND_FIRST_KEY, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_ADD_KEY, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_ROTATE_KEY, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_REVOKE_KEY, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_CONFIGURE_RECOVERY, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_RECOVER, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_SUSPEND, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_REACTIVATE, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_DELETE, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_ISSUE_GRANT, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_REVOKE_GRANT, HubIdentity),
+    daemon_rpc!(ABILITY_PRINCIPAL_GET, HubIdentity),
     runtime_admin_rpc!(ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY, HubRuntimeAdmin),
     // `session.open` rides the daemon bidi carrier (`InvokeBidi`), not the local registry or the unary/stream
     // Invocation route table. They are prefix-bypassed in dispatch (SPEC
