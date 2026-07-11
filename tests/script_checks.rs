@@ -81,6 +81,24 @@ fn sdk_cutover_readiness_script_contract_holds() {
 }
 
 #[test]
+fn product_key_custody_boundary_script_contract_holds() {
+    // Pins product processes as SDK consumers: Backend and EasyRemote must not
+    // own runtime signing private material, key-service vault/passphrase
+    // policy, raw daemon subprocess lifecycle, or direct C ABI loading.
+    run_bash_script("tests/scripts/test_check_product_key_custody_boundary.sh");
+}
+
+#[test]
+fn downstream_sdk_consumer_cutover_script_contract_holds() {
+    // Pins positive downstream cutover evidence: Backend runtimeprofile source
+    // stays deleted and Backend/EasyRemote consumers use canonical Go/Python
+    // SDK providers for Directory, Receipt, Events, Admin, access control,
+    // PrincipalLifecycle, configuration, identity, transport and receipt
+    // anchors.
+    run_bash_script("tests/scripts/test_check_downstream_sdk_consumer_cutover.sh");
+}
+
+#[test]
 fn trace_parity_script_contract_holds() {
     // Covers happy, failure (missing fixture, extra key, removed key)
     // and edge cases (idempotence, path-only payload invariant).

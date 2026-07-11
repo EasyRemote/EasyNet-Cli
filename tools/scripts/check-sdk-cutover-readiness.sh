@@ -62,6 +62,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
   run_gate "generic FFI ABI v5 exact-surface self-test" bash "$REPO_ROOT/tests/scripts/test_check_ffi_abi_v5_header.sh"
   run_gate "SDK package metadata self-test" bash "$SELF_DIR/check-sdk-package-metadata.sh" --self-test
+  run_gate "downstream SDK consumer cutover self-test" bash "$SELF_DIR/check-downstream-sdk-consumer-cutover.sh" --self-test
+  run_gate "product key-custody boundary self-test" bash "$SELF_DIR/check-product-key-custody-boundary.sh" --self-test
   run_gate "product smoke self-test" bash "$SELF_DIR/check-sdk-product-smokes.sh" --self-test
   run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
   run_gate "Go SDK live smoke self-test" bash "$SELF_DIR/go-sdk-live-smoke.sh" --self-test
@@ -100,6 +102,8 @@ run_gate "daemon Invocation migration" bash "$SELF_DIR/check-daemon-invocation-m
 run_gate "EasyRemote SDK boundary" bash "$SELF_DIR/check-easyremote-sdk-boundary.sh" "$EASYREMOTE_ROOT" || status=1
 run_gate "backend route-family coverage" bash "$SELF_DIR/check-backend-route-family-coverage.sh" || status=1
 run_gate "backend SDK-only boundary" bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" "$BACKEND_ROOT" || status=1
+run_gate "downstream SDK consumer cutover" bash "$SELF_DIR/check-downstream-sdk-consumer-cutover.sh" "$BACKEND_ROOT" "$EASYREMOTE_ROOT" || status=1
+run_gate "product key-custody boundary" bash "$SELF_DIR/check-product-key-custody-boundary.sh" "$BACKEND_ROOT" "$EASYREMOTE_ROOT" || status=1
 run_gate "product smokes" bash "$SELF_DIR/check-sdk-product-smokes.sh" || status=1
 run_gate "Python SDK live smoke" bash "$SELF_DIR/python-sdk-live-smoke.sh" || status=1
 run_gate "Go SDK live smoke" bash "$SELF_DIR/go-sdk-live-smoke.sh" || status=1
