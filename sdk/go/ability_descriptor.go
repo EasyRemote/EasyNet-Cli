@@ -40,12 +40,12 @@ type AbilityDescriptorRef struct {
 }
 
 // ProjectAbilityDescriptorRef projects a DescriptorRef through the
-// Axon-delegated Identity facade.
-func ProjectAbilityDescriptorRef(ctx context.Context, identity *IdentityClient, raw string) (AbilityDescriptorRef, error) {
-	if identity == nil {
-		return AbilityDescriptorRef{}, invalidProfileClient(directoryIdentityProfile, "identity client is required for descriptor_ref projection")
+// product-neutral Axon-delegated Addressing seam.
+func ProjectAbilityDescriptorRef(ctx context.Context, addressing Addressing, raw string) (AbilityDescriptorRef, error) {
+	if addressing == nil {
+		return AbilityDescriptorRef{}, invalidProfileClient(addressingProfile, "addressing provider is required for descriptor_ref projection")
 	}
-	projection, err := identity.ProjectDescriptorRef(ctx, DescriptorRefRequest{DescriptorRef: raw})
+	projection, err := addressing.ProjectDescriptorRef(ctx, CanonicalDescriptorRefRequest{DescriptorRef: raw})
 	if err != nil {
 		return AbilityDescriptorRef{}, err
 	}
@@ -53,7 +53,7 @@ func ProjectAbilityDescriptorRef(ctx context.Context, identity *IdentityClient, 
 		strings.TrimSpace(projection.DescriptorRef) == "" ||
 		strings.TrimSpace(projection.AbilityURA) == "" ||
 		strings.TrimSpace(projection.DescriptorVersion) == "" {
-		return AbilityDescriptorRef{}, invalidProfilePayload(directoryIdentityProfile, "descriptor_ref projection is incomplete", nil)
+		return AbilityDescriptorRef{}, invalidProfilePayload(addressingProfile, "descriptor_ref projection is incomplete", nil)
 	}
 	return AbilityDescriptorRef{
 		Raw:        projection.DescriptorRef,

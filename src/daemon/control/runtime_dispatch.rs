@@ -15,14 +15,17 @@
 // --------------------------------------------------------------------
 //
 //   request line  (terminated by \n):
-//     {"mode":"rpc",    "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>","subject_ura":"<optional>"}
+//     {"mode":"rpc",    "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>",
+//      "bridge_version":2,"envelope_b64":"<protobuf-base64>",
+//      "descriptor_ref":"<signed-ref>","metadata":{...}}
 //   OR:
-//     {"mode":"stream", "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>","subject_ura":"<optional>"}
+//     {"mode":"stream", "tool_name":"<x>","function_name":"<y>","arguments_b64":"<base64>",
+//      "bridge_version":2,"envelope_b64":"<protobuf-base64>",
+//      "descriptor_ref":"<signed-ref>","metadata":{...}}
 //
-// `mode` is required. `subject_ura` is optional envelope context.
-// This UDS is still only a daemon-internal local-tool bridge: it
-// does not mint canonical Invocation receipts and does not replace
-// the public daemon.sock Invocation transport.
+// `mode` and the v2 signed Invocation context are required. This UDS is a
+// daemon-internal transport bridge only: Axon remains the owner of admission
+// and receipts, and the bridge must not mint a local caller or a new nonce.
 //
 //   RPC response (single line, terminated by \n):
 //     {"ok":true,  "result_b64":"<base64>", "content_type":"application/json"}
@@ -71,24 +74,28 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
+use easynet_axon::pb::axon::v1 as pb;
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 #[cfg(windows)]
 use crate::support::platform::named_pipe::{scoped_pipe_name, PipeListener};
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
+use crate::daemon::control::runtime_dispatch_adapter::{
+    RuntimeDispatchAdapter, RuntimeDispatchEnvelope,
+};
 
-/// One incoming request on the runtime-dispatch UDS. Mirrors the
-/// shape `axon-runtime/.../execution.rs::try_dispatch_runtime_local_tool`
-/// emits — adding fields here without coordinating axon-runtime
-/// would silently break dispatch.
+/// One incoming request on the runtime-dispatch UDS. Version 2 carries the
+/// complete signed invocation envelope; version 1 was retired because it
+/// discarded caller identity and caused local invocation reconstruction.
 #[derive(Debug, Deserialize)]
 struct DispatchRequest {
     /// Dispatch mode. `"rpc"` uses the single-line response shape.
@@ -108,12 +115,14 @@ struct DispatchRequest {
     /// JSON args), invokes, and re-encodes the result.
     #[serde(default)]
     arguments_b64: String,
-    /// Optional AXIOM envelope subject supplied by the Axon runtime.
-    /// Empty/missing means "degenerate local-tool subject" and is
-    /// represented as `None` in `InvocationPlan`; resource-scoped
-    /// handlers must still reject missing subjects themselves.
     #[serde(default)]
-    subject_ura: String,
+    bridge_version: u32,
+    #[serde(default)]
+    envelope_b64: String,
+    #[serde(default)]
+    descriptor_ref: String,
+    #[serde(default)]
+    metadata: HashMap<String, String>,
 }
 
 /// Success response shape.
@@ -137,6 +146,12 @@ struct DispatchErr {
 /// see "this is the runtime-dispatch socket" without referring
 /// to a doc.
 pub const DEFAULT_RUNTIME_DISPATCH_SOCK_NAME: &str = "runtime-dispatch.sock";
+
+/// Hard cap for one newline-delimited runtime-dispatch request, including the
+/// protobuf envelope and base64 expansion. Runtime-local tools carry JSON
+/// control payloads, not unbounded media streams; larger calls must use the
+/// streaming/bidi data plane.
+pub const MAX_RUNTIME_DISPATCH_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 
 /// Compute the socket path the daemon binds. The override env var
 /// is the integration-test seam: a fixture can write to a temp
@@ -307,12 +322,16 @@ where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (read_half, mut write_half) = tokio::io::split(stream);
-    let mut reader = BufReader::new(read_half);
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
-        return Ok(()); // peer closed without sending
-    }
+    let line = match read_request_frame(read_half, MAX_RUNTIME_DISPATCH_REQUEST_BYTES).await? {
+        RuntimeDispatchRequestFrame::PeerClosed => return Ok(()),
+        RuntimeDispatchRequestFrame::Complete(line) => line,
+        RuntimeDispatchRequestFrame::Rejected(reason) => {
+            let line = error_line("BAD_REQUEST", reason);
+            write_half.write_all(line.as_bytes()).await?;
+            write_half.flush().await?;
+            return Ok(());
+        }
+    };
 
     // Parse once. Tool-name / base64 validation happens inside the
     // mode-specific path so error reporting shape stays consistent.
@@ -332,6 +351,52 @@ where
         }
     }
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RuntimeDispatchRequestFrame {
+    PeerClosed,
+    Complete(String),
+    Rejected(String),
+}
+
+/// Read exactly one bounded newline-delimited request frame.
+///
+/// The byte cap is applied before UTF-8 or JSON decoding, so malformed input
+/// cannot allocate beyond the private bridge's declared bound. EOF without a
+/// newline is rejected because accepting it would create a second framing
+/// convention beside the Axon sender's newline-delimited contract.
+async fn read_request_frame<R>(
+    read_half: R,
+    max_bytes: usize,
+) -> std::io::Result<RuntimeDispatchRequestFrame>
+where
+    R: AsyncRead + Unpin,
+{
+    let reader = BufReader::new(read_half);
+    let limited = reader.take((max_bytes + 1) as u64);
+    let mut reader = BufReader::new(limited);
+    let mut bytes = Vec::new();
+    let n = reader.read_until(b'\n', &mut bytes).await?;
+    if n == 0 {
+        return Ok(RuntimeDispatchRequestFrame::PeerClosed);
+    }
+    if bytes.len() > max_bytes {
+        return Ok(RuntimeDispatchRequestFrame::Rejected(format!(
+            "runtime-dispatch request exceeds {max_bytes} byte limit"
+        )));
+    }
+    if bytes.last() != Some(&b'\n') {
+        return Ok(RuntimeDispatchRequestFrame::Rejected(
+            "runtime-dispatch request must end with a newline".into(),
+        ));
+    }
+    match String::from_utf8(bytes) {
+        Ok(line) => Ok(RuntimeDispatchRequestFrame::Complete(line)),
+        Err(err) => Ok(RuntimeDispatchRequestFrame::Rejected(format!(
+            "runtime-dispatch request is not valid UTF-8: {err}"
+        ))),
+    }
 }
 
 /// Result of pre-parsing a request line. Carries the typed
@@ -375,8 +440,12 @@ fn build_response_line(req: &DispatchRequest, adapter: &RuntimeDispatchAdapter) 
         Ok(v) => v,
         Err(msg) => return error_line("BAD_REQUEST", msg),
     };
+    let context = match decode_dispatch_context(req) {
+        Ok(context) => context,
+        Err(msg) => return error_line("BAD_REQUEST", msg),
+    };
 
-    match adapter.execute_runtime_dispatch(&req.tool_name, args_value, subject_from_request(req)) {
+    match adapter.execute_runtime_dispatch(context, args_value) {
         Ok(value) => {
             let bytes = match serde_json::to_vec(&value) {
                 Ok(b) => b,
@@ -461,12 +530,17 @@ where
             return Ok(());
         }
     };
+    let context = match decode_dispatch_context(req) {
+        Ok(context) => context,
+        Err(msg) => {
+            let line = error_line("BAD_REQUEST", msg);
+            write_half.write_all(line.as_bytes()).await?;
+            write_half.flush().await?;
+            return Ok(());
+        }
+    };
 
-    let source = match adapter.execute_runtime_dispatch_stream(
-        &req.tool_name,
-        args_value,
-        subject_from_request(req),
-    ) {
+    let source = match adapter.execute_runtime_dispatch_stream(context, args_value) {
         Ok(s) => s,
         Err(msg) => {
             // Centralised "ability not found" classification — see
@@ -489,13 +563,33 @@ where
     write_stream_source(source, write_half).await
 }
 
-fn subject_from_request(req: &DispatchRequest) -> Option<String> {
-    let subject = req.subject_ura.trim();
-    if subject.is_empty() {
-        None
-    } else {
-        Some(subject.to_owned())
+/// Decode the versioned bridge context. The bridge never falls back to the
+/// historical subject-only request: that form loses caller, callee, nonce,
+/// causal binding, descriptor proof, and signature semantics.
+fn decode_dispatch_context(req: &DispatchRequest) -> Result<RuntimeDispatchEnvelope, String> {
+    if req.bridge_version != 2 {
+        return Err(format!(
+            "runtime-dispatch bridge_version must be 2 (got {})",
+            req.bridge_version
+        ));
     }
+    let descriptor_ref = req.descriptor_ref.trim();
+    if descriptor_ref.is_empty() {
+        return Err("descriptor_ref must be non-empty".into());
+    }
+    let envelope_bytes = base64::engine::general_purpose::STANDARD
+        .decode(req.envelope_b64.as_bytes())
+        .map_err(|e| format!("envelope_b64 decode: {e}"))?;
+    if envelope_bytes.is_empty() {
+        return Err("envelope_b64 must carry a protobuf Envelope".into());
+    }
+    let envelope = pb::Envelope::decode(envelope_bytes.as_slice())
+        .map_err(|e| format!("envelope_b64 protobuf decode: {e}"))?;
+    Ok(RuntimeDispatchEnvelope {
+        envelope,
+        descriptor_ref: descriptor_ref.to_owned(),
+        metadata: req.metadata.clone(),
+    })
 }
 
 /// Decode the base64 arguments. Pulled out so both RPC and stream
@@ -634,12 +728,13 @@ mod tests {
         }
     }
 
-    /// Bare adapter used by every test. The dispatcher under it is
-    /// the live system-ability registry — `observe.health` is the
-    /// canonical "always-registered, no fixture needed" probe.
+    /// Bare adapter used by carrier-validation tests. No test may make this
+    /// adapter synthesize a local invocation: dispatch now requires complete
+    /// externally-signed envelope material.
     fn fresh_adapter() -> IsolatedRuntimeDispatchAdapter {
         let home = crate::cli::commands::test_support::HomeGuard::new();
-        let adapter = RuntimeDispatchAdapter::new_for_test();
+        let adapter =
+            RuntimeDispatchAdapter::new_with_runtime(easynet_axon::invocation::LocalRuntime::new());
         IsolatedRuntimeDispatchAdapter {
             _home: home,
             adapter,
@@ -707,6 +802,36 @@ mod tests {
         assert!(v["message"].as_str().unwrap().contains("malformed"));
     }
 
+    #[tokio::test]
+    async fn request_frame_reader_enforces_one_bounded_utf8_line() {
+        assert_eq!(
+            read_request_frame(&b"{}\n"[..], 8).await.unwrap(),
+            RuntimeDispatchRequestFrame::Complete("{}\n".into())
+        );
+        assert_eq!(
+            read_request_frame(&b""[..], 8).await.unwrap(),
+            RuntimeDispatchRequestFrame::PeerClosed
+        );
+
+        let oversized = read_request_frame(&b"123456789\n"[..], 8).await.unwrap();
+        assert!(matches!(
+            oversized,
+            RuntimeDispatchRequestFrame::Rejected(reason) if reason.contains("8 byte limit")
+        ));
+
+        let unterminated = read_request_frame(&b"{}"[..], 8).await.unwrap();
+        assert!(matches!(
+            unterminated,
+            RuntimeDispatchRequestFrame::Rejected(reason) if reason.contains("end with a newline")
+        ));
+
+        let invalid_utf8 = read_request_frame(&[0xff, b'\n'][..], 8).await.unwrap();
+        assert!(matches!(
+            invalid_utf8,
+            RuntimeDispatchRequestFrame::Rejected(reason) if reason.contains("valid UTF-8")
+        ));
+    }
+
     #[test]
     fn empty_tool_name_returns_bad_request() {
         let adapter = fresh_adapter();
@@ -745,22 +870,20 @@ mod tests {
     }
 
     #[test]
-    fn empty_arguments_default_to_empty_object() {
-        // observe.health accepts {} — empty arguments_b64 must be
-        // treated as {} not as a bad-request.
+    fn legacy_subject_only_request_is_rejected() {
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
             r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
-        assert_eq!(v["ok"], true);
-        assert!(v["result_b64"].as_str().is_some());
-        assert_eq!(v["content_type"], "application/json");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["code"], "BAD_REQUEST");
+        assert!(v["message"].as_str().unwrap().contains("bridge_version"));
     }
 
     #[test]
-    fn unknown_ability_returns_not_found() {
+    fn missing_bridge_context_is_rejected_before_dispatch() {
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
             r#"{"mode":"rpc","tool_name":"nope.does_not_exist","arguments_b64":""}"#,
@@ -768,32 +891,23 @@ mod tests {
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
         assert_eq!(v["ok"], false);
-        assert_eq!(v["code"], "NOT_FOUND");
+        assert_eq!(v["code"], "BAD_REQUEST");
     }
 
     #[test]
-    fn observe_health_round_trip_ok() {
-        // Real RPC through the dispatcher — observe.health has a
-        // built-in handler that returns a structured object. We
-        // verify the result_b64 decodes to JSON and isn't empty.
+    fn bridge_rejection_has_no_result_payload() {
         let adapter = fresh_adapter();
         let resp = build_response_line_from_str(
             r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
             &adapter,
         );
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
-        assert_eq!(v["ok"], true);
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(v["result_b64"].as_str().unwrap())
-            .unwrap();
-        let inner: Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(inner.is_object(), "observe.health returns an object");
+        assert_eq!(v["ok"], false);
+        assert!(v.get("result_b64").is_none());
     }
 
     #[test]
-    fn json_args_decoded_then_passed_to_dispatcher() {
-        // observe.health echoes its args through `ts`. We send a
-        // marker arg and verify the dispatch path didn't drop it.
+    fn arguments_are_validated_before_bridge_admission() {
         let adapter = fresh_adapter();
         let args = serde_json::json!({"client_marker":"e2e-step3"}).to_string();
         let args_b64 = base64::engine::general_purpose::STANDARD.encode(args.as_bytes());
@@ -802,11 +916,8 @@ mod tests {
         );
         let resp = build_response_line_from_str(&req, &adapter);
         let v: Value = serde_json::from_str(resp.trim()).unwrap();
-        assert_eq!(v["ok"], true);
-        // We don't pin the inner shape — observe.health may or may
-        // not echo client_marker depending on its implementation.
-        // The pin is "this didn't crash + ok=true," meaning args
-        // decode + JSON parse + dispatch all worked.
+        assert_eq!(v["ok"], false);
+        assert!(v["message"].as_str().unwrap().contains("bridge_version"));
     }
 
     /// End-to-end UDS round trip: bind a real socket, write the
@@ -846,8 +957,8 @@ mod tests {
         server.await.unwrap();
 
         let v: Value = serde_json::from_str(line.trim()).unwrap();
-        assert_eq!(v["ok"], true);
-        assert_eq!(v["content_type"], "application/json");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["code"], "BAD_REQUEST");
 
         let _ = std::fs::remove_file(&socket_path);
     }
@@ -900,10 +1011,8 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         let v: Value = serde_json::from_str(line.trim()).expect("envelope is JSON");
-        assert_eq!(
-            v["kind"], "done",
-            "snapshot-only stream must produce a synthetic terminal `done` envelope"
-        );
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["code"], "BAD_REQUEST");
         // EOF after terminal: read_line returns 0 bytes.
         let mut line2 = String::new();
         let n = reader.read_line(&mut line2).await.unwrap();
@@ -949,8 +1058,8 @@ mod tests {
         let mut line = String::new();
         reader.read_line(&mut line).await.unwrap();
         let v: Value = serde_json::from_str(line.trim()).expect("envelope is JSON");
-        assert_eq!(v["kind"], "error");
-        assert_eq!(v["code"], "NOT_FOUND");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["code"], "BAD_REQUEST");
         server.await.unwrap();
         let _ = std::fs::remove_file(&socket_path);
     }
@@ -997,27 +1106,59 @@ mod tests {
     }
 
     #[test]
-    fn subject_ura_is_optional_and_trimmed() {
+    fn complete_bridge_context_preserves_the_signed_envelope_tuple() {
+        let envelope = pb::Envelope {
+            request_id: "request-42".into(),
+            caller: Some(pb::AgentIdentity {
+                ura: "easynet:///r/test/agent/caller".into(),
+                profile: "easynet/v2".into(),
+            }),
+            callee: Some(pb::AgentIdentity {
+                ura: "easynet:///r/test/agent/callee".into(),
+                profile: "easynet/v2".into(),
+            }),
+            subject: Some(pb::SubjectIdentity {
+                ura: "easynet:///r/test/resource/subject".into(),
+                profile: "easynet/v2".into(),
+                ..Default::default()
+            }),
+            invocation_nonce: vec![7; 16],
+            causal_context: Some(pb::CausalContext {
+                form: Some(pb::causal_context::Form::None(pb::Empty {})),
+            }),
+            caller_signature: Some(pb::CallerSignature {
+                algorithm: "ed25519".into(),
+                signature: vec![9; 64],
+                key_id_hint: "caller-key".into(),
+            }),
+            ..Default::default()
+        };
+        let request = DispatchRequest {
+            mode: "rpc".into(),
+            tool_name: "observe.health".into(),
+            function_name: String::new(),
+            arguments_b64: String::new(),
+            bridge_version: 2,
+            envelope_b64: base64::engine::general_purpose::STANDARD
+                .encode(envelope.encode_to_vec()),
+            descriptor_ref: "easynet:///r/test/ability/device.observe.health@1.0.0".into(),
+            metadata: HashMap::from([("trace.origin".into(), "test".into())]),
+        };
+        let context = decode_dispatch_context(&request).expect("complete v2 bridge context");
+        assert_eq!(context.envelope, envelope);
+        assert_eq!(context.descriptor_ref, request.descriptor_ref);
+        assert_eq!(context.metadata, request.metadata);
+    }
+
+    #[test]
+    fn missing_or_legacy_bridge_version_is_rejected() {
         let req: DispatchRequest = serde_json::from_str(
             r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":""}"#,
         )
         .unwrap();
-        assert_eq!(subject_from_request(&req), None);
-
-        let req: DispatchRequest = serde_json::from_str(
-            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":"","subject_ura":"  easynet:///r/test/resource/device  "}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            subject_from_request(&req).as_deref(),
-            Some("easynet:///r/test/resource/device")
-        );
-
-        let req: DispatchRequest = serde_json::from_str(
-            r#"{"mode":"rpc","tool_name":"observe.health","arguments_b64":"","subject_ura":"   "}"#,
-        )
-        .unwrap();
-        assert_eq!(subject_from_request(&req), None);
+        assert!(decode_dispatch_context(&req)
+            .unwrap_err()
+            .contains("bridge_version"));
     }
 
     /// `bind_socket` cleans up a stale (no live listener) socket

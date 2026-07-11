@@ -565,9 +565,14 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let pending_stream = Arc::new(PendingStreamDispatchMap::new());
     let svc = make_service().with_pending_stream(Arc::clone(&pending_stream));
     let (target_tx, mut target_rx) = mpsc::channel(4);
-    svc.directory
-        .presence
-        .insert(TARGET_DEVICE_URA.to_string(), target_tx);
+    svc.directory.presence.insert_negotiated(
+        TARGET_DEVICE_URA.to_string(),
+        target_tx,
+        crate::daemon::invocation::bidi::state::presence::SessionContract {
+            version: 1,
+            claimant_boot_nonce: vec![1; 16],
+        },
+    );
     publish_test_route(&svc, TARGET_DEVICE_URA, ABILITY);
 
     let arguments = br#"{"message":"hello"}"#.to_vec();
@@ -600,32 +605,34 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         .expect("remote target receives dispatch frame")
         .expect("dispatch frame is Ok");
     let call_id = match dispatch_frame.frame.payload.expect("dispatch payload") {
-        DownPayload::BinaryChunk(chunk) => {
-            let dispatch =
-                SessionDispatch::decode_frame(&chunk.data).expect("SessionDispatch decodes");
-            match dispatch {
-                SessionDispatch::Dispatch {
-                    call_id,
-                    callee_ura,
-                    subject_ura,
-                    ability,
-                    args,
-                    ..
-                } => {
-                    assert_eq!(callee_ura.as_deref(), Some(TARGET_DEVICE_URA));
-                    assert_eq!(subject_ura.as_deref(), Some(TARGET_DEVICE_URA));
-                    assert_eq!(
-                        ability,
-                        crate::core::ura::owner_ability_ura(TARGET_DEVICE_URA, ABILITY)
-                            .expect("expected ability URA")
-                    );
-                    assert_eq!(args, arguments);
-                    call_id
-                }
-                other => panic!("expected SessionDispatch::Dispatch, got {other:?}"),
-            }
+        DownPayload::DispatchCall(call) => {
+            let request = call.request.expect("canonical request is present");
+            let envelope = request
+                .envelope
+                .as_ref()
+                .expect("signed envelope is present");
+            assert_eq!(
+                envelope
+                    .callee
+                    .as_ref()
+                    .map(|identity| identity.ura.as_str()),
+                Some(TARGET_DEVICE_URA)
+            );
+            assert_eq!(
+                envelope
+                    .subject
+                    .as_ref()
+                    .map(|identity| identity.ura.as_str()),
+                Some(TARGET_DEVICE_URA)
+            );
+            assert_eq!(request.function_name, ABILITY);
+            assert_eq!(request.arguments, arguments);
+            assert!(request
+                .metadata
+                .contains_key(crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY));
+            call.call_id
         }
-        other => panic!("expected legacy BinaryChunk carrier, got {other:?}"),
+        other => panic!("expected canonical DispatchCall carrier, got {other:?}"),
     };
 
     assert_eq!(

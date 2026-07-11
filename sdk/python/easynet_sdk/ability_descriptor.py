@@ -31,17 +31,11 @@ def parse_ability_descriptor_ref(
 
     try:
         if addressing is not None:
-            from .identity import DescriptorRefRequest
-
-            projection = addressing.project_descriptor_ref(DescriptorRefRequest(raw))
+            projection = addressing.project_descriptor_ref(raw)
         else:
-            from .identity import project_descriptor_ref
+            from .axon_addressing import project_descriptor_ref
 
-            projection = project_descriptor_ref(
-                raw,
-                library_path=library_path,
-                control_path=control_path,
-            )
+            projection = project_descriptor_ref(raw)
     except SDKError:
         raise
     except Exception as exc:

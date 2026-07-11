@@ -1,52 +1,83 @@
-# EasyNet Daemon SDK
+# Canonical Runtime SDK
 
-This directory is the public Daemon SDK workspace for EasyNet-Cli. The SDK
-controls and calls `easynet-daemon`; it is not a command-line wrapper around
-the `easynet` binary.
+This directory contains product-neutral language bindings for the governed
+runtime hosted by `easynet-daemon`. The SDK is not a collection of EasyNet or
+EasyRemote product APIs. Products build typed local facades on top of complete
+generic Invocation.
 
-The semantic implementation lives in the Rust crate and is projected through
-the C ABI. Go, Python, Node, Java, Swift, and future language packages are
-facades over the same object model, DTO schemas, and conformance cases.
+## Current model
 
-## Current Status
-
-The authoritative capability state is `sdk/conformance/sdk-parity-matrix.json`
-and the human-readable summary is `SDK_PARITY.md`. This README is only the
-workspace entrypoint; it must not drift into a second status ledger.
-
-| Area | Current state |
+| Layer | Responsibility |
 | --- | --- |
-| Rust Runtime Core | source-of-truth implementation substrate for daemon SDK semantics and C ABI projection |
-| C ABI | ABI v4 projection with opaque handles, feature discovery, runtime core, and shipped profile carrier/projection entry points |
-| Schemas | shared DTO schema set for Runtime Core, profile clients, stream/bidi terminal projections, and conformance fixtures |
-| Conformance | shared cases, fixtures, manifest runner, Rust/C ABI/Go/Python action-adapter reports, and Node/Java/Swift seam action-adapter reports |
-| Go facade | provider-backed for the shipped P0 Hub/backend profiles listed in `SDK_PARITY.md` |
-| Python facade | provider-backed for the shipped P0 EasyRemote/local automation profiles listed in `SDK_PARITY.md` |
-| Node / TypeScript facade | Runtime Core seam over injected transports with Health, Authority, Directory + Identity, Receipt, Publication, Host Binding, Mission, Admin + Gateway, Events, Surface, Compatibility, and Wrappers profile seams; daemon providers remain unsupported |
-| Java / JVM facade | Runtime Core seam as a Maven package for typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `CompletableFuture` async adapters, iterator-backed bounded stream/bidi state, Health DTO/client seams, Authority metadata seams, Directory + Identity DTO/client seams including directory subscription carriers/projections over injected stream handles, Receipt DTO/client seams, Publication carrier/resource-ref seams, Host Binding codec/hash/lifecycle seams, Mission carrier/status/event seams, Admin + Gateway carrier/status/session seams, Events carrier/frame/stream seams, Surface page/manifest/health seams, Compatibility carrier/projection seams, and Wrappers record-projection seams; daemon providers remain unsupported |
-| Swift facade | Runtime Core seam as a Swift Package Manager package for typed errors, feature discovery, complete Invocation drafts, prepared/signed Invocation material over injected runtime transport, `AsyncSequence` bounded stream/bidi state, Health DTO/client seams, Authority metadata seams, Directory + Identity DTO/client seams including directory subscription carriers/projections over injected stream handles, Receipt DTO/client seams, Publication carrier/resource-ref seams, Host Binding codec/hash/lifecycle seams, Mission carrier/status/event seams, Admin + Gateway carrier/status/session seams, Events carrier/frame/stream seams, Surface page/manifest/health seams, Compatibility carrier/projection seams, and Wrappers record-projection seams; daemon providers remain unsupported |
-| Package metadata | Go module, Python project, Node package, Java Maven package, and Swift Package Manager manifests are machine-checked by `tools/scripts/check-sdk-package-metadata.sh`; this is package metadata, not stable release evidence |
+| Axon | URA and descriptor-reference grammar, canonical bytes, admission, call modes and receipt cryptography |
+| Rust runtime | daemon/provider implementation and generic handle semantics |
+| C ABI v5 | exact generic lifecycle, Invocation, stream/bidi, health, Addressing and memory boundary |
+| Go/Python | provider-backed projections of the same runtime object graph |
+| Node/Java/Swift | supported subsets of that graph; absent capabilities are explicitly unsupported |
+| products | ability names, request/result DTOs and workflows in downstream repositories |
 
-P0 consumer cutover readiness is tracked by
-`tools/scripts/check-sdk-cutover-readiness.sh` and summarized by
-`tools/scripts/check-sdk-completion-audit.sh`. Language profile rows remain
-provider-backed evidence; product cutover claims must cite the aggregate gates.
-Package metadata checks prove manifest identity only; release stability and
-publishing claims still require the package-specific evidence in
-`SDK_PARITY.md`.
+The object graph and prohibitions are defined in
+[`SDK_INTERFACE_SPEC.md`](SDK_INTERFACE_SPEC.md). The normative requirements
+are in
+[`../docs/spec/daemon-sdk-requirements-v1.md`](../docs/spec/daemon-sdk-requirements-v1.md).
 
-## Files
+## Runtime surface
 
-- `SDK_INTERFACE_SPEC.md`: implementation-facing object model and lifecycle
-  contract.
-- `SDK_PARITY.md`: language tiers, profile status, and known gaps.
-- `CONFORMANCE_SUITE.md`: fixture and runner contract.
-- `schemas/`: public JSON DTO projections shared by bindings.
-- `conformance/`: language-neutral cases and golden fixtures.
+- environment and daemon/runtime lifecycle;
+- canonical Addressing delegated to Axon;
+- governed AbilityDescriptor and authority metadata projection;
+- complete Invocation build, prepare, sign, invoke, submit and handle state;
+- ordered server streams and bidirectional sessions;
+- typed errors, runtime health and diagnostics;
+- opaque terminal receipt facts needed for causal continuation.
 
-## Ownership Rule
+The SDK does not expose Directory, Mission, Admin, Publication, Pages/Surface,
+OpenAI compatibility, HostBinding, product Events, convenience wrappers,
+desktop companions or other product profiles. Those concepts live with the
+product that owns their behavior and lower through `RuntimeClient`.
 
-Axon owns protocol semantics such as URA grammar, DescriptorRef
-canonicalization, Invocation canonical bytes, admission, and receipt
-verification. EasyNet-Cli SDK owns daemon lifecycle, local transport, typed
-Daemon SDK DTOs, profile clients, and language binding projection.
+## ABI
+
+ABI v5 is a hard major cut. The authoritative header and export list are:
+
+- [`../include/easynet_cli.h`](../include/easynet_cli.h)
+- [`../include/easynet_cli.exports.v5`](../include/easynet_cli.exports.v5)
+- [`../docs/spec/ffi-abi-v5.md`](../docs/spec/ffi-abi-v5.md)
+
+There is no v4 domain-symbol compatibility path.
+
+## Capability state
+
+[`conformance/sdk-parity-matrix.json`](conformance/sdk-parity-matrix.json) is
+the machine source of truth for Go/Python capability state. Every row is one of
+`unsupported`, `seam`, `provider-backed` or `cutover-ready` and cites
+executable evidence. [`SDK_PARITY.md`](SDK_PARITY.md) is the readable summary.
+
+## Repository layout
+
+- `go/`, `python/`, `node/`, `java/`, `swift/`: language bindings;
+- `schemas/`: generic public DTO schemas only;
+- `conformance/cases/`: language-neutral runtime cases only;
+- `conformance/fixtures/`: canonical runtime fixtures;
+- `CONFORMANCE_SUITE.md`: runner and evidence contract.
+
+Downstream product conformance belongs in the downstream repository. SDK tests
+may verify that a downstream import boundary is clean, but may not reintroduce
+its product model as an SDK profile.
+
+## Package metadata
+
+Package names, module coordinates, language versions and typed-package markers
+are machine-checked so local and CI builds resolve the same SDK. This metadata
+is not stable release evidence: publish credentials, registry availability and
+consumer release stability remain separate delivery concerns.
+
+## Non-negotiable boundaries
+
+- no local URA or DescriptorRef grammar;
+- no parallel Invocation or call-mode taxonomy;
+- no product ability literals in public bindings;
+- no product-domain C symbols;
+- no service locator or optional-provider fallback;
+- no load-error-to-empty/default behavior;
+- no legacy address-era names for URA semantic identity.

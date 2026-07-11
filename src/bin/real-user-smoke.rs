@@ -39,7 +39,7 @@ use std::sync::Arc;
 
 use easynet_cli::daemon::ability::builtins::agents::chat::ContextLoader;
 use easynet_cli::daemon::ability::catalog::{
-    build_registry_for_daemon_result, build_registry_with_services, RegistryBuildConfig,
+    build_registry_for_daemon_result, build_registry_with_services_result, RegistryBuildConfig,
     RegistryBuildServices, RegistryDaemonBuildConfig,
 };
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
@@ -75,7 +75,9 @@ impl RuntimeSmoke {
         let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
         let mut config = RegistryBuildConfig::new(RegistryBuildServices::fresh(), &agents);
         config.local_runtime = Some(Arc::clone(&runtime));
-        let catalog = build_registry_with_services(config);
+        let catalog = build_registry_with_services_result(config)
+            .expect("build system registry for smoke")
+            .catalog;
         Self { runtime, catalog }
     }
 

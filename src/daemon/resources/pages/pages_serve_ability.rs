@@ -12,7 +12,7 @@
 //              transformation beyond mechanical HTTP framing.
 //
 // Conformance: RFC-006-B v0.6 INV-1 (Adapter Purity), §3.1
-//              (forward via standard forward_invoke).
+//              (forward via standard canonical_invoke).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -39,7 +39,7 @@ pub struct ServedBytes {
 ///
 /// In v0 we call `fetch::handle_fetch` directly because the
 /// listener and the fetch handler share the same daemon process —
-/// going through a full `forward_invoke` round trip with envelope
+/// going through a full `canonical_invoke` round trip with envelope
 /// minting + nonce + receipt would be ceremony without any
 /// adversary-distinguishable benefit at this layer. The contract
 /// (Adapter Purity, INV-1) is unchanged: this function still does
@@ -47,7 +47,7 @@ pub struct ServedBytes {
 /// receipt for the fetch is recorded by the dispatch path the same
 /// way it would be for any other ability invocation.
 ///
-/// Phase 2 promotes this to a real `forward_invoke` so the same
+/// Phase 2 promotes this to a real `canonical_invoke` so the same
 /// translation works from the Go backend hub against a remote
 /// daemon's project.
 pub fn serve_bytes(user: &str, project_id: &str, path: &str) -> ServedBytes {

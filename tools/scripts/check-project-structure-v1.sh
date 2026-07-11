@@ -56,8 +56,8 @@ check_root_contract() {
     gallery
     include
     packaging
-    platforms
     plugins
+    pr
     schemas
     sdk
     skills
@@ -154,6 +154,7 @@ require_file PROJECT_STRUCTURE.md
 require_file VERSION
 require_file build.rs
 require_file include/easynet_cli.h
+require_file include/easynet_cli.exports.v5
 check_root_contract
 
 require_only_files src/bin \
@@ -169,7 +170,7 @@ require_only_dirs src \
   bin core daemon cli ffi eal support
 
 require_only_dirs src/core \
-  ability agent identity ura domain
+  agent identity ura domain
 
 require_only_dirs src/daemon \
   boot control invocation ability execution resources identity trust keyring federation plugins persistence axon_bridge telemetry
@@ -187,15 +188,13 @@ require_only_dirs src/daemon/execution \
   pty mcp mission schedule loop_instance permission session
 
 require_only_dirs src/daemon/resources \
-  skills pages context files media remote_desktop
+  skills pages context files media
 
 require_only_dirs src/cli \
   commands presentation daemon_client mcp
 
 require_only_dirs src/ffi \
-  daemon client invocation errors strings profile_json \
-  identity directory receipt publication host_binding mission \
-  events admin_gateway surface compatibility wrappers
+  daemon client invocation errors features strings
 
 require_only_dirs src/eal \
   parser interpreter runtime diagnostics
@@ -226,8 +225,6 @@ require_dir tools
 require_dir tools/benches
 require_dir packaging/docker
 require_dir packaging/release
-require_dir platforms/macos
-require_dir platforms/windows
 require_dir .github/workflows
 
 require_dir tests/e2e
@@ -261,15 +258,15 @@ done < <(find "$ROOT/ability-descriptors/system" -mindepth 1 -maxdepth 1 -type f
 
 while IFS= read -r file; do
   fail "flat ffi source file is not final structure: ${file#$ROOT/}"
-done < <(find "$ROOT/src/ffi" -mindepth 1 -maxdepth 1 -type f ! -name 'mod.rs' 2>/dev/null | sort)
+done < <(find "$ROOT/src/ffi" -mindepth 1 -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null | sort)
 
 while IFS= read -r file; do
   fail "flat eal source file is not final structure: ${file#$ROOT/}"
-done < <(find "$ROOT/src/eal" -mindepth 1 -maxdepth 1 -type f ! -name 'mod.rs' 2>/dev/null | sort)
+done < <(find "$ROOT/src/eal" -mindepth 1 -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null | sort)
 
 while IFS= read -r file; do
   fail "flat support source file is not final structure: ${file#$ROOT/}"
-done < <(find "$ROOT/src/support" -mindepth 1 -maxdepth 1 -type f ! -name 'mod.rs' 2>/dev/null | sort)
+done < <(find "$ROOT/src/support" -mindepth 1 -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null | sort)
 
 if ((${#failures[@]} > 0)); then
   printf 'project-structure-v1 failed:\n' >&2

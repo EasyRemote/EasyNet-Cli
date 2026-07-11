@@ -954,14 +954,14 @@ open-code LaunchAgent, Run key, systemd, or status-file behavior.
 The control-plane source of truth is one Rust DTO set owned by EasyNet-Cli:
 
 ```text
-src/protocol/companion_contract.rs
+src/daemon/plugins/companion/projection.rs
 sdk/schemas/desktop-companion-status.schema.json
 sdk/schemas/desktop-companion-action.schema.json
 ```
 
 Initial contract slice implemented in this branch:
 
-- `src/protocol/companion_contract.rs` projects and validates
+- `src/daemon/plugins/companion/projection.rs` projects and validates
   `DesktopCompanionStatus` and `DesktopCompanionActionResult`.
 - `sdk/schemas/desktop-companion-status.schema.json` defines the stable status
   JSON shape.
@@ -1362,7 +1362,7 @@ Tests:
 
 Files:
 
-- `src/protocol/companion_contract.rs`
+- `src/daemon/plugins/companion/projection.rs`
 - `sdk/schemas/desktop-companion-status.schema.json`
 - `sdk/schemas/desktop-companion-action.schema.json`
 - `src/ffi/daemon/mod.rs` or a dedicated FFI companion module

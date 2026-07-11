@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
+use crate::daemon::ability::descriptors::{
+    AbilityDescriptor, CallMode, ReceiptSemantics, Visibility,
+};
 use crate::daemon::persistence::owner_projections::{
     self, OwnerProjectionCursor, OwnerProjectionCursorFile,
 };
@@ -42,7 +44,8 @@ pub(crate) struct AbilityInputFieldSummary {
 pub(crate) struct AbilityCallableSummary {
     pub public_name: String,
     pub description: String,
-    pub ability_class: String,
+    pub call_mode: CallMode,
+    pub receipt_semantics: ReceiptSemantics,
     pub input_fields: Vec<AbilityInputFieldSummary>,
     pub flags: AbilityCallableFlags,
 }
@@ -67,7 +70,8 @@ impl AbilityCallableSummary {
 ///
 /// The first ten fields mirror the Axon `AbilityProjectionSummary` proto
 /// (`EasyNet-Axon/core/proto/axon/v1/namespace.proto`). The eleventh field,
-/// `callable_summary` (`public_name` / `description` / `ability_class` /
+/// `callable_summary` (`public_name` / `description` / `call_mode` /
+/// `receipt_semantics` /
 /// input fields / flags), is **registry/index presentation metadata that is
 /// deliberately NOT part of the Axon proto** and must stay that way.
 ///
@@ -381,7 +385,17 @@ pub(crate) fn summary_from_descriptor(
     let (namespace, local_name) = split_public_name(&public_name);
     let descriptor_revision = descriptor.descriptor_hash_prefixed();
     let schema_hash = Some(descriptor.schema_hash_prefixed());
-    let mut tags = vec![format!("class:{}", descriptor.ability_class().as_str())];
+    let mut tags = vec![
+        format!("mode:{}", descriptor.call_mode().as_str()),
+        format!("receipt:{}", descriptor.receipt_semantics().as_str()),
+    ];
+    if let Some(transition) = descriptor.receipt_semantics().transition() {
+        tags.push(format!("transition:{}", transition.transition_id()));
+        tags.push(format!(
+            "transition_class:{}",
+            transition.transition_class().as_str()
+        ));
+    }
     if !descriptor.source.trim().is_empty() {
         tags.push(format!("source:{}", bounded_tag_value(&descriptor.source)));
     }
@@ -414,14 +428,15 @@ fn callable_summary_from_descriptor(
         } else {
             descriptor.description.trim().to_string()
         },
-        ability_class: descriptor.ability_class().as_str().to_string(),
+        call_mode: descriptor.call_mode(),
+        receipt_semantics: descriptor.receipt_semantics().clone(),
         input_fields: input_field_summaries(&descriptor.schema_summary.input),
         flags: AbilityCallableFlags {
             read_only: descriptor.hints.read_only,
             destructive: descriptor.hints.destructive,
             idempotent: descriptor.hints.idempotent,
-            streaming_only: descriptor.hints.streaming_only,
-            bidi_only: descriptor.hints.bidi_only,
+            streaming_only: descriptor.call_mode() == CallMode::Stream,
+            bidi_only: descriptor.call_mode() == CallMode::Bidi,
         },
     }
 }
@@ -751,7 +766,11 @@ mod tests {
         assert!(summary.schema_hash.as_ref().unwrap().starts_with("sha256:"));
         assert_eq!(summary.callable_summary.public_name, "fs.read");
         assert_eq!(summary.callable_summary.description, "fs.read");
-        assert_eq!(summary.callable_summary.ability_class, "query");
+        assert_eq!(summary.callable_summary.call_mode, CallMode::Rpc);
+        assert_eq!(
+            summary.callable_summary.receipt_semantics,
+            ReceiptSemantics::Operational
+        );
         assert_eq!(prepared.publication.projection_revision, 1);
         // C4: lease cancelled (ISS-002) — projections publish lease=0.
         assert_eq!(prepared.publication.lease_expires_unix_ms, 0);
@@ -1010,7 +1029,8 @@ mod tests {
             callable_summary: AbilityCallableSummary {
                 public_name: "fs.read".into(),
                 description: "read a file".into(),
-                ability_class: "query".into(),
+                call_mode: CallMode::Rpc,
+                receipt_semantics: ReceiptSemantics::Operational,
                 ..AbilityCallableSummary::default()
             },
         };
@@ -1025,6 +1045,12 @@ mod tests {
             Some("read a file"),
             "callable_summary must be present on the projection wire shape"
         );
+        assert_eq!(wire["callable_summary"]["call_mode"], "rpc");
+        assert_eq!(
+            wire["callable_summary"]["receipt_semantics"]["kind"],
+            "operational"
+        );
+        assert!(wire["callable_summary"].get("ability_class").is_none());
         let decoded: AbilityProjectionSummary =
             serde_json::from_value(wire).expect("summary round-trips");
         assert_eq!(decoded, summary);

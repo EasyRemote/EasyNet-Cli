@@ -34,7 +34,7 @@ class HealthClientTests(unittest.TestCase):
                     "trust_ready": true,
                     "runtime_ready": true,
                     "version": "0.1.0",
-                    "abi_version": 4,
+                    "abi_version": 5,
                     "mismatch": null,
                     "diagnostics": []
                 }"""
@@ -45,7 +45,7 @@ class HealthClientTests(unittest.TestCase):
 
         self.assertTrue(health.api_alive())
         self.assertTrue(health.ready())
-        self.assertEqual(health.abi_version, 4)
+        self.assertEqual(health.abi_version, 5)
 
     def test_runtime_health_exposes_control_only_state(self) -> None:
         client = HealthClient(
@@ -86,7 +86,7 @@ class HealthClientTests(unittest.TestCase):
                     "state": "Running",
                     "ready": true,
                     "version": "0.91.30",
-                    "abi_version": 4,
+                    "abi_version": 5,
                     "control_endpoint": "/tmp/easynet/control.json",
                     "invocation_endpoint": "/tmp/easynet/daemon.sock",
                     "checks": [{"name": "runtime", "ready": true, "message": null}],

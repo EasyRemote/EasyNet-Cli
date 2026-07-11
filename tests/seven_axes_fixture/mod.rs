@@ -655,11 +655,14 @@ fn start_daemon_at(
     config.hot_agent_registrar_cell = Arc::clone(&hot_agent_registrar_cell);
     config.local_runtime = Some(Arc::clone(&runtime));
     config.invocation_ledger = Some(Arc::clone(&ledger));
-    let built_registry = build_registry_with_services_result(config);
+    let built_registry =
+        build_registry_with_services_result(config).expect("assemble seven-axes fixture catalog");
     let catalog = Arc::clone(&built_registry.catalog);
-    if let Some(hot_registrar) = hot_agent_registrar_cell.get() {
-        hot_registrar.set_runtime(Arc::clone(&runtime));
-    }
+    hot_agent_registrar_cell
+        .get()
+        .expect("catalog assembly wires hot-Agent registrar")
+        .require_ready()
+        .expect("hot-Agent registrar ready after catalog assembly");
     if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
         device_registrar
             .set_control_plane_catalog(Arc::downgrade(&catalog))

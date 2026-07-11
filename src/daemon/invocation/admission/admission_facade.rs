@@ -2,15 +2,14 @@
 // ==================================================
 //
 // File: src/daemon/invocation/admission_facade.rs
-// Description: Per-RPC transport/product policy gate the dispatcher
-//              consults before routing into a federation wrapper or
-//              any ability handler.
+// Description: Per-RPC transport/product policy gate applied before route
+//              selection or ability execution.
 //
 // Boundary note
 // -------------
 // This facade is not an Axon LocalRuntime "already admitted" boundary.
 // A successful `verify_*` result only means the daemon transport accepted
-// the caller for routing, quota, delegation, and wrapper compatibility.
+// the caller for routing, quota, and delegation.
 // Any request that enters Axon `LocalRuntime` must still be reconstructed
 // as a descriptor-bound public request and admitted by Axon through
 // `DescriptorBoundInvocationRequest::{externally_signed,signed}`.
@@ -135,7 +134,7 @@ use crate::daemon::invocation::admission::grant_matcher::{
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::admission::policy_gate::{
-    ability_ura_for, principal_for, resolve_owner, AdmissionPolicyContext, AdmissionPolicyGate,
+    ability_ura_for, principal_for, AdmissionPolicyContext, AdmissionPolicyGate,
 };
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
@@ -143,8 +142,7 @@ use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedU
 #[cfg(test)]
 use crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_AGENT;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
-    ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_JOIN,
-    ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+    ABILITY_FEDERATION_JOIN, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     AUTHORITY_PROOF_METADATA_KEY, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
@@ -375,112 +373,6 @@ impl AdmissionFacade {
         }
     }
 
-    /// Verify delegation metadata against an already-constructed
-    /// envelope without re-running caller signature / nonce policy checks.
-    ///
-    /// Used by `runtime.invoke_remote` for the inner ability request:
-    /// the outer invoke_remote frame has already passed strict
-    /// admission, and the inner JSON carries the user/resource
-    /// subject plus non-AXIOM metadata. This method verifies only the
-    /// authority proof binding `(caller, subject, callee, ability)`.
-    pub fn verify_delegation_for_envelope(
-        &self,
-        envelope: &Envelope,
-        ability: &str,
-        metadata: &HashMap<String, String>,
-    ) -> Result<(), Status> {
-        reject_public_hosted_agent_delegation_metadata(Some(metadata))?;
-        verify_delegation_metadata(
-            envelope,
-            ability,
-            action_for_unary_ability(ability),
-            Some(metadata),
-            self.trust_anchor_snapshot().as_ref(),
-            axon_now_ms(),
-        )
-        .map(|_| ())
-    }
-
-    /// Verify RFC-014 policy for an invocation that enters the daemon from an
-    /// already-admitted carrier instead of a fresh public Axon envelope.
-    ///
-    /// `federation.forward_invoke` JSON frames and self-targeted
-    /// `runtime.invoke_remote` dispatches land in this category: their outer
-    /// carrier proves transport membership, but the inner ability still needs
-    /// the same owner/token/grant policy floor before touching LocalRuntime.
-    pub fn verify_carried_runtime_policy(
-        &self,
-        caller_ura: &str,
-        trusted_role: TrustedAgentRole,
-        callee_ura: &str,
-        subject_ura: &str,
-        ability_ura: &str,
-        ability: &str,
-        verified_authority_id: Option<String>,
-    ) -> Result<(), Status> {
-        let trust_anchor = self.trust_anchor_snapshot();
-        let owner = resolve_owner(
-            subject_ura,
-            callee_ura,
-            self.daemon_ura.as_deref(),
-            trust_anchor.as_ref(),
-        );
-        let principal = principal_for(trusted_role, caller_ura, trust_anchor.as_ref());
-        let grants = match owner.owner_user_id.as_deref() {
-            Some(owner_user_id) => AccessControlStore::open_or_create(owner_user_id)
-                .map(|store| store.grants())
-                .map_err(|err| {
-                    Status::internal(format!(
-                        "POLICY_STORE_UNAVAILABLE: owner_user_id={owner_user_id} error={err}"
-                    ))
-                })?,
-            None => Vec::new(),
-        };
-        let action = action_for_unary_ability(ability);
-        let decision = crate::daemon::invocation::admission::policy_engine::PolicyEngine::check(
-            crate::daemon::invocation::admission::policy_engine::PolicyInput {
-                owner,
-                caller_user_id: principal.caller_user_id,
-                caller_ura: caller_ura.to_string(),
-                principal_kind: principal.kind,
-                principal_id: principal.id,
-                token_id: principal.token_id,
-                token_class: principal.token_class,
-                callee_ura: callee_ura.to_string(),
-                subject_ura: subject_ura.to_string(),
-                ability_ura: ability_ura.to_string(),
-                action,
-                // Carrier children are not hub safe-read by default. A
-                // hub-linked token that enters through `federation.forward_invoke`
-                // or `runtime.invoke_remote` must rely on owner default, an
-                // explicit child grant, or verified authority material.
-                safe_read: false,
-                interactive_context_available: false,
-                canonical_hash: None,
-                signature_key_id: None,
-                verified_authority_id,
-                rejector_ura: self.daemon_ura.clone(),
-                now: Utc::now(),
-                grants,
-            },
-        );
-        match decision.decision {
-            crate::daemon::invocation::admission::decision::PolicyDecisionOutcome::Allow => Ok(()),
-            crate::daemon::invocation::admission::decision::PolicyDecisionOutcome::Prompt
-            | crate::daemon::invocation::admission::decision::PolicyDecisionOutcome::Deny => {
-                let encoded = serde_json::to_string(&decision).unwrap_or_else(|_| {
-                    format!(
-                        "{{\"decision\":\"{:?}\",\"reason\":\"{:?}\"}}",
-                        decision.decision, decision.reason
-                    )
-                });
-                Err(Status::permission_denied(format!(
-                    "POLICY_DENIED: {encoded}"
-                )))
-            }
-        }
-    }
-
     /// The daemon's own canonical URA. Used by per-ability
     /// admission filters that need to recognise the loopback
     /// caller (eg. `federation.list_user_devices` in N3-5
@@ -529,18 +421,7 @@ impl AdmissionFacade {
     ///   `ResourceExhausted`; key contract violations use
     ///   `InvalidArgument`.
     pub fn check_quota(&self, request: &InvokeRequest) -> Result<Option<RateLimitInfo>, Status> {
-        self.check_quota_for_ability(request, &request.function_name)
-    }
-
-    /// #185: meter a transport-policy-accepted unary caller against an
-    /// explicit ability name. `federation.forward_invoke` uses this to
-    /// charge the caller for the inner user ability while keeping the
-    /// top-level federation wrapper itself exempt as control-plane traffic.
-    pub fn check_quota_for_ability(
-        &self,
-        request: &InvokeRequest,
-        ability: &str,
-    ) -> Result<Option<RateLimitInfo>, Status> {
+        let ability = request.function_name.as_str();
         let Some(envelope) = request.envelope.as_ref() else {
             return Ok(None);
         };
@@ -910,7 +791,6 @@ impl AdmissionFacade {
             // `op_event!` audit lines + the wire-level error
             // their gRPC client sees.
             Ok(()) if bootstrap_authority_ability(ability) => Ok(()),
-            Ok(()) if carrier_admission_only_ability(ability) => Ok(()),
             Ok(()) => {
                 let delegation_authority_id = verify_delegation_metadata(
                     envelope,
@@ -1471,16 +1351,6 @@ fn bootstrap_authority_ability(ability: &str) -> bool {
     )
 }
 
-/// Carrier abilities only authorize transport placement. Their child
-/// invocation is admitted separately after the carrier is decoded.
-fn carrier_admission_only_ability(ability: &str) -> bool {
-    matches!(
-        action_classification_ability_name(ability).as_str(),
-        ABILITY_FEDERATION_FORWARD_INVOKE
-            | crate::daemon::ability::conformance::ABILITY_RUNTIME_INVOKE_REMOTE
-    )
-}
-
 fn action_for_unary_ability(ability: &str) -> AccessAction {
     use crate::daemon::ability::names::{
         agents as agent_names, automation as automation_names, device_control as device_names,
@@ -1642,9 +1512,13 @@ fn action_for_unary_ability(ability: &str) -> AccessAction {
         return AccessAction::Manage;
     }
 
-    let hints =
-        crate::daemon::ability::catalog::catalog_metadata::discovery_hints_for_name(ability);
-    if hints.read_only && hints.idempotent && !hints.streaming_only && !hints.bidi_only {
+    let descriptor =
+        crate::daemon::ability::catalog::catalog_metadata::registered_descriptor_for_name(ability);
+    if descriptor.is_some_and(|descriptor| {
+        descriptor.hints.read_only
+            && descriptor.hints.idempotent
+            && descriptor.call_mode() == crate::daemon::ability::CallMode::Rpc
+    }) {
         AccessAction::Read
     } else {
         AccessAction::Invoke
@@ -2421,16 +2295,6 @@ mod tests {
 
     #[test]
     fn rfc014_unary_action_classifier_pins_session_and_policy_boundaries() {
-        assert!(carrier_admission_only_ability(
-            ABILITY_FEDERATION_FORWARD_INVOKE
-        ));
-        assert!(carrier_admission_only_ability(
-            crate::daemon::ability::conformance::ABILITY_RUNTIME_INVOKE_REMOTE
-        ));
-        assert!(
-            !carrier_admission_only_ability("terminal.create"),
-            "terminal.create creates the governed child resource and must stay in owner policy"
-        );
         assert_eq!(
             action_for_unary_ability("terminal.create"),
             AccessAction::Stream
@@ -3232,11 +3096,12 @@ mod tests {
         let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
         let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None)
             .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(config)));
-        let req = invoke_request(Some(envelope_with_caller(caller)));
+        let mut req = invoke_request(Some(envelope_with_caller(caller)));
         let ability = "a".repeat(MAX_QUOTA_ABILITY_NAME_BYTES + 1);
+        req.function_name = ability;
 
         let err = facade
-            .check_quota_for_ability(&req, &ability)
+            .check_quota(&req)
             .expect_err("oversized quota key must be rejected");
 
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
@@ -3642,7 +3507,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::daemon::federation::client::FederationClient for NoopFederationClient {
-        async fn forward_invoke(
+        async fn invoke(
             &self,
             _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,

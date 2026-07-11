@@ -2,16 +2,23 @@
 # python-sdk-live-smoke.sh — live daemon smoke through the Python SDK facade
 # =========================================================================
 #
-# Builds `libeasynet_cli` and `easynet-daemon`, starts a hermetic daemon through
+# Builds generic C ABI v5 `libeasynet_cli` and `easynet-daemon`, starts a hermetic daemon through
 # `easynet_sdk.CABIDaemonTransport`, then exercises Runtime Core unary, stream,
-# bidi file transfer, and typed terminal failure paths through the Python SDK
+# stream, prepare/sign/submit, and typed terminal failure paths through the Python SDK
 # object model.
 
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  command -v uv >/dev/null 2>&1 || {
+    echo "[python-sdk-live-smoke] uv is required to materialize the SDK test environment" >&2
+    exit 2
+  }
+  (cd "$REPO_ROOT/sdk/python" && uv sync --quiet)
+  PYTHON_BIN="$REPO_ROOT/sdk/python/.venv/bin/python"
+fi
 DAEMON_BIN="$REPO_ROOT/target/debug/easynet-daemon"
 
 case "$(uname -s)" in
@@ -27,15 +34,15 @@ LIB_PATH="$REPO_ROOT/target/debug/libeasynet_cli.${LIB_EXT}"
 
 if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
-  grep -q "fs.transfer" "$0"
+  grep -q "generic C ABI v5" "$0"
   grep -q "typed terminal failure decoded" "$0"
-  PYTHONPATH="$REPO_ROOT/sdk/python" "$PYTHON_BIN" - <<'PY'
+  PYTHONPATH="$REPO_ROOT/sdk/python:$REPO_ROOT/../EasyNet-Axon/sdk/python" "$PYTHON_BIN" - <<'PY'
 import easynet_sdk
 from easynet_sdk._cabi import EXPECTED_ABI_VERSION
 
 assert hasattr(easynet_sdk, "DaemonControl")
 assert hasattr(easynet_sdk, "RuntimeClient")
-assert EXPECTED_ABI_VERSION == 4
+assert EXPECTED_ABI_VERSION == 5
 print("python-sdk-live-smoke self-test ok")
 PY
   exit 0
@@ -60,7 +67,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[python-sdk-live-smoke] starting daemon through Python SDK facade..."
-PYTHONPATH="$REPO_ROOT/sdk/python" \
+PYTHONPATH="$REPO_ROOT/sdk/python:$REPO_ROOT/../EasyNet-Axon/sdk/python" \
 LIB_PATH="$LIB_PATH" \
 DAEMON_BIN="$DAEMON_BIN" \
 SMOKE_HOME="$SMOKE_HOME" \
@@ -69,18 +76,13 @@ import base64
 import json
 import os
 import time
-from dataclasses import asdict
 from pathlib import Path
 
 from easynet_sdk import (
-    AddressingClient,
-    BidiStreamDescriptor,
     DaemonControl,
     DaemonMode,
     HealthClient,
     InvocationSignature,
-    LocalResourceRefRequest,
-    PublicationClient,
     StartConfig,
 )
 from easynet_sdk._cabi import CABIDaemonTransport, CLILibrary
@@ -145,12 +147,16 @@ def nonce(start):
     return base64.b64encode(bytes(range(start, start + 16))).decode("ascii")
 
 
-def draft(runtime, addressing, device_ura, ability, args, nonce_start):
+def draft(runtime, device_ura, ability, args, nonce_start):
+    realm, device_id = device_ura.removeprefix("easynet:///r/").split("/device/", 1)
+    descriptor_ref = (
+        f"easynet:///r/{realm}/ability/device.{device_id}.{ability}@1.0.0"
+    )
     return (
         runtime.new_invocation()
         .with_caller_ura(device_ura)
         .with_callee_ura(device_ura)
-        .with_descriptor_ref(addressing.owner_ability_descriptor_ref(device_ura, ability))
+        .with_descriptor_ref(descriptor_ref)
         .with_subject_ura(device_ura)
         .with_nonce_base64(nonce(nonce_start))
         .with_causal_context({"form": "none"})
@@ -170,8 +176,6 @@ transport = CABIDaemonTransport(CLILibrary.load(os.environ["LIB_PATH"]))
 control = DaemonControl(transport)
 handle = None
 runtime = None
-identity_transport = None
-publication_transport = None
 try:
     handle = control.start(
         StartConfig(
@@ -191,16 +195,12 @@ try:
     assert status.endpoints.invocation_endpoint, status
     assert handle.invocation_endpoint(), status
     runtime = handle.open_runtime()
-    identity_transport = transport.open_identity_transport(handle.handle_id, b"{}")
-    addressing = AddressingClient(identity_transport)
-    publication_transport = transport.open_publication_transport(handle.handle_id, b"{}")
-    publication = PublicationClient(publication_transport)
 
     health = HealthClient(runtime._transport).runtime_health()
     assert health.ready(), health
 
     unary = runtime.invoke(
-        draft(runtime, addressing, device_ura, "observe.health", {"smoke": "python-sdk"}, 1)
+        draft(runtime, device_ura, "observe.health", {"smoke": "python-sdk"}, 1)
     )
     assert unary.ok is True, unary
     assert unary.terminal_state == "Completed", unary
@@ -211,7 +211,6 @@ try:
     prepared_failure, _ = runtime.prepare(
         draft(
             runtime,
-            addressing,
             device_ura,
             "sdk.live_smoke_missing",
             {"smoke": "python-sdk-terminal-failure"},
@@ -240,7 +239,6 @@ try:
     browser = runtime.invoke(
         draft(
             runtime,
-            addressing,
             device_ura,
             "browser.open_session",
             {"url": "https://example.com"},
@@ -252,7 +250,6 @@ try:
     stream = runtime.invoke_stream(
         draft(
             runtime,
-            addressing,
             device_ura,
             "browser.capture_viewport",
             {"session_ura": session_ura},
@@ -265,52 +262,7 @@ try:
     stream.cancel("python-sdk-live-smoke")
     print("[python-sdk-live-smoke] StreamHandle received daemon frame")
 
-    download_path = Path(smoke_home) / ".easynet" / "python-sdk-smoke-download.bin"
-    download_bytes = b"python sdk bidi proof\n"
-    download_path.write_bytes(download_bytes)
-    bidi = runtime.open_bidi(
-        draft(
-            runtime,
-            addressing,
-            device_ura,
-            "fs.transfer",
-            {
-                "mode": "download",
-                "resource_ref": asdict(
-                    publication.build_local_resource_ref(
-                        LocalResourceRefRequest(str(download_path), "read")
-                    )
-                ),
-            },
-            49,
-        ),
-        (
-            BidiStreamDescriptor(
-                stream_id=1,
-                content_type="application/octet-stream",
-                ordering="STRICT",
-            ),
-        ),
-    )
-    bidi.close_send()
-    frames = []
-
-    def saw_terminal_download():
-        return any(frame.kind == "binary_chunk" for frame in frames) and any(
-            frame.terminal for frame in frames
-        )
-
-    deadline = time.time() + 8.0
-    while time.time() < deadline and not saw_terminal_download():
-        frames.append(bidi.receive(timeout=1.0))
-    assert saw_terminal_download(), [frame.kind for frame in frames]
-    bidi.close()
-    print("[python-sdk-live-smoke] BidiSession received data and terminal frame")
 finally:
-    if publication_transport is not None:
-        publication_transport.close()
-    if identity_transport is not None:
-        identity_transport.close()
     if runtime is not None:
         runtime.close()
     if handle is not None:

@@ -1950,8 +1950,9 @@ This skill does X.\n";
         let mut reg = AxonAbilityCatalog::new();
         let counter_c = Arc::clone(&counter);
         let replies_c = Arc::clone(&replies);
-        reg.register_rpc(
+        reg.register_rpc_with_owner(
             format!("{agent}.chat"),
+            crate::daemon::ability::dispatch::OwnerKind::Device,
             Arc::new(move |args: Value| {
                 let mut idx = counter_c.lock().unwrap();
                 let i = *idx;

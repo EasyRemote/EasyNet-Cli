@@ -1,5 +1,5 @@
 // Step dispatch plane: agent-aware dispatcher, daemon and
-// remote forward_invoke routes (split from interpreter.rs,
+// remote canonical_invoke routes (split from interpreter.rs,
 // T4.4 / F-021; bodies are move-only).
 
 // EasyNet CLI — EAL Interpreter
@@ -35,7 +35,7 @@ use serde_json::Value;
 use super::*;
 
 /// without changing the EAL surface.
-fn dispatch_remote_via_forward_invoke(
+fn dispatch_remote_via_canonical_invoke(
     tenant: &str,
     node_id: &str,
     ability_name: &str,
@@ -50,7 +50,7 @@ fn dispatch_remote_via_forward_invoke(
         // Local short-circuit: `local`, empty, or this device's own
         // node id all dispatch through the local daemon's control
         // socket, the same surface every other in-process invocation
-        // uses. Skip the forward_invoke envelope entirely — the
+        // uses. Skip the canonical_invoke envelope entirely — the
         // self-target shortcut on the daemon side covers a different
         // case (canonical self URA), not the keyword `local`.
         let self_node = crate::daemon::persistence::config::load_credentials()
@@ -69,7 +69,7 @@ fn dispatch_remote_via_forward_invoke(
         }
 
         let target_ura = if crate::core::ura::parse_ura(trimmed).is_ok() {
-            crate::daemon::invocation::routing::federation_invoke::parse_node_ura(trimmed)
+            crate::daemon::invocation::routing::remote_invoke::parse_node_ura(trimmed)
                 .map_err(|e| EalError::Validation(format!("parse target URA: {e}")))?
         } else if !tenant.is_empty() {
             crate::core::ura::device_ura(tenant, trimmed)
@@ -84,19 +84,21 @@ fn dispatch_remote_via_forward_invoke(
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+        let target_call = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
             &target_ura,
             ability_name,
         )
         .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
-        crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
+        crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_causal_parents(
             &target_call,
             arguments.clone(),
             caller_ura.as_deref(),
             causal_parents,
         )
         .map_err(|e| {
-            EalError::Unavailable(format!("forward_invoke {ability_name} → {target_ura}: {e}"))
+            EalError::Unavailable(format!(
+                "canonical_invoke {ability_name} → {target_ura}: {e}"
+            ))
         })
     }
     #[cfg(not(feature = "axon-pb"))]
@@ -164,20 +166,18 @@ fn dispatch_local_device_ability(
 fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
     crate::daemon::ability::catalog::published_abilities()
         .into_iter()
-        .find(|meta| meta.name == ability_name)
-        .map(|meta| dispatch_mode_from_hints(&meta.hints))
+        .find(|descriptor| descriptor.name == ability_name)
+        .map(|descriptor| dispatch_mode_from_call_mode(descriptor.call_mode()))
         .unwrap_or(LocalDeviceDispatchMode::Rpc)
 }
 
-fn dispatch_mode_from_hints(
-    hints: &crate::daemon::ability::descriptors::AbilityHints,
+fn dispatch_mode_from_call_mode(
+    call_mode: crate::daemon::ability::CallMode,
 ) -> LocalDeviceDispatchMode {
-    if hints.bidi_only {
-        LocalDeviceDispatchMode::BidiUnsupported
-    } else if hints.streaming_only {
-        LocalDeviceDispatchMode::StreamFirstPayload
-    } else {
-        LocalDeviceDispatchMode::Rpc
+    match call_mode {
+        crate::daemon::ability::CallMode::Rpc => LocalDeviceDispatchMode::Rpc,
+        crate::daemon::ability::CallMode::Stream => LocalDeviceDispatchMode::StreamFirstPayload,
+        crate::daemon::ability::CallMode::Bidi => LocalDeviceDispatchMode::BidiUnsupported,
     }
 }
 
@@ -255,7 +255,7 @@ impl StepDispatcher for AgentAwareDispatcher {
                 // Thread the live causal parents onto the device forward hop
                 // too — the sibling agent branch already lowers them, and
                 // dropping them here re-rooted the receipt DAG (SPEC §15.1-1).
-                dispatch_remote_via_forward_invoke(
+                dispatch_remote_via_canonical_invoke(
                     run.tenant,
                     node_id,
                     ability.as_str(),
@@ -541,27 +541,21 @@ fn try_dispatch_via_daemon(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_mode_from_hints, LocalDeviceDispatchMode};
-    use crate::daemon::ability::descriptors::AbilityHints;
+    use super::{dispatch_mode_from_call_mode, LocalDeviceDispatchMode};
+    use crate::daemon::ability::CallMode;
 
     #[test]
-    fn local_device_dispatch_mode_is_derived_from_descriptor_hints() {
+    fn local_device_dispatch_mode_is_derived_from_canonical_call_mode() {
         assert_eq!(
-            dispatch_mode_from_hints(&AbilityHints::default()),
+            dispatch_mode_from_call_mode(CallMode::Rpc),
             LocalDeviceDispatchMode::Rpc
         );
         assert_eq!(
-            dispatch_mode_from_hints(&AbilityHints {
-                streaming_only: true,
-                ..Default::default()
-            }),
+            dispatch_mode_from_call_mode(CallMode::Stream),
             LocalDeviceDispatchMode::StreamFirstPayload
         );
         assert_eq!(
-            dispatch_mode_from_hints(&AbilityHints {
-                bidi_only: true,
-                ..Default::default()
-            }),
+            dispatch_mode_from_call_mode(CallMode::Bidi),
             LocalDeviceDispatchMode::BidiUnsupported
         );
     }

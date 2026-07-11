@@ -1,44 +1,24 @@
-//! Hot-add agent registration into `LocalRuntime`.
+//! File: `src/daemon/axon_bridge/hot_agent_registrar.rs`
+//! Description: Transactional hot registration for daemon-hosted Agents.
 //!
-//! Phase 5c blocker: `agent.start` / `agent.stop`
-//! used to mutate only `agents.json` on disk. The new agent's
-//! `<agent>.chat / discover / invoke` handlers were not registered
-//! in the Axon runtime; an older catalog lookup-miss fallback
-//! synthesized them on demand. RFC-005 route selection cannot rely
-//! on such hidden executable routes, so hot additions must now
-//! materialise runtime handlers before the owner projection is
-//! advertised.
+//! Protocol responsibility: turn one validated hosted-Agent lifecycle record
+//! into the canonical authority, catalogue/control-plane, and `LocalRuntime`
+//! rows for `<agent>.*`, and remove those rows symmetrically on stop.
 //!
-//! This registrar closes the gap. `agent.start` calls
-//! `register_agent(name, entry)` which builds the same handler set
-//! the boot path needs, then commits every row through
-//! [`AxonAbilityCatalog`]'s dynamic registration transaction. That
-//! transaction is the single writer for descriptor facts, authority
-//! binding, implementation binding, dynamic catalogue metadata, and
-//! the [`LocalRuntime`] executable row. Product-facing
-//! `<agent>.<verb>` names stay at the catalog/manifest boundary only.
-//! `agent.stop` calls `unregister_agent(name)`, which decodes runtime
-//! keys back to owner-local public names and removes the matching
-//! dynamic rows through the same catalogue transaction.
+//! Implementation approach: the registrar exposes an explicit readiness state
+//! (`PendingRuntime -> PendingCatalog -> Ready`) and fails closed until Ready.
+//! Registration first enrolls the Agent authority through the catalogue-owned
+//! durable authority inventory, then writes dynamic ability rows. Removal uses
+//! an opaque token: runtime/catalogue rows are removed while the durable record
+//! still proves authority; inventory revocation is committed only after both
+//! lifecycle stores prove the Agent is gone. Multi-row failures carry typed
+//! partial outcomes and reverse-order rollback status.
 //!
-//! ## Boot-order rationale
-//!
-//! The `AxonAbilityCatalog` is constructed *before* the Axon
-//! `LocalRuntime` (registry comes from
-//! `daemon::ability::catalog::build_registry_with_services` in the daemon's
-//! Stage 2; runtime comes later in
-//! `invocation_transport::start_daemon_invocation_transport`).
-//! But `agent.start`'s handler closure has to be installed at
-//! registry-build time. We bridge that by parking the
-//! [`LocalRuntime`] handle in an internal [`OnceLock`]: the
-//! registrar is constructed *pending* at registry-build time, the
-//! handler closure captures `Arc<Self>`, and boot calls
-//! [`HotAgentRegistrar::set_runtime`] once the runtime is ready.
-//! Any `register_agent` call that lands before the runtime is wired
-//! returns `runtime_not_ready` and emits a diagnostic op_event —
-//! the disk-side `agents.json` write still succeeds, so the next
-//! daemon restart replays the current hosted-agent registry through
-//! this same dynamic registrar after the catalogue OnceLock is set.
+//! Architecture: this module owns orchestration and handler synthesis only.
+//! [`AxonAbilityCatalog`] remains the single writer for descriptor, authority,
+//! implementation, execution-index, and runtime facts. Lifecycle persistence
+//! remains owned by `agents::lifecycle`; Hub advertisement is a separate,
+//! best-effort observer and never changes local commit semantics.
 
 use std::sync::{Arc, OnceLock};
 
@@ -51,12 +31,15 @@ use crate::daemon::ability::builtins::agents::chat::{
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
-pub(crate) fn block_on_hot_registrar<F, T>(future: F) -> Option<T>
+pub(crate) fn block_on_hot_registrar<F, T>(future: F) -> T
 where
     F: std::future::Future<Output = T> + Send,
     T: Send,
 {
-    crate::support::async_bridge::try_run_blocking_in_tokio(future)
+    crate::support::async_bridge::run_blocking(
+        future,
+        crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -70,9 +53,11 @@ struct HotAgentRuntimeSyncContext<'a> {
     binding: &'a HostedAgentRuntimeBinding,
     authority_scope: crate::daemon::ability::AuthorityScope,
     outcome: &'a mut HotAgentRuntimeSyncOutcome,
+    failures: &'a mut Vec<HotAgentRuntimeSyncFailure>,
 }
 
 impl HostedAgentRuntimeBinding {
+    #[cfg(test)]
     fn load(name: &str) -> anyhow::Result<Self> {
         let local_agents = crate::daemon::persistence::local_agents::load()
             .map_err(|err| anyhow::anyhow!("load local hosted agents: {err}"))?;
@@ -169,15 +154,13 @@ async fn hosted_agent_runtime_ability_uras_for_agent(
 /// Captures every dependency a hot-add path needs to synthesise an
 /// agent's handler set + register it into the ability catalogue.
 ///
-/// Constructed *pending* (without a runtime) at registry-build time
-/// via [`HotAgentRegistrar::new_pending`]. Boot calls
-/// [`HotAgentRegistrar::set_runtime`] once the Axon `LocalRuntime`
-/// exists, at which point `register_agent` / `unregister_agent`
-/// start landing rows into the runtime.
+/// Constructed during catalogue assembly, then wired exactly once with the
+/// shared runtime and completed catalogue. The pending construction shape
+/// solves the closure cycle only; public lifecycle calls fail closed until
+/// [`Self::readiness`] is `Ready`.
 pub struct HotAgentRegistrar {
-    /// Populated by [`HotAgentRegistrar::set_runtime`] after the
-    /// Axon `LocalRuntime` is constructed in boot. Reads before that
-    /// point return `None` and the registrar no-ops.
+    /// Populated exactly once by catalogue assembly. Missing state is reported
+    /// as [`HotAgentRegistrarReadiness::PendingRuntime`].
     runtime: OnceLock<Arc<LocalRuntime>>,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
     /// The discover + invoke handlers re-enter local dispatch through
@@ -193,9 +176,9 @@ pub struct HotAgentRegistrar {
     /// Runtime registration is local; hub visibility is separate.
     /// Device-mode boot wires this after the long-lived
     /// `session.open` escalation channel exists. Tests and
-    /// non-device modes leave it empty, in which case
-    /// `agent.start` still succeeds locally and the next
-    /// reconnect/boot advertise sweep repairs hub visibility.
+    /// non-device modes leave it empty. Local lifecycle success is independent
+    /// of Hub reachability; the public lifecycle response reports
+    /// `not_configured`, `succeeded`, or `failed` explicitly.
     hot_advertiser: OnceLock<Arc<dyn HotAgentAdvertiser>>,
 }
 
@@ -210,35 +193,127 @@ pub fn name_claims_reserved_device_owner(name: &str) -> bool {
     name == "device" || name.starts_with("device.")
 }
 
-/// Outcome reported back to the caller of `register_agent` /
-/// `unregister_agent` so the lifecycle handler's op_event line can
-/// surface how many `<agent>.*` rows actually landed.
-#[derive(Debug, Default, Clone, Copy)]
+/// Registrar readiness is a monotonic boot state. Lifecycle mutations are
+/// legal only in `Ready`; pending states are typed failures, never successful
+/// no-ops repaired by a later restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotAgentRegistrarReadiness {
+    PendingRuntime,
+    PendingCatalog,
+    Ready,
+}
+
+impl std::fmt::Display for HotAgentRegistrarReadiness {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::PendingRuntime => "pending_runtime",
+            Self::PendingCatalog => "pending_catalog",
+            Self::Ready => "ready",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotAgentSyncOperation {
+    Register,
+    Unregister,
+}
+
+impl std::fmt::Display for HotAgentSyncOperation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Register => "register",
+            Self::Unregister => "unregister",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotAgentRuntimeSyncFailure {
+    pub ability: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotAgentRollbackStatus {
+    Completed,
+    Partial { failures: Vec<String> },
+}
+
+impl std::fmt::Display for HotAgentRollbackStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed => formatter.write_str("completed"),
+            Self::Partial { failures } => write!(formatter, "partial({})", failures.join("; ")),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum HotAgentRegistrarError {
+    #[error("hot hosted-Agent registrar is not ready: {readiness}")]
+    NotReady {
+        readiness: HotAgentRegistrarReadiness,
+    },
+    #[error("hosted Agent name {agent:?} claims the reserved device owner namespace")]
+    ReservedOwner { agent: String },
+    #[error("hosted Agent {agent:?} authority enrollment failed: {reason}")]
+    AuthorityEnrollment { agent: String, reason: String },
+    #[error("hosted Agent {agent:?} authority scope is invalid: {reason}")]
+    AuthorityScope { agent: String, reason: String },
+    #[error(
+        "hot hosted-Agent {operation} failed for {agent:?} after {failure_count} row error(s); rollback={rollback}"
+    )]
+    RuntimeSync {
+        operation: HotAgentSyncOperation,
+        agent: String,
+        failure_count: usize,
+        outcome: HotAgentRuntimeSyncOutcome,
+        failures: Vec<HotAgentRuntimeSyncFailure>,
+        rollback: HotAgentRollbackStatus,
+    },
+    #[error("commit hosted Agent {agent:?} authority revocation failed: {reason}")]
+    AuthorityRevocation { agent: String, reason: String },
+    #[error("hot hosted-Agent registrar wiring rejected a second {dependency} writer")]
+    SecondWriter { dependency: &'static str },
+}
+
+/// Successful row counts for a registrar transaction. `failed` is retained in
+/// the public response shape, but a successful `Result` always carries zero;
+/// non-zero counts live in [`HotAgentRegistrarError::RuntimeSync`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct HotAgentRuntimeSyncOutcome {
     pub registered: usize,
     pub replaced: usize,
     pub failed: usize,
-    /// True when the agent name claimed the reserved `device.` owner
-    /// token and the whole registration was refused (RFC-005 §3.1.2:
-    /// hosted user agent ≠ device-sponsored System Agent). No runtime
-    /// rows were touched.
-    pub rejected_reserved_owner: bool,
     /// Rows reconciled away: previously-registered `<agent>.*`
     /// abilities whose backing manifest is gone. The registrar owns
     /// the whole `<agent>.` LocalRuntime namespace (see
     /// `unregister_agent`'s prefix wipe), so anything it did not
     /// just (re-)register is stale by definition.
     pub removed: usize,
-    /// True when the call landed before `set_runtime` was called.
-    /// Distinguishes "deliberate no-op due to boot ordering" from
-    /// "every register attempt errored". The disk side still wrote
-    /// `agents.json`, so the agent comes up on daemon restart.
-    pub runtime_not_ready: bool,
-    /// True when the catalogue `OnceLock` has not been populated yet.
-    /// Runtime-only registration is forbidden: a hosted-agent ability
-    /// row without descriptor/authority/implementation facts is not a
-    /// valid EasyNet ability.
-    pub catalog_not_ready: bool,
+}
+
+/// Opaque two-phase removal token. Runtime/catalogue rows are already absent;
+/// lifecycle persistence must now remove the durable row and identity before
+/// calling `commit_agent_removal` to revoke authority.
+#[derive(Debug, Clone)]
+pub struct HotAgentUnregistration {
+    name: String,
+    enrollment: crate::daemon::ability::dispatch::HotAgentAuthorityEnrollment,
+    outcome: HotAgentRuntimeSyncOutcome,
+}
+
+impl HotAgentUnregistration {
+    #[must_use]
+    pub fn outcome(&self) -> HotAgentRuntimeSyncOutcome {
+        self.outcome
+    }
+
+    #[must_use]
+    pub fn agent_ura(&self) -> &str {
+        self.enrollment.authority_root()
+    }
 }
 
 /// Input for a hot hosted-agent advertise pass.
@@ -261,10 +336,52 @@ pub struct HotAgentAdvertiseRequest {
 }
 
 /// Outcome for best-effort hub advertisement after hot agent add.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotAgentAdvertiseState {
+    Succeeded,
+    Failed,
+}
+
+/// A configured advertiser always reports an explicit terminal state. Absence
+/// of an advertiser remains represented by `Option::None` at the lifecycle
+/// boundary and is surfaced as `not_configured` in public responses.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotAgentAdvertiseOutcome {
-    pub advertised: bool,
-    pub error: Option<String>,
+    state: HotAgentAdvertiseState,
+    error: Option<String>,
+}
+
+impl HotAgentAdvertiseOutcome {
+    #[must_use]
+    pub fn succeeded() -> Self {
+        Self {
+            state: HotAgentAdvertiseState::Succeeded,
+            error: None,
+        }
+    }
+
+    #[must_use]
+    pub fn failed(error: impl Into<String>) -> Self {
+        Self {
+            state: HotAgentAdvertiseState::Failed,
+            error: Some(error.into()),
+        }
+    }
+
+    #[must_use]
+    pub fn advertised(&self) -> bool {
+        self.state == HotAgentAdvertiseState::Succeeded
+    }
+
+    #[must_use]
+    pub fn state(&self) -> HotAgentAdvertiseState {
+        self.state
+    }
+
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
 }
 
 /// Input for a hot hosted-agent revoke pass (`agent.stop`). Drives
@@ -288,18 +405,10 @@ pub trait HotAgentAdvertiser: Send + Sync {
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
         -> HotAgentAdvertiseOutcome;
 
-    /// Revoke a hot-removed hosted agent's identity from the hub
-    /// directory (`federation.revoke`). Default is a no-op outcome so
-    /// recorders/tests that only care about advertise need not
-    /// implement it; the device-mode session advertiser overrides it.
-    /// ISS-002.
-    fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest) -> HotAgentAdvertiseOutcome {
-        let _ = request;
-        HotAgentAdvertiseOutcome {
-            advertised: false,
-            error: None,
-        }
-    }
+    /// Revoke a hot-removed hosted agent's identity from the hub directory.
+    /// Implementations must report success or failure; a default no-op would
+    /// turn "not implemented" into fake success.
+    fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest) -> HotAgentAdvertiseOutcome;
 }
 
 impl HotAgentRegistrar {
@@ -322,25 +431,54 @@ impl HotAgentRegistrar {
         })
     }
 
-    /// Attach the live `LocalRuntime`. Idempotent on the first
-    /// successful set; subsequent calls are ignored (`OnceLock`
-    /// semantics). Called from `boot.rs` exactly once, after
-    /// `build_local_runtime`.
-    pub fn set_runtime(&self, runtime: Arc<LocalRuntime>) {
-        let _ = self.runtime.set(runtime);
+    /// Attach the live `LocalRuntime`. A second writer is a boot wiring error,
+    /// not an idempotent success, because handler closures would remain pinned
+    /// to the first runtime.
+    pub fn set_runtime(&self, runtime: Arc<LocalRuntime>) -> Result<(), HotAgentRegistrarError> {
+        self.runtime
+            .set(runtime)
+            .map_err(|_| HotAgentRegistrarError::SecondWriter {
+                dependency: "runtime",
+            })
     }
 
-    /// Attach the hot advertise bridge. Idempotent first-writer-wins
-    /// to mirror [`Self::set_runtime`]; boot should call this at most
-    /// once after the device-mode session escalation handle exists.
-    pub fn set_hot_agent_advertiser(&self, advertiser: Arc<dyn HotAgentAdvertiser>) {
-        let _ = self.hot_advertiser.set(advertiser);
+    /// Attach the hot advertise bridge after the device-mode session
+    /// escalation handle exists. A second writer is rejected explicitly.
+    pub fn set_hot_agent_advertiser(
+        &self,
+        advertiser: Arc<dyn HotAgentAdvertiser>,
+    ) -> Result<(), HotAgentRegistrarError> {
+        self.hot_advertiser
+            .set(advertiser)
+            .map_err(|_| HotAgentRegistrarError::SecondWriter {
+                dependency: "hub advertiser",
+            })
     }
 
     /// Clone the current hot advertise bridge if boot wired one.
     #[must_use]
     pub fn hot_agent_advertiser(&self) -> Option<Arc<dyn HotAgentAdvertiser>> {
         self.hot_advertiser.get().cloned()
+    }
+
+    #[must_use]
+    pub fn readiness(&self) -> HotAgentRegistrarReadiness {
+        if self.runtime.get().is_none() {
+            HotAgentRegistrarReadiness::PendingRuntime
+        } else if self.dispatch_handle.get().is_none() {
+            HotAgentRegistrarReadiness::PendingCatalog
+        } else {
+            HotAgentRegistrarReadiness::Ready
+        }
+    }
+
+    pub fn require_ready(&self) -> Result<(), HotAgentRegistrarError> {
+        let readiness = self.readiness();
+        if readiness == HotAgentRegistrarReadiness::Ready {
+            Ok(())
+        } else {
+            Err(HotAgentRegistrarError::NotReady { readiness })
+        }
     }
 
     /// Register the canonical `<agent>.chat / discover / invoke`
@@ -357,7 +495,19 @@ impl HotAgentRegistrar {
         &self,
         name: &str,
         entry: &AgentEntry,
-    ) -> HotAgentRuntimeSyncOutcome {
+    ) -> Result<HotAgentRuntimeSyncOutcome, HotAgentRegistrarError> {
+        self.register_agent_replacing(name, entry, None).await
+    }
+
+    /// Register a lifecycle replacement with the prior durable entry available
+    /// for compensation. If any new row fails, the registrar re-materializes
+    /// the prior handler set before returning the typed failure.
+    pub async fn register_agent_replacing(
+        &self,
+        name: &str,
+        entry: &AgentEntry,
+        previous: Option<&AgentEntry>,
+    ) -> Result<HotAgentRuntimeSyncOutcome, HotAgentRegistrarError> {
         // DEC-F048 enforcement gate: the registrar owns hosted
         // agents' owner-local public namespace before mapping it to
         // LocalRuntime Ability URA keys. It refuses to mint rows
@@ -373,56 +523,29 @@ impl HotAgentRegistrar {
                           device-sponsored System Agents (RFC-005 §3.1.2); \
                           hosted user agents cannot register under it",
             );
-            return HotAgentRuntimeSyncOutcome {
-                rejected_reserved_owner: true,
-                ..Default::default()
-            };
+            return Err(HotAgentRegistrarError::ReservedOwner {
+                agent: name.to_string(),
+            });
         }
 
-        let Some(runtime) = self.runtime.get() else {
-            crate::op_event!(
-                component = axon_bridge,
-                kind = hot_agent_register_runtime_not_ready,
-                agent = name,
-                message = "agent.start landed before LocalRuntime was wired; \
-                          agents.json still written, agent comes up on daemon restart",
-            );
-            return HotAgentRuntimeSyncOutcome {
-                runtime_not_ready: true,
-                ..Default::default()
-            };
-        };
-        let Some(catalog) = self.dispatch_handle.get().cloned() else {
-            crate::op_event!(
-                component = axon_bridge,
-                kind = hot_agent_register_catalog_not_ready,
-                agent = name,
-                message = "agent runtime registration refused because the live ability \
-                          catalogue is not wired; runtime-only rows are invalid",
-            );
-            return HotAgentRuntimeSyncOutcome {
-                failed: 1,
-                catalog_not_ready: true,
-                ..Default::default()
-            };
-        };
-
-        let binding = match HostedAgentRuntimeBinding::load(name) {
-            Ok(binding) => binding,
-            Err(err) => {
-                let err_msg = err.to_string();
-                crate::op_event!(
-                    component = axon_bridge,
-                    kind = hot_agent_register_identity_missing,
-                    agent = name,
-                    error = err_msg.as_str(),
-                    message = "hosted agent runtime registration requires canonical local-agents identity",
-                );
-                return HotAgentRuntimeSyncOutcome {
-                    failed: 1,
-                    ..Default::default()
-                };
-            }
+        self.require_ready()?;
+        let runtime = self
+            .runtime
+            .get()
+            .expect("Ready registrar must own LocalRuntime");
+        let catalog = self
+            .dispatch_handle
+            .get()
+            .cloned()
+            .expect("Ready registrar must own AxonAbilityCatalog");
+        let enrollment = catalog
+            .enroll_persisted_hot_agent_authority(name)
+            .map_err(|error| HotAgentRegistrarError::AuthorityEnrollment {
+                agent: name.to_string(),
+                reason: error.to_string(),
+            })?;
+        let binding = HostedAgentRuntimeBinding {
+            agent_ura: enrollment.authority_root().to_string(),
         };
 
         let authority_scope = match binding.authority_scope(name) {
@@ -438,14 +561,18 @@ impl HotAgentRegistrar {
                     message =
                         "hosted agent runtime registration requires a canonical authority scope",
                 );
-                return HotAgentRuntimeSyncOutcome {
-                    failed: 1,
-                    ..Default::default()
-                };
+                if previous.is_none() {
+                    let _ = catalog.rollback_hot_agent_authority_enrollment(&enrollment);
+                }
+                return Err(HotAgentRegistrarError::AuthorityScope {
+                    agent: name.to_string(),
+                    reason: err_msg,
+                });
             }
         };
 
         let mut outcome = HotAgentRuntimeSyncOutcome::default();
+        let mut failures = Vec::new();
         let owner = OwnerKind::Agent(name.to_string());
         // Every catalogue row this sync (re-)registers; the reconcile pass at
         // the end removes any other row whose decoded public ability name is
@@ -458,6 +585,7 @@ impl HotAgentRegistrar {
                 binding: &binding,
                 authority_scope,
                 outcome: &mut outcome,
+                failures: &mut failures,
             };
 
             // ── chat
@@ -615,6 +743,10 @@ impl HotAgentRegistrar {
                 Err(err) => {
                     outcome.failed += 1;
                     let err_msg = err.to_string();
+                    failures.push(HotAgentRuntimeSyncFailure {
+                        ability: dispatch_key.clone(),
+                        reason: err_msg.clone(),
+                    });
                     crate::op_event!(
                         component = axon_bridge,
                         kind = hot_agent_ability_reconcile_failed,
@@ -626,7 +758,37 @@ impl HotAgentRegistrar {
             }
         }
 
-        outcome
+        if failures.is_empty() {
+            return Ok(outcome);
+        }
+
+        let rollback = if let Some(previous) = previous {
+            self.restore_agent_rows(name, previous, runtime, &catalog, &binding)
+                .await
+        } else {
+            self.remove_agent_rows(runtime, &catalog, name).await
+        };
+        let mut rollback_failures = rollback.err().into_iter().collect::<Vec<_>>();
+        if previous.is_none() {
+            if let Err(error) = catalog.rollback_hot_agent_authority_enrollment(&enrollment) {
+                rollback_failures.push(format!("rollback authority enrollment: {error}"));
+            }
+        }
+        let rollback = if rollback_failures.is_empty() {
+            HotAgentRollbackStatus::Completed
+        } else {
+            HotAgentRollbackStatus::Partial {
+                failures: rollback_failures,
+            }
+        };
+        Err(HotAgentRegistrarError::RuntimeSync {
+            operation: HotAgentSyncOperation::Register,
+            agent: name.to_string(),
+            failure_count: failures.len(),
+            outcome,
+            failures,
+            rollback,
+        })
     }
 
     /// Unregister every dynamic `<name>.*` hosted-agent ability.
@@ -638,34 +800,47 @@ impl HotAgentRegistrar {
     /// through `AxonAbilityCatalog::hot_unregister` so control-plane
     /// and dynamic side tables cannot drift from the executable row.
     ///
-    /// No-op (returns 0) when the runtime is not yet wired —
-    /// the disk-side `agents.json` row is already gone, so the
-    /// next daemon restart won't bring the agent back.
-    pub async fn unregister_agent(&self, name: &str) -> usize {
-        let Some(runtime) = self.runtime.get() else {
-            return 0;
+    pub async fn unregister_agent(
+        &self,
+        name: &str,
+        entry: &AgentEntry,
+    ) -> Result<HotAgentUnregistration, HotAgentRegistrarError> {
+        self.require_ready()?;
+        let runtime = self
+            .runtime
+            .get()
+            .expect("Ready registrar must own LocalRuntime");
+        let catalog = self
+            .dispatch_handle
+            .get()
+            .cloned()
+            .expect("Ready registrar must own AxonAbilityCatalog");
+        let enrollment = catalog
+            .enroll_persisted_hot_agent_authority(name)
+            .map_err(|error| HotAgentRegistrarError::AuthorityEnrollment {
+                agent: name.to_string(),
+                reason: error.to_string(),
+            })?;
+        let binding = HostedAgentRuntimeBinding {
+            agent_ura: enrollment.authority_root().to_string(),
         };
-        let Some(catalog) = self.dispatch_handle.get().cloned() else {
-            crate::op_event!(
-                component = axon_bridge,
-                kind = hot_agent_unregister_catalog_not_ready,
-                agent = name,
-                message = "agent runtime unregister refused because the live ability \
-                          catalogue is not wired",
-            );
-            return 0;
-        };
-        let mut removed = 0;
+        let mut outcome = HotAgentRuntimeSyncOutcome::default();
+        let mut failures = Vec::new();
         for runtime_key in hosted_agent_runtime_ability_uras_for_agent(runtime, name).await {
             let Some(dispatch_key) = dispatch_key_for_hosted_agent_runtime_key(&runtime_key, name)
             else {
                 continue;
             };
             match catalog.hot_unregister(&dispatch_key) {
-                Ok(true) => removed += 1,
+                Ok(true) => outcome.removed += 1,
                 Ok(false) => {}
                 Err(err) => {
                     let err_msg = err.to_string();
+                    outcome.failed += 1;
+                    failures.push(HotAgentRuntimeSyncFailure {
+                        ability: dispatch_key.clone(),
+                        reason: err_msg.clone(),
+                    });
                     crate::op_event!(
                         component = axon_bridge,
                         kind = hot_agent_unregister_failed,
@@ -676,7 +851,94 @@ impl HotAgentRegistrar {
                 }
             }
         }
-        removed
+        if failures.is_empty() {
+            return Ok(HotAgentUnregistration {
+                name: name.to_string(),
+                enrollment,
+                outcome,
+            });
+        }
+
+        let rollback = match self
+            .restore_agent_rows(name, entry, runtime, &catalog, &binding)
+            .await
+        {
+            Ok(()) => HotAgentRollbackStatus::Completed,
+            Err(error) => HotAgentRollbackStatus::Partial {
+                failures: vec![error],
+            },
+        };
+        Err(HotAgentRegistrarError::RuntimeSync {
+            operation: HotAgentSyncOperation::Unregister,
+            agent: name.to_string(),
+            failure_count: failures.len(),
+            outcome,
+            failures,
+            rollback,
+        })
+    }
+
+    /// Commit phase two of `agent.stop`: the lifecycle stores are already
+    /// absent, so the opaque removal token may revoke the authority root.
+    pub fn commit_agent_removal(
+        &self,
+        removal: &HotAgentUnregistration,
+    ) -> Result<(), HotAgentRegistrarError> {
+        let catalog =
+            self.dispatch_handle
+                .get()
+                .cloned()
+                .ok_or(HotAgentRegistrarError::NotReady {
+                    readiness: HotAgentRegistrarReadiness::PendingCatalog,
+                })?;
+        catalog
+            .revoke_removed_hot_agent_authority(&removal.enrollment)
+            .map_err(|error| HotAgentRegistrarError::AuthorityRevocation {
+                agent: removal.name.clone(),
+                reason: error.to_string(),
+            })
+    }
+
+    async fn restore_agent_rows(
+        &self,
+        name: &str,
+        entry: &AgentEntry,
+        _runtime: &Arc<LocalRuntime>,
+        _catalog: &Arc<AxonAbilityCatalog>,
+        _binding: &HostedAgentRuntimeBinding,
+    ) -> Result<(), String> {
+        // Box the compensating call because it reuses the same registration
+        // state machine; boxing makes the intentional async recursion finite.
+        match Box::pin(self.register_agent_replacing(name, entry, None)).await {
+            Ok(_) => Ok(()),
+            Err(error) => Err(format!("restore prior hosted-Agent rows: {error}")),
+        }
+    }
+
+    async fn remove_agent_rows(
+        &self,
+        runtime: &Arc<LocalRuntime>,
+        catalog: &Arc<AxonAbilityCatalog>,
+        name: &str,
+    ) -> Result<(), String> {
+        let mut failures = Vec::new();
+        for runtime_key in hosted_agent_runtime_ability_uras_for_agent(runtime, name).await {
+            let Some(dispatch_key) = dispatch_key_for_hosted_agent_runtime_key(&runtime_key, name)
+            else {
+                continue;
+            };
+            if let Err(error) = catalog.hot_unregister(&dispatch_key) {
+                failures.push(format!("{dispatch_key}: {error}"));
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "remove partially registered hosted-Agent rows: {}",
+                failures.join("; ")
+            ))
+        }
     }
 
     async fn register_rpc_with_spec(
@@ -696,7 +958,7 @@ impl HotAgentRegistrar {
                 .await
             }
             None => {
-                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
                 return false;
             }
         };
@@ -716,7 +978,7 @@ impl HotAgentRegistrar {
                 true
             }
             Err(err) => {
-                Self::record_registration_error(ability_name, err, ctx.outcome);
+                Self::record_registration_error(ability_name, err, ctx.outcome, ctx.failures);
                 false
             }
         }
@@ -739,7 +1001,7 @@ impl HotAgentRegistrar {
                 .await
             }
             None => {
-                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
                 return false;
             }
         };
@@ -761,7 +1023,7 @@ impl HotAgentRegistrar {
                 true
             }
             Err(err) => {
-                Self::record_registration_error(ability_name, err, ctx.outcome);
+                Self::record_registration_error(ability_name, err, ctx.outcome, ctx.failures);
                 false
             }
         }
@@ -784,7 +1046,7 @@ impl HotAgentRegistrar {
                 .await
             }
             None => {
-                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome);
+                Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
                 return false;
             }
         };
@@ -806,7 +1068,7 @@ impl HotAgentRegistrar {
                 true
             }
             Err(err) => {
-                Self::record_registration_error(ability_name, err, ctx.outcome);
+                Self::record_registration_error(ability_name, err, ctx.outcome, ctx.failures);
                 false
             }
         }
@@ -816,8 +1078,13 @@ impl HotAgentRegistrar {
         binding: &HostedAgentRuntimeBinding,
         ability_name: &str,
         outcome: &mut HotAgentRuntimeSyncOutcome,
+        failures: &mut Vec<HotAgentRuntimeSyncFailure>,
     ) {
         outcome.failed += 1;
+        failures.push(HotAgentRuntimeSyncFailure {
+            ability: ability_name.to_string(),
+            reason: "derive hosted Agent Ability URA failed".to_string(),
+        });
         crate::op_event!(
             component = axon_bridge,
             kind = hot_agent_register_failed,
@@ -846,9 +1113,14 @@ impl HotAgentRegistrar {
         ability_name: &str,
         err: anyhow::Error,
         outcome: &mut HotAgentRuntimeSyncOutcome,
+        failures: &mut Vec<HotAgentRuntimeSyncFailure>,
     ) {
         outcome.failed += 1;
         let err_msg = format!("{err}");
+        failures.push(HotAgentRuntimeSyncFailure {
+            ability: ability_name.to_string(),
+            reason: err_msg.clone(),
+        });
         crate::op_event!(
             component = axon_bridge,
             kind = hot_agent_register_failed,
@@ -865,6 +1137,18 @@ mod tests {
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
 
     fn seed_hosted_agent(name: &str) -> String {
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.test:50051".to_string(),
+                realm: "localhost".to_string(),
+                username: Some("dev".to_string()),
+                user_id: Some("user-dev".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed paired credentials");
         let host_device_ura = crate::core::ura::device_ura("localhost", "dev");
         let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
         crate::daemon::persistence::local_agents::save(
@@ -880,6 +1164,13 @@ mod tests {
             },
         )
         .expect("seed local-agents.json");
+        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
+        registry.agents.insert(
+            name.to_string(),
+            AgentEntry::new(AgentType::ClaudeCode, None),
+        );
+        crate::daemon::persistence::agent_registry::save_agents(&registry)
+            .expect("seed durable Agent registry");
         agent_ura
     }
 
@@ -901,14 +1192,14 @@ mod tests {
         registrar: &Arc<HotAgentRegistrar>,
         runtime: Arc<LocalRuntime>,
     ) -> Arc<AxonAbilityCatalog> {
-        registrar.set_runtime(Arc::clone(&runtime));
-        // This test helper mirrors the legacy embedding seam. Production boot
-        // snapshots hosted Agent URAs into its explicit authority context;
-        // these focused registrar tests seed lifecycle state immediately
-        // before registration, so the local-environment resolver is the
-        // equivalent test fixture.
-        let authority_context =
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::from_local_environment();
+        registrar
+            .set_runtime(Arc::clone(&runtime))
+            .expect("test runtime wired once");
+        let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura("localhost", "dev"),
+            Vec::<String>::new(),
+        )
+        .expect("test Device authority context");
         let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
             runtime,
             authority_context,
@@ -934,9 +1225,14 @@ mod tests {
 
         // Dotted form — would mint rows that read as device-owned
         // ability shapes (`device.dev-1.sys.chat`).
-        let outcome = registrar.register_agent("device.dev-1.sys", &entry).await;
-        assert!(outcome.rejected_reserved_owner);
-        assert_eq!(outcome.registered, 0);
+        let error = registrar
+            .register_agent("device.dev-1.sys", &entry)
+            .await
+            .expect_err("reserved owner must fail closed");
+        assert!(matches!(
+            error,
+            HotAgentRegistrarError::ReservedOwner { .. }
+        ));
         assert!(
             rt.list_abilities().await.is_empty(),
             "no device-owned-shaped rows may reach the runtime"
@@ -944,15 +1240,23 @@ mod tests {
 
         // Bare reserved token — would collide with the `device.*`
         // system ability namespace.
-        let outcome = registrar.register_agent("device", &entry).await;
-        assert!(outcome.rejected_reserved_owner);
+        let error = registrar
+            .register_agent("device", &entry)
+            .await
+            .expect_err("bare reserved owner must fail closed");
+        assert!(matches!(
+            error,
+            HotAgentRegistrarError::ReservedOwner { .. }
+        ));
         assert!(rt.list_abilities().await.is_empty());
 
         // User-owned shape passes the same gate untouched.
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         seed_hosted_agent("liangbing");
-        let outcome = registrar.register_agent("liangbing", &entry).await;
-        assert!(!outcome.rejected_reserved_owner);
+        registrar
+            .register_agent("liangbing", &entry)
+            .await
+            .expect("user-hosted Agent registers");
         assert!(
             rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
                 .await
@@ -971,6 +1275,9 @@ mod tests {
         // since been deleted: the row exists in the runtime but no
         // current source will re-register it.
         let ghost_key = runtime_key("liangbing", "liangbing.ghost_op");
+        catalog
+            .enroll_persisted_hot_agent_authority("liangbing")
+            .expect("durable hosted-Agent authority enrollment");
         let ghost_authority = HostedAgentRuntimeBinding::load("liangbing")
             .expect("hosted Agent binding")
             .authority_scope("liangbing")
@@ -987,7 +1294,10 @@ mod tests {
         assert!(rt.has_ability(&ghost_key).await);
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        let outcome = registrar.register_agent("liangbing", &entry).await;
+        let outcome = registrar
+            .register_agent("liangbing", &entry)
+            .await
+            .expect("reconcile succeeds");
 
         assert_eq!(outcome.removed, 1, "stale row must be reconciled away");
         assert!(
@@ -1008,7 +1318,7 @@ mod tests {
         // After `set_runtime`, calling `register_agent("liangbing", entry)`
         // MUST make `runtime.has_ability("liangbing.chat") == true` —
         // the load-bearing property the dispatcher's Phase-4 arm
-        // (`runtime.invoke_remote`) and the host's session-receive
+        // canonical dispatch and the host's session-receive
         // Axon arm (`LocalAxonSessionDispatcher`) both gate on.
         //
         // Pre-this-PR, `agent.start` only wrote `agents.json`
@@ -1026,9 +1336,11 @@ mod tests {
         seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        let outcome = registrar.register_agent("liangbing", &entry).await;
+        let outcome = registrar
+            .register_agent("liangbing", &entry)
+            .await
+            .expect("register succeeds");
 
-        assert!(!outcome.runtime_not_ready, "runtime IS ready post-set");
         assert!(
             outcome.registered >= 3,
             "chat/discover/invoke triple must land (plus any TOML), got {outcome:?}"
@@ -1078,14 +1390,20 @@ mod tests {
         seed_hosted_agent("liangbing");
 
         let first_entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
-        let first = registrar.register_agent("liangbing", &first_entry).await;
+        let first = registrar
+            .register_agent("liangbing", &first_entry)
+            .await
+            .expect("initial register succeeds");
         assert!(first.registered >= 3, "initial register must land rows");
         assert_eq!(first.replaced, 0);
         assert_eq!(first.failed, 0);
 
         let mut changes = rt.subscribe_ability_changes();
         let second_entry = AgentEntry::new(AgentType::ClaudeCode, Some("opus".to_string()));
-        let second = registrar.register_agent("liangbing", &second_entry).await;
+        let second = registrar
+            .register_agent("liangbing", &second_entry)
+            .await
+            .expect("replacement succeeds");
         assert_eq!(
             second.registered, 0,
             "refreshing an existing agent should not create duplicate rows"
@@ -1128,21 +1446,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_agent_before_set_runtime_no_ops_with_runtime_not_ready_flag() {
-        // Pre-`set_runtime` (i.e. during the brief boot window
-        // between `build_registry_with_services` and
-        // `start_daemon_invocation_transport`'s `set_runtime` call), the
-        // registrar must NOT panic — it logs an op_event and
-        // returns `runtime_not_ready: true`. The agent still lands
-        // on disk via the lifecycle handler's prior `save_agents`,
-        // so daemon-restart picks it up via the static-boot path.
+    async fn register_agent_before_set_runtime_fails_with_typed_readiness() {
         let registrar = build_pending();
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        let outcome = registrar.register_agent("liangbing", &entry).await;
-        assert!(outcome.runtime_not_ready);
-        assert_eq!(outcome.registered, 0);
-        assert_eq!(outcome.replaced, 0);
-        assert_eq!(outcome.failed, 0);
+        let error = registrar
+            .register_agent("liangbing", &entry)
+            .await
+            .expect_err("pending registrar must fail closed");
+        assert_eq!(
+            error,
+            HotAgentRegistrarError::NotReady {
+                readiness: HotAgentRegistrarReadiness::PendingRuntime,
+            }
+        );
     }
 
     #[tokio::test]
@@ -1158,13 +1474,20 @@ mod tests {
         seed_hosted_agent("liangbing");
 
         let entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        registrar.register_agent("liangbing", &entry).await;
+        registrar
+            .register_agent("liangbing", &entry)
+            .await
+            .expect("register succeeds");
         assert!(
             rt.has_ability(&runtime_key("liangbing", "liangbing.chat"))
                 .await
         );
 
-        let removed = registrar.unregister_agent("liangbing").await;
+        let removal = registrar
+            .unregister_agent("liangbing", &entry)
+            .await
+            .expect("unregister succeeds");
+        let removed = removal.outcome().removed;
         assert!(
             removed >= 3,
             "chat/discover/invoke triple must be removed, got {removed}"

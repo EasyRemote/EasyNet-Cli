@@ -149,7 +149,7 @@ impl StopPlan {
                 }
             };
             let caller_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
-            match crate::daemon::invocation::routing::federation_invoke::invoke_federation_revoke(
+            match crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
                 &caller_ura,
                 "device shutdown",
             ) {

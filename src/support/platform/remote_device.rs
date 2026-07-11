@@ -82,7 +82,7 @@ where
 {
     let trimmed = node.trim();
     if crate::core::ura::parse_ura(trimmed).is_ok() {
-        return crate::daemon::invocation::routing::federation_invoke::parse_node_ura(trimmed);
+        return crate::daemon::invocation::routing::remote_invoke::parse_node_ura(trimmed);
     }
     if let Some(ura) = lookup(trimmed) {
         return Ok(ura);
@@ -103,8 +103,7 @@ where
 /// legacy local-realm fallback.
 fn lookup_node_ura_in_directory(node: &str) -> Option<String> {
     let entries =
-        crate::daemon::invocation::routing::federation_invoke::invoke_federation_discover(None)
-            .ok()?;
+        crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover(None).ok()?;
     for entry in entries {
         if entry.get("node_id").and_then(Value::as_str) == Some(node) {
             if let Some(ura) = entry.get("agent_ura").and_then(Value::as_str) {

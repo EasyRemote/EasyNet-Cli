@@ -515,12 +515,12 @@ mod tests {
             "descriptor-safe metadata stays hub safe-read eligible"
         );
         assert!(
-            safe_read("namespace.resolve", AccessAction::Read),
-            "namespace.resolve is the RFC-014 descriptor-safe route read"
+            !safe_read("namespace.resolve", AccessAction::Read),
+            "namespace.resolve exposes route facts and requires scoped authority"
         );
         assert!(
-            safe_read("federation.resolve", AccessAction::Read),
-            "federation.resolve is the RFC-014 descriptor-safe directory read"
+            !safe_read("federation.resolve", AccessAction::Read),
+            "federation.resolve exposes directory and route facts"
         );
         assert!(
             !safe_read("terminal.list", AccessAction::Read),

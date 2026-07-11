@@ -5,7 +5,7 @@
 // Description: Pure-function TLS-pinning helpers shared by every
 //              outbound dial that targets a hub-mode peer
 //              (`cross_hub_dial::resolve_peer_channel` for hub-to-hub
-//              cross-realm forward_invoke, `daemon::invocation::session_
+//              cross-realm canonical_invoke, `daemon::invocation::session_
 //              initiator::dial_and_run_session` for device-to-hub
 //              `session.open` bootstrap).
 //

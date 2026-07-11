@@ -30,7 +30,7 @@ func (m *memoryDiscoveryTransport) Close(ctx context.Context) error {
 func TestFeatureDiscoveryDecodesRuntimeCoreFacts(t *testing.T) {
 	client, err := NewClient(DiscoveryTransportFunc(func(ctx context.Context) ([]byte, error) {
 		return []byte(`{
-			"abi_version": 4,
+			"abi_version": 5,
 			"sdk_version": "0.91.30",
 			"profiles": {"runtime_core": "provider-backed"},
 			"symbols": {"runtime_health": true},
@@ -46,8 +46,8 @@ func TestFeatureDiscoveryDecodesRuntimeCoreFacts(t *testing.T) {
 		t.Fatalf("FeatureDiscovery: %v", err)
 	}
 
-	if features.Version().ABIVersion != 4 {
-		t.Fatalf("ABI version = %d, want 4", features.Version().ABIVersion)
+	if features.Version().ABIVersion != 5 {
+		t.Fatalf("ABI version = %d, want 5", features.Version().ABIVersion)
 	}
 	if !features.Symbols["runtime_health"] {
 		t.Fatalf("runtime_health symbol not projected")
@@ -62,7 +62,7 @@ func TestRequireABIReturnsTypedVersionMismatch(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	_, err = client.RequireABI(context.Background(), 4)
+	_, err = client.RequireABI(context.Background(), 5)
 	if err == nil {
 		t.Fatalf("RequireABI succeeded, want version error")
 	}
@@ -104,7 +104,7 @@ func TestRequireABIMapsZeroDaemonABIToVersionMismatch(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	_, err = client.RequireABI(context.Background(), 4)
+	_, err = client.RequireABI(context.Background(), 5)
 	if err == nil {
 		t.Fatalf("RequireABI succeeded, want version error")
 	}
@@ -135,7 +135,7 @@ func TestFeatureDiscoveryRejectsMalformedJSON(t *testing.T) {
 }
 
 func TestClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
-	transport := &memoryDiscoveryTransport{payload: []byte(`{"abi_version": 4, "sdk_version": "0.91.30"}`)}
+	transport := &memoryDiscoveryTransport{payload: []byte(`{"abi_version": 5, "sdk_version": "0.91.30"}`)}
 	client, err := NewClient(transport)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
@@ -165,7 +165,7 @@ func TestClientCloseDelegatesOnceAndFailsClosed(t *testing.T) {
 func TestClientCloseFailureIsTerminal(t *testing.T) {
 	down := errors.New("close failed")
 	transport := &memoryDiscoveryTransport{
-		payload:  []byte(`{"abi_version": 4, "sdk_version": "0.91.30"}`),
+		payload:  []byte(`{"abi_version": 5, "sdk_version": "0.91.30"}`),
 		closeErr: down,
 	}
 	client, err := NewClient(transport)
@@ -180,7 +180,7 @@ func TestClientCloseFailureIsTerminal(t *testing.T) {
 	if !IsCode(err, ErrTransport) || !errors.Is(err, down) {
 		t.Fatalf("close error not wrapped as transport cause: %v", err)
 	}
-	_, err = client.RequireABI(context.Background(), 4)
+	_, err = client.RequireABI(context.Background(), 5)
 	if err == nil {
 		t.Fatalf("RequireABI after failed close succeeded")
 	}

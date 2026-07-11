@@ -486,7 +486,7 @@ impl SelfIdentity for KeyringClient {
             base64::engine::general_purpose::STANDARD.encode(expected_public_key.to_bytes());
         let req = KeyringRequest::Sign {
             self_ura: self_ura.to_string(),
-            signer_policy_ref: crate::protocol::identity_contract::signer_policy_ref(
+            signer_policy_ref: crate::daemon::identity::signer_policy_ref(
                 self_ura,
                 self_ura,
                 &public_key_b64,

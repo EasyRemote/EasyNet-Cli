@@ -44,8 +44,6 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::daemon::ability::catalog::ability_toml::Rfc006Metadata;
-use crate::daemon::ability::descriptors::AbilityClass;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::persistence::resources::{self, filter_by_kinds, ResourceEntry, ResourceType};
@@ -134,8 +132,8 @@ fn project(e: &ResourceEntry) -> Value {
 /// JSON Schema for `args`. The `enum` for `types[]` derives from
 /// `ResourceType::ALL` rather than a hand-typed string list so a
 /// new variant in `persistence::resources` shows up here without
-/// a second edit (single source of truth — same drift-prevention
-/// pattern as `AbilityClass::as_str`).
+/// a second edit (single source of truth — the same drift-prevention
+/// pattern used by descriptor call-mode rendering).
 pub fn input_schema() -> Value {
     let enum_values: Vec<Value> = ResourceType::ALL
         .iter()
@@ -167,18 +165,6 @@ pub fn description() -> &'static str {
      canonical subject for media abilities (mic.subscribe, \
      camera.snapshot, ...). Optional `types` filter narrows the \
      result."
-}
-
-/// RFC-006 metadata for `meta.list_resources`. Pure read, no
-/// state mutation — Query class. Co-located with the handler so
-/// mod.rs's `rfc006_for` can delegate without inlining yet
-/// another `Rfc006Metadata` literal (the same drift class
-/// `resources::media::rfc006` exists to prevent).
-pub fn rfc006() -> Rfc006Metadata {
-    Rfc006Metadata {
-        class: Some(AbilityClass::Query),
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]
@@ -268,15 +254,5 @@ mod tests {
             resp.get("resources").and_then(Value::as_array).is_some(),
             "receipt body must always carry a `resources` array; got {resp}"
         );
-    }
-
-    #[test]
-    fn rfc006_declares_query_class() {
-        // Pin: meta.list_resources is read-only, must classify as
-        // Query. A reclassification would change receipt semantics
-        // (Stream vs Query) and trip wire format consumers.
-        let m = rfc006();
-        assert_eq!(m.class, Some(AbilityClass::Query));
-        assert!(m.transition.is_none());
     }
 }

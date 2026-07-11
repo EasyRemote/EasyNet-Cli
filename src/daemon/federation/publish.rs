@@ -147,8 +147,8 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     }
 
     // Step 3: advertise the device-profile (Selfsigned, Model A).
-    // RFC-002: pass host_node_id so federation.forward_invoke can
-    // route inbound forward requests to this daemon's local-tool
+    // RFC-002: pass host_node_id so `Invocation::Invoke` can
+    // route inbound remote requests to this daemon's local-tool
     // dispatch surface. Clean RFC-005 publishing requires the host
     // identity to be a canonical `/device/<id>` URA.
     let device_outcome = advertise::advertise_self_signed_device_with_host_node(
@@ -226,10 +226,6 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
     // this cycle" rather than blocking the rest of publish — the
     // outcome row surfaces the reason.
     let live_registry = crate::daemon::ability::catalog::build_registry();
-    let hint_snapshot =
-        crate::daemon::ability::catalog::AbilityDiscoveryHintSnapshot::from_registry(
-            &live_registry,
-        );
     match crate::daemon::persistence::agent_registry::load_agents() {
         Ok(reg) => {
             for (name, entry) in &reg.agents {
@@ -245,24 +241,16 @@ pub fn republish_with_minter<I: AbilityInvoker, M: UraMinter>(
                     crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(name, entry);
                 for spec in specs {
                     let registry_name = spec.name();
-                    let owner_local_name =
-                        crate::daemon::execution::mission::agent_ability_specs::public_agent_ability_name(
+                    let desc =
+                        crate::daemon::ability::catalog::profiles::llm::descriptor_for_agent_spec(
+                            &live_registry,
                             &owner_ura,
                             name,
-                            registry_name,
+                            &spec,
                         );
-                    let desc = crate::daemon::ability::descriptors::AbilityDescriptor::new(
-                        owner_local_name,
-                        &owner_ura,
-                        crate::daemon::ability::descriptors::Visibility::Scoped,
-                    );
                     match desc {
                         Ok(d) => {
-                            let mut d = d
-                                .with_description(spec.description())
-                                .with_input_schema(spec.parameters().clone())
-                                .with_hints(hint_snapshot.for_name(registry_name))
-                                .with_source(format!("agent:{name}"));
+                            let mut d = d;
                             d = d.with_metadata_entry("host_node_id", host_node_id.clone());
                             d = d.with_metadata_entry("runtime", entry.agent_type.to_string());
                             d = d.with_metadata_entry("agent_type", entry.agent_type.to_string());

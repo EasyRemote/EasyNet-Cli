@@ -28,11 +28,11 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::daemon::ability::{
     public_route_ability_from_descriptor_ref, AbilityControlPlaneAuthorityModeLookupError,
-    AbilityControlPlaneError, AbilityControlPlaneKey, AbilityControlPlaneLookupError,
-    AbilityControlPlaneRecord, AbilityControlPlaneRegistration, AbilityControlPlaneRegistry,
+    AbilityControlPlaneError, AbilityControlPlaneLookupError, AbilityControlPlaneRecord,
+    AbilityControlPlaneRegistration, AbilityControlPlaneRegistry, AbilityDescriptor,
     AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
-    HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, RuntimeEnv,
-    HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, ReceiptSemantics,
+    RuntimeEnv, HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
@@ -374,6 +374,7 @@ struct ControlPlaneRegistrationRequest<'a> {
     owner: &'a OwnerKind,
     manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
     call_mode: DescriptorCallMode,
+    receipt_semantics: ReceiptSemantics,
     implementation: ControlPlaneImplementation,
 }
 
@@ -382,6 +383,7 @@ struct ResolvedControlPlaneRegistration<'a> {
     authority_scope: AuthorityScope,
     manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
     call_mode: DescriptorCallMode,
+    receipt_semantics: ReceiptSemantics,
     implementation: ControlPlaneImplementation,
     owner_label: String,
 }
@@ -1254,6 +1256,306 @@ struct CanonicalDeviceAuthority {
     device_id: String,
 }
 
+/// Typed failures for the mutable hosted-Agent authority inventory.
+///
+/// The inventory is deliberately narrower than the general ability authority
+/// context: callers cannot insert an arbitrary URA. Enrollment re-reads and
+/// validates the durable `agents.json` row plus its `local-agents.json`
+/// identity binding, while revocation requires those durable rows to be gone.
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub(crate) enum HotAgentAuthorityInventoryError {
+    #[error("this catalog does not own a hot hosted-Agent authority inventory")]
+    UnsupportedAuthorityContext,
+    #[error("load durable hosted-Agent registry for {agent:?}: {reason}")]
+    DurableRegistryUnreadable { agent: String, reason: String },
+    #[error("hosted Agent {agent:?} has no durable agents.json row")]
+    DurableAgentMissing { agent: String },
+    #[error("load hosted-Agent identity registry for {agent:?}: {reason}")]
+    IdentityRegistryUnreadable { agent: String, reason: String },
+    #[error("hosted Agent {agent:?} has no llm identity row in local-agents.json")]
+    IdentityMissing { agent: String },
+    #[error("hosted Agent {agent:?} has multiple llm identity rows")]
+    IdentityAmbiguous { agent: String },
+    #[error("hosted Agent {agent:?} identity {authority_root:?} is invalid: {reason}")]
+    IdentityInvalid {
+        agent: String,
+        authority_root: String,
+        reason: String,
+    },
+    #[error("load paired Device credentials for hosted Agent {agent:?}: {reason}")]
+    CredentialsUnreadable { agent: String, reason: String },
+    #[error(
+        "hosted Agent {agent:?} authority root conflicts with enrolled root: enrolled={enrolled:?}, requested={requested:?}"
+    )]
+    AuthorityConflict {
+        agent: String,
+        enrolled: String,
+        requested: String,
+    },
+    #[error("cannot revoke hosted Agent {agent:?}: durable agents.json row still exists")]
+    DurableAgentStillPresent { agent: String },
+    #[error("cannot revoke hosted Agent {agent:?}: local-agents.json identity still exists")]
+    IdentityStillPresent { agent: String },
+    #[error("hosted Agent {agent:?} authority root is not enrolled")]
+    AuthorityNotEnrolled { agent: String },
+    #[error("hosted Agent {agent:?} authority inventory lock is poisoned")]
+    InventoryPoisoned { agent: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PersistedHotAgentAuthority {
+    agent: String,
+    authority_root: String,
+}
+
+impl PersistedHotAgentAuthority {
+    fn load(
+        device: &CanonicalDeviceAuthority,
+        agent: &str,
+    ) -> Result<Self, HotAgentAuthorityInventoryError> {
+        let registry =
+            crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
+                HotAgentAuthorityInventoryError::DurableRegistryUnreadable {
+                    agent: agent.to_string(),
+                    reason: format!("{error:#}"),
+                }
+            })?;
+        if !registry.agents.contains_key(agent) {
+            return Err(HotAgentAuthorityInventoryError::DurableAgentMissing {
+                agent: agent.to_string(),
+            });
+        }
+
+        let identities = crate::daemon::persistence::local_agents::load().map_err(|error| {
+            HotAgentAuthorityInventoryError::IdentityRegistryUnreadable {
+                agent: agent.to_string(),
+                reason: format!("{error:#}"),
+            }
+        })?;
+        let mut matches = identities
+            .hosted_agents
+            .iter()
+            .filter(|entry| entry.profile == "llm" && entry.name == agent);
+        let identity =
+            matches
+                .next()
+                .ok_or_else(|| HotAgentAuthorityInventoryError::IdentityMissing {
+                    agent: agent.to_string(),
+                })?;
+        if matches.next().is_some() {
+            return Err(HotAgentAuthorityInventoryError::IdentityAmbiguous {
+                agent: agent.to_string(),
+            });
+        }
+
+        let invalid = |reason: String| HotAgentAuthorityInventoryError::IdentityInvalid {
+            agent: agent.to_string(),
+            authority_root: identity.agent_ura.clone(),
+            reason,
+        };
+        let parsed = crate::core::ura::parse_ura(&identity.agent_ura)
+            .map_err(|error| invalid(error.to_string()))?;
+        let Some((username, agent_id)) = parsed.agent_ids() else {
+            return Err(invalid(
+                "expected a user-hosted Agent URA, not a device-sponsored System Agent".to_string(),
+            ));
+        };
+        if parsed.kind != crate::core::ura::URAKind::Agent
+            || parsed.realm != device.realm
+            || agent_id != agent
+        {
+            return Err(invalid(format!(
+                "expected realm {:?} and agent id {:?}",
+                device.realm, agent
+            )));
+        }
+
+        let credentials =
+            crate::daemon::persistence::config::load_credentials().map_err(|error| {
+                HotAgentAuthorityInventoryError::CredentialsUnreadable {
+                    agent: agent.to_string(),
+                    reason: format!("{error:#}"),
+                }
+            })?;
+        let expected_username = credentials.username_slug().map_err(|error| {
+            HotAgentAuthorityInventoryError::CredentialsUnreadable {
+                agent: agent.to_string(),
+                reason: format!("paired credentials are missing username: {error:#}"),
+            }
+        })?;
+        let expected_device_ura =
+            crate::core::ura::device_ura(credentials.realm.trim(), credentials.node_id.trim());
+        let expected_signing_authority = format!("hosted_by:{expected_device_ura}");
+        if credentials.realm.trim() != device.realm
+            || username != expected_username
+            || identities.host_device_agent_ura != expected_device_ura
+            || identity.signing_authority != expected_signing_authority
+        {
+            return Err(invalid(
+                "identity is not bound to the paired Device and username".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            agent: agent.to_string(),
+            authority_root: identity.agent_ura.clone(),
+        })
+    }
+}
+
+/// Receipt proving that one authority root was admitted from validated
+/// lifecycle state. The fields are private so rollback/revoke cannot be driven
+/// by caller-supplied strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HotAgentAuthorityEnrollment {
+    agent: String,
+    authority_root: String,
+    inserted: bool,
+}
+
+impl HotAgentAuthorityEnrollment {
+    pub(crate) fn authority_root(&self) -> &str {
+        &self.authority_root
+    }
+}
+
+/// Catalog-owned mutable authority inventory for post-boot hosted Agents.
+///
+/// Static boot roots and hot enrollments share this single map, so authority
+/// admission never consults ambient HOME state during a dynamic registration.
+/// The lifecycle proof is checked exactly at the enroll/revoke boundary.
+#[derive(Debug)]
+struct HotAgentAuthorityInventory {
+    device: CanonicalDeviceAuthority,
+    roots: std::sync::RwLock<BTreeMap<String, String>>,
+}
+
+impl HotAgentAuthorityInventory {
+    fn new(device: CanonicalDeviceAuthority, roots: BTreeMap<String, String>) -> Arc<Self> {
+        Arc::new(Self {
+            device,
+            roots: std::sync::RwLock::new(roots),
+        })
+    }
+
+    fn authority_root(&self, agent: &str) -> Option<String> {
+        self.roots.read().ok()?.get(agent).cloned()
+    }
+
+    fn enroll_persisted(
+        &self,
+        agent: &str,
+    ) -> Result<HotAgentAuthorityEnrollment, HotAgentAuthorityInventoryError> {
+        let proof = PersistedHotAgentAuthority::load(&self.device, agent)?;
+        let mut roots =
+            self.roots
+                .write()
+                .map_err(|_| HotAgentAuthorityInventoryError::InventoryPoisoned {
+                    agent: agent.to_string(),
+                })?;
+        let inserted = match roots.get(agent) {
+            Some(enrolled) if enrolled == &proof.authority_root => false,
+            Some(enrolled) => {
+                return Err(HotAgentAuthorityInventoryError::AuthorityConflict {
+                    agent: agent.to_string(),
+                    enrolled: enrolled.clone(),
+                    requested: proof.authority_root,
+                });
+            }
+            None => {
+                roots.insert(agent.to_string(), proof.authority_root.clone());
+                true
+            }
+        };
+        Ok(HotAgentAuthorityEnrollment {
+            agent: proof.agent,
+            authority_root: proof.authority_root,
+            inserted,
+        })
+    }
+
+    fn rollback_enrollment(
+        &self,
+        enrollment: &HotAgentAuthorityEnrollment,
+    ) -> Result<(), HotAgentAuthorityInventoryError> {
+        if !enrollment.inserted {
+            return Ok(());
+        }
+        let mut roots =
+            self.roots
+                .write()
+                .map_err(|_| HotAgentAuthorityInventoryError::InventoryPoisoned {
+                    agent: enrollment.agent.clone(),
+                })?;
+        match roots.get(&enrollment.agent) {
+            Some(current) if current == &enrollment.authority_root => {
+                roots.remove(&enrollment.agent);
+                Ok(())
+            }
+            Some(current) => Err(HotAgentAuthorityInventoryError::AuthorityConflict {
+                agent: enrollment.agent.clone(),
+                enrolled: current.clone(),
+                requested: enrollment.authority_root.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    fn revoke_after_durable_removal(
+        &self,
+        enrollment: &HotAgentAuthorityEnrollment,
+    ) -> Result<(), HotAgentAuthorityInventoryError> {
+        let registry =
+            crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
+                HotAgentAuthorityInventoryError::DurableRegistryUnreadable {
+                    agent: enrollment.agent.clone(),
+                    reason: format!("{error:#}"),
+                }
+            })?;
+        if registry.agents.contains_key(&enrollment.agent) {
+            return Err(HotAgentAuthorityInventoryError::DurableAgentStillPresent {
+                agent: enrollment.agent.clone(),
+            });
+        }
+        let identities = crate::daemon::persistence::local_agents::load().map_err(|error| {
+            HotAgentAuthorityInventoryError::IdentityRegistryUnreadable {
+                agent: enrollment.agent.clone(),
+                reason: format!("{error:#}"),
+            }
+        })?;
+        if identities
+            .hosted_agents
+            .iter()
+            .any(|entry| entry.profile == "llm" && entry.name == enrollment.agent)
+        {
+            return Err(HotAgentAuthorityInventoryError::IdentityStillPresent {
+                agent: enrollment.agent.clone(),
+            });
+        }
+
+        let mut roots =
+            self.roots
+                .write()
+                .map_err(|_| HotAgentAuthorityInventoryError::InventoryPoisoned {
+                    agent: enrollment.agent.clone(),
+                })?;
+        match roots.get(&enrollment.agent) {
+            Some(current) if current == &enrollment.authority_root => {
+                roots.remove(&enrollment.agent);
+                Ok(())
+            }
+            Some(current) => Err(HotAgentAuthorityInventoryError::AuthorityConflict {
+                agent: enrollment.agent.clone(),
+                enrolled: current.clone(),
+                requested: enrollment.authority_root.clone(),
+            }),
+            None => Err(HotAgentAuthorityInventoryError::AuthorityNotEnrolled {
+                agent: enrollment.agent.clone(),
+            }),
+        }
+    }
+}
+
 impl CanonicalDeviceAuthority {
     fn parse(ura: String) -> Result<Self, AbilityControlPlaneError> {
         let parsed = crate::core::ura::parse_ura(&ura).map_err(|error| {
@@ -1314,13 +1616,12 @@ impl CanonicalHubAuthority {
 
 #[derive(Debug, Clone)]
 enum DeviceSubordinateAuthoritySource {
-    LocalEnvironment,
     DeviceScoped,
     /// Canonical Agent authority roots resolved by daemon boot from the
     /// hosted-agent lifecycle registry. Keeping this set inside the authority
     /// context makes dynamic registration independent of ambient HOME reads
     /// while still rejecting a same-realm Agent owned by another user.
-    ExplicitHostedAgentRoots(BTreeMap<String, String>),
+    ExplicitHostedAgentRoots(Arc<HotAgentAuthorityInventory>),
 }
 
 /// Explicit process-local authority state.
@@ -1403,10 +1704,17 @@ impl AbilityAuthorityContext {
     pub fn from_local_environment() -> Self {
         let device = CanonicalDeviceAuthority::parse(local_device_authority_root())
             .expect("local Device authority helper must return a canonical Device URA");
+        let roots = crate::daemon::persistence::hosted_agent_authority_roots().expect(
+            "local hosted-Agent lifecycle state must be readable when building authority context",
+        );
+        let roots = hosted_agent_roots_for_device(&device, roots)
+            .expect("local hosted-Agent lifecycle state must contain canonical authority roots");
         Self {
             authorities: AbilityAuthoritySet::Device {
+                subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
+                    HotAgentAuthorityInventory::new(device.clone(), roots),
+                ),
                 device,
-                subordinate_source: DeviceSubordinateAuthoritySource::LocalEnvironment,
             },
             declared_agent_roots: BTreeMap::new(),
         }
@@ -1416,11 +1724,18 @@ impl AbilityAuthorityContext {
         let device = CanonicalDeviceAuthority::parse(local_device_authority_root())
             .expect("local Device authority helper must return a canonical Device URA");
         let hub = CanonicalHubAuthority::for_realm(&device.realm);
+        let roots = crate::daemon::persistence::hosted_agent_authority_roots().expect(
+            "local hosted-Agent lifecycle state must be readable when building authority context",
+        );
+        let roots = hosted_agent_roots_for_device(&device, roots)
+            .expect("local hosted-Agent lifecycle state must contain canonical authority roots");
         Self {
             authorities: AbilityAuthoritySet::Both {
-                device,
                 hub,
-                subordinate_source: DeviceSubordinateAuthoritySource::LocalEnvironment,
+                subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
+                    HotAgentAuthorityInventory::new(device.clone(), roots),
+                ),
+                device,
             },
             declared_agent_roots: BTreeMap::new(),
         }
@@ -1451,10 +1766,10 @@ impl AbilityAuthorityContext {
         let hosted_agent_roots = hosted_agent_roots_for_device(&device, hosted_agent_uras)?;
         Ok(Self {
             authorities: AbilityAuthoritySet::Device {
-                device,
                 subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
-                    hosted_agent_roots,
+                    HotAgentAuthorityInventory::new(device.clone(), hosted_agent_roots),
                 ),
+                device,
             },
             declared_agent_roots: BTreeMap::new(),
         })
@@ -1488,11 +1803,11 @@ impl AbilityAuthorityContext {
         let hosted_agent_roots = hosted_agent_roots_for_device(&device, hosted_agent_uras)?;
         Ok(Self {
             authorities: AbilityAuthoritySet::Both {
-                device,
                 hub,
                 subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
-                    hosted_agent_roots,
+                    HotAgentAuthorityInventory::new(device.clone(), hosted_agent_roots),
                 ),
+                device,
             },
             declared_agent_roots: BTreeMap::new(),
         })
@@ -1555,6 +1870,16 @@ impl AbilityAuthorityContext {
 
     pub(crate) fn hosts_device_authority(&self) -> bool {
         self.authorities.device().is_some()
+    }
+
+    fn hot_agent_authority_inventory(&self) -> Option<Arc<HotAgentAuthorityInventory>> {
+        let (_, source) = self.authorities.device()?;
+        match source {
+            DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(inventory) => {
+                Some(Arc::clone(inventory))
+            }
+            DeviceSubordinateAuthoritySource::DeviceScoped => None,
+        }
     }
 
     fn supports_owner(&self, owner: &OwnerKind) -> bool {
@@ -1655,42 +1980,12 @@ impl AbilityAuthorityContext {
             .expect("Agent owner support requires Device authority");
         match source {
             DeviceSubordinateAuthoritySource::DeviceScoped => {
-                return crate::core::ura::device_agent_ura(
-                    &device.realm,
-                    &device.device_id,
-                    agent_id,
-                );
+                crate::core::ura::device_agent_ura(&device.realm, &device.device_id, agent_id)
             }
             DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(roots) => {
-                if let Some(hosted) = roots.get(agent_id) {
-                    return hosted.clone();
+                if let Some(hosted) = roots.authority_root(agent_id) {
+                    return hosted;
                 }
-                return crate::core::ura::device_agent_ura(
-                    &device.realm,
-                    &device.device_id,
-                    agent_id,
-                );
-            }
-            DeviceSubordinateAuthoritySource::LocalEnvironment => {}
-        }
-        if let Ok(local_agents) = crate::daemon::persistence::local_agents::load() {
-            if let Ok(Some(entry)) =
-                crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
-                    &local_agents,
-                    agent_id,
-                )
-            {
-                return entry.agent_ura.clone();
-            }
-        }
-        match crate::daemon::persistence::config::load_credentials() {
-            Ok(creds) if creds.realm_str() == device.realm => match creds.user_id() {
-                Ok(user_id) => crate::core::ura::agent_ura(&creds.realm, user_id, agent_id),
-                Err(_) => {
-                    crate::core::ura::device_agent_ura(&creds.realm, &creds.node_id, agent_id)
-                }
-            },
-            Ok(_) | Err(_) => {
                 crate::core::ura::device_agent_ura(&device.realm, &device.device_id, agent_id)
             }
         }
@@ -1708,17 +2003,7 @@ impl AbilityAuthorityContext {
         let (_, source) = self.authorities.device()?;
         match source {
             DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(roots) => {
-                roots.get(agent_id).cloned()
-            }
-            DeviceSubordinateAuthoritySource::LocalEnvironment => {
-                let local_agents = crate::daemon::persistence::local_agents::load().ok()?;
-                crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
-                    &local_agents,
-                    agent_id,
-                )
-                .ok()
-                .flatten()
-                .map(|entry| entry.agent_ura.clone())
+                roots.authority_root(agent_id)
             }
             DeviceSubordinateAuthoritySource::DeviceScoped => None,
         }
@@ -1807,7 +2092,7 @@ impl ControlPlaneAbilityKey {
     fn from_record(record: &AbilityControlPlaneRecord) -> Self {
         Self::new(
             record.authority().scope().authority_root(),
-            record.descriptor().name(),
+            record.ability(),
         )
     }
 
@@ -1855,142 +2140,19 @@ impl ControlPlaneModeKey {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AbilityCatalogSnapshotRow {
-    pub name: String,
-    pub owner: Option<OwnerKind>,
-    pub manifest: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
-}
-
-/// One descriptor projection row per canonical runtime authority and public
-/// ability name.
+/// One canonical descriptor row per committed control-plane record.
 ///
-/// Unlike [`AbilityCatalogSnapshotRow`], this read model never collapses the
-/// same implementation registered under Device and Hub authority. Discovery
-/// surfaces consume these rows when owner identity is wire-visible: the
-/// authority root and descriptor URA come from the committed control-plane
-/// record, not from credentials, process mode, or a `self` placeholder.
+/// The execution `name` remains available for local handler lookup, while all
+/// protocol-visible interface, owner, version, transport, receipt, access, and
+/// schema facts live in `descriptor`. Rows are deliberately not collapsed by
+/// public identity: if an authority publishes distinct versions or call modes,
+/// callers observe each committed record instead of an arbitrary winner.
 #[derive(Debug, Clone)]
 pub struct AuthorityAbilityCatalogSnapshotRow {
+    /// Execution registry key. Never serialize this as the public ability name.
     pub name: String,
     pub owner: OwnerKind,
-    pub owner_ura: String,
-    pub ability_ura: String,
-    pub manifest: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AuthorityAbilityCatalogSnapshotKey {
-    authority_root: String,
-    owner_projection: String,
-    name: String,
-}
-
-#[derive(Debug, Clone)]
-struct AuthorityAbilityCatalogSnapshotBuilder {
-    ability_ura: String,
-    manifest: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
-    ambiguous_manifest: bool,
-}
-
-impl AuthorityAbilityCatalogSnapshotBuilder {
-    fn new(ability_ura: String) -> Self {
-        Self {
-            ability_ura,
-            manifest: None,
-            ambiguous_manifest: false,
-        }
-    }
-
-    fn observe_ability_ura(&self, ability_ura: &str) {
-        assert_eq!(
-            self.ability_ura, ability_ura,
-            "one authority-owned ability must have one canonical ability URA across call modes"
-        );
-    }
-
-    fn observe_manifest(
-        &mut self,
-        next: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
-    ) {
-        let Some(next) = next else {
-            return;
-        };
-        match self.manifest.as_ref() {
-            None if !self.ambiguous_manifest => self.manifest = Some(next),
-            Some(current) if current.descriptor_version() == next.descriptor_version() => {}
-            Some(_) | None => {
-                self.manifest = None;
-                self.ambiguous_manifest = true;
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct AbilityCatalogSnapshotBuilder {
-    owner: Option<OwnerKind>,
-    ambiguous_owner: bool,
-    manifest: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
-    ambiguous_manifest: bool,
-}
-
-impl AbilityCatalogSnapshotBuilder {
-    fn new(owner: Option<OwnerKind>) -> Self {
-        Self {
-            owner,
-            ambiguous_owner: false,
-            manifest: None,
-            ambiguous_manifest: false,
-        }
-    }
-
-    fn observe_owner(&mut self, next: Option<OwnerKind>) {
-        if self.ambiguous_owner {
-            return;
-        }
-        match (&self.owner, next) {
-            (None, owner) => self.owner = owner,
-            (Some(current), Some(next)) if *current == next => {}
-            (Some(_), Some(_)) | (Some(_), None) => {
-                self.owner = None;
-                self.ambiguous_owner = true;
-            }
-        }
-    }
-
-    fn observe_manifest(
-        &mut self,
-        next: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
-    ) {
-        let Some(next) = next else {
-            return;
-        };
-        match self.manifest.as_ref() {
-            None if !self.ambiguous_manifest => self.manifest = Some(next),
-            Some(current) if current.descriptor_version() == next.descriptor_version() => {}
-            Some(_) | None => {
-                self.manifest = None;
-                self.ambiguous_manifest = true;
-            }
-        }
-    }
-
-    fn into_row(self, name: String) -> AbilityCatalogSnapshotRow {
-        AbilityCatalogSnapshotRow {
-            name,
-            owner: if self.ambiguous_owner {
-                None
-            } else {
-                self.owner
-            },
-            manifest: if self.ambiguous_manifest {
-                None
-            } else {
-                self.manifest
-            },
-        }
-    }
+    pub descriptor: AbilityDescriptor,
 }
 
 /// Axon ability catalogue. Keyed by full ability name. v1 shape is
@@ -2017,7 +2179,7 @@ pub struct AxonAbilityCatalog {
     runtime: Option<Arc<LocalRuntime>>,
     // ── Execution index (SPEC §9.1.A) ────────────────────────
     // This is a PURE EXECUTION INDEX, not a metadata store. Canonical owner /
-    // authority / manifest / call-mode truth lives ONLY in `control_plane`,
+    // authority / governed-descriptor / call-mode truth lives ONLY in `control_plane`,
     // keyed by `AbilityControlPlaneKey(authority_root, ability, version,
     // call_mode)`. The execution index is keyed by the runtime aggregation key
     // `ControlPlaneAbilityKey(authority_root, ability)` because one Axon
@@ -2035,26 +2197,11 @@ pub struct AxonAbilityCatalog {
     static_authority_exclusions: BTreeMap<String, usize>,
     /// Descriptor/authority/implementation binding records keyed by the
     /// typed control-plane key. This is the canonical owner / authority /
-    /// manifest / call-mode truth (SPEC §9.1.A); the handler maps above are
-    /// an execution index only. The former `owner` / `manifests` side tables
-    /// have been removed in favour of `control_plane_owner` /
-    /// `control_plane_manifest` read-throughs.
+    /// interface / call-mode truth (SPEC §9.1.A); the handler maps above are
+    /// an execution index only. Import manifests are normalized into the
+    /// descriptor at this boundary and are never retained as a second read
+    /// model.
     control_plane: std::sync::RwLock<AbilityControlPlaneRegistry>,
-    /// Manifest bodies, keyed by the SAME `AbilityControlPlaneKey` as the
-    /// control-plane record they belong to (SPEC §9.1.A Step 3). The
-    /// control-plane registry is deliberately hash-pure — it stores
-    /// `schema_hash`, not the schema body — so the manifest body (needed by
-    /// `meta.list_abilities` to surface `input_schema`/`output_schema`) is
-    /// the catalog-owned facet of the record, committed in lockstep with it.
-    ///
-    /// Keying by the control-plane key (not a bare ability `String`) makes
-    /// this the manifest facet of the one record rather than a parallel
-    /// truth: a multi-call-mode ability has one manifest row per mode, and a
-    /// missing record cannot have a manifest fall through (acceptance test
-    /// 5). There is no String-keyed manifest fallback.
-    control_plane_manifests: std::sync::RwLock<
-        BTreeMap<AbilityControlPlaneKey, Arc<crate::daemon::ability::manifest::AbilityManifest>>,
-    >,
     /// Serializes post-boot dynamic catalogue transactions.
     ///
     /// Invariant 1: dynamic execution-index rows, dynamic control-plane
@@ -2106,7 +2253,7 @@ struct ExecutionIndexEntry {
 /// closures and their lifecycle origin. The authority key mirrors the Axon
 /// runtime binding boundary: one `(authority_root, ability)` row can carry RPC,
 /// stream, and bidi slots, while the control-plane registry remains the source
-/// for descriptor version, schema hash, owner, manifest, and call-mode proofs.
+/// for descriptor version, schema hash, owner, and call-mode proofs.
 #[derive(Default)]
 struct ExecutionIndex {
     entries: BTreeMap<ControlPlaneAbilityKey, ExecutionIndexEntry>,
@@ -2170,6 +2317,7 @@ impl ExecutionIndex {
             owner: _,
             authority_scope: _,
             manifest: _,
+            receipt_semantics: _,
             implementation: _,
             handler,
         } = registration;
@@ -2516,6 +2664,7 @@ struct StaticRegistration {
     owner: OwnerKind,
     authority_scope: Option<AuthorityScope>,
     manifest: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
+    receipt_semantics: ReceiptSemantics,
     implementation: ControlPlaneImplementation,
     handler: StaticRegistrationHandler,
 }
@@ -2531,6 +2680,7 @@ impl StaticRegistration {
             owner,
             authority_scope: None,
             manifest: None,
+            receipt_semantics: ReceiptSemantics::Operational,
             implementation: ControlPlaneImplementation::native_daemon(),
             handler,
         }
@@ -2549,6 +2699,11 @@ impl StaticRegistration {
         self
     }
 
+    fn with_receipt_semantics(mut self, receipt_semantics: ReceiptSemantics) -> Self {
+        self.receipt_semantics = receipt_semantics;
+        self
+    }
+
     fn with_authority_scope(mut self, authority_scope: AuthorityScope) -> Self {
         self.authority_scope = Some(authority_scope);
         self
@@ -2559,7 +2714,8 @@ impl StaticRegistration {
             ability,
             owner,
             authority_scope,
-            manifest,
+            mut manifest,
+            receipt_semantics,
             implementation,
             handler,
         } = self;
@@ -2574,6 +2730,16 @@ impl StaticRegistration {
         }
         let call_mode = handler.call_mode();
         let target_slot = handler.slot();
+        if manifest.is_none() {
+            manifest = Some(Arc::new(
+                crate::daemon::ability::catalog::system_manifest::registration_manifest(&ability)
+                    .with_context(|| {
+                    format!(
+                        "static ability {ability:?} failed to import canonical catalog metadata"
+                    )
+                })?,
+            ));
+        }
         let authority_scope = match authority_scope {
             Some(authority_scope) => {
                 catalog
@@ -2590,11 +2756,12 @@ impl StaticRegistration {
         };
         let execution_key = ControlPlaneAbilityKey::new(authority_scope.authority_root(), &ability);
         catalog.assert_static_handler_slot_available(&execution_key, target_slot);
-        catalog.register_control_plane_with_scope_result(
+        catalog.register_control_plane_with_scope_and_semantics_result(
             &ability,
             authority_scope.clone(),
             manifest.as_ref().map(Arc::as_ref),
             call_mode,
+            receipt_semantics,
             &implementation,
         )?;
         catalog
@@ -2612,6 +2779,7 @@ struct DynamicRegistration {
     owner: OwnerKind,
     authority_scope: Option<AuthorityScope>,
     manifest: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
+    receipt_semantics: ReceiptSemantics,
     implementation: ControlPlaneImplementation,
     handler: DynamicRegistrationHandler,
 }
@@ -2629,6 +2797,7 @@ impl DynamicRegistration {
             owner,
             authority_scope: None,
             manifest,
+            receipt_semantics: ReceiptSemantics::Operational,
             implementation,
             handler,
         }
@@ -2871,13 +3040,15 @@ impl DynamicRegistration {
             predicted_control_plane_key.ability(),
             predicted_control_plane_key.call_mode(),
         );
-        let control_plane_key = catalog.register_dynamic_control_plane_with_scope_result(
-            &ability,
-            authority_scope.clone(),
-            self.manifest_ref(),
-            call_mode,
-            &self.implementation,
-        )?;
+        let control_plane_key = catalog
+            .register_dynamic_control_plane_with_scope_and_semantics_result(
+                &ability,
+                authority_scope.clone(),
+                self.manifest_ref(),
+                call_mode,
+                self.receipt_semantics.clone(),
+                &self.implementation,
+            )?;
         debug_assert_eq!(control_plane_key, predicted_control_plane_key);
         let mut txn = DynamicRegistrationTxn::after_control_plane(
             catalog,
@@ -2918,17 +3089,6 @@ pub struct ControlPlaneAuthorityModeTxn<'a> {
     ability: String,
     call_mode: DescriptorCallMode,
     prior_records: Option<Vec<AbilityControlPlaneRecord>>,
-    /// Manifest-store entries for the affected `(authority_root, ability,
-    /// call_mode)` slice, captured at `begin`. On rollback they are restored
-    /// in lockstep with `prior_records` so a failed dynamic registration
-    /// cannot strand a manifest body keyed by a control-plane key whose
-    /// record was reverted (SPEC §9.1.A Step 3 / Step 7 follow-up).
-    prior_manifests: Option<
-        Vec<(
-            AbilityControlPlaneKey,
-            Arc<crate::daemon::ability::manifest::AbilityManifest>,
-        )>,
-    >,
     phase: ControlPlaneAuthorityModeTxnPhase,
 }
 
@@ -2944,35 +3104,18 @@ impl<'a> ControlPlaneAuthorityModeTxn<'a> {
             .read()
             .expect("control_plane RwLock poisoned")
             .records_for_authority_mode(authority_root, ability, call_mode);
-        // Capture the manifest facet for the same slice so rollback can
-        // restore it. Keyed by each prior record's control-plane key.
-        let prior_manifests = {
-            let manifests = catalog
-                .control_plane_manifests
-                .read()
-                .expect("control_plane_manifests RwLock poisoned");
-            prior_records
-                .iter()
-                .filter_map(|record| {
-                    let key = AbilityControlPlaneKey::for_authority(record.authority());
-                    manifests.get(&key).map(|m| (key, Arc::clone(m)))
-                })
-                .collect::<Vec<_>>()
-        };
         Self {
             catalog,
             authority_root: authority_root.to_string(),
             ability: ability.to_string(),
             call_mode,
             prior_records: Some(prior_records),
-            prior_manifests: Some(prior_manifests),
             phase: ControlPlaneAuthorityModeTxnPhase::Active,
         }
     }
 
     pub fn commit(mut self) {
         self.prior_records = None;
-        self.prior_manifests = None;
         self.phase = ControlPlaneAuthorityModeTxnPhase::Committed;
     }
 
@@ -2991,26 +3134,6 @@ impl<'a> ControlPlaneAuthorityModeTxn<'a> {
                     self.call_mode,
                     records,
                 )?;
-        }
-        // Restore the manifest facet to its pre-transaction state: drop any
-        // entry the failed registration added for this slice, then re-insert
-        // the captured snapshot. This prevents a rolled-back dynamic register
-        // from stranding a manifest body whose control-plane record was just
-        // reverted (SPEC §9.1.A Step 7 follow-up).
-        if let Some(snapshot) = self.prior_manifests.take() {
-            let mut manifests = self
-                .catalog
-                .control_plane_manifests
-                .write()
-                .expect("control_plane_manifests RwLock poisoned");
-            manifests.retain(|key, _| {
-                !(key.authority_root() == self.authority_root
-                    && key.ability() == self.ability
-                    && key.call_mode() == self.call_mode)
-            });
-            for (key, manifest) in snapshot {
-                manifests.insert(key, manifest);
-            }
         }
         self.phase = ControlPlaneAuthorityModeTxnPhase::RolledBack;
         Ok(())
@@ -3192,7 +3315,6 @@ impl AxonAbilityCatalog {
             authority_context,
             static_authority_exclusions: BTreeMap::new(),
             control_plane: std::sync::RwLock::new(AbilityControlPlaneRegistry::default()),
-            control_plane_manifests: std::sync::RwLock::new(BTreeMap::new()),
             dynamic_txn: std::sync::Mutex::new(()),
         }
     }
@@ -3205,6 +3327,51 @@ impl AxonAbilityCatalog {
 
     pub(crate) fn authority_set_label(&self) -> &'static str {
         self.authority_context.authorities.label()
+    }
+
+    /// Admit one post-boot hosted-Agent authority from validated lifecycle
+    /// state. The only input is the durable agent name; the authority root is
+    /// resolved and verified inside the inventory boundary.
+    pub(crate) fn enroll_persisted_hot_agent_authority(
+        &self,
+        agent: &str,
+    ) -> Result<HotAgentAuthorityEnrollment, HotAgentAuthorityInventoryError> {
+        self.authority_context
+            .hot_agent_authority_inventory()
+            .ok_or(HotAgentAuthorityInventoryError::UnsupportedAuthorityContext)?
+            .enroll_persisted(agent)
+    }
+
+    /// Undo only an enrollment created by the supplied receipt. Existing boot
+    /// inventory rows are never removed by a failed replacement attempt.
+    pub(crate) fn rollback_hot_agent_authority_enrollment(
+        &self,
+        enrollment: &HotAgentAuthorityEnrollment,
+    ) -> Result<(), HotAgentAuthorityInventoryError> {
+        self.authority_context
+            .hot_agent_authority_inventory()
+            .ok_or(HotAgentAuthorityInventoryError::UnsupportedAuthorityContext)?
+            .rollback_enrollment(enrollment)
+    }
+
+    /// Revoke a hosted-Agent authority only after both lifecycle stores prove
+    /// removal. The opaque enrollment receipt prevents caller-supplied URAs
+    /// from deleting unrelated authority roots.
+    pub(crate) fn revoke_removed_hot_agent_authority(
+        &self,
+        enrollment: &HotAgentAuthorityEnrollment,
+    ) -> Result<(), HotAgentAuthorityInventoryError> {
+        self.authority_context
+            .hot_agent_authority_inventory()
+            .ok_or(HotAgentAuthorityInventoryError::UnsupportedAuthorityContext)?
+            .revoke_after_durable_removal(enrollment)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn enrolled_hot_agent_authority_root(&self, agent: &str) -> Option<String> {
+        self.authority_context
+            .hot_agent_authority_inventory()?
+            .authority_root(agent)
     }
 
     pub(crate) fn static_authority_exclusion_snapshot(&self) -> BTreeMap<String, usize> {
@@ -3239,6 +3406,7 @@ impl AxonAbilityCatalog {
             authority_scope,
             manifest: request.manifest,
             call_mode: request.call_mode,
+            receipt_semantics: request.receipt_semantics,
             implementation: request.implementation,
             owner_label,
         })
@@ -3248,6 +3416,7 @@ impl AxonAbilityCatalog {
         &self,
         request: ResolvedControlPlaneRegistration<'_>,
     ) -> anyhow::Result<AbilityControlPlaneRecord> {
+        let authority_root = request.authority_scope.authority_root().to_string();
         let mut registration = AbilityControlPlaneRegistration::new(
             request.ability.to_string(),
             request.call_mode,
@@ -3255,7 +3424,13 @@ impl AxonAbilityCatalog {
             request.authority_scope,
             request.implementation.runtime_env,
             request.implementation.impl_source,
-        );
+        )
+        .with_receipt_semantics(request.receipt_semantics)
+        .with_descriptor_hints(crate::daemon::ability::catalog::registration_hints(
+            &authority_root,
+            request.ability,
+            request.call_mode,
+        ));
         if let Some(impl_content_hash) = request.implementation.impl_content_hash {
             registration = registration.with_impl_content_hash(impl_content_hash);
         }
@@ -3265,30 +3440,7 @@ impl AxonAbilityCatalog {
             .expect("control_plane RwLock poisoned")
             .register_registration(registration);
         match result {
-            Ok(record) => {
-                // SPEC §9.1.A Step 3: dual-write the manifest body into the
-                // control-plane-keyed store, in lockstep with the record and
-                // through this single choke point (both static and dynamic
-                // commits flow here). Keyed by the record's own
-                // `AbilityControlPlaneKey`, so the manifest is the record's
-                // facet by key-identity, not a parallel String-keyed truth.
-                // Absent manifest means "no declared schema" — recorded as a
-                // key removal so a re-registration without a manifest cannot
-                // leave a stale body behind.
-                let key = AbilityControlPlaneKey::for_authority(record.authority());
-                if let Some(manifest) = request.manifest {
-                    self.control_plane_manifests
-                        .write()
-                        .expect("control_plane_manifests RwLock poisoned")
-                        .insert(key, Arc::new(manifest.clone()));
-                } else {
-                    self.control_plane_manifests
-                        .write()
-                        .expect("control_plane_manifests RwLock poisoned")
-                        .remove(&key);
-                }
-                Ok(record)
-            }
+            Ok(record) => Ok(record),
             Err(error) => {
                 let error_message = error.to_string();
                 crate::op_event!(
@@ -3326,12 +3478,13 @@ impl AxonAbilityCatalog {
             .unwrap_or_else(|error| panic!("static registration failed for {ability:?}: {error}"));
     }
 
-    fn register_control_plane_with_scope_result(
+    fn register_control_plane_with_scope_and_semantics_result(
         &self,
         ability: &str,
         authority_scope: AuthorityScope,
         manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
         call_mode: DescriptorCallMode,
+        receipt_semantics: ReceiptSemantics,
         implementation: &ControlPlaneImplementation,
     ) -> anyhow::Result<ControlPlaneModeKey> {
         let owner_label = format!(
@@ -3344,25 +3497,28 @@ impl AxonAbilityCatalog {
             authority_scope,
             manifest,
             call_mode,
+            receipt_semantics,
             implementation: implementation.clone(),
             owner_label,
         })?;
         Ok(ControlPlaneModeKey::from_record(&record))
     }
 
-    fn register_dynamic_control_plane_with_scope_result(
+    fn register_dynamic_control_plane_with_scope_and_semantics_result(
         &self,
         ability: &str,
         authority_scope: AuthorityScope,
         manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
         call_mode: DescriptorCallMode,
+        receipt_semantics: ReceiptSemantics,
         implementation: &ControlPlaneImplementation,
     ) -> anyhow::Result<ControlPlaneModeKey> {
-        match self.register_control_plane_with_scope_result(
+        match self.register_control_plane_with_scope_and_semantics_result(
             ability,
             authority_scope,
             manifest,
             call_mode,
+            receipt_semantics,
             implementation,
         ) {
             Ok(control_plane_key) => Ok(control_plane_key),
@@ -3413,6 +3569,22 @@ impl AxonAbilityCatalog {
             .get_for_mode(ability, call_mode)
     }
 
+    /// Resolve one canonical governed descriptor by execution registry name.
+    ///
+    /// Callers without a concrete transport may use this only when the name is
+    /// provably single-mode/single-version/single-authority. Ambiguity is an
+    /// error rather than an arbitrary descriptor choice.
+    pub fn canonical_descriptor_for_ability(
+        &self,
+        ability: &str,
+    ) -> Result<Option<AbilityDescriptor>, AbilityControlPlaneLookupError> {
+        self.control_plane
+            .read()
+            .expect("control_plane RwLock poisoned")
+            .get(ability)
+            .map(|record| record.map(|record| record.descriptor().clone()))
+    }
+
     pub fn control_plane_record_for_version_mode(
         &self,
         ability: &str,
@@ -3441,7 +3613,7 @@ impl AxonAbilityCatalog {
     ) -> Result<Option<String>, AbilityControlPlaneLookupError> {
         Ok(self
             .control_plane_record_for_mode(ability, call_mode)?
-            .map(|record| record.descriptor().version().as_str().to_string()))
+            .map(|record| record.descriptor().version.clone()))
     }
 
     pub fn control_plane_record_for_authority_mode(
@@ -3480,6 +3652,7 @@ impl AxonAbilityCatalog {
             owner,
             manifest,
             call_mode,
+            receipt_semantics: ReceiptSemantics::Operational,
             implementation: ControlPlaneImplementation::new(impl_source, runtime_env),
         })
         .map(|_| ())
@@ -3499,6 +3672,7 @@ impl AxonAbilityCatalog {
             authority_scope: request.authority_scope,
             manifest: request.manifest,
             call_mode: request.call_mode,
+            receipt_semantics: ReceiptSemantics::Operational,
             implementation: request.implementation,
             owner_label,
         })
@@ -3514,14 +3688,10 @@ impl AxonAbilityCatalog {
     }
 
     fn remove_control_plane_for_authority(&self, authority_root: &str, ability: &str) -> bool {
-        let records_removed = self
-            .control_plane
+        self.control_plane
             .write()
             .expect("control_plane RwLock poisoned")
-            .remove_for_authority(authority_root, ability);
-        let manifests_removed =
-            self.remove_control_plane_manifests_for_authority(authority_root, ability);
-        records_removed || manifests_removed
+            .remove_for_authority(authority_root, ability)
     }
 
     fn remove_control_plane_for_authority_mode(
@@ -3530,51 +3700,10 @@ impl AxonAbilityCatalog {
         ability: &str,
         call_mode: DescriptorCallMode,
     ) -> bool {
-        let records_removed = self
-            .control_plane
+        self.control_plane
             .write()
             .expect("control_plane RwLock poisoned")
-            .remove_for_authority_mode(authority_root, ability, call_mode);
-        let manifests_removed = self.remove_control_plane_manifests_for_authority_mode(
-            authority_root,
-            ability,
-            call_mode,
-        );
-        records_removed || manifests_removed
-    }
-
-    fn remove_control_plane_manifests_for_authority(
-        &self,
-        authority_root: &str,
-        ability: &str,
-    ) -> bool {
-        let mut manifests = self
-            .control_plane_manifests
-            .write()
-            .expect("control_plane_manifests RwLock poisoned");
-        let before = manifests.len();
-        manifests
-            .retain(|key, _| !(key.authority_root() == authority_root && key.ability() == ability));
-        manifests.len() != before
-    }
-
-    fn remove_control_plane_manifests_for_authority_mode(
-        &self,
-        authority_root: &str,
-        ability: &str,
-        call_mode: DescriptorCallMode,
-    ) -> bool {
-        let mut manifests = self
-            .control_plane_manifests
-            .write()
-            .expect("control_plane_manifests RwLock poisoned");
-        let before = manifests.len();
-        manifests.retain(|key, _| {
-            !(key.authority_root() == authority_root
-                && key.ability() == ability
-                && key.call_mode() == call_mode)
-        });
-        manifests.len() != before
+            .remove_for_authority_mode(authority_root, ability, call_mode)
     }
 
     /// Return daemon-local runtime binding facts for this ability.
@@ -3617,13 +3746,13 @@ impl AxonAbilityCatalog {
         let descriptor = record.descriptor();
         let authority = record.authority();
         let implementation_record = record.implementation();
-        let descriptor_version = descriptor.version().to_string();
+        let descriptor_version = descriptor.version.clone();
         let runtime_env = implementation_record.runtime_env().label().to_string();
-        let descriptor_hash = Some(descriptor.descriptor_hash().prefixed_hex());
+        let descriptor_hash = Some(descriptor.descriptor_hash_prefixed());
         RuntimeBindingFacts {
             descriptor_version,
             call_mode: descriptor.call_mode(),
-            schema_hash: descriptor.schema_hash().prefixed_hex(),
+            schema_hash: descriptor.schema_hash_prefixed(),
             descriptor_hash,
             implementation_source: implementation_record.source().as_str().to_string(),
             implementation_content_hash: implementation_record.content_hash().map(str::to_string),
@@ -4058,8 +4187,8 @@ impl AxonAbilityCatalog {
             })?;
         Ok(options.with_mode_descriptor_proof(
             axon_mode,
-            record.descriptor().version().as_str(),
-            record.descriptor().schema_hash().0,
+            record.descriptor().version.as_str(),
+            record.descriptor().schema_hash_bytes(),
             record.implementation().impl_hash(),
         ))
     }
@@ -4122,10 +4251,10 @@ impl AxonAbilityCatalog {
     /// `InvokeAbilityDialog`, which renders a SchemaForm when an
     /// input schema is present and a free-text JSON box otherwise.
     /// Use this variant for any ability that already has a static
-    /// manifest in `daemon::ability::manifest` (the chat ability, the
+    /// import manifest in `daemon::ability::manifest` (the chat ability, the
     /// pages family, …); the registry then becomes the single
     /// source of truth for "does this verb have a schema" and
-    /// downstream consumers stop having to know which manifest
+    /// downstream consumers stop having to know which import DTO
     /// constructor to call by hand.
     pub fn register_rpc_with_spec(
         &mut self,
@@ -4134,9 +4263,27 @@ impl AxonAbilityCatalog {
         manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalRpcHandler,
     ) {
+        self.register_rpc_with_spec_and_semantics(
+            ability,
+            owner,
+            manifest,
+            ReceiptSemantics::Operational,
+            handler,
+        );
+    }
+
+    pub fn register_rpc_with_spec_and_semantics(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        receipt_semantics: ReceiptSemantics,
+        handler: LocalRpcHandler,
+    ) {
         self.register_static_or_panic(
             StaticRegistration::new(ability, owner, StaticRegistrationHandler::Rpc(handler))
-                .with_manifest(manifest),
+                .with_manifest(manifest)
+                .with_receipt_semantics(receipt_semantics),
         );
     }
 
@@ -4169,9 +4316,27 @@ impl AxonAbilityCatalog {
         manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalStreamHandler,
     ) {
+        self.register_stream_with_spec_and_semantics(
+            ability,
+            owner,
+            manifest,
+            ReceiptSemantics::Operational,
+            handler,
+        );
+    }
+
+    pub fn register_stream_with_spec_and_semantics(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        receipt_semantics: ReceiptSemantics,
+        handler: LocalStreamHandler,
+    ) {
         self.register_static_or_panic(
             StaticRegistration::new(ability, owner, StaticRegistrationHandler::Stream(handler))
-                .with_manifest(manifest),
+                .with_manifest(manifest)
+                .with_receipt_semantics(receipt_semantics),
         );
     }
 
@@ -4207,52 +4372,6 @@ impl AxonAbilityCatalog {
         )
     }
 
-    /// Control-plane read-through for an ability's manifest body, derived
-    /// from the control-plane-keyed manifest facet (SPEC §9.1.A Step 3).
-    ///
-    /// The ability is resolved to its canonical control-plane record first
-    /// (ambiguous multi-mode names yield `None`, never an arbitrary pick),
-    /// then the manifest facet is looked up by that record's key. A record
-    /// with no manifest yields `None` — there is no fall-through to the
-    /// former String-keyed manifest table, so a missing facet stays missing
-    /// (acceptance test 5).
-    pub fn control_plane_manifest(
-        &self,
-        ability: &str,
-    ) -> Option<Arc<crate::daemon::ability::manifest::AbilityManifest>> {
-        let record = self
-            .control_plane
-            .read()
-            .expect("control_plane RwLock poisoned")
-            .get(ability)
-            .ok()
-            .flatten()?;
-        let key = AbilityControlPlaneKey::for_authority(record.authority());
-        self.control_plane_manifests
-            .read()
-            .expect("control_plane_manifests RwLock poisoned")
-            .get(&key)
-            .map(Arc::clone)
-    }
-
-    /// Register an RPC handler under `ability`. Owner defaults to
-    /// [`OwnerKind::Device`] — the safe choice for daemon-local host
-    /// abilities advertised by the device-profile Agent under device
-    /// authority. New call sites should use [`register_rpc_with_owner`]
-    /// to declare the actual authority projection explicitly.
-    ///
-    /// As of M0 commit 5 of the system-namespace migration, every
-    /// production register site has migrated to the `_with_owner`
-    /// family; this shim is retained only because a handful of
-    /// test fixtures across the agents module still use it
-    /// (`test.api_key.*`-style harness wiring), and migrating them
-    /// adds zero owner-attribution value. M0 commit 6 (a separate,
-    /// optional follow-up PR) deletes the shim once those tests
-    /// are also converted.
-    pub fn register_rpc(&mut self, ability: impl Into<String>, handler: LocalRpcHandler) {
-        self.register_rpc_with_owner(ability, OwnerKind::Device, handler);
-    }
-
     /// Register a stream handler with explicit owner. See
     /// [`register_rpc_with_owner`] for the M0 migration rationale.
     pub fn register_stream_with_owner(
@@ -4266,13 +4385,6 @@ impl AxonAbilityCatalog {
             owner,
             StaticRegistrationHandler::Stream(handler),
         ));
-    }
-
-    /// Register a stream handler under `ability`. Same single-
-    /// writer model as `register_rpc`. Transitional shim;
-    /// defaults owner to `OwnerKind::Device`.
-    pub fn register_stream(&mut self, ability: impl Into<String>, handler: LocalStreamHandler) {
-        self.register_stream_with_owner(ability, OwnerKind::Device, handler);
     }
 
     /// Register a bidi handler with explicit owner. See
@@ -4303,27 +4415,28 @@ impl AxonAbilityCatalog {
         manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalBidiHandler,
     ) {
-        self.register_static_or_panic(
-            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Bidi(handler))
-                .with_manifest(manifest),
+        self.register_bidi_with_spec_and_semantics(
+            ability,
+            owner,
+            manifest,
+            ReceiptSemantics::Operational,
+            handler,
         );
     }
 
-    /// Register a bidi handler under `ability`. Same single-writer
-    /// model as `register_rpc` / `register_stream`.
-    ///
-    /// Per design §D2 the handler closure runs only once per session
-    /// (at OpenBidi time): it must build the two `mpsc` channels,
-    /// `tokio::spawn` its own session loop, and return the
-    /// `BidiSource` immediately. Returning the source is the
-    /// "session opened" signal — anything that can fail the open
-    /// (registry lookup, validation, channel construction) must
-    /// surface as `Err` from the closure so §I3 holds: a failed
-    /// open never produces a half-live session.
-    ///
-    /// Transitional shim; defaults owner to `OwnerKind::Device`.
-    pub fn register_bidi(&mut self, ability: impl Into<String>, handler: LocalBidiHandler) {
-        self.register_bidi_with_owner(ability, OwnerKind::Device, handler);
+    pub fn register_bidi_with_spec_and_semantics(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        receipt_semantics: ReceiptSemantics,
+        handler: LocalBidiHandler,
+    ) {
+        self.register_static_or_panic(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Bidi(handler))
+                .with_manifest(manifest)
+                .with_receipt_semantics(receipt_semantics),
+        );
     }
 
     /// Register an envelope-aware RPC handler with explicit owner.
@@ -4349,12 +4462,29 @@ impl AxonAbilityCatalog {
     /// causal metadata) and also need to publish the package descriptor schema
     /// through `meta.list_abilities`. This method keeps those two contracts in
     /// one registration path instead of forcing plugin host code to write the
-    /// handler index and manifest facet separately.
+    /// handler index and descriptor projection separately.
     pub fn register_rpc_with_envelope_and_spec(
         &mut self,
         ability: impl Into<String>,
         owner: OwnerKind,
         manifest: crate::daemon::ability::manifest::AbilityManifest,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        self.register_rpc_with_envelope_and_spec_and_semantics(
+            ability,
+            owner,
+            manifest,
+            ReceiptSemantics::Operational,
+            handler,
+        );
+    }
+
+    pub fn register_rpc_with_envelope_and_spec_and_semantics(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        receipt_semantics: ReceiptSemantics,
         handler: LocalRpcHandlerWithEnvelope,
     ) {
         self.register_static_or_panic(
@@ -4363,7 +4493,8 @@ impl AxonAbilityCatalog {
                 owner,
                 StaticRegistrationHandler::RpcWithEnvelope(handler),
             )
-            .with_manifest(manifest),
+            .with_manifest(manifest)
+            .with_receipt_semantics(receipt_semantics),
         );
     }
 
@@ -4384,27 +4515,6 @@ impl AxonAbilityCatalog {
             .with_manifest(manifest)
             .with_implementation(implementation),
         )
-    }
-
-    /// Register an envelope-aware RPC handler. Used by abilities
-    /// that need access to the AXIOM 7-tuple `subject` (per
-    /// **INV-SUBJECT-ENVELOPE**) — typically media abilities
-    /// resolving a `subject = resource_ura` to a local resource
-    /// table entry. The handler closure signature is
-    /// `Fn(EnvelopeContext, Value) -> Result<Value>`; the runtime
-    /// adapter
-    /// passes the resolved `InvocationTarget.subject` in the
-    /// context. Mutually exclusive with `register_rpc` per ability
-    /// — registering both is a startup bug (caller picks one
-    /// shape per ability).
-    ///
-    /// Transitional shim; defaults owner to `OwnerKind::Device`.
-    pub fn register_rpc_with_envelope(
-        &mut self,
-        ability: impl Into<String>,
-        handler: LocalRpcHandlerWithEnvelope,
-    ) {
-        self.register_rpc_with_envelope_and_owner(ability, OwnerKind::Device, handler);
     }
 
     /// Envelope-aware stream variant with explicit owner. See
@@ -4431,13 +4541,31 @@ impl AxonAbilityCatalog {
         manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
     ) {
+        self.register_stream_with_envelope_and_spec_and_semantics(
+            ability,
+            owner,
+            manifest,
+            ReceiptSemantics::Operational,
+            handler,
+        );
+    }
+
+    pub fn register_stream_with_envelope_and_spec_and_semantics(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        receipt_semantics: ReceiptSemantics,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) {
         self.register_static_or_panic(
             StaticRegistration::new(
                 ability,
                 owner,
                 StaticRegistrationHandler::StreamWithEnvelope(handler),
             )
-            .with_manifest(manifest),
+            .with_manifest(manifest)
+            .with_receipt_semantics(receipt_semantics),
         );
     }
 
@@ -4458,17 +4586,6 @@ impl AxonAbilityCatalog {
             .with_manifest(manifest)
             .with_implementation(implementation),
         )
-    }
-
-    /// Envelope-aware stream variant. See `register_rpc_with_envelope`
-    /// for the rationale. Transitional shim; defaults owner to
-    /// `OwnerKind::Device`.
-    pub fn register_stream_with_envelope(
-        &mut self,
-        ability: impl Into<String>,
-        handler: LocalStreamHandlerWithEnvelope,
-    ) {
-        self.register_stream_with_envelope_and_owner(ability, OwnerKind::Device, handler);
     }
 
     /// Envelope-aware bidi variant with explicit owner. See
@@ -4495,13 +4612,31 @@ impl AxonAbilityCatalog {
         manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
     ) {
+        self.register_bidi_with_envelope_and_spec_and_semantics(
+            ability,
+            owner,
+            manifest,
+            ReceiptSemantics::Operational,
+            handler,
+        );
+    }
+
+    pub fn register_bidi_with_envelope_and_spec_and_semantics(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        receipt_semantics: ReceiptSemantics,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) {
         self.register_static_or_panic(
             StaticRegistration::new(
                 ability,
                 owner,
                 StaticRegistrationHandler::BidiWithEnvelope(handler),
             )
-            .with_manifest(manifest),
+            .with_manifest(manifest)
+            .with_receipt_semantics(receipt_semantics),
         );
     }
 
@@ -4522,17 +4657,6 @@ impl AxonAbilityCatalog {
             .with_manifest(manifest)
             .with_implementation(implementation),
         )
-    }
-
-    /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
-    /// for the rationale. Transitional shim; defaults owner to
-    /// `OwnerKind::Device`.
-    pub fn register_bidi_with_envelope(
-        &mut self,
-        ability: impl Into<String>,
-        handler: LocalBidiHandlerWithEnvelope,
-    ) {
-        self.register_bidi_with_envelope_and_owner(ability, OwnerKind::Device, handler);
     }
 
     /// Control-plane read-through for an ability's `OwnerKind`, derived from
@@ -4574,8 +4698,8 @@ impl AxonAbilityCatalog {
     }
 
     /// Remove every static trace of `ability` from the registry: its
-    /// authority-keyed execution row, control-plane records, and control-plane
-    /// manifest facets. Returns `true` if the ability was present, `false` if
+    /// authority-keyed execution row and control-plane records. Returns
+    /// `true` if the ability was present, `false` if
     /// it was already absent.
     ///
     /// Use cases (plan §B4):
@@ -4630,8 +4754,8 @@ impl AxonAbilityCatalog {
     // The methods below are the `&self` mutation surface used by
     // `RegistryRefreshSink` after boot. They may only write rows tagged
     // `ExecutionOrigin::Dynamic` in the single execution index. Metadata
-    // reads come from the control-plane registry and its keyed manifest facet,
-    // not from dynamic metadata snapshots.
+    // reads come from the control-plane registry's canonical descriptor, not
+    // from dynamic metadata snapshots.
 
     /// Hot-register an RPC handler with explicit owner + manifest as a dynamic
     /// execution row. Used by `RegistryRefreshSink` when a
@@ -5009,130 +5133,31 @@ impl AxonAbilityCatalog {
             .names()
     }
 
-    /// Deterministic catalogue read-model: public ability name -> registered
-    /// descriptor call modes.
+    /// Complete canonical catalogue read model.
     ///
-    /// This is deliberately a control-plane snapshot, not a runtime probe.
-    /// Catalogue renderers (`meta.list_abilities`, MCP/A2A projections, CLI
-    /// list views) need to know whether an ability is unary, stream, or bidi,
-    /// but asking `LocalRuntime::ability_options` once per ability/mode turns
-    /// a pure list operation into an async fan-out. The control-plane registry
-    /// already owns the validated descriptor rows; read those rows once and
-    /// let callers derive advisory hints from the snapshot.
-    pub fn call_modes_by_ability(&self) -> BTreeMap<String, BTreeSet<DescriptorCallMode>> {
-        let mut modes = BTreeMap::<String, BTreeSet<DescriptorCallMode>>::new();
-        for (key, _record) in self
-            .control_plane
+    /// Every row is projected directly from one committed control-plane
+    /// aggregate. No manifest DTO, static template, owner reconstruction, or
+    /// mode/version collapse participates in this read path.
+    pub fn authority_ability_catalog_snapshot(&self) -> Vec<AuthorityAbilityCatalogSnapshotRow> {
+        self.control_plane
             .read()
             .expect("control_plane RwLock poisoned")
             .records()
-        {
-            modes
-                .entry(key.ability().to_string())
-                .or_default()
-                .insert(key.call_mode());
-        }
-        modes
-    }
-
-    /// Complete catalogue read model keyed by public ability name.
-    ///
-    /// This is the owner/manifest companion to [`Self::call_modes_by_ability`].
-    /// Read paths that render descriptors should consume this snapshot instead
-    /// of calling `control_plane_owner` and `control_plane_manifest` per name:
-    /// those APIs preserve precise single-record lookup semantics for dispatch
-    /// and tests, while catalogue projection needs one bounded scan.
-    pub fn ability_catalog_snapshot(&self) -> Vec<AbilityCatalogSnapshotRow> {
-        let mut rows: BTreeMap<String, AbilityCatalogSnapshotBuilder> = BTreeMap::new();
-
-        for authority_row in self.authority_ability_catalog_snapshot() {
-            let AuthorityAbilityCatalogSnapshotRow {
-                name,
-                owner,
-                manifest,
-                ..
-            } = authority_row;
-            rows.entry(name.clone())
-                .and_modify(|row| {
-                    row.observe_owner(Some(owner.clone()));
-                    row.observe_manifest(manifest.clone());
-                })
-                .or_insert_with(|| {
-                    let mut row = AbilityCatalogSnapshotBuilder::new(Some(owner));
-                    row.observe_manifest(manifest);
-                    row
-                });
-        }
-
-        rows.into_iter()
-            .map(|(name, row)| row.into_row(name))
-            .collect()
-    }
-
-    /// Complete catalogue read model keyed by canonical runtime authority and
-    /// public ability name.
-    ///
-    /// Descriptor renderers must use this surface whenever `owner_ura` or
-    /// `ability_ura` leaves the process. It preserves Device/Hub dual
-    /// registration and reads both identities from the committed control-plane
-    /// records, so discovery cannot reconstruct owner truth from ambient
-    /// credentials or process-global mode.
-    pub fn authority_ability_catalog_snapshot(&self) -> Vec<AuthorityAbilityCatalogSnapshotRow> {
-        let control_plane = self
-            .control_plane
-            .read()
-            .expect("control_plane RwLock poisoned");
-        let manifests = self
-            .control_plane_manifests
-            .read()
-            .expect("control_plane_manifests RwLock poisoned");
-        let mut rows: BTreeMap<
-            AuthorityAbilityCatalogSnapshotKey,
-            AuthorityAbilityCatalogSnapshotBuilder,
-        > = BTreeMap::new();
-
-        for (key, record) in control_plane.records() {
-            let scope = record.authority().scope();
-            let authority_root = scope.authority_root().to_string();
-            let owner_projection = scope.owner_projection().to_string();
-            let row_key = AuthorityAbilityCatalogSnapshotKey {
-                authority_root,
-                owner_projection,
-                name: key.ability().to_string(),
-            };
-            let ability_ura = record.descriptor().ability_ura().to_string();
-            let manifest = manifests.get(&key).map(Arc::clone);
-            rows.entry(row_key)
-                .and_modify(|row| {
-                    row.observe_ability_ura(&ability_ura);
-                    row.observe_manifest(manifest.clone());
-                })
-                .or_insert_with(|| {
-                    let mut row = AuthorityAbilityCatalogSnapshotBuilder::new(ability_ura);
-                    row.observe_manifest(manifest);
-                    row
-                });
-        }
-
-        rows.into_iter()
-            .map(|(key, row)| {
+            .into_iter()
+            .map(|record| {
+                let scope = record.authority().scope();
                 let owner =
-                    owner_kind_from_projection(&key.owner_projection).unwrap_or_else(|| {
+                    owner_kind_from_projection(scope.owner_projection()).unwrap_or_else(|| {
                         panic!(
                             "control-plane authority {:?} stored unknown owner projection {:?}",
-                            key.authority_root, key.owner_projection
+                            scope.authority_root(),
+                            scope.owner_projection()
                         )
                     });
                 AuthorityAbilityCatalogSnapshotRow {
-                    name: key.name,
+                    name: record.ability().to_string(),
                     owner,
-                    owner_ura: key.authority_root,
-                    ability_ura: row.ability_ura,
-                    manifest: if row.ambiguous_manifest {
-                        None
-                    } else {
-                        row.manifest
-                    },
+                    descriptor: record.descriptor().clone(),
                 }
             })
             .collect()
@@ -5326,7 +5351,7 @@ impl AxonAbilityCatalog {
             anyhow::bail!(
                 "AxonAbilityCatalog::execute_rpc no longer accepts \
                  TargetScope::Remote ({node}); route through \
-                 Axon federation.forward_invoke."
+                 Axon canonical Invocation::Invoke."
             );
         }
         let runtime = self.runtime().ok_or_else(|| {
@@ -5781,13 +5806,13 @@ mod tests {
                 .expect("Hub authority context"),
         );
 
-        catalog.register_rpc_with_owner("device.only", OwnerKind::Device, ok_handler());
+        catalog.register_rpc_with_owner("device.test.only", OwnerKind::Device, ok_handler());
         catalog.register_rpc_with_owner("meta.hub_only", OwnerKind::Hub, ok_handler());
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].owner, OwnerKind::Hub);
-        assert_eq!(rows[0].owner_ura, hub_ura);
+        assert_eq!(rows[0].descriptor.owner_ura, hub_ura);
         assert_eq!(
             catalog.static_authority_exclusion_snapshot(),
             BTreeMap::from([("device".to_string(), 1)])
@@ -5798,7 +5823,7 @@ mod tests {
         assert!(block_on_runtime_sync(runtime.ability_options(&hub_runtime_key)).is_some());
         let synthetic_device_key = local_runtime_ability_key_for_authority(
             &crate::core::ura::device_ura("hub-only", "local"),
-            "device.only",
+            "device.test.only",
         )
         .expect("hypothetical Device runtime key");
         assert!(block_on_runtime_sync(runtime.ability_options(&synthetic_device_key)).is_none());
@@ -5815,20 +5840,20 @@ mod tests {
                 .expect("Device authority context"),
         );
 
-        catalog.register_rpc_with_owner("device.only", OwnerKind::Device, ok_handler());
+        catalog.register_rpc_with_owner("device.test.only", OwnerKind::Device, ok_handler());
         catalog.register_rpc_with_owner("meta.hub_only", OwnerKind::Hub, ok_handler());
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].owner, OwnerKind::Device);
-        assert_eq!(rows[0].owner_ura, device_ura);
+        assert_eq!(rows[0].descriptor.owner_ura, device_ura);
         assert_eq!(
             catalog.static_authority_exclusion_snapshot(),
             BTreeMap::from([("hub".to_string(), 1)])
         );
 
         let device_runtime_key =
-            local_runtime_ability_key_for_authority(&device_ura, "device.only")
+            local_runtime_ability_key_for_authority(&device_ura, "device.test.only")
                 .expect("Device runtime key");
         assert!(block_on_runtime_sync(runtime.ability_options(&device_runtime_key)).is_some());
         let hub_runtime_key = local_runtime_ability_key_for_authority(&hub_ura, "meta.hub_only")
@@ -5905,7 +5930,7 @@ mod tests {
     #[test]
     fn public_catalog_constructor_preserves_device_and_hub_registration() {
         let mut catalog = AxonAbilityCatalog::new();
-        catalog.register_rpc_with_owner("device.constructor", OwnerKind::Device, ok_handler());
+        catalog.register_rpc_with_owner("device.test.constructor", OwnerKind::Device, ok_handler());
         catalog.register_rpc_with_owner("meta.constructor", OwnerKind::Hub, ok_handler());
 
         let rows = catalog.authority_ability_catalog_snapshot();
@@ -6087,8 +6112,10 @@ mod tests {
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().any(|row| row.owner_ura == device_ura));
-        assert!(rows.iter().any(|row| row.owner_ura == hub_ura));
+        assert!(rows
+            .iter()
+            .any(|row| row.descriptor.owner_ura == device_ura));
+        assert!(rows.iter().any(|row| row.descriptor.owner_ura == hub_ura));
     }
 
     #[test]
@@ -6116,14 +6143,18 @@ mod tests {
         assert_eq!(rows.len(), 2, "combined authority rows must not collapse");
         assert!(rows.iter().any(|row| {
             row.owner == OwnerKind::Device
-                && row.owner_ura == device_ura
-                && row.ability_ura
-                    == crate::core::ura::device_ability_ura("realm-b", "dev-b", "meta.describe")
+                && row.descriptor.owner_ura == device_ura
+                && row.descriptor.canonical_ability_ura().as_deref()
+                    == Some(
+                        crate::core::ura::device_ability_ura("realm-b", "dev-b", "meta.describe")
+                            .as_str(),
+                    )
         }));
         assert!(rows.iter().any(|row| {
             row.owner == OwnerKind::Hub
-                && row.owner_ura == hub_ura
-                && row.ability_ura == crate::core::ura::hub_ability_ura("realm-b", "meta.describe")
+                && row.descriptor.owner_ura == hub_ura
+                && row.descriptor.canonical_ability_ura().as_deref()
+                    == Some(crate::core::ura::hub_ability_ura("realm-b", "meta.describe").as_str())
         }));
 
         let runtime = catalog.runtime().expect("combined LocalRuntime");
@@ -6137,12 +6168,12 @@ mod tests {
             );
         }
 
-        let aggregate = catalog.ability_catalog_snapshot();
-        assert_eq!(aggregate.len(), 1);
-        assert_eq!(aggregate[0].name, "meta.describe");
         assert_eq!(
-            aggregate[0].owner, None,
-            "legacy name aggregate must expose ambiguity instead of choosing one authority"
+            rows.iter()
+                .filter(|row| row.name == "meta.describe")
+                .count(),
+            2,
+            "canonical snapshot must retain one descriptor per authority"
         );
     }
 
@@ -6166,8 +6197,9 @@ mod tests {
         // handler with the normalised args; the handler's return
         // value is surfaced verbatim.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc(
+        reg.register_rpc_with_owner(
             "observe.health",
+            OwnerKind::Device,
             Arc::new(|args: Value| Ok(json!({"echo": args}))),
         );
         let dispatcher = Arc::new(reg);
@@ -6185,8 +6217,9 @@ mod tests {
         // half: handler registered via register_rpc_with_envelope
         // receives target.subject in EnvelopeContext, NOT via args.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_envelope(
+        reg.register_rpc_with_envelope_and_owner(
             "media.x.snapshot",
+            OwnerKind::Device,
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 Ok(json!({
                     "saw_subject": env.subject(),
@@ -6217,12 +6250,14 @@ mod tests {
         // A programming error must fail at boot instead of silently
         // choosing whichever handler family the dispatcher checks first.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc(
+        reg.register_rpc_with_owner(
             "x.dual",
+            OwnerKind::Device,
             Arc::new(|_args: Value| Ok(json!({"path": "legacy"}))),
         );
-        reg.register_rpc_with_envelope(
+        reg.register_rpc_with_envelope_and_owner(
             "x.dual",
+            OwnerKind::Device,
             Arc::new(|_env: EnvelopeContext, _args: Value| Ok(json!({"path": "envelope"}))),
         );
     }
@@ -6234,8 +6269,9 @@ mod tests {
         // calls, and envelope-aware handlers must see that value instead of an
         // erased `None`.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_envelope(
+        reg.register_rpc_with_envelope_and_owner(
             "x.optional",
+            OwnerKind::Device,
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 Ok(json!({
                     "subject_present": true,
@@ -6268,8 +6304,9 @@ mod tests {
         // the frame. Stream stays its own call mode — it is NOT collapsed
         // onto bidi.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_stream_with_envelope(
+        reg.register_stream_with_envelope_and_owner(
             "x.subscribe",
+            OwnerKind::Device,
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 let frame = json!({"subject_seen": env.subject()});
                 Ok(StreamSource::Snapshot(vec![frame]))
@@ -6304,7 +6341,11 @@ mod tests {
         // and gen-ability-tomls iterate this list, and a handler
         // registered only via register_rpc_with_envelope MUST appear.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_envelope("x.env_only", Arc::new(|_env, _args| Ok(json!({}))));
+        reg.register_rpc_with_envelope_and_owner(
+            "x.env_only",
+            OwnerKind::Device,
+            Arc::new(|_env, _args| Ok(json!({}))),
+        );
         let names = reg.list_abilities();
         assert!(
             names.iter().any(|n| n == "x.env_only"),
@@ -6318,7 +6359,7 @@ mod tests {
         // routes through GatewayApi (deleted along with
         // NoopGateway's invoke_remote_ability stub). Cross-device
         // dispatch flows through
-        // `daemon::invocation::routing::federation_invoke::invoke_via_federation_forward`
+        // `daemon::invocation::routing::remote_invoke::invoke_remote_target`
         // instead. The dispatcher surfaces a typed error
         // pointing the caller at the new path so a stale Remote
         // construction fails loud instead of silently bouncing
@@ -6338,7 +6379,7 @@ mod tests {
         let err = dispatcher.execute_rpc(target).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("federation.forward_invoke") || msg.contains("federation_invoke"),
+            msg.contains("canonical Invocation::Invoke") || msg.contains("remote_invoke"),
             "error must redirect to the unified path, got: {msg}"
         );
     }
@@ -6390,9 +6431,13 @@ mod tests {
         // builds the `system_skills[]` label from this list, and
         // the byte-stable golden fixture depends on it.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("observe.health", Arc::new(|_| Ok(Value::Null)));
-        reg.register_rpc("test.foo", Arc::new(|_| Ok(Value::Null)));
-        reg.register_rpc("test.bar", Arc::new(|_| Ok(Value::Null)));
+        reg.register_rpc_with_owner(
+            "observe.health",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(Value::Null)),
+        );
+        reg.register_rpc_with_owner("test.foo", OwnerKind::Device, Arc::new(|_| Ok(Value::Null)));
+        reg.register_rpc_with_owner("test.bar", OwnerKind::Device, Arc::new(|_| Ok(Value::Null)));
         let names = reg.list_abilities();
         // BTreeMap iteration order is alphabetical (test.bar < test.foo,
         // observe.health < test.*).
@@ -6424,34 +6469,7 @@ mod tests {
     }
 
     #[test]
-    fn call_modes_by_ability_reads_control_plane_rows_once() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner("agent.chat", OwnerKind::Agent("agent".into()), ok_handler());
-        reg.register_stream_with_owner(
-            "agent.chat",
-            OwnerKind::Agent("agent".into()),
-            Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
-        );
-        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
-
-        let modes = reg.call_modes_by_ability();
-        assert_eq!(
-            modes.get("agent.chat"),
-            Some(&BTreeSet::from([
-                DescriptorCallMode::Rpc,
-                DescriptorCallMode::Stream
-            ])),
-            "same-name multi-mode abilities must be represented without probing LocalRuntime"
-        );
-        assert_eq!(
-            modes.get("terminal.attach"),
-            Some(&BTreeSet::from([DescriptorCallMode::Bidi])),
-            "bidi-only rows must remain visible to catalogue hint projection"
-        );
-    }
-
-    #[test]
-    fn ability_catalog_snapshot_projects_owner_and_manifest_in_one_pass() {
+    fn authority_catalog_snapshot_projects_canonical_descriptors_in_one_pass() {
         let mut reg = AxonAbilityCatalog::new();
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "read",
@@ -6462,24 +6480,50 @@ mod tests {
         reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
         reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
 
-        let rows = reg.ability_catalog_snapshot();
+        let rows = reg.authority_ability_catalog_snapshot();
         let fs = rows
             .iter()
             .find(|row| row.name == "fs.read")
             .expect("fs.read row");
-        assert_eq!(fs.owner, Some(OwnerKind::Device));
-        assert_eq!(
-            fs.manifest.as_ref().map(|m| m.description()),
-            Some("read a local file")
-        );
+        assert_eq!(fs.owner, OwnerKind::Device);
+        assert_eq!(fs.descriptor.description, "read a local file");
+        assert_eq!(fs.descriptor.input_schema(), &json!({"type": "object"}));
         let terminal = rows
             .iter()
             .find(|row| row.name == "terminal.attach")
             .expect("terminal.attach row");
-        assert_eq!(terminal.owner, Some(OwnerKind::Device));
+        assert_eq!(terminal.owner, OwnerKind::Device);
+        assert_eq!(terminal.descriptor.input_schema()["type"], "object");
         assert!(
-            terminal.manifest.is_none(),
-            "handler-only registrations must not fabricate manifest bodies"
+            !terminal.descriptor.description.is_empty(),
+            "static registrations must import canonical catalog metadata before commit"
+        );
+    }
+
+    #[test]
+    fn static_catalog_import_preserves_observation_public_visibility() {
+        let mut reg = AxonAbilityCatalog::new();
+        reg.register_rpc_with_owner("observe.health", OwnerKind::Device, ok_handler());
+        reg.register_rpc_with_owner("admin.status", OwnerKind::Device, ok_handler());
+
+        let observe = reg
+            .control_plane_record_for_mode("observe.health", DescriptorCallMode::Rpc)
+            .expect("observe lookup")
+            .expect("observe descriptor");
+        assert_eq!(
+            observe.descriptor().visibility,
+            crate::daemon::ability::descriptors::Visibility::Public
+        );
+        assert!(observe.descriptor().hints.read_only);
+        assert!(observe.descriptor().hints.idempotent);
+        assert_eq!(observe.descriptor().call_mode(), DescriptorCallMode::Rpc);
+        let admin = reg
+            .control_plane_record_for_mode("admin.status", DescriptorCallMode::Rpc)
+            .expect("admin lookup")
+            .expect("admin descriptor");
+        assert_eq!(
+            admin.descriptor().visibility,
+            crate::daemon::ability::descriptors::Visibility::Scoped
         );
     }
 
@@ -6511,7 +6555,7 @@ mod tests {
         // `self.stream` instead of `self.bidi`) trips a test.
         let mut reg = AxonAbilityCatalog::new();
         assert!(reg.get_bidi("terminal.attach").is_none());
-        reg.register_bidi("terminal.attach", trivial_bidi_handler());
+        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
         assert!(reg.get_bidi("terminal.attach").is_some());
         // Negative: not visible on the other call modes.
         assert!(reg.get_rpc("terminal.attach").is_none());
@@ -6525,12 +6569,17 @@ mod tests {
         // so a missing call mode would silently hide bidi-only
         // abilities from clients.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("observe.health", Arc::new(|_| Ok(Value::Null)));
-        reg.register_stream(
+        reg.register_rpc_with_owner(
+            "observe.health",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(Value::Null)),
+        );
+        reg.register_stream_with_owner(
             "permission.subscribe",
+            OwnerKind::Device,
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
-        reg.register_bidi("terminal.attach", trivial_bidi_handler());
+        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
         assert_eq!(
             reg.list_abilities(),
             vec!["observe.health", "permission.subscribe", "terminal.attach",],
@@ -6561,8 +6610,9 @@ mod tests {
 
         // A handler that owns its own loop reading from_client and
         // echoing into to_client. Spawned inside the closure per §D2.
-        reg.register_bidi(
+        reg.register_bidi_with_owner(
             "device.test.echo",
+            OwnerKind::Device,
             Arc::new(|_args: Value| {
                 let (client_to_handler_tx, mut client_to_handler_rx) =
                     mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
@@ -6647,8 +6697,9 @@ mod tests {
         // message preserves the handler's reason rather than being
         // swallowed by a generic dispatcher message.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_bidi(
+        reg.register_bidi_with_owner(
             "device.test.bad",
+            OwnerKind::Device,
             Arc::new(|_| anyhow::bail!("intentional handler failure: precondition foo missing")),
         );
         let dispatcher = Arc::new(reg);
@@ -6722,8 +6773,8 @@ mod tests {
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
             .expect("control-plane lookup is unambiguous")
             .expect("control-plane record");
-        assert_eq!(record.descriptor().name(), "fs.read");
-        assert_eq!(record.descriptor().version().as_str(), "1.0.0");
+        assert_eq!(record.descriptor().name, "fs.read");
+        assert_eq!(record.descriptor().version, "1.0.0");
         assert_eq!(record.descriptor().call_mode(), DescriptorCallMode::Rpc);
         assert!(record.authority().predicate().governs_advertise());
         assert!(record.authority().predicate().governs_invoke());
@@ -6736,7 +6787,7 @@ mod tests {
             record.implementation().runtime_env().label(),
             RuntimeEnv::daemon_native().label()
         );
-        assert_ne!(record.descriptor().schema_hash().0, [0u8; 32]);
+        assert_ne!(record.descriptor().schema_hash_bytes(), [0u8; 32]);
         assert_ne!(record.implementation().impl_hash(), [0u8; 32]);
     }
 
@@ -6798,9 +6849,9 @@ mod tests {
 
         assert_eq!(
             proof.descriptor_version,
-            record.descriptor().version().as_str()
+            record.descriptor().version.as_str()
         );
-        assert_eq!(proof.schema_hash, record.descriptor().schema_hash().0);
+        assert_eq!(proof.schema_hash, record.descriptor().schema_hash_bytes());
         assert_eq!(proof.impl_hash, record.implementation().impl_hash());
         assert!(!proof.is_unbound());
     }
@@ -6859,19 +6910,14 @@ mod tests {
             block_on_runtime_sync(runtime.ability_options(&runtime_key)).expect("runtime options");
         let proof = options.proof_for_mode(AxonCallMode::Rpc);
 
-        assert_eq!(record.descriptor().version().as_str(), "2.0.0");
+        assert_eq!(record.descriptor().version, "2.0.0");
         assert_eq!(proof.descriptor_version, "2.0.0");
-        assert_eq!(proof.schema_hash, record.descriptor().schema_hash().0);
+        assert_eq!(proof.schema_hash, record.descriptor().schema_hash_bytes());
         assert_eq!(proof.impl_hash, record.implementation().impl_hash());
     }
 
-    /// SPEC §9.1.A Step 3: the control-plane-keyed manifest store carries
-    /// the registered manifest body (the schema `meta.list_abilities`
-    /// surfaces), and reports absence for an ability registered without a
-    /// manifest. The legacy String-keyed table this once cross-checked is
-    /// now deleted, so the test asserts the registration-time truth.
     #[test]
-    fn control_plane_manifest_carries_registered_body_and_reports_absence() {
+    fn control_plane_descriptor_owns_normalized_schema_and_description() {
         let mut reg = AxonAbilityCatalog::new();
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "read",
@@ -6880,30 +6926,31 @@ mod tests {
         )
         .unwrap();
         reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest.clone(), ok_handler());
-        // An ability registered without a manifest must surface no body.
         reg.register_rpc_with_owner("admin.status", OwnerKind::Device, ok_handler());
 
-        // Has-manifest: the schema body survives into the control-plane store.
-        let control_plane = reg.control_plane_manifest("fs.read");
+        let descriptor = reg
+            .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("lookup succeeds")
+            .expect("record exists")
+            .descriptor()
+            .clone();
         assert_eq!(
-            control_plane
-                .as_ref()
-                .expect("manifest present")
-                .input_schema(),
+            descriptor.input_schema(),
             manifest.input_schema(),
-            "input_schema body must survive into the control-plane store"
+            "manifest schema must be normalized into the canonical descriptor"
         );
-        assert_eq!(
-            control_plane.expect("manifest present").description(),
-            manifest.description()
-        );
+        assert_eq!(descriptor.description, manifest.description());
 
-        // No-manifest: the control-plane store reports absence.
-        assert!(reg.control_plane_manifest("admin.status").is_none());
+        let imported = reg
+            .control_plane_record_for_mode("admin.status", DescriptorCallMode::Rpc)
+            .expect("lookup succeeds")
+            .expect("record exists");
+        assert_eq!(imported.descriptor().input_schema()["type"], "object");
+        assert!(!imported.descriptor().description.is_empty());
     }
 
     #[test]
-    fn control_plane_rebind_without_manifest_removes_stale_manifest_facet() {
+    fn control_plane_rebind_without_manifest_replaces_descriptor_schema() {
         let mut reg = AxonAbilityCatalog::new();
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "read",
@@ -6912,10 +6959,13 @@ mod tests {
         )
         .unwrap();
         reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
-        assert!(
-            reg.control_plane_manifest("fs.read").is_some(),
-            "test setup must publish a manifest facet"
-        );
+        assert!(!reg
+            .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("lookup succeeds")
+            .expect("record exists")
+            .descriptor()
+            .input_schema()
+            .is_null());
 
         reg.rebind_control_plane_record(
             "fs.read",
@@ -6927,15 +6977,16 @@ mod tests {
         )
         .expect("control-plane rebind without manifest succeeds");
 
-        assert!(
-            reg.control_plane_manifest("fs.read").is_none(),
-            "manifest facet must follow the accepted control-plane record; \
-             a rebind without manifest must not retain the old schema body"
-        );
+        let rebound = reg
+            .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("lookup succeeds")
+            .expect("record exists");
+        assert!(rebound.descriptor().input_schema().is_null());
+        assert!(rebound.descriptor().description.is_empty());
     }
 
     #[test]
-    fn remove_control_plane_record_for_authority_mode_removes_manifest_facet() {
+    fn remove_control_plane_record_for_authority_mode_removes_descriptor_row() {
         let mut reg = AxonAbilityCatalog::new();
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "read",
@@ -6948,27 +6999,22 @@ mod tests {
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
             .expect("control-plane lookup succeeds")
             .expect("control-plane record");
-        let manifest_key = AbilityControlPlaneKey::for_authority(record.authority());
-        assert!(
-            reg.control_plane_manifests
-                .read()
-                .expect("manifest store lock")
-                .contains_key(&manifest_key),
-            "test setup must publish a manifest facet"
-        );
+        let key = record.key().clone();
 
         assert!(reg.remove_control_plane_record_for_authority_mode(
-            manifest_key.authority_root(),
-            manifest_key.ability(),
-            manifest_key.call_mode(),
+            key.authority_root(),
+            key.ability(),
+            key.call_mode(),
         ));
-
         assert!(
-            !reg.control_plane_manifests
-                .read()
-                .expect("manifest store lock")
-                .contains_key(&manifest_key),
-            "authority-mode removal must delete the manifest facet keyed by the removed record"
+            reg.control_plane_record_for_authority_mode(
+                key.authority_root(),
+                key.ability(),
+                key.call_mode(),
+            )
+            .expect("lookup remains valid")
+            .is_none(),
+            "authority-mode removal must delete the canonical descriptor row"
         );
     }
 
@@ -7004,6 +7050,15 @@ mod tests {
 
         assert_eq!(rpc.descriptor().call_mode(), DescriptorCallMode::Rpc);
         assert_eq!(stream.descriptor().call_mode(), DescriptorCallMode::Stream);
+        let snapshot = reg.authority_ability_catalog_snapshot();
+        assert_eq!(
+            snapshot
+                .iter()
+                .filter(|row| row.name == "agent.chat")
+                .count(),
+            2,
+            "catalogue projection must preserve each committed call-mode record"
+        );
         let err = reg
             .control_plane_record("agent.chat")
             .expect_err("mode-agnostic lookup must not collapse same ability/version modes");
@@ -7022,17 +7077,17 @@ mod tests {
 
         assert_eq!(
             rpc_proof.descriptor_version,
-            rpc.descriptor().version().as_str()
+            rpc.descriptor().version.as_str()
         );
-        assert_eq!(rpc_proof.schema_hash, rpc.descriptor().schema_hash().0);
+        assert_eq!(rpc_proof.schema_hash, rpc.descriptor().schema_hash_bytes());
         assert_eq!(rpc_proof.impl_hash, rpc.implementation().impl_hash());
         assert_eq!(
             stream_proof.descriptor_version,
-            stream.descriptor().version().as_str()
+            stream.descriptor().version.as_str()
         );
         assert_eq!(
             stream_proof.schema_hash,
-            stream.descriptor().schema_hash().0
+            stream.descriptor().schema_hash_bytes()
         );
         assert_eq!(stream_proof.impl_hash, stream.implementation().impl_hash());
         assert_ne!(
@@ -7055,16 +7110,13 @@ mod tests {
             .expect("runtime binding lookup is unambiguous")
             .expect("runtime binding facts");
 
-        assert_eq!(
-            facts.descriptor_version,
-            record.descriptor().version().to_string()
-        );
+        assert_eq!(facts.descriptor_version, record.descriptor().version);
         assert_eq!(facts.call_mode, DescriptorCallMode::Rpc);
         assert_eq!(
             facts.schema_hash,
-            record.descriptor().schema_hash().prefixed_hex()
+            record.descriptor().schema_hash_prefixed()
         );
-        let descriptor_hash = record.descriptor().descriptor_hash().prefixed_hex();
+        let descriptor_hash = record.descriptor().descriptor_hash_prefixed();
         assert_eq!(
             facts.descriptor_hash.as_deref(),
             Some(descriptor_hash.as_str())
@@ -7153,22 +7205,6 @@ mod tests {
         // this to detect "not in our local registry" without falling
         // back to name-string sniffing.
         assert_eq!(reg.control_plane_owner("not.registered"), None);
-    }
-
-    #[test]
-    fn legacy_register_rpc_shim_defaults_owner_to_device() {
-        // The transitional shim. Lets every existing register call
-        // site compile unchanged at M0 commit 1; sites migrate to
-        // the `_with_owner` family commit-by-commit through M0
-        // commits 2-5; the shim is removed at M0 commit 6.
-        // Guarantees the shim default matches the documented
-        // contract ("80%+ of system abilities are device-bundle").
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("legacy.shim.smoke", ok_handler());
-        assert_eq!(
-            reg.control_plane_owner("legacy.shim.smoke"),
-            Some(OwnerKind::Device),
-        );
     }
 
     #[test]
@@ -7409,7 +7445,11 @@ mod tests {
     #[test]
     fn unregister_removes_rpc_handler_and_descriptor_state() {
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("doomed.tool", Arc::new(|_| Ok(json!("v"))));
+        reg.register_rpc_with_owner(
+            "doomed.tool",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(json!("v"))),
+        );
         assert!(reg.has_rpc("doomed.tool"));
         assert_eq!(
             reg.control_plane_owner("doomed.tool"),
@@ -7440,12 +7480,14 @@ mod tests {
     #[test]
     fn unregister_removes_stream_and_bidi_handlers() {
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_stream(
+        reg.register_stream_with_owner(
             "doomed.stream",
+            OwnerKind::Device,
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
-        reg.register_bidi(
+        reg.register_bidi_with_owner(
             "doomed.bidi",
+            OwnerKind::Device,
             Arc::new(|_| {
                 Err(anyhow::anyhow!(
                     "test bidi handler not expected to actually run"
@@ -7491,10 +7533,7 @@ mod tests {
     }
 
     #[test]
-    fn hot_register_rpc_with_spec_publishes_manifest_through_dynamic_lookup() {
-        // `manifest_for_dynamic` is what `meta_ability::list_abilities`
-        // reads. A hot-registered manifest must surface there or
-        // freshly reflected MCP tools advertise without a schema.
+    fn hot_register_rpc_with_spec_publishes_canonical_descriptor() {
         let reg = Arc::new(AxonAbilityCatalog::new());
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "search",
@@ -7510,15 +7549,15 @@ mod tests {
         )
         .expect("dynamic RPC with manifest registers");
 
-        // The hot-registered manifest is visible through the control-plane
-        // store: the commit choke point dual-writes static and dynamic
-        // registrations alike, so there is no static-vs-dynamic split to
-        // probe any more (§9.1.A — the legacy String-keyed manifest table
-        // that once distinguished them is gone).
-        let m = reg
-            .control_plane_manifest("mcp_wikipedia__search")
-            .expect("hot-registered manifest visible in control-plane");
-        assert_eq!(m.description(), "Search Wikipedia.");
+        let record = reg
+            .control_plane_record_for_mode("mcp_wikipedia__search", DescriptorCallMode::Rpc)
+            .expect("lookup succeeds")
+            .expect("hot-registered descriptor visible in control-plane");
+        assert_eq!(record.descriptor().description, "Search Wikipedia.");
+        assert_eq!(
+            record.descriptor().input_schema(),
+            &serde_json::json!({"type": "object"})
+        );
     }
 
     #[test]
@@ -7705,11 +7744,12 @@ mod tests {
             ControlPlaneAbilityKey::new(authority_scope.authority_root(), "plugin.txn")
                 .for_mode(DescriptorCallMode::Rpc);
         catalog
-            .register_dynamic_control_plane_with_scope_result(
+            .register_dynamic_control_plane_with_scope_and_semantics_result(
                 "plugin.txn",
                 authority_scope.clone(),
                 Some(&old_manifest),
                 DescriptorCallMode::Rpc,
+                ReceiptSemantics::Operational,
                 &ControlPlaneImplementation::native_daemon(),
             )
             .expect("old control-plane record writes");
@@ -7718,7 +7758,7 @@ mod tests {
             .expect("old lookup succeeds")
             .expect("old record exists")
             .descriptor()
-            .schema_hash();
+            .schema_hash_bytes();
 
         let mut txn = catalog.begin_control_plane_authority_mode_transaction(
             control_plane_key.authority_root(),
@@ -7732,11 +7772,12 @@ mod tests {
         )
         .unwrap();
         catalog
-            .register_dynamic_control_plane_with_scope_result(
+            .register_dynamic_control_plane_with_scope_and_semantics_result(
                 "plugin.txn",
                 authority_scope,
                 Some(&new_manifest),
                 DescriptorCallMode::Rpc,
+                ReceiptSemantics::Operational,
                 &ControlPlaneImplementation::native_daemon(),
             )
             .expect("new control-plane record writes");
@@ -7746,7 +7787,7 @@ mod tests {
                 .expect("new lookup succeeds")
                 .expect("new record exists")
                 .descriptor()
-                .schema_hash(),
+                .schema_hash_bytes(),
             old_schema_hash,
             "test must exercise an actual overwrite"
         );
@@ -7759,7 +7800,7 @@ mod tests {
                 .expect("restored lookup succeeds")
                 .expect("restored record exists")
                 .descriptor()
-                .schema_hash(),
+                .schema_hash_bytes(),
             old_schema_hash,
             "rollback must restore old descriptor facts"
         );
@@ -7787,7 +7828,7 @@ mod tests {
             .expect("old control-plane lookup succeeds")
             .expect("old control-plane record exists")
             .descriptor()
-            .schema_hash();
+            .schema_hash_bytes();
 
         let control_plane_key = catalog
             .dynamic_control_plane_key("plugin.rollback")
@@ -7815,11 +7856,12 @@ mod tests {
             .resolve_authority_scope_for_owner("plugin.rollback", &OwnerKind::Device)
             .expect("device owner resolves authority scope");
         let written_key = catalog
-            .register_dynamic_control_plane_with_scope_result(
+            .register_dynamic_control_plane_with_scope_and_semantics_result(
                 "plugin.rollback",
                 new_authority_scope,
                 Some(&new_manifest),
                 DescriptorCallMode::Rpc,
+                ReceiptSemantics::Operational,
                 &ControlPlaneImplementation::native_daemon(),
             )
             .expect("new dynamic control-plane write succeeds");
@@ -7860,29 +7902,26 @@ mod tests {
             .expect("restored control-plane lookup succeeds")
             .expect("restored control-plane record exists")
             .descriptor()
-            .schema_hash();
+            .schema_hash_bytes();
         assert_eq!(
             restored_schema_hash, old_schema_hash,
             "rollback must restore the previous descriptor proof, not leave the failed write"
         );
 
-        // SPEC §9.1.A Step 7 follow-up: the manifest facet must roll back in
-        // lockstep with the record. Before this fix, the new manifest body
-        // was stranded in `control_plane_manifests` keyed by the (now
-        // restored) control-plane key. After rollback the store must surface
-        // the OLD manifest (the "old" schema property), not the failed "new".
-        let restored_manifest = catalog
-            .control_plane_manifest("plugin.rollback")
-            .expect("rollback must restore the prior manifest, not strand the new one");
-        let props = restored_manifest
+        let restored_record = catalog
+            .control_plane_record_for_mode("plugin.rollback", DescriptorCallMode::Rpc)
+            .expect("restored descriptor lookup succeeds")
+            .expect("rollback must restore the prior descriptor");
+        let props = restored_record
+            .descriptor()
             .input_schema()
             .get("properties")
             .and_then(|p| p.as_object())
-            .expect("manifest input_schema has properties");
+            .expect("descriptor input_schema has properties");
         assert!(
             props.contains_key("old") && !props.contains_key("new"),
-            "manifest store must restore the OLD manifest after rollback; got {:?}",
-            restored_manifest.input_schema()
+            "rollback must restore the old descriptor schema; got {:?}",
+            restored_record.descriptor().input_schema()
         );
     }
 
@@ -7931,7 +7970,7 @@ mod tests {
     }
 
     #[test]
-    fn hot_unregister_removes_dynamic_control_plane_manifest_facet() {
+    fn hot_unregister_removes_dynamic_control_plane_descriptor() {
         let reg = Arc::new(AxonAbilityCatalog::new());
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "search",
@@ -7946,17 +7985,11 @@ mod tests {
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         )
         .expect("dynamic RPC registers");
-        let record = reg
-            .control_plane_record_for_mode("mcp_wikipedia__search", DescriptorCallMode::Rpc)
-            .expect("control-plane lookup succeeds")
-            .expect("control-plane record");
-        let manifest_key = AbilityControlPlaneKey::for_authority(record.authority());
         assert!(
-            reg.control_plane_manifests
-                .read()
-                .expect("manifest store lock")
-                .contains_key(&manifest_key),
-            "test setup must publish a dynamic manifest facet"
+            reg.authority_ability_catalog_snapshot()
+                .iter()
+                .any(|row| row.name == "mcp_wikipedia__search"),
+            "test setup must publish a canonical dynamic descriptor"
         );
 
         assert!(reg
@@ -7964,11 +7997,10 @@ mod tests {
             .expect("dynamic RPC unregisters"));
 
         assert!(
-            !reg.control_plane_manifests
-                .read()
-                .expect("manifest store lock")
-                .contains_key(&manifest_key),
-            "hot_unregister must remove the manifest facet with the dynamic control-plane record"
+            !reg.authority_ability_catalog_snapshot()
+                .iter()
+                .any(|row| row.name == "mcp_wikipedia__search"),
+            "hot_unregister must remove the dynamic control-plane descriptor"
         );
     }
 

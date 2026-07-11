@@ -8,16 +8,17 @@
 use std::fmt;
 
 use super::{
-    AbilityControlPlaneError, AbilityControlPlaneKey, AbilityDescriptorRecord,
-    AbilityDescriptorRegistry, AbilityImplBinding, AbilityImplRegistry, AbilityImplSource,
-    AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityScope, CallMode, RuntimeEnv,
+    AbilityControlPlaneError, AbilityControlPlaneKey, AbilityDescriptor, AbilityDescriptorRegistry,
+    AbilityHints, AbilityImplBinding, AbilityImplRegistry, AbilityImplSource, AuthorityBinding,
+    AuthorityBindingRegistry, AuthorityScope, CallMode, ReceiptSemantics, RuntimeEnv,
     DEFAULT_ABILITY_DESCRIPTOR_VERSION,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AbilityControlPlaneRecord {
-    descriptor: AbilityDescriptorRecord,
-    authority: AuthorityBindingRecord,
+    key: AbilityControlPlaneKey,
+    descriptor: AbilityDescriptor,
+    authority: AuthorityBinding,
     implementation: AbilityImplBinding,
 }
 
@@ -70,11 +71,19 @@ impl fmt::Display for AbilityControlPlaneAuthorityModeLookupError {
 impl std::error::Error for AbilityControlPlaneAuthorityModeLookupError {}
 
 impl AbilityControlPlaneRecord {
-    pub fn descriptor(&self) -> &AbilityDescriptorRecord {
+    pub fn key(&self) -> &AbilityControlPlaneKey {
+        &self.key
+    }
+
+    pub fn ability(&self) -> &str {
+        self.key.ability()
+    }
+
+    pub fn descriptor(&self) -> &AbilityDescriptor {
         &self.descriptor
     }
 
-    pub fn authority(&self) -> &AuthorityBindingRecord {
+    pub fn authority(&self) -> &AuthorityBinding {
         &self.authority
     }
 
@@ -95,6 +104,8 @@ pub struct AbilityControlPlaneRegistration<'a> {
     ability: String,
     descriptor_version: String,
     call_mode: CallMode,
+    receipt_semantics: ReceiptSemantics,
+    descriptor_hints: Option<AbilityHints>,
     manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
     authority_scope: AuthorityScope,
     runtime_env: RuntimeEnv,
@@ -115,6 +126,8 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
             ability: ability.into(),
             descriptor_version: manifest_descriptor_version(manifest).to_string(),
             call_mode,
+            receipt_semantics: ReceiptSemantics::Operational,
+            descriptor_hints: None,
             manifest,
             authority_scope,
             runtime_env,
@@ -134,6 +147,18 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
         self.impl_content_hash = Some(impl_content_hash.into());
         self
     }
+
+    #[must_use]
+    pub fn with_receipt_semantics(mut self, receipt_semantics: ReceiptSemantics) -> Self {
+        self.receipt_semantics = receipt_semantics;
+        self
+    }
+
+    #[must_use]
+    pub fn with_descriptor_hints(mut self, hints: AbilityHints) -> Self {
+        self.descriptor_hints = Some(hints);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +175,6 @@ struct AbilityControlPlaneRegistrationPlan<'a> {
 
 struct MaterializedAbilityControlPlaneRegistration {
     stage: AbilityControlPlaneRegistrationStage,
-    key: AbilityControlPlaneKey,
     record: AbilityControlPlaneRecord,
 }
 
@@ -170,6 +194,8 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
             ability,
             descriptor_version,
             call_mode,
+            receipt_semantics,
+            descriptor_hints,
             manifest,
             authority_scope,
             runtime_env,
@@ -183,41 +209,59 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
         // while keeping the registry key unchanged for execution lookup.
         let public_ability_name =
             crate::core::ura::descriptor_public_ability_name(&authority_root, &ability);
-        let ability_ura =
-            crate::core::ura::owner_ability_ura(&authority_root, &public_ability_name).ok_or_else(
-                || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
-                    authority_root: authority_root.clone(),
-                    ability: public_ability_name.clone(),
-                },
-            )?;
-        let descriptor = AbilityDescriptorRecord::for_ability_ura(
-            ability_ura,
-            &ability,
-            descriptor_version,
-            call_mode,
-            manifest,
+        crate::core::ura::owner_ability_ura(&authority_root, &public_ability_name).ok_or_else(
+            || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
+                authority_root: authority_root.clone(),
+                ability: public_ability_name.clone(),
+            },
         )?;
-        let authority = AuthorityBindingRecord::local_self_with_manifest_policy(
-            ability.clone(),
-            descriptor.version().to_string(),
+        ensure_manifest_descriptor_version_matches(&descriptor_version, manifest)?;
+        let mut descriptor = AbilityDescriptor::from_registry_manifest(
+            &ability,
+            &authority_root,
             call_mode,
-            authority_scope,
             manifest,
+        )
+        .map_err(|error| AbilityControlPlaneError::DescriptorConstruction {
+            reason: error.to_string(),
+        })?;
+        if manifest.is_none() && descriptor.version != descriptor_version {
+            descriptor = descriptor
+                .with_version(&descriptor_version)
+                .map_err(|error| AbilityControlPlaneError::DescriptorConstruction {
+                    reason: error.to_string(),
+                })?;
+        }
+        if let Some(hints) = descriptor_hints {
+            descriptor = descriptor.with_hints(hints).with_call_mode(call_mode);
+        }
+        descriptor = descriptor
+            .with_receipt_semantics(receipt_semantics)
+            .with_source("daemon:control-plane");
+        let authority = AuthorityBinding::local_self_for_descriptor(
+            ability.clone(),
+            authority_scope,
+            &descriptor,
         )?;
         let implementation = AbilityImplBinding::new_with_content_hash(
-            ability,
-            descriptor.version().to_string(),
+            ability.clone(),
+            descriptor.version.clone(),
             call_mode,
             runtime_env,
             impl_source,
             impl_content_hash,
         )?;
-        let key = AbilityControlPlaneKey::for_descriptor(&authority_root, &descriptor);
+        let key = AbilityControlPlaneKey::new(
+            &authority_root,
+            ability,
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+        )?;
         assert_record_keys_match(&key, &descriptor, &authority, &implementation)?;
         Ok(MaterializedAbilityControlPlaneRegistration {
             stage: AbilityControlPlaneRegistrationStage::Materialized,
-            key,
             record: AbilityControlPlaneRecord {
+                key,
                 descriptor,
                 authority,
                 implementation,
@@ -234,11 +278,11 @@ impl MaterializedAbilityControlPlaneRegistration {
         );
         registry
             .descriptors
-            .register(self.key.clone(), self.record.descriptor.clone());
+            .register(self.record.key.clone(), self.record.descriptor.clone());
         registry.authorities.bind(self.record.authority.clone());
         registry
             .implementations
-            .bind(self.key.clone(), self.record.implementation.clone());
+            .bind(self.record.key.clone(), self.record.implementation.clone());
         self.stage = AbilityControlPlaneRegistrationStage::Committed;
         self.record
     }
@@ -370,7 +414,7 @@ impl AbilityControlPlaneRegistry {
     ///
     /// Invariant 2: records are reinserted through their canonical key derived
     /// from the record body, keeping key construction centralized in
-    /// [`AbilityControlPlaneKey::for_descriptor`].
+    /// the aggregate's stored [`AbilityControlPlaneKey`].
     pub fn restore_authority_mode_records(
         &mut self,
         authority_root: &str,
@@ -464,69 +508,6 @@ impl AbilityControlPlaneRegistry {
         self.record_for_key(&key)
     }
 
-    pub fn descriptor(
-        &self,
-        ability: &str,
-    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
-        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
-    }
-
-    pub fn descriptor_for_mode(
-        &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(
-            self.descriptors.keys(),
-            ability,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
-    }
-
-    pub fn authority(
-        &self,
-        ability: &str,
-    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
-        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
-    }
-
-    pub fn authority_for_mode(
-        &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(
-            self.descriptors.keys(),
-            ability,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
-    }
-
-    pub fn implementation(
-        &self,
-        ability: &str,
-    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
-        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
-    }
-
-    pub fn implementation_for_mode(
-        &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(
-            self.descriptors.keys(),
-            ability,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
-    }
-
     pub fn contains(&self, ability: &str) -> bool {
         self.descriptors
             .contains_matching(|key| key.ability() == ability)
@@ -559,17 +540,6 @@ impl AbilityControlPlaneRegistry {
         roots
     }
 
-    /// Every registered control-plane key, in the descriptor registry's
-    /// canonical order. This is the row enumerator the catalog/discovery
-    /// read paths need to consume control-plane truth instead of unioning
-    /// the legacy handler maps and side tables (SPEC §9.1.A target item 6).
-    ///
-    /// Keys are returned owned so callers iterate without holding a read
-    /// borrow on the registry, matching the [`names`](Self::names) idiom.
-    pub fn keys(&self) -> Vec<AbilityControlPlaneKey> {
-        self.descriptors.keys().cloned().collect()
-    }
-
     /// Every registered control-plane record, joined from the descriptor,
     /// authority, and implementation facets through the shared
     /// `AbilityControlPlaneKey`. This is the single read API that
@@ -578,22 +548,25 @@ impl AbilityControlPlaneRegistry {
     /// come from one row rather than parallel side tables (SPEC §9.1.A
     /// target items 2 and 6).
     ///
-    /// A key whose facets are not all present is skipped rather than
-    /// silently faked — a partially-materialized row never surfaces as a
-    /// catalog entry.
-    pub fn records(&self) -> Vec<(AbilityControlPlaneKey, AbilityControlPlaneRecord)> {
+    /// A key whose facets are not all present is registry corruption. Reads
+    /// fail closed instead of silently dropping the governed ability.
+    pub fn records(&self) -> Vec<AbilityControlPlaneRecord> {
         self.descriptors
             .keys()
-            .cloned()
-            .filter_map(|key| {
-                let record = self.record_for_key(&key)?;
-                Some((key, record))
+            .map(|key| {
+                self.record_for_key(key).unwrap_or_else(|| {
+                    panic!(
+                        "control-plane aggregate is missing a facet for {}",
+                        format_control_plane_key(key)
+                    )
+                })
             })
             .collect()
     }
 
     fn record_for_key(&self, key: &AbilityControlPlaneKey) -> Option<AbilityControlPlaneRecord> {
         Some(AbilityControlPlaneRecord {
+            key: key.clone(),
             descriptor: self.descriptors.get(key)?.clone(),
             authority: self.authorities.get(key)?.clone(),
             implementation: self.implementations.get(key)?.clone(),
@@ -604,7 +577,7 @@ impl AbilityControlPlaneRegistry {
         &mut self,
         record: AbilityControlPlaneRecord,
     ) -> Result<(), AbilityControlPlaneError> {
-        let key = key_for_record(&record);
+        let key = record.key.clone();
         assert_record_keys_match(
             &key,
             record.descriptor(),
@@ -697,21 +670,18 @@ fn unique_key_for_authority_mode<'a>(
     }
 }
 
-fn key_for_record(record: &AbilityControlPlaneRecord) -> AbilityControlPlaneKey {
-    AbilityControlPlaneKey::for_descriptor(
-        record.authority().scope().authority_root(),
-        record.descriptor(),
-    )
-}
-
 fn assert_record_keys_match(
     expected: &AbilityControlPlaneKey,
-    descriptor: &AbilityDescriptorRecord,
-    authority: &AuthorityBindingRecord,
+    descriptor: &AbilityDescriptor,
+    authority: &AuthorityBinding,
     implementation: &AbilityImplBinding,
 ) -> Result<(), AbilityControlPlaneError> {
-    let descriptor_key =
-        AbilityControlPlaneKey::for_descriptor(expected.authority_root(), descriptor);
+    let descriptor_key = AbilityControlPlaneKey::new(
+        descriptor.owner_ura.clone(),
+        expected.ability(),
+        descriptor.version.clone(),
+        descriptor.call_mode(),
+    )?;
     assert_table_key_matches("descriptor", expected, &descriptor_key)?;
     let authority_key = authority.key();
     assert_table_key_matches("authority", expected, &authority_key)?;
@@ -761,6 +731,23 @@ fn manifest_descriptor_version(
         .unwrap_or(DEFAULT_ABILITY_DESCRIPTOR_VERSION)
 }
 
+fn ensure_manifest_descriptor_version_matches(
+    registration_version: &str,
+    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
+) -> Result<(), AbilityControlPlaneError> {
+    let Some(manifest) = manifest else {
+        return Ok(());
+    };
+    let manifest_version = manifest.descriptor_version();
+    if manifest_version == registration_version {
+        return Ok(());
+    }
+    Err(AbilityControlPlaneError::DescriptorVersionMismatch {
+        manifest_version: manifest_version.to_string(),
+        registration_version: registration_version.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -782,7 +769,7 @@ mod tests {
                 AbilityImplSource::NativeDaemon,
             )
             .unwrap();
-        assert_eq!(record.descriptor().version().as_str(), "1.0.0");
+        assert_eq!(record.descriptor().version.as_str(), "1.0.0");
         assert!(record.authority().predicate().governs_advertise());
         assert!(record.authority().predicate().governs_invoke());
         assert_eq!(
@@ -817,7 +804,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(record.descriptor().version().as_str(), "2.3.4");
+        assert_eq!(record.descriptor().version.as_str(), "2.3.4");
         assert_eq!(record.authority().descriptor_version(), "2.3.4");
         assert_eq!(record.implementation().descriptor_version(), "2.3.4");
         assert!(registry
@@ -828,8 +815,51 @@ mod tests {
             .get_for_mode("agent.search", CallMode::Rpc)
             .expect("single non-default descriptor version is selected");
         assert_eq!(
-            default_lookup.unwrap().descriptor().version().as_str(),
+            default_lookup.unwrap().descriptor().version.as_str(),
             "2.3.4"
+        );
+    }
+
+    #[test]
+    fn registration_commits_one_governed_descriptor_and_authority_policy() {
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+            "publish",
+            "publish a canonical page revision",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_access(crate::daemon::ability::manifest::AccessPolicy {
+            visibility: crate::daemon::ability::manifest::ManifestAccessScope::Device,
+            allow_callers: Some(vec!["editor".to_string()]),
+            deny_callers: Some(vec!["blocked".to_string()]),
+        })
+        .unwrap();
+        let semantics = ReceiptSemantics::state_transition(
+            "pages.publish@v1",
+            crate::daemon::ability::descriptors::TransitionClass::Canonical,
+        )
+        .unwrap();
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let record = registry
+            .register_registration(
+                AbilityControlPlaneRegistration::new(
+                    "pages.publish",
+                    CallMode::Rpc,
+                    Some(&manifest),
+                    AuthorityScope::new("agent:pages", LOCAL_AGENT_URA).unwrap(),
+                    RuntimeEnv::daemon_native(),
+                    AbilityImplSource::NativeDaemon,
+                )
+                .with_receipt_semantics(semantics.clone()),
+            )
+            .unwrap();
+
+        assert_eq!(record.descriptor().receipt_semantics(), &semantics);
+        assert_eq!(record.descriptor().denied_agents(), &["blocked"]);
+        assert_eq!(
+            record.authority().invoke_policy_hash(),
+            record.descriptor().access_policy_hash_bytes(),
+            "authority must bind the policy already normalized into the descriptor"
         );
     }
 
@@ -847,10 +877,11 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(record.descriptor().name(), "assistant.chat");
+        assert_eq!(record.ability(), "assistant.chat");
+        assert_eq!(record.descriptor().name, "chat");
         assert_eq!(
-            record.descriptor().ability_ura(),
-            "easynet:///r/default/ability/user.assistant.chat"
+            record.descriptor().canonical_ability_ura().as_deref(),
+            Some("easynet:///r/default/ability/user.assistant.chat")
         );
         assert!(registry
             .get("assistant.chat")
@@ -1021,25 +1052,25 @@ mod tests {
             )
             .unwrap();
 
-        let keys = registry.keys();
-        assert_eq!(keys.len(), 2, "both call-mode rows must enumerate");
-
         let records = registry.records();
-        assert_eq!(records.len(), keys.len(), "records and keys must agree");
+        assert_eq!(records.len(), 2, "both call-mode rows must enumerate");
 
         // Each enumerated record's key must match its joined facets — proving
         // the rows are the same row the typed-key lookups return, not a union
         // artifact.
-        for (key, record) in &records {
-            assert_eq!(key.ability(), "agent.chat");
-            assert_eq!(key.call_mode(), record.descriptor().call_mode());
+        for record in &records {
+            assert_eq!(record.key().ability(), "agent.chat");
+            assert_eq!(record.key().call_mode(), record.descriptor().call_mode());
             assert_eq!(
-                key.authority_root(),
+                record.key().authority_root(),
                 record.authority().scope().authority_root()
             );
         }
 
-        let mut modes: Vec<CallMode> = records.iter().map(|(k, _)| k.call_mode()).collect();
+        let mut modes: Vec<CallMode> = records
+            .iter()
+            .map(|record| record.key().call_mode())
+            .collect();
         modes.sort();
         assert_eq!(modes, vec![CallMode::Rpc, CallMode::Stream]);
     }
@@ -1219,7 +1250,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .descriptor()
-                .version()
+                .version
                 .as_str(),
             "2.0.0"
         );

@@ -3,7 +3,7 @@
 # ==================================================================
 #
 # Boots `easynet-daemon`, then loads `libeasynet_cli` via Python
-# ctypes and exercises the ABI v4 surface: init/shutdown, daemon
+# ctypes and exercises the generic ABI v5 surface: init/shutdown, daemon
 # lifecycle preflight, and complete Invocation unary/stream/bidi
 # argument validation.
 #
@@ -65,7 +65,6 @@ echo "[ffi-smoke] loading libeasynet_cli via ctypes and exercising C ABI..."
 LIB_PATH="$LIB_PATH" DAEMON_BIN="$DAEMON_BIN" SMOKE_HOME="$SMOKE_HOME" python3 - <<'PY'
 import base64
 import ctypes
-import hashlib
 import json
 import os
 import time
@@ -101,20 +100,6 @@ lib.easynet_daemon_invocation_endpoint.argtypes = [ctypes.c_uint64, ctypes.POINT
 
 lib.easynet_daemon_open_client.restype = ctypes.c_int32
 lib.easynet_daemon_open_client.argtypes = [ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
-
-lib.easynet_identity_build_descriptor_ref.restype = ctypes.c_int32
-lib.easynet_identity_build_descriptor_ref.argtypes = [
-    ctypes.c_uint64,
-    ctypes.c_char_p,
-    ctypes.POINTER(ctypes.c_char_p),
-]
-
-lib.easynet_publication_build_resource_ref.restype = ctypes.c_int32
-lib.easynet_publication_build_resource_ref.argtypes = [
-    ctypes.c_uint64,
-    ctypes.c_char_p,
-    ctypes.POINTER(ctypes.c_char_p),
-]
 
 lib.easynet_invocation_invoke.restype = ctypes.c_int32
 lib.easynet_invocation_invoke.argtypes = [
@@ -166,11 +151,11 @@ lib.easynet_invocation_bidi_cancel.argtypes = [
     ctypes.c_uint64,
 ]
 
-lib.easynet_last_error.restype = ctypes.c_char_p
-lib.easynet_last_error.argtypes = []
+lib.easynet_last_error_json.restype = ctypes.c_int32
+lib.easynet_last_error_json.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
 
 lib.easynet_string_free.restype = None
-lib.easynet_string_free.argtypes = [ctypes.c_char_p]
+lib.easynet_string_free.argtypes = [ctypes.c_void_p]
 
 daemon_handle = ctypes.c_uint64(0)
 client_from_daemon = ctypes.c_uint64(0)
@@ -180,8 +165,14 @@ STREAM_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_char_p)
 BIDI_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_char_p)
 
 def last_error():
-    raw = lib.easynet_last_error()
-    return raw.decode("utf-8", "replace") if raw else ""
+    out = ctypes.c_void_p()
+    rc = lib.easynet_last_error_json(ctypes.byref(out))
+    if rc != 0 or not out.value:
+        return ""
+    try:
+        return ctypes.string_at(out.value).decode("utf-8", "replace")
+    finally:
+        lib.easynet_string_free(out)
 
 def cstr_value(ptr):
     if not ptr.value:
@@ -253,7 +244,7 @@ added_at_unix_ms = 0
 try:
     # 1. ABI version sanity.
     ver = lib.easynet_abi_version()
-    assert ver == 4, f"unexpected ABI version: {ver}"
+    assert ver == 5, f"unexpected ABI version: {ver}"
     print(f"[ffi-smoke] ABI version: {ver}")
 
     # 2. Daemon lifecycle ABI preflight. Malformed config fails
@@ -338,35 +329,24 @@ try:
         "args": {"smoke": "ffi-happy-path"},
     }
     def descriptor_ref(ability):
-        request = {
-            "owner_ura": self_device_ura,
-            "ability_name": ability,
-            "descriptor_version": "1.0.0",
-        }
-        out_ptr = ctypes.c_char_p()
-        assert_ok(
-            lib.easynet_identity_build_descriptor_ref(
-                init_handle.value,
-                json.dumps(request).encode("utf-8"),
-                ctypes.byref(out_ptr),
-            ),
-            f"easynet_identity_build_descriptor_ref {ability}",
+        return (
+            f"easynet:///r/{realm}/ability/"
+            f"device.{node_id}.{ability}@1.0.0"
         )
-        projection = json.loads(cstr_value(out_ptr))
-        return projection["descriptor_ref"]
 
     def resource_ref(path, capability):
-        request = {"path": path, "capability": capability}
-        out_ptr = ctypes.c_char_p()
-        assert_ok(
-            lib.easynet_publication_build_resource_ref(
-                init_handle.value,
-                json.dumps(request).encode("utf-8"),
-                ctypes.byref(out_ptr),
+        display_path = os.path.abspath(path).lstrip("/")
+        return {
+            "resource_ura": (
+                f"easynet:///r/{realm}/resource/device.{node_id}/fs/{display_path}"
             ),
-            f"easynet_publication_build_resource_ref {capability}",
-        )
-        return json.loads(cstr_value(out_ptr))
+            "owner_ura": self_device_ura,
+            "namespace": "fs",
+            "display_path": display_path,
+            "capability": capability,
+            "expires_unix_ms": 4102444800000,
+            "revision": "fs-local-mapping-v1",
+        }
 
     def invoke_health(handle, label, nonce_start):
         request = dict(invocation)
@@ -532,7 +512,6 @@ try:
         if frame.get("event") == "receipt" and frame.get("terminal") is True
     ][-1]
     assert terminal_bidi["receipt"]["state"] == 5, terminal_bidi  # Axon InvocationState::Completed
-    assert hashlib.sha256(download_bytes).hexdigest(), "sha sanity"
     print("[ffi-smoke] complete Invocation bidi happy path delivered data and terminal receipt")
 
     # 8. Complete Invocation ABI preflight. Malformed JSON fails

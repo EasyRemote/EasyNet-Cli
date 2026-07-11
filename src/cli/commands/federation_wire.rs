@@ -9,7 +9,7 @@
 // running daemon (boot-time read + SIGHUP-aware reload). What
 // was missing was the populate-on-join step: when this device
 // pairs, the local hub-mode daemon (if any) needs that mapping
-// so cross-hub `federation.forward_invoke` calls targeting the
+// so cross-hub `Invocation::Invoke` calls targeting the
 // just-joined realm resolve a hub URA.
 //
 // This module owns one helper: `auto_wire_federated_peer_from_
@@ -232,7 +232,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     //       on :50051 in dev / TLS axon:// in prod)
     //
     //   * `[daemon.federated_peers].<t>` ← peer_hub
-    //     = THIS hub dials peer hubs for `forward_invoke`
+    //     = THIS hub dials peer hubs for `canonical_invoke`
     //       (always TLS on :50443)
     //
     // Conflating them broke single-host host-mode v4.1.5: the

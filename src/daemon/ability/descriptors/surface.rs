@@ -5,27 +5,16 @@
 //
 // Per AXON-RFC-001 plan v4.1.2 §1.6, every advertised Ability is
 // described by an AbilityDescriptor. This is the Rust home for
-// that schema. Today's CLI carries two ad-hoc precursors:
-//
-//   * `daemon::execution::mission::agent_ability_specs::AgentAbilitySpec` — per-agent on-disk
-//     manifest shape, used for chat / skill manifests.
-//   * `daemon::ability::catalog::SystemAbilityMetadata` — in-memory shape
-//     for built-in abilities (observe.*, agent.*, …).
-//
-// Both pre-date RFC-001 and lack visibility/scope. AbilityDescriptor
-// supersedes them at the protocol-facing edge: anything that goes to
+// that schema. AbilityDescriptor supersedes earlier metadata projections at
+// the protocol-facing edge: anything that goes to
 // `federation.advertise_abilities` (P4.6) or back to a caller via
 // `meta.list_abilities` MUST flow through this struct.
 //
 // Why a fresh module instead of mutating the existing types
 // ---------------------------------------------------------
-// The existing types still have non-trivial in-tree consumers
-// (manifest readers, schema synthesizers, the legacy MCP catalog).
-// Bolting visibility + scope onto them would force a single
-// commit to touch every consumer. P4.1 introduces the schema in
-// isolation; P4.2 wires profile registration to it; P4.4 reshapes
-// AgentType into descriptor metadata; and only after all of those
-// land does the legacy SystemAbilityMetadata get retired.
+// Persistence manifests remain import DTOs. Catalogues, profiles, discovery,
+// and publication exchange this governed aggregate directly so no reduced
+// metadata object can silently drop policy, receipt, version, or hash inputs.
 //
 // The minimum viable scope for P4.1
 // ---------------------------------
@@ -49,7 +38,10 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+
+use super::CallMode;
 
 /// Per RFC §1.6, an Ability has one of three visibility levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,72 +63,164 @@ pub enum Visibility {
     Private,
 }
 
-/// Per AXON-RFC-006 §"transition receipts", an ability falls into
-/// one of four execution shapes that determine receipt
-/// machinery + audit timing:
+/// Receipt class declared by an RFC-006 state transition.
 ///
-///   * `Query`      — single-shot read. One request, one response,
-///                    no state mutation. Receipt is signed at
-///                    completion. Examples: `meta.list_abilities`,
-///                    `fs.read`, `camera.snapshot`.
-///
-///   * `Stream`     — long-lived subscribe. One request, N response
-///                    frames, an explicit terminal frame. Receipt
-///                    covers the bracketed window; per-frame
-///                    auditing lives in the stream itself.
-///                    Examples: `mic.subscribe`, `camera.subscribe`,
-///                    `discuss.subscribe`.
-///
-///   * `Bidi`       — full-duplex session. One open handshake, then
-///                    independent inbound/outbound frames until a
-///                    terminal close. It intentionally hashes as the
-///                    Axon Bidi call mode, never as a Stream.
-///
-///   * `Transition` — state-mutating sequence. The ability hands
-///                    back a receipt that itself carries the
-///                    pre-/post-state digests so a future
-///                    invocation can chain off it. Reserved for
-///                    RFC-006 v2 abilities; no caller instantiates
-///                    this variant in v1, but the enum carries it
-///                    so descriptor renderers / discovery surfaces
-///                    can match on it without a wildcard arm.
-///
-/// `Serialize` / `Deserialize` use the lowercased form so the
-/// on-disk descriptor TOMLs and the wire envelope agree
-/// byte-for-byte (`"class": "query"`).
+/// This is deliberately independent of [`CallMode`]. A canonical transition
+/// may be unary, streaming, or bidirectional; transport shape cannot prove
+/// whether a receipt advances canonical state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum AbilityClass {
-    Query,
-    Stream,
-    Bidi,
-    Transition,
+pub enum TransitionClass {
+    /// Runtime/observability transition. Its receipt never advances the
+    /// canonical state chain.
+    Operational,
+    /// Canonical state transition. Its terminal receipt binds pre/post state
+    /// hashes and advances the state object's canonical version.
+    Canonical,
 }
 
-impl AbilityClass {
-    /// Lowercase wire form, mirroring the serde rename. Pulled out
-    /// as a method so non-serde call sites (descriptor table
-    /// rendering, log lines) can stay drift-free with the wire
-    /// shape — one rename in this enum updates every consumer.
+impl TransitionClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Operational => "operational",
+            Self::Canonical => "canonical",
+        }
+    }
+}
+
+/// Validated RFC-006 state-transition declaration.
+///
+/// `transition_id` is schema identity, not an invocation transport selector.
+/// It has the stable `<ability-qualified-name>@v<integer>` form required by
+/// RFC-006 and therefore remains meaningful across descriptor revisions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StateTransition {
+    transition_id: String,
+    transition_class: TransitionClass,
+}
+
+impl<'de> Deserialize<'de> for StateTransition {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            transition_id: String,
+            transition_class: TransitionClass,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.transition_id, wire.transition_class).map_err(serde::de::Error::custom)
+    }
+}
+
+impl StateTransition {
+    pub fn new(
+        transition_id: impl Into<String>,
+        transition_class: TransitionClass,
+    ) -> Result<Self, StateTransitionError> {
+        let transition_id = transition_id.into();
+        validate_transition_id(&transition_id)?;
+        Ok(Self {
+            transition_id,
+            transition_class,
+        })
+    }
+
+    pub fn transition_id(&self) -> &str {
+        &self.transition_id
+    }
+
+    pub fn transition_class(&self) -> TransitionClass {
+        self.transition_class
+    }
+
+    fn validate(&self) -> Result<(), StateTransitionError> {
+        validate_transition_id(&self.transition_id)
+    }
+}
+
+/// Receipt/state-machine semantics of an ability descriptor.
+///
+/// Ordinary calls emit operational invocation receipts. A state transition
+/// additionally declares the transition schema identity and whether the
+/// terminal receipt is canonical or operational. Neither variant implies a
+/// transport mode; [`AbilityDescriptor::call_mode`] is the sole transport
+/// source of truth.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "transition", rename_all = "snake_case")]
+pub enum ReceiptSemantics {
+    #[default]
+    Operational,
+    StateTransition(StateTransition),
+}
+
+impl ReceiptSemantics {
+    pub fn state_transition(
+        transition_id: impl Into<String>,
+        transition_class: TransitionClass,
+    ) -> Result<Self, StateTransitionError> {
+        StateTransition::new(transition_id, transition_class).map(Self::StateTransition)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
-            AbilityClass::Query => "query",
-            AbilityClass::Stream => "stream",
-            AbilityClass::Bidi => "bidi",
-            AbilityClass::Transition => "transition",
+            Self::Operational => "operational",
+            Self::StateTransition(_) => "state_transition",
         }
     }
 
-    /// Derive the execution class from transport hints when an
-    /// ability manifest has not declared a class explicitly.
-    pub fn from_hints(hints: &AbilityHints) -> Self {
-        if hints.bidi_only {
-            AbilityClass::Bidi
-        } else if hints.streaming_only {
-            AbilityClass::Stream
-        } else {
-            AbilityClass::Query
+    pub fn transition(&self) -> Option<&StateTransition> {
+        match self {
+            Self::Operational => None,
+            Self::StateTransition(transition) => Some(transition),
         }
+    }
+
+    fn validate(&self) -> Result<(), StateTransitionError> {
+        match self {
+            Self::Operational => Ok(()),
+            Self::StateTransition(transition) => transition.validate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateTransitionError {
+    transition_id: String,
+}
+
+impl StateTransitionError {
+    pub fn transition_id(&self) -> &str {
+        &self.transition_id
+    }
+}
+
+impl std::fmt::Display for StateTransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "transition_id {:?} must use `<ability-qualified-name>@v<positive-integer>`",
+            self.transition_id
+        )
+    }
+}
+
+impl std::error::Error for StateTransitionError {}
+
+fn validate_transition_id(transition_id: &str) -> Result<(), StateTransitionError> {
+    let valid = transition_id
+        .rsplit_once("@v")
+        .is_some_and(|(ability, version)| {
+            super::is_valid_ability_name(ability)
+                && !version.is_empty()
+                && version.bytes().all(|byte| byte.is_ascii_digit())
+                && version.parse::<u64>().is_ok_and(|version| version > 0)
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(StateTransitionError {
+            transition_id: transition_id.to_string(),
+        })
     }
 }
 
@@ -180,6 +264,16 @@ impl ScopeRule {
                 .any(|allow| ura_matches_with_path_boundary(allow, candidate_ura)),
         }
     }
+
+    fn admits_agent(&self, candidate: &str) -> bool {
+        match self {
+            ScopeRule::Any => true,
+            ScopeRule::None => false,
+            ScopeRule::OnlyMatching(allowed) => allowed
+                .iter()
+                .any(|allow| agent_policy_identity_matches(allow, candidate)),
+        }
+    }
 }
 
 /// Path-boundary URA matcher. A bare equality match passes; a
@@ -195,6 +289,31 @@ fn ura_matches_with_path_boundary(allow: &str, candidate: &str) -> bool {
         return rest.starts_with('/');
     }
     false
+}
+
+fn agent_policy_identity_matches(allowed: &str, candidate: &str) -> bool {
+    if ura_matches_with_path_boundary(allowed, candidate) {
+        return true;
+    }
+    let Ok(parsed) = crate::core::ura::parse_ura(candidate) else {
+        return false;
+    };
+    let candidate_agent = parsed
+        .agent_ids()
+        .map(|(_, agent_id)| agent_id)
+        .or_else(|| parsed.device_agent_ids().map(|(_, agent_id)| agent_id));
+    candidate_agent.is_some_and(|agent_id| allowed == agent_id)
+}
+
+fn normalized_policy_values(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut values = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
 }
 
 /// Per RFC §1.6, advisory hints about an ability's behavior. Not
@@ -215,6 +334,21 @@ pub struct AbilityHints {
     pub bidi_only: bool,
 }
 
+fn call_mode_from_hints(hints: &AbilityHints) -> CallMode {
+    if hints.bidi_only {
+        CallMode::Bidi
+    } else if hints.streaming_only {
+        CallMode::Stream
+    } else {
+        CallMode::Rpc
+    }
+}
+
+fn synchronize_transport_hints(hints: &mut AbilityHints, call_mode: CallMode) {
+    hints.streaming_only = call_mode == CallMode::Stream;
+    hints.bidi_only = call_mode == CallMode::Bidi;
+}
+
 /// Canonical locator for an ability descriptor.
 ///
 /// Descriptor names are presentation names scoped by an owner URA:
@@ -224,46 +358,22 @@ pub struct AbilityHints {
 /// on this value object instead of reconstructing `(owner, name)`
 /// tuples at each call site.
 ///
-/// Descriptors whose owner URA does not yet parse (e.g. a daemon
-/// that hasn't joined a hub, so the static catalogue is anchored on
-/// the literal `"self"` marker) still get a stable identity — a
-/// synthetic `pseudo://<owner>/<name>` shape that preserves the
-/// "distinct owner → distinct identity" invariant downstream catalog
-/// merge depends on. The synthetic form is internal-only: it never
-/// leaves this process because the wire `ability_ura` field is
-/// recomputed from owner+name and skipped when empty.
+/// The locator is always a canonical Ability URA. There is no synthetic
+/// pre-join identity: a descriptor without a canonical authority owner is
+/// not routable and therefore has no identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AbilityIdentity {
-    /// Either the canonical ability URA, or a `pseudo://...`
-    /// fallback when no canonical URA can be derived. Both shapes
-    /// are unique per `(owner, public verb)` pair.
+    /// Canonical Ability URA, unique per `(authority owner, public verb)`.
     locator: String,
 }
 
 impl AbilityIdentity {
-    /// Build an identity for `descriptor`. Returns `None` whenever
-    /// either the owner URA or the name is blank — both halves are
-    /// load-bearing for the `(owner, public verb)` uniqueness
-    /// invariant the catalog merge relies on, so a half-filled
-    /// descriptor MUST NOT mint a key. Every other case produces a
-    /// stable key, falling back to a `pseudo://` form only when the
-    /// owner URA does not yet parse (e.g. the daemon has not joined
-    /// a hub, so the static catalogue is still anchored on the
-    /// literal `"self"` marker).
+    /// Build an identity for `descriptor`. Returns `None` if public field
+    /// mutation has broken the descriptor invariant after construction.
     pub fn from_descriptor(descriptor: &AbilityDescriptor) -> Option<Self> {
-        let owner = descriptor.owner_ura.trim();
-        let name = descriptor.name.trim();
-        if owner.is_empty() || name.is_empty() {
-            return None;
-        }
-        if let Some(canonical) = descriptor.canonical_ability_ura() {
-            if crate::core::ura::parse_ura(&canonical).is_ok() {
-                return Some(Self { locator: canonical });
-            }
-        }
-        Some(Self {
-            locator: format!("pseudo://{owner}/{name}"),
-        })
+        let canonical = descriptor.canonical_ability_ura()?;
+        crate::core::ura::AbilitySelector::parse(&canonical).ok()?;
+        Some(Self { locator: canonical })
     }
 
     pub fn as_str(&self) -> &str {
@@ -299,8 +409,8 @@ pub struct AbilitySchemaSummary {
 /// caches: wire `name` is the owner-local public verb,
 /// `ability_ura` is always recomputed from `owner_ura` +
 /// public verb at serialize time and ignored on deserialize, and
-/// `class` always emits an effective value even when no explicit
-/// override was set.
+/// `call_mode` and `receipt_semantics` are emitted as orthogonal governed
+/// facts: transport selection never implies a state transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AbilityDescriptor {
     /// Callable owner-local public ability name. Device and hub abilities
@@ -331,15 +441,19 @@ pub struct AbilityDescriptor {
     /// `AbilityManifest.schema_version`, which versions the TOML file
     /// format rather than the callable interface contract.
     pub version: String,
-    /// Explicit execution-class override. `None` means "derive from
-    /// transport hints"; `Some(_)` means a builder called
-    /// `with_class(...)` and the descriptor must honor that even if
-    /// hints would have steered elsewhere. Internal — read through
-    /// [`Self::ability_class`].
-    class_override: Option<AbilityClass>,
+    /// Canonical invocation transport. This is the only field used by
+    /// descriptor hashing and routing projections; the legacy
+    /// `streaming_only` / `bidi_only` hints are synchronized presentation
+    /// flags, not a second selector.
+    call_mode: CallMode,
+    /// Receipt/state-machine classification, independent of transport.
+    receipt_semantics: ReceiptSemantics,
     pub visibility: Visibility,
     pub scope_subjects: ScopeRule,
     pub scope_agents: ScopeRule,
+    /// Canonical deny set for caller Agents. Values are sorted, deduplicated,
+    /// and evaluated before visibility or allow scope; deny always wins.
+    denied_agents: Vec<String>,
     /// Human-readable description, surfaced as the MCP tool's
     /// `description` field and on `meta.list_abilities`. Empty
     /// when unknown — the projection layer falls back to the name
@@ -358,14 +472,17 @@ pub struct AbilityDescriptor {
 }
 
 // Hand-written Serialize / Deserialize for AbilityDescriptor:
-// the wire shape is a flat object with `ability_ura` and `class`
+// the wire shape is a flat object with `ability_ura`, `call_mode`, and
+// `receipt_semantics`
 // as fields, but those fields are **derived** in code, not
 // independent state. Hiding them behind a serde proxy (rather
 // than `pub` cache fields) closes the door on any call site
 // mutating them out of sync with the canonical inputs.
 impl Serialize for AbilityDescriptor {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        AbilityDescriptorWire::from_descriptor(self).serialize(serializer)
+        AbilityDescriptorWire::try_from_descriptor(self)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
     }
 }
 
@@ -381,8 +498,7 @@ impl<'de> Deserialize<'de> for AbilityDescriptor {
 /// canonical type so the on-the-wire field set stays under one
 /// source of truth: any field added here must come with an explicit
 /// projection from / to the canonical struct, which is what stops
-/// `ability_ura` and `class` from drifting back into dual-source
-/// fields.
+/// derived identity fields from drifting back into dual-source fields.
 #[derive(Serialize, Deserialize)]
 struct AbilityDescriptorWire {
     /// Owner-local public ability name. Local registry prefixes
@@ -400,17 +516,13 @@ struct AbilityDescriptorWire {
     schema_hash: String,
     #[serde(default)]
     descriptor_hash: String,
-    /// Always emitted at serialize time with the descriptor's
-    /// effective class, so consumers always see a concrete value.
-    /// On parse, an absent field becomes `None` (the descriptor's
-    /// `class_override` stays empty and `ability_class()` derives
-    /// from hints); a present field is taken as an explicit
-    /// override.
-    #[serde(default)]
-    class: Option<AbilityClass>,
+    call_mode: CallMode,
+    receipt_semantics: ReceiptSemantics,
     visibility: Visibility,
     scope_subjects: ScopeRule,
     scope_agents: ScopeRule,
+    #[serde(default)]
+    denied_agents: Vec<String>,
     #[serde(default)]
     description: String,
     #[serde(default)]
@@ -424,33 +536,38 @@ struct AbilityDescriptorWire {
 }
 
 impl AbilityDescriptorWire {
-    fn from_descriptor(d: &AbilityDescriptor) -> Self {
+    fn try_from_descriptor(d: &AbilityDescriptor) -> Result<Self, String> {
+        AbilityDescriptor::validate_owner_ura(&d.owner_ura).map_err(|error| error.to_string())?;
         let name = d.public_name();
         let ability_ura = crate::core::ura::owner_ability_ura(&d.owner_ura, &name)
             .or_else(|| d.canonical_ability_ura())
-            .unwrap_or_default();
-        // Wire always carries a concrete class. Pinned overrides
-        // pass through; unpinned descriptors emit the derived value
-        // so a remote consumer (or a re-deserialize round-trip) sees
-        // what we would have computed locally.
-        let class = Some(d.ability_class());
-        Self {
+            .ok_or_else(|| {
+                format!(
+                    "descriptor owner {:?} and name {name:?} do not derive a canonical Ability URA",
+                    d.owner_ura
+                )
+            })?;
+        crate::core::ura::AbilitySelector::parse(&ability_ura)
+            .map_err(|error| format!("invalid derived Ability URA {ability_ura:?}: {error}"))?;
+        Ok(Self {
             name,
             ability_ura,
             owner_ura: d.owner_ura.clone(),
             version: d.version.clone(),
             schema_hash: d.schema_hash_prefixed(),
             descriptor_hash: d.descriptor_hash_prefixed(),
-            class,
+            call_mode: d.call_mode,
+            receipt_semantics: d.receipt_semantics.clone(),
             visibility: d.visibility,
             scope_subjects: d.scope_subjects.clone(),
             scope_agents: d.scope_agents.clone(),
+            denied_agents: d.denied_agents.clone(),
             description: d.description.clone(),
             source: d.source.clone(),
             schema_summary: d.schema_summary.clone(),
             hints: d.hints.clone(),
             metadata: d.metadata.clone(),
-        }
+        })
     }
 
     fn try_into_descriptor(self) -> Result<AbilityDescriptor, String> {
@@ -465,16 +582,34 @@ impl AbilityDescriptorWire {
         crate::daemon::ability::descriptors::AbilityDescriptorVersion::new(version.clone())
             .map_err(|err| format!("invalid descriptor version {version:?}: {err}"))?;
 
-        // Wire `class`, when present, becomes the explicit override.
+        self.receipt_semantics
+            .validate()
+            .map_err(|err| err.to_string())?;
+        AbilityDescriptor::new(&self.name, &self.owner_ura, self.visibility)
+            .map_err(|error| error.to_string())?;
+        let normalized_denied_agents = normalized_policy_values(self.denied_agents.clone());
+        if normalized_denied_agents != self.denied_agents {
+            return Err("wire denied_agents must be sorted, deduplicated, and non-empty".into());
+        }
+        let hinted_call_mode = call_mode_from_hints(&self.hints);
+        if hinted_call_mode != self.call_mode {
+            return Err(format!(
+                "wire call_mode {:?} conflicts with transport hints (which imply {:?})",
+                self.call_mode, hinted_call_mode
+            ));
+        }
+
         // Wire identity/hash fields are independently validated below.
         let descriptor = AbilityDescriptor {
             name: self.name,
             owner_ura: self.owner_ura,
             version,
-            class_override: self.class,
+            call_mode: self.call_mode,
+            receipt_semantics: self.receipt_semantics,
             visibility: self.visibility,
             scope_subjects: self.scope_subjects,
             scope_agents: self.scope_agents,
+            denied_agents: self.denied_agents,
             description: self.description,
             source: self.source,
             schema_summary: self.schema_summary,
@@ -530,6 +665,7 @@ pub enum DescriptorError {
     EmptyName,
     UnnamespacedName,
     EmptyOwner,
+    InvalidOwnerUra { owner_ura: String },
     InvalidVersion { version: String },
 }
 
@@ -543,6 +679,10 @@ impl std::fmt::Display for DescriptorError {
             DescriptorError::EmptyOwner => {
                 write!(f, "owner_ura must not be empty")
             }
+            DescriptorError::InvalidOwnerUra { owner_ura } => write!(
+                f,
+                "owner_ura {owner_ura:?} must be a canonical Agent, Device, or Hub URA"
+            ),
             DescriptorError::InvalidVersion { version } => {
                 write!(f, "descriptor version {version:?} is not a valid semver")
             }
@@ -571,10 +711,10 @@ impl AbilityDescriptor {
         if owner_ura.trim().is_empty() {
             return Err(DescriptorError::EmptyOwner);
         }
+        Self::validate_owner_ura(&owner_ura)?;
         if !name.contains('.') {
             let agent_owned = crate::core::ura::parse_ura(&owner_ura)
-                .map(|parsed| parsed.kind == crate::core::ura::URAKind::Agent)
-                .unwrap_or(false);
+                .is_ok_and(|parsed| parsed.kind == crate::core::ura::URAKind::Agent);
             if !agent_owned {
                 return Err(DescriptorError::UnnamespacedName);
             }
@@ -583,18 +723,107 @@ impl AbilityDescriptor {
             name,
             owner_ura,
             version: default_descriptor_version(),
-            class_override: None,
+            call_mode: CallMode::Rpc,
+            receipt_semantics: ReceiptSemantics::Operational,
             visibility,
             // Sensible defaults for SCOPED's two axes: any caller
             // from any subject. Builders narrow as needed.
             scope_subjects: ScopeRule::Any,
             scope_agents: ScopeRule::Any,
+            denied_agents: Vec::new(),
             description: String::new(),
             source: String::new(),
             schema_summary: AbilitySchemaSummary::default(),
             hints: AbilityHints::default(),
             metadata: HashMap::new(),
         })
+    }
+
+    /// Validate the authority root that owns an ability descriptor.
+    ///
+    /// User, Ability, Resource, legacy `self`, and ad-hoc URA schemes are not
+    /// ability-publishing authorities. Comparing against the Axon builder's
+    /// reconstruction also prevents a merely parseable non-canonical spelling
+    /// from becoming a second locator for the same authority.
+    pub fn validate_owner_ura(owner_ura: &str) -> Result<(), DescriptorError> {
+        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|_| {
+            DescriptorError::InvalidOwnerUra {
+                owner_ura: owner_ura.to_string(),
+            }
+        })?;
+        let canonical = match parsed.kind {
+            crate::core::ura::URAKind::Agent => parsed
+                .device_agent_ids()
+                .map(|(device_id, agent_id)| {
+                    crate::core::ura::device_agent_ura(&parsed.realm, device_id, agent_id)
+                })
+                .or_else(|| {
+                    parsed.agent_ids().map(|(user_id, agent_id)| {
+                        crate::core::ura::agent_ura(&parsed.realm, user_id, agent_id)
+                    })
+                }),
+            crate::core::ura::URAKind::Device => parsed
+                .device_id()
+                .map(|device_id| crate::core::ura::device_ura(&parsed.realm, device_id)),
+            crate::core::ura::URAKind::Hub => Some(crate::core::ura::hub_ura(&parsed.realm)),
+            _ => None,
+        };
+        if canonical.as_deref() == Some(owner_ura) {
+            Ok(())
+        } else {
+            Err(DescriptorError::InvalidOwnerUra {
+                owner_ura: owner_ura.to_string(),
+            })
+        }
+    }
+
+    /// Normalize one daemon registry row and its optional persistence manifest
+    /// into the governed descriptor aggregate.
+    ///
+    /// A missing manifest is not interpreted as open access: the synthesized
+    /// descriptor is scoped to its owner on both caller and subject axes. A
+    /// present manifest contributes version, schemas, access allow/deny rules,
+    /// and description exactly once at this import boundary.
+    pub fn from_registry_manifest(
+        registry_ability: impl Into<String>,
+        owner_ura: impl Into<String>,
+        call_mode: CallMode,
+        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
+    ) -> Result<Self, DescriptorError> {
+        let registry_ability = registry_ability.into();
+        let owner_ura = owner_ura.into();
+        let public_name =
+            crate::core::ura::descriptor_public_ability_name(&owner_ura, &registry_ability);
+
+        let visibility = manifest
+            .map(crate::daemon::ability::manifest::AbilityManifest::access)
+            .map(|access| visibility_from_manifest(access.visibility))
+            .unwrap_or(Visibility::Scoped);
+        let mut descriptor =
+            Self::new(public_name, owner_ura.clone(), visibility)?.with_call_mode(call_mode);
+
+        match manifest {
+            Some(manifest) => {
+                let access = manifest.access();
+                descriptor = descriptor
+                    .with_version(manifest.descriptor_version())?
+                    .with_description(manifest.description())
+                    .with_input_schema(manifest.input_schema().clone())
+                    .with_scope_subjects(ScopeRule::Any)
+                    .with_scope_agents(scope_agents_from_manifest(&access))
+                    .with_denied_agents(access.deny_callers.unwrap_or_default());
+                if let Some(output_schema) = manifest.output_schema() {
+                    descriptor = descriptor.with_output_schema(output_schema.clone());
+                }
+            }
+            None => {
+                let owner_only = ScopeRule::OnlyMatching(vec![owner_ura]);
+                descriptor = descriptor
+                    .with_scope_subjects(owner_only.clone())
+                    .with_scope_agents(owner_only);
+            }
+        }
+        Ok(descriptor)
     }
 
     /// Builder: set the human-readable description in one call.
@@ -632,26 +861,62 @@ impl AbilityDescriptor {
         self
     }
 
-    /// Attach transport hints. Does **not** mutate the explicit
-    /// class override: `ability_class()` derives from hints only
-    /// when `with_class(...)` has not been called. This makes the
-    /// builder commutative in (`with_class`, `with_hints`) — call
-    /// them in any order and the result is the same.
+    /// Attach advisory hints and normalize their transport projection into
+    /// the canonical [`CallMode`]. Existing metadata producers may still
+    /// provide `streaming_only` / `bidi_only`; after construction, routing and
+    /// hashing read only [`Self::call_mode`].
     pub fn with_hints(mut self, hints: AbilityHints) -> Self {
+        self.call_mode = call_mode_from_hints(&hints);
         self.hints = hints;
         self
     }
 
-    /// Pin the execution class explicitly. Once set, later
-    /// `with_hints(...)` calls cannot silently flip it.
-    pub fn with_class(mut self, class: AbilityClass) -> Self {
-        self.class_override = Some(class);
+    /// Select the invocation transport and synchronize the presentation hints
+    /// so callers cannot observe a contradictory descriptor.
+    pub fn with_call_mode(mut self, call_mode: CallMode) -> Self {
+        self.call_mode = call_mode;
+        synchronize_transport_hints(&mut self.hints, call_mode);
+        self
+    }
+
+    /// Declare receipt/state-machine semantics without changing transport.
+    pub fn with_receipt_semantics(mut self, receipt_semantics: ReceiptSemantics) -> Self {
+        receipt_semantics
+            .validate()
+            .expect("ReceiptSemantics must be constructed with a valid transition_id");
+        self.receipt_semantics = receipt_semantics;
         self
     }
 
     pub fn with_visibility(mut self, visibility: Visibility) -> Self {
         self.visibility = visibility;
         self
+    }
+
+    /// Re-anchor this governed descriptor on another canonical owner while
+    /// preserving every non-identity facet.
+    ///
+    /// Profile projection uses this instead of reconstructing a descriptor
+    /// field-by-field. Self-referential scope entries are rebound to the new
+    /// owner; external allow/deny identities, schemas, metadata, transport,
+    /// receipt semantics, and version remain unchanged. Hashes are always
+    /// derived on demand, so the returned descriptor has the canonical hash
+    /// for its new identity and policy without a stale cache.
+    pub fn rebind_owner_ura(
+        mut self,
+        owner_ura: impl Into<String>,
+    ) -> Result<Self, DescriptorError> {
+        let owner_ura = owner_ura.into();
+        let public_name = self.public_name();
+        Self::new(public_name.clone(), owner_ura.clone(), self.visibility)?;
+
+        let previous_owner_ura = std::mem::replace(&mut self.owner_ura, owner_ura.clone());
+        self.name = public_name;
+        self.scope_subjects =
+            rebind_owner_scope_rule(self.scope_subjects, &previous_owner_ura, &owner_ura);
+        self.scope_agents =
+            rebind_owner_scope_rule(self.scope_agents, &previous_owner_ura, &owner_ura);
+        Ok(self)
     }
 
     pub fn with_scope_subjects(mut self, rule: ScopeRule) -> Self {
@@ -661,6 +926,11 @@ impl AbilityDescriptor {
 
     pub fn with_scope_agents(mut self, rule: ScopeRule) -> Self {
         self.scope_agents = rule;
+        self
+    }
+
+    pub fn with_denied_agents(mut self, denied_agents: impl IntoIterator<Item = String>) -> Self {
+        self.denied_agents = normalized_policy_values(denied_agents);
         self
     }
 
@@ -689,18 +959,22 @@ impl AbilityDescriptor {
         crate::daemon::ability::descriptors::schema_hash_for_governed_summary(&governed).0
     }
 
+    pub fn input_schema(&self) -> &Value {
+        &self.schema_summary.input
+    }
+
+    pub fn output_receipt_schema(&self) -> &Value {
+        &self.schema_summary.output_receipt_body
+    }
+
     fn governed_schema_summary(&self) -> Value {
-        let access_policy = crate::daemon::ability::descriptors::governed_access_policy_summary(
-            serde_json::to_value(self.visibility).expect("visibility serializes"),
-            governed_scope_rule_value(&self.scope_subjects),
-            governed_scope_rule_value(&self.scope_agents),
-            serde_json::json!([]),
-        );
+        let access_policy = self.governed_access_policy_summary();
         crate::daemon::ability::descriptors::governed_schema_summary(
             &self.schema_summary.input,
             &self.schema_summary.output_receipt_body,
             access_policy,
             serde_json::to_value(&self.hints).expect("ability hints serialize"),
+            serde_json::to_value(&self.receipt_semantics).expect("receipt semantics serialize"),
         )
     }
 
@@ -708,20 +982,38 @@ impl AbilityDescriptor {
         crate::daemon::ability::descriptors::SchemaHash(self.schema_hash_bytes()).prefixed_hex()
     }
 
+    /// Canonical governed access-policy projection used by schema hashing,
+    /// authority binding, and diagnostics. Callers receive a value snapshot;
+    /// no mutable policy cache exists outside the descriptor.
+    pub fn governed_access_policy_summary(&self) -> Value {
+        crate::daemon::ability::descriptors::governed_access_policy_summary(
+            serde_json::to_value(self.visibility).expect("visibility serializes"),
+            governed_scope_rule_value(&self.scope_subjects),
+            governed_scope_rule_value(&self.scope_agents),
+            serde_json::to_value(&self.denied_agents).expect("denied_agents serialize"),
+        )
+    }
+
+    pub fn access_policy_hash_bytes(&self) -> [u8; 32] {
+        let canonical = crate::daemon::ability::descriptors::canonical_json_bytes(
+            &self.governed_access_policy_summary(),
+        );
+        Sha256::digest(canonical).into()
+    }
+
+    pub fn access_policy_hash_prefixed(&self) -> String {
+        format!("sha256:{}", hex::encode(self.access_policy_hash_bytes()))
+    }
+
     pub fn descriptor_hash_bytes(&self) -> [u8; 32] {
-        let call_mode = match self.ability_class() {
-            AbilityClass::Stream => crate::daemon::ability::CallMode::Stream,
-            AbilityClass::Bidi => crate::daemon::ability::CallMode::Bidi,
-            AbilityClass::Query | AbilityClass::Transition => crate::daemon::ability::CallMode::Rpc,
-        };
         let ability_ura = self
             .canonical_ability_ura()
-            .unwrap_or_else(|| self.public_name());
+            .expect("validated AbilityDescriptor must have a canonical Ability URA");
         crate::daemon::ability::descriptors::descriptor_hash_for_ability_ura_parts(
             &ability_ura,
             &self.public_name(),
             &self.version,
-            call_mode,
+            self.call_mode,
             crate::daemon::ability::descriptors::SchemaHash(self.schema_hash_bytes()),
         )
         .0
@@ -736,20 +1028,16 @@ impl AbilityDescriptor {
         AbilityIdentity::from_descriptor(self)
     }
 
-    /// Effective execution shape. An explicit `with_class(...)` wins;
-    /// otherwise the class is derived from transport hints. Callers
-    /// that need to know whether the class was pinned can use
-    /// [`Self::class_was_pinned`] instead.
-    pub fn ability_class(&self) -> AbilityClass {
-        self.class_override
-            .unwrap_or_else(|| AbilityClass::from_hints(&self.hints))
+    pub fn call_mode(&self) -> CallMode {
+        self.call_mode
     }
 
-    /// `true` iff a builder pinned the class via `with_class(...)`.
-    /// Mostly useful for tests and for downstream tooling that must
-    /// distinguish "derived from hints" from "operator-asserted".
-    pub fn class_was_pinned(&self) -> bool {
-        self.class_override.is_some()
+    pub fn receipt_semantics(&self) -> &ReceiptSemantics {
+        &self.receipt_semantics
+    }
+
+    pub fn denied_agents(&self) -> &[String] {
+        &self.denied_agents
     }
 
     /// Per RFC §1.6, decide whether this descriptor should be
@@ -758,10 +1046,18 @@ impl AbilityDescriptor {
     ///
     /// Centralised so a future caller cannot drift the rule.
     pub fn is_visible_to(&self, caller_ura: &str, subject_ura: &str) -> bool {
+        if self
+            .denied_agents
+            .iter()
+            .any(|denied| agent_policy_identity_matches(denied, caller_ura))
+        {
+            return false;
+        }
         match self.visibility {
             Visibility::Public => true,
             Visibility::Scoped => {
-                self.scope_subjects.admits(subject_ura) && self.scope_agents.admits(caller_ura)
+                self.scope_subjects.admits(subject_ura)
+                    && self.scope_agents.admits_agent(caller_ura)
             }
             Visibility::Private => {
                 // Owner's own signing authority can list — that's
@@ -773,6 +1069,50 @@ impl AbilityDescriptor {
                 caller_ura == self.owner_ura || subject_ura == self.owner_ura
             }
         }
+    }
+}
+
+fn visibility_from_manifest(
+    visibility: crate::daemon::ability::manifest::ManifestAccessScope,
+) -> Visibility {
+    match visibility {
+        crate::daemon::ability::manifest::ManifestAccessScope::Selfish => Visibility::Private,
+        crate::daemon::ability::manifest::ManifestAccessScope::Device => Visibility::Scoped,
+        crate::daemon::ability::manifest::ManifestAccessScope::Public => Visibility::Public,
+    }
+}
+
+fn rebind_owner_scope_rule(
+    rule: ScopeRule,
+    previous_owner_ura: &str,
+    owner_ura: &str,
+) -> ScopeRule {
+    let ScopeRule::OnlyMatching(values) = rule else {
+        return rule;
+    };
+    ScopeRule::OnlyMatching(
+        values
+            .into_iter()
+            .map(|value| {
+                if value == previous_owner_ura {
+                    return owner_ura.to_string();
+                }
+                crate::core::ura::public_ability_name_from_ability_ura(previous_owner_ura, &value)
+                    .and_then(|name| crate::core::ura::owner_ability_ura(owner_ura, &name))
+                    .unwrap_or(value)
+            })
+            .collect(),
+    )
+}
+
+fn scope_agents_from_manifest(
+    access: &crate::daemon::ability::manifest::AccessPolicy,
+) -> ScopeRule {
+    let allowed = normalized_policy_values(access.allow_callers.clone().unwrap_or_default());
+    if allowed.is_empty() {
+        ScopeRule::Any
+    } else {
+        ScopeRule::OnlyMatching(allowed)
     }
 }
 
@@ -801,6 +1141,8 @@ fn sorted_scope_values(values: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    const DEVICE_OWNER: &str = "easynet:///r/acme/device/dev-1";
+
     fn must(name: &str, owner: &str, vis: Visibility) -> AbilityDescriptor {
         AbilityDescriptor::new(name, owner, vis).expect("descriptor must construct")
     }
@@ -808,11 +1150,11 @@ mod tests {
     #[test]
     fn descriptor_constructor_rejects_empty_name() {
         assert_eq!(
-            AbilityDescriptor::new("", "u", Visibility::Public).unwrap_err(),
+            AbilityDescriptor::new("", DEVICE_OWNER, Visibility::Public).unwrap_err(),
             DescriptorError::EmptyName,
         );
         assert_eq!(
-            AbilityDescriptor::new("   ", "u", Visibility::Public).unwrap_err(),
+            AbilityDescriptor::new("   ", DEVICE_OWNER, Visibility::Public).unwrap_err(),
             DescriptorError::EmptyName,
         );
     }
@@ -820,7 +1162,7 @@ mod tests {
     #[test]
     fn descriptor_constructor_rejects_unnamespaced_name() {
         assert_eq!(
-            AbilityDescriptor::new("nodot", "u", Visibility::Public).unwrap_err(),
+            AbilityDescriptor::new("nodot", DEVICE_OWNER, Visibility::Public).unwrap_err(),
             DescriptorError::UnnamespacedName,
         );
     }
@@ -830,6 +1172,102 @@ mod tests {
         assert_eq!(
             AbilityDescriptor::new("a.b", "", Visibility::Public).unwrap_err(),
             DescriptorError::EmptyOwner,
+        );
+    }
+
+    #[test]
+    fn descriptor_constructor_rejects_non_authority_and_legacy_owner_locators() {
+        for owner_ura in [
+            "self",
+            "agent://claude",
+            "easynet:///r/acme/user/alice",
+            "easynet:///r/acme/ability/device.dev-1.fs.read",
+            "easynet:///r/acme/resource/device.dev-1/fs/file",
+        ] {
+            assert_eq!(
+                AbilityDescriptor::new("fs.read", owner_ura, Visibility::Public).unwrap_err(),
+                DescriptorError::InvalidOwnerUra {
+                    owner_ura: owner_ura.to_string()
+                },
+                "owner {owner_ura:?} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn owner_rebind_preserves_governed_facets_and_rebinds_self_scope() {
+        let previous_owner = "easynet:///r/acme/device/dev-a";
+        let owner = "easynet:///r/acme/device/dev-b";
+        let previous_ability =
+            crate::core::ura::owner_ability_ura(previous_owner, "fs.read").unwrap();
+        let external = "easynet:///r/acme/agent/user.external".to_string();
+        let descriptor = must("fs.read", previous_owner, Visibility::Scoped)
+            .with_version("2.0.0")
+            .unwrap()
+            .with_description("Read one file")
+            .with_source("daemon:control-plane")
+            .with_input_schema(serde_json::json!({"type": "object"}))
+            .with_output_schema(serde_json::json!({"type": "string"}))
+            .with_call_mode(CallMode::Stream)
+            .with_receipt_semantics(
+                ReceiptSemantics::state_transition("fs.read@v1", TransitionClass::Operational)
+                    .unwrap(),
+            )
+            .with_scope_subjects(ScopeRule::OnlyMatching(vec![
+                previous_owner.to_string(),
+                previous_ability,
+                external.clone(),
+            ]))
+            .with_scope_agents(ScopeRule::OnlyMatching(vec![
+                previous_owner.to_string(),
+                external.clone(),
+            ]))
+            .with_denied_agents(["mallory".to_string()])
+            .with_metadata_entry("runtime", "native");
+
+        let previous_descriptor_hash = descriptor.descriptor_hash_prefixed();
+        let rebound = descriptor.rebind_owner_ura(owner).unwrap();
+
+        assert_eq!(rebound.owner_ura, owner);
+        assert_eq!(rebound.name, "fs.read");
+        assert_eq!(rebound.version, "2.0.0");
+        assert_eq!(rebound.call_mode(), CallMode::Stream);
+        assert_eq!(
+            rebound
+                .receipt_semantics()
+                .transition()
+                .unwrap()
+                .transition_id(),
+            "fs.read@v1"
+        );
+        assert_eq!(rebound.description, "Read one file");
+        assert_eq!(rebound.source, "daemon:control-plane");
+        assert_eq!(
+            rebound.input_schema(),
+            &serde_json::json!({"type": "object"})
+        );
+        assert_eq!(
+            rebound.output_receipt_schema(),
+            &serde_json::json!({"type": "string"})
+        );
+        assert!(rebound.hints.streaming_only);
+        assert_eq!(rebound.denied_agents(), &["mallory"]);
+        assert_eq!(
+            rebound.metadata.get("runtime").map(String::as_str),
+            Some("native")
+        );
+        assert!(rebound.scope_subjects.admits(owner));
+        assert!(rebound.scope_subjects.admits(&external));
+        assert!(rebound.scope_agents.admits(owner));
+        assert!(rebound.scope_agents.admits(&external));
+        assert_ne!(rebound.descriptor_hash_prefixed(), previous_descriptor_hash);
+
+        let wire = serde_json::to_value(&rebound).unwrap();
+        let round_trip: AbilityDescriptor = serde_json::from_value(wire).unwrap();
+        assert_eq!(round_trip, rebound);
+        assert_eq!(
+            round_trip.descriptor_hash_prefixed(),
+            rebound.descriptor_hash_prefixed()
         );
     }
 
@@ -851,6 +1289,102 @@ mod tests {
         assert!(d.is_visible_to(owner, "stranger"));
         assert!(d.is_visible_to("stranger", owner));
         assert!(!d.is_visible_to("stranger", "stranger"));
+    }
+
+    #[test]
+    fn denied_agents_are_canonical_and_override_visibility() {
+        let descriptor = must("agent.list", DEVICE_OWNER, Visibility::Public).with_denied_agents([
+            " mallory ".to_string(),
+            "alice".to_string(),
+            "mallory".to_string(),
+            "".to_string(),
+        ]);
+        assert_eq!(descriptor.denied_agents(), &["alice", "mallory"]);
+        assert!(!descriptor.is_visible_to("mallory", "anything"));
+        assert!(descriptor.is_visible_to("bob", "anything"));
+
+        let wire = serde_json::to_value(&descriptor).unwrap();
+        assert_eq!(
+            wire["denied_agents"],
+            serde_json::json!(["alice", "mallory"])
+        );
+    }
+
+    #[test]
+    fn denied_agent_name_matches_canonical_agent_ura() {
+        let descriptor = must("agent.list", DEVICE_OWNER, Visibility::Public)
+            .with_denied_agents(["mallory".to_string()]);
+        assert!(!descriptor.is_visible_to(
+            "easynet:///r/acme/agent/alice.mallory",
+            "easynet:///r/acme/device/dev-1"
+        ));
+    }
+
+    #[test]
+    fn policy_hash_binds_deny_rules() {
+        let base = must("agent.list", DEVICE_OWNER, Visibility::Scoped);
+        let denied = base.clone().with_denied_agents(["mallory".to_string()]);
+        assert_ne!(
+            base.access_policy_hash_bytes(),
+            denied.access_policy_hash_bytes()
+        );
+        assert_ne!(base.schema_hash_bytes(), denied.schema_hash_bytes());
+        assert_eq!(
+            denied.governed_access_policy_summary()["deny_callers"],
+            serde_json::json!(["mallory"])
+        );
+    }
+
+    #[test]
+    fn missing_manifest_normalizes_to_owner_only_scope() {
+        let owner = "easynet:///r/acme/device/dev-1";
+        let descriptor =
+            AbilityDescriptor::from_registry_manifest("fs.read", owner, CallMode::Rpc, None)
+                .unwrap();
+        assert_eq!(descriptor.visibility, Visibility::Scoped);
+        assert_eq!(descriptor.call_mode(), CallMode::Rpc);
+        assert!(descriptor.is_visible_to(owner, owner));
+        assert!(!descriptor.is_visible_to("easynet:///r/acme/agent/alice", owner));
+        assert!(!descriptor.is_visible_to(owner, "easynet:///r/acme/resource/other"));
+    }
+
+    #[test]
+    fn manifest_normalization_projects_schema_mode_and_access_once() {
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+            "quote",
+            "emit a quote",
+            serde_json::json!({"type":"object","required":["topic"]}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.0.0")
+        .unwrap()
+        .with_output_schema(serde_json::json!({"type":"object"}))
+        .unwrap()
+        .with_access(crate::daemon::ability::manifest::AccessPolicy {
+            visibility: crate::daemon::ability::manifest::ManifestAccessScope::Public,
+            allow_callers: Some(vec!["bob".into(), " alice ".into(), "bob".into()]),
+            deny_callers: Some(vec!["mallory".into(), " mallory ".into()]),
+        })
+        .unwrap();
+        let descriptor = AbilityDescriptor::from_registry_manifest(
+            "mentor.quote",
+            "easynet:///r/acme/agent/alice.mentor",
+            CallMode::Stream,
+            Some(&manifest),
+        )
+        .unwrap();
+
+        assert_eq!(descriptor.public_name(), "quote");
+        assert_eq!(descriptor.version, "2.0.0");
+        assert_eq!(descriptor.call_mode(), CallMode::Stream);
+        assert_eq!(descriptor.description, "emit a quote");
+        assert_eq!(descriptor.denied_agents(), &["mallory"]);
+        assert_eq!(
+            descriptor.scope_agents,
+            ScopeRule::OnlyMatching(vec!["alice".into(), "bob".into()])
+        );
+        assert!(descriptor.is_visible_to("easynet:///r/acme/agent/alice.bob", "any-subject"));
+        assert!(!descriptor.is_visible_to("easynet:///r/acme/agent/alice.mallory", "any-subject"));
     }
 
     #[test]
@@ -933,9 +1467,7 @@ mod tests {
     fn identity_rejects_half_filled_descriptor() {
         // The constructor enforces non-empty name + owner, but a
         // caller that mutates the struct after construction must not
-        // be able to mint a ghost identity (`pseudo://owner/` or
-        // `pseudo:///name`) that the catalog dedup would treat as
-        // unique-per-blank. Both halves are load-bearing for the
+        // be able to mint a ghost identity. Both halves are load-bearing for the
         // `(owner, public verb)` uniqueness invariant — either being
         // blank means there is nothing to identify.
         let mut blank_name = must(
@@ -1036,56 +1568,77 @@ mod tests {
     }
 
     #[test]
-    fn ability_class_is_derived_from_transport_hints() {
-        let query = must(
+    fn call_mode_is_canonicalized_from_transport_hints() {
+        let rpc = must(
             "agent.list",
             "easynet:///r/acme/device/dev-1",
             Visibility::Scoped,
         );
-        assert_eq!(query.ability_class(), AbilityClass::Query);
-        assert!(!query.class_was_pinned());
+        assert_eq!(rpc.call_mode(), CallMode::Rpc);
 
-        let stream = query.clone().with_hints(AbilityHints {
+        let stream = rpc.clone().with_hints(AbilityHints {
             streaming_only: true,
             ..Default::default()
         });
-        assert_eq!(stream.ability_class(), AbilityClass::Stream);
-        assert!(!stream.class_was_pinned());
+        assert_eq!(stream.call_mode(), CallMode::Stream);
 
-        let bidi = query.clone().with_hints(AbilityHints {
+        let bidi = rpc.with_hints(AbilityHints {
             streaming_only: true,
             bidi_only: true,
             ..Default::default()
         });
-        assert_eq!(bidi.ability_class(), AbilityClass::Bidi);
-        assert!(!bidi.class_was_pinned());
+        assert_eq!(bidi.call_mode(), CallMode::Bidi);
+    }
 
-        let transition = query.with_class(AbilityClass::Transition);
-        assert_eq!(transition.ability_class(), AbilityClass::Transition);
-        assert!(transition.class_was_pinned());
-        // Hints arriving AFTER an explicit override do not flip the
-        // pinned class — this is the regression the audit caught.
-        let transition_after_hints = transition.with_hints(AbilityHints {
-            streaming_only: true,
-            ..Default::default()
-        });
+    #[test]
+    fn state_transition_semantics_are_independent_of_call_mode() {
+        let transition =
+            ReceiptSemantics::state_transition("page.publish@v2", TransitionClass::Canonical)
+                .unwrap();
+        let descriptor = must(
+            "page.publish",
+            "easynet:///r/acme/agent/alice.pages",
+            Visibility::Scoped,
+        )
+        .with_call_mode(CallMode::Stream)
+        .with_receipt_semantics(transition);
+
+        assert_eq!(descriptor.call_mode(), CallMode::Stream);
         assert_eq!(
-            transition_after_hints.ability_class(),
-            AbilityClass::Transition,
-            "with_hints must not silently overwrite a class pinned by with_class"
+            descriptor
+                .receipt_semantics()
+                .transition()
+                .unwrap()
+                .transition_id(),
+            "page.publish@v2"
         );
+        assert_eq!(
+            descriptor
+                .receipt_semantics()
+                .transition()
+                .unwrap()
+                .transition_class(),
+            TransitionClass::Canonical
+        );
+        assert!(descriptor.hints.streaming_only);
+        assert!(!descriptor.hints.bidi_only);
+    }
+
+    #[test]
+    fn transition_id_is_validated_at_construction() {
+        let error = ReceiptSemantics::state_transition(
+            "page.publish@not-a-version",
+            TransitionClass::Canonical,
+        )
+        .unwrap_err();
+        assert_eq!(error.transition_id(), "page.publish@not-a-version");
     }
 
     #[test]
     fn descriptor_round_trips_through_serde() {
-        // Wire round-trip equivalence: serialize → deserialize →
-        // serialize again must produce byte-identical JSON. We assert
-        // wire-equivalence (not full struct equality) because the
-        // wire `class` field cannot distinguish an explicit override
-        // of `Query` from "no override + derived Query", so the
-        // `class_override` internal field is intentionally one-way
-        // lossy across the wire. Every other field round-trips
-        // exactly.
+        // Wire round-trip equivalence: serialize → deserialize → serialize
+        // again must produce byte-identical JSON. Call mode and receipt
+        // semantics are concrete fields, so the full aggregate round-trips.
         let d = must(
             "skill.alive-video",
             "easynet:///r/acme/agent/alice.claude",
@@ -1110,12 +1663,14 @@ mod tests {
         assert_eq!(back.visibility, d.visibility);
         assert_eq!(back.scope_subjects, d.scope_subjects);
         assert_eq!(back.scope_agents, d.scope_agents);
+        assert_eq!(back.denied_agents, d.denied_agents);
         assert_eq!(back.description, d.description);
         assert_eq!(back.source, d.source);
         assert_eq!(back.schema_summary, d.schema_summary);
         assert_eq!(back.hints, d.hints);
         assert_eq!(back.metadata, d.metadata);
-        assert_eq!(back.ability_class(), d.ability_class());
+        assert_eq!(back.call_mode(), d.call_mode());
+        assert_eq!(back.receipt_semantics(), d.receipt_semantics());
         assert_eq!(back.canonical_ability_ura(), d.canonical_ability_ura());
     }
 
@@ -1168,6 +1723,24 @@ mod tests {
         assert!(
             descriptor_err.to_string().contains("wire descriptor_hash"),
             "{descriptor_err}"
+        );
+    }
+
+    #[test]
+    fn descriptor_wire_rejects_non_canonical_owner_even_without_identity_fields() {
+        let descriptor = must("fs.read", DEVICE_OWNER, Visibility::Scoped);
+        let mut json = serde_json::to_value(descriptor).unwrap();
+        json["owner_ura"] = serde_json::json!("self");
+        json.as_object_mut().unwrap().remove("ability_ura");
+        json.as_object_mut().unwrap().remove("schema_hash");
+        json.as_object_mut().unwrap().remove("descriptor_hash");
+
+        let error = serde_json::from_value::<AbilityDescriptor>(json).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("canonical Agent, Device, or Hub URA"),
+            "{error}"
         );
     }
 
@@ -1232,9 +1805,7 @@ mod tests {
     }
 
     #[test]
-    fn wire_class_field_is_always_present_with_effective_value() {
-        // Unpinned + streaming hints → emit "stream" on the wire even
-        // though `class_override` is None internally.
+    fn wire_separates_call_mode_from_receipt_semantics() {
         let d = must(
             "chat",
             "easynet:///r/acme/agent/alice.claude",
@@ -1245,8 +1816,9 @@ mod tests {
             ..Default::default()
         });
         let json = serde_json::to_value(&d).unwrap();
-        assert_eq!(json["class"], serde_json::json!("stream"));
-        assert!(!d.class_was_pinned());
+        assert_eq!(json["call_mode"], serde_json::json!("stream"));
+        assert_eq!(json["receipt_semantics"]["kind"], "operational");
+        assert!(json.get("class").is_none());
     }
 
     #[test]
@@ -1261,8 +1833,8 @@ mod tests {
             ..Default::default()
         });
 
-        assert_eq!(bidi.ability_class(), AbilityClass::Bidi);
-        assert_eq!(serde_json::to_value(&bidi).unwrap()["class"], "bidi");
+        assert_eq!(bidi.call_mode(), CallMode::Bidi);
+        assert_eq!(serde_json::to_value(&bidi).unwrap()["call_mode"], "bidi");
         assert_ne!(
             stream.descriptor_hash_prefixed(),
             bidi.descriptor_hash_prefixed(),
@@ -1271,30 +1843,22 @@ mod tests {
     }
 
     #[test]
-    fn with_class_and_with_hints_are_commutative() {
+    fn with_call_mode_synchronizes_transport_hints() {
         let owner = "easynet:///r/acme/device/dev-1";
-        // Order A: pin class, then add streaming hints.
-        let a = must("agent.list", owner, Visibility::Scoped)
-            .with_class(AbilityClass::Query)
-            .with_hints(AbilityHints {
-                streaming_only: true,
-                ..Default::default()
-            });
-        // Order B: same calls reversed.
-        let b = must("agent.list", owner, Visibility::Scoped)
+        let descriptor = must("agent.list", owner, Visibility::Scoped)
             .with_hints(AbilityHints {
                 streaming_only: true,
                 ..Default::default()
             })
-            .with_class(AbilityClass::Query);
-        assert_eq!(a.ability_class(), AbilityClass::Query);
-        assert_eq!(b.ability_class(), AbilityClass::Query);
-        assert_eq!(a, b);
+            .with_call_mode(CallMode::Bidi);
+        assert_eq!(descriptor.call_mode(), CallMode::Bidi);
+        assert!(!descriptor.hints.streaming_only);
+        assert!(descriptor.hints.bidi_only);
     }
 
     #[test]
     fn visibility_serde_uses_uppercase_form() {
-        let d = must("a.b", "u", Visibility::Public);
+        let d = must("a.b", DEVICE_OWNER, Visibility::Public);
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(json["visibility"], "PUBLIC");
     }

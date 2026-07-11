@@ -2,17 +2,13 @@
 // =========================
 //
 // File: src/daemon/invocation/hub_resolver.rs
-// Description: Resolves a cross-realm `target_realm` (plus the full
-//              `target_ura` for directory lookups) to a peer hub
-//              endpoint that `forward_invoke` should dial. Owns the
-//              fallback chain that used to live inline in
-//              `DaemonInvocationService::dispatch_federation_forward_invoke`.
+// Description: Resolves a remote execution target to the peer hub endpoint
+//              used by canonical `Invocation::Invoke` transport.
 //
 // Why this module exists
 // ----------------------
-// `dispatch_federation_forward_invoke` is a transport-layer entry
-// point — its job is to admit the caller, sign the peer envelope,
-// dial, and unwrap the peer's reply. *How* the daemon picks the
+// Canonical invocation dispatch admits the caller, signs the peer envelope,
+// and dials the selected peer. *How* the daemon picks the
 // peer hub URA is a routing policy, and a routing policy that has
 // grown from one source (operator-curated `federated_peers`) to two
 // (operator-curated map + observed federation directory) and will

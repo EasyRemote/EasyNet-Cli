@@ -37,12 +37,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 
-use crate::daemon::ability::dispatch::StreamSource;
-use crate::daemon::ability::manifest::HostStreamExec;
-use crate::protocol::host_stream_contract::{
+mod contract;
+
+use self::contract::{
     decode_host_frame, verify_terminal, HostFrame, HostStreamFailure, HostStreamFailureKind,
     HostStreamHashState,
 };
+use crate::daemon::ability::dispatch::StreamSource;
+use crate::daemon::ability::manifest::HostStreamExec;
 
 /// Broadcast depth. Frames are small JSON values; a generous buffer
 /// absorbs a slow consumer without forcing the reader task to block on

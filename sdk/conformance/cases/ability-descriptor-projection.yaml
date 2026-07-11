@@ -1,0 +1,13 @@
+id: ability/descriptor_projection
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Language SDKs project governed AbilityDescriptor facts without inferring schema, call mode, authority, or visibility from an ability name.
+steps:
+  - action: project_governed_ability_descriptor
+  - action: reject_name_based_descriptor_inference
+expect:
+  result: canonical_descriptor_projection
+  parallel_manifest_model: false
+  inferred_governance: false

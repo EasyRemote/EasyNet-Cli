@@ -95,7 +95,7 @@ fn hub_mode_registry_satisfies_hub_local_registry_slice() {
     assert!(report.is_conformant(), "{}", report.panic_message());
 }
 
-/// The daemon runtime-admin surface (`session.open`, `runtime.invoke_remote`
+/// The daemon runtime-admin surface (`session.open`, `canonical session dispatch`
 /// bidi carriers + `runtime.bootstrap_self_identity`) must be installed.
 /// The installed set is derived from the production dispatcher constant via
 /// `from_daemon_surface`, so this gate cannot pass on a hand-mirrored list.

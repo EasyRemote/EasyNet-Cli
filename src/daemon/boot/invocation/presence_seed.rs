@@ -87,7 +87,7 @@ fn seed_device_mode_self_presence(daemon_ura: Option<&str>, presence: &Arc<Prese
 /// emits a no-op no matter what `EASYNET_DEMO_PRESENCE_SEED`
 /// holds. The seed registers a no-op `DispatchSender` under
 /// each comma-separated URA in the env var so cross-hub
-/// `forward_invoke` targeting that URA survives the presence
+/// `canonical_invoke` targeting that URA survives the presence
 /// registry lookup gate without a real device pair flow.
 ///
 /// Channel capacity 8 mirrors the `session.open` accept

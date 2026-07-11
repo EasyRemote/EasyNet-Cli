@@ -6,8 +6,8 @@
 //              makes after frame-0 transport policy (commit-plan-2
 //              Axis E / E2, final dispatcher):
 //
-//                * `runtime.invoke_remote` — hub-side RFC-005 per-call
-//                  dispatch over a device's session reverse channel
+//                * typed `DispatchCall` / `ReverseDispatchCall` relay over a
+//                  device's session reverse channel
 //                * `session.open` — device session accept loop +
 //                  the hub-side session-frame request dispatcher
 //                * plugin/builtin bidi wire abilities — local PTY/
@@ -17,9 +17,8 @@
 //              terminal/admission receipt builders, the local bidi
 //              frame mappers, and the session/local down-stream types.
 //
-//              Composes `UnaryDispatcher` for the self-targeted
-//              invoke_remote fast path and the forward-route
-//              resolution it shares with the unary plane.
+//              Composes `UnaryDispatcher` so bidi and unary entry points use
+//              the same admission and route-selection policy.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -34,7 +33,6 @@ use std::future::Future;
 
 use futures::Stream;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tonic::{Response, Status, Streaming};
 
@@ -48,18 +46,14 @@ use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::admission::target_gate::{
-    route_negative_message, route_negative_status, route_owner_mismatch_message,
-    route_profile_blocked_message, route_profile_blocked_status, route_selected_remote_host_status,
+    route_negative_status, route_profile_blocked_status, route_selected_remote_host_status,
     selected_host_unavailable_message, signed_envelope_for_selected_route, TargetGate,
 };
-use crate::daemon::invocation::bidi::invoke_remote_initiator::{
-    build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
-    build_invoke_remote_terminal_frame, call_id_hex, decode_inner_payload,
-    invoke_remote_inband_error_response, InnerPayload, InvokeRemoteDispatchFrameRequest,
-    InvokeRemoteDown, InvokeRemoteUp, RequestOutcome, SessionContentEnvelope, SessionDispatch,
-    SessionRequestError, ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
-};
 use crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN;
+use crate::daemon::invocation::bidi::session_wire::{
+    build_carrier_v1_dispatch_frame, call_id_hex, RequestOutcome, SessionContentEnvelope,
+    SessionDispatch, SessionRequestError,
+};
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, IdentityPlane, RuntimePlane, SessionPlane,
 };
@@ -67,17 +61,13 @@ use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility
 use crate::daemon::invocation::dispatch::federation_wrappers;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
-    ABILITY_FEDERATION_FORWARD_INVOKE,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
     SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
-use crate::daemon::invocation::receipts::ledger_projection::ledger_record_from_remote_receipt;
-use crate::daemon::invocation::routing::route_resolver::{
-    ForwardInvokeRouteSelection, SelectedInvokeRoute,
-};
+use crate::daemon::invocation::routing::route_resolver::SelectedInvokeRoute;
 use easynet_axon::invocation::{AbilityFrame, BidiInputFrame};
 
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
@@ -97,8 +87,7 @@ use crate::daemon::trust::anchor::RealmTrustAnchor;
 /// arms in `dispatch` reference the same constants, so a baseline row can
 /// never claim an `AxonRuntimeAdmin` ability the dispatcher does not
 /// actually install (SPEC §7.1 notes 6/7, §7.3 item 7, §9.1 item 13).
-pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[&str] =
-    &[ABILITY_INVOKE_REMOTE, ABILITY_SESSION_OPEN];
+pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[&str] = &[ABILITY_SESSION_OPEN];
 
 fn local_bidi_wire_kind_for(
     registry: &crate::daemon::ability::wire::AbilityWireRegistry,
@@ -194,7 +183,6 @@ impl BidiDispatcher {
         up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
         match ability_name {
-            ABILITY_INVOKE_REMOTE => self.dispatch_invoke_remote(envelope_open, up).await,
             ABILITY_SESSION_OPEN => {
                 let caller_ura = envelope_open
                     .envelope
@@ -214,8 +202,8 @@ impl BidiDispatcher {
             other if local_is_bidi_wire_ability(&self.runtime.ability_wire, other) => {
                 if let Some(target_ura) = remote_bidi_target_ura(envelope_open) {
                     if !self.gate.matches_self_target_ura(&target_ura).await {
-                        // RFC-005 resolve-first gate. Mirror the
-                        // `runtime.invoke_remote` resolver call site:
+                        // Apply the same resolve-first gate as canonical
+                        // unary dispatch:
                         // prove the wire ability exists on the target
                         // and that the selected route is
                         // authoritative-local-or-better BEFORE bridging
@@ -400,7 +388,7 @@ impl BidiDispatcher {
                 // Full = device is slow, not dead: keep its session,
                 // fail only this call as retryable backpressure.
                 return Err(Status::resource_exhausted(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON,
+                    crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_BUSY_REASON,
                 ));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
@@ -410,7 +398,7 @@ impl BidiDispatcher {
                     crate::daemon::invocation::bidi::state::presence::OfflineReason::StreamClosed,
                 );
                 return Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                    crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_OFFLINE_REASON,
                 ));
             }
         }
@@ -591,7 +579,7 @@ impl BidiDispatcher {
                         // Full = device is slow, not dead: keep its
                         // session, fail only this call as retryable.
                         let reason =
-                            federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON.to_string();
+                            crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_BUSY_REASON.to_string();
                         let _ = pending_for_up
                             .finish(
                                 call_id,
@@ -607,7 +595,7 @@ impl BidiDispatcher {
                             crate::daemon::invocation::bidi::state::presence::OfflineReason::StreamClosed,
                         );
                         let reason =
-                            federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON.to_string();
+                            crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_OFFLINE_REASON.to_string();
                         let _ = pending_for_up
                             .finish(
                                 call_id,
@@ -804,7 +792,7 @@ impl BidiDispatcher {
         let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
 
         // Down-stream: handler-emitted JSON → InvokeBidiDown frames.
-        // Capacity 16 mirrors `INVOKE_REMOTE_DISPATCH_CAPACITY`.
+        // Capacity 16 bounds per-session dispatch backpressure.
         let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
 
         let down_tx_for_handler = down_tx.clone();
@@ -923,438 +911,6 @@ impl BidiDispatcher {
         ))
     }
 
-    /// Hub-side `runtime.invoke_remote` handler. Drives the RFC-005
-    /// per-call dispatch flow:
-    ///
-    /// 1. Parse the frame-0 `EnvelopeOpen.initial_args` as
-    ///    `InvokeRemoteUp::Request { subject_device, ability_ura, args }`
-    /// 2. Resolve `ability_ura` through `namespace.resolve` and
-    ///    require an authoritative local-or-better `FinalRoute`
-    /// 3. Verify the selected owner still matches the request
-    ///    target. `subject_device` is a consistency check, not a
-    ///    route source.
-    /// 4. Verify delegation against the selected callee and dispatch
-    ///    name.
-    /// 5. If the selected execution host is this daemon, dispatch
-    ///    directly through Axon `LocalRuntime`.
-    /// 6. Otherwise, look up the selected execution host in
-    ///    `PresenceRegistry`, register a pending-reply slot, and push
-    ///    a `DispatchDown` frame carrying the selected callee and
-    ///    selected dispatch key.
-    /// 7. Return a server-stream whose frames project
-    ///    `DispatchStreamEvent` / `DispatchResult` into
-    ///    `InvokeRemoteDown`.
-    pub(crate) async fn dispatch_invoke_remote(
-        &self,
-        envelope_open: &EnvelopeOpen,
-        _up: Streaming<InvokeBidiUp>,
-    ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
-        let request: InvokeRemoteUp =
-            serde_json::from_slice(&envelope_open.initial_args).map_err(|err| {
-                Status::invalid_argument(format!(
-                    "runtime.invoke_remote: frame-0 initial_args is not valid \
-                     InvokeRemoteUp JSON: {err}"
-                ))
-            })?;
-
-        let InvokeRemoteUp::Request {
-            subject_device,
-            subject_ura,
-            ability_ura,
-            args,
-            args_content_envelope,
-            metadata,
-            origin_caller,
-        } = request;
-
-        let selected_route = match self
-            .gate
-            .route_resolver()
-            .await
-            .resolve_route(&ability_ura, "")
-        {
-            Ok(route) if route.is_authoritative_local_or_better() => route,
-            Ok(route) => {
-                return invoke_remote_inband_error_response(route_profile_blocked_message(&route))
-            }
-            Err(failure) => {
-                return invoke_remote_inband_error_response(route_negative_message(&failure))
-            }
-        };
-        if selected_route.owner_ura != subject_device {
-            return invoke_remote_inband_error_response(route_owner_mismatch_message(
-                &selected_route.owner_ura,
-                &ability_ura,
-                &subject_device,
-            ));
-        }
-        let public_ability = selected_route.dispatch_name.clone();
-        let inner_subject = subject_ura.trim();
-        if inner_subject.is_empty() {
-            return invoke_remote_inband_error_response(
-                "runtime.invoke_remote: missing inner subject_ura".to_string(),
-            );
-        }
-        let outer_caller = envelope_open
-            .envelope
-            .as_ref()
-            .and_then(|envelope| envelope.caller.clone())
-            .ok_or_else(|| {
-                Status::invalid_argument(
-                    "runtime.invoke_remote: admitted frame-0 envelope is missing caller",
-                )
-            })?;
-        let inner_envelope = crate::daemon::invocation::ProtoEnvelope::targeted(
-            outer_caller.ura,
-            selected_route.callee_ura.clone(),
-            inner_subject,
-        )
-        .map_err(|err| {
-            Status::invalid_argument(format!(
-                "runtime.invoke_remote: invalid inner envelope: {err}"
-            ))
-        })?
-        .into_inner();
-        self.admission.verify_delegation_for_envelope(
-            &inner_envelope,
-            &public_ability,
-            &metadata,
-        )?;
-
-        // ── Phase 4: Axon-routed **self-target** dispatch ──────────
-        //
-        // If a shared `LocalRuntime` is wired AND the resolver-selected
-        // execution host names THIS daemon's own URA, route the call through
-        // the Axon bridge's descriptor-bound request path. Axon owns
-        // admission, the state machine, and ledger persistence; the bridge
-        // shim drains the handle and produces the wire-shape `(payload,
-        // error)` pair we emit in the one-shot terminal frame.
-        //
-        // **Critical guard — selected `execution_host_ura`.**
-        // Without it, this arm intercepts every call whose ability
-        // name happens to be in our local runtime — even when the
-        // caller's `subject_device` names a peer device that should
-        // get a forwarded `Dispatch` frame. The original symptom of
-        // missing this guard: the Web UI's `agent.list`
-        // request against a peer device returned THIS daemon's
-        // agents (because `agent.list` is registered in
-        // every daemon's runtime), so the agent page lit up with
-        // wrong data instead of the peer's view.
-        //
-        // Why the bridge uses the outer signed envelope:
-        // `InvokeRemoteUp::Request` does not carry a separate inner
-        // user-signed descriptor-bound envelope. The Go shim
-        // (`backend/internal/daemon_grpc/remote_routing.go:197`)
-        // decomposes the user route and re-issues the request through
-        // `runtime.invoke_remote`; this daemon therefore verifies the
-        // caller material present on the outer envelope and dispatches the
-        // resolver-selected local ability under the Axon bridge's public
-        // descriptor-bound request APIs.
-        //
-        // Self-targeted invoke_remote never goes through the pending
-        // session map. The daemon's shared
-        // Axon `LocalRuntime` is the only local execution surface; if
-        // the ability is absent, Axon returns the in-band error frame.
-        let execution_host_is_self = self
-            .gate
-            .matches_self_target_ura(&selected_route.execution_host_ura)
-            .await;
-        if selected_route
-            .dispatch_target(execution_host_is_self)
-            .is_local_runtime()
-        {
-            return self
-                .unary
-                .dispatch_self_targeted_invoke_remote(
-                    &selected_route,
-                    Some(inner_subject),
-                    &args,
-                    &metadata,
-                    origin_caller.as_ref(),
-                )
-                .await;
-        }
-
-        let pending = self.sessions.pending.as_ref().ok_or_else(|| {
-            Status::failed_precondition(
-                "runtime.invoke_remote: daemon was constructed without a \
-                 PendingDispatchMap; call DaemonInvocationService::with_pending(...) \
-                 at boot to enable cross-device invocation",
-            )
-        })?;
-
-        let (target_session_id, target_sender) = match self
-            .directory
-            .presence
-            .lookup_tracked(&selected_route.execution_host_ura)
-        {
-            Some(slot) => slot,
-            None => {
-                return invoke_remote_inband_error_response(selected_host_unavailable_message(
-                    &selected_route,
-                ));
-            }
-        };
-
-        // Register pending entry BEFORE pushing the dispatch frame —
-        // otherwise the target could reply faster than we can register
-        // and the reply would land as a no-op `complete`.
-        //
-        // Prefer the stream-aware table. It preserves unary behaviour
-        // (one Terminal event) while allowing server-stream abilities
-        // to surface zero or more Chunk events before Terminal. The
-        // unary map remains as a fallback for older boot wiring.
-        let mut stream_handle = self.sessions.pending_stream.as_ref().map(|pending_stream| {
-            pending_stream.register_pending_for(&selected_route.execution_host_ura)
-        });
-        let unary_handle = if stream_handle.is_none() {
-            Some(pending.register_pending_for(&selected_route.execution_host_ura))
-        } else {
-            None
-        };
-        let call_id = stream_handle
-            .as_ref()
-            .map(|handle| handle.call_id())
-            .or_else(|| unary_handle.as_ref().map(|handle| handle.call_id()))
-            .expect("invoke_remote registered a pending handle");
-
-        let dispatch_ability = selected_route.dispatch_key();
-        // Carrier selection (DEC-F004 rolling upgrade): a v1 device
-        // gets the canonical proto frame — the caller's EnvelopeOpen
-        // envelope forwarded verbatim inside a complete InvokeRequest.
-        // Calls carrying an origin_caller claim stay on the JSON shape
-        // until the backend submits real-user envelopes directly
-        // (T2.1b dissolves the claim into caller + caller_signature);
-        // that fallback dies with the JSON carrier.
-        let target_contract_v1 = self
-            .directory
-            .presence
-            .dispatch_contract_version(&selected_route.execution_host_ura)
-            .unwrap_or(0)
-            >= 1;
-        let dispatch_frame = if target_contract_v1 && origin_caller.is_none() {
-            build_carrier_v1_dispatch_frame(
-                call_id,
-                easynet_axon::pb::axon::v1::InvokeRequest {
-                    envelope: Some(inner_envelope),
-                    function_name: selected_route.dispatch_name.clone(),
-                    arguments: args.clone(),
-                    content_envelope: envelope_open.content_envelope.clone(),
-                    metadata: metadata.clone(),
-                    ..easynet_axon::pb::axon::v1::InvokeRequest::default()
-                },
-                false,
-            )
-        } else {
-            build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
-                call_id,
-                callee_ura: &selected_route.callee_ura,
-                subject_ura: inner_subject,
-                ability: &dispatch_ability,
-                args: &args,
-                args_content_envelope,
-                metadata,
-                origin_caller,
-            })?
-        };
-        match target_sender.try_send(Ok(dispatch_frame)) {
-            Ok(()) => {}
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                // Full = the device is slow (its session drain is
-                // behind), not dead. Keep its session and fail only
-                // this call as retryable backpressure — evicting
-                // here turned one >256-frame burst into a false
-                // offline plus a failure avalanche for every
-                // pending call (measured 2026-06-12).
-                return invoke_remote_inband_error_response(format!(
-                    "runtime.invoke_remote: selected execution host `{}` dispatch \
-                     channel full ({}); retry",
-                    selected_route.execution_host_ura,
-                    federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON,
-                ));
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                self.directory.presence.remove_if_session(
-                    &selected_route.execution_host_ura,
-                    target_session_id,
-                    OfflineReason::StreamClosed,
-                );
-                return invoke_remote_inband_error_response(format!(
-                    "runtime.invoke_remote: selected execution host `{}` receiver closed \
-                     between lookup and dispatch; removed from registry",
-                    selected_route.execution_host_ura
-                ));
-            }
-        }
-
-        // The down stream: streamed targets yield Chunk frames until
-        // the target sends a terminal Result. Unary targets naturally
-        // produce only the terminal Result, so the same bridge covers
-        // both call shapes.
-        let (down_tx, down_rx) = mpsc::channel::<Result<InvokeBidiDown, Status>>(16);
-        if let Some(mut handle) = stream_handle.take() {
-            let cancel_sender = target_sender.clone();
-            tokio::spawn(async move {
-                let mut terminal_seen = false;
-                while let Some(event) = handle.recv().await {
-                    let (frame, terminal) = match event {
-                        DispatchStreamEvent::Chunk(payload) => {
-                            let down = InvokeRemoteDown::Chunk { payload };
-                            (build_invoke_remote_terminal_frame(&down), false)
-                        }
-                        DispatchStreamEvent::Terminal(result) => {
-                            let DispatchResult {
-                                payload,
-                                error,
-                                failure,
-                                request_id,
-                                receipt: _,
-                            } = *result;
-                            let down = InvokeRemoteDown::Result {
-                                payload,
-                                error,
-                                failure,
-                                request_id,
-                            };
-                            (build_invoke_remote_terminal_frame(&down), true)
-                        }
-                    };
-                    terminal_seen = terminal_seen || terminal;
-                    if down_tx.send(frame).await.is_err() || terminal {
-                        break;
-                    }
-                }
-                if !terminal_seen {
-                    crate::support::async_bridge::discard_try_send_classify(
-                        cancel_sender.try_send(Ok(build_remote_bidi_input_dispatch_frame(
-                            call_id,
-                            &[],
-                            true,
-                        ))),
-                        "daemon_invocation",
-                        &format!("invoke_remote_stream_cancel call_id={call_id}"),
-                    );
-                }
-            });
-        } else {
-            let handle = unary_handle.expect("unary pending handle registered");
-            // Carrier-v1 receipt projection (DEC-F004 landing audit 3):
-            // the consumer side holds the dispatch context the receipt's
-            // axiom echo lacks (ability), so the hub's ledger row is
-            // written here, not in the drain.
-            let ledger_for_receipt = self.runtime.invocation_ledger.clone();
-            let ability_for_receipt = dispatch_ability.clone();
-            let dispatch_started_unix_ms = crate::daemon::federation::directory::now_unix_ms();
-            tokio::spawn(async move {
-                let frame = match handle.await_reply().await {
-                    Ok(DispatchResult {
-                        payload,
-                        error,
-                        failure,
-                        request_id,
-                        receipt,
-                    }) => {
-                        if let (Some(ledger), Some(receipt)) =
-                            (ledger_for_receipt.as_ref(), receipt.as_ref())
-                        {
-                            match ledger_record_from_remote_receipt(
-                                receipt,
-                                &ability_for_receipt,
-                                dispatch_started_unix_ms,
-                            )
-                            .and_then(|record| {
-                                ledger.put(&record).map(|()| record).map_err(Into::into)
-                            }) {
-                                Ok(record) => crate::op_event!(
-                                    component = daemon_invocation,
-                                    kind = carrier_v1_receipt_ledgered,
-                                    invocation_ura = record.invocation_ura,
-                                    state = record.state,
-                                ),
-                                Err(err) => {
-                                    let err_msg = format!("{err}");
-                                    crate::op_event!(
-                                        component = daemon_invocation,
-                                        kind = ledger_write_failed,
-                                        shape = "carrier_v1_receipt",
-                                        error = err_msg,
-                                    );
-                                }
-                            }
-                        }
-                        let down = InvokeRemoteDown::Result {
-                            payload,
-                            error,
-                            failure,
-                            request_id,
-                        };
-                        match build_invoke_remote_terminal_frame(&down) {
-                            Ok(f) => Ok(f),
-                            Err(status) => Err(status),
-                        }
-                    }
-                    Err(_recv_err) => {
-                        // Sender dropped without complete — target session
-                        // task crashed or daemon shutdown mid-call.
-                        let reason =
-                            format!("target session disconnected before reply (call_id={call_id})");
-                        let down = InvokeRemoteDown::Result {
-                            payload: Vec::new(),
-                            error: Some(reason.clone()),
-                            failure: Some(SessionFailure::from_reason(
-                                reason,
-                                "TARGET_NOT_IN_PRESENCE_REGISTRY",
-                                true,
-                            )),
-                            request_id: None,
-                        };
-                        match build_invoke_remote_terminal_frame(&down) {
-                            Ok(f) => Ok(f),
-                            Err(status) => Err(status),
-                        }
-                    }
-                };
-                let _ = down_tx.send(frame).await;
-            });
-        }
-
-        let stream = ReceiverStream::new(down_rx);
-        Ok(Response::new(
-            Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
-        ))
-    }
-
-    /// Hub-side acceptor for `session.open`. The device opens a
-    /// long-lived `InvokeBidi` against the daemon at boot and holds
-    /// the stream open for the daemon process's lifetime; this is
-    /// the canonical reverse channel through which the hub pushes
-    /// `runtime.invoke_remote` `SessionDispatch::Dispatch` frames
-    /// and the device replies with `SessionDispatch::Result` frames.
-    ///
-    /// Liveness model (spec §3): registry membership = liveness.
-    /// Inserting the device's `DispatchSender` into the
-    /// `PresenceRegistry` is the act of "device is online"; removing
-    /// it (graceful close, transport reset, send-failure backpressure
-    /// eviction) is the act of "device is offline". No periodic
-    /// heartbeat — the bidi stream IS the heartbeat.
-    ///
-    /// Flow:
-    /// 1. Build a fresh mpsc `(tx, rx)` of capacity
-    ///    `DISPATCH_CHANNEL_CAPACITY` (256, spec §3.2)
-    /// 2. Insert `tx` into PresenceRegistry under the caller URA;
-    ///    any prior session for the same URA is displaced (the
-    ///    registry emits Offline-then-Online, the displaced
-    ///    receiver's mpsc dies → its outbound stream ends, that
-    ///    device reconnects)
-    /// 3. Spawn a task draining the device's up-stream:
-    ///    each frame is parsed as `SessionDispatch::Result` and
-    ///    routed via `pending.complete(call_id, result)` if a
-    ///    `runtime.invoke_remote` caller is awaiting; on stream
-    ///    close, remove the registry entry with the appropriate
-    ///    `OfflineReason`
-    /// 4. Return the down-stream wrapping `rx` so tonic pumps every
-    ///    `DispatchFrame` (BinaryChunk-wrapped `SessionDispatch::Dispatch`)
-    ///    pushed into `tx` back to the device
     pub(crate) async fn dispatch_self_session_accept(
         &self,
         caller_ura: String,
@@ -1371,8 +927,8 @@ impl BidiDispatcher {
         let (down_tx, down_rx): (DispatchSender, _) =
             mpsc::channel::<Result<DispatchFrame, Status>>(DISPATCH_CHANNEL_CAPACITY);
 
-        // Step 1: register before spawning so a SessionDispatch::Dispatch
-        // arriving from `runtime.invoke_remote` immediately can find this
+        // Register before spawning so a canonical `DispatchCall` arriving
+        // immediately can find this
         // sender. The PresenceRegistry handles displacement (Offline +
         // Online emission ordering) under the hood; the slot remembers
         // the frame-0 carrier negotiation (DEC-F004).
@@ -1412,18 +968,14 @@ impl BidiDispatcher {
             }
         }
 
-        // Step 2: spawn the up-stream consumer. Reads device replies
-        // (SessionDispatch::Result frames) and routes them to the
-        // PendingDispatchMap so the originating runtime.invoke_remote
-        // caller wakes up.
+        // Spawn the upstream consumer. It routes typed dispatch results and
+        // remaining streaming/control replies to their correlation tables.
         let presence_for_drain = Arc::clone(&self.directory.presence);
         let pending_for_drain = self.sessions.pending.clone();
         let pending_stream_for_drain = self.sessions.pending_stream.clone();
         let caller_ura_for_drain = caller_ura.clone();
-        // PR-N6 C3: drain task needs a service handle so inbound
-        // `Request` frames can route into the same dispatch arms
-        // the unary `Invoke` RPC uses (forward_invoke today; other
-        // abilities follow as PR-N6 grows). `DaemonInvocationService`
+        // The drain task needs a service handle so reverse calls use the same
+        // dispatch policy as unary `Invoke`. `DaemonInvocationService`
         // is `Clone` over Arc/Option fields so this is cheap.
         let service_for_drain = self.clone();
         tokio::spawn(async move {
@@ -1439,9 +991,8 @@ impl BidiDispatcher {
             .await
         });
 
-        // Step 3: hand the down stream to tonic. Frames arrive in
-        // `down_tx` from runtime.invoke_remote dispatchers and from
-        // federation.forward_invoke pushers as `DispatchFrame`
+        // Hand the down stream to tonic. Frames arrive in `down_tx` as
+        // `DispatchFrame`
         // (presence_registry's newtype around `InvokeBidiDown`).
         // The tonic trait wants raw `InvokeBidiDown`, so map each
         // frame to unwrap the newtype.
@@ -2142,15 +1693,30 @@ impl Stream for SessionDownStream {
 }
 
 impl BidiDispatcher {
-    /// PR-N6 C3 hub-side handler for inbound `SessionDispatch::Request`
-    /// frames arriving on a device's `session.open` bidi. Validates
-    /// the hub-owned Ability URA, routes the derived public wrapper
-    /// ability through the same dispatch arms the unary `Invoke` RPC
-    /// consults, then maps the result into the typed `RequestOutcome`
-    /// shape.
-    ///
-    /// Spec scope: forwards `federation.forward_invoke` plus the
-    /// hosted-agent self-advertise repair pair —
+    /// Admit and route an opaque canonical invocation received through a
+    /// device-owned reverse session. The session proves transport liveness;
+    /// caller authority remains exclusively in the request envelope and is
+    /// revalidated here before any route or execution is attempted.
+    async fn dispatch_canonical_session_invoke(
+        &self,
+        request: easynet_axon::pb::axon::v1::InvokeRequest,
+    ) -> RequestOutcome {
+        if let Err(status) = self.admission.verify_invoke(&request) {
+            return map_status_to_session_request_error(status);
+        }
+        let (result, _) = self.unary.dispatch_local_rpc_selected_route(&request).await;
+        match result {
+            Ok(response) => RequestOutcome::Ok {
+                result_bytes: response.into_inner().result,
+            },
+            Err(status) => map_status_to_session_request_error(status),
+        }
+    }
+
+    /// Handle daemon-owned control requests arriving on a device's
+    /// `session.open` stream. Product invocations use the typed canonical
+    /// request arm above. The allowed control set is the hosted-agent
+    /// self-advertise pair —
     /// `federation.advertise_agent` (identity, PR-N6 v1) and
     /// `federation.advertise_abilities` (hot-add ability projection,
     /// ISS-002 closure). Other ability names return
@@ -2162,16 +1728,6 @@ impl BidiDispatcher {
     /// the bidi was established with a signed Bootstrap frame, so
     /// the hub trusts the originating device on every Request frame
     /// — no per-Request signature verify happens here.
-    #[cfg(test)]
-    pub(crate) async fn dispatch_session_request(
-        &self,
-        ability_ura: &str,
-        args: &[u8],
-    ) -> RequestOutcome {
-        self.dispatch_session_request_for_caller(None, ability_ura, args)
-            .await
-    }
-
     pub(crate) async fn dispatch_session_request_from_session(
         &self,
         caller_device_ura: &str,
@@ -2254,31 +1810,6 @@ impl BidiDispatcher {
         }
     }
 
-    /// Carrier-v1 entry (DEC-F004): the proto frame already carries the
-    /// canonical ability name in `request.function_name`, so the URA →
-    /// public-name projection of the JSON path is unnecessary. The
-    /// dispatch match below is itself the hub's public-ability
-    /// whitelist (unknown names return PermissionDenied).
-    #[cfg(test)]
-    pub(crate) async fn dispatch_session_request_named(
-        &self,
-        ability: &str,
-        args: &[u8],
-    ) -> RequestOutcome {
-        self.dispatch_session_request_named_for_caller(None, ability, args)
-            .await
-    }
-
-    async fn dispatch_session_request_named_from_session(
-        &self,
-        caller_device_ura: &str,
-        ability: &str,
-        args: &[u8],
-    ) -> RequestOutcome {
-        self.dispatch_session_request_named_for_caller(Some(caller_device_ura), ability, args)
-            .await
-    }
-
     async fn dispatch_session_request_named_for_caller(
         &self,
         caller_device_ura: Option<&str>,
@@ -2286,23 +1817,6 @@ impl BidiDispatcher {
         args: &[u8],
     ) -> RequestOutcome {
         match ability {
-            ABILITY_FEDERATION_FORWARD_INVOKE => {
-                self.emit_session_request_resolution_marker(args).await;
-
-                match self
-                    .unary
-                    .dispatch_federation_forward_invoke(None, args)
-                    .await
-                {
-                    Ok(response) => {
-                        let body = response.into_inner();
-                        RequestOutcome::Ok {
-                            result_bytes: body.result,
-                        }
-                    }
-                    Err(status) => map_status_to_session_request_error(status),
-                }
-            }
             ABILITY_FEDERATION_ADVERTISE_AGENT => {
                 let result = match caller_device_ura {
                     Some(caller_device_ura) => self
@@ -2371,96 +1885,13 @@ impl BidiDispatcher {
                 error: SessionRequestError::PermissionDenied {
                     reason: format!(
                         "session_request: ability `{other}` is not yet routed; \
-                         only `{ABILITY_FEDERATION_FORWARD_INVOKE}`, \
-                         `{ABILITY_FEDERATION_ADVERTISE_AGENT}`, \
+                         only `{ABILITY_FEDERATION_ADVERTISE_AGENT}`, \
                          `{ABILITY_FEDERATION_ADVERTISE_ABILITIES}`, and \
                          `{}` are wired",
                         federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY
                     ),
                 },
             },
-        }
-    }
-
-    pub(crate) async fn emit_session_request_resolution_marker(&self, args: &[u8]) {
-        let Ok(request) = serde_json::from_slice::<federation_wrappers::ForwardInvokeRequest>(args)
-        else {
-            crate::op_event!(
-                component = session_request,
-                kind = target_resolved,
-                state_code = "R400",
-                path = "malformed_request",
-                reason = "forward_invoke_request_decode_failed",
-            );
-            return;
-        };
-        let inner_payload = match decode_inner_payload(&request.inner_envelope_b64) {
-            Ok(payload) => payload,
-            Err(status) => {
-                crate::op_event!(
-                    component = session_request,
-                    kind = target_resolved,
-                    state_code = "R400",
-                    path = "malformed_inner_payload",
-                    target_ura = request.target_ura.as_str(),
-                    reason = status.message(),
-                );
-                return;
-            }
-        };
-
-        match self
-            .unary
-            .resolve_forward_invoke_selection(&request, &inner_payload)
-            .await
-        {
-            Ok(ForwardInvokeRouteSelection::Local(selected_route)) => {
-                let execution_host_is_self = self
-                    .gate
-                    .matches_self_target_ura(&selected_route.execution_host_ura)
-                    .await;
-                let path = if selected_route
-                    .dispatch_target(execution_host_is_self)
-                    .is_local_runtime()
-                {
-                    "selected_self"
-                } else {
-                    "selected_local_session"
-                };
-                crate::op_event!(
-                    component = session_request,
-                    kind = target_resolved,
-                    state_code = "R300",
-                    path = path,
-                    target_ura = request.target_ura.as_str(),
-                    route_ura = selected_route.route_ura.as_str(),
-                    callee_ura = selected_route.callee_ura.as_str(),
-                    execution_host_ura = selected_route.execution_host_ura.as_str(),
-                    dispatch_name = selected_route.dispatch_name.as_str(),
-                );
-            }
-            Ok(ForwardInvokeRouteSelection::Peer(delegation)) => {
-                let endpoint = delegation.primary_endpoint().unwrap_or("");
-                crate::op_event!(
-                    component = session_request,
-                    kind = target_resolved,
-                    state_code = "R350",
-                    path = "peer_hub_delegation",
-                    target_ura = request.target_ura.as_str(),
-                    target_realm = delegation.realm.as_str(),
-                    peer_endpoint = endpoint,
-                );
-            }
-            Err(status) => {
-                crate::op_event!(
-                    component = session_request,
-                    kind = target_resolved,
-                    state_code = "R400",
-                    path = "resolver_negative",
-                    target_ura = request.target_ura.as_str(),
-                    reason = status.message(),
-                );
-            }
         }
     }
 
@@ -2501,7 +1932,8 @@ fn map_status_to_session_request_error(status: Status) -> RequestOutcome {
     let code = status.code();
     let message = status.message().to_string();
     if code == tonic::Code::FailedPrecondition
-        && message.trim() == federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON
+        && message.trim()
+            == crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_OFFLINE_REASON
     {
         return RequestOutcome::Err {
             error: SessionRequestError::TargetOffline,
@@ -2568,7 +2000,7 @@ pub(crate) fn build_session_request_result_frame(
 /// `call_id` (per PR-N6 spec §"Concurrent multiplexing"). Lookup
 /// failure means the device disconnected between issuing the
 /// Request and the hub finishing dispatch — log + drop, which is
-/// the same shape PR-N1's `try_push_forward_invoke_frame` uses for
+/// the same shape PR-N1's `try_push_canonical_invoke_frame` uses for
 /// the symmetric race.
 pub(crate) fn push_session_request_result(
     presence: &Arc<PresenceRegistry>,
@@ -2784,10 +2216,9 @@ fn report_chunk_delivery(
 }
 
 /// Drain a device's `session.open` up-stream. Each up-frame is
-/// expected to be a `BinaryChunk` carrying a JSON-serialised
-/// `SessionDispatch::Result`; on parse the matching pending entry
-/// in the `PendingDispatchMap` is completed so the
-/// `runtime.invoke_remote` caller wakes up.
+/// may carry typed `DispatchResult` / `ReverseDispatchCall` frames or the
+/// remaining JSON streaming/control frames. Matching pending entries are
+/// settled by call_id.
 ///
 /// On stream close (any reason — graceful CloseSend, transport
 /// reset, RST_STREAM, peer crash) the device is removed from the
@@ -2957,29 +2388,9 @@ async fn drain_session_up_stream(
                 let presence_for_reply = Arc::clone(&presence);
                 let caller_ura_for_reply = caller_ura.clone();
                 tokio::spawn(async move {
-                    let outcome = if request
-                        .content_envelope
-                        .as_ref()
-                        .is_some_and(|c| c.encryption != 0)
-                    {
-                        RequestOutcome::Err {
-                            error: SessionRequestError::PermissionDenied {
-                                reason: format!(
-                                    "session.open: ReverseDispatchCall `{}` carries encrypted \
-                                     args but no hub-side request decryptor is wired",
-                                    request.function_name
-                                ),
-                            },
-                        }
-                    } else {
-                        dispatcher_for_request
-                            .dispatch_session_request_named_from_session(
-                                &caller_ura_for_reply,
-                                &request.function_name,
-                                &request.arguments,
-                            )
-                            .await
-                    };
+                    let outcome = dispatcher_for_request
+                        .dispatch_canonical_session_invoke(request)
+                        .await;
                     let frame = build_reverse_dispatch_result_frame(call_id, outcome);
                     push_session_request_result(
                         &presence_for_reply,
@@ -3052,17 +2463,6 @@ async fn drain_session_up_stream(
                     );
                 }
             }
-            SessionDispatch::Dispatch { call_id, .. } => {
-                // A device sending a Dispatch up its own session
-                // makes no sense — Dispatch is hub→device only.
-                crate::op_event!(
-                    component = session_accept,
-                    kind = unexpected_upstream_frame,
-                    caller = caller_ura,
-                    frame_kind = "Dispatch",
-                    call_id = call_id,
-                );
-            }
             SessionDispatch::BidiOpen {
                 call_id, ability, ..
             } => {
@@ -3091,27 +2491,9 @@ async fn drain_session_up_stream(
                 args,
                 args_content_envelope,
             } => {
-                // PR-N6 C3: device → hub forward_invoke escalation.
-                // The device emits this when its CLI's
-                // `ability invoke --node` hits a target whose
-                // dispatch the device-mode daemon's empty local
-                // PresenceRegistry can't serve. The hub runs the
-                // SAME ability dispatch the unary `Invoke` RPC
-                // does, then sends `RequestResult` back down the
-                // device's open `session.open` bidi.
-                //
-                // Operator log marker for the PR-N6 hub→device
-                // session-Request dispatch path. SRE pipelines grep
-                // `kind=session_accept_request_frame` to confirm a
-                // forward_invoke escalation actually landed on the
-                // hub-side accept loop rather than being answered
-                // from local presence. The PR-N6 "locked marker"
-                // comment that used to live here referenced a demo
-                // orchestration script that no longer grep-asserts
-                // the byte-exact form; the audit on 2026-05-25
-                // confirmed no remaining external dependency on the
-                // old `[session-accept] received Request frame`
-                // string, so we converged on the op_event shape.
+                // Daemon-owned bootstrap/publication control request.
+                // Product invocations arrive through the typed
+                // `ReverseDispatchCall` arm above.
                 let id_hex = call_id_hex(&call_id);
                 crate::op_event!(
                     component = daemon_invocation,
@@ -3249,7 +2631,7 @@ pub(crate) fn refresh_session_owner_projection_lease_at(
 /// admission gate against the trust anchor's pubkey for this
 /// URA, so a trust-anchor hit here is a sufficient proof of
 /// federated identity. Same mechanism the cross-realm
-/// `forward_invoke` admission already uses (PR-N2 commits
+/// `canonical_invoke` admission already uses (PR-N2 commits
 /// `d1adbea` + `68f6556`); we extend it to cover
 /// `session.open` admission too. Unblocks the cross-hub
 /// same-realm directive that LB-49 surfaced.
@@ -3309,44 +2691,6 @@ fn session_trust_context_from_open(
         .unwrap_or_default();
     SessionTrustContext::user_pubkey(presented)
 }
-
-impl InnerPayload {
-    pub(crate) fn public_ability_for_target(&self, target_ura: &str) -> Result<String, Status> {
-        crate::core::ura::public_ability_name_from_ability_ura(target_ura, &self.ability_ura)
-            .ok_or_else(|| {
-                Status::invalid_argument(format!(
-                    "federation.forward_invoke: ability_ura `{}` does not belong to target `{}`",
-                    self.ability_ura, target_ura
-                ))
-            })
-    }
-}
-
-// ── Phase 5a tombstone: ForwardReceipt / SharedReceiptStore ──
-// Phase 5a deleted three things in lockstep:
-//   * the `FORWARD_RECEIPT_TYPE` / `FORWARD_RECEIPT_DIGEST_CONTENT_TYPE`
-//     constants,
-//   * `build_forward_receipt` (the caller-hub ForwardReceipt builder
-//     modelled on InvocationReceipt — DEC-N5 §1 only required the
-//     causal link, so the dedicated container was redundant), and
-//   * every `self.admission.receipt_store().record(...)` call site in
-//     `dispatch_federation_forward_invoke`.
-//
-// The in-memory `FORWARD_RECEIPT_TYPE` ring-buffer entries had no
-// production reader — only legacy tests in the same file inspected
-// them — so removing both the writes and the helper loses zero
-// production observability. Cross-hub forward-invoke outcomes are
-// now observable via:
-//   * the dispatched invocation's `InvocationLedger` row, written
-//     when the target reaches a terminal state, and
-//   * `op_event!(component = daemon_invocation, kind = forward_invoke_*)`
-//     log lines for transport-level miss / fail diagnostics.
-//
-// The trade-off: admission-time emission of any audit artefact is
-// gone. An admission that succeeds but whose invocation never reaches
-// a terminal state leaves no record. Closing that gap is a Week-5+
-// topic; for now the operator log is the audit source for
-// non-terminal calls.
 
 /// step-3b hub arm (DEC-F004): pick the bidi-open carrier by the
 /// execution host's negotiated contract. A v1 host with the caller's
@@ -3420,7 +2764,7 @@ pub(crate) fn build_remote_bidi_open_dispatch_frame(
     })?;
     Ok(DispatchFrame::normal(InvokeBidiDown {
         payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-            stream_id: INVOKE_REMOTE_STREAM_ID,
+            stream_id: crate::daemon::invocation::bidi::session_initiator::SESSION_STREAM_ID,
             data: bytes,
             ..BinaryChunk::default()
         })),
@@ -3443,7 +2787,7 @@ fn build_remote_bidi_input_dispatch_frame(
         .expect("SessionDispatch::BidiInput is statically encodable");
     DispatchFrame::normal(InvokeBidiDown {
         payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-            stream_id: INVOKE_REMOTE_STREAM_ID,
+            stream_id: crate::daemon::invocation::bidi::session_initiator::SESSION_STREAM_ID,
             data,
             ..BinaryChunk::default()
         })),

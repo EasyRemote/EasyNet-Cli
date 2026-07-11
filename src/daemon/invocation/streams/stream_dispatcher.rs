@@ -19,7 +19,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
@@ -36,10 +35,7 @@ use crate::daemon::invocation::admission::target_gate::{
     route_negative_status, route_profile_blocked_status, selected_host_unavailable_message,
     signed_envelope_for_selected_route, TargetGate,
 };
-use crate::daemon::invocation::bidi::invoke_remote_initiator::{
-    build_carrier_v1_dispatch_frame, build_invoke_remote_dispatch_frame,
-    InvokeRemoteDispatchFrameRequest, SessionContentEnvelope,
-};
+use crate::daemon::invocation::bidi::session_wire::build_carrier_v1_dispatch_frame;
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent,
 };
@@ -515,7 +511,7 @@ impl StreamDispatcher {
                  envelope on the canonical Invocation face",
             )));
         };
-        let envelope = signed_envelope_for_selected_route(
+        signed_envelope_for_selected_route(
             envelope,
             &selected_route,
             request
@@ -542,52 +538,37 @@ impl StreamDispatcher {
 
         let mut handle = pending.register_pending_for(&selected_route.execution_host_ura);
         let call_id = handle.call_id();
-        let target_contract_v1 = self
+        let carrier_version = self
             .directory
             .presence
             .dispatch_contract_version(&selected_route.execution_host_ura)
-            .unwrap_or(0)
-            >= 1;
-        let dispatch_frame = if target_contract_v1 {
-            build_carrier_v1_dispatch_frame(
-                call_id,
-                easynet_axon::pb::axon::v1::InvokeRequest {
-                    envelope: Some(envelope.clone()),
-                    function_name: selected_route.dispatch_name.clone(),
-                    arguments: request.arguments.clone(),
-                    content_envelope: request.content_envelope.clone(),
-                    metadata: request.metadata.clone(),
-                    ..easynet_axon::pb::axon::v1::InvokeRequest::default()
-                },
-                false,
-            )
-        } else {
-            let subject_ura = envelope.subject.as_ref().map(|subject| subject.ura.clone());
-            let Some(subject_ura) = subject_ura
-                .as_deref()
-                .map(str::trim)
-                .filter(|subject| !subject.is_empty())
-            else {
-                return Err(Status::invalid_argument(
-                    "InvokeStream: remote stream dispatch missing inner subject_ura",
-                ));
-            };
-            build_invoke_remote_dispatch_frame(InvokeRemoteDispatchFrameRequest {
-                call_id,
-                callee_ura: &selected_route.callee_ura,
-                subject_ura,
-                ability: &selected_route.ability_ura,
-                args: &request.arguments,
-                args_content_envelope: SessionContentEnvelope::plaintext_json(),
-                metadata: HashMap::new(),
-                origin_caller: None,
-            })?
-        };
+            .unwrap_or(0);
+        if carrier_version < 1 {
+            return Err(Status::failed_precondition(format!(
+                "InvokeStream selected host `{}` negotiated session carrier v{carrier_version}; \
+                 canonical relay requires v1 or newer",
+                selected_route.execution_host_ura
+            )));
+        }
+        let dispatch_frame = build_carrier_v1_dispatch_frame(
+            call_id,
+            easynet_axon::pb::axon::v1::InvokeRequest {
+                envelope: request.envelope.clone(),
+                function_name: request.function_name.clone(),
+                arguments: request.arguments.clone(),
+                content_type: request.content_type.clone(),
+                content_envelope: request.content_envelope.clone(),
+                metadata: request.metadata.clone(),
+                payload_ref: request.payload_ref.clone(),
+                ..easynet_axon::pb::axon::v1::InvokeRequest::default()
+            },
+            false,
+        );
         match sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 return Err(Status::resource_exhausted(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_BUSY_REASON,
+                    crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_BUSY_REASON,
                 ));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
@@ -597,7 +578,7 @@ impl StreamDispatcher {
                     crate::daemon::invocation::bidi::state::presence::OfflineReason::StreamClosed,
                 );
                 return Err(Status::failed_precondition(
-                    federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
+                    crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_OFFLINE_REASON,
                 ));
             }
         }
@@ -610,7 +591,7 @@ impl StreamDispatcher {
             callee_ura = selected_route.callee_ura.as_str(),
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             route_ura = selected_route.route_ura.as_str(),
-            carrier_v1 = target_contract_v1,
+            carrier_version = carrier_version,
             call_id = call_id,
         );
 

@@ -113,7 +113,7 @@ pub(super) async fn run_session_preludes(
         Arc::clone(&hub_published_abilities),
     );
 
-    run_hosted_agent_advertise_prelude(client, phase, signer.as_ref()).await;
+    run_hosted_agent_advertise_prelude(client, phase, hub_endpoint, signer.as_ref()).await?;
 
     Ok(SessionPreludeGuards {
         _user_trust_resync: user_trust_resync,
@@ -256,12 +256,16 @@ async fn run_user_trust_bootstrap_and_spawn_resync(
 async fn run_hosted_agent_advertise_prelude(
     client: &mut InvocationClient<Channel>,
     phase: &mut SessionPhaseTracker,
+    hub_endpoint: &str,
     signer: &dyn CanonicalSigner,
-) {
+) -> Result<(), SessionError> {
     let caller_ura = signer.owner_ura();
     let realm = crate::core::ura::parse_ura(caller_ura)
         .map(|parsed| parsed.realm)
-        .unwrap_or_default();
+        .map_err(|error| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!("signer owner URA `{caller_ura}` is invalid: {error}"),
+        })?;
     // The agent owner-prefix is the USERNAME slug (`<username>.<agent>`, e.g.
     // `dev.pages`), NOT the user UUID. This is the §15.1-3 dual grammar: subject
     // URAs anchor on the stable UUID, but owner-prefixed agent/resource URAs keep
@@ -269,20 +273,30 @@ async fn run_hosted_agent_advertise_prelude(
     // `svc.UsernameForUID` (username), so advertising under the UUID
     // (`<uuid>.pages`) lands a directory entry the resolver never queries →
     // `namespace.resolve NXDOMAIN: owner is not online` on `project_list`/etc.
-    let user_segment = std::env::var("EASYNET_PAGES_USER")
+    let user_segment = match std::env::var("EASYNET_PAGES_USER")
         .ok()
-        .filter(|v| !v.is_empty())
-        .or_else(|| {
-            crate::daemon::persistence::config::load_credentials()
-                .ok()
-                .and_then(|c| c.username)
-                .filter(|v| !v.is_empty())
-        })
-        .unwrap_or_default();
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => crate::daemon::persistence::config::load_credentials()
+            .map_err(|error| SessionError::HostedAgentPreludeFailed {
+                endpoint: hub_endpoint.to_string(),
+                reason: format!("load credentials for hosted-agent owner projection: {error}"),
+            })?
+            .username
+            .filter(|value| !value.is_empty())
+            .unwrap_or_default(),
+    };
 
-    let entries = collect_advertise_entries(&realm, &user_segment);
+    let local_agents = crate::daemon::persistence::local_agents::load().map_err(|error| {
+        SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason: format!("load local-agents registry: {error}"),
+        }
+    })?;
+    let entries = collect_advertise_entries(&realm, &user_segment, &local_agents);
     if realm.is_empty() || entries.is_empty() {
-        return;
+        return Ok(());
     }
 
     let caller_node_id = crate::core::ura::parse_ura(caller_ura)
@@ -307,7 +321,12 @@ async fn run_hosted_agent_advertise_prelude(
     );
 
     let agent_registry =
-        crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default();
+        crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
+            SessionError::HostedAgentPreludeFailed {
+                endpoint: hub_endpoint.to_string(),
+                reason: format!("load hosted-agent registry: {error}"),
+            }
+        })?;
     let live_registry = crate::daemon::ability::catalog::build_registry();
     for entry in &entries {
         advertise_hosted_agent_entry(
@@ -319,7 +338,11 @@ async fn run_hosted_agent_advertise_prelude(
             entry,
             signer,
         )
-        .await;
+        .await
+        .map_err(|reason| SessionError::HostedAgentPreludeFailed {
+            endpoint: hub_endpoint.to_string(),
+            reason,
+        })?;
     }
     let entries_done_count = entries.len();
     crate::op_event!(
@@ -327,6 +350,7 @@ async fn run_hosted_agent_advertise_prelude(
         kind = advertise_agent_prelude_done,
         agent_count = entries_done_count,
     );
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -336,11 +360,14 @@ struct AdvertiseEntry {
     hosted_agent_name: Option<String>,
 }
 
-fn collect_advertise_entries(realm: &str, user_segment: &str) -> Vec<AdvertiseEntry> {
+fn collect_advertise_entries(
+    realm: &str,
+    user_segment: &str,
+    local_agents_file: &crate::daemon::persistence::local_agents::LocalAgentsFile,
+) -> Vec<AdvertiseEntry> {
     let mut entries = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
 
-    let local_agents_file = crate::daemon::persistence::local_agents::load().unwrap_or_default();
     for hosted in &local_agents_file.hosted_agents {
         if hosted.agent_ura.is_empty() || hosted.agent_ura.contains("<unjoined>") {
             continue;
@@ -387,7 +414,7 @@ async fn advertise_hosted_agent_entry(
     live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
     entry: &AdvertiseEntry,
     signer: &dyn CanonicalSigner,
-) {
+) -> Result<(), String> {
     let agent_id = crate::core::ura::parse_ura(&entry.agent_ura)
         .ok()
         .filter(|p| p.kind == crate::core::ura::URAKind::Agent)
@@ -398,33 +425,25 @@ async fn advertise_hosted_agent_entry(
     } else {
         caller_node_id.as_deref()
     };
-    let advertise_agent_result =
-        send_advertise_agent_prelude(client, &entry.agent_ura, host_for_advertise, signer).await;
-    match advertise_agent_result {
-        Ok(()) => {
-            let mut advertise_ctx = HostedAgentAbilityAdvertiseContext {
-                client,
-                caller_ura,
-                caller_node_id: caller_node_id.as_deref(),
-                agent_registry,
-                live_registry,
-                signer,
-            };
-            advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &agent_id).await;
-        }
-        Err(err) => {
-            let agent_ura = entry.agent_ura.clone();
-            let code = err.code();
-            let msg = err.message();
-            crate::op_event!(
-                component = session,
-                kind = advertise_agent_prelude_soft_failed,
-                agent_ura = agent_ura,
-                code = code,
-                error = msg,
-            );
-        }
-    }
+    send_advertise_agent_prelude(client, &entry.agent_ura, host_for_advertise, signer)
+        .await
+        .map_err(|error| {
+            format!(
+                "advertise hosted agent `{}` failed (code={:?}): {}",
+                entry.agent_ura,
+                error.code(),
+                error.message()
+            )
+        })?;
+    let mut advertise_ctx = HostedAgentAbilityAdvertiseContext {
+        client,
+        caller_ura,
+        caller_node_id: caller_node_id.as_deref(),
+        agent_registry,
+        live_registry,
+        signer,
+    };
+    advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &agent_id).await
 }
 
 fn is_user_scoped_synthetic_agent(agent_id: &str) -> bool {
@@ -444,25 +463,27 @@ async fn advertise_hosted_agent_abilities(
     ctx: &mut HostedAgentAbilityAdvertiseContext<'_>,
     entry: &AdvertiseEntry,
     agent_id: &str,
-) {
+) -> Result<(), String> {
     let descriptors = match entry.hosted_agent_name.as_deref() {
         Some(agent_name) => {
-            let Some(agent_config) = ctx.agent_registry.agents.get(agent_name) else {
-                return;
-            };
+            let agent_config = ctx.agent_registry.agents.get(agent_name).ok_or_else(|| {
+                format!(
+                    "hosted agent `{agent_name}` is published in local-agents.json but absent from agents registry"
+                )
+            })?;
             build_hosted_agent_ability_descriptors(
                 &entry.agent_ura,
                 agent_name,
                 agent_config,
                 ctx.caller_node_id,
                 ctx.live_registry,
-            )
+            )?
         }
         None if agent_id == "pages" => build_synthetic_pages_ability_descriptors(&entry.agent_ura),
-        None => return,
+        None => return Ok(()),
     };
     if descriptors.is_empty() {
-        return;
+        return Ok(());
     }
 
     let ability_count = descriptors.len();
@@ -472,7 +493,7 @@ async fn advertise_hosted_agent_abilities(
         agent_ura = entry.agent_ura,
         ability_count = ability_count,
     );
-    if let Err(err) = send_advertise_abilities_prelude(
+    send_advertise_abilities_prelude(
         ctx.client,
         &entry.agent_ura,
         ctx.caller_ura,
@@ -480,24 +501,21 @@ async fn advertise_hosted_agent_abilities(
         &descriptors,
     )
     .await
-    {
-        let code = err.code();
-        let msg = err.message();
-        crate::op_event!(
-            component = session,
-            kind = advertise_hosted_agent_abilities_prelude_soft_failed,
-            agent_ura = entry.agent_ura,
-            code = code,
-            error = msg,
-        );
-    } else {
-        crate::op_event!(
-            component = session,
-            kind = advertise_hosted_agent_abilities_prelude_ok,
-            agent_ura = entry.agent_ura,
-            ability_count = ability_count,
-        );
-    }
+    .map_err(|error| {
+        format!(
+            "advertise hosted-agent abilities for `{}` failed (code={:?}): {}",
+            entry.agent_ura,
+            error.code(),
+            error.message()
+        )
+    })?;
+    crate::op_event!(
+        component = session,
+        kind = advertise_hosted_agent_abilities_prelude_ok,
+        agent_ura = entry.agent_ura,
+        ability_count = ability_count,
+    );
+    Ok(())
 }
 
 async fn send_federation_join_prelude(
@@ -1199,32 +1217,18 @@ fn build_hosted_agent_ability_descriptors(
     entry: &crate::daemon::persistence::agent_registry::AgentEntry,
     host_node_id: Option<&str>,
     live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
-) -> Vec<AbilityDescriptor> {
+) -> Result<Vec<AbilityDescriptor>, String> {
     let mut descriptors = Vec::new();
-    let hint_snapshot =
-        crate::daemon::ability::catalog::AbilityDiscoveryHintSnapshot::from_registry(live_registry);
     for spec in crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
         agent_name, entry,
     ) {
-        let registry_name = spec.name();
-        let owner_local_name =
-            crate::daemon::execution::mission::agent_ability_specs::public_agent_ability_name(
+        let mut descriptor =
+            crate::daemon::ability::catalog::profiles::llm::descriptor_for_agent_spec(
+                live_registry,
                 owner_ura,
                 agent_name,
-                registry_name,
-            );
-        let Ok(mut descriptor) = AbilityDescriptor::new(
-            owner_local_name,
-            owner_ura,
-            crate::daemon::ability::descriptors::Visibility::Scoped,
-        ) else {
-            continue;
-        };
-        descriptor = descriptor
-            .with_description(spec.description())
-            .with_input_schema(spec.parameters().clone())
-            .with_hints(hint_snapshot.for_name(registry_name))
-            .with_source(format!("agent:{agent_name}"))
+                &spec,
+            )?
             .with_metadata_entry("runtime", entry.agent_type.to_string())
             .with_metadata_entry("agent_type", entry.agent_type.to_string())
             .with_metadata_entry("base_runtime", entry.agent_type.to_string());
@@ -1238,7 +1242,7 @@ fn build_hosted_agent_ability_descriptors(
         }
         descriptors.push(descriptor);
     }
-    descriptors
+    Ok(descriptors)
 }
 
 pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<AbilityDescriptor> {

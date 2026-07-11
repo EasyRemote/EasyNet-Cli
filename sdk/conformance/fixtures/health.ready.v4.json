@@ -6,7 +6,7 @@
   "trust_ready": true,
   "runtime_ready": true,
   "version": "0.1.0",
-  "abi_version": 4,
+  "abi_version": 5,
   "mismatch": null,
   "diagnostics": []
 }

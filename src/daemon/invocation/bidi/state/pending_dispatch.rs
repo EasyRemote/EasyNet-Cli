@@ -2,24 +2,18 @@
 // ===================================================
 //
 // File: src/daemon/invocation/state/pending_dispatch.rs
-// Description: Cross-call correlation table for `runtime.invoke_remote`
-//              dispatches awaiting their reply on a target device's
-//              `session.open` stream.
+// Description: Correlates typed session `DispatchCall` / `DispatchResult`
+//              frames by call_id, including streaming deliveries.
 //
 // Why this module exists
 // ----------------------
-// `runtime.invoke_remote` (PR-3, this commit) is the per-call bidi the
-// caller opens against the daemon. The daemon pushes a `Dispatch`
-// frame down the target device's pre-existing `session.open`
-// reverse channel (PR-2 lands the session accept side). The target
-// device runs the requested ability locally and writes a `Result`
-// frame back up its session stream. PR-2's session-receive task
-// must then route that `Result` back to the *original*
-// `runtime.invoke_remote` caller — by call_id.
+// The daemon sends a canonical `DispatchCall` over the target's existing
+// `session.open` reverse channel. The device returns `DispatchResult`, and
+// this table settles the original unary or streaming waiter by call_id.
 //
 // `PendingDispatchMap` is the shared correlation surface:
 //
-//   * `runtime.invoke_remote` handler (PR-3, this commit's caller):
+//   * canonical invocation dispatcher:
 //     `register_pending(call_id) -> oneshot::Receiver<DispatchResult>`.
 //     The handler awaits the receiver while a target session task
 //     races to fulfil it.
@@ -27,7 +21,7 @@
 //   * PR-2 `session.open` receive task (planned):
 //     `complete(call_id, DispatchResult)` invoked when the device's
 //     `Result { call_id, ... }` frame arrives. The matching
-//     oneshot is fulfilled and the invoke_remote handler wakes.
+//     oneshot is fulfilled and the invocation dispatcher wakes.
 //
 // Lifetime + bounded growth
 // -------------------------
@@ -84,7 +78,7 @@ pub struct DispatchResult {
     pub payload: Vec<u8>,
     /// Callee-signed execution receipt when the target spoke
     /// carrier-v1 (DEC-F004 landing audit 3). Internal projection
-    /// field — never serialized; the invoke_remote consumer side
+    /// field — never serialized; the invocation consumer side
     /// projects it into the hub ledger where the full call context
     /// (ability, route) lives. `None` on the JSON carrier.
     pub receipt: Option<DispatchReceipt>,
@@ -143,7 +137,7 @@ impl Drop for PendingHandle {
 /// device the caller is waiting on so a `PresenceEvent::Offline`
 /// for that URA can fail-fast every outstanding waiter targeting
 /// it (PR-N6 mid-flight cancellation: pre-fix the daemon's
-/// `forward_invoke` `await_reply()` blocked indefinitely when the
+/// the invocation wait blocked indefinitely when the
 /// target session dropped, surfacing on the operator side as a
 /// 30s HTTP timeout instead of an immediate `target_offline`).
 struct PendingEntry {
@@ -166,8 +160,8 @@ impl std::fmt::Debug for PendingEntry {
     }
 }
 
-/// Shared correlation table between `runtime.invoke_remote` (writer)
-/// and `session.open` (completer). Constructed once per daemon
+/// Shared correlation table between canonical dispatch (writer) and
+/// `session.open` (completer). Constructed once per daemon
 /// process; cloned by `Arc` into each handler that needs it.
 #[derive(Debug, Clone, Default)]
 pub struct PendingDispatchMap {
@@ -226,7 +220,7 @@ impl PendingDispatchMap {
     /// Cancel every outstanding pending dispatch whose `target_ura`
     /// matches. Called from the daemon's presence-event watcher
     /// when a `session.open` reverse channel drops — without this,
-    /// `forward_invoke` callers would block on `oneshot::Receiver`
+    /// invocation callers would block on `oneshot::Receiver`
     /// until their HTTP request timeout fired (typically 30s) for a
     /// target whose offline state is already known. Returns the
     /// number of entries cancelled.

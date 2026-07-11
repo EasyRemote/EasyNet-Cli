@@ -15,75 +15,41 @@ import os
 import sys
 from pathlib import Path
 
-
 repo = Path(sys.argv[1]).resolve()
 matrix_path = Path(sys.argv[2]).resolve()
 
 CASE_ID = "sdk/go_python_parity_matrix"
-SPEC_REF = "docs/spec/daemon-sdk-requirements-v1.md#5.7"
+SPEC_REF = "docs/spec/daemon-sdk-requirements-v1.md#10-capability-state-matrix"
 LANGUAGES = ("go", "python")
 STATUS_ORDER = ("unsupported", "seam", "provider-backed", "cutover-ready")
-ALLOWED_EVIDENCE_KINDS = {
-    "go_test",
-    "python_test",
-    "sdk_conformance_case",
-    "static_gate",
-    "manifest",
-    "doc",
-}
-
+PROFILES = {"runtime_core", "addressing", "authority", "managed_signing", "conformance"}
+EVIDENCE_KINDS = {"go_test", "python_test", "sdk_conformance_case", "static_gate", "manifest", "doc"}
 REQUIRED_CAPABILITIES = (
     "abi_version_discovery",
     "daemon_lifecycle",
     "runtime_connection",
+    "canonical_addressing",
     "runtime_health",
-    "runtime_companion_control",
     "typed_errors",
+    "ability_descriptor_projection",
+    "authority_metadata",
     "complete_invocation_draft",
     "prepare_sign_submit",
     "managed_signing",
     "unary_invoke",
     "stream",
     "bidi",
-    "directory_identity",
-    "receipt",
-    "publication",
-    "host_binding",
-    "mission",
-    "admin_gateway",
-    "events",
-    "surface",
-    "compatibility",
-    "wrappers",
-    "access_control",
+    "terminal_receipt_facts",
     "conformance_runner",
 )
-
-REQUIRED_PRODUCT_BOUNDARIES = ("easynet_product", "easyremote_product")
-FORBIDDEN_CAPABILITY_TOKENS = ("backend", "easyremote", "product", "hub")
-PROVIDER_BACKED_REQUIRED_EVIDENCE = {
-    "surface": {
-        "go": "sdk/go/surface_runtime_test.go",
-        "python": "sdk/python/tests/test_cabi.py",
-    },
-    "compatibility": {
-        "go": "sdk/go/compatibility_runtime_test.go",
-        "python": "sdk/python/tests/test_cabi.py",
-    },
-    "wrappers": {
-        "go": "sdk/go/wrappers_runtime_test.go",
-        "python": "sdk/python/tests/test_wrappers.py",
-    },
-}
-ACTION_ADAPTER_REPORTS = {
-    "go": os.environ.get(
-        "EASYNET_SDK_PARITY_GO_REPORT",
-        "sdk/conformance/runner/go-action-adapter-report.json",
-    ),
-    "python": os.environ.get(
-        "EASYNET_SDK_PARITY_PYTHON_REPORT",
-        "sdk/conformance/runner/python-action-adapter-report.json",
-    ),
+FORBIDDEN_TOKENS = (
+    "admin", "gateway", "directory", "identity", "mission", "publication",
+    "host_binding", "surface", "compatibility", "wrapper", "companion",
+    "easyremote", "backend", "product",
+)
+ACTION_REPORTS = {
+    "go": os.environ.get("EASYNET_SDK_PARITY_GO_REPORT", "sdk/conformance/runner/go-action-adapter-report.json"),
+    "python": os.environ.get("EASYNET_SDK_PARITY_PYTHON_REPORT", "sdk/conformance/runner/python-action-adapter-report.json"),
 }
 
 
@@ -94,293 +60,174 @@ def fail(message: str) -> None:
 
 def require_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        fail(f"missing_or_empty_{field}")
+        fail(f"missing_or_empty:{field}")
     return value.strip()
 
 
-def require_string_list(value: object, field: str) -> list[str]:
+def repo_path(ref: str, field: str) -> Path:
+    path = (repo / ref).resolve()
+    try:
+        path.relative_to(repo)
+    except ValueError:
+        fail(f"outside_repo:{field}:{ref}")
+    if not path.exists():
+        fail(f"missing_ref:{field}:{ref}")
+    return path
+
+
+def string_list(value: object, field: str) -> list[str]:
     if not isinstance(value, list) or not value:
-        fail(f"missing_or_empty_{field}")
-    result: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            fail(f"invalid_{field}")
-        result.append(item.strip())
-    if len(set(result)) != len(result):
-        fail(f"duplicate_{field}")
+        fail(f"missing_or_empty:{field}")
+    result = [require_string(item, field) for item in value]
+    if len(result) != len(set(result)):
+        fail(f"duplicate:{field}")
     return result
 
 
-def repo_ref_exists(ref: str) -> bool:
-    path = (repo / ref).resolve()
-    try:
-        path.relative_to(repo)
-    except ValueError:
-        return False
-    return path.exists()
-
-
-def load_json_repo_ref(ref: str, field: str) -> object:
-    path = (repo / ref).resolve()
-    try:
-        path.relative_to(repo)
-    except ValueError:
-        fail(f"{field}_outside_repo:{ref}")
-    if not path.exists():
-        fail(f"missing_{field}:{ref}")
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        fail(f"invalid_{field}:{ref}:{exc}")
-
-
-def load_shared_case_metadata(ref: str) -> tuple[str, set[str]]:
-    path = (repo / ref).resolve()
-    try:
-        path.relative_to(repo)
-    except ValueError:
-        fail(f"shared_case_outside_repo:{ref}")
-    if not path.exists():
-        fail(f"missing_shared_case:{ref}")
+def case_metadata(ref: str) -> tuple[str, set[str]]:
+    path = repo_path(ref, "shared_case")
     case_id = ""
     required_for: set[str] = set()
-    in_required_for = False
+    in_required = False
     for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
         if line.startswith("id:"):
             case_id = require_string(line.split(":", 1)[1], f"{ref}.id")
-            in_required_for = False
-            continue
-        if line.startswith("required_for:"):
-            in_required_for = True
-            continue
-        if in_required_for:
-            if line.startswith("  - "):
-                required_for.add(require_string(line[4:], f"{ref}.required_for"))
-                continue
-            if stripped and not line.startswith(" "):
-                in_required_for = False
-    if not case_id:
-        fail(f"missing_shared_case_id:{ref}")
-    if not required_for:
-        fail(f"missing_shared_case_required_for:{ref}")
+            in_required = False
+        elif line.startswith("required_for:"):
+            in_required = True
+        elif in_required and line.startswith("  - "):
+            required_for.add(require_string(line[4:], f"{ref}.required_for"))
+        elif in_required and line and not line.startswith(" "):
+            in_required = False
+    if not case_id or not required_for:
+        fail(f"invalid_shared_case:{ref}")
+    missing = set(LANGUAGES) - required_for
+    if missing:
+        fail(f"shared_case_not_symmetric:{ref}:{','.join(sorted(missing))}")
     return case_id, required_for
 
 
-def load_action_adapter_report(language: str) -> dict[str, dict[str, object]]:
-    report_ref = ACTION_ADAPTER_REPORTS[language]
-    report = load_json_repo_ref(report_ref, f"{language}_action_adapter_report")
-    if not isinstance(report, dict):
-        fail(f"invalid_{language}_action_adapter_report")
-    if report.get("schema_version") != 1:
-        fail(f"{language}_action_adapter_report_schema_version")
-    if report.get("language") != language:
-        fail(f"{language}_action_adapter_report_language")
+def load_report(language: str) -> dict[str, dict[str, object]]:
+    ref = ACTION_REPORTS[language]
+    try:
+        report = json.loads(repo_path(ref, f"{language}_report").read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"invalid_report_json:{language}:{exc}")
+    if report.get("schema_version") != 1 or report.get("language") != language:
+        fail(f"invalid_report_header:{language}")
     records = report.get("records")
     if not isinstance(records, list):
-        fail(f"{language}_action_adapter_report_missing_records")
-    by_case: dict[str, dict[str, object]] = {}
-    for index, record in enumerate(records):
+        fail(f"missing_report_records:{language}")
+    indexed: dict[str, dict[str, object]] = {}
+    for record in records:
         if not isinstance(record, dict):
-            fail(f"{language}_action_adapter_report_invalid_record:{index}")
-        case_id = require_string(record.get("case_id"), f"{language}.report.case_id")
-        if case_id in by_case:
-            fail(f"{language}_action_adapter_report_duplicate_case:{case_id}")
-        by_case[case_id] = record
-    return by_case
+            fail(f"invalid_report_record:{language}")
+        case_id = require_string(record.get("case_id"), f"{language}.case_id")
+        if case_id in indexed:
+            fail(f"duplicate_report_record:{language}:{case_id}")
+        indexed[case_id] = record
+    return indexed
 
 
-def validate_evidence(owner: str, status: str, evidence: object) -> None:
+def validate_evidence(capability: str, language: str, status: str, raw: object) -> None:
     if status == "unsupported":
-        if evidence not in ([], None):
-            fail(f"unsupported_must_not_have_evidence:{owner}")
+        if raw not in (None, []):
+            fail(f"unsupported_with_evidence:{capability}:{language}")
         return
-    if not isinstance(evidence, list) or not evidence:
-        fail(f"missing_evidence:{owner}")
-    for index, item in enumerate(evidence):
+    if not isinstance(raw, list) or not raw:
+        fail(f"missing_evidence:{capability}:{language}")
+    kinds: set[str] = set()
+    for item in raw:
         if not isinstance(item, dict):
-            fail(f"invalid_evidence:{owner}:{index}")
-        kind = require_string(item.get("kind"), f"{owner}.evidence.kind")
-        ref = require_string(item.get("ref"), f"{owner}.evidence.ref")
-        if kind not in ALLOWED_EVIDENCE_KINDS:
-            fail(f"unknown_evidence_kind:{owner}:{kind}")
-        if kind != "doc" and not repo_ref_exists(ref):
-            fail(f"missing_evidence_ref:{owner}:{ref}")
+            fail(f"invalid_evidence:{capability}:{language}")
+        kind = require_string(item.get("kind"), f"{capability}.{language}.kind")
+        ref = require_string(item.get("ref"), f"{capability}.{language}.ref")
+        if kind not in EVIDENCE_KINDS:
+            fail(f"unknown_evidence_kind:{capability}:{language}:{kind}")
+        if kind != "doc":
+            repo_path(ref, f"{capability}.{language}.evidence")
+        kinds.add(kind)
+    if status == "cutover-ready" and not ({"static_gate", "manifest"} & kinds):
+        fail(f"cutover_without_gate:{capability}:{language}")
 
-
-def require_provider_backed_evidence(row_id: str, row: dict[str, object]) -> None:
-    required = PROVIDER_BACKED_REQUIRED_EVIDENCE.get(row_id)
-    if required is None:
-        return
-    for language, required_ref in required.items():
-        state = row[language]
-        if not isinstance(state, dict):
-            fail(f"missing_language_state:{row_id}:{language}")
-        if state.get("status") != "provider-backed":
-            continue
-        evidence = state.get("evidence")
-        if not isinstance(evidence, list):
-            fail(f"missing_evidence:{row_id}.{language}")
-        refs = {item.get("ref") for item in evidence if isinstance(item, dict)}
-        if required_ref not in refs:
-            fail(f"provider_backed_without_runtime_evidence:{row_id}:{language}:{required_ref}")
-
-
-def require_provider_backed_action_reports(
-    row_id: str,
-    row: dict[str, object],
-    shared_cases: list[tuple[str, set[str]]],
-    action_reports: dict[str, dict[str, dict[str, object]]],
-) -> None:
-    for language in LANGUAGES:
-        state = row[language]
-        if not isinstance(state, dict):
-            fail(f"missing_language_state:{row_id}:{language}")
-        if state.get("status") != "provider-backed":
-            continue
-        for case_id, required_for in shared_cases:
-            if language not in required_for:
-                continue
-            record = action_reports[language].get(case_id)
-            if record is None:
-                fail(f"provider_backed_missing_action_report:{row_id}:{language}:{case_id}")
-            status = require_string(record.get("status"), f"{language}.report.{case_id}.status")
-            if status != "passed":
-                fail(f"provider_backed_action_report_not_passed:{row_id}:{language}:{case_id}:{status}")
-
-
-def validate_language_status(row_id: str, row: dict[str, object]) -> tuple[str, str]:
-    statuses: list[str] = []
-    for language in LANGUAGES:
-        state = row.get(language)
-        if not isinstance(state, dict):
-            fail(f"missing_language_state:{row_id}:{language}")
-        status = require_string(state.get("status"), f"{row_id}.{language}.status")
-        if status not in STATUS_ORDER:
-            fail(f"invalid_status:{row_id}:{language}:{status}")
-        validate_evidence(f"{row_id}.{language}", status, state.get("evidence"))
-        statuses.append(status)
-    go_status, python_status = statuses
-    if go_status != python_status and not require_string(row.get("parity_gap"), f"{row_id}.parity_gap"):
-        fail(f"missing_parity_gap:{row_id}")
-    if "cutover-ready" in statuses:
-        remaining = str(row.get("remaining", "")).lower()
-        if "incomplete" in remaining or "remain" in remaining:
-            fail(f"false_cutover_ready:{row_id}")
-        for language, status in zip(LANGUAGES, statuses):
-            if status == "cutover-ready":
-                evidence = row[language]["evidence"]  # type: ignore[index]
-                kinds = {item.get("kind") for item in evidence}  # type: ignore[union-attr]
-                if "static_gate" not in kinds and "manifest" not in kinds:
-                    fail(f"cutover_ready_without_gate:{row_id}:{language}")
-    else:
-        require_string(row.get("remaining"), f"{row_id}.remaining")
-    return go_status, python_status
-
-
-def validate_product_boundary_evidence(row_id: str, evidence: object) -> None:
-    if not isinstance(evidence, list) or not evidence:
-        fail(f"missing_product_boundary_evidence:{row_id}")
-    for index, item in enumerate(evidence):
-        if not isinstance(item, dict):
-            fail(f"invalid_product_boundary_evidence:{row_id}:{index}")
-        kind = require_string(item.get("kind"), f"{row_id}.evidence.kind")
-        ref = require_string(item.get("ref"), f"{row_id}.evidence.ref")
-        if kind not in ALLOWED_EVIDENCE_KINDS:
-            fail(f"unknown_evidence_kind:{row_id}:{kind}")
-        if kind != "doc" and not repo_ref_exists(ref):
-            fail(f"missing_product_boundary_evidence_ref:{row_id}:{ref}")
-
-
-if not matrix_path.exists():
-    fail(f"matrix_not_found:{matrix_path}")
 
 try:
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
-except json.JSONDecodeError as exc:
-    fail(f"invalid_json:{exc}")
+except (OSError, json.JSONDecodeError) as exc:
+    fail(f"invalid_matrix:{exc}")
 
 if matrix.get("schema_version") != 1:
-    fail("schema_version_must_be_1")
+    fail("schema_version")
 if matrix.get("case_id") != CASE_ID:
-    fail("case_id_mismatch")
+    fail("case_id")
 if matrix.get("source_spec") != SPEC_REF:
-    fail("source_spec_mismatch")
+    fail("source_spec")
 if tuple(matrix.get("status_order", ())) != STATUS_ORDER:
-    fail("status_order_mismatch")
+    fail("status_order")
 if tuple(matrix.get("languages", ())) != LANGUAGES:
-    fail("languages_mismatch")
+    fail("languages")
+if "product_boundary_rules" in matrix:
+    fail("product_boundary_rows_forbidden")
 
 definitions = matrix.get("status_definitions")
 if not isinstance(definitions, dict):
-    fail("missing_status_definitions")
+    fail("status_definitions")
 for status in STATUS_ORDER:
     require_string(definitions.get(status), f"status_definitions.{status}")
 
-capabilities = matrix.get("capabilities")
-if not isinstance(capabilities, list):
-    fail("missing_capabilities")
-if len(capabilities) != len(REQUIRED_CAPABILITIES):
-    fail(f"capability_count:{len(capabilities)}_want_{len(REQUIRED_CAPABILITIES)}")
+rows = matrix.get("capabilities")
+if not isinstance(rows, list):
+    fail("capabilities")
+if len(rows) != len(REQUIRED_CAPABILITIES):
+    fail(f"capability_count:{len(rows)}_want_{len(REQUIRED_CAPABILITIES)}")
 
+reports = {language: load_report(language) for language in LANGUAGES}
 seen: set[str] = set()
-action_reports = {
-    language: load_action_adapter_report(language)
-    for language in LANGUAGES
-}
-for row in capabilities:
+for row in rows:
     if not isinstance(row, dict):
         fail("invalid_capability_row")
-    row_id = require_string(row.get("capability_id"), "capability_id")
-    if row_id in seen:
-        fail(f"duplicate_capability:{row_id}")
-    seen.add(row_id)
-    if row_id not in REQUIRED_CAPABILITIES:
-        fail(f"unknown_capability:{row_id}")
-    profile = require_string(row.get("profile"), f"{row_id}.profile")
-    product_surface = f"{row_id} {profile}".lower()
-    for token in FORBIDDEN_CAPABILITY_TOKENS:
-        if token in product_surface:
-            fail(f"product_specific_capability:{row_id}:{token}")
-    shared_case_metadata = [
-        load_shared_case_metadata(ref)
-        for ref in require_string_list(row.get("shared_cases"), f"{row_id}.shared_cases")
-    ]
-    validate_language_status(row_id, row)
-    require_provider_backed_evidence(row_id, row)
-    require_provider_backed_action_reports(row_id, row, shared_case_metadata, action_reports)
+    capability = require_string(row.get("capability_id"), "capability_id")
+    if capability in seen:
+        fail(f"duplicate_capability:{capability}")
+    seen.add(capability)
+    if capability not in REQUIRED_CAPABILITIES:
+        fail(f"unknown_capability:{capability}")
+    profile = require_string(row.get("profile"), f"{capability}.profile")
+    if profile not in PROFILES:
+        fail(f"product_or_unknown_profile:{capability}:{profile}")
+    surface = f"{capability} {profile}".lower()
+    for token in FORBIDDEN_TOKENS:
+        if token in surface:
+            fail(f"product_specific_capability:{capability}:{token}")
+
+    cases = [case_metadata(ref) for ref in string_list(row.get("shared_cases"), f"{capability}.shared_cases")]
+    states: dict[str, str] = {}
+    for language in LANGUAGES:
+        state = row.get(language)
+        if not isinstance(state, dict):
+            fail(f"missing_language_state:{capability}:{language}")
+        status = require_string(state.get("status"), f"{capability}.{language}.status")
+        if status not in STATUS_ORDER:
+            fail(f"invalid_status:{capability}:{language}:{status}")
+        states[language] = status
+        validate_evidence(capability, language, status, state.get("evidence"))
+        if status == "provider-backed" or status == "cutover-ready":
+            for case_id, _required_for in cases:
+                record = reports[language].get(case_id)
+                if record is None:
+                    fail(f"provider_backed_missing_action_report:{capability}:{language}:{case_id}")
+                if record.get("status") != "passed":
+                    fail(f"provider_backed_action_report_not_passed:{capability}:{language}:{case_id}")
+    if states["go"] != states["python"]:
+        fail(f"language_state_mismatch:{capability}:{states['go']}:{states['python']}")
+    if states["go"] != "cutover-ready":
+        require_string(row.get("remaining"), f"{capability}.remaining")
+    elif row.get("remaining") not in (None, ""):
+        fail(f"cutover_ready_has_remaining:{capability}")
 
 missing = sorted(set(REQUIRED_CAPABILITIES) - seen)
 if missing:
     fail("missing_capability:" + ",".join(missing))
-
-product_boundaries = matrix.get("product_boundary_rules")
-if not isinstance(product_boundaries, list):
-    fail("missing_product_boundary_rules")
-if len(product_boundaries) != len(REQUIRED_PRODUCT_BOUNDARIES):
-    fail(f"product_boundary_count:{len(product_boundaries)}_want_{len(REQUIRED_PRODUCT_BOUNDARIES)}")
-
-seen_boundaries: set[str] = set()
-for row in product_boundaries:
-    if not isinstance(row, dict):
-        fail("invalid_product_boundary_row")
-    row_id = require_string(row.get("product_id"), "product_id")
-    if row_id in seen_boundaries:
-        fail(f"duplicate_product_boundary:{row_id}")
-    seen_boundaries.add(row_id)
-    if row_id not in REQUIRED_PRODUCT_BOUNDARIES:
-        fail(f"unknown_product_boundary:{row_id}")
-    primary = require_string(row.get("primary_sdk_language"), f"{row_id}.primary_sdk_language")
-    if primary not in LANGUAGES:
-        fail(f"invalid_primary_sdk_language:{row_id}:{primary}")
-    if row.get("not_sdk_profile") is not True:
-        fail(f"product_boundary_must_not_be_sdk_profile:{row_id}")
-    require_string(row.get("rule"), f"{row_id}.rule")
-    validate_product_boundary_evidence(row_id, row.get("evidence"))
-
-missing_boundaries = sorted(set(REQUIRED_PRODUCT_BOUNDARIES) - seen_boundaries)
-if missing_boundaries:
-    fail("missing_product_boundary:" + ",".join(missing_boundaries))
 
 print(f"sdk parity matrix ok: {matrix_path}")
 PY
@@ -394,96 +241,47 @@ if [[ "${1:-}" == "--self-test" ]]; then
   cp "$DEFAULT_MATRIX" "$tmp/good.json"
   run_validator "$tmp/good.json" >/dev/null
 
-  python3 - "$DEFAULT_MATRIX" "$tmp/missing.json" "$tmp/status.json" "$tmp/cutover.json" "$tmp/product.json" "$tmp/provider.json" "$tmp/go-report-missing.json" <<'PY'
-from __future__ import annotations
-
-import json
-import sys
+  python3 - "$DEFAULT_MATRIX" "$tmp" "$REPO_ROOT/sdk/conformance/runner/go-action-adapter-report.json" <<'PY'
+import json, sys
 from pathlib import Path
+source, out, go_report = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+matrix = json.loads(source.read_text())
 
+def write(name, value):
+    (out / name).write_text(json.dumps(value))
 
-source = Path(sys.argv[1])
-missing = Path(sys.argv[2])
-status = Path(sys.argv[3])
-cutover = Path(sys.argv[4])
-product = Path(sys.argv[5])
-provider = Path(sys.argv[6])
-go_report_missing = Path(sys.argv[7])
+value = json.loads(json.dumps(matrix)); value["capabilities"] = value["capabilities"][:-1]; write("missing.json", value)
+value = json.loads(json.dumps(matrix)); value["capabilities"][0]["go"]["status"] = "partial"; write("status.json", value)
+value = json.loads(json.dumps(matrix)); value["capabilities"][0]["python"]["status"] = "seam"; write("mismatch.json", value)
+value = json.loads(json.dumps(matrix)); value["capabilities"][0]["capability_id"] = "mission_runtime"; write("product.json", value)
+value = json.loads(json.dumps(matrix)); value["product_boundary_rules"] = []; write("boundary.json", value)
+value = json.loads(json.dumps(matrix)); value["capabilities"][0]["go"]["status"] = "cutover-ready"; value["capabilities"][0]["python"]["status"] = "cutover-ready"; write("cutover.json", value)
 
-matrix = json.loads(source.read_text(encoding="utf-8"))
-
-without_capability = json.loads(json.dumps(matrix))
-without_capability["capabilities"] = without_capability["capabilities"][:-1]
-missing.write_text(json.dumps(without_capability), encoding="utf-8")
-
-with_bad_status = json.loads(json.dumps(matrix))
-with_bad_status["capabilities"][0]["go"]["status"] = "partial"
-status.write_text(json.dumps(with_bad_status), encoding="utf-8")
-
-with_false_cutover = json.loads(json.dumps(matrix))
-with_false_cutover["capabilities"][0]["go"]["status"] = "cutover-ready"
-with_false_cutover["capabilities"][0]["python"]["status"] = "cutover-ready"
-with_false_cutover["capabilities"][0]["remaining"] = "lower-layer product cutover remains incomplete"
-cutover.write_text(json.dumps(with_false_cutover), encoding="utf-8")
-
-with_product_capability = json.loads(json.dumps(matrix))
-with_product_capability["capabilities"][0]["capability_id"] = "easyremote_runtime"
-product.write_text(json.dumps(with_product_capability), encoding="utf-8")
-
-with_missing_provider_evidence = json.loads(json.dumps(matrix))
-for row in with_missing_provider_evidence["capabilities"]:
-    if row["capability_id"] == "surface":
-        row["go"]["evidence"] = [
-            item for item in row["go"]["evidence"]
-            if item["ref"] != "sdk/go/surface_runtime_test.go"
-        ]
-        break
-provider.write_text(json.dumps(with_missing_provider_evidence), encoding="utf-8")
-
-repo_root = source.resolve().parents[2]
-go_report = json.loads((repo_root / "sdk/conformance/runner/go-action-adapter-report.json").read_text(encoding="utf-8"))
-go_report["records"] = [
-    record for record in go_report["records"]
-    if record["case_id"] != "receipt/axon_chain_verification"
-]
-go_report_missing.write_text(json.dumps(go_report), encoding="utf-8")
+report = json.loads(go_report.read_text())
+report["records"] = [r for r in report["records"] if r["case_id"] != "invocation/complete_tuple"]
+write("go-report-missing.json", report)
 PY
 
-  if run_validator "$tmp/missing.json" >"$tmp/missing.out" 2>&1; then
-    echo "self-test expected missing capability fixture to fail" >&2
-    exit 1
-  fi
-  grep -Eq "capability_count|missing_capability" "$tmp/missing.out"
+  expect_failure() {
+    local fixture="$1" pattern="$2"
+    if run_validator "$tmp/$fixture" >"$tmp/$fixture.out" 2>&1; then
+      echo "self-test expected $fixture to fail" >&2
+      exit 1
+    fi
+    grep -Eq "$pattern" "$tmp/$fixture.out"
+  }
 
-  if run_validator "$tmp/status.json" >"$tmp/status.out" 2>&1; then
-    echo "self-test expected invalid status fixture to fail" >&2
-    exit 1
-  fi
-  grep -Fq "invalid_status" "$tmp/status.out"
-
-  if run_validator "$tmp/cutover.json" >"$tmp/cutover.out" 2>&1; then
-    echo "self-test expected false cutover fixture to fail" >&2
-    exit 1
-  fi
-  grep -Fq "false_cutover_ready" "$tmp/cutover.out"
-
-  if run_validator "$tmp/product.json" >"$tmp/product.out" 2>&1; then
-    echo "self-test expected product capability fixture to fail" >&2
-    exit 1
-  fi
-  grep -Eq "unknown_capability|product_specific_capability" "$tmp/product.out"
-
-  if run_validator "$tmp/provider.json" >"$tmp/provider.out" 2>&1; then
-    echo "self-test expected provider-backed runtime evidence fixture to fail" >&2
-    exit 1
-  fi
-  grep -Fq "provider_backed_without_runtime_evidence" "$tmp/provider.out"
-
+  expect_failure missing.json 'capability_count|missing_capability'
+  expect_failure status.json 'invalid_status'
+  expect_failure mismatch.json 'language_state_mismatch'
+  expect_failure product.json 'unknown_capability|product_specific_capability'
+  expect_failure boundary.json 'product_boundary_rows_forbidden'
+  expect_failure cutover.json 'cutover_without_gate|cutover_ready_has_remaining'
   if EASYNET_SDK_PARITY_GO_REPORT="$tmp/go-report-missing.json" run_validator "$tmp/good.json" >"$tmp/report.out" 2>&1; then
-    echo "self-test expected missing action-adapter report fixture to fail" >&2
+    echo "self-test expected missing report case to fail" >&2
     exit 1
   fi
-  grep -Fq "provider_backed_missing_action_report" "$tmp/report.out"
+  grep -Fq 'provider_backed_missing_action_report' "$tmp/report.out"
 
   echo "check-sdk-parity-matrix self-test ok"
   exit 0

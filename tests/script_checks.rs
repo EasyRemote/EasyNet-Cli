@@ -94,17 +94,16 @@ fn kernel_boundary_script_contract_holds() {
 }
 
 #[test]
-fn ffi_abi_v4_header_script_contract_holds() {
-    // Pins the binding-facing ABI contract: version, error code table,
-    // Runtime Core SDK symbols, daemon lifecycle symbols, and
-    // retirement of the old auto-spawn init surface.
-    run_bash_script("tests/scripts/test_check_ffi_abi_v4_header.sh");
+fn ffi_abi_v5_exact_surface_script_contract_holds() {
+    // Pins the generic binding boundary: exact header/source/dylib allowlist,
+    // error code table, daemon lifecycle, and complete Invocation lifecycle.
+    run_bash_script("tests/scripts/test_check_ffi_abi_v5_header.sh");
 }
 
 #[test]
 fn release_package_contract_script_holds() {
     // Pins the release shape consumed by install.sh: runtime binaries,
-    // dendrite bridge, and ABI v4 binding artefacts must be packaged
+    // dendrite bridge, and ABI v5 binding artefacts must be packaged
     // and installed together.
     run_bash_script("tests/scripts/test_check_release_package_contract.sh");
 }
@@ -135,13 +134,6 @@ fn credentials_username_contract_script_holds() {
     // Pins joined device credentials to carrying the stable username
     // slug. Runtime bootstrap must not recover by reading auth.json.
     run_bash_script("tests/scripts/test_check_credentials_username_contract.sh");
-}
-
-#[test]
-fn federation_forward_ability_ura_script_contract_holds() {
-    // Pins remote federation invoke callers to explicit Ability URAs
-    // before they enter federation.forward_invoke.
-    run_bash_script("tests/scripts/test_check_federation_forward_ability_ura.sh");
 }
 
 #[test]

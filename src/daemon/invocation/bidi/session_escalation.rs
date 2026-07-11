@@ -1,12 +1,11 @@
-// EasyNet CLI — invocation_transport — device-mode `forward_invoke` escalation
-// =====================================================================
+// EasyNet CLI — invocation_transport — reverse-session invocation relay
+// ======================================================================
 //
 // File: src/daemon/invocation/session_escalation.rs
-// Description: Lets a device-mode daemon's `dispatch_federation_
-//              forward_invoke` send a `SessionDispatch::Request`
-//              frame up the long-lived `session.open` bidi to its
-//              hub, then `await` the matching `RequestResult` on a
-//              `tokio::sync::oneshot` channel.
+// Description: Relays complete signed InvokeRequests from a device daemon to
+//              its hub as typed `ReverseDispatchCall` frames. Daemon-owned
+//              bootstrap control calls retain a separate bounded Request /
+//              RequestResult codec.
 //
 // Why this module exists
 // ----------------------
@@ -14,8 +13,8 @@
 // accept inbound bidi; their local `PresenceRegistry` is empty by
 // construction (no peer ever calls `presence.insert` on a
 // device-mode daemon's registry). The hub holds the authoritative
-// PresenceRegistry; PR-N6 spec routes device-mode forward_invoke
-// up the already-open session bidi to the hub for resolution.
+// PresenceRegistry, so canonical remote calls travel up the already-open
+// session to the hub for routing.
 //
 // Wire ↔ correlation seam
 // -----------------------
@@ -50,16 +49,16 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::daemon::invocation::bidi::invoke_remote_initiator::{
+use crate::daemon::invocation::bidi::session_initiator::{SessionUpSender, SESSION_STREAM_ID};
+use crate::daemon::invocation::bidi::session_wire::{
     call_id_hex, RequestOutcome, SessionRequestError,
 };
-use crate::daemon::invocation::bidi::session_initiator::{SessionUpSender, SESSION_STREAM_ID};
 
 /// Default deadline for awaiting a `RequestResult` after the
 /// device queues a Request. PR-N6 spec §"Deadline propagation"
 /// says CLI-supplied `--deadline-ms` overrides this; the daemon
 /// applies this default when the CLI didn't supply one. 30s
-/// matches PR-N1's `forward_invoke_timeout`.
+/// matches the canonical remote invocation deadline.
 pub const DEFAULT_ESCALATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Capacity of the dispatch-side mpsc the dispatch handler pushes
@@ -73,9 +72,18 @@ pub const ESCALATION_QUEUE_CAPACITY: usize = 256;
 /// minted a `call_id` and is awaiting the hub's `RequestResult`.
 pub struct EscalationRequest {
     pub call_id: [u8; 16],
-    pub ability_ura: String,
-    pub args: Vec<u8>,
+    pub invocation: EscalationInvocation,
     pub reply: oneshot::Sender<RequestOutcome>,
+}
+
+/// Payload carried by a reverse session request.
+///
+/// Product invocations use `Canonical` exclusively. `LegacyControl` remains
+/// scoped to daemon-owned bootstrap/publication control messages and must not
+/// be used by CLI or user-ability adapters.
+pub enum EscalationInvocation {
+    Canonical(easynet_axon::pb::axon::v1::InvokeRequest),
+    LegacyControl { ability_ura: String, args: Vec<u8> },
 }
 
 /// Stable handle the dispatch handler clones to submit Requests.
@@ -89,6 +97,19 @@ pub struct SessionEscalationHandle {
 }
 
 impl SessionEscalationHandle {
+    /// Relay one already-signed canonical invocation through the device's
+    /// daemon-owned session without projecting or rebuilding any tuple field.
+    pub async fn escalate_invoke(
+        &self,
+        request: easynet_axon::pb::axon::v1::InvokeRequest,
+    ) -> RequestOutcome {
+        self.escalate_invocation(
+            EscalationInvocation::Canonical(request),
+            DEFAULT_ESCALATION_TIMEOUT,
+        )
+        .await
+    }
+
     /// Submit a Request for a hub-owned public wrapper ability and
     /// await the matching `RequestResult`. The wire frame carries
     /// the derived `ability_ura`, not this internal public-name
@@ -111,15 +132,27 @@ impl SessionEscalationHandle {
         args: Vec<u8>,
         timeout: Duration,
     ) -> RequestOutcome {
+        let ability_ura = crate::core::ura::hub_ability_ura(&self.session_realm, ability.trim());
+        self.escalate_invocation(
+            EscalationInvocation::LegacyControl { ability_ura, args },
+            timeout,
+        )
+        .await
+    }
+
+    async fn escalate_invocation(
+        &self,
+        invocation: EscalationInvocation,
+        timeout: Duration,
+    ) -> RequestOutcome {
         use rand::RngCore as _;
         let mut call_id = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut call_id);
         let id_hex = call_id_hex(&call_id);
-        let ability_ura = crate::core::ura::hub_ability_ura(&self.session_realm, ability.trim());
 
-        // Operator log marker for the device-mode forward_invoke
+        // Operator log marker for the device-mode canonical_invoke
         // escalation up the `session.open` bidi. SRE pipelines
-        // grep `kind=forward_invoke_escalated_up_session_bidi` to
+        // grep `kind=canonical_invoke_escalated_up_session_bidi` to
         // confirm the device-mode daemon actually escalated to the
         // hub rather than answering from local presence. The
         // PR-N6 "locked marker" comment that referenced a demo
@@ -128,15 +161,14 @@ impl SessionEscalationHandle {
         // on the previous byte-exact form.
         crate::op_event!(
             component = daemon_invocation,
-            kind = forward_invoke_escalated_up_session_bidi,
+            kind = canonical_invoke_escalated_up_session_bidi,
             call_id = id_hex,
         );
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let request = EscalationRequest {
             call_id,
-            ability_ura,
-            args,
+            invocation,
             reply: reply_tx,
         };
 
@@ -332,8 +364,7 @@ pub fn spawn_escalation_consumer_with_outbox(
         while let Some(request) = submit_rx.recv().await {
             let EscalationRequest {
                 call_id,
-                ability_ura,
-                args,
+                invocation,
                 reply,
             } = request;
 
@@ -343,7 +374,7 @@ pub fn spawn_escalation_consumer_with_outbox(
                 // instead of waiting for a hub reconnect.
                 let _ = reply.send(RequestOutcome::Err {
                     error: SessionRequestError::UpstreamFailure {
-                        reason: "no live session.open bidi to escalate forward_invoke up; \
+                        reason: "no live session.open bidi to escalate canonical_invoke up; \
                                  device-mode daemon's session supervisor has not (yet) \
                                  reconnected"
                             .to_string(),
@@ -354,8 +385,7 @@ pub fn spawn_escalation_consumer_with_outbox(
 
             correlation.register(call_id, reply);
 
-            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
-            if let Err(err) = up_tx.send_binary_chunk(frame).await {
+            if let Err(err) = send_escalation_request(&up_tx, call_id, invocation).await {
                 let mut guard = match correlation.inner.lock() {
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
@@ -402,14 +432,12 @@ pub fn spawn_escalation_consumer(
         while let Some(request) = submit_rx.recv().await {
             let EscalationRequest {
                 call_id,
-                ability_ura,
-                args,
+                invocation,
                 reply,
             } = request;
             correlation.register(call_id, reply);
 
-            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
-            if let Err(err) = up_tx.send_binary_chunk(frame).await {
+            if let Err(err) = send_escalation_request(&up_tx, call_id, invocation).await {
                 // Up-channel closed — the bidi went away mid-flight.
                 // Pull the entry back out and surface upstream
                 // failure to the dispatch caller. The consumer
@@ -433,6 +461,33 @@ pub fn spawn_escalation_consumer(
     handle
 }
 
+async fn send_escalation_request(
+    up_tx: &SessionUpSender,
+    call_id: [u8; 16],
+    invocation: EscalationInvocation,
+) -> Result<(), String> {
+    match invocation {
+        EscalationInvocation::Canonical(request) => {
+            use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+            use easynet_axon::pb::axon::v1::ReverseDispatchCall;
+            up_tx
+                .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
+                    call_id: call_id.to_vec(),
+                    request: Some(request),
+                }))
+                .await
+                .map_err(|err| err.to_string())
+        }
+        EscalationInvocation::LegacyControl { ability_ura, args } => {
+            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
+            up_tx
+                .send_binary_chunk(frame)
+                .await
+                .map_err(|err| err.to_string())
+        }
+    }
+}
+
 /// Build the `InvokeBidiUp` frame that wraps a
 /// `SessionDispatch::Request` JSON in a `BinaryChunk` payload.
 /// Mirrors what `dial_and_run_session` writes for non-Request
@@ -442,9 +497,7 @@ fn build_session_request_up_chunk(
     ability_ura: &str,
     args: &[u8],
 ) -> easynet_axon::pb::axon::v1::BinaryChunk {
-    use crate::daemon::invocation::bidi::invoke_remote_initiator::{
-        SessionContentEnvelope, SessionDispatch,
-    };
+    use crate::daemon::invocation::bidi::session_wire::{SessionContentEnvelope, SessionDispatch};
     use easynet_axon::pb::axon::v1::BinaryChunk;
 
     let dispatch = SessionDispatch::Request {
@@ -492,10 +545,11 @@ mod tests {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
                 };
-                let dispatch: crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch =
+                let dispatch: crate::daemon::invocation::bidi::session_wire::SessionDispatch =
                     serde_json::from_slice(&chunk.data).expect("decode");
-                if let crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch::Request {
-                    call_id, ..
+                if let crate::daemon::invocation::bidi::session_wire::SessionDispatch::Request {
+                    call_id,
+                    ..
                 } = dispatch
                 {
                     correlation_for_hub.complete(
@@ -509,7 +563,7 @@ mod tests {
         });
 
         let outcome = handle
-            .escalate("federation.forward_invoke".into(), b"{}".to_vec())
+            .escalate("federation.resolve_key".into(), b"{}".to_vec())
             .await;
         match outcome {
             RequestOutcome::Ok { result_bytes } => {
@@ -534,7 +588,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_millis(50),
             )
@@ -563,7 +617,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_secs(2),
             )
@@ -631,7 +685,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_secs(2),
             )
@@ -678,10 +732,11 @@ mod tests {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
                 };
-                let dispatch: crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch =
+                let dispatch: crate::daemon::invocation::bidi::session_wire::SessionDispatch =
                     serde_json::from_slice(&chunk.data).expect("decode");
-                if let crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch::Request {
-                    call_id, ..
+                if let crate::daemon::invocation::bidi::session_wire::SessionDispatch::Request {
+                    call_id,
+                    ..
                 } = dispatch
                 {
                     correlation_for_hub.complete(
@@ -695,7 +750,7 @@ mod tests {
         });
 
         let outcome = handle
-            .escalate("federation.forward_invoke".into(), b"{}".to_vec())
+            .escalate("federation.resolve_key".into(), b"{}".to_vec())
             .await;
         match outcome {
             RequestOutcome::Ok { result_bytes } => {
@@ -725,7 +780,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_secs(2),
             )

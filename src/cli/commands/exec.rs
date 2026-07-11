@@ -5,7 +5,7 @@
 // Description: One-shot remote command execution. Local targets
 //              dispatch to `process.exec` through the local daemon;
 //              remote targets reuse the same
-//              `federation.forward_invoke` path that powers
+//              canonical `Invocation::Invoke` RPC path that powers
 //              `easynet ability invoke --node`.
 //
 // What this CLI shim does
@@ -116,18 +116,16 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
     let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+    let target_call = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
         &target_ura,
         "process.exec",
     )?;
-    crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
+    crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
         &target_call,
         payload,
         caller_ura.as_deref(),
     )
-    .with_context(|| {
-        format!("invoke process.exec via federation.forward_invoke target={target_ura}")
-    })
+    .with_context(|| format!("invoke process.exec via canonical Invoke target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]

@@ -9,6 +9,7 @@ class ImportBoundaryTests(unittest.TestCase):
     def test_public_python_sdk_does_not_import_forbidden_runtime_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         private_cabi = root / "_cabi.py"
+        axon_addressing = root / "axon_addressing.py"
         forbidden = [
             "import ctypes",
             "from ctypes",
@@ -27,7 +28,14 @@ class ImportBoundaryTests(unittest.TestCase):
                 continue
             body = path.read_text()
             for needle in forbidden:
+                if path == axon_addressing and needle == "easynet_":
+                    continue
                 self.assertNotIn(needle, body, f"{path} contains {needle!r}")
+
+        addressing_body = axon_addressing.read_text()
+        self.assertIn("from easynet_axon", addressing_body)
+        self.assertNotIn("service_locator", addressing_body)
+        self.assertNotIn("open_cabi", addressing_body)
 
     def test_raw_cabi_is_confined_to_private_transport_adapter(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
@@ -37,7 +45,7 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertIn("import ctypes", body)
         self.assertIn("easynet_abi_version", body)
 
-    def test_python_sdk_root_exports_sdk_profiles_not_product_aliases(self) -> None:
+    def test_python_sdk_root_exports_only_runtime_concepts(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         self.assertFalse((root / "easyremote_profiles.py").exists())
         exported = set(getattr(easynet_sdk, "__all__", ()))
@@ -47,18 +55,14 @@ class ImportBoundaryTests(unittest.TestCase):
             "ListModelsRequest",
             "ChatCompletionRequest",
             "StreamChatCompletionRequest",
-            "DaemonLifecycleFacade",
-            "DaemonHandleFacade",
+            "GatewayLifecycleFacade",
+            "DirectoryClient",
+            "ReceiptClient",
+            "MissionClient",
         ):
             self.assertNotIn(name, exported)
             self.assertFalse(hasattr(easynet_sdk, name), name)
-        for name in (
-            "GatewayLifecycleFacade",
-            "GatewayConfig",
-            "GatewayRuntime",
-            "GatewayLifecycleState",
-            "GatewayDaemonHandle",
-        ):
+        for name in ("AddressingClient", "RuntimeClient", "InvocationDraft"):
             self.assertIn(name, exported)
             self.assertTrue(hasattr(easynet_sdk, name), name)
 
@@ -99,10 +103,10 @@ class ImportBoundaryTests(unittest.TestCase):
             for needle in forbidden:
                 self.assertNotIn(needle, body, f"{path} contains {needle!r}")
 
-    def test_descriptor_ref_public_helper_delegates_to_identity_projection(self) -> None:
+    def test_descriptor_ref_public_helper_delegates_to_addressing_projection(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         body = (root / "ability_descriptor.py").read_text()
-        self.assertIn("DescriptorRefRequest", body)
+        self.assertIn(".axon_addressing", body)
         self.assertIn("project_descriptor_ref", body)
 
 

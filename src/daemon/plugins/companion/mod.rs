@@ -9,6 +9,7 @@ mod heartbeat;
 pub mod linux;
 pub mod macos;
 pub mod planner;
+mod projection;
 mod session;
 pub mod state_store;
 pub mod status;
@@ -27,6 +28,7 @@ use crate::daemon::plugins::package::SharedPluginPackage;
 pub use planner::{
     current_platform, DesktopCompanionPlan, DesktopCompanionPlanner, PlatformCompanionSpec,
 };
+pub(crate) use projection::{project_action_result, project_status};
 pub use session::DesktopCompanionSessionProbe;
 pub use state_store::DesktopCompanionStateStore;
 pub use status::{
@@ -394,7 +396,7 @@ impl DesktopCompanionManager {
         let status = self.status_for_package(package)?;
         serde_json::to_value(status)
             .ok()
-            .and_then(|value| crate::protocol::companion_contract::project_status(&value).ok())
+            .and_then(|value| project_status(&value).ok())
             .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
                 id: package.id().as_str().to_string(),
                 reason: "companion status projection failed".to_string(),
@@ -667,7 +669,7 @@ fn action_result(
     changed: bool,
     error: Option<String>,
 ) -> Result<serde_json::Value> {
-    crate::protocol::companion_contract::project_action_result(&json!({
+    project_action_result(&json!({
         "package_id": package_id,
         "action": action,
         "status_before": before,

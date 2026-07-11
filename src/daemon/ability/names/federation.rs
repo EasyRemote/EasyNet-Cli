@@ -23,5 +23,3 @@ pub const REVOKE: &str = "federation.revoke";
 pub const IDENTITY_LIST_USER_PUBKEYS: &str = "identity.list_user_pubkeys";
 pub const IDENTITY_REGISTER_PUBKEY: &str = "identity.register_pubkey";
 pub const IDENTITY_REVOKE_USER_PUBKEY: &str = "identity.revoke_user_pubkey";
-
-pub const RUNTIME_INVOKE_REMOTE: &str = "runtime.invoke_remote";

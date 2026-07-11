@@ -4,7 +4,7 @@
 // File: src/daemon/federation/init/outcome.rs
 //
 // `FederationInitOutcome` is the protocol between
-// `try_install_federation_routing` and its callers (daemon boot,
+// `assess_federation_readiness` and its callers (daemon boot,
 // status-probe ability handlers, operator log emitters). It is
 // deliberately a closed enum:
 //
@@ -61,22 +61,8 @@ pub enum FederationInitOutcome {
     /// fall through to `target_not_registered` like before.
     Disabled { reason: String },
 
-    /// Federation routing was installed for the first time. The
-    /// process-global `forward::FORWARD_INVOKER` slot is now
-    /// populated; subsequent installs are no-ops.
+    /// Federation control-plane prerequisites are ready.
     Installed {
-        tenant: String,
-        realm: String,
-        device_ura: String,
-    },
-
-    /// A prior call to the same init function already populated
-    /// the slot. The current call's caller is OK either way —
-    /// the invoker is in place — but the field values reflect the
-    /// state captured by THIS call (which may diverge from what
-    /// the first install used if credentials changed without a
-    /// daemon restart).
-    AlreadyInstalled {
         tenant: String,
         realm: String,
         device_ura: String,
@@ -96,7 +82,7 @@ impl FederationInitOutcome {
     /// the daemon-boot log to decide between "federation: ON" and
     /// "federation: OFF (...)" headlines.
     pub fn is_operational(&self) -> bool {
-        matches!(self, Self::Installed { .. } | Self::AlreadyInstalled { .. })
+        matches!(self, Self::Installed { .. })
     }
 
     /// Stable code for status-probe receipts + logs. Mirrors the
@@ -106,7 +92,6 @@ impl FederationInitOutcome {
         match self {
             Self::Disabled { .. } => "disabled",
             Self::Installed { .. } => "installed",
-            Self::AlreadyInstalled { .. } => "already_installed",
             Self::Failed { .. } => "failed",
         }
     }
@@ -119,12 +104,6 @@ mod tests {
     #[test]
     fn is_operational_matches_installed_states() {
         assert!(FederationInitOutcome::Installed {
-            tenant: "t".into(),
-            realm: "r".into(),
-            device_ura: "u".into(),
-        }
-        .is_operational());
-        assert!(FederationInitOutcome::AlreadyInstalled {
             tenant: "t".into(),
             realm: "r".into(),
             device_ura: "u".into(),

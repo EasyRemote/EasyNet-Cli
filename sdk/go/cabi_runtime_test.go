@@ -13,7 +13,6 @@ import (
 )
 
 var _ DaemonTransport = (*CABIDaemonTransport)(nil)
-var _ CompanionTransport = (*CABIDaemonTransport)(nil)
 var _ RuntimeTransport = (*CABIRuntimeTransport)(nil)
 var _ HealthTransport = (*CABIRuntimeTransport)(nil)
 
@@ -246,49 +245,6 @@ func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
 	}
 }
 
-func TestCABICompanionLifecycleUsesDaemonHandle(t *testing.T) {
-	libraryPath := buildFakeCABIStreamLibrary(t)
-	transport, err := OpenCABIDaemonTransport(libraryPath)
-	if err != nil {
-		t.Fatalf("OpenCABIDaemonTransport: %v", err)
-	}
-	defer func() {
-		if err := transport.Close(context.Background()); err != nil {
-			t.Fatalf("Close C ABI daemon transport: %v", err)
-		}
-	}()
-	control, err := NewDaemonControl(transport)
-	if err != nil {
-		t.Fatalf("NewDaemonControl: %v", err)
-	}
-	handle, err := control.Start(context.Background(), StartConfig{Mode: ModeDevice, DeviceID: "dev-a"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	list, err := handle.CompanionList(context.Background())
-	if err != nil {
-		t.Fatalf("CompanionList: %v", err)
-	}
-	if len(list.Companions) != 1 || list.Companions[0].ProjectedState != CompanionProjectedRunning {
-		t.Fatalf("unexpected companion list: %#v", list)
-	}
-	status, err := handle.CompanionStatus(context.Background(), " easynet.desktop.menubar ", " 0.1.0 ")
-	if err != nil {
-		t.Fatalf("CompanionStatus: %v", err)
-	}
-	if status.PackageID != "easynet.desktop.menubar" || status.PackageVersion != "0.1.0" {
-		t.Fatalf("status input was not projected through C ABI: %#v", status)
-	}
-	result, err := handle.CompanionDisable(context.Background(), "easynet.desktop.menubar", "")
-	if err != nil {
-		t.Fatalf("CompanionDisable: %v", err)
-	}
-	if result.Action != "disable" || result.StatusAfter == nil {
-		t.Fatalf("unexpected companion action result: %#v", result)
-	}
-}
-
 func TestCABICallbackInboxOverflowIsBounded(t *testing.T) {
 	inbox := newCABICallbackInbox(1)
 	inbox.push([]byte(`{"sequence":1,"kind":"chunk","terminal":false}`))
@@ -342,7 +298,7 @@ static char *dup_json(const char *s) {
 	return out;
 }
 
-uint32_t easynet_abi_version(void) { return 4u; }
+uint32_t easynet_abi_version(void) { return 5u; }
 void easynet_string_free(char *s) { free(s); }
 int32_t easynet_last_error_json(char **out_error_json) {
 	*out_error_json = dup_json("{\"code\":\"GENERIC\",\"stage\":\"fake\",\"message\":\"fake C ABI error\",\"retry\":\"never\",\"details\":{}}");
@@ -376,47 +332,6 @@ int32_t easynet_daemon_open_client(uint64_t daemon_handle, uint64_t *out_handle)
 	*out_handle = 808;
 	return 0;
 }
-static char *companion_status_json(const char *package_id, const char *version) {
-	char buffer[1024];
-	snprintf(buffer, sizeof(buffer), "{\"profile\":\"desktop_companion\",\"kind\":\"desktop_companion_status\",\"package_id\":\"%s\",\"package_version\":\"%s\",\"display_name\":\"EasyNet Menu Bar\",\"platform\":\"macos\",\"desired_state\":\"enabled\",\"supervisor_state\":\"installed_enabled\",\"observed_state\":\"running\",\"projected_state\":\"running\",\"boot_policy\":\"ensure_running_after_daemon_ready\",\"stop_policy\":\"keep_running\",\"health\":\"status_file\",\"pid\":123,\"version\":\"0.1.0\",\"last_seen_unix_ms\":1783411200000,\"launch_method\":\"launch_agent\",\"error\":null,\"metadata\":{}}", package_id, version);
-	return dup_json(buffer);
-}
-int32_t easynet_companion_list(uint64_t handle, char **out_json) {
-	(void)handle;
-	*out_json = dup_json("{\"kind\":\"desktop_companion_list\",\"companions\":[{\"profile\":\"desktop_companion\",\"kind\":\"desktop_companion_status\",\"package_id\":\"easynet.desktop.menubar\",\"package_version\":\"0.1.0\",\"display_name\":\"EasyNet Menu Bar\",\"platform\":\"macos\",\"desired_state\":\"enabled\",\"supervisor_state\":\"installed_enabled\",\"observed_state\":\"running\",\"projected_state\":\"running\",\"boot_policy\":\"ensure_running_after_daemon_ready\",\"stop_policy\":\"keep_running\",\"health\":\"status_file\",\"pid\":123,\"version\":\"0.1.0\",\"last_seen_unix_ms\":1783411200000,\"launch_method\":\"launch_agent\",\"error\":null,\"metadata\":{}}]}");
-	return 0;
-}
-int32_t easynet_companion_status(uint64_t handle, const char *package_id, const char *version_or_null, char **out_json) {
-	(void)handle;
-	*out_json = companion_status_json(package_id, version_or_null == 0 ? "0.1.0" : version_or_null);
-	return 0;
-}
-static int32_t companion_action(const char *action, const char *package_id, const char *version_or_null, char **out_json) {
-	char *status = companion_status_json(package_id, version_or_null == 0 ? "0.1.0" : version_or_null);
-	size_t n = strlen(status) + strlen(action) + 256;
-	char *buffer = (char *)malloc(n);
-	if (buffer == 0) return 10;
-	snprintf(buffer, n, "{\"profile\":\"desktop_companion\",\"kind\":\"desktop_companion_action_result\",\"package_id\":\"%s\",\"action\":\"%s\",\"changed\":true,\"status_before\":null,\"status_after\":%s,\"error\":null,\"metadata\":{}}", package_id, action, status);
-	free(status);
-	*out_json = buffer;
-	return 0;
-}
-int32_t easynet_companion_enable(uint64_t handle, const char *package_id, const char *version_or_null, char **out_json) {
-	(void)handle;
-	return companion_action("enable", package_id, version_or_null, out_json);
-}
-int32_t easynet_companion_disable(uint64_t handle, const char *package_id, const char *version_or_null, char **out_json) {
-	(void)handle;
-	return companion_action("disable", package_id, version_or_null, out_json);
-}
-int32_t easynet_companion_start(uint64_t handle, const char *package_id, const char *version_or_null, char **out_json) {
-	(void)handle;
-	return companion_action("start", package_id, version_or_null, out_json);
-}
-int32_t easynet_companion_stop(uint64_t handle, const char *package_id, const char *version_or_null, char **out_json) {
-	(void)handle;
-	return companion_action("stop", package_id, version_or_null, out_json);
-}
 int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
 int32_t easynet_runtime_health(uint64_t handle, char **out_health_json) {
 	(void)handle;
@@ -425,7 +340,7 @@ int32_t easynet_runtime_health(uint64_t handle, char **out_health_json) {
 }
 int32_t easynet_runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {
 	(void)handle;
-	*out_diagnostics_json = dup_json("{\"profile\":\"health\",\"kind\":\"diagnostics_report\",\"state\":\"Running\",\"ready\":true,\"version\":\"0.91.30\",\"abi_version\":4,\"control_endpoint\":\"/tmp/easynet/control.json\",\"invocation_endpoint\":\"/tmp/easynet/daemon.sock\",\"checks\":[{\"name\":\"api\",\"ready\":true,\"message\":null},{\"name\":\"daemon\",\"ready\":true,\"message\":null},{\"name\":\"invocation\",\"ready\":true,\"message\":null},{\"name\":\"directory\",\"ready\":true,\"message\":null},{\"name\":\"trust\",\"ready\":true,\"message\":null},{\"name\":\"runtime\",\"ready\":true,\"message\":null}],\"diagnostics\":[]}");
+	*out_diagnostics_json = dup_json("{\"profile\":\"health\",\"kind\":\"diagnostics_report\",\"state\":\"Running\",\"ready\":true,\"version\":\"0.91.30\",\"abi_version\":5,\"control_endpoint\":\"/tmp/easynet/control.json\",\"invocation_endpoint\":\"/tmp/easynet/daemon.sock\",\"checks\":[{\"name\":\"api\",\"ready\":true,\"message\":null},{\"name\":\"daemon\",\"ready\":true,\"message\":null},{\"name\":\"invocation\",\"ready\":true,\"message\":null},{\"name\":\"directory\",\"ready\":true,\"message\":null},{\"name\":\"trust\",\"ready\":true,\"message\":null},{\"name\":\"runtime\",\"ready\":true,\"message\":null}],\"diagnostics\":[]}");
 	return 0;
 }
 int32_t easynet_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {

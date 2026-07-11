@@ -29,7 +29,7 @@ func TestRuntimeHealthDecodesReadyFixture(t *testing.T) {
 			"trust_ready": true,
 			"runtime_ready": true,
 			"version": "0.1.0",
-			"abi_version": 4,
+			"abi_version": 5,
 			"mismatch": null,
 			"diagnostics": []
 		}`), nil
@@ -49,8 +49,8 @@ func TestRuntimeHealthDecodesReadyFixture(t *testing.T) {
 	if !health.Ready() {
 		t.Fatalf("Ready = false, want true")
 	}
-	if health.ABIVersion == nil || *health.ABIVersion != 4 {
-		t.Fatalf("ABI version = %v, want 4", health.ABIVersion)
+	if health.ABIVersion == nil || *health.ABIVersion != 5 {
+		t.Fatalf("ABI version = %v, want 5", health.ABIVersion)
 	}
 }
 
@@ -71,7 +71,7 @@ func TestRuntimeDiagnosticsDecodesReportFixture(t *testing.T) {
 			"state": "Running",
 			"ready": true,
 			"version": "0.91.30",
-			"abi_version": 4,
+			"abi_version": 5,
 			"control_endpoint": "/tmp/easynet/control.json",
 			"invocation_endpoint": "/tmp/easynet/daemon.sock",
 			"checks": [{"name": "runtime", "ready": true, "message": null}],

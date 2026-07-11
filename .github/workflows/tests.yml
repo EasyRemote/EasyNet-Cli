@@ -65,3 +65,12 @@ jobs:
       - name: Run the lib test suite
         working-directory: EasyNet-Cli
         run: cargo test --features axon-pb --lib
+
+      # A source/header-only check cannot detect stale or accidental cdylib
+      # exports. Build the actual shared library and compare its normalized
+      # dynamic symbol table against the canonical 54-symbol v5 allowlist.
+      - name: Verify exact generic C ABI v5 exports
+        working-directory: EasyNet-Cli
+        run: |
+          cargo build --features axon-pb --lib
+          EASYNET_FFI_REQUIRE_DYLIB=1 bash tools/scripts/check-ffi-abi-v5-header.sh

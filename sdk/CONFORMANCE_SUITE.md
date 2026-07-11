@@ -1,158 +1,108 @@
-# SDK Conformance Suite
+# Canonical Runtime Conformance Suite
 
-The conformance suite is the language-neutral behavior contract for the
-EasyNet Daemon SDK. It prevents language facades from redefining daemon or Axon
-semantics while still allowing idiomatic APIs.
+The conformance suite proves that every binding implements the same
+product-neutral runtime semantics. It does not standardize product workflows.
 
-## Layout
+## Sources
 
-```text
-sdk/conformance/
-  cases/
-    *.yaml
-  fixtures/
-    *.json
-  fixture-schema-bindings.json
-  runner/
-    README.md
-    rust-action-adapter-report.json
-    c-abi-action-adapter-report.json
-    go-action-adapter-report.json
-    python-action-adapter-report.json
-    node-action-adapter-report.json
-    java-action-adapter-report.json
-    swift-action-adapter-report.json
+- `cases/`: declarative semantic requirements;
+- `fixtures/`: exact cross-language inputs and projections;
+- `sdk-parity-matrix.json`: Go/Python capability state and evidence;
+- `runner/`: action adapters and reports;
+- language tests: executable provider/binding evidence.
+
+## Required case families
+
+### Addressing
+
+- valid and invalid URA vectors delegate to Axon;
+- owner and AbilityDescriptorRef projections are identical across bindings;
+- descriptor-bound subjects are explicit;
+- malformed structural segments fail closed;
+- no binding or product assembles canonical strings independently.
+
+### Complete Invocation
+
+- every seven-tuple slot is required;
+- exactly one argument representation is accepted;
+- descriptor version survives prepare and dispatch;
+- caller, callee, subject, nonce and causal context survive unary, stream, bidi
+  and federation relay;
+- prepared material is not executable;
+- signed material is immutable and submitted at most once.
+
+### Lifecycle
+
+- builder/prepared/signed/handle/stream/bidi transitions are monotonic;
+- close is idempotent and observes ownership;
+- invalid transitions return typed errors;
+- unavailable required providers fail construction or the operation;
+- corrupt discovery/catalog state is never projected as an empty success.
+
+### Authority and receipts
+
+- delegation and session-authority metadata are mutually exclusive;
+- canonical material is delegated to the authority provider;
+- receipt facts used for causal continuation are explicit and opaque;
+- summary data alone never claims cryptographic verification.
+
+### ABI v5
+
+- header and export allowlist agree exactly;
+- Go/Python native loaders resolve only allowed symbols;
+- owned buffers and opaque handles have explicit release operations;
+- removed domain symbols and aliases are absent from source, binaries and
+  release packages.
+
+### Product neutrality
+
+- public exports contain no product profile client/factory;
+- public source contains no product ability literals;
+- generic schemas and cases do not encode product DTOs;
+- Node/Java/Swift do not ship placeholder product seams;
+- downstream products own their DTOs/workflows while importing only generic
+  runtime concepts;
+- legacy identity spelling is absent where the semantic value is a URA.
+
+## Evidence rules
+
+1. Every non-unsupported matrix state cites an existing executable test.
+2. A report generated from a stale source tree is invalid.
+3. A case cannot pass through an unimplemented/default action adapter.
+4. `provider-backed` requires an explicit provider path, not a DTO-only seam.
+5. `cutover-ready` requires deletion of the replaced implementation and an
+   import/export boundary gate.
+6. Product repository tests may be referenced as downstream evidence, but the
+   product contract is not copied into this suite.
+
+## Runner result
+
+An action adapter emits one result per selected case:
+
+```json
+{
+  "case_id": "invocation/complete_tuple",
+  "status": "passed",
+  "evidence": ["language test or exact fixture reference"]
+}
 ```
 
-Cases are declarative. Fixtures are golden DTO payloads validated against
-`sdk/schemas` through `sdk/conformance/fixture-schema-bindings.json`. The
-binding manifest is exhaustive: every `*.v4.json` fixture is bound exactly once
-to the schema that defines its canonical DTO contract.
+Unknown actions, missing fixtures, missing evidence and schema mismatches fail
+the run. Skipping is permitted only when the capability state is explicitly
+`unsupported`; a shipped seam/provider cannot silently skip its declared cases.
 
-## Case Format
+## Release gate
 
-Each YAML case uses:
+The SDK release gate runs:
 
-```yaml
-id: invocation/complete_tuple
-profile: runtime_core
-required_for:
-  - rust
-  - c_abi
-steps:
-  - action: build_invocation
-    fixture: invocation.complete.v4.json
-expect:
-  result: ok
-```
+- Rust library check/tests with zero warnings;
+- exact ABI/header/package checks;
+- Go tests under supported build tags;
+- Python tests, typing and import/export audit;
+- Node/Java/Swift build/tests for their declared subsets;
+- matrix schema/evidence validation;
+- product-neutrality, URA naming, project-structure and dead-code guards;
+- downstream EasyNet backend and EasyRemote suites after product extraction.
 
-Runners may translate actions to idiomatic language APIs, but they must report
-the same case id, profile, result, and typed error code.
-
-## Runner Contract
-
-A language runner must:
-
-- Load case YAML from `sdk/conformance/cases`.
-- Load fixture JSON from `sdk/conformance/fixtures`.
-- Validate fixture files against `sdk/schemas` via
-  `sdk/conformance/fixture-schema-bindings.json` before executing behavior.
-- Fail when a public API exposes raw Axon/proto/runtime types.
-- Treat skipped cases as instability evidence unless the profile is undeclared
-  for that language.
-- Emit machine-readable results with `case_id`, `language`, `profile`,
-  `status`, and `error_code`.
-- Provide an action-adapter report for provider-backed language parity claims.
-  The shared runner validates that every required case has a passed adapter
-  record, repository-local evidence, and an evidence kind owned by the report
-  language.
-
-Rust, C ABI, Go, Python, and shipped P1 seam reports such as Node, Java, and Swift must
-consume shared cases from `sdk/conformance/cases` and shared fixtures from
-`sdk/conformance/fixtures` for shipped local DTO/actions and projection-only
-profile behavior, including
-Runtime Core, Directory + Identity, Mission, Admin + Gateway, Publication,
-Events, Surface, Compatibility, Receipt, Host Binding, and Wrapper profile
-adapters. Inline samples may remain as focused unit tests, but they do not
-replace the shared case-aware parity gate.
-
-## Minimum Commands
-
-```text
-cargo run --bin sdk-conformance-runner -- --language rust --adapter-report sdk/conformance/runner/rust-action-adapter-report.json --format jsonl
-cargo run --bin sdk-conformance-runner -- --language c_abi --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json --format jsonl
-cargo run --bin sdk-conformance-runner -- --language go --adapter-report sdk/conformance/runner/go-action-adapter-report.json --format jsonl
-cargo run --bin sdk-conformance-runner -- --language python --adapter-report sdk/conformance/runner/python-action-adapter-report.json --format jsonl
-cargo run --bin sdk-conformance-runner -- --language node --adapter-report sdk/conformance/runner/node-action-adapter-report.json --format jsonl
-cargo run --bin sdk-conformance-runner -- --language java --adapter-report sdk/conformance/runner/java-action-adapter-report.json --format jsonl
-cargo run --bin sdk-conformance-runner -- --language swift --adapter-report sdk/conformance/runner/swift-action-adapter-report.json --format jsonl
-cargo test --lib --features axon-pb sdk_
-cargo test --lib --features axon-pb ffi::
-bash tools/scripts/check-sdk-scaffold.sh
-bash tools/scripts/check-sdk-package-metadata.sh
-bash tools/scripts/check-backend-sdk-only-boundary.sh "$EASYNET_BACKEND_ROOT"
-bash tools/scripts/check-backend-route-family-coverage.sh
-bash tools/scripts/check-sdk-parity-matrix.sh
-bash tools/scripts/check-sdk-ura-naming.sh
-bash tools/scripts/check-sdk-product-smokes.sh
-bash tools/scripts/python-sdk-live-smoke.sh
-bash tools/scripts/go-sdk-live-smoke.sh
-bash tools/scripts/check-sdk-cutover-readiness.sh
-```
-
-Future runners should add:
-
-```text
-cd sdk/go && go test ./...
-cd sdk/python && python3 -m unittest discover -s tests
-npm test --prefix sdk/node
-./gradlew :sdk:java:test
-swift test --package-path sdk/swift
-```
-
-## Required Case Families
-
-- version and ABI compatibility
-- environment process root feature discovery, ABI check, daemon lifecycle
-  facade access, local connect, and idempotent cleanup
-- daemon lifecycle and degraded readiness
-- complete Invocation tuple
-- invocation builder handle state transitions
-- invocation handle terminal monotonicity
-- canonical material delegated to Axon
-- typed error JSON projection
-- prepared-not-submittable
-- pre-signed submit
-- local daemon signing boundary
-- terminal monotonicity
-- authority mutual exclusion
-- stream close and bidi close-send lifecycle ownership
-- stream terminal ordering and backpressure
-- bidi frame0 and close-send behavior
-- directory read-model carriers, resolve carrier/projection, page projection,
-  pagination, and no-default-fanout
-- identity URA and DescriptorRef projection delegates to Axon helpers
-- invocation carriers consume Axon/daemon-projected DescriptorRef values rather
-  than synthesizing descriptor grammar in SDK facades
-- receipt fetch/project/verify/causal-ref
-- receipt projection never upgrades summary-only data to verified
-- publication ResourceRef, package validation, and complete Invocation carriers
-- host binding frame codec and output-hash folding
-- mission run/track/cancel complete Invocation carriers and MissionStatus
-  projection
-- events directory subscription carrier, explicit cursor projection,
-  dropped-event reports, and terminal frames
-- admin/gateway agent/session carriers, lifecycle readiness flags, agent record
-  projection, and lifecycle result projection
-- compatibility OpenAI model/chat carriers, canonical model id validation,
-  unary completion projection, and stream envelope projection
-- convenience wrapper file/session/media record projections without execution
-  transport ownership
-- profile ownership exclusivity
-- first-class consumer coverage through declared profiles
-- Runtime Core no-bloat boundary
-- backend SDK-only import-ban enforcement and Hub route-family coverage mapping
-- Go/Python SDK parity matrix enforcement with product-boundary checks
-
-The scaffold in `cases/` names the first shared cases. A profile must add its
-full case set before it can be marked profile-ready.
+The release is blocked if any current-architecture document, public export or
+conformance artifact describes the retired product-profile SDK.

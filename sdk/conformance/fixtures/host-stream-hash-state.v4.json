@@ -1,7 +1,0 @@
-{
-  "algorithm": "sha256(prev_hash || seq_be || canonical_json(value))",
-  "output_hash": "sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15",
-  "frames": 1,
-  "last_seq": 0,
-  "canonical_json": "{\"token\":\"hello\"}"
-}

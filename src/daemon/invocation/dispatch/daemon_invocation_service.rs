@@ -60,7 +60,7 @@
 //   * `Status::failed_precondition` — the request is well-formed
 //     and the caller has admission, but THIS daemon is not
 //     configured to serve it. Examples: `with_pending(...)` was
-//     not called at boot so `runtime.invoke_remote` has no
+//     not called at boot so session dispatch has no
 //     correlation map; `LocalRuntime` is not wired so a self-
 //     dispatch ability cannot run; the daemon was constructed
 //     without an `InvocationLedger`. The caller can retry the
@@ -106,13 +106,13 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::daemon::ability::builtins::governance::invocation_history::{
     record_by_request_id, ABILITY_INVOCATION_RECORD_GET,
 };
-use crate::daemon::ability::conformance::BaselineCallMode;
+use crate::daemon::ability::CallMode;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
-use crate::daemon::invocation::admission::quota_meter::quota_metered_ability_for_request;
+use crate::daemon::invocation::admission::quota_meter::quota_meters_request;
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::target_gate::TargetGate;
@@ -125,12 +125,12 @@ use crate::daemon::invocation::dispatch::deps::{
 };
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
-    ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_FORWARD_INVOKE, ABILITY_FEDERATION_HEARTBEAT,
-    ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_LIST_USER_DEVICES,
-    ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES, ABILITY_FEDERATION_RESOLVE,
-    ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE, ABILITY_FEDERATION_STATUS,
-    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
-    ABILITY_NAMESPACE_PROXY_RESOLVE, ABILITY_NAMESPACE_RESOLVE,
+    ABILITY_FEDERATION_DISCOVER, ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN,
+    ABILITY_FEDERATION_LIST_USER_DEVICES, ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
+    ABILITY_FEDERATION_RESOLVE, ABILITY_FEDERATION_RESOLVE_KEY, ABILITY_FEDERATION_REVOKE,
+    ABILITY_FEDERATION_STATUS, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+    ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2, ABILITY_NAMESPACE_PROXY_RESOLVE,
+    ABILITY_NAMESPACE_RESOLVE,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{wrap_json_response, BoxedDownStream};
 use crate::daemon::invocation::dispatch::unary_dispatcher::{
@@ -165,7 +165,6 @@ pub(crate) enum DaemonUnaryRoute {
     FederationProxyListUserDevices,
     NamespaceProxyResolve,
     FederationRevoke,
-    FederationForwardInvoke,
     IdentityRegisterPubkey,
     IdentityRevokeUserPubkey,
     IdentityListUserPubkeys,
@@ -186,7 +185,6 @@ impl DaemonUnaryRoute {
         Self::FederationProxyListUserDevices,
         Self::NamespaceProxyResolve,
         Self::FederationRevoke,
-        Self::FederationForwardInvoke,
         Self::IdentityRegisterPubkey,
         Self::IdentityRevokeUserPubkey,
         Self::IdentityListUserPubkeys,
@@ -216,7 +214,6 @@ impl DaemonUnaryRoute {
             Self::FederationProxyListUserDevices => ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
             Self::NamespaceProxyResolve => ABILITY_NAMESPACE_PROXY_RESOLVE,
             Self::FederationRevoke => ABILITY_FEDERATION_REVOKE,
-            Self::FederationForwardInvoke => ABILITY_FEDERATION_FORWARD_INVOKE,
             Self::IdentityRegisterPubkey => ABILITY_IDENTITY_REGISTER_PUBKEY,
             Self::IdentityRevokeUserPubkey => ABILITY_IDENTITY_REVOKE_USER_PUBKEY,
             Self::IdentityListUserPubkeys => ABILITY_IDENTITY_LIST_USER_PUBKEYS,
@@ -224,8 +221,8 @@ impl DaemonUnaryRoute {
     }
 
     #[must_use]
-    pub(crate) const fn call_mode(self) -> BaselineCallMode {
-        BaselineCallMode::Rpc
+    pub(crate) const fn call_mode(self) -> CallMode {
+        CallMode::Rpc
     }
 }
 
@@ -262,14 +259,14 @@ impl DaemonStreamRoute {
     }
 
     #[must_use]
-    pub(crate) const fn call_mode(self) -> BaselineCallMode {
-        BaselineCallMode::Stream
+    pub(crate) const fn call_mode(self) -> CallMode {
+        CallMode::Stream
     }
 }
 
 pub(crate) const DAEMON_INVOCATION_STREAM_ROUTES: &[DaemonStreamRoute] = DaemonStreamRoute::ALL;
 
-fn dispatch_function_name_for_route_table(
+pub(crate) fn dispatch_function_name_for_route_table(
     function_name: &str,
     envelope: Option<&easynet_axon::pb::axon::v1::Envelope>,
 ) -> String {
@@ -310,7 +307,7 @@ use easynet_axon::pb::axon::v1::{
 /// Holds the dependencies the three RPC methods need:
 ///
 /// - `presence` — the `PresenceRegistry` consulted by federation
-///   wrappers (resolve / forward_invoke / revoke / heartbeat /
+///   wrappers (resolve / canonical_invoke / revoke / heartbeat /
 ///   subscribe_directory) and by the future `session.open` accept
 ///   path in PR-2
 /// - `admission` — the transport policy facade consulted at the start
@@ -407,10 +404,8 @@ impl DaemonInvocationService {
     /// audit-log subscriber. The policy facade is constructed
     /// from `RealmTrustAnchor::load_or_empty(...)` at daemon boot.
     ///
-    /// `runtime.invoke_remote` requires an additional
-    /// `PendingDispatchMap`; use `with_pending(...)` to attach one.
-    /// Daemons constructed without it reject `runtime.invoke_remote`
-    /// calls as not-configured rather than crashing.
+    /// Session-routed calls require a `PendingDispatchMap`; use
+    /// `with_pending(...)` to attach one.
     #[must_use]
     pub fn new(presence: Arc<PresenceRegistry>, admission: AdmissionFacade) -> Self {
         Self {
@@ -597,8 +592,8 @@ impl DaemonInvocationService {
         })
     }
 
-    /// Attach a `PendingDispatchMap` for `runtime.invoke_remote`
-    /// dispatch correlation. Builder-style so existing
+    /// Attach the correlation table for typed session dispatch results.
+    /// Builder-style so existing
     /// `DaemonInvocationService::new(presence, admission)` callers
     /// stay source-compatible.
     ///
@@ -610,7 +605,7 @@ impl DaemonInvocationService {
     pub fn with_pending(mut self, pending: Arc<PendingDispatchMap>) -> Self {
         // Spawn a presence-event watcher that fail-fasts every
         // pending dispatch whose target_ura just went offline.
-        // Without this hook, `forward_invoke`'s `await_reply()`
+        // Without this hook, a dispatch's `await_reply()`
         // blocks on the oneshot until the operator-side HTTP
         // request times out (~30s) for a target session that's
         // already known-dead — surfacing as "your invoke just
@@ -725,13 +720,9 @@ impl DaemonInvocationService {
         self
     }
 
-    /// **PR-N6 C4**. Attach a session-escalation handle. When
-    /// set, `dispatch_federation_forward_invoke` routes every
-    /// inbound forward_invoke call up the existing
-    /// `session.open` bidi to the hub instead of consulting
-    /// the local PresenceRegistry. Boot wires this only under
-    /// `mode = "device"`; hub/both daemons leave it `None` and
-    /// take the existing dispatch arm.
+    /// Attach the device-mode reverse-session relay. Device daemons submit
+    /// complete signed requests to their hub through `session.open`; hub/both
+    /// daemons route directly from their authoritative presence state.
     #[must_use]
     pub fn with_session_escalation(
         mut self,
@@ -776,17 +767,8 @@ impl DaemonInvocationService {
         self
     }
 
-    /// **Phase 2 of the Axon-SDK migration**. Attach the shared
-    /// `LocalRuntime` instance. Boot constructs it after the trust
-    /// anchor and invocation ledger are available so the runtime
-    /// can install its `KeyResolver` + `LedgerSink` before any
-    /// invocation lands.
-    ///
-    /// Phase 4 flips `dispatch_invoke_remote` /
-    /// `dispatch_federation_forward_invoke` to route through the
-    /// runtime; until then this is wired but unread, matching the
-    /// "non-destructive bring-up first, hard-swap second" cadence
-    /// of the migration.
+    /// Attach the shared Axon `LocalRuntime`. Boot installs its key resolver
+    /// and ledger sink before exposing the Invocation service.
     #[must_use]
     pub fn with_local_runtime(
         mut self,
@@ -807,13 +789,8 @@ impl DaemonInvocationService {
         self
     }
 
-    /// **PR-N1 commit 3a/N**. Attach the cross-hub federation
-    /// client. Daemons booted without one return `target_offline`
-    /// for cross-realm
-    /// `federation.forward_invoke` calls. PR-N1 commit 3b/N
-    /// rewrites the dispatcher to consume the client; commit
-    /// 3a/N only stores it as a field so that rewrite has a stable
-    /// constructor surface to thread through.
+    /// Attach the peer Invocation transport. Daemons without one reject
+    /// cross-realm routes as unavailable.
     #[must_use]
     pub fn with_federation_client(mut self, client: Arc<dyn FederationClient>) -> Self {
         self.federation.client = Some(client);
@@ -940,21 +917,17 @@ impl Invocation for DaemonInvocationService {
         // dispatch still enters LocalRuntime through public Axon
         // admission below. A throttled caller is rejected here with
         // `ResourceExhausted` before any dispatch work.
-        let rate_limit = match quota_metered_ability_for_request(&inner) {
-            Ok(Some(ability)) => match self.admission.check_quota_for_ability(&inner, &ability) {
+        let rate_limit = if quota_meters_request(&inner) {
+            match self.admission.check_quota(&inner) {
                 Ok(info) => info,
                 Err(err) => {
                     let result: Result<Response<InvokeResponse>, Status> = Err(err);
                     self.record_unary_invocation(&inner, started_unix_ms, &result);
                     return result;
                 }
-            },
-            Ok(None) => None,
-            Err(err) => {
-                let result: Result<Response<InvokeResponse>, Status> = Err(err);
-                self.record_unary_invocation(&inner, started_unix_ms, &result);
-                return result;
             }
+        } else {
+            None
         };
 
         // Phase 5e: flag set by the Axon-routed catch-all arm so we
@@ -1026,14 +999,6 @@ impl Invocation for DaemonInvocationService {
                 Some(DaemonUnaryRoute::FederationRevoke) => {
                     unary.dispatch_federation_revoke(&inner.arguments)
                 }
-                Some(DaemonUnaryRoute::FederationForwardInvoke) => {
-                    unary
-                        .dispatch_federation_forward_invoke(
-                            inner.envelope.as_ref(),
-                            &inner.arguments,
-                        )
-                        .await
-                }
                 Some(DaemonUnaryRoute::IdentityRegisterPubkey) => {
                     unary.dispatch_register_device_pubkey(inner.envelope.as_ref(), &inner.arguments)
                 }
@@ -1052,8 +1017,10 @@ impl Invocation for DaemonInvocationService {
                 // receiving daemon, not owner-routed abilities. Dispatch them
                 // directly on the LocalRuntime so a hub-owner callee URA does
                 // not get rejected as `NXDOMAIN owner is not online`.
-                None if is_runtime_admin_ability(function) => {
-                    unary.dispatch_runtime_admin_ability(&inner).await
+                None if is_runtime_admin_ability(&route_function) => {
+                    unary
+                        .dispatch_runtime_admin_ability(&inner, &route_function)
+                        .await
                 }
                 // Catch-all user abilities must pass through namespace.resolve
                 // before Axon LocalRuntime dispatch. The runtime executes the
@@ -1094,9 +1061,7 @@ impl Invocation for DaemonInvocationService {
     /// Spec §4 reference. Routes by
     /// `InvokeServerStreamRequest.function_name`. PR-1 staging
     /// supports `federation.subscribe_directory` with the initial
-    /// snapshot frame only; the broadcast pump for subsequent
-    /// transitions lands in commit 8/9 alongside
-    /// `federation.forward_invoke` reverse-channel push.
+    /// snapshot plus subsequent presence transitions.
     async fn invoke_stream(
         &self,
         request: Request<InvokeServerStreamRequest>,
@@ -1124,12 +1089,9 @@ impl Invocation for DaemonInvocationService {
     /// Spec §2.1 reference. Routes by frame-0
     /// `EnvelopeOpen.target.ability_name`:
     ///
-    /// - `runtime.invoke_remote` → cross-device dispatch handler
-    ///   (PR-3 commit 1/3, this commit). Requires `with_pending(...)`
-    ///   to have wired a `PendingDispatchMap`; otherwise returns
-    ///   `Status::failed_precondition` with explicit reason.
-    /// - `session.open` → PR-2; arm added when PR-2 lands
-    /// - anything else → `Status::unimplemented` citing PR-2/PR-3
+    /// - `session.open` accepts a long-lived reverse channel.
+    /// - registered builtin/plugin bidi abilities use their declared wire
+    ///   profile.
     async fn invoke_bidi(
         &self,
         request: Request<Streaming<InvokeBidiUp>>,

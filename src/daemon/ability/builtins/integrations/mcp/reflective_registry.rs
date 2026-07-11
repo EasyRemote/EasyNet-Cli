@@ -18,7 +18,7 @@
 //     registry refuses to overwrite an existing handler.
 //   - Axon protocol wire is untouched: reflection registers ordinary
 //     local abilities; cross-device dispatch reuses
-//     `federation.forward_invoke` like any other ability.
+//     the canonical `Invocation::Invoke` RPC like every other invocation.
 //
 // What this module does NOT do (kept narrow on purpose):
 //
@@ -1854,7 +1854,11 @@ while True:
         let (_dir, svc) = make_echo_client("echo");
         let owner = "easynet:///r/r/agent/u.mcp";
         let mut reg = registry_for_mcp_owner(owner);
-        reg.register_rpc("echo_one", Arc::new(|_: Value| Ok(json!("local"))));
+        reg.register_rpc_with_owner(
+            "echo_one",
+            OwnerKind::Agent("mcp".into()),
+            Arc::new(|_: Value| Ok(json!("local"))),
+        );
 
         let result = reflect_all(&svc, &mut reg, owner).await;
 
@@ -2092,10 +2096,14 @@ while True:
             reg.control_plane_owner("echo_one"),
             Some(OwnerKind::Agent("mcp".to_string()))
         );
-        // Hot-registered MCP tool: its manifest is present in the
-        // control-plane store (the commit choke point dual-writes static
-        // and dynamic registrations alike).
-        assert!(reg.control_plane_manifest("echo_one").is_some());
+        let descriptor = reg
+            .control_plane_record_for_mode("echo_one", crate::daemon::ability::CallMode::Stream)
+            .expect("reflected descriptor lookup is unambiguous")
+            .expect("hot-registered MCP tool publishes a canonical descriptor");
+        assert_eq!(
+            descriptor.descriptor().call_mode(),
+            crate::daemon::ability::CallMode::Stream
+        );
         assert_eq!(
             reflected_names_by_server(&result).get("echo").cloned(),
             Some(vec!["echo_one".to_string(), "echo_two".to_string()])
@@ -2218,8 +2226,9 @@ while True:
         // from the [a, b] state. Manually register `a` so the
         // diff has something to remove.
         use std::sync::Arc;
-        reg2.register_rpc(
+        reg2.register_rpc_with_owner(
             "a",
+            OwnerKind::Agent("mcp".into()),
             Arc::new(|_: Value| Ok(serde_json::json!({"stale": "tool a"}))),
         );
         // After this seed, reg2 has [a, b, c]. previously_reflected

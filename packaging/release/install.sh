@@ -68,7 +68,8 @@ main() {
     echo "    easynet-keyring              → $INSTALL_DIR/"
     echo "    libaxon_dendrite_bridge.$LIB_EXT  → $NATIVE_DIR/"
     echo "    easynet_cli.h                → $INCLUDE_DIR/"
-    echo "    ffi-abi-v4.md                → $DOC_DIR/"
+    echo "    easynet_cli.exports.v5       → $INCLUDE_DIR/"
+    echo "    ffi-abi-v5.md                → $DOC_DIR/"
     echo ""
     if [ -n "${PROFILE:-}" ]; then
         echo "  To activate in this terminal, run:"
@@ -194,12 +195,13 @@ download_and_install() {
     mv "${TMPDIR}/easynet-keyring" "${INSTALL_DIR}/easynet-keyring"
     chmod +x "${INSTALL_DIR}/easynet" "${INSTALL_DIR}/easynet-daemon" "${INSTALL_DIR}/easynet-keyring"
 
-    # Install the C ABI v4 contract alongside the runtime artefacts.
-    # Language bindings compile against this header; the markdown spec
-    # carries the return-code and ownership rules that a C header cannot.
+    # Install the generic C ABI v5 contract alongside the runtime artefacts.
+    # Language bindings compile against the header; release/CI tooling uses
+    # the exact export allowlist; the spec carries ownership rules.
     mkdir -p "$INCLUDE_DIR" "$DOC_DIR"
     mv "${TMPDIR}/include/easynet_cli.h" "${INCLUDE_DIR}/easynet_cli.h"
-    mv "${TMPDIR}/docs/spec/ffi-abi-v4.md" "${DOC_DIR}/ffi-abi-v4.md"
+    mv "${TMPDIR}/include/easynet_cli.exports.v5" "${INCLUDE_DIR}/easynet_cli.exports.v5"
+    mv "${TMPDIR}/docs/spec/ffi-abi-v5.md" "${DOC_DIR}/ffi-abi-v5.md"
 
     # Install dendrite bridge library under the REAL user's home so
     # the daemon can dlopen it without LD_LIBRARY_PATH gymnastics.

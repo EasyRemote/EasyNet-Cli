@@ -21,7 +21,7 @@ default = ["axon-pb", "remote-desktop"]
 # types start being consumed. v10.5 R1 PR-DAEMON ships the .proto
 # files and the toolchain wiring, but does NOT flip any call site
 # to use the generated types (that is a follow-up commit / PR-SYS).
-proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
+proto-gen = ["dep:prost-types", "dep:prost-build"]
 
 # Enable Axon's SDK-owned `pb` module exposing the tonic server-side
 # `Invocation` trait that RFC-003 PR-1 implements. This is part of the
@@ -73,14 +73,6 @@ name = "easynet_cli"
 path = "src/lib.rs"
 crate-type = ["rlib", "cdylib", "staticlib"]
 bench = false
-
-# T0.4 carrier baseline (to-be-fix.spec §A2 gate): quantifies the
-# SessionDispatch JSON-in-BinaryChunk double-parse cost against the
-# canonical proto carrier before T2.1 unifies them.
-[[bench]]
-name = "session_frame_carrier"
-path = "tools/benches/session_frame_carrier.rs"
-harness = false
 
 [[bin]]
 name = "easynet"
@@ -151,6 +143,7 @@ ctrlc = "3"
 # lookups across thousands of devices — is documented in
 # `daemon/invocation/state/presence.rs` module docs.
 dashmap = "6"
+prost = "0.13"
 # async-trait — required by RFC-003 PR-2's `SessionFrameDispatcher`
 # trait so trait method bodies can be `async fn`. Already pulled in
 # transitively via tonic; declared direct so the daemon's surface
@@ -356,14 +349,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
-# PR-N1 commit 8/N: CLI bridge for `easynet ability invoke --node`
-# uses a tonic UDS gRPC client to reach the local daemon's
-# Invocation server with `function_name="federation.forward_invoke"`.
+# The remote invocation adapter uses a tonic UDS client to submit a complete
+# signed `InvokeRequest` to the local daemon's Invocation server.
 # `tower::service_fn` adapts the `tokio::net::UnixStream` connector
 # tonic's `Endpoint::connect_with_connector` accepts; `hyper_util::
 # rt::TokioIo` wraps the stream into hyper-compatible IO. Both are
 # already in the transitive dep graph via tonic; declared direct
-# so the call site in `support/federation_invoke.rs` imports them
+# so the call site in `daemon/invocation/routing/remote_invoke.rs` imports them
 # cleanly. Gated to the `axon-pb` feature alongside tonic.
 [dependencies.tower]
 version = "0.5"
@@ -414,18 +406,13 @@ objc2-video-toolbox = { version = "0.3", features = [
 # invocation-transport reply-deadline tests fire the 60s timer
 # instantly instead of sleeping it for real. Test builds only.
 tokio = { version = "1", features = ["test-util"] }
-# T0.4 carrier baseline harness (tools/benches/session_frame_carrier.rs).
-criterion = "0.5"
-# prost::Message in the bench encodes the pb frames the same way the
-# tonic wire does; version pinned to easynet-axon's prost.
-prost = "0.13"
-# Used by `tests/cross_device_invoke_remote_e2e.rs` to construct
-# a `tower::service_fn` connector that adapts a `tokio::net::UnixStream`
+# Used by daemon Invocation integration tests to construct a
+# `tower::service_fn` connector that adapts a `tokio::net::UnixStream`
 # into something tonic's `Endpoint::connect_with_connector` accepts.
 # tower itself is already pulled in transitively by tonic; declared
 # direct so the e2e test imports it cleanly.
 tower = "0.5"
-# Used by the same test to wrap a `tokio::net::UnixStream` into a
+# Used by the same integration fixtures to wrap a `tokio::net::UnixStream` into a
 # `hyper`-compatible IO via `hyper_util::rt::TokioIo`. Required by
 # tonic 0.12's UDS-over-`connect_with_connector` recipe.
 hyper-util = "0.1"
@@ -451,10 +438,6 @@ rcgen = "0.13"
 # sites on hand-rolled JSON structs; enabling `--features
 # proto-gen` makes prost-build compile schemas/*.proto into
 # target/build/proto/ types that follow-up commits consume.
-[dependencies.prost]
-version = "0.13"
-optional = true
-
 [dependencies.prost-types]
 version = "0.13"
 optional = true

@@ -8,7 +8,6 @@ Daemon SDK layout from `docs/spec/daemon-sdk-requirements-v1.md`.
 | Path | Owner |
 | --- | --- |
 | `src/daemon/` | daemon process lifecycle, Invocation runtime, identity, resources, plugins, and Axon adapter boundary |
-| `src/protocol/` | Axon-derived SDK JSON projections, shared DTO contracts, and profile carrier validation |
 | `src/ffi/` | C ABI handles, error mapping, and Runtime Core projection |
 | `include/easynet_cli.h` | binding-facing C ABI contract |
 | `sdk/` | public Daemon SDK docs, schemas, conformance assets, and language facades |
@@ -32,10 +31,11 @@ The current SDK stage contains:
 - `sdk/go/`, `sdk/python/`, `sdk/node/`, `sdk/java/`, `sdk/swift/`
 
 `sdk/rust/` and `sdk/c/` remain migration targets, not active roots. Native
-Rust daemon process behavior currently lives under `src/daemon/`, shared SDK
-protocol projections live under `src/protocol/`, and C ABI projection lives
-under `src/ffi/`; the C binding contract lives in `include/easynet_cli.h` and
-`docs/spec/ffi-abi-v4.md`.
+Rust product behavior and product-specific projections live with their semantic
+owners under `src/daemon/`; generic C ABI projection lives under `src/ffi/`.
+The C binding contract lives in `include/easynet_cli.h` and
+`docs/spec/ffi-abi-v5.md` and the exact export allowlist
+`include/easynet_cli.exports.v5`.
 
 ## Structural Rules
 

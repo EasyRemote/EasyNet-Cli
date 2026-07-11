@@ -105,7 +105,7 @@ pub fn run(args: DeviceArgs) -> anyhow::Result<()> {
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     // Joint-plan unified path (海峰 + 凉冰, 2026-05-03): every
     // cross-device dispatch flows through
-    // `federation.forward_invoke`; each daemon describes ITSELF via
+    // the canonical `Invocation::Invoke` RPC; each daemon describes ITSELF via
     // `node.describe {node_id:"local"}`. The CLI is the
     // routing-decision site:
     //   * `args.node_id` looks like a canonical URA  → forward to it
@@ -331,7 +331,7 @@ fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 
 #[cfg(feature = "axon-pb")]
 fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
-    crate::daemon::invocation::routing::federation_invoke::parse_node_ura(ura)
+    crate::daemon::invocation::routing::remote_invoke::parse_node_ura(ura)
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -342,9 +342,7 @@ fn canonicalize_remove_target_ura(ura: &str) -> anyhow::Result<String> {
 #[cfg(feature = "axon-pb")]
 fn invoke_revoke(target_ura: &str, reason: &str, caller_ura: &str) -> anyhow::Result<()> {
     let _ = caller_ura;
-    crate::daemon::invocation::routing::federation_invoke::invoke_federation_revoke(
-        target_ura, reason,
-    )
+    crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(target_ura, reason)
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -363,10 +361,10 @@ fn invoke_revoke(target_ura: &str, _reason: &str, _caller_ura: &str) -> anyhow::
 ///
 ///   * `local` or matches this daemon's own node id → invoke
 ///     `node.describe` locally over the control socket.
-///   * canonical URA pointing at a remote device → forward_invoke
+///   * canonical URA pointing at a remote device → canonical_invoke
 ///     `node.describe` against that URA.
 ///   * bare uuid that does not match local → wrap in this device's
-///     realm and forward_invoke (matches the legacy
+///     realm and canonical_invoke (matches the legacy
 ///     `node.describe` same-realm fallback).
 fn describe_target(node_id: &str) -> anyhow::Result<Value> {
     let trimmed = node_id.trim();
@@ -398,11 +396,11 @@ fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Valu
     let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
 
     let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+    let target_call = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
         &target_ura,
         "node.describe",
     )?;
-    crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
+    crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
         &target_call,
         serde_json::json!({"node_id": "local"}),
         caller_ura.as_deref(),

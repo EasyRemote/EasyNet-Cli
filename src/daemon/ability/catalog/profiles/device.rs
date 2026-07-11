@@ -40,25 +40,23 @@
 pub fn descriptors_for(
     owner_ura: &str,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::Visibility;
     use crate::daemon::ability::dispatch::OwnerKind;
 
     let mut out = Vec::new();
-    for meta in
+    for descriptor in
         crate::daemon::ability::catalog::published_system_abilities_for_owner(OwnerKind::Device)
     {
-        let visibility = if meta.name.starts_with("observe.") {
+        let visibility = if descriptor.name.starts_with("observe.") {
             Visibility::Public
         } else {
             Visibility::Scoped
         };
-        let public_name = crate::core::ura::owner_local_ability_name(owner_ura, &meta.name);
-        let descriptor = AbilityDescriptor::new(public_name, owner_ura, visibility)
-            .expect("registry-derived device names satisfy descriptor invariants")
-            .with_input_schema(meta.input_schema.clone())
-            .with_hints(meta.hints.clone())
-            .with_source("kernel:built-in")
-            .with_description(meta.description.as_str());
+        let descriptor = descriptor
+            .rebind_owner_ura(owner_ura)
+            .expect("registry-derived descriptor accepts canonical device owner")
+            .with_visibility(visibility)
+            .with_source("kernel:built-in");
         out.push(descriptor);
     }
     out

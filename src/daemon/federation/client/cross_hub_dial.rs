@@ -5,7 +5,7 @@
 //
 // PR-N1 commit 4/N — adds timeout + per-peer circuit-breaker on
 // top of the schema-B + TLS-pinned dial shipped by commit 2/N
-// (`ca081bc`). The handler `dispatch_federation_forward_invoke`
+// (`ca081bc`). The handler `dispatch_remote_invoke`
 // rewrite shipped by commit 3a/N + 3b/N (`b3a06f4` + `57a42df`)
 // already routes cross-realm calls through this dialer; commit
 // 4/N hardens the dial path so a slow / dead peer cannot stall
@@ -13,12 +13,12 @@
 //
 // Forward-invoke shape after this commit:
 //
-//   forward_invoke(target_hub_endpoint, req)
+//   invoke(target_hub_endpoint, req)
 //     ├─ trust_anchor.lookup_peer_hub(target_hub_endpoint)?  ← schema-B gate
 //     ├─ check_breaker_open(target_hub_endpoint)?            ← commit 4/N
 //     ├─ resolve_peer_channel(target_hub_endpoint) → cached or new
 //     │     TLS-pinned tonic Channel
-//     ├─ tokio::time::timeout(forward_invoke_timeout,
+//     ├─ tokio::time::timeout(invoke_timeout,
 //     │     InvocationClient::new(channel).invoke(req)).await
 //     └─ on success → record_breaker_success(target_hub_endpoint)
 //        on failure → record_breaker_failure(target_hub_endpoint) + return
@@ -122,12 +122,12 @@ impl TrustSource {
     }
 }
 
-/// Default per-call timeout for `forward_invoke`. Spec §commit 4/N:
+/// Default per-call timeout for `invoke`. Spec §commit 4/N:
 /// 30s. The end-to-end caller (the hub-side admission gate) has its
 /// own admission deadline; 30s is generous enough to absorb a
 /// reasonable peer admission round-trip without stranding the
 /// caller on a dead peer.
-pub const DEFAULT_FORWARD_INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_INVOKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default failure threshold before the breaker opens. Spec
 /// §commit 4/N: 3 consecutive failures.
@@ -169,21 +169,21 @@ impl Default for BreakerState {
 
 /// The traffic pattern a breaker entry is keyed against.
 ///
-/// `forward_invoke` and `subscribe_directory_v2` share the same
+/// `invoke` and `subscribe_directory_v2` share the same
 /// trust gate, channel cache, and dial path, but their failure
 /// patterns differ: a streaming supervisor may retry
 /// `subscribe_directory_v2` continuously during a peer outage,
-/// while `forward_invoke` is per-call and tolerates a much higher
+/// while `invoke` is per-call and tolerates a much higher
 /// failure rate. Conflating their counters lets a transient stream
-/// outage open the breaker for forward_invoke too — surfaced in a
+/// outage open the breaker for invoke too — surfaced in a
 /// real production run when boot-time stream failures starved the
 /// per-call path even after trust was repaired. Separating the
 /// scopes keeps the auto-open behaviour but lets each path's
 /// counters reflect its own SLA.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum BreakerScope {
-    /// Per-call `forward_invoke` dispatch.
-    ForwardInvoke,
+    /// Per-call `invoke` dispatch.
+    Invoke,
     /// Long-running `subscribe_directory_v2` server-stream
     /// supervisor. Reconnect attempts during a peer outage are
     /// expected; their failures must not drain the budget the
@@ -214,7 +214,7 @@ fn status_counts_as_peer_health_failure(code: tonic::Code) -> bool {
 ///   "https://10.0.0.7:50443"
 pub type HubEndpoint = String;
 
-/// Outcome of a cross-hub `forward_invoke` attempt.
+/// Outcome of a cross-hub `invoke` attempt.
 ///
 /// Each variant is a wire-stable identifier — audit pipelines and
 /// metrics consumers grep on these values, so renaming any is a
@@ -240,7 +240,7 @@ pub enum FederationClientError {
     },
 
     /// The cross-hub channel exceeded the configured timeout
-    /// (PR-N1 spec INV-4: 30s for `forward_invoke`, 10s for
+    /// (PR-N1 spec INV-4: 30s for `invoke`, 10s for
     /// dial). Maps onto `target_offline` in the wire response so
     /// callers fall back to local cache / retry policy.
     #[error("federation channel to `{0}` timed out")]
@@ -275,8 +275,8 @@ pub enum FederationClientError {
     Unimplemented(&'static str),
 }
 
-/// Abstract surface every `federation.forward_invoke` cross-hub
-/// dispatcher consumes. Trait shape mirrors
+/// Abstract surface consumed by canonical cross-hub invocation dispatch.
+/// Trait shape mirrors
 /// `daemon_grpc::Client::Invoke` so audit pipelines and tests can
 /// swap in mocks without touching call sites.
 #[async_trait]
@@ -290,10 +290,10 @@ pub trait FederationClient: Send + Sync {
     /// 2. Re-use a cached `tonic::transport::Channel` per peer
     ///    (PR-N1 spec INV-5) — fresh channel per call would
     ///    burn TLS handshakes.
-    /// 3. NOT retry on `forward_invoke`. The user-facing call
+    /// 3. NOT retry on `invoke`. The user-facing call
     ///    has its own idempotency assumptions; only dial-level
     ///    transient failures are retried (PR-N1 commit 4/N).
-    async fn forward_invoke(
+    async fn invoke(
         &self,
         target_hub_endpoint: &HubEndpoint,
         request: InvokeRequest,
@@ -368,13 +368,13 @@ pub struct CrossHubDialer {
     /// cache shape so admission + breaker contention stay
     /// symmetric on the hot path. Scope separation keeps the
     /// long-stream supervisor's reconnect failures from draining
-    /// the per-call `forward_invoke` budget on the same peer.
+    /// the per-call `invoke` budget on the same peer.
     breaker_state: Arc<DashMap<(HubEndpoint, BreakerScope), BreakerState>>,
     /// **PR-N1 commit 4/N**. Per-call timeout for the inner
     /// `InvocationClient::invoke`. Wraps with
     /// `tokio::time::timeout`; expiration surfaces as
     /// `FederationClientError::ChannelTimeout`.
-    forward_invoke_timeout: Duration,
+    invoke_timeout: Duration,
     /// **PR-N1 commit 4/N**. Consecutive-failure threshold before
     /// the breaker opens. Default 3 per spec; tests inject 1 so
     /// they can exercise the open transition without dispatching
@@ -392,7 +392,7 @@ impl std::fmt::Debug for CrossHubDialer {
         f.debug_struct("CrossHubDialer")
             .field("cached_peers", &self.channels.len())
             .field("tracked_peers_breaker_state", &self.breaker_state.len())
-            .field("forward_invoke_timeout", &self.forward_invoke_timeout)
+            .field("invoke_timeout", &self.invoke_timeout)
             .field("breaker_failure_threshold", &self.breaker_failure_threshold)
             .field("breaker_reset_window", &self.breaker_reset_window)
             .finish_non_exhaustive()
@@ -440,7 +440,7 @@ impl CrossHubDialer {
             trust_source,
             channels: Arc::new(DashMap::new()),
             breaker_state: Arc::new(DashMap::new()),
-            forward_invoke_timeout: DEFAULT_FORWARD_INVOKE_TIMEOUT,
+            invoke_timeout: DEFAULT_INVOKE_TIMEOUT,
             breaker_failure_threshold: DEFAULT_BREAKER_FAILURE_THRESHOLD,
             breaker_reset_window: DEFAULT_BREAKER_RESET_WINDOW,
         }
@@ -452,8 +452,8 @@ impl CrossHubDialer {
     /// daemons accept the default unless `DaemonConfig::
     /// federation_timeout_ms` overrides at boot.
     #[must_use]
-    pub fn with_forward_invoke_timeout(mut self, timeout: Duration) -> Self {
-        self.forward_invoke_timeout = timeout;
+    pub fn with_invoke_timeout(mut self, timeout: Duration) -> Self {
+        self.invoke_timeout = timeout;
         self
     }
 
@@ -485,7 +485,7 @@ impl CrossHubDialer {
     /// current breaker state for the named scope. Test/
     /// observability only — production callers do not branch on
     /// this directly; they see the typed `CircuitOpen` error from
-    /// `forward_invoke`. Returns `None` when the peer-scope tuple
+    /// `invoke`. Returns `None` when the peer-scope tuple
     /// has never been dialed (no breaker entry tracked yet,
     /// semantically equivalent to `Closed { 0 }`).
     #[cfg(test)]
@@ -655,7 +655,7 @@ impl CrossHubDialer {
         //     config for every retry. `connect_lazy` returns a
         //     Channel that retries internally on a per-RPC
         //     basis, matching the trait's "no retry on
-        //     forward_invoke" contract.
+        //     invoke" contract.
         let channel = endpoint.connect_lazy();
         // DEC-N5 §5: lazy eviction of stale-generation entries
         // for *this* peer. New-generation lookups miss the cache,
@@ -674,7 +674,7 @@ impl CrossHubDialer {
 
 #[async_trait]
 impl FederationClient for CrossHubDialer {
-    async fn forward_invoke(
+    async fn invoke(
         &self,
         target_hub_endpoint: &HubEndpoint,
         request: InvokeRequest,
@@ -708,9 +708,9 @@ impl FederationClient for CrossHubDialer {
         // Open + within reset window → fail-fast `CircuitOpen`.
         // Open + past reset window → Open transitions to HalfOpen,
         // this call is the trial dial. Closed → proceed normally.
-        // Scope = ForwardInvoke so this path's failure budget is
+        // Scope = Invoke so this path's failure budget is
         // independent of the long-stream supervisor's.
-        self.check_and_advance_breaker(target_hub_endpoint, BreakerScope::ForwardInvoke)?;
+        self.check_and_advance_breaker(target_hub_endpoint, BreakerScope::Invoke)?;
 
         // ── 3. Resolve channel (cached or fresh TLS-pinned) ──
         // DEC-N5 §5: key the cache by `(hub_endpoint, generation)` so a
@@ -728,25 +728,24 @@ impl FederationClient for CrossHubDialer {
                 // `tls_ca_pem_path` can't pin the breaker open
                 // forever — the next operator save flushes the
                 // bad entry and the breaker auto-resets.
-                self.record_breaker_failure(target_hub_endpoint, BreakerScope::ForwardInvoke);
+                self.record_breaker_failure(target_hub_endpoint, BreakerScope::Invoke);
                 return Err(err);
             }
         };
 
         // ── 4. Inner Invoke wrapped in timeout (commit 4/N) ──
         let mut client = InvocationClient::new(channel);
-        let outcome =
-            tokio::time::timeout(self.forward_invoke_timeout, client.invoke(request)).await;
+        let outcome = tokio::time::timeout(self.invoke_timeout, client.invoke(request)).await;
 
         match outcome {
             Ok(Ok(response)) => {
-                self.record_breaker_success(target_hub_endpoint, BreakerScope::ForwardInvoke);
+                self.record_breaker_success(target_hub_endpoint, BreakerScope::Invoke);
                 Ok(response.into_inner())
             }
             Ok(Err(status)) => {
                 self.record_breaker_failure_for_status(
                     target_hub_endpoint,
-                    BreakerScope::ForwardInvoke,
+                    BreakerScope::Invoke,
                     &status,
                 );
                 Err(FederationClientError::InnerInvokeFailed {
@@ -755,7 +754,7 @@ impl FederationClient for CrossHubDialer {
                 })
             }
             Err(_elapsed) => {
-                self.record_breaker_failure(target_hub_endpoint, BreakerScope::ForwardInvoke);
+                self.record_breaker_failure(target_hub_endpoint, BreakerScope::Invoke);
                 Err(FederationClientError::ChannelTimeout(
                     target_hub_endpoint.clone(),
                 ))
@@ -765,7 +764,7 @@ impl FederationClient for CrossHubDialer {
 
     /// **PR-N3 N3-streaming-3**. Open a server-stream against
     /// the peer's `federation.subscribe_directory_v2`. Reuses
-    /// the same trust gate + channel cache as `forward_invoke`,
+    /// the same trust gate + channel cache as `invoke`,
     /// then calls `client.invoke_stream(request)` and wraps the
     /// returned `tonic::Streaming<InvokeStreamChunk>` with a
     /// JSON-decode step so consumers see a clean
@@ -779,7 +778,7 @@ impl FederationClient for CrossHubDialer {
     /// transient malformed bytes.
     ///
     /// The breaker counts failed *opens* against the peer (same
-    /// shape as forward_invoke). Once the stream is open and
+    /// shape as invoke). Once the stream is open and
     /// pumping, in-stream tonic errors (peer dropped) end the
     /// stream gracefully — the per-peer supervisor reconnects.
     async fn subscribe_directory_v2(
@@ -787,7 +786,7 @@ impl FederationClient for CrossHubDialer {
         target_hub_endpoint: &HubEndpoint,
         request: InvokeServerStreamRequest,
     ) -> Result<DirectoryEventStream, FederationClientError> {
-        // ── 1. Trust gate (same as forward_invoke). ─────────
+        // ── 1. Trust gate (same as invoke). ─────────
         let trust_snapshot = self.trust_source.snapshot();
         let entry = trust_snapshot
             .lookup_peer_hub(target_hub_endpoint)
@@ -800,12 +799,12 @@ impl FederationClient for CrossHubDialer {
         // ── 2. Breaker gate. ────────────────────────────────
         // Scope = SubscribeDirectoryV2 so reconnect-storm failures
         // here (boot-time trust mismatch, network drop) keep their
-        // own counter and do NOT open the breaker for ForwardInvoke
+        // own counter and do NOT open the breaker for Invoke
         // on the same peer. Both scopes share the trust gate +
         // channel cache; only the breaker counters are split.
         self.check_and_advance_breaker(target_hub_endpoint, BreakerScope::SubscribeDirectoryV2)?;
 
-        // ── 3. Channel resolve (same cache as forward_invoke). ─
+        // ── 3. Channel resolve (same cache as invoke). ─
         let generation = self.trust_source.cert_anchor_generation();
         let channel = match self.resolve_peer_channel(target_hub_endpoint, ca_path, generation) {
             Ok(channel) => channel,
@@ -822,7 +821,7 @@ impl FederationClient for CrossHubDialer {
         let mut client = InvocationClient::new(channel);
         let target_hub_endpoint_owned = target_hub_endpoint.clone();
         let outcome =
-            tokio::time::timeout(self.forward_invoke_timeout, client.invoke_stream(request)).await;
+            tokio::time::timeout(self.invoke_timeout, client.invoke_stream(request)).await;
         match outcome {
             Ok(Ok(response)) => {
                 self.record_breaker_success(
@@ -978,7 +977,7 @@ mod tests {
 
     #[async_trait]
     impl FederationClient for MockFederationClient {
-        async fn forward_invoke(
+        async fn invoke(
             &self,
             target_hub_endpoint: &HubEndpoint,
             request: InvokeRequest,
@@ -1047,7 +1046,7 @@ mod tests {
         let dialer = CrossHubDialer::new(empty_anchor());
         let target = "https://peer-hub.example:50443".to_string();
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("empty anchor must reject");
         match err {
@@ -1071,7 +1070,7 @@ mod tests {
 
         let dialer = CrossHubDialer::new(anchor);
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("non-hub role must reject");
         assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
@@ -1090,7 +1089,7 @@ mod tests {
 
         let dialer = CrossHubDialer::new(anchor);
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("missing origin_realm must reject");
         assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
@@ -1109,7 +1108,7 @@ mod tests {
 
         let dialer = CrossHubDialer::new(anchor);
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("missing tls_ca_pem_path must reject");
         assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
@@ -1128,7 +1127,7 @@ mod tests {
 
         let dialer = CrossHubDialer::new(anchor);
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("unreadable CA must surface as DialFailed");
         match err {
@@ -1149,7 +1148,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_peer_channel_caches_per_peer() {
-        // Two consecutive forward_invoke calls to the same peer
+        // Two consecutive invoke calls to the same peer
         // must populate exactly one channel-cache entry. The
         // second call's failure path (peer is unreachable) is
         // expected; we assert only that the cache fills once and
@@ -1168,18 +1167,14 @@ mod tests {
         // fails) depending on tonic's connect_lazy behaviour. We
         // do not assert the variant — we assert the cache
         // populated.
-        let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
-            .await;
+        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
         assert_eq!(
             dialer.cached_peer_count(),
             1,
             "first call must populate the channel cache"
         );
 
-        let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
-            .await;
+        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
         assert_eq!(
             dialer.cached_peer_count(),
             1,
@@ -1203,10 +1198,9 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer =
-            CrossHubDialer::new(anchor).with_forward_invoke_timeout(Duration::from_millis(50));
+        let dialer = CrossHubDialer::new(anchor).with_invoke_timeout(Duration::from_millis(50));
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("50ms budget against black-hole port must time out");
         match err {
@@ -1242,17 +1236,17 @@ mod tests {
         let anchor = anchor_with(entry);
 
         let dialer = CrossHubDialer::new(anchor)
-            .with_forward_invoke_timeout(Duration::from_millis(50))
+            .with_invoke_timeout(Duration::from_millis(50))
             .with_breaker_failure_threshold(1)
             .with_breaker_reset_window(Duration::from_secs(60));
 
         // First call fails — breaker transitions to Open.
         let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("first call should fail");
         assert!(
-            !dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
+            !dialer.breaker_is_closed(&target, BreakerScope::Invoke),
             "first failure must open the breaker"
         );
 
@@ -1262,7 +1256,7 @@ mod tests {
         // the hot path is a single DashMap entry read).
         let started = std::time::Instant::now();
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("second call should be CircuitOpen");
         let elapsed = started.elapsed();
@@ -1291,15 +1285,15 @@ mod tests {
         let anchor = anchor_with(entry);
 
         let dialer = CrossHubDialer::new(anchor)
-            .with_forward_invoke_timeout(Duration::from_millis(50))
+            .with_invoke_timeout(Duration::from_millis(50))
             .with_breaker_failure_threshold(1)
             .with_breaker_reset_window(Duration::from_millis(50));
 
         let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("first call should fail");
-        assert!(!dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke));
+        assert!(!dialer.breaker_is_closed(&target, BreakerScope::Invoke));
 
         // Wait for the reset window to elapse.
         tokio::time::sleep(Duration::from_millis(75)).await;
@@ -1309,7 +1303,7 @@ mod tests {
         // InnerInvokeFailed is acceptable — the assertion is that
         // the breaker did not fail-fast.
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("trial dial after reset window should attempt the network");
         match err {
@@ -1336,7 +1330,7 @@ mod tests {
         // the dialer to see them. Commit 9/N's
         // `with_trust_anchor_cell` constructor wires the live
         // `SharedTrustAnchor` cell so a `cell.replace(...)` is
-        // visible to the next `forward_invoke` dial.
+        // visible to the next `invoke` dial.
         //
         // This test drives the assertion at the trust-gate layer
         // (no real network) — the dialer rejects the target with
@@ -1356,11 +1350,11 @@ mod tests {
         // Cell starts empty (no federation peer entries).
         let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
         let dialer = CrossHubDialer::with_trust_anchor_cell(cell.clone())
-            .with_forward_invoke_timeout(Duration::from_millis(50));
+            .with_invoke_timeout(Duration::from_millis(50));
 
         // First dial: empty cell → PeerNotTrusted.
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("empty cell must reject");
         assert!(
@@ -1380,7 +1374,7 @@ mod tests {
         // PeerNotTrusted, which is the contract this test is
         // pinning.
         let err2 = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("network-layer failure expected");
         match err2 {
@@ -1399,7 +1393,7 @@ mod tests {
                 panic!("breaker should not be open on the second dial")
             }
             FederationClientError::Unimplemented(_) => {
-                panic!("forward_invoke is implemented; Unimplemented unreachable here")
+                panic!("invoke is implemented; Unimplemented unreachable here")
             }
         }
     }
@@ -1418,11 +1412,11 @@ mod tests {
 
         let target = "https://peer-hub.example:50443".to_string();
         let empty_anchor = Arc::new(RealmTrustAnchor::default());
-        let dialer = CrossHubDialer::new(empty_anchor)
-            .with_forward_invoke_timeout(Duration::from_millis(50));
+        let dialer =
+            CrossHubDialer::new(empty_anchor).with_invoke_timeout(Duration::from_millis(50));
 
         let err = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("snapshot must reject indefinitely");
         assert!(matches!(err, FederationClientError::PeerNotTrusted(_)));
@@ -1431,7 +1425,7 @@ mod tests {
         // makes hot-reload impossible by construction. Call again
         // and assert the same outcome to pin the contract.
         let err2 = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect_err("snapshot must reject indefinitely");
         assert!(matches!(err2, FederationClientError::PeerNotTrusted(_)));
@@ -1472,12 +1466,10 @@ mod tests {
         let initial_anchor = anchor_with(fed_peer_entry(&target, ca_path_v1));
         let cell = SharedTrustAnchor::new(initial_anchor);
         let dialer = CrossHubDialer::with_trust_anchor_cell(cell.clone())
-            .with_forward_invoke_timeout(Duration::from_millis(50));
+            .with_invoke_timeout(Duration::from_millis(50));
 
         // First dial populates the cache at generation 0.
-        let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
-            .await;
+        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
         assert_eq!(
             dialer.cached_peer_count(),
             1,
@@ -1495,9 +1487,7 @@ mod tests {
         // channel built. The lazy retain pass evicts the
         // generation-0 entry for this peer, so total count is
         // still 1, but the entry itself is the new one.
-        let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
-            .await;
+        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
         assert_eq!(
             dialer.cached_peer_count(),
             1,
@@ -1529,14 +1519,9 @@ mod tests {
         let entry = fed_peer_entry(&target, ca_path);
         let anchor = anchor_with(entry);
 
-        let dialer =
-            CrossHubDialer::new(anchor).with_forward_invoke_timeout(Duration::from_millis(50));
-        let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
-            .await;
-        let _ = dialer
-            .forward_invoke(&target, sample_request("test.echo"))
-            .await;
+        let dialer = CrossHubDialer::new(anchor).with_invoke_timeout(Duration::from_millis(50));
+        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
+        let _ = dialer.invoke(&target, sample_request("test.echo")).await;
         assert_eq!(dialer.cached_peer_count(), 1);
         let entry = dialer.channels.iter().next().expect("one entry remains");
         let (_, cached_gen) = entry.key();
@@ -1563,19 +1548,19 @@ mod tests {
 
         let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(2);
 
-        dialer.record_breaker_failure(&target, BreakerScope::ForwardInvoke);
+        dialer.record_breaker_failure(&target, BreakerScope::Invoke);
         // Counter at 1 — still Closed.
-        assert!(dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke));
+        assert!(dialer.breaker_is_closed(&target, BreakerScope::Invoke));
 
-        dialer.record_breaker_success(&target, BreakerScope::ForwardInvoke);
+        dialer.record_breaker_success(&target, BreakerScope::Invoke);
         // Counter back to 0.
-        assert!(dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke));
+        assert!(dialer.breaker_is_closed(&target, BreakerScope::Invoke));
 
-        dialer.record_breaker_failure(&target, BreakerScope::ForwardInvoke);
+        dialer.record_breaker_failure(&target, BreakerScope::Invoke);
         // Only 1 failure since the success — still Closed (would
         // be Open if the counter hadn't reset).
         assert!(
-            dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
+            dialer.breaker_is_closed(&target, BreakerScope::Invoke),
             "success between failures must reset the counter"
         );
     }
@@ -1626,24 +1611,24 @@ mod tests {
         let dialer = CrossHubDialer::new(anchor).with_breaker_failure_threshold(1);
         dialer.record_breaker_failure_for_status(
             &target,
-            BreakerScope::ForwardInvoke,
+            BreakerScope::Invoke,
             &tonic::Status::permission_denied("POLICY_DENIED"),
         );
 
         assert!(
-            dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
+            dialer.breaker_is_closed(&target, BreakerScope::Invoke),
             "application-level PermissionDenied must not open the transport breaker"
         );
     }
 
     #[tokio::test]
-    async fn breaker_scopes_are_independent_for_forward_invoke_and_subscribe() {
+    async fn breaker_scopes_are_independent_for_invoke_and_subscribe() {
         // Drive the SubscribeDirectoryV2 scope's counter past the
-        // threshold so that scope opens. The ForwardInvoke scope on
+        // threshold so that scope opens. The Invoke scope on
         // the same hub must remain Closed — the per-call dispatch
         // path keeps its own budget. Without scope separation a
         // boot-time stream-supervisor failure storm would starve
-        // forward_invoke even after the operator repaired trust.
+        // invoke even after the operator repaired trust.
         let target = "https://peer-hub.example:50443".to_string();
         let dir = tempfile::tempdir().expect("tempdir");
         let ca_path = dir.path().join("ca.pem");
@@ -1661,15 +1646,15 @@ mod tests {
             "subscribe scope should be Open after threshold reached"
         );
         assert!(
-            dialer.breaker_is_closed(&target, BreakerScope::ForwardInvoke),
-            "forward_invoke scope must remain Closed despite subscribe failures \
+            dialer.breaker_is_closed(&target, BreakerScope::Invoke),
+            "invoke scope must remain Closed despite subscribe failures \
              on the same peer"
         );
     }
 
     #[tokio::test]
     async fn breaker_scope_does_not_leak_success_signal_across_paths() {
-        // Symmetric counterpart: a success on ForwardInvoke must
+        // Symmetric counterpart: a success on Invoke must
         // not reset SubscribeDirectoryV2's failure counter. The
         // two scopes are truly independent dimensions, not just
         // separate buckets that share a reset signal.
@@ -1688,12 +1673,12 @@ mod tests {
         // SubscribeDirectoryV2 is Open.
         assert!(!dialer.breaker_is_closed(&target, BreakerScope::SubscribeDirectoryV2));
 
-        // A ForwardInvoke success on the same peer must NOT reset
+        // A Invoke success on the same peer must NOT reset
         // SubscribeDirectoryV2's state.
-        dialer.record_breaker_success(&target, BreakerScope::ForwardInvoke);
+        dialer.record_breaker_success(&target, BreakerScope::Invoke);
         assert!(
             !dialer.breaker_is_closed(&target, BreakerScope::SubscribeDirectoryV2),
-            "ForwardInvoke success must not reset SubscribeDirectoryV2 scope"
+            "Invoke success must not reset SubscribeDirectoryV2 scope"
         );
     }
 
@@ -1758,7 +1743,7 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
         mock.insert(target.clone(), "test.echo", sample_response());
 
         let resp = mock
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect("canned response delivered");
         assert_eq!(
@@ -1776,7 +1761,7 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
         let mock = MockFederationClient::new();
         let target = "https://peer-hub.example:50443".to_string();
         let err = mock
-            .forward_invoke(&target, sample_request("never.canned"))
+            .invoke(&target, sample_request("never.canned"))
             .await
             .expect_err("missing canned response must surface as DialFailed");
         match err {
@@ -1803,11 +1788,11 @@ SxYwtVK19IHR+6r7EBBCBg5D0fpPsH/xFsEWhdKVscezZ/W6m2iSQASUsCqSuQ22
         mock.insert(target.clone(), "test.other", other_resp.clone());
 
         let r1 = mock
-            .forward_invoke(&target, sample_request("test.echo"))
+            .invoke(&target, sample_request("test.echo"))
             .await
             .expect("echo canned");
         let r2 = mock
-            .forward_invoke(&target, sample_request("test.other"))
+            .invoke(&target, sample_request("test.other"))
             .await
             .expect("other canned");
         assert_eq!(r1.result, b"echo-payload");

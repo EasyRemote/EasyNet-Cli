@@ -124,7 +124,7 @@ pub struct ShowArgs {
     pub ability_ura: String,
     /// Target node id or canonical device URA. Omit, or pass `local`,
     /// to inspect this daemon; any other value is resolved through the
-    /// federation forward-invoke catalogue path.
+    /// canonical remote catalogue path.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
     /// Output format. 'table' emits the human-readable contract view;
@@ -176,7 +176,7 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     ensure_ability_ura(&args.ability_ura)?;
     let client = AbilityCatalogueClient::new(AbilityCatalogueQuery::default());
     // Joint-plan unified path: `--node` is now wired through
-    // `federation.forward_invoke` against the target device URA;
+    // the canonical `Invocation::Invoke` RPC against the target device URA;
     // `meta.list_abilities` runs on the peer daemon, the result
     // bridges back, we filter by ability name client-side. Match
     // the routing rules `ability list --node` and `device show`

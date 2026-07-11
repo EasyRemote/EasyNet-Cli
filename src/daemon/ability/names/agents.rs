@@ -1,5 +1,6 @@
 pub const CHAT: &str = "chat";
-pub const DISCOVER: &str = "discover";
+pub const DISCOVER_VERB: &str = "discover";
+pub const DISCOVER: &str = "agent.discover";
 pub const INVOKE: &str = "invoke";
 
 pub const AGENT_LIST: &str = "agent.list";

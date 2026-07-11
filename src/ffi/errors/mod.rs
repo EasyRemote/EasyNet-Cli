@@ -4,7 +4,7 @@
 // File: src/ffi/errors.rs
 // Description: Integer error codes returned across the C ABI,
 //              plus a thread-local "last error message" buffer the
-//              caller queries via `easynet_last_error()` when an
+//              caller queries via `easynet_last_error_json()` when an
 //              exported function returns a non-zero code.
 //
 // Why an i32 + TLS, not exceptions / Result
@@ -101,9 +101,7 @@ pub const ERR_TIMEOUT: i32 = 16;
 
 thread_local! {
     /// Per-thread last-error message. Rust storage owns the
-    /// `CString`; the pointer returned by `easynet_last_error()` is
-    /// borrowed from this storage and is only valid until the next
-    /// call on the same thread that writes a new error.
+    /// `CString`; typed JSON projection copies this message for the caller.
     static LAST_ERROR: RefCell<Option<LastErrorRecord>> = const { RefCell::new(None) };
 }
 
@@ -113,7 +111,7 @@ struct LastErrorRecord {
 }
 
 /// Record an error message for later retrieval by
-/// `easynet_last_error`. Called internally from exported functions
+/// `easynet_last_error_json`. Called internally from exported functions
 /// immediately before returning a non-zero code.
 #[cfg(test)]
 pub(crate) fn set_last_error(msg: impl Into<String>) {
@@ -148,21 +146,6 @@ pub(crate) fn clear_last_error() {
     });
 }
 
-/// Return a borrowed pointer to the thread-local last-error
-/// message. The pointer is valid until the next error-recording
-/// call on the same thread. Returns NULL when no error is recorded.
-///
-/// # Safety
-/// The caller must not free the returned pointer nor use it across
-/// a subsequent call that records a new error on the same thread.
-#[no_mangle]
-pub extern "C" fn easynet_last_error() -> *const c_char {
-    LAST_ERROR.with(|slot| match &*slot.borrow() {
-        Some(record) => record.message.as_ptr(),
-        None => std::ptr::null(),
-    })
-}
-
 /// Return the current thread's typed last-error JSON.
 ///
 /// The returned string is caller-owned and must be released with
@@ -193,8 +176,7 @@ pub unsafe extern "C" fn easynet_last_error_json(out_error_json: *mut *mut c_cha
 /// shared `DaemonError` JSON DTO.
 ///
 /// Bindings that already have a non-zero return code can call this
-/// directly and branch on `code` in the returned JSON without parsing
-/// `easynet_last_error()` text.
+/// directly and branch on `code` in the returned JSON.
 ///
 /// # Safety
 /// `message` may be null; if non-null it must be a valid UTF-8 C string.
@@ -407,44 +389,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn last_error_null_before_any_error() {
-        // A thread that has not produced an error must see NULL.
-        // Run in a fresh thread so prior test ordering cannot stain
-        // the TLS slot.
-        std::thread::spawn(|| {
-            let p = easynet_last_error();
-            assert!(p.is_null());
-        })
-        .join()
-        .unwrap();
-    }
-
-    #[test]
-    fn set_then_read_last_error_round_trips_message() {
-        std::thread::spawn(|| {
-            set_last_error("boom");
-            let p = easynet_last_error();
-            assert!(!p.is_null());
-            let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap();
-            assert_eq!(s, "boom");
-        })
-        .join()
-        .unwrap();
-    }
-
-    #[test]
-    fn clear_last_error_makes_pointer_null_again() {
-        std::thread::spawn(|| {
-            set_last_error("oops");
-            clear_last_error();
-            let p = easynet_last_error();
-            assert!(p.is_null());
-        })
-        .join()
-        .unwrap();
-    }
-
-    #[test]
     fn last_error_json_returns_null_when_clean() {
         std::thread::spawn(|| {
             clear_last_error();
@@ -570,9 +514,7 @@ mod tests {
         // a \0 inside it.
         std::thread::spawn(|| {
             set_last_error("a\0b\0c");
-            let p = easynet_last_error();
-            let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap();
-            assert_eq!(s, "abc");
+            assert_eq!(last_error_message().as_deref(), Some("abc"));
         })
         .join()
         .unwrap();

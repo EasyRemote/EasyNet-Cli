@@ -20,13 +20,9 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
-	identityTransportClosed := false
-	identity, err := NewIdentityClient(nativeRuntimeIdentityTransport{closed: &identityTransportClosed})
-	if err != nil {
-		t.Fatalf("NewIdentityClient: %v", err)
-	}
+	addressing := NewCanonicalAddressing()
 	providerClosed := false
-	handle, err := newNativeRuntimeHandleWithIdentity(runtime, health, identity, func(context.Context) error {
+	handle, err := newNativeRuntimeHandleWithAddressing(runtime, health, addressing, func(context.Context) error {
 		providerClosed = true
 		return nil
 	})
@@ -48,18 +44,18 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if healthClient != health {
 		t.Fatalf("Health returned different client")
 	}
-	identityClient, err := handle.Identity()
+	addressingProvider, err := handle.Addressing()
 	if err != nil {
-		t.Fatalf("Identity: %v", err)
+		t.Fatalf("Addressing: %v", err)
 	}
-	if identityClient != identity {
-		t.Fatalf("Identity returned different client")
+	if addressingProvider != addressing {
+		t.Fatalf("Addressing returned different provider")
 	}
 	if err := handle.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !transportClosed || !identityTransportClosed || !providerClosed {
-		t.Fatalf("close did not release client/identity/provider: client=%v identity=%v provider=%v", transportClosed, identityTransportClosed, providerClosed)
+	if !transportClosed || !providerClosed {
+		t.Fatalf("close did not release client/provider: client=%v provider=%v", transportClosed, providerClosed)
 	}
 	if _, err := handle.Client(); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("Client after close error = %v, want %s", err, ErrInvalidArgument)
@@ -67,22 +63,42 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if _, err := handle.Health(); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("Health after close error = %v, want %s", err, ErrInvalidArgument)
 	}
-	if _, err := handle.Identity(); !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("Identity after close error = %v, want %s", err, ErrInvalidArgument)
+	if _, err := handle.Addressing(); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Addressing after close error = %v, want %s", err, ErrInvalidArgument)
 	}
 	if err := handle.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
 }
 
-type nativeRuntimeIdentityTransport struct {
-	IdentityTransportFunc
-	closed *bool
-}
+func TestNativeRuntimeHandleAlwaysProvidesCanonicalAddressing(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc: func(context.Context, []byte) ([]byte, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	handle, err := newNativeRuntimeHandle(runtime, nativeRuntimeTestHealth(t), nil)
+	if err != nil {
+		t.Fatalf("newNativeRuntimeHandle: %v", err)
+	}
 
-func (t nativeRuntimeIdentityTransport) Close(context.Context) error {
-	*t.closed = true
-	return nil
+	addressing, err := handle.Addressing()
+	if err != nil {
+		t.Fatalf("Addressing: %v", err)
+	}
+	ref, err := addressing.OwnerAbilityDescriptorRef(
+		context.Background(),
+		"easynet:///r/example/device/dev-a",
+		"observe.health",
+		"1.0.0",
+	)
+	if err != nil {
+		t.Fatalf("OwnerAbilityDescriptorRef: %v", err)
+	}
+	if ref != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+		t.Fatalf("descriptor_ref = %q", ref)
+	}
 }
 
 func TestNativeRuntimeHandleRequiresHealthFacade(t *testing.T) {

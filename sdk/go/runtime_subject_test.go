@@ -2,7 +2,6 @@ package easynet
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -52,59 +51,7 @@ func TestCanonicalInvocationBytesRejectsUnprojectedUserSubject(t *testing.T) {
 	}
 }
 
-func newRuntimeSubjectIdentity(t *testing.T) *IdentityClient {
+func newRuntimeSubjectIdentity(t *testing.T) Addressing {
 	t.Helper()
-	identity, err := NewIdentityClient(IdentityTransportFunc{
-		BuildURAFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
-			var req URABuildRequest
-			if err := json.Unmarshal(requestJSON, &req); err != nil {
-				return nil, err
-			}
-			switch req.Kind {
-			case "resource":
-				return json.Marshal(map[string]any{
-					"kind":       "resource",
-					"valid":      true,
-					"ura":        ResourceDotURA("example", "user.alice", req.Path),
-					"profile":    "directory_identity",
-					"components": map[string]any{"owner_ura": req.OwnerURA},
-					"metadata":   map[string]any{"source": "runtime_subject_test"},
-				})
-			case "ability":
-				abilityURA := OwnerAbilityURA(req.OwnerURA, req.AbilityName)
-				return json.Marshal(map[string]any{
-					"kind":       "ability",
-					"valid":      true,
-					"ura":        abilityURA,
-					"profile":    "directory_identity",
-					"components": map[string]any{"owner_ura": req.OwnerURA},
-					"metadata":   map[string]any{"source": "runtime_subject_test"},
-				})
-			default:
-				t.Fatalf("unexpected URA build kind %q", req.Kind)
-				return nil, nil
-			}
-		},
-		BuildDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
-			var req DescriptorRefBuildRequest
-			if err := json.Unmarshal(requestJSON, &req); err != nil {
-				return nil, err
-			}
-			ref := req.AbilityURA + "@" + req.DescriptorVersion
-			return json.Marshal(map[string]any{
-				"kind":               "descriptor_ref",
-				"valid":              true,
-				"descriptor_ref":     ref,
-				"ability_ura":        req.AbilityURA,
-				"descriptor_version": req.DescriptorVersion,
-				"profile":            "directory_identity",
-				"components":         map[string]any{"ability_ura": req.AbilityURA},
-				"metadata":           map[string]any{"source": "runtime_subject_test"},
-			})
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewIdentityClient: %v", err)
-	}
-	return identity
+	return NewCanonicalAddressing()
 }

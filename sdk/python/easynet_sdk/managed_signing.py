@@ -21,7 +21,7 @@ from ._key_service import (
     required_response_i64,
 )
 from .errors import ErrorCode, RetryHint, SDKError
-from .identity import SignerHandle, _signer_handle_provenance_error
+from .signer_handle import SignerHandle, signer_handle_provenance_error
 from .invocation import InvocationSignature
 from .signing import SignatureProvider, SigningMaterial
 
@@ -224,7 +224,7 @@ class ManagedSigningClient:
         return key
 
     def sign(self, key_id: str, canonical_bytes: bytes) -> bytes:
-        """Compatibility entry point routed through a key-bound signer."""
+        """Convenience entry point routed through a key-bound signer."""
 
         normalized_key_id = _required_text("key ID", key_id)
         _validate_canonical_bytes(canonical_bytes)
@@ -436,7 +436,7 @@ class ManagedSigner(SignatureProvider):
             raise invalid_key_service_input(
                 "managed signer requires signing material and a signer handle"
             )
-        provenance_error = _signer_handle_provenance_error(handle)
+        provenance_error = signer_handle_provenance_error(handle)
         if provenance_error:
             raise invalid_key_service_input(provenance_error)
         if (

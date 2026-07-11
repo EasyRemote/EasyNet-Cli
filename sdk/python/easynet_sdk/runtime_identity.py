@@ -26,7 +26,7 @@ from ._key_service import (
     require_response_shape,
 )
 from .errors import SDKError
-from .identity import SignerHandle
+from .signer_handle import SignerHandle
 from .invocation import InvocationSignature
 from .signing import SignatureProvider, SigningMaterial
 

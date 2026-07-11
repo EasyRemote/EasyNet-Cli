@@ -58,7 +58,7 @@ pub struct InvokeArgs {
     /// Pin the invocation to a remote node: a canonical Device URA
     /// (`easynet:///r/<realm>/device/<node_id>`) or Hub URA
     /// (`easynet:///r/<realm>/hub`). The call routes through the
-    /// local daemon's `federation.forward_invoke` ability — the
+    /// local daemon's canonical `Invocation::Invoke` RPC — the
     /// cross-device main channel. Requires the `axon-pb` feature
     /// (production builds always enable it); minimal builds reject
     /// the flag with a re-build hint. Omit to dispatch locally.
@@ -101,8 +101,8 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     let ability_selector = ability_ref.selector();
 
     // PR-N1 commit 8/N: `--node` is now wired against the local
-    // daemon's `federation.forward_invoke` ability via the
-    // `daemon::invocation::routing::federation_invoke` helper. The path requires the
+    // daemon's canonical `Invocation::Invoke` RPC via the
+    // `daemon::invocation::routing::remote_invoke` helper. The path requires the
     // `axon-pb` feature (production builds) — minimal builds still
     // bail with the legacy message.
     let node_ura: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
@@ -114,7 +114,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
         Some(node) => {
             #[cfg(feature = "axon-pb")]
             {
-                Some(crate::daemon::invocation::routing::federation_invoke::parse_node_ura(node)?)
+                Some(crate::daemon::invocation::routing::remote_invoke::parse_node_ura(node)?)
             }
             #[cfg(not(feature = "axon-pb"))]
             {
@@ -183,7 +183,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                         .and_then(|creds| default_owner_invoke_subject(creds, ability_selector))
                 });
             let value =
-                crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target_with_timeout(
+                crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_timeout(
                     &target_call,
                     subject.as_deref(),
                     arguments,
@@ -192,7 +192,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
                     &[],
                     timeout,
                 )?;
-            (value, format!("federation.forward_invoke target={target}"))
+            (value, format!("canonical Invoke target={target}"))
         }
         // The `not(axon-pb)` arm of `--node` already bailed above;
         // this match is reachable only via `node_ura == None`.
@@ -305,17 +305,17 @@ impl InvokeAbilityRef {
         &self,
         execution_target_ura: &str,
     ) -> anyhow::Result<
-        crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget,
+        crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget,
     > {
         match self.descriptor_ref.as_deref() {
             Some(descriptor_ref) => {
-                crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::from_descriptor_ref(
+                crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::from_descriptor_ref(
                     execution_target_ura,
                     descriptor_ref,
                 )
             }
             None => {
-                crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::from_ability_ura(
+                crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::from_ability_ura(
                     execution_target_ura,
                     self.selector.ability_ura(),
                 )

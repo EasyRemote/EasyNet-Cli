@@ -472,9 +472,11 @@ pub(crate) fn build_discover_handler_for(
     // AxonAbilityCatalog`, which we don't have here). The handler
     // re-loads agents on every call so a brand-new peer is visible
     // immediately — same hot-add story as the chat handler.
-    let provider: Arc<
-        dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
-    > = Arc::new(|| crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default());
+    let provider: crate::daemon::ability::builtins::agents::discover::AgentRegistryProvider =
+        Arc::new(|| {
+            crate::daemon::persistence::agent_registry::load_agents()
+                .map_err(|error| anyhow::anyhow!("load discover agent registry: {error:#}"))
+        });
     Arc::new(move |args: Value| {
         // Defer to the discover module's per-call entry. Public
         // entry exposed for this purpose (and test cases).
@@ -495,10 +497,12 @@ pub(crate) fn build_invoke_handler_for(
     agent_name: String,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) -> crate::daemon::ability::dispatch::LocalRpcHandler {
-    let provider: Arc<
-        dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
-    > = Arc::new(|| crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default());
     Arc::new(move |args: Value| {
+        let registry = crate::daemon::persistence::agent_registry::load_agents()
+            .map_err(|error| anyhow::anyhow!("load invoke agent registry: {error:#}"))?;
+        let provider: Arc<
+            dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
+        > = Arc::new(move || registry.clone());
         crate::daemon::ability::builtins::agents::invoke::dispatch(
             &agent_name,
             &provider,

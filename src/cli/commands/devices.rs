@@ -15,7 +15,7 @@
 // fanned out only the local probe view + a same-realm
 // `federation.resolve` fallback. The joint plan
 // (海峰 + 凉冰, 2026-05-03) collapses every cross-device dispatch
-// onto `federation.forward_invoke`; for read-only directory
+// onto the canonical `Invocation::Invoke` RPC; for read-only directory
 // queries the canonical surface is `federation.discover`. One
 // helper, one path; the legacy `node.list` arm gets
 // removed in the cull phase.
@@ -146,7 +146,7 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
 
 #[cfg(feature = "axon-pb")]
 fn fetch_directory_entries(_self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::invocation::routing::federation_invoke::invoke_federation_discover(None)
+    crate::daemon::invocation::routing::remote_invoke::invoke_federation_discover(None)
         .context("invoke federation.discover for device list")
 }
 

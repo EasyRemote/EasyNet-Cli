@@ -44,30 +44,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// RFC-005 federation.forward_invoke argument shape.
-#[derive(Debug, Clone, Serialize)]
-pub struct ForwardInvokeArgs {
-    pub target_ura: String,
-    pub ability_ura: String,
-    /// Standard base64 of the serialized argument payload (typically
-    /// JSON bytes for ability calls). Hub forwards verbatim.
-    pub arguments_b64: String,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ForwardInvokeReceipt {
-    pub ok: bool,
-    pub state_code: i32,
-    #[serde(default)]
-    pub result_b64: String,
-    #[serde(default)]
-    pub result_content_type: String,
-    #[serde(default)]
-    pub error_code: String,
-    #[serde(default)]
-    pub error_message: String,
-}
-
 /// RFC-002 §5.1 federation.resolve_key argument shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolveKeyArgs {
@@ -212,10 +188,7 @@ pub struct AdvertiseAgentArgs {
     #[serde(default)]
     pub public_key_hex: String,
     pub signing_authority: AdvertisedSigningAuthority,
-    /// RFC-002 §5.2 forward_invoke routing key. The advertising
-    /// daemon supplies its own runtime node_id so the hub knows
-    /// which UDS-bound local-tool registration to dispatch into
-    /// when an inbound forward arrives for this agent.
+    /// Runtime node hosting the agent's canonical invocation endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_node_id: Option<String>,
 }

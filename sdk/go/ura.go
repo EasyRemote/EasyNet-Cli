@@ -8,10 +8,9 @@ import (
 
 // URA helpers are Go SDK facades over Axon-owned grammar.
 //
-// Product code should prefer IdentityClient/C ABI identity projection when a
-// daemon boundary is available. These package-level helpers keep existing pure
-// value-object ergonomics, but parse/build semantics are delegated to Axon
-// rather than maintained as a second grammar here.
+// Product code should prefer the Addressing provider. These package-level
+// helpers keep pure value-object ergonomics, while parse/build semantics remain
+// delegated to Axon rather than maintained as a second grammar here.
 
 const URAScheme = axonsdk.URAScheme
 
@@ -152,6 +151,10 @@ func DeviceURA(realm, deviceID string) string {
 
 func AgentURA(realm, userID, agentID string) string {
 	return axonsdk.AgentURA(realm, userID, agentID)
+}
+
+func DeviceAgentURA(realm, deviceID, agentID string) string {
+	return axonsdk.DeviceAgentURA(realm, deviceID, agentID)
 }
 
 func AbilityURA(realm, userID, agentID, abilityID string) string {

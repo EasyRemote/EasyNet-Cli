@@ -70,9 +70,7 @@ use crate::daemon::persistence::config::{
 };
 
 pub mod abilities;
-pub mod bridge_forward;
 pub mod federated_bindings;
-pub mod forward;
 pub mod lifecycle;
 mod passphrase;
 pub mod resolver;
@@ -625,7 +623,7 @@ impl Vault {
                 "runtime signing public projection does not match the owner key".into(),
             ));
         }
-        let expected_policy_ref = crate::protocol::identity_contract::signer_policy_ref(
+        let expected_policy_ref = crate::daemon::identity::signer_policy_ref(
             &self_ura,
             &self_ura,
             &expected_public_key_b64,
@@ -2044,8 +2042,7 @@ mod tests {
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
         vault.ensure(owner).unwrap();
         let public_key_b64 = encode_b64(&vault.derive_pubkey(owner).unwrap().to_bytes());
-        let policy =
-            crate::protocol::identity_contract::signer_policy_ref(owner, owner, &public_key_b64);
+        let policy = crate::daemon::identity::signer_policy_ref(owner, owner, &public_key_b64);
         assert!(vault
             .sign_bound(owner, &public_key_b64, &policy, b"canonical")
             .is_ok());

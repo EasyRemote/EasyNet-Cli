@@ -89,25 +89,25 @@ class DaemonInvocationTransport:
         """Open a direct daemon Axon gRPC-over-UDS Runtime Core session."""
 
         from .direct_runtime import DirectDaemonRuntimeConnector
-        from .identity import AddressingClient
 
         control_path = options.control_path or control_path
-        close_identity = False
         if identity is None:
-            from . import _cabi
-
-            identity = AddressingClient(
-                _cabi.open_cabi_identity_transport(
-                    control_path=control_path,
-                    library_path=library_path,
-                )
+            raise SDKError(
+                code=ErrorCode.NOT_IMPLEMENTED,
+                stage="sdk",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message=(
+                    "direct runtime requires an explicit Addressing provider; "
+                    "generic C ABI v5 does not export identity grammar"
+                ),
             )
-            close_identity = True
+        _ = library_path
         connection = RuntimeConnection(
             DirectDaemonRuntimeConnector(
                 control_path=control_path,
                 identity=identity,
-                close_identity=close_identity,
+                close_identity=False,
             )
         )
         connection.connect(

@@ -711,6 +711,23 @@ fn per_agent_workspace_descriptors(
         Some(e) => e,
         None => return Vec::new(),
     };
+    let local_agents = match crate::daemon::persistence::local_agents::load() {
+        Ok(local_agents) => local_agents,
+        Err(_) => return Vec::new(),
+    };
+    let owner_ura_for = |name: &str| {
+        crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(&local_agents, name)
+            .ok()
+            .flatten()
+            .map(|entry| entry.agent_ura.clone())
+            .filter(|owner_ura| AbilityDescriptor::validate_owner_ura(owner_ura).is_ok())
+    };
+    let Some(own_owner_ura) = owner_ura_for(agent_name) else {
+        // A workspace short name is a registry key, not a network identity.
+        // Until bootstrap has persisted its canonical Agent URA there is no
+        // routable descriptor to expose through MCP.
+        return Vec::new();
+    };
 
     let mut out: Vec<AbilityDescriptor> = Vec::new();
 
@@ -752,7 +769,6 @@ fn per_agent_workspace_descriptors(
         .collect();
     let own_specs =
         crate::daemon::execution::mission::agent_ability_specs::abilities_for(agent_name, entry);
-    let own_owner_ura = format!("agent://{agent_name}");
     let self_chat = format!("{agent_name}.chat");
     for s in own_specs.into_iter().filter(|s| s.name() != self_chat) {
         let metadata = metadata_for_agent_ability(agent_name, own_manifests.get(s.name()));
@@ -833,7 +849,9 @@ fn per_agent_workspace_descriptors(
             continue;
         }
         let other_chat = format!("{other_name}.chat");
-        let other_owner = format!("agent://{other_name}");
+        let Some(other_owner) = owner_ura_for(other_name) else {
+            continue;
+        };
         let other_manifests: std::collections::BTreeMap<
             String,
             crate::daemon::ability::manifest::AbilityManifest,
@@ -966,6 +984,9 @@ mod tests {
     use easynet_axon::mcp::McpToolProvider;
     use std::cell::RefCell;
 
+    const TEST_DEVICE_OWNER: &str = "easynet:///r/acme/device/01DEV";
+    const TEST_AGENT_OWNER: &str = "easynet:///r/acme/agent/test-user.claude";
+
     #[test]
     fn descriptors_follow_registry_owner() {
         let descriptors = descriptors_for("easynet:///r/acme/agent/u1.01MCP");
@@ -1015,6 +1036,18 @@ mod tests {
         (workspace_root, entry)
     }
 
+    fn save_test_authorities(agent: &str) {
+        let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
+            host_device_agent_ura: TEST_DEVICE_OWNER.to_string(),
+            ..Default::default()
+        };
+        let agent_ura = crate::core::ura::agent_ura("acme", "test-user", agent);
+        crate::daemon::persistence::local_agents::upsert_hosted_agent(
+            &mut local, "llm", agent, &agent_ura,
+        );
+        crate::daemon::persistence::local_agents::save(&local).unwrap();
+    }
+
     #[test]
     fn tool_spec_from_descriptor_emits_mcp_shape() {
         let spec = tool_spec_from_descriptor(&d("agent.list"));
@@ -1051,7 +1084,7 @@ mod tests {
         // No `.with_description(...)` → empty string → fall back to
         // qualified name so the MCP wire never carries an empty
         // description (which Claude Code's tool list rejects).
-        let desc = AbilityDescriptor::new("a.b", "u", Visibility::Public)
+        let desc = AbilityDescriptor::new("a.b", TEST_DEVICE_OWNER, Visibility::Public)
             .unwrap()
             .with_input_schema(serde_json::json!({"type":"object"}));
         let spec = tool_spec_from_descriptor(&desc);
@@ -1061,7 +1094,8 @@ mod tests {
 
     #[test]
     fn tool_spec_falls_back_to_object_schema_when_input_is_null() {
-        let mut desc = AbilityDescriptor::new("a.b", "u", Visibility::Public).unwrap();
+        let mut desc =
+            AbilityDescriptor::new("a.b", TEST_DEVICE_OWNER, Visibility::Public).unwrap();
         desc.schema_summary.input = serde_json::Value::Null;
         let spec = tool_spec_from_descriptor(&desc);
         assert_eq!(spec["inputSchema"]["type"], "object");
@@ -1084,7 +1118,7 @@ mod tests {
     fn tool_spec_surfaces_owner_and_cost_metadata_for_agent_mcp_ability() {
         let desc = AbilityDescriptor::new(
             "openai.mcp_google_maps__geocode",
-            "agent://openai",
+            "easynet:///r/acme/agent/silan.openai",
             Visibility::Scoped,
         )
         .unwrap()
@@ -1152,7 +1186,7 @@ mod tests {
 
     #[test]
     fn mcp_provider_advertises_and_routes_agent_discover() {
-        let desc = AbilityDescriptor::new("claude.discover", "agent://claude", Visibility::Scoped)
+        let desc = AbilityDescriptor::new("claude.discover", TEST_AGENT_OWNER, Visibility::Scoped)
             .unwrap()
             .with_source("kernel:built-in:self-bundle")
             .with_input_schema(crate::daemon::ability::builtins::agents::discover::input_schema())
@@ -1312,12 +1346,11 @@ mod tests {
     }
 
     #[test]
-    fn build_stdio_server_produces_provider_with_at_least_observe_health() {
+    fn build_stdio_server_pre_join_has_no_synthetic_descriptor_identity() {
         // Single-source-of-truth contract: both `easynet mcp_server`
         // and `easynet start --mcp` go through `build_stdio_server`.
-        // The result MUST advertise every device-profile ability the
-        // live registry registers, anchored on whatever local-agents.json
-        // says (or the literal "self" pre-join).
+        // Before bootstrap persists an authority URA, no routable descriptor
+        // exists and the server must not invent a `self` owner.
         let _h = crate::cli::commands::test_support::HomeGuard::new();
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
@@ -1326,23 +1359,7 @@ mod tests {
         };
         let configured = build_stdio_server(&cfg);
         assert_eq!(configured.server_name, "easynet-test");
-        assert!(
-            configured.descriptor_count() > 0,
-            "build_stdio_server must surface at least the device-profile abilities; \
-             got descriptor_count = 0"
-        );
-        // The pre-join fallback anchors on "self"; the descriptors
-        // we get must reference this URA as owner.
-        let owners: std::collections::HashSet<String> = configured
-            .provider
-            .descriptors
-            .iter()
-            .map(|d| d.owner_ura.clone())
-            .collect();
-        assert!(
-            owners.contains("self"),
-            "pre-join fallback must anchor descriptors on `self`; got owners = {owners:?}"
-        );
+        assert_eq!(configured.descriptor_count(), 0);
     }
 
     #[test]
@@ -1405,6 +1422,7 @@ mod tests {
         let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
         registry.agents.insert(agent.into(), entry);
         crate::daemon::persistence::agent_registry::save_agents(&registry).unwrap();
+        save_test_authorities(agent);
 
         std::fs::write(
             workspace_root.join("abilities/code-review.ability.toml"),
@@ -1525,6 +1543,7 @@ mod tests {
         let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
         registry.agents.insert(agent.into(), entry);
         crate::daemon::persistence::agent_registry::save_agents(&registry).unwrap();
+        save_test_authorities(agent);
 
         // MCP-backed ability whose [exec] kind = "mcp" would normally
         // resolve to `cost_kind = unknown` via the heuristic. The

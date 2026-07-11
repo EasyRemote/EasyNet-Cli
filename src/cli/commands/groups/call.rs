@@ -168,10 +168,10 @@ fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
             let hub_ura = crate::core::ura::hub_ura(realm);
             let caller_ura = crate::core::ura::device_ura(realm, node_id);
             let target_call =
-                crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+                crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
                     &hub_ura, ability,
                 )?;
-            return crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
+            return crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
                 &target_call,
                 args,
                 Some(&caller_ura),

@@ -63,7 +63,6 @@ pub mod core;
 pub mod daemon;
 pub mod eal;
 pub mod ffi;
-pub mod protocol;
 pub mod support;
 
 pub use core::ura;

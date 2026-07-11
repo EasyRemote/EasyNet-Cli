@@ -4,8 +4,7 @@
 // File: src/daemon/invocation/state/presence.rs
 // Description: In-memory, sharded, broadcast-equipped registry of
 //              live `session.open` reverse channels keyed by
-//              caller URA. Hub-side liveness model for the new
-//              transport plane.
+//              caller URA. This is the hub-side source of session liveness.
 //
 // Why this module exists
 // ----------------------
@@ -16,8 +15,8 @@
 // liveness onto the transport itself: a device is *alive* exactly
 // when its `session.open` `InvokeBidi` stream is open. When the
 // stream closes for any reason, the registry drops the entry and
-// emits an `Offline` event downstream consumers (subscribe_directory
-// pumps, federation.* wrappers, the daemon's audit log) all share.
+// emits an `Offline` event consumed by directory projections, dispatch
+// correlation, and audit logging.
 //
 // This module is the single canonical home for that state. PR-1
 // spec §3 (`pr-drafts/PR-0-spec-daemon-invocation-server.md`) pins
@@ -29,9 +28,7 @@
 // --------------
 // - `PresenceRegistry` — the registry itself, owned by the daemon
 //   `DaemonInvocationService` via `Arc`
-// - `DispatchSender` — type alias for the per-device mpsc sender
-//   that `runtime.invoke_remote` and `federation.forward_invoke`
-//   push reverse-channel frames into
+// - `DispatchSender` — per-device queue for typed session frames
 // - `PresenceEvent` — what subscribers receive; either `Online` or
 //   `Offline`, with the URA plus (for Offline) a typed reason
 // - `OfflineReason` — disjoint reasons a session is removed
@@ -59,8 +56,8 @@
 //    as `None` and treats as `OfflineReason::StreamClosed`.
 // 4. **Bounded backpressure**. The per-device mpsc has capacity
 //    `DISPATCH_CHANNEL_CAPACITY = 256`. A slow consumer cannot
-//    accumulate frames in the hub's memory; `forward_invoke` and
-//    `runtime.invoke_remote` push paths handle `try_send` failure
+//    accumulate frames in the hub's memory; dispatch paths handle
+//    `try_send` failure
 //    by removing the slow device with `OfflineReason::SendFailed`,
 //    which collapses backpressure into a presence event.
 // 5. **Lossy broadcast**. The events broadcast channel has capacity
@@ -77,6 +74,12 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 use tokio::sync::{broadcast, mpsc};
+
+/// Stable terminal reason when no live session owns the selected target.
+pub const DISPATCH_TARGET_OFFLINE_REASON: &str = "target_offline";
+
+/// Stable retryable reason when the selected session's bounded queue is full.
+pub const DISPATCH_TARGET_BUSY_REASON: &str = "target_busy_retry";
 
 /// Capacity of the cross-cutting `events` broadcast channel.
 ///
@@ -113,9 +116,8 @@ pub fn presence_registry_shards() -> usize {
     target.next_power_of_two()
 }
 
-/// Sender end of the per-device mpsc that downstream call paths
-/// (`runtime.invoke_remote`, `federation.forward_invoke`) push
-/// reverse-channel frames into. The receiving end is held by the
+/// Sender end of the per-device mpsc carrying reverse-channel frames. The
+/// receiving end is held by the
 /// device's `session.open` task.
 ///
 /// Frames are tonic results so a stream-level error (e.g., admission

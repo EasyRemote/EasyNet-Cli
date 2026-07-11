@@ -30,93 +30,22 @@
 //   strings/   — UTF-8 C string ↔ Rust &str conversion helpers.
 //   invocation/ — complete Axon Invocation ABI.
 //
-// v4 status (daemon SDK Runtime Core ABI)
-// -------------------------------
-// - ABI version + handle registry + last-error TLS.
-// - `easynet_init` / `easynet_shutdown`: daemon handle setup.
-// - `easynet_daemon_start/stop/status/invocation_endpoint`:
-//   product daemon lifecycle and endpoint discovery.
-// - `easynet_daemon_attach/discover/endpoints/detach`:
-//   explicit lifecycle object ownership without implicit spawn.
-// - `easynet_invocation_invoke`: complete unary Axon Invocation over
-//   daemon.sock when the `axon-pb` feature is enabled.
-// - `easynet_invocation_prepare/sign_prepared/submit_signed`:
-//   additive Draft -> Prepared -> Signed -> Submitted state-machine
-//   projection over opaque handles.
-// - `easynet_invocation_stream_open/cancel/close`: complete
-//   server-stream Axon Invocation over daemon.sock.
-// - `easynet_invocation_bidi_open/send/close_send/close/cancel`:
-//   complete InvokeBidi session ABI over daemon.sock.
-// - `easynet_authority_prepare_*` and
-//   `easynet_authority_materialize_*`: authority signing material and metadata
-//   materialization helpers backed by daemon admission metadata core.
-// - `easynet_host_binding_build/decode_request/encode_*` and
-//   `easynet_host_binding_fold_output_hash`: schema-backed host-stream
-//   binding/frame/hash DTO projections.
-// - `easynet_publication_build_resource_ref/validate_package` and
-//   publication Invocation carrier builders for daemon system abilities.
-// - `easynet_mission_build_*_invocation`,
-//   `easynet_mission_project_status`, and
-//   `easynet_mission_project_events`: Mission/EAL carrier, status, and event
-//   projection helpers.
-// - `easynet_events_build_*_subscription_invocation`,
-//   `easynet_events_build_device_event_history_invocation`,
-//   `easynet_events_project_device_event_page`,
-//   `easynet_events_project_directory_event`,
-//   `easynet_events_project_terminal`, and
-//   `easynet_events_project_drop_report`: Events stream/history carriers and
-//   typed frame projection helpers.
-// - `easynet_directory_build_list_*_invocation`,
-//   `easynet_directory_build_resolve_invocation`,
-//   `easynet_directory_build_subscription_invocation`,
-//   `easynet_directory_project_*_page`,
-//   `easynet_directory_project_resolved_ref`, and
-//   `easynet_directory_project_subscription`: Directory read-model carrier,
-//   resolve carrier, subscription carrier, and projection helpers.
-// - `easynet_receipt_build_fetch_invocation`,
-//   `easynet_receipt_project`, `easynet_receipt_verify`, and
-//   `easynet_receipt_causal_ref`: Receipt fetch carrier and conservative
-//   projection helpers.
-// - `easynet_admin_build_*_invocation`,
-//   `easynet_admin_project_gateway_status`,
-//   `easynet_admin_project_agent_records`, and
-//   `easynet_admin_project_agent_lifecycle_result`, and
-//   `easynet_admin_project_device_admin_result`: Admin + Gateway carrier and
-//   daemon lifecycle projection helpers.
-// - `easynet_compatibility_build_*_invocation` and
-//   `easynet_compatibility_project_*`: Compatibility carrier and OpenAI-shape
-//   model/chat/file projection helpers.
-// - `easynet_surface_build_*_invocation` and
-//   `easynet_surface_project_*`: Surface page carrier, daemon pages health,
-//   and projection helpers.
-// - `easynet_wrappers_build_*_invocation` and
-//   `easynet_wrappers_project_*`: Convenience Wrapper file/session/media
-//   carrier and record projection helpers.
-// - No `easynet_ability_*` exports. The ability+args ABI was removed
-//   instead of retained as hard-fail compatibility symbols.
+// v5 status (generic Runtime Core ABI)
+// ------------------------------------
+// - Daemon lifecycle and generic Runtime/Invocation ownership only.
+// - Unary, prepared/signed/handle, stream, and bidi state machines.
+// - Stable feature, health, diagnostics, and typed-error JSON DTOs.
+// - Domain profiles are language-SDK abstractions and are never C exports.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-pub mod admin_gateway;
-pub mod authority;
 pub mod client;
-pub mod compatibility;
 pub mod daemon;
-pub mod directory;
 pub mod errors;
-pub mod events;
 pub mod features;
-pub mod host_binding;
-pub mod identity;
 pub mod invocation;
-pub mod mission;
-mod profile_json;
-pub mod publication;
-pub mod receipt;
 pub mod strings;
-pub mod surface;
-pub mod wrappers;
 
 use std::os::raw::c_char;
 
@@ -142,7 +71,9 @@ use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 /// v4 = 4. Additive Daemon SDK Runtime Core object-family symbols:
 /// feature discovery, attach/discover/detach/endpoints, runtime
 /// health, and prepare/sign/submit handles.
-pub const EASYNET_ABI_VERSION: u32 = 4;
+/// v5 = 5. Generic-only C surface: daemon lifecycle, Runtime/Invocation,
+/// stream/bidi, and stable runtime/error DTOs. Domain profile exports removed.
+pub const EASYNET_ABI_VERSION: u32 = 5;
 
 /// Report the ABI version of this library build. Client bindings
 /// call this first thing at dlopen time and refuse to proceed when

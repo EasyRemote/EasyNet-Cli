@@ -228,10 +228,10 @@ echo "Rule 6 — Hosted Agent receipt schema (deferred to P4)"
 echo "  [info] receipt schema lands in P4"
 
 # ─────────────────────────────────────────────────────────────────
-# Rule 7: §A13 — hosted Agent URI persistence.
+# Rule 7: §A13 — hosted Agent URA persistence.
 # Deferred to P4 when local-agents.json lands.
 # ─────────────────────────────────────────────────────────────────
-echo "Rule 7 — local-agents.json hosted URI persistence (deferred to P4)"
+echo "Rule 7 — local-agents.json hosted URA persistence (deferred to P4)"
 echo "  [info] persistence lands in P4"
 
 # ─────────────────────────────────────────────────────────────────

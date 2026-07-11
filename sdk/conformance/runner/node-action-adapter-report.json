@@ -1,487 +1,223 @@
 {
-  "schema_version": 1,
-  "language": "node",
   "adapter_kind": "node_facade_conformance_tests",
+  "language": "node",
   "records": [
     {
-      "case_id": "admin_gateway/carrier_status",
-      "profile": "admin_gateway",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
       "case_id": "authority/mutual_exclusion",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": "Node Authority projects delegated/session authority metadata, delegates minting through injected transports, preserves unrelated Invocation metadata, and rejects ambiguous authority metadata."
+      "message": "Node Authority projects delegated/session authority metadata, delegates minting through injected transports, preserves unrelated Invocation metadata, and rejects ambiguous authority metadata.",
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "bidi/close_send_not_cancel",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": "Node Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close."
+      "message": "Node Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close.",
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "bidi/frame0_required",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node Runtime Core seam keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload.",
       "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": "Node Runtime Core seam keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload."
-    },
-    {
-      "case_id": "compatibility/openai_carrier_projection",
-      "profile": "compatibility",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "directory/list_pagination",
-      "profile": "directory_identity",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "directory/no_default_fanout",
-      "profile": "directory_identity",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "directory/resolve",
-      "profile": "directory_identity",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "directory/subscription_stream",
-      "profile": "directory_identity",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
+      "status": "passed"
     },
     {
       "case_id": "error/profile_source_refs",
-      "profile": "errors",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": null,
+      "profile": "errors",
+      "status": "passed"
     },
     {
       "case_id": "error/retry_hint",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": "Node typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages."
+      "message": "Node typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages.",
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "error/typed_json",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null,
       "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "events/device_invocation_history",
-      "profile": "events",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "events/directory_stream",
-      "profile": "events",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "events/session_stream",
-      "profile": "events",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
+      "status": "passed"
     },
     {
       "case_id": "health/api_vs_runtime",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null,
       "profile": "health",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "host_binding/codec_hash",
-      "profile": "host_binding",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "identity/ura_descriptor_projection",
-      "profile": "directory_identity",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
+      "status": "passed"
     },
     {
       "case_id": "invocation/builder_handle_state",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": null,
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "invocation/canonical_material",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": null,
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "invocation/complete_tuple",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null,
       "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "invocation/descriptor_ref_helper_delegation",
-      "profile": "directory_identity",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
+      "status": "passed"
     },
     {
       "case_id": "invocation/prepared_not_submittable",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": null,
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "invocation/presigned_submit",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": null,
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "invocation/terminal_monotonicity",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null,
       "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "memc/consumer_coverage",
-      "profile": "memc",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "memc/no_core_bloat",
-      "profile": "memc",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "memc/profile_exclusivity",
-      "profile": "memc",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "memc/semantic_alignment",
-      "profile": "memc",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": "Node seam semantic terms map to the same MEMC owners and descriptor-ref delegation contract as the shared daemon SDK ledger."
-    },
-    {
-      "case_id": "mission/carrier_status",
-      "profile": "mission",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "publication/resource_carriers",
-      "profile": "publication",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "receipt/fetch_carrier",
-      "profile": "receipt",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "receipt/projection_causal_ref",
-      "profile": "receipt",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
+      "status": "passed"
     },
     {
       "case_id": "runtime_core/feature_discovery",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": "Node decodes the canonical Runtime Core feature discovery facts through an injected transport seam."
+      "message": "Node decodes the canonical Runtime Core feature discovery facts through an injected transport seam.",
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "stream/backpressure_bound",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": null,
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "stream/order_terminal",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": "Node Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy.",
       "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": "Node Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy."
-    },
-    {
-      "case_id": "surface/page_carriers",
-      "profile": "surface",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
+      "status": "passed"
     },
     {
       "case_id": "version/abi_compatible",
-      "profile": "runtime_core",
-      "status": "passed",
       "evidence": [
         {
           "kind": "node_test",
           "ref_path": "sdk/node/test/runtime-core.test.mjs"
         }
       ],
-      "message": null
+      "message": null,
+      "profile": "runtime_core",
+      "status": "passed"
     },
     {
       "case_id": "version/abi_incompatible",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+        }
+      ],
+      "message": null,
       "profile": "runtime_core",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
-    },
-    {
-      "case_id": "wrappers/profile_records",
-      "profile": "wrappers",
-      "status": "passed",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": null
+      "status": "passed"
     }
-  ]
+  ],
+  "schema_version": 1
 }

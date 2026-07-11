@@ -30,7 +30,7 @@ from easynet_sdk._key_service import (
 )
 from easynet_sdk.managed_signing import _verify_ed25519_signature
 
-from tests.key_service_fake import KeyServiceResponsePlan, KeyServiceServer
+from key_service_fake import KeyServiceResponsePlan, KeyServiceServer
 
 
 class ManagedSigningTests(unittest.TestCase):
@@ -338,7 +338,7 @@ class ManagedSigningTests(unittest.TestCase):
             self.assertEqual(signer.signing_public_key(), public_key)
             self.assertEqual(signer.sign_canonical(canonical), signature)
             handle = SignerHandle(
-                profile="directory_identity",
+                profile="signing",
                 signer_id="signer-managed-key-provider",
                 owner_ura=subject_ura,
                 key_id=key_id,

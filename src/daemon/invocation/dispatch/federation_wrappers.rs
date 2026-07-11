@@ -56,9 +56,9 @@ use crate::daemon::invocation::bidi::state::presence::PresenceRegistry;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1 as axon_pb;
 pub use easynet_axon::{
-    DiscoverRequest, DiscoverResponse, ForwardInvokeRequest, ForwardInvokeResponse,
-    ListUserDevicesRequest, ListUserDevicesResponse, ResolveAgentSummary, ResolveFilterRequest,
-    ResolveKeyRequest, ResolveKeyResponse, ResolveRequest, ResolveResponse,
+    DiscoverRequest, DiscoverResponse, ListUserDevicesRequest, ListUserDevicesResponse,
+    ResolveAgentSummary, ResolveFilterRequest, ResolveKeyRequest, ResolveKeyResponse,
+    ResolveRequest, ResolveResponse,
 };
 
 /// `federation.join` — caller's claimed URA is authoritative; no
@@ -104,11 +104,6 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY: &str =
 /// `federation.revoke` — operator-driven removal of an agent from
 /// the registry via `PresenceRegistry::force_revoke`.
 pub const ABILITY_FEDERATION_REVOKE: &str = conformance::ABILITY_FEDERATION_REVOKE;
-
-/// `federation.forward_invoke` — push an inner envelope down a
-/// target agent's `session.open` reverse channel; correlate the
-/// reply by call_id (same scheme MVP uses).
-pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = conformance::ABILITY_FEDERATION_FORWARD_INVOKE;
 
 /// `federation.resolve_key` — peer-hub lookup of an agent URA's
 /// Ed25519 public key, served from the local realm trust anchor.
@@ -209,7 +204,6 @@ pub const FEDERATION_ABILITIES: &[&str] = &[
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
     ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
     ABILITY_FEDERATION_REVOKE,
-    ABILITY_FEDERATION_FORWARD_INVOKE,
     ABILITY_FEDERATION_ADVERTISE_ABILITIES,
     ABILITY_FEDERATION_STATUS,
 ];
@@ -1049,12 +1043,9 @@ pub fn handle_revoke(
     }
 }
 
-// ─── federation.forward_invoke ─────────────────────────────────────
-
 /// Reason text emitted on `Status::failed_precondition` when the
 /// target presence-registry lookup misses on the local-realm
 /// fast-path. Wire-stable per DEC-N4 §2.1.
-pub const FORWARD_INVOKE_TARGET_OFFLINE_REASON: &str = "target_offline";
 
 /// Reason text emitted when the target device's dispatch channel is
 /// full. A full channel means the device is SLOW (its session drain
@@ -1064,29 +1055,6 @@ pub const FORWARD_INVOKE_TARGET_OFFLINE_REASON: &str = "target_offline";
 /// offline plus a failure avalanche for every pending call
 /// (measured: one >256-frame burst killed 73% of 2048 in-flight
 /// invocations).
-pub const FORWARD_INVOKE_TARGET_BUSY_REASON: &str = "target_busy_retry";
-
-/// Handle a local-realm `federation.forward_invoke` invocation.
-///
-/// Pure constructor for the DEC-N4 §2.1 `ForwardInvokeResponse`
-/// shape. Threads the caller's `correlation_call_id` and the
-/// target's `result_bytes` into the wire envelope. Presence-
-/// registry lookup + target_offline behaviour live in the
-/// dispatcher (`daemon_invocation_service::try_push_forward_
-/// invoke_frame`); this wrapper exists for the test contract
-/// pin and call sites that build the wire shape directly.
-#[must_use]
-pub fn handle_forward_invoke(
-    request: &ForwardInvokeRequest,
-    correlation_call_id: &str,
-    result_bytes: Vec<u8>,
-) -> ForwardInvokeResponse {
-    let _ = request;
-    ForwardInvokeResponse {
-        result_bytes,
-        correlation_call_id: correlation_call_id.to_string(),
-    }
-}
 
 // ─── federation.subscribe_directory ────────────────────────────────
 //
@@ -1210,10 +1178,6 @@ mod tests {
             "federation.subscribe_directory"
         );
         assert_eq!(ABILITY_FEDERATION_REVOKE, "federation.revoke");
-        assert_eq!(
-            ABILITY_FEDERATION_FORWARD_INVOKE,
-            "federation.forward_invoke"
-        );
         assert_eq!(ABILITY_FEDERATION_RESOLVE_KEY, "federation.resolve_key");
         assert_eq!(ABILITY_FEDERATION_DISCOVER, "federation.discover");
         assert_eq!(
@@ -1240,7 +1204,7 @@ mod tests {
         // `namespace.*` resolver surfaces live outside the federation ability
         // set. `runtime.bootstrap_self_identity` is namespaced under
         // `runtime.*`, so it also stays outside this list.
-        assert_eq!(FEDERATION_ABILITIES.len(), 14);
+        assert_eq!(FEDERATION_ABILITIES.len(), 13);
         assert!(
             !FEDERATION_ABILITIES.contains(&"aggregate.list_abilities_catalog"),
             "backend/product aggregate alias must not be advertised as federation baseline"
@@ -2310,110 +2274,6 @@ mod tests {
                 .is_none(),
             "revoke must remove advertised hosted-agent rows"
         );
-    }
-
-    #[test]
-    fn handle_forward_invoke_threads_correlation_id_and_result_bytes() {
-        // DEC-N4 §2.1 final shape: handle_forward_invoke is a
-        // pure constructor that threads the caller's
-        // correlation_call_id and the target's result_bytes
-        // through. Presence-registry lookup + target_offline
-        // surface live in the dispatcher's
-        // try_push_forward_invoke_frame.
-        let _registry = PresenceRegistry::new();
-        let target_reply = b"hello from device-b".to_vec();
-        let resp = handle_forward_invoke(
-            &ForwardInvokeRequest {
-                target_ura: "easynet:///r/realm/device/n1".to_string(),
-                inner_envelope_b64: String::new(),
-                causal_context_bytes: Vec::new(),
-                forward_deadline_ms: 0,
-                origin_caller: None,
-            },
-            "call-id-7",
-            target_reply.clone(),
-        );
-        assert_eq!(resp.correlation_call_id, "call-id-7");
-        assert_eq!(resp.result_bytes, target_reply);
-    }
-
-    #[test]
-    fn handle_forward_invoke_empty_result_bytes_is_legal_at_construction() {
-        // Empty result_bytes is a legitimate shape after the
-        // target dispatcher returns nothing. It is NOT how
-        // target_offline is signalled (DEC-N4 §2.1 makes
-        // target_offline a Status::failed_precondition).
-        let resp = handle_forward_invoke(
-            &ForwardInvokeRequest {
-                target_ura: "easynet:///r/realm/device/n1".to_string(),
-                inner_envelope_b64: String::new(),
-                causal_context_bytes: Vec::new(),
-                forward_deadline_ms: 0,
-                origin_caller: None,
-            },
-            "call-id-8",
-            Vec::new(),
-        );
-        assert!(resp.result_bytes.is_empty());
-        assert_eq!(resp.correlation_call_id, "call-id-8");
-    }
-
-    #[test]
-    fn forward_invoke_request_round_trips_audit_chain_and_deadline() {
-        // DEC-N4 §2.1 acceptance: `causal_context_bytes` and
-        // `forward_deadline_ms` are wire fields on
-        // `ForwardInvokeRequest` that round-trip verbatim from the
-        // caller's `runtime.invoke_remote` initiator (or the CLI
-        // bridge in `daemon::invocation::routing::federation_invoke`) through the
-        // dispatcher's JSON deserialise step. The dispatcher
-        // surfaces these to the target's session frame so PR-N5's
-        // InvocationReceipt can stamp `causal_context.list` and
-        // DEC-N5 §3 can derive the inner deadline.
-        //
-        // `causal_context_bytes` rides the wire as a base64 STRING,
-        // not a JSON byte-array — the Axon deserializer rejects a
-        // sequence with `invalid type: sequence, expected a
-        // base64-encoded string`. Serialise the canonical struct (the
-        // exact shape a producer emits) so this test exercises the
-        // real wire contract rather than a hand-rolled object that can
-        // drift from it.
-        let audit_bytes: Vec<u8> = vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0xFF];
-        let original = ForwardInvokeRequest {
-            target_ura: "easynet:///r/realm/device/n1".to_string(),
-            inner_envelope_b64: String::new(),
-            causal_context_bytes: audit_bytes.clone(),
-            forward_deadline_ms: 12_345,
-            origin_caller: None,
-        };
-        let bytes = serde_json::to_vec(&original).unwrap();
-
-        // Pin the wire shape: the audit field must be a base64 string.
-        let wire: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(
-            wire["causal_context_bytes"].as_str(),
-            Some(BASE64_STANDARD.encode(&audit_bytes).as_str()),
-            "causal_context_bytes must serialise as a base64 string, not a JSON array"
-        );
-
-        let parsed: ForwardInvokeRequest = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(parsed.causal_context_bytes, audit_bytes);
-        assert_eq!(parsed.forward_deadline_ms, 12_345);
-    }
-
-    #[test]
-    fn forward_invoke_request_audit_fields_default_when_absent() {
-        // Backwards-compat: a `ForwardInvokeRequest` produced
-        // before C1a (no audit fields in the JSON) must still
-        // deserialise — the new fields default to empty / zero
-        // sentinels per the `#[serde(default)]` annotation.
-        let pre_c1a = serde_json::json!({
-            "target_ura": "easynet:///r/realm/device/n1",
-            "inner_envelope_b64": "",
-        });
-        let bytes = serde_json::to_vec(&pre_c1a).unwrap();
-        let parsed: ForwardInvokeRequest = serde_json::from_slice(&bytes).unwrap();
-        assert!(parsed.causal_context_bytes.is_empty());
-        assert_eq!(parsed.forward_deadline_ms, 0);
     }
 
     #[test]

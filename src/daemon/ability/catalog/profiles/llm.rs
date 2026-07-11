@@ -16,7 +16,7 @@
 //! Currently wired in system_abilities/agents/chat.rs. The chat handler
 //! is the conversation.send implementation.
 
-use crate::daemon::ability::catalog::SystemAbilityMetadata;
+use crate::daemon::ability::descriptors::AbilityDescriptor;
 
 const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // RFC-005 owner-local catalogue names: `meta.*` and the built-in
@@ -60,6 +60,59 @@ fn is_llm_dynamic_ability(ability_name: &str) -> bool {
     LLM_DYNAMIC_ABILITY_PREFIXES
         .iter()
         .any(|p| ability_name.starts_with(p))
+}
+
+/// Project one hosted-Agent ability from canonical control-plane truth.
+///
+/// A registered descriptor wins intact and is re-anchored through the typed
+/// owner builder. Only a not-yet-registered import falls back to the spec DTO
+/// plus pure registration hints. Ambiguous live rows fail closed.
+pub(crate) fn descriptor_for_agent_spec(
+    live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
+    owner_ura: &str,
+    agent_name: &str,
+    spec: &crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec,
+) -> Result<AbilityDescriptor, String> {
+    let registry_name = spec.name();
+    let owner_local_name =
+        crate::daemon::execution::mission::agent_ability_specs::public_agent_ability_name(
+            owner_ura,
+            agent_name,
+            registry_name,
+        );
+    let descriptor = match live_registry
+        .canonical_descriptor_for_ability(registry_name)
+        .map_err(|error| error.to_string())?
+    {
+        Some(descriptor) => {
+            let descriptor = descriptor
+                .rebind_owner_ura(owner_ura)
+                .map_err(|error| error.to_string())?;
+            if descriptor.name != owner_local_name {
+                return Err(format!(
+                    "canonical descriptor name {:?} does not match hosted-Agent projection {:?}",
+                    descriptor.name, owner_local_name
+                ));
+            }
+            descriptor
+        }
+        None => AbilityDescriptor::new(
+            owner_local_name,
+            owner_ura,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+        )
+        .map_err(|error| error.to_string())?
+        .with_description(spec.description())
+        .with_input_schema(spec.parameters().clone())
+        .with_hints(crate::daemon::ability::catalog::registration_hints(
+            owner_ura,
+            registry_name,
+            crate::daemon::ability::CallMode::Rpc,
+        )),
+    };
+    Ok(descriptor
+        .with_visibility(crate::daemon::ability::descriptors::Visibility::Scoped)
+        .with_source(format!("agent:{agent_name}")))
 }
 
 /// AbilityDescriptors for every conversation.* / private skill.* in the live
@@ -107,7 +160,7 @@ pub fn descriptors_for_with_metadata(
 /// projection for each hosted agent.
 #[derive(Debug, Clone)]
 pub struct LlmProfileAbilityCatalog {
-    abilities: Vec<SystemAbilityMetadata>,
+    abilities: Vec<AbilityDescriptor>,
 }
 
 impl LlmProfileAbilityCatalog {
@@ -117,7 +170,7 @@ impl LlmProfileAbilityCatalog {
     }
 
     #[must_use]
-    pub fn from_system_abilities(abilities: Vec<SystemAbilityMetadata>) -> Self {
+    pub fn from_system_abilities(abilities: Vec<AbilityDescriptor>) -> Self {
         Self {
             abilities: abilities
                 .into_iter()
@@ -126,7 +179,7 @@ impl LlmProfileAbilityCatalog {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = &SystemAbilityMetadata> {
+    fn iter(&self) -> impl Iterator<Item = &AbilityDescriptor> {
         self.abilities.iter()
     }
 }
@@ -136,21 +189,21 @@ pub fn descriptors_for_with_catalog(
     agent_type_display: Option<&str>,
     catalog: &LlmProfileAbilityCatalog,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::Visibility;
     catalog
         .iter()
-        .map(|m| {
-            let visibility = if m.name.starts_with("skill.") {
+        .map(|descriptor| {
+            let visibility = if descriptor.name.starts_with("skill.") {
                 Visibility::Private
             } else {
                 Visibility::Scoped
             };
-            let mut desc = AbilityDescriptor::new(m.name.clone(), owner_ura, visibility)
-                .expect("registry-derived names satisfy descriptor invariants")
-                .with_input_schema(m.input_schema.clone())
-                .with_hints(m.hints.clone())
-                .with_source("kernel:built-in")
-                .with_description(m.description.clone());
+            let mut desc = descriptor
+                .clone()
+                .rebind_owner_ura(owner_ura)
+                .expect("registry-derived descriptor accepts canonical LLM owner")
+                .with_visibility(visibility)
+                .with_source("kernel:built-in");
             if let Some(t) = agent_type_display {
                 desc = desc.with_metadata_entry("agent_type", t);
             }
@@ -240,25 +293,21 @@ mod tests {
 
     #[test]
     fn catalog_snapshot_projects_to_multiple_llm_owners_without_mutating_source() {
+        let source_owner = "easynet:///r/acme/device/catalog";
+        let descriptor = |name: &str, description: &str| {
+            AbilityDescriptor::new(
+                name,
+                source_owner,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+            )
+            .expect("test descriptor")
+            .with_description(description)
+            .with_input_schema(serde_json::json!({"type": "object"}))
+        };
         let catalog = LlmProfileAbilityCatalog::from_system_abilities(vec![
-            SystemAbilityMetadata {
-                name: "conversation.send".to_string(),
-                description: "Send a prompt".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                hints: Default::default(),
-            },
-            SystemAbilityMetadata {
-                name: "skill.design".to_string(),
-                description: "Run a private skill".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                hints: Default::default(),
-            },
-            SystemAbilityMetadata {
-                name: "meta.list_abilities".to_string(),
-                description: "Device-owned metadata".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                hints: Default::default(),
-            },
+            descriptor("conversation.send", "Send a prompt"),
+            descriptor("skill.design", "Run a private skill"),
+            descriptor("meta.list_abilities", "Device-owned metadata"),
         ]);
 
         let alice = descriptors_for_with_catalog(

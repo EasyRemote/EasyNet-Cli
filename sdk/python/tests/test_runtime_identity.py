@@ -11,7 +11,7 @@ from easynet_sdk.runtime_identity import (
     ensure_runtime_signing_identity,
     load_runtime_signing_identity,
 )
-from tests.key_service_fake import KeyServiceServer
+from key_service_fake import KeyServiceServer
 
 
 class RuntimeIdentityTests(unittest.TestCase):

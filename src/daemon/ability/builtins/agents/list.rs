@@ -50,9 +50,10 @@ pub const ABILITY_LIST_AGENTS: &str = crate::daemon::ability::names::agents::AGE
 /// hot-reload of `agents.json` is reflected without re-registration.
 pub fn register<F>(reg: &mut AxonAbilityCatalog, registry_provider: F)
 where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> anyhow::Result<AgentRegistry> + Send + Sync + 'static,
 {
-    let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(registry_provider);
+    let provider: Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync> =
+        Arc::new(registry_provider);
     reg.register_rpc_with_owner(
         ABILITY_LIST_AGENTS,
         OwnerKind::Device,
@@ -61,10 +62,11 @@ where
 }
 
 fn list_agents_handler(
-    registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
+    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync>,
 ) -> anyhow::Result<Value> {
-    let registry = registry_provider();
-    let local_agents = crate::daemon::persistence::local_agents::load().unwrap_or_default();
+    let registry = registry_provider()?;
+    let local_agents = crate::daemon::persistence::local_agents::load()
+        .map_err(|error| anyhow::anyhow!("agent.list: load hosted-agent URA index: {error:#}"))?;
     Ok(json!({ "agents": agent_rows(&registry, &local_agents) }))
 }
 
@@ -124,17 +126,28 @@ mod tests {
     #[test]
     fn registration_makes_list_agents_dispatchable() {
         let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg, AgentRegistry::default);
+        register(&mut reg, || Ok(AgentRegistry::default()));
         assert!(reg.get_rpc(ABILITY_LIST_AGENTS).is_some());
     }
 
     #[test]
     fn list_agents_empty_registry_returns_empty_array() {
         let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg, AgentRegistry::default);
+        register(&mut reg, || Ok(AgentRegistry::default()));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
         assert!(resp["agents"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_agents_propagates_registry_load_failure() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg, || anyhow::bail!("durable registry is unreadable"));
+        let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
+
+        let error = handler(json!({})).expect_err("corrupt state must not look like no agents");
+
+        assert!(error.to_string().contains("durable registry is unreadable"));
     }
 
     #[test]
@@ -146,7 +159,7 @@ mod tests {
 
         let mut reg = AxonAbilityCatalog::new();
         let snapshot = registry.clone();
-        register(&mut reg, move || snapshot.clone());
+        register(&mut reg, move || Ok(snapshot.clone()));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
 
@@ -189,7 +202,7 @@ mod tests {
 
         let mut reg = AxonAbilityCatalog::new();
         let snapshot = registry.clone();
-        register(&mut reg, move || snapshot.clone());
+        register(&mut reg, move || Ok(snapshot.clone()));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
 

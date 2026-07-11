@@ -125,7 +125,7 @@ class ControlDiscoveryRuntimeConnector:
 
     The connector owns only discovery-to-endpoint projection. Handshake,
     transport lifetime, and Invocation protocol behavior stay delegated to the
-    inner connector, usually the private C ABI v4 connector.
+    inner connector, usually the private generic C ABI v5 connector.
     """
 
     inner: RuntimeConnector

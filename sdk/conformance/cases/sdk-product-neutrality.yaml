@@ -1,0 +1,13 @@
+id: sdk/product_neutrality
+profile: conformance
+required_for:
+  - go
+  - python
+description: Runtime SDK production exports contain only generic runtime concepts and no product profiles, product ability literals, retired domain ABI symbols, or compatibility aliases.
+steps:
+  - action: run_sdk_product_neutrality_guard
+expect:
+  result: product_neutral_runtime_sdk
+  product_profiles: 0
+  retired_domain_symbols: 0
+  compatibility_aliases: 0

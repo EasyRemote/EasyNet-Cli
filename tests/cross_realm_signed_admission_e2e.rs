@@ -49,9 +49,9 @@
 //   that bypasses the network. The 2-daemon spawned-binary version
 //   (real TLS handshake) is a follow-up; this test verifies the
 //   admission + resolve_key correlation logic deterministically.
-// - The PR-N1 forward_invoke unwrap path. The signed envelope is
+// - The PR-N1 invoke unwrap path. The signed envelope is
 //   delivered straight to daemon B's invoke endpoint, not through
-//   `federation.forward_invoke`. Composing the two is PR-N3
+//   `federation.invoke`. Composing the two is PR-N3
 //   territory (full discover + forward + signed admit chain).
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
@@ -90,7 +90,7 @@ use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, Trusted
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
 const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
-/// In-process federation client that forwards every `forward_invoke`
+/// In-process federation client that forwards every `invoke`
 /// to a target `DaemonInvocationService`. Used so daemon B's
 /// FederatedKeyResolver can dial daemon A without a real TLS
 /// channel.
@@ -115,7 +115,7 @@ struct InProcessForwarder {
 
 #[async_trait]
 impl FederationClient for InProcessForwarder {
-    async fn forward_invoke(
+    async fn invoke(
         &self,
         _target_hub_endpoint: &HubEndpoint,
         mut request: InvokeRequest,
@@ -383,7 +383,7 @@ async fn cross_realm_caller_with_no_federated_peer_entry_rejected() {
     struct DialFailedClient;
     #[async_trait]
     impl FederationClient for DialFailedClient {
-        async fn forward_invoke(
+        async fn invoke(
             &self,
             target_hub_endpoint: &HubEndpoint,
             _request: InvokeRequest,

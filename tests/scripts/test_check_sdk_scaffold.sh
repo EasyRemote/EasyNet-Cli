@@ -53,8 +53,10 @@ make_sandbox() {
     "$dir/target" \
     "$dir/tools/scripts"
   cp "$ROOT/include/easynet_cli.h" "$dir/include/easynet_cli.h"
+  cp "$ROOT/include/easynet_cli.exports.v5" "$dir/include/easynet_cli.exports.v5"
   cp "$ROOT/src/bin/sdk-conformance-runner.rs" "$dir/src/bin/sdk-conformance-runner.rs"
-  cp "$ROOT/src/ffi/features.rs" "$dir/src/ffi/features.rs"
+  mkdir -p "$dir/src/ffi/features"
+  cp "$ROOT/src/ffi/features/mod.rs" "$dir/src/ffi/features/mod.rs"
   local checker
   for checker in \
     check-backend-route-family-coverage.sh \
@@ -71,7 +73,6 @@ make_sandbox() {
     check-sdk-product-smokes.sh \
     check-sdk-receipt-ura-boundary.sh \
     check-sdk-scaffold.sh \
-    check-sdk-section27-coverage.sh \
     check-sdk-ura-naming.sh \
     check-swift-sdk-seam.sh \
     go-sdk-live-smoke.sh \

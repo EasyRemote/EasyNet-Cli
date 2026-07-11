@@ -25,10 +25,10 @@
 // AXON-RFC-001 P1.5 deleted the underlying `send_a2a_task` axon
 // helper (it now bails with a deprecation message). The new
 // canonical path is "use Invoke against the appropriate Agent
-// ability." This ability is the wrapper that does exactly that:
-// calls the daemon-hosted `federation.forward_invoke` ability, so
-// outbound A2A uses the same Axon service path as CLI/EAL remote
-// invocation.
+// ability." This adapter projects A2A arguments into a complete
+// descriptor-bound request and submits it through the daemon-hosted
+// `Invocation::Invoke` service, so outbound A2A uses the same Axon
+// service path as CLI/EAL remote invocation.
 //
 // What lives here
 // ---------------
@@ -61,8 +61,8 @@ pub const ABILITY_SEND_TASK: &str =
     crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK;
 
 /// Register `a2a.client.send_task` on the registry. Stateless;
-/// every call dials the local daemon's `federation.forward_invoke`
-/// surface fresh — same wire path the rest of the CLI's
+/// every call submits a signed request to the local daemon's
+/// `Invocation::Invoke` service — the same wire path the rest of the CLI's
 /// cross-device dispatch takes after the joint-plan unification.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     // Registered envelope-aware so the handler can read the inbound
@@ -110,7 +110,7 @@ fn causal_parents_from_env(env: &crate::daemon::ability::dispatch::EnvelopeConte
 /// Args: `{ "target_node_ura": "<URA>", "agent_name": "<agent>",
 ///          "skill_name": "<verb>", "args": <json-value> }`.
 ///
-/// Routes through `federation.forward_invoke` against the target
+/// Routes through the canonical `Invocation::Invoke` service for the target
 /// device URA — the same unified path
 /// `easynet ability invoke --node <URA>` and EAL
 /// `IrTarget::Device` use after the joint-plan cut over. Pre-cut
@@ -144,9 +144,7 @@ fn send_task_handler(
     #[cfg(feature = "axon-pb")]
     {
         let target_ura = if crate::core::ura::parse_ura(target_node.trim()).is_ok() {
-            match crate::daemon::invocation::routing::federation_invoke::parse_node_ura(
-                &target_node,
-            ) {
+            match crate::daemon::invocation::routing::remote_invoke::parse_node_ura(&target_node) {
                 Ok(ura) => ura,
                 Err(e) => return Ok(error_response(&format!("parse target_node_ura: {e}"))),
             }
@@ -173,7 +171,7 @@ fn send_task_handler(
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
         let target_call =
-            match crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+            match crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
                 &target_ura,
                 &ability,
             ) {
@@ -184,7 +182,7 @@ fn send_task_handler(
         // hop so an A2A relay preserves the receipt DAG instead of re-rooting
         // it (SPEC §15.1-1, bug-1 Slice B). Root invocations yield no parents.
         let causal_parents = causal_parents_from_env(env);
-        match crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
+        match crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_causal_parents(
             &target_call,
             task_args,
             caller_ura.as_deref(),
@@ -244,13 +242,11 @@ fn target_node_field(args: &Value) -> Result<String, String> {
 }
 
 pub fn send_task_description() -> &'static str {
-    "Outbound A2A: dispatch an RPC Invoke against a remote node's \
-     ability. Resolves to `<agent_name>.<skill_name>` on the named \
-     node and routes through daemon-hosted federation.forward_invoke. \
-     Returns {ok:true,result} on success; remote failures surface as \
-     {ok:false,error} so callers can branch without a try/catch. The \
-     `args` payload is OPAQUE to the daemon — its shape is the remote \
-     skill's input_schema contract and is not validated locally."
+    "Outbound A2A: dispatch a signed descriptor-bound RPC Invoke against a \
+     remote node's `<agent_name>.<skill_name>` ability through the daemon's \
+     canonical Invocation service. Returns {ok:true,result} on success; \
+     remote failures surface as {ok:false,error}. The `args` payload remains \
+     opaque to the routing layer."
 }
 
 #[cfg(test)]
@@ -394,7 +390,7 @@ mod tests {
     fn send_task_without_daemon_socket_returns_ok_false_no_panic() {
         // Joint-plan phase 4: a2a.client.send_task no longer
         // requires a process-wide dispatcher handle — every call
-        // dials `federation.forward_invoke` over the daemon UDS
+        // dials the canonical `Invocation::Invoke` service over the daemon UDS
         // fresh. Tests run without a daemon, so the call path
         // surfaces a structured `ok: false` envelope (NOT panic)
         // with a message naming the missing daemon transport or

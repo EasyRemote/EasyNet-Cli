@@ -1,9 +1,0 @@
-{
-  "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/receipt-1/receipt",
-  "receipt_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "invocation_id": "inv-example-1",
-  "index": 0,
-  "metadata": {
-    "source": "daemon"
-  }
-}

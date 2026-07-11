@@ -44,29 +44,24 @@ fn system_descriptors_for_owner(
     owner: crate::daemon::ability::dispatch::OwnerKind,
     visibility_for: impl Fn(&str) -> crate::daemon::ability::descriptors::Visibility,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    use crate::daemon::ability::descriptors::AbilityDescriptor;
-
     crate::daemon::ability::catalog::published_system_abilities_for_owner(owner)
         .into_iter()
-        .map(|m| {
-            AbilityDescriptor::new(m.name.clone(), owner_ura, visibility_for(&m.name))
-                .expect("registry-derived names satisfy descriptor invariants")
-                .with_input_schema(m.input_schema.clone())
-                .with_hints(m.hints.clone())
+        .map(|descriptor| {
+            let visibility = visibility_for(&descriptor.name);
+            descriptor
+                .rebind_owner_ura(owner_ura)
+                .expect("registry-derived descriptor accepts canonical profile owner")
+                .with_visibility(visibility)
                 .with_source("kernel:built-in")
-                .with_description(m.description)
         })
         .collect()
 }
 
 /// Read `~/.easynet/local-agents.json` and project it into the full
 /// host descriptor catalog. Returns an empty catalog when the file is
-/// missing or malformed (pre-join state, brand-new install) — callers
-/// that need a strict error path should call `local_agents::load`
-/// directly. Pre-join, descriptors anchor on a literal "self" URA
-/// marker so the catalog is still well-formed; once join completes
-/// and a daemon restart picks up the canonical URA, the catalog
-/// re-anchors automatically on the next call.
+/// missing, malformed, or does not yet contain a canonical host authority
+/// URA. Pre-join state has no routable descriptor identity; it is not
+/// represented by a synthetic owner locator.
 ///
 /// Single source of truth for the recipe used by both the MCP stdio
 /// server (advertised tool surface) and the in-process
@@ -74,20 +69,27 @@ fn system_descriptors_for_owner(
 /// helper is what guarantees external and internal MCP callers see
 /// the same catalog.
 pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
-    let host_ura = if local.host_device_agent_ura.is_empty() {
-        "self".to_string()
-    } else {
-        local.host_device_agent_ura.clone()
+    use crate::daemon::ability::descriptors::AbilityDescriptor;
+
+    let Ok(local) = crate::daemon::persistence::local_agents::load() else {
+        return Vec::new();
     };
+    let host_ura = local.host_device_agent_ura.clone();
+    if AbilityDescriptor::validate_owner_ura(&host_ura).is_err() {
+        return Vec::new();
+    }
     let consent_ura =
-        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default");
+        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default")
+            .filter(|owner| AbilityDescriptor::validate_owner_ura(owner).is_ok());
     let mcp_ura =
-        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default");
+        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default")
+            .filter(|owner| AbilityDescriptor::validate_owner_ura(owner).is_ok());
     let llm_uras: Vec<(String, String)> = local
         .hosted_agents
         .iter()
-        .filter(|e| e.profile == "llm")
+        .filter(|e| {
+            e.profile == "llm" && AbilityDescriptor::validate_owner_ura(&e.agent_ura).is_ok()
+        })
         .map(|e| (e.name.clone(), e.agent_ura.clone()))
         .collect();
     all_descriptors_for_host(

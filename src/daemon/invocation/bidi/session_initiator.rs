@@ -7,10 +7,8 @@
 //              stream against its configured hub, sends frame 0 =
 //              `EnvelopeOpen` carrying the caller URA, then keeps
 //              the stream open for the lifetime of the daemon —
-//              this is the canonical reverse channel through which
-//              the hub pushes `runtime.invoke_remote` and
-//              `federation.forward_invoke` frames back to the
-//              device.
+//              this is the canonical reverse channel through which the hub
+//              pushes typed dispatch and control frames back to the device.
 //
 // Where this fits in RFC-003
 // --------------------------
@@ -751,6 +749,9 @@ pub enum SessionError {
         source: UserTrustBootstrapError,
     },
 
+    #[error("hub `{endpoint}` hosted-agent prelude failed: {reason}")]
+    HostedAgentPreludeFailed { endpoint: String, reason: String },
+
     #[error("{reason}: hub `{endpoint}` sent down frame sequence {actual}, expected {expected}")]
     DownStreamSequence {
         endpoint: String,
@@ -964,8 +965,29 @@ mod tests {
     type TestInvokeBidiStream =
         Pin<Box<dyn Stream<Item = Result<InvokeBidiDown, Status>> + Send + 'static>>;
 
+    fn accepted_prelude_response() -> Response<InvokeResponse> {
+        Response::new(InvokeResponse::default())
+    }
+
+    fn seed_session_credentials() {
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "n1".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "http://127.0.0.1:1".to_string(),
+                realm: "realm".to_string(),
+                username: Some("dev".to_string()),
+                user_id: Some("user-dev".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed session test credentials");
+    }
+
     #[derive(Default)]
-    struct SilentSessionHub;
+    struct SilentSessionHub {
+        reject_unary_prelude: bool,
+    }
 
     #[derive(Clone)]
     struct NotifyingSessionHub {
@@ -981,7 +1003,11 @@ mod tests {
             &self,
             _request: Request<InvokeRequest>,
         ) -> Result<Response<InvokeResponse>, Status> {
-            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+            if self.reject_unary_prelude {
+                Err(Status::unimplemented("test hub rejects unary prelude"))
+            } else {
+                Ok(accepted_prelude_response())
+            }
         }
 
         async fn invoke_stream(
@@ -1026,7 +1052,7 @@ mod tests {
             &self,
             _request: Request<InvokeRequest>,
         ) -> Result<Response<InvokeResponse>, Status> {
-            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+            Ok(accepted_prelude_response())
         }
 
         async fn invoke_stream(
@@ -1084,7 +1110,7 @@ mod tests {
             &self,
             _request: Request<InvokeRequest>,
         ) -> Result<Response<InvokeResponse>, Status> {
-            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+            Ok(accepted_prelude_response())
         }
 
         async fn invoke_stream(
@@ -1134,7 +1160,7 @@ mod tests {
             &self,
             _request: Request<InvokeRequest>,
         ) -> Result<Response<InvokeResponse>, Status> {
-            Err(Status::unimplemented("test hub only wires InvokeBidi"))
+            Ok(accepted_prelude_response())
         }
 
         async fn invoke_stream(
@@ -1242,6 +1268,12 @@ mod tests {
     }
 
     async fn spawn_silent_session_hub() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        spawn_silent_session_hub_with_prelude(false).await
+    }
+
+    async fn spawn_silent_session_hub_with_prelude(
+        reject_unary_prelude: bool,
+    ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind silent session hub");
@@ -1249,7 +1281,9 @@ mod tests {
         let incoming = TcpListenerStream::new(listener);
         let handle = tokio::spawn(async move {
             tonic::transport::Server::builder()
-                .add_service(InvocationServer::new(SilentSessionHub))
+                .add_service(InvocationServer::new(SilentSessionHub {
+                    reject_unary_prelude,
+                }))
                 .serve_with_incoming(incoming)
                 .await
                 .expect("silent session hub server");
@@ -1597,6 +1631,7 @@ mod tests {
     #[tokio::test]
     async fn clean_close_reports_uptime_and_frame_count_stats() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_session_credentials();
         // Device-side fingerprint contract for hub-side close
         // diagnosis (incident 2026-06-11: hub logs lost, device
         // stats are the only surviving evidence). A hub that admits
@@ -1800,7 +1835,7 @@ mod tests {
     async fn owner_projection_publish_failure_blocks_namespace_visible_session() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let dispatcher = Arc::new(RecordingDispatcher::default());
-        let (addr, _server) = spawn_silent_session_hub().await;
+        let (addr, _server) = spawn_silent_session_hub_with_prelude(true).await;
         let owner = "easynet:///r/realm/device/n1";
         let descriptors = vec![crate::daemon::ability::descriptors::AbilityDescriptor::new(
             "agent.start",
@@ -2230,6 +2265,8 @@ mod tests {
 
     #[tokio::test]
     async fn supervisor_reconnects_when_hub_starts_after_cli_daemon() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_session_credentials();
         // Regression guard for the product-lifecycle split: a
         // device-mode daemon may be locally running while the Hub is
         // down. The session supervisor must keep running after the
@@ -2281,6 +2318,8 @@ mod tests {
 
     #[tokio::test]
     async fn supervisor_reports_initial_admission_after_bidi_opens() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -2314,6 +2353,8 @@ mod tests {
 
     #[tokio::test]
     async fn silent_hub_triggers_idle_timeout_reconnect_error() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
 
@@ -2345,6 +2386,8 @@ mod tests {
 
     #[tokio::test]
     async fn out_of_sequence_down_frame_returns_protocol_error() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_out_of_sequence_session_hub().await;
 

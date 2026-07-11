@@ -61,7 +61,6 @@ const FED_RESOLVE_ABILITY_NAME: &str = "federation.resolve";
 const FED_REVOKE_ABILITY_NAME: &str = "federation.revoke";
 const FED_HEARTBEAT_ABILITY_NAME: &str = "federation.heartbeat";
 const FED_RESOLVE_KEY_ABILITY_NAME: &str = "federation.resolve_key";
-const FED_FORWARD_INVOKE_ABILITY_NAME: &str = "federation.forward_invoke";
 
 fn hub_ability_resource_ura(realm: &str, ability_name: &str) -> String {
     crate::core::ura::hub_ability_ura(realm, ability_name)
@@ -548,36 +547,6 @@ pub fn resolve_key<I: AbilityInvoker>(
     serde_json::from_value(receipt_body).map_err(|e| format!("parse resolve_key receipt: {e}"))
 }
 
-/// RFC-002 §5.2 federation.forward_invoke client. Hands a forward
-/// request to the realm's hub which routes it to the target's host
-/// daemon via runtime-local-tool dispatch.
-pub fn forward_invoke<I: AbilityInvoker>(
-    invoker: &I,
-    tenant_id: &str,
-    realm: &str,
-    target_ura: &str,
-    ability_name: &str,
-    arguments: &Value,
-) -> Result<crate::daemon::federation::client::ability_contract::ForwardInvokeReceipt, String> {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-    let resource_ura = hub_ability_resource_ura(realm, FED_FORWARD_INVOKE_ABILITY_NAME);
-    let arguments_bytes =
-        serde_json::to_vec(arguments).map_err(|e| format!("encode forward args: {e}"))?;
-    let arguments_b64 = STANDARD.encode(&arguments_bytes);
-    let public_ability = crate::core::ura::owner_local_ability_name(target_ura, ability_name);
-    let ability_ura = crate::core::ura::owner_ability_ura(target_ura, &public_ability)
-        .ok_or_else(|| format!("derive forward ability URA for {target_ura} {public_ability}"))?;
-    let payload = serde_json::json!({
-        "target_ura": target_ura,
-        "ability_ura": ability_ura,
-        "arguments_b64": arguments_b64,
-    });
-    let response = invoker.invoke_ability(tenant_id, &resource_ura, payload)?;
-    let receipt_body = unwrap_result_json(response);
-    serde_json::from_value(receipt_body).map_err(|e| format!("parse forward_invoke receipt: {e}"))
-}
-
 /// Convenience: advertise the device-profile Agent itself (Selfsigned
 /// Model A per §1.3) as a single helper since it's the very first
 /// call any daemon makes after federation.join.
@@ -598,9 +567,7 @@ pub fn advertise_self_signed_device<I: AbilityInvoker>(
     )
 }
 
-/// RFC-002 §5.2 variant: pass host_node_id so forward_invoke knows
-/// which UDS-bound local-tool registration owns this agent's
-/// dispatch path.
+/// Variant that records the runtime node hosting this agent.
 pub fn advertise_self_signed_device_with_host_node<I: AbilityInvoker>(
     invoker: &I,
     tenant_id: &str,
@@ -630,8 +597,7 @@ pub fn advertise_hosted_agent<I: AbilityInvoker>(
     advertise_hosted_agent_with_host_node(invoker, tenant_id, realm, agent_ura, host_ura, None)
 }
 
-/// RFC-002 §5.2 variant: pass host_node_id so forward_invoke knows
-/// where the hosted agent's dispatch endpoint is registered.
+/// Variant that records the runtime node hosting this agent.
 pub fn advertise_hosted_agent_with_host_node<I: AbilityInvoker>(
     invoker: &I,
     tenant_id: &str,

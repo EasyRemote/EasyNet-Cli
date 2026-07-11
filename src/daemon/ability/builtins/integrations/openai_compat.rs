@@ -35,10 +35,11 @@ use crate::daemon::ability::names::integrations::{
     OPENAI_LIST_MODELS,
 };
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
-use crate::protocol::compatibility_contract::{
-    project_file, project_file_delete_result, project_file_upload,
-};
 use crate::support::platform::process_singleton::ProcessSingleton;
+
+mod file_projection;
+
+use self::file_projection::{project_file, project_file_delete_result, project_file_upload};
 
 /// Process-wide handle to the live ability registry. The inner
 /// `Arc<OnceLock<Arc<AxonAbilityCatalog>>>` is the seam
@@ -1045,14 +1046,14 @@ mod tests {
     #[test]
     fn project_model_id_drops_non_agent_chat_owner() {
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner("device.chat", OwnerKind::Device, ok_handler());
+        reg.register_rpc_with_owner("device.llm.chat", OwnerKind::Device, ok_handler());
         let identity = OpenAICompatIdentity {
             user: Some("alice".into()),
             realm: "easynet.run".into(),
         };
 
         assert_eq!(
-            project_model_id_with_identity(&reg, "device.chat", Some(&identity)),
+            project_model_id_with_identity(&reg, "device.llm.chat", Some(&identity)),
             None
         );
     }

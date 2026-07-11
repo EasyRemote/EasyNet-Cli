@@ -32,7 +32,7 @@ pub mod wire;
 
 pub(crate) use authority::public_route_ability_from_descriptor_ref;
 pub use authority::{
-    AuthorityBindingKind, AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityPredicate,
+    AuthorityBinding, AuthorityBindingKind, AuthorityBindingRegistry, AuthorityPredicate,
     AuthorityScope, HostedAgentAuthority, HostedAgentDelegationClaims,
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding,
     HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_METADATA_KEY,
@@ -45,8 +45,8 @@ pub use control_plane::{
 };
 pub use control_plane_error::AbilityControlPlaneError;
 pub use descriptors::{
-    canonical_json_bytes, AbilityControlPlaneKey, AbilityDescriptorKey, AbilityDescriptorRecord,
-    AbilityDescriptorRegistry, AbilityDescriptorVersion, CallMode, DescriptorHash, SchemaHash,
-    DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+    canonical_json_bytes, AbilityControlPlaneKey, AbilityDescriptor, AbilityDescriptorKey,
+    AbilityDescriptorRegistry, AbilityDescriptorVersion, AbilityHints, CallMode, DescriptorHash,
+    ReceiptSemantics, SchemaHash, DEFAULT_ABILITY_DESCRIPTOR_VERSION,
 };
 pub use impl_bindings::{AbilityImplBinding, AbilityImplRegistry, AbilityImplSource, RuntimeEnv};

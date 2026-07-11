@@ -26,7 +26,7 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 	}
 	descriptorProjection, err := addressing.ProjectDescriptorRef(
 		ctx,
-		DescriptorRefRequest{DescriptorRef: descriptorRef},
+		CanonicalDescriptorRefRequest{DescriptorRef: descriptorRef},
 	)
 	if err != nil {
 		t.Fatalf("ProjectDescriptorRef: %v", err)
@@ -82,7 +82,7 @@ func TestCanonicalAddressingRejectsNonPublisherAndMalformedDescriptor(t *testing
 	}
 	if _, err := addressing.ProjectDescriptorRef(
 		ctx,
-		DescriptorRefRequest{DescriptorRef: "not-a-descriptor"},
+		CanonicalDescriptorRefRequest{DescriptorRef: "not-a-descriptor"},
 	); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("descriptor error = %v, want %s", err, ErrInvalidArgument)
 	}
@@ -98,10 +98,10 @@ func TestCanonicalAddressingSharedProjectionCorpus(t *testing.T) {
 		Profile      string `json:"profile"`
 		GrammarOwner string `json:"grammar_owner"`
 		URACases     []struct {
-			Name       string          `json:"name"`
-			Request    URABuildRequest `json:"request"`
-			URA        string          `json:"ura"`
-			Components map[string]any  `json:"components"`
+			Name       string                   `json:"name"`
+			Request    CanonicalURABuildRequest `json:"request"`
+			URA        string                   `json:"ura"`
+			Components map[string]any           `json:"components"`
 		} `json:"ura_cases"`
 		Descriptor struct {
 			Raw        string         `json:"raw"`
@@ -133,7 +133,7 @@ func TestCanonicalAddressingSharedProjectionCorpus(t *testing.T) {
 	}
 	descriptor, err := addressing.ProjectDescriptorRef(
 		ctx,
-		DescriptorRefRequest{DescriptorRef: fixture.Descriptor.Raw},
+		CanonicalDescriptorRefRequest{DescriptorRef: fixture.Descriptor.Raw},
 	)
 	if err != nil {
 		t.Fatalf("ProjectDescriptorRef: %v", err)

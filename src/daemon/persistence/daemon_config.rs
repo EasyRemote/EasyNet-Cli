@@ -393,7 +393,7 @@ pub struct DaemonConfig {
     ledger_dir: PathBuf,
     /// **PR-N1 commit 3a/N**. Operator-curated `realm → hub_endpoint`
     /// map the federation dispatcher consults when `federation.
-    /// forward_invoke` targets a realm that is not local.
+    /// canonical_invoke` targets a realm that is not local.
     /// Empty = no cross-realm routing configured (legacy
     /// `target_online: false` fallback). PR-N3 will replace this
     /// hand-curated map with the auto-discovered cross-realm
@@ -590,7 +590,7 @@ impl DaemonConfig {
     /// dispatch map. Empty when the operator did not configure
     /// any federation peers — the federation dispatcher then
     /// falls back to the legacy `target_online: false` shape
-    /// for cross-realm `federation.forward_invoke` calls.
+    /// for cross-realm `Invocation::Invoke` calls.
     pub fn federated_peers(&self) -> &BTreeMap<String, String> {
         &self.federated_peers
     }
@@ -638,7 +638,7 @@ pub(crate) struct RawDaemonSection {
     #[serde(default)]
     pub(crate) ledger_dir: Option<String>,
     /// PR-N1 commit 3a/N: operator-curated `realm → hub_endpoint`
-    /// map for cross-realm `federation.forward_invoke` routing.
+    /// map for cross-realm `Invocation::Invoke` routing.
     /// `#[serde(default)]` so configs that omit federation routing
     /// policy load with an empty map.
     #[serde(default)]

@@ -399,14 +399,14 @@ mod tests {
         let mut file = LocalAgentsFile::default();
         let minter = CountingMinter::new();
         let first = bootstrap_local_agents(&plan, &mut file, &minter);
-        let consent_uri_v1 = first[0].agent_ura.clone();
+        let consent_ura_v1 = first[0].agent_ura.clone();
 
         // Same plan, same file — every outcome must report reused=true
         // and the URA must match exactly.
         let second = bootstrap_local_agents(&plan, &mut file, &minter);
         assert_eq!(second.len(), 1);
         assert!(second[0].reused);
-        assert_eq!(second[0].agent_ura, consent_uri_v1);
+        assert_eq!(second[0].agent_ura, consent_ura_v1);
         assert_eq!(file.hosted_agents.len(), 1, "must not duplicate rows");
     }
 

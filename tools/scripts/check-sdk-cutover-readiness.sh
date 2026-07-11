@@ -58,9 +58,9 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "backend SDK-only boundary self-test" bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" --self-test
   run_gate "backend route-family coverage self-test" bash "$SELF_DIR/check-backend-route-family-coverage.sh" --self-test
   run_gate "SDK URA naming self-test" bash "$SELF_DIR/check-sdk-ura-naming.sh" --self-test
+  run_gate "SDK product-neutrality syntax" bash -n "$SELF_DIR/check-sdk-product-neutrality.sh"
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
-  run_gate "SDK section 27 coverage self-test" bash "$SELF_DIR/check-sdk-section27-coverage.sh" --self-test
-  run_gate "FFI ABI v4 header self-test" bash "$SELF_DIR/check-ffi-abi-v4-header.sh" --self-test
+  run_gate "generic FFI ABI v5 exact-surface self-test" bash "$REPO_ROOT/tests/scripts/test_check_ffi_abi_v5_header.sh"
   run_gate "SDK package metadata self-test" bash "$SELF_DIR/check-sdk-package-metadata.sh" --self-test
   run_gate "product smoke self-test" bash "$SELF_DIR/check-sdk-product-smokes.sh" --self-test
   run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
@@ -89,9 +89,9 @@ status=0
 
 run_gate "SDK scaffold" bash "$SELF_DIR/check-sdk-scaffold.sh" || status=1
 run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-test || status=1
+run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_gate "SDK conformance reports" bash "$SELF_DIR/check-sdk-conformance-reports.sh" || status=1
-run_gate "SDK section 27 coverage" bash "$SELF_DIR/check-sdk-section27-coverage.sh" || status=1
-run_gate "FFI ABI v4 header" bash "$SELF_DIR/check-ffi-abi-v4-header.sh" || status=1
+run_gate "generic FFI ABI v5 exact surface" bash "$SELF_DIR/check-ffi-abi-v5-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1
 run_gate "SDK receipt URA boundary" bash "$SELF_DIR/check-sdk-receipt-ura-boundary.sh" || status=1

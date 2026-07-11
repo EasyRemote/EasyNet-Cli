@@ -21,7 +21,7 @@ func (m *memoryRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte
 	if err := json.Unmarshal(optionsJSON, &m.seenOptions); err != nil {
 		return nil, err
 	}
-	return []byte(`{"endpoint": "unix:///tmp/easynet-daemon.sock", "control_path": "/tmp/control.sock", "protocol_version": "v4", "abi_version": 4}`), nil
+	return []byte(`{"endpoint": "unix:///tmp/easynet-daemon.sock", "control_path": "/tmp/control.sock", "protocol_version": "v4", "abi_version": 5}`), nil
 }
 
 func (m *memoryRuntimeConnector) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {

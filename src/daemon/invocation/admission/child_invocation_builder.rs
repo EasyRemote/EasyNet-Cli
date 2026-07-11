@@ -96,7 +96,6 @@ impl SelectedChildRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChildInvocationAuthority {
     ExternallySigned(ExternallySignedChildInvocation),
-    OriginCaller(OriginCallerAuthority),
     AuthorityProof(AuthorityProof),
     DaemonInternalSystem,
 }
@@ -108,11 +107,6 @@ pub struct ExternallySignedChildInvocation {
     pub signed_descriptor_ref: String,
     pub signed_subject_ura: String,
     pub canonical_hash: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OriginCallerAuthority {
-    pub caller_ura: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,7 +133,6 @@ pub struct BuiltChildInvocation {
 #[serde(rename_all = "snake_case")]
 pub enum ChildAuthorityShape {
     ExternallySigned,
-    OriginCaller,
     AuthorityProof,
     DaemonInternalSystem,
 }
@@ -165,7 +158,6 @@ pub enum ChildInvocationBuildFailureCode {
     SignedEnvelopeRouteMutation,
     SignedDescriptorRefMissing,
     SignedDescriptorRefMismatch,
-    MissingOriginCaller,
     AuthorityProofMissing,
     AuthorityProofMismatch,
     DescriptorBindingMissing,
@@ -179,7 +171,6 @@ impl ChildInvocationBuildFailureCode {
             Self::SignedEnvelopeRouteMutation => "SIGNED_ENVELOPE_ROUTE_MUTATION",
             Self::SignedDescriptorRefMissing => "SIGNED_DESCRIPTOR_REF_MISSING",
             Self::SignedDescriptorRefMismatch => "SIGNED_DESCRIPTOR_REF_MISMATCH",
-            Self::MissingOriginCaller => "MISSING_ORIGIN_CALLER",
             Self::AuthorityProofMissing => "AUTHORITY_PROOF_MISSING",
             Self::AuthorityProofMismatch => "AUTHORITY_PROOF_MISMATCH",
             Self::DescriptorBindingMissing => "DESCRIPTOR_BINDING_MISSING",
@@ -225,33 +216,6 @@ impl ChildInvocationBuilder {
                     args_hash,
                     authority_shape: ChildAuthorityShape::ExternallySigned,
                     canonical_hash: Some(signed.canonical_hash),
-                    authority_proof_id: None,
-                })
-            }
-            ChildInvocationAuthority::OriginCaller(origin) => {
-                if origin.caller_ura.trim().is_empty() {
-                    return Err(failure(
-                        &input.route,
-                        TraceStage::PolicyDenied,
-                        ChildInvocationBuildFailureCode::MissingOriginCaller,
-                        "public carrier child invocation requires origin caller authority",
-                        None,
-                        Some(PolicyDecisionReason::MissingOriginCaller),
-                    ));
-                }
-                Ok(BuiltChildInvocation {
-                    caller_ura: origin.caller_ura,
-                    callee_ura: input.route.selected_callee_ura,
-                    subject_ura: input.child_subject_ura,
-                    ability_ura,
-                    descriptor_ref: input.route.selected_descriptor_ref,
-                    descriptor_version: input.route.descriptor_version,
-                    dispatch_key: input.route.dispatch_key,
-                    route_ref: input.route.route_ref,
-                    execution_host_ura: input.route.execution_host_ura,
-                    args_hash,
-                    authority_shape: ChildAuthorityShape::OriginCaller,
-                    canonical_hash: None,
                     authority_proof_id: None,
                 })
             }

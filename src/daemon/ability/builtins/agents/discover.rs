@@ -75,8 +75,8 @@ use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
 /// Verb portion of the per-agent discover ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.discover`.
-pub const ABILITY_VERB: &str = crate::daemon::ability::names::agents::DISCOVER;
-/// Daemon-owned aggregate discover entry used by top-level
+pub const ABILITY_VERB: &str = crate::daemon::ability::names::agents::DISCOVER_VERB;
+/// Daemon-owned `agent.discover` aggregate used by top-level
 /// `easynet discover` when the caller does not select a self agent.
 /// The owner is already `OwnerKind::Device`, so the dispatch key must
 /// stay owner-local instead of duplicating a `device.` prefix.
@@ -315,13 +315,36 @@ fn local_resolve_prefix(
 /// `agent_registry_provider` is invoked at handler-call time so that
 /// hot-added or hot-removed peer agents are reflected on the next
 /// discover call without re-registration.
-pub fn register_for_agent<F>(
+pub type AgentRegistryProvider = Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync>;
+
+/// Adapter for infallible in-memory fixtures and fallible durable providers.
+/// Production providers return `anyhow::Result`; the infallible implementation
+/// keeps deterministic unit fixtures concise without introducing a runtime
+/// fallback.
+pub trait IntoAgentRegistryLoadResult {
+    fn into_agent_registry_load_result(self) -> anyhow::Result<AgentRegistry>;
+}
+
+impl IntoAgentRegistryLoadResult for AgentRegistry {
+    fn into_agent_registry_load_result(self) -> anyhow::Result<AgentRegistry> {
+        Ok(self)
+    }
+}
+
+impl IntoAgentRegistryLoadResult for anyhow::Result<AgentRegistry> {
+    fn into_agent_registry_load_result(self) -> anyhow::Result<AgentRegistry> {
+        self
+    }
+}
+
+pub fn register_for_agent<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> R + Send + Sync + 'static,
+    R: IntoAgentRegistryLoadResult,
 {
     register_for_agent_with_resolver(
         reg,
@@ -334,17 +357,19 @@ pub fn register_for_agent<F>(
 
 /// Same as [`register_for_agent`] with an explicit federation
 /// resolver dependency.
-pub fn register_for_agent_with_resolver<F>(
+pub fn register_for_agent_with_resolver<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: SharedDiscoverFederationResolver,
 ) where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> R + Send + Sync + 'static,
+    R: IntoAgentRegistryLoadResult,
 {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
+    let provider: AgentRegistryProvider =
+        Arc::new(move || agent_registry_provider().into_agent_registry_load_result());
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let agent = agent_name.clone();
     reg.register_rpc_with_spec(
@@ -363,23 +388,25 @@ pub fn register_for_agent_with_resolver<F>(
     );
 }
 
-/// Register the daemon-owned device aggregate discover entry.
+/// Register the daemon-owned `agent.discover` aggregate entry.
 ///
 /// This is intentionally a thin owner wrapper over [`dispatch`], not a
 /// second discovery implementation. Passing an empty `self_agent` means local
 /// fan-in has no self tier: `visibility = self` helpers stay hidden and the
 /// top-level CLI sees the device aggregate without choosing an arbitrary
 /// first agent as caller identity.
-pub fn register_device_aggregate_with_resolver<F>(
+pub fn register_device_aggregate_with_resolver<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: SharedDiscoverFederationResolver,
 ) where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> R + Send + Sync + 'static,
+    R: IntoAgentRegistryLoadResult,
 {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
+    let provider: AgentRegistryProvider =
+        Arc::new(move || agent_registry_provider().into_agent_registry_load_result());
     reg.register_rpc_with_spec(
         DEVICE_DISCOVER_ABILITY,
         OwnerKind::Device,
@@ -414,7 +441,7 @@ pub fn register_device_aggregate_with_resolver<F>(
 /// `&mut AxonAbilityCatalog`).
 pub fn dispatch(
     self_agent: &str,
-    agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
+    agent_registry_provider: &AgentRegistryProvider,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: &dyn DiscoverFederationResolver,
     args: Value,
@@ -467,7 +494,8 @@ pub fn dispatch(
         return resolve_via_federation(federation_resolver, scope, query.as_deref(), source_window);
     }
 
-    let agents = agent_registry_provider();
+    let agents = agent_registry_provider()
+        .map_err(|error| anyhow::anyhow!("discover: load agent registry: {error:#}"))?;
     let local_agent_uras = match LocalAgentAbilityOwners::load() {
         Ok(owners) => owners,
         Err(error) => {
@@ -538,12 +566,13 @@ pub fn dispatch(
 /// recursion-trigger.
 fn delegate_to_provider(
     provider_name: &str,
-    agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
+    agent_registry_provider: &AgentRegistryProvider,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     DiscoverProviderName::parse(provider_name)?;
-    let agents = agent_registry_provider();
+    let agents = agent_registry_provider()
+        .map_err(|error| anyhow::anyhow!("discover: load agent registry: {error:#}"))?;
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
         anyhow::anyhow!(
             "internal_error: dispatch registry handle not yet set; \
@@ -594,7 +623,12 @@ impl DiscoverProviderTarget {
             })?;
         Ok(Self {
             registry_name,
-            ability_ura: record.descriptor().ability_ura().to_string(),
+            ability_ura: record.descriptor().canonical_ability_ura().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "discover: provider {:?} has no canonical Ability URA",
+                    record.ability()
+                )
+            })?,
             subject_ura: record.authority().scope().authority_root().to_string(),
         })
     }
@@ -1164,8 +1198,8 @@ fn classify_fulfilled_by(
 ///
 /// RFC-005 forbids synthesizing ability identities from presence
 /// facts. A directory entry proves that an owner exists or is online;
-/// it does not prove that `<owner>.forward_invoke` is a real public
-/// Ability. Cross-hub routing still uses `federation.forward_invoke`
+/// it does not prove that `<owner>.canonical_invoke` is a real public
+/// ability. Cross-hub routing still uses the canonical `Invocation::Invoke` RPC
 /// internally, but discover must only expose callable abilities when
 /// a federated ability summary carries a canonical `ability_ura`.
 ///
@@ -1375,11 +1409,12 @@ mod tests {
             Arc::new(std::sync::OnceLock::new()),
         );
 
-        let manifest = reg
-            .control_plane_manifest("claude.discover")
-            .expect("discover registration must publish its manifest");
-        assert_eq!(manifest.description(), description());
-        assert_eq!(manifest.input_schema(), &input_schema());
+        let record = reg
+            .control_plane_record_for_mode("claude.discover", crate::daemon::ability::CallMode::Rpc)
+            .expect("discover descriptor lookup is unambiguous")
+            .expect("discover registration must publish its canonical descriptor");
+        assert_eq!(record.descriptor().description, description());
+        assert_eq!(record.descriptor().input_schema(), &input_schema());
     }
 
     /// Build a temp workspace with `<root>/abilities/<verb>.ability.toml`
@@ -1457,6 +1492,27 @@ mod tests {
         let h = reg.get_rpc("claude.discover").unwrap();
         let err = h(json!({"scope": "galaxy"})).unwrap_err();
         assert!(format!("{err}").contains("scope"));
+    }
+
+    #[test]
+    fn discover_propagates_durable_registry_load_failure() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let mut reg = AxonAbilityCatalog::new();
+        register_for_agent(
+            &mut reg,
+            "claude".into(),
+            || -> anyhow::Result<AgentRegistry> { Err(anyhow::anyhow!("corrupt agents.json")) },
+            Arc::new(std::sync::OnceLock::new()),
+        );
+
+        let handler = reg.get_rpc("claude.discover").unwrap();
+        let error = handler(json!({"scope": "self"})).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("discover: load agent registry: corrupt agents.json"),
+            "{error:#}"
+        );
     }
 
     /// **Schema/parser parity pin**.
@@ -1947,7 +2003,11 @@ mod tests {
         // discover. Wire the OnceLock to the same registry so the
         // builtin discover can resolve the provider.
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("userx.discover", provider_handler);
+        reg.register_rpc_with_owner(
+            "userx.discover",
+            crate::daemon::ability::dispatch::OwnerKind::Device,
+            provider_handler,
+        );
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         let mut agents = AgentRegistry::default();
@@ -1986,8 +2046,9 @@ mod tests {
     #[test]
     fn provider_target_is_descriptor_bound_with_explicit_subject() {
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc(
+        reg.register_rpc_with_owner(
             "userx.discover",
+            crate::daemon::ability::dispatch::OwnerKind::Device,
             Arc::new(|_args| Ok(json!({"candidates": []}))),
         );
         let mut agents = AgentRegistry::default();
@@ -2156,7 +2217,7 @@ mod tests {
 
         assert!(
             out.is_empty(),
-            "directory presence must not synthesize a forward_invoke Ability candidate"
+            "directory presence must not synthesize a canonical_invoke Ability candidate"
         );
     }
 

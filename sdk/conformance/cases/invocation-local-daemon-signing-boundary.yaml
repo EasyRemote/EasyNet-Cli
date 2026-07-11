@@ -13,7 +13,7 @@ steps:
 expect:
   result: ok
   public_object: SignedInvocation
-  signer_handle_profile: directory_identity
+  signer_handle_profile: signing
   signer_handle_policy_mode: local_daemon_signing
   signer_handle_policy_usage: invocation.sign
   signer_handle_policy_ref_required: true

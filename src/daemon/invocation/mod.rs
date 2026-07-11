@@ -26,8 +26,8 @@
 // - Ability dispatch — `daemon::ability::dispatch` continues to own
 //   the AxonAbilityCatalog and the registered handler set; this
 //   module routes inbound RPC calls into that runtime surface
-// - Federation `session.open` / `runtime.invoke_remote` reverse-
-//   channel liveness — that lives in `presence_registry` and the
+// - `session.open` reverse-channel liveness — that lives in the presence
+//   registry and the
 //   session-specific modules below, not in the top-level service
 //   namespace
 //
@@ -81,10 +81,7 @@ pub use admission::admission_facade::AdmissionFacade;
 pub use admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 pub use admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 pub use admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
-pub use bidi::invoke_remote_initiator::{
-    invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
-    ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
-};
+pub use bidi::session_wire::SessionDispatch;
 pub use dispatch::daemon_invocation_service::DaemonInvocationService;
 pub use dispatch::invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
 pub use dispatch::{

@@ -52,25 +52,25 @@ use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 
-/// In-process forwarder that delivers `forward_invoke` calls
+/// In-process forwarder that delivers `invoke` calls
 /// straight to a target `DaemonInvocationService`. Stamps daemon
-/// A's loopback URI as caller so admission's loopback bypass
+/// A's loopback URA as caller so admission's loopback bypass
 /// admits without a signed envelope.
 struct InProcessForwarder {
     peer: Arc<DaemonInvocationService>,
-    peer_loopback_uri: String,
+    peer_loopback_ura: String,
 }
 
 #[async_trait]
 impl FederationClient for InProcessForwarder {
-    async fn forward_invoke(
+    async fn invoke(
         &self,
         _target_hub_endpoint: &HubEndpoint,
         mut request: InvokeRequest,
     ) -> Result<InvokeResponse, FederationClientError> {
         request.envelope = Some(easynet_axon::pb::axon::v1::Envelope {
             caller: Some(easynet_axon::pb::axon::v1::AgentIdentity {
-                ura: self.peer_loopback_uri.clone(),
+                ura: self.peer_loopback_ura.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             ..Default::default()
@@ -127,7 +127,7 @@ async fn poll_once_against_real_daemon_populates_cell_with_peer_directory() {
     let daemon_b_loopback = easynet_cli::core::ura::hub_ura("realm-b");
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: daemon_a_loopback.clone(),
+        peer_loopback_ura: daemon_a_loopback.clone(),
     });
     let daemon_b_directory = SharedFederatedDirectoryView::default();
     assert!(
@@ -210,7 +210,7 @@ async fn discover_dispatch_returns_what_poll_populated() {
     let daemon_b_loopback = easynet_cli::core::ura::hub_ura("realm-b");
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: daemon_a_loopback.clone(),
+        peer_loopback_ura: daemon_a_loopback.clone(),
     });
     let daemon_b_directory = SharedFederatedDirectoryView::default();
     let daemon_b = DaemonInvocationService::new(

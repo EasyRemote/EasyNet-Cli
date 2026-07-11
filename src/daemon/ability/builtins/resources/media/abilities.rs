@@ -7,22 +7,21 @@
 // Per the binding invariants
 // in plan v3.2:
 //
-//   A1 mic.subscribe        Stream  (server-stream)  device
-//   A2 camera.subscribe     Stream  (server-stream)  device
-//   A3 camera.snapshot      Query   (rpc)            device
-//   A4 screen.subscribe     Stream  (server-stream)  device
-//   A5 speaker.publish      Stream  (bidi, down=∅)   device
-//   A6 voice.subscribe      Stream  (server-stream)  llm
-//   A7 voice.transcribe     Stream  (true bidi)      llm
-//   A8 screen.snapshot      Query   (rpc)            device
-//   A9 camera.record_start  Transition (rpc)         device
-//   A10 camera.record_stop  Transition (rpc)         device
+//   A1 mic.subscribe        Stream  operational       device
+//   A2 camera.subscribe     Stream  operational       device
+//   A3 camera.snapshot      Rpc     operational       device
+//   A4 screen.subscribe     Stream  operational       device
+//   A5 speaker.publish      Bidi    operational       device
+//   A6 voice.subscribe      Stream  operational       llm
+//   A7 voice.transcribe     Bidi    operational       llm
+//   A8 screen.snapshot      Rpc     operational       device
+//   A9 camera.record_start  Rpc     state-transition  device
+//   A10 camera.record_stop  Rpc     state-transition  device
 //
 // Single source of truth: a const `ABILITIES` table holds every
-// ability's name + description + input_schema + RFC-006 class +
-// dispatch shape, in declaration order. The `register` fn iterates
-// it; `mod.rs` queries it through `metadata(name)` for its
-// description/schema/rfc006 lookup tables. Adding a 9th media
+// ability's name + description + input_schema + transport mode +
+// receipt semantics, in declaration order. The `register` fn iterates
+// it; descriptor projections query the same rows. Adding a media
 // ability requires touching exactly one place.
 //
 // PR2 scope (this file)
@@ -36,8 +35,8 @@
 //   - registration of only the still-unwired stubs; real media
 //     modules register their own envelope-aware handlers and must
 //     not share the same dispatch slot with an args-only stub
-//   - description / input_schema / rfc006 metadata so each TOML
-//     materialises with the correct RFC-006 class
+//   - description / input_schema / receipt metadata so each descriptor
+//     materialises with orthogonal transport and state semantics
 //   - validation skeleton enforcing **INV-SUBJECT-ENVELOPE**: the
 //     handler MUST reject `args` containing a key named `subject`
 //     before any other arg parsing, even when the body is stubbed.
@@ -74,8 +73,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::daemon::ability::catalog::ability_toml::Rfc006Metadata;
-use crate::daemon::ability::descriptors::AbilityClass;
+use crate::daemon::ability::descriptors::{CallMode, ReceiptSemantics, TransitionClass};
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, BidiSource, StreamSource};
 
@@ -114,39 +112,23 @@ pub const REASON_SUBJECT_IN_ARGS: &str = "subject_in_args";
 
 // ── Dispatch shape + metadata table ──────────────────────────
 
-/// Three dispatch shapes the registry distinguishes. Names are
-/// the same RFC-006 class names where the mapping is clear (Query
-/// for RPC, Stream for stream/bidi); `Bidi` carries the explicit
-/// "downstream may be empty" semantics for `speaker.publish`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DispatchShape {
-    /// `register_rpc` — RFC-006 Query. Single response.
-    Rpc,
-    /// `register_stream` — RFC-006 Stream, server-push only.
-    Stream,
-    /// `register_bidi` — RFC-006 Stream, bidirectional frames
-    /// (true bidi for transcribe; downstream-empty for
-    /// speaker.publish).
-    Bidi,
-}
-
 /// Per-ability static record. Single source of truth for every
 /// piece of metadata mod.rs needs (description, input_schema,
-/// rfc006) plus the dispatch shape `register` consumes.
+/// receipt semantics) plus the call mode `register` consumes.
 struct AbilityRow {
     name: &'static str,
     description: &'static str,
     /// JSON Schema builder. Returns a fresh `Value` per call so
     /// callers can mutate without aliasing concerns.
     input_schema: fn() -> Value,
-    class: AbilityClass,
-    shape: DispatchShape,
+    call_mode: CallMode,
+    receipt_semantics: fn() -> ReceiptSemantics,
 }
 
 /// All media abilities in declaration order. Adding another
 /// media ability means appending one row here — `register` and
 /// `metadata(name)` both pick it up automatically; mod.rs's three
-/// description/schema/rfc006 tables already delegate via
+/// description/schema/receipt-semantics tables already delegate via
 /// `metadata`, so no extra mod.rs edit is needed.
 const ABILITIES: &[AbilityRow] = &[
     AbilityRow {
@@ -156,8 +138,8 @@ const ABILITIES: &[AbilityRow] = &[
                       Subject MUST be a mic resource_ura (use meta.list_resources \
                       to discover).",
         input_schema: capture_audio_args,
-        class: AbilityClass::Stream,
-        shape: DispatchShape::Stream,
+        call_mode: CallMode::Stream,
+        receipt_semantics: operational_receipt,
     },
     AbilityRow {
         name: ABILITY_CAMERA_SUBSCRIBE,
@@ -165,8 +147,8 @@ const ABILITIES: &[AbilityRow] = &[
                       stream of video BinaryChunk frames at the requested fps / \
                       resolution / codec. Subject MUST be a camera resource_ura.",
         input_schema: video_subscribe_args_no_region,
-        class: AbilityClass::Stream,
-        shape: DispatchShape::Stream,
+        call_mode: CallMode::Stream,
+        receipt_semantics: operational_receipt,
     },
     AbilityRow {
         name: ABILITY_CAMERA_SNAPSHOT,
@@ -174,8 +156,8 @@ const ABILITIES: &[AbilityRow] = &[
                       be a camera resource_ura. Returns { image_bytes_b64 OR \
                       payloadstore_ura, captured_at } in the receipt body.",
         input_schema: snapshot_args_no_region,
-        class: AbilityClass::Query,
-        shape: DispatchShape::Rpc,
+        call_mode: CallMode::Rpc,
+        receipt_semantics: operational_receipt,
     },
     AbilityRow {
         name: ABILITY_CAMERA_RECORD_START,
@@ -184,8 +166,8 @@ const ABILITIES: &[AbilityRow] = &[
                       recording_session_id that must be passed to \
                       camera.record_stop.",
         input_schema: camera_record_start_args,
-        class: AbilityClass::Transition,
-        shape: DispatchShape::Rpc,
+        call_mode: CallMode::Rpc,
+        receipt_semantics: record_start_receipt,
     },
     AbilityRow {
         name: ABILITY_CAMERA_RECORD_STOP,
@@ -193,8 +175,8 @@ const ABILITIES: &[AbilityRow] = &[
                       device-camera artifact. Subject MUST be the same camera \
                       resource_ura used for camera.record_start.",
         input_schema: camera_record_stop_args,
-        class: AbilityClass::Transition,
-        shape: DispatchShape::Rpc,
+        call_mode: CallMode::Rpc,
+        receipt_semantics: record_stop_receipt,
     },
     AbilityRow {
         name: ABILITY_SCREEN_SUBSCRIBE,
@@ -204,8 +186,8 @@ const ABILITIES: &[AbilityRow] = &[
                       `region` arg is valid ONLY when subject's type is `display` \
                       (window/application bounds are self-defining).",
         input_schema: video_subscribe_args_with_region,
-        class: AbilityClass::Stream,
-        shape: DispatchShape::Stream,
+        call_mode: CallMode::Stream,
+        receipt_semantics: operational_receipt,
     },
     AbilityRow {
         name: ABILITY_SCREEN_SNAPSHOT,
@@ -214,8 +196,8 @@ const ABILITIES: &[AbilityRow] = &[
                       or `window`. Optional `region` arg is valid ONLY when \
                       subject's type is `display`.",
         input_schema: snapshot_args_with_region,
-        class: AbilityClass::Query,
-        shape: DispatchShape::Rpc,
+        call_mode: CallMode::Rpc,
+        receipt_semantics: operational_receipt,
     },
     AbilityRow {
         name: ABILITY_SPEAKER_PUBLISH,
@@ -224,8 +206,8 @@ const ABILITIES: &[AbilityRow] = &[
                       bidi shape but emits no frames. Subject MUST be a speaker \
                       resource_ura.",
         input_schema: playback_audio_args,
-        class: AbilityClass::Stream,
-        shape: DispatchShape::Bidi,
+        call_mode: CallMode::Bidi,
+        receipt_semantics: operational_receipt,
     },
     AbilityRow {
         name: ABILITY_VOICE_SUBSCRIBE,
@@ -234,8 +216,8 @@ const ABILITIES: &[AbilityRow] = &[
                       voice resource_ura (one llm may expose multiple voice \
                       profiles).",
         input_schema: tts_output_args,
-        class: AbilityClass::Stream,
-        shape: DispatchShape::Stream,
+        call_mode: CallMode::Stream,
+        receipt_semantics: operational_receipt,
     },
     AbilityRow {
         name: ABILITY_VOICE_TRANSCRIBE,
@@ -244,19 +226,36 @@ const ABILITIES: &[AbilityRow] = &[
                       BinaryChunk (or structured JSON) DOWN. Subject MUST be an \
                       ASR-model resource_ura.",
         input_schema: transcribe_args,
-        class: AbilityClass::Stream,
-        shape: DispatchShape::Bidi,
+        call_mode: CallMode::Bidi,
+        receipt_semantics: operational_receipt,
     },
 ];
+
+fn operational_receipt() -> ReceiptSemantics {
+    ReceiptSemantics::Operational
+}
+
+fn record_start_receipt() -> ReceiptSemantics {
+    recording_transition(ABILITY_CAMERA_RECORD_START)
+}
+
+fn record_stop_receipt() -> ReceiptSemantics {
+    recording_transition(ABILITY_CAMERA_RECORD_STOP)
+}
+
+fn recording_transition(ability: &str) -> ReceiptSemantics {
+    ReceiptSemantics::state_transition(format!("{ability}@v1"), TransitionClass::Operational)
+        .expect("static media transition IDs satisfy RFC-006")
+}
 
 // ── Public projections ───────────────────────────────────────
 //
 // Three single-field projections backed by the `ABILITIES` table.
-// Each call site needs exactly one of (description, schema, class),
+// Each call site needs exactly one of (description, schema, receipt semantics),
 // so a bundled struct would force every caller to allocate the
 // other two. Keeping the projections separate lets `mod.rs::
 // description_for` route 8 names with zero schema allocations,
-// and `rfc006_for` route 8 names with zero schema allocations
+// and `receipt_semantics_for` routes names with zero schema allocations
 // either.
 //
 // `gen-ability-tomls` is the one site that wants all three; it
@@ -294,13 +293,15 @@ pub(crate) fn registry_manifest(
     )
 }
 
-/// RFC-006 metadata for a media ability, or `None` if not a media
-/// ability. No `Value` allocation; cheapest of the three.
-pub fn rfc006(name: &str) -> Option<Rfc006Metadata> {
-    row(name).map(|r| Rfc006Metadata {
-        class: Some(r.class),
-        ..Default::default()
-    })
+/// Receipt/state-machine semantics for a media ability. Transport remains a
+/// separate [`CallMode`] in the same authoritative row.
+pub fn receipt_semantics(name: &str) -> Option<ReceiptSemantics> {
+    row(name).map(|row| (row.receipt_semantics)())
+}
+
+/// Canonical invocation transport for a media ability.
+pub fn call_mode(name: &str) -> Option<CallMode> {
+    row(name).map(|row| row.call_mode)
 }
 
 /// Internal table lookup. Centralises the linear scan so each
@@ -336,28 +337,31 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         // prepended `device.` at registration; the M5 cleanup
         // promoted the table itself, so the registration site
         // passes `row.name` verbatim.
-        match row.shape {
-            DispatchShape::Rpc => {
-                reg.register_rpc_with_spec(
+        match row.call_mode {
+            CallMode::Rpc => {
+                reg.register_rpc_with_spec_and_semantics(
                     row.name,
                     OwnerKind::Device,
                     registry_manifest(row.name),
+                    (row.receipt_semantics)(),
                     Arc::new(|args| query_stub(row.name, args)),
                 );
             }
-            DispatchShape::Stream => {
-                reg.register_stream_with_spec(
+            CallMode::Stream => {
+                reg.register_stream_with_spec_and_semantics(
                     row.name,
                     OwnerKind::Device,
                     registry_manifest(row.name),
+                    (row.receipt_semantics)(),
                     Arc::new(|args| stream_stub(row.name, args)),
                 );
             }
-            DispatchShape::Bidi => {
-                reg.register_bidi_with_spec(
+            CallMode::Bidi => {
+                reg.register_bidi_with_spec_and_semantics(
                     row.name,
                     OwnerKind::Device,
                     registry_manifest(row.name),
+                    (row.receipt_semantics)(),
                     Arc::new(|args| bidi_stub(row.name, args)),
                 );
             }
@@ -614,20 +618,20 @@ mod tests {
                 );
                 continue;
             }
-            match row.shape {
-                DispatchShape::Rpc => assert!(
+            match row.call_mode {
+                CallMode::Rpc => assert!(
                     reg.get_rpc(row.name).is_some(),
-                    "{} declared shape=Rpc but not registered as RPC",
+                    "{} declared call_mode=Rpc but not registered as RPC",
                     row.name
                 ),
-                DispatchShape::Stream => assert!(
+                CallMode::Stream => assert!(
                     reg.get_stream(row.name).is_some(),
-                    "{} declared shape=Stream but not registered as Stream",
+                    "{} declared call_mode=Stream but not registered as Stream",
                     row.name
                 ),
-                DispatchShape::Bidi => assert!(
+                CallMode::Bidi => assert!(
                     reg.get_bidi(row.name).is_some(),
-                    "{} declared shape=Bidi but not registered as Bidi",
+                    "{} declared call_mode=Bidi but not registered as Bidi",
                     row.name
                 ),
             }
@@ -635,22 +639,22 @@ mod tests {
     }
 
     #[test]
-    fn stub_registration_publishes_media_manifests() {
+    fn stub_registration_publishes_media_descriptors() {
         let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
-        let rows = reg.ability_catalog_snapshot();
+        let rows = reg.authority_ability_catalog_snapshot();
 
         for row in ABILITIES {
             if has_real_media_handler(row.name) {
                 continue;
             }
-            let manifest = rows
+            let descriptor = rows
                 .iter()
                 .find(|catalog_row| catalog_row.name == row.name)
-                .and_then(|catalog_row| catalog_row.manifest.as_ref())
-                .unwrap_or_else(|| panic!("{} must publish a media manifest", row.name));
-            assert_eq!(manifest.description(), row.description);
-            assert_eq!(manifest.input_schema(), &(row.input_schema)());
+                .map(|catalog_row| &catalog_row.descriptor)
+                .unwrap_or_else(|| panic!("{} must publish a media descriptor", row.name));
+            assert_eq!(descriptor.description, row.description);
+            assert_eq!(descriptor.input_schema(), &(row.input_schema)());
         }
     }
 
@@ -664,7 +668,8 @@ mod tests {
         // `row()`).
         for row in ABILITIES {
             assert_eq!(description(row.name), Some(row.description));
-            assert_eq!(rfc006(row.name).and_then(|m| m.class), Some(row.class));
+            assert_eq!(call_mode(row.name), Some(row.call_mode));
+            assert_eq!(receipt_semantics(row.name), Some((row.receipt_semantics)()));
             let manifest = registry_manifest(row.name);
             assert_eq!(manifest.description(), row.description);
             assert!(
@@ -680,7 +685,8 @@ mod tests {
         for non_media in ["observe.health", "agent.list", "totally.unknown"] {
             assert!(description(non_media).is_none());
             assert!(input_schema(non_media).is_none());
-            assert!(rfc006(non_media).is_none());
+            assert!(call_mode(non_media).is_none());
+            assert!(receipt_semantics(non_media).is_none());
         }
     }
 
@@ -740,19 +746,26 @@ mod tests {
     }
 
     #[test]
-    fn recording_abilities_are_explicit_transitions() {
-        assert_eq!(
-            rfc006(ABILITY_CAMERA_RECORD_START).unwrap().class,
-            Some(AbilityClass::Transition)
-        );
-        assert_eq!(
-            rfc006(ABILITY_CAMERA_RECORD_STOP).unwrap().class,
-            Some(AbilityClass::Transition)
-        );
+    fn recording_abilities_are_rpc_operational_transitions() {
+        for ability in [ABILITY_CAMERA_RECORD_START, ABILITY_CAMERA_RECORD_STOP] {
+            assert_eq!(call_mode(ability), Some(CallMode::Rpc));
+            let semantics = receipt_semantics(ability).expect("media semantics");
+            let transition = semantics.transition().expect("state transition");
+            assert_eq!(
+                transition.transition_id(),
+                format!("{ability}@v1"),
+                "transition identity must not be inferred from Rpc transport"
+            );
+            assert_eq!(
+                transition.transition_class(),
+                TransitionClass::Operational,
+                "recording session changes runtime state, not canonical state"
+            );
+        }
     }
 
     #[test]
-    fn non_recording_media_ability_rows_classify_as_query_or_stream() {
+    fn non_recording_media_abilities_do_not_claim_state_transitions() {
         for row in ABILITIES {
             if matches!(
                 row.name,
@@ -760,12 +773,14 @@ mod tests {
             ) {
                 continue;
             }
-            assert!(
-                matches!(row.class, AbilityClass::Query | AbilityClass::Stream),
-                "{} classified as Transition; would need transition_id, state_type, etc.",
-                row.name
-            );
+            assert_eq!((row.receipt_semantics)(), ReceiptSemantics::Operational);
         }
+    }
+
+    #[test]
+    fn bidirectional_media_abilities_are_not_collapsed_into_stream_mode() {
+        assert_eq!(call_mode(ABILITY_SPEAKER_PUBLISH), Some(CallMode::Bidi));
+        assert_eq!(call_mode(ABILITY_VOICE_TRANSCRIBE), Some(CallMode::Bidi));
     }
 
     #[test]

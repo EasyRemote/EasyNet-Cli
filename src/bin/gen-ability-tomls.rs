@@ -78,8 +78,8 @@ fn main() -> anyhow::Result<()> {
     let package_index = PluginPackageIndex::builtin()?;
     let plugin_wire = PluginWireRegistry::new(&package_index);
 
-    let all_system_metas = published_system_abilities();
-    let collisions: Vec<_> = all_system_metas
+    let all_system_descriptors = published_system_abilities();
+    let collisions: Vec<_> = all_system_descriptors
         .iter()
         .filter(|m| plugin_wire.ability_descriptor_path(&m.name).is_some())
         .map(|m| m.name.clone())
@@ -91,25 +91,31 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    let metas: Vec<_> = all_system_metas.into_iter().collect();
-    let live_system_names: BTreeSet<String> = metas.iter().map(|m| m.name.clone()).collect();
+    let descriptors: Vec<_> = all_system_descriptors.into_iter().collect();
+    let live_system_names: BTreeSet<String> = descriptors
+        .iter()
+        .map(|descriptor| descriptor.name.clone())
+        .collect();
 
     let mut written: Vec<String> = Vec::new();
     let mut unchanged: Vec<String> = Vec::new();
-    for meta in &metas {
-        let body =
-            ability_toml::render_ability_toml(&meta.name, &meta.description, &meta.input_schema);
-        let path = PathBuf::from(descriptor_path_for(&meta.name));
+    for descriptor in &descriptors {
+        let body = ability_toml::render_ability_toml(
+            &descriptor.name,
+            &descriptor.description,
+            descriptor.input_schema(),
+        );
+        let path = PathBuf::from(descriptor_path_for(&descriptor.name));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let prior = std::fs::read_to_string(&path).ok();
         if prior.as_deref() == Some(body.as_str()) {
-            unchanged.push(meta.name.clone());
+            unchanged.push(descriptor.name.clone());
             continue;
         }
         std::fs::write(&path, body)?;
-        written.push(meta.name.clone());
+        written.push(descriptor.name.clone());
     }
 
     let mut deleted: Vec<String> = Vec::new();

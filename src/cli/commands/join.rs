@@ -107,7 +107,7 @@ pub struct JoinArgs {
     // around it. The detailed rationale for `--peer-hub` (Hub
     // pairing response carries the backend Axon endpoint, not the
     // peer daemon's TLS listener; multi-hub deployments diverge)
-    // lives in docs/spec/RFC-002 §federation.forward_invoke and in
+    // lives in docs/spec/RFC-002 §canonical Invocation::Invoke and in
     // the auto-wire commit message — that's where verbose context
     // belongs, not in `--help`.
     /// Peer hub's daemon TLS listener (https://host:port).
@@ -469,7 +469,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         )
     })?;
     let join_response = join_response.into_inner();
-    crate::daemon::invocation::routing::federation_invoke::ensure_completed_invoke_response(
+    crate::daemon::invocation::routing::remote_invoke::ensure_completed_invoke_response(
         "federation.join",
         &join_response,
     )?;
@@ -527,7 +527,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         )
     })?;
     let resolve_response = resolve_response.into_inner();
-    crate::daemon::invocation::routing::federation_invoke::ensure_completed_invoke_response(
+    crate::daemon::invocation::routing::remote_invoke::ensure_completed_invoke_response(
         "federation.resolve_key",
         &resolve_response,
     )?;
@@ -1213,7 +1213,7 @@ fn derive_device_public_key_hex(realm: &str, node_id: &str) -> anyhow::Result<St
 // compile).
 #[cfg(feature = "axon-pb")]
 fn invoke_federation_revoke_for_rejoin(device_ura: &str) -> anyhow::Result<()> {
-    crate::daemon::invocation::routing::federation_invoke::invoke_federation_revoke(
+    crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
         device_ura,
         "device-rejoin",
     )

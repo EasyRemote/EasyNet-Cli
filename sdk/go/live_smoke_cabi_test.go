@@ -9,10 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
 
+// TestGoSDKLiveDaemonSmoke proves the generic C ABI v5 boundary through the
+// public Go facade. Product/profile helpers are deliberately absent: complete
+// Invocation descriptors are supplied to Runtime Core directly.
 func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -28,7 +32,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	realm, deviceID, deviceURA, trustPath := writeGoLiveSmokeIdentity(t, home)
 	t.Setenv("HOME", home)
 	t.Setenv("EASYNET_REALM_TRUST_PATH", trustPath)
-	t.Setenv("EASYNET_PAGES_PORT", goLiveSmokePagesPort())
+	t.Setenv("EASYNET_PAGES_PORT", strconv.Itoa(19000+os.Getpid()%1000))
 
 	transport, err := OpenCABIDaemonTransport(libPath)
 	if err != nil {
@@ -69,6 +73,14 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		}
 	}()
 
+	status, err := handle.Status(ctx)
+	if err != nil {
+		t.Fatalf("daemon status: %v", err)
+	}
+	if status.Endpoints.InvocationEndpoint == "" {
+		t.Fatalf("daemon status has no invocation endpoint: %#v", status)
+	}
+
 	runtime, err := handle.OpenRuntime(ctx, ConnectOptions{})
 	if err != nil {
 		t.Fatalf("open runtime: %v", err)
@@ -79,23 +91,9 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		}
 	}()
 
-	identityTransport, err := transport.OpenIdentityTransport(ctx, handle.HandleID())
-	if err != nil {
-		t.Fatalf("OpenIdentityTransport: %v", err)
-	}
-	defer func() {
-		if err := identityTransport.Close(context.Background()); err != nil {
-			t.Fatalf("identity transport close: %v", err)
-		}
-	}()
-	identity, err := NewIdentityClient(identityTransport)
-	if err != nil {
-		t.Fatalf("NewIdentityClient: %v", err)
-	}
-
 	healthTransport, ok := runtime.transport.(HealthTransport)
 	if !ok {
-		t.Fatalf("runtime transport does not expose health")
+		t.Fatal("runtime transport does not expose health")
 	}
 	healthClient, err := NewHealthClient(healthTransport)
 	if err != nil {
@@ -109,7 +107,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("runtime health is not ready: %#v", health)
 	}
 
-	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, identity, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
+	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
 	if err != nil {
 		t.Fatalf("RuntimeClient.Invoke: %v", err)
 	}
@@ -125,11 +123,11 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("unary RuntimeClient.Invoke OK")
 
-	preparedFailure, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, identity, deviceURA, "sdk.live_smoke_missing", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
+	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, deviceURA, "sdk.live_smoke_missing", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
 	if err != nil {
 		t.Fatalf("typed terminal failure prepare: %v", err)
 	}
-	signedFailure, err := preparedFailure.SignWithCallerSignature(InvocationSignature{
+	signed, err := prepared.SignWithCallerSignature(InvocationSignature{
 		Algorithm:       "ed25519",
 		SignatureBase64: "c2lnbmF0dXJl",
 		KeyIDHint:       "go-sdk-live-smoke-invalid-signature",
@@ -137,7 +135,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("typed terminal failure sign: %v", err)
 	}
-	failureHandle, err := runtime.SubmitSigned(ctx, signedFailure)
+	failureHandle, err := runtime.SubmitSigned(ctx, signed)
 	if err != nil {
 		t.Fatalf("typed terminal failure submit: %v", err)
 	}
@@ -154,7 +152,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Logf("typed terminal failure decoded: code=%s stage=%s", failure.Code(), failure.Stage())
 
-	browser, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, identity, deviceURA, "browser.open_session", map[string]any{"url": "https://example.com"}, 17))
+	browser, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, deviceURA, "browser.open_session", map[string]any{"url": "https://example.com"}, 17))
 	if err != nil {
 		t.Fatalf("browser.open_session: %v", err)
 	}
@@ -166,7 +164,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	if !ok || sessionURA == "" {
 		t.Fatalf("browser session_ura missing: %#v", browserOutput)
 	}
-	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, identity, deviceURA, "browser.capture_viewport", map[string]any{"session_ura": sessionURA}, 33))
+	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, deviceURA, "browser.capture_viewport", map[string]any{"session_ura": sessionURA}, 33))
 	if err != nil {
 		t.Fatalf("browser.capture_viewport stream: %v", err)
 	}
@@ -179,13 +177,6 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	if streamEvent.Kind() != "chunk" {
 		t.Fatalf("stream event kind = %q", streamEvent.Kind())
 	}
-	var streamPayload map[string]any
-	if err := json.Unmarshal(streamEvent.PayloadJSON(), &streamPayload); err != nil {
-		t.Fatalf("decode stream payload: %v", err)
-	}
-	if streamPayload["is_placeholder"] != true {
-		t.Fatalf("stream payload = %#v", streamPayload)
-	}
 	if _, err := stream.Cancel(ctx, "go-sdk-live-smoke"); err != nil {
 		t.Fatalf("stream cancel: %v", err)
 	}
@@ -193,58 +184,6 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("stream close: %v", err)
 	}
 	t.Log("StreamHandle received daemon frame")
-
-	downloadPath := filepath.Join(home, ".easynet", "go-sdk-smoke-download.bin")
-	downloadBytes := []byte("go sdk bidi proof\n")
-	if err := os.WriteFile(downloadPath, downloadBytes, 0o600); err != nil {
-		t.Fatalf("write bidi payload: %v", err)
-	}
-	resourceRef, err := identity.BuildResourceRef(ctx, LocalResourceRefRequest{Path: downloadPath, Capability: "read"})
-	if err != nil {
-		t.Fatalf("BuildResourceRef: %v", err)
-	}
-	bidi, err := runtime.OpenBidi(
-		ctx,
-		goLiveSmokeDraft(t, identity, deviceURA, "fs.transfer", map[string]any{
-			"mode":         "download",
-			"resource_ref": resourceRef,
-		}, 49),
-		[]BidiStreamDescriptor{{
-			StreamID:    1,
-			ContentType: "application/octet-stream",
-			Ordering:    "STRICT",
-		}},
-	)
-	if err != nil {
-		t.Fatalf("fs.transfer open bidi: %v", err)
-	}
-	if _, err := bidi.CloseSend(ctx); err != nil {
-		t.Fatalf("bidi close-send: %v", err)
-	}
-	sawBinary := false
-	sawTerminal := false
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) && !(sawBinary && sawTerminal) {
-		recvCtx, recvCancel := context.WithTimeout(ctx, time.Second)
-		frame, err := bidi.Receive(recvCtx)
-		recvCancel()
-		if err != nil {
-			t.Fatalf("bidi receive: %v", err)
-		}
-		if frame.Kind() == "binary_chunk" {
-			sawBinary = true
-		}
-		if frame.Terminal() {
-			sawTerminal = true
-		}
-	}
-	if !sawBinary || !sawTerminal {
-		t.Fatalf("bidi did not observe data+terminal: binary=%v terminal=%v state=%s", sawBinary, sawTerminal, bidi.State())
-	}
-	if err := bidi.Close(ctx); err != nil {
-		t.Fatalf("bidi close: %v", err)
-	}
-	t.Log("BidiSession received data and terminal frame")
 }
 
 func requireLiveSmokeEnv(t *testing.T, name string) string {
@@ -268,15 +207,11 @@ func writeGoLiveSmokeIdentity(t *testing.T, home string) (string, string, string
 	realm := "cli"
 	deviceID := "local"
 	deviceURA := "easynet:///r/cli/device/local"
-	credentials := map[string]any{
-		"node_id":          deviceID,
-		"credential_token": "go-sdk-smoke-token",
-		"hub_endpoint":     "https://127.0.0.1:50443",
-		"realm":            realm,
-		"username":         "go-sdk-smoke-user",
-		"user_id":          "go-sdk-smoke-user-id",
-	}
-	writeGoLiveSmokeJSON(t, filepath.Join(stateDir, "credentials.json"), credentials)
+	writeGoLiveSmokeJSON(t, filepath.Join(stateDir, "credentials.json"), map[string]any{
+		"node_id": deviceID, "credential_token": "go-sdk-smoke-token",
+		"hub_endpoint": "https://127.0.0.1:50443", "realm": realm,
+		"username": "go-sdk-smoke-user", "user_id": "go-sdk-smoke-user-id",
+	})
 	daemonConfig := `[daemon]
 mode = "device"
 realm = "cli"
@@ -286,11 +221,7 @@ uds_path = "~/.easynet/custom-invocation.sock"
 	if err := os.WriteFile(filepath.Join(stateDir, "daemon-config.toml"), []byte(daemonConfig), 0o600); err != nil {
 		t.Fatalf("write daemon-config.toml: %v", err)
 	}
-	publicKeyBytes := make([]byte, 32)
-	for i := range publicKeyBytes {
-		publicKeyBytes[i] = 1
-	}
-	fakePublicKey := base64.StdEncoding.EncodeToString(publicKeyBytes)
+	fakePublicKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	trustPath := filepath.Join(stateDir, "realm-trust.toml")
 	trust := `[[trusted_agent]]
 agent_ura = "` + deviceURA + `"
@@ -310,28 +241,19 @@ func writeGoLiveSmokeJSON(t *testing.T, path string, value any) {
 	if err != nil {
 		t.Fatalf("marshal %s: %v", path, err)
 	}
-	raw = append(raw, '\n')
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
 
-func dumpGoLiveSmokeLog(t *testing.T, path string) {
+func goLiveSmokeDraft(t *testing.T, deviceURA, ability string, args map[string]any, nonceStart byte) InvocationDraft {
 	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Logf("daemon log unavailable at %s: %v", path, err)
-		return
+	realmAndDevice := strings.TrimPrefix(deviceURA, "easynet:///r/")
+	parts := strings.SplitN(realmAndDevice, "/device/", 2)
+	if len(parts) != 2 {
+		t.Fatalf("invalid live-smoke device URA %q", deviceURA)
 	}
-	t.Logf("daemon log:\n%s", string(raw))
-}
-
-func goLiveSmokeDraft(t *testing.T, identity *IdentityClient, deviceURA string, ability string, args map[string]any, nonceStart byte) InvocationDraft {
-	t.Helper()
-	descriptorRef, err := identity.OwnerAbilityDescriptorRef(context.Background(), deviceURA, ability, "1.0.0")
-	if err != nil {
-		t.Fatalf("OwnerAbilityDescriptorRef(%s): %v", ability, err)
-	}
+	descriptorRef := "easynet:///r/" + parts[0] + "/ability/device." + parts[1] + "." + ability + "@1.0.0"
 	draft, err := NewInvocationBuilder().
 		WithCallerURA(deviceURA).
 		WithCalleeURA(deviceURA).
@@ -356,6 +278,12 @@ func goLiveSmokeNonce(start byte) string {
 	return base64.StdEncoding.EncodeToString(nonce)
 }
 
-func goLiveSmokePagesPort() string {
-	return strconv.Itoa(19000 + os.Getpid()%1000)
+func dumpGoLiveSmokeLog(t *testing.T, path string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Logf("daemon log unavailable at %s: %v", path, err)
+		return
+	}
+	t.Logf("daemon log:\n%s", string(raw))
 }

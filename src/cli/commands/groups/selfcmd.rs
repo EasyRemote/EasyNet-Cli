@@ -339,7 +339,7 @@ impl UninstallEnvironment for ProductionUninstallEnvironment {
 
         #[cfg(feature = "axon-pb")]
         {
-            match crate::daemon::invocation::routing::federation_invoke::invoke_federation_revoke(
+            match crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
                 &identity.device_ura,
                 "self uninstall",
             ) {

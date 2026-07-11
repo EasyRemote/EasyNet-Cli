@@ -31,6 +31,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 
 #[cfg(feature = "axon-pb")]
+mod backpressure;
+
+#[cfg(feature = "axon-pb")]
+use self::backpressure::{bidi_callback_backpressure_frame, stream_callback_backpressure_event};
+#[cfg(feature = "axon-pb")]
 use crate::ffi::client::handle::lib_runtime;
 use crate::ffi::client::handle::{get, EasynetHandle};
 #[cfg(not(feature = "axon-pb"))]
@@ -47,10 +52,6 @@ use crate::ffi::errors::{
 #[cfg(feature = "axon-pb")]
 use crate::ffi::strings::alloc_output_cstring;
 use crate::ffi::strings::{read_cstr, StringError};
-#[cfg(feature = "axon-pb")]
-use crate::protocol::runtime_stream_contract::{
-    bidi_callback_backpressure_frame, stream_callback_backpressure_event,
-};
 
 /// Opaque id for a server-stream opened through
 /// `easynet_invocation_stream_open`.
@@ -756,45 +757,6 @@ pub unsafe extern "C" fn easynet_invocation_sign_prepared_local(
     #[cfg(feature = "axon-pb")]
     {
         sign_prepared_local_with_axon_pb(prepared_id, out_signed_id, out_signed_json)
-    }
-}
-
-/// Submit a signed Invocation through the daemon runtime endpoint.
-///
-/// # Safety
-/// `out_result_json` must be a non-null caller-owned pointer.
-#[no_mangle]
-pub unsafe extern "C" fn easynet_invocation_submit_signed(
-    handle: EasynetHandle,
-    signed_id: SignedInvocationId,
-    out_result_json: *mut *mut c_char,
-) -> i32 {
-    if out_result_json.is_null() {
-        return record_invocation_error(
-            ERR_NULL_POINTER,
-            "easynet_invocation_submit_signed: out_result_json pointer is null",
-        );
-    }
-    unsafe { *out_result_json = std::ptr::null_mut() };
-    let session = match get(handle) {
-        Some(session) => session,
-        None => {
-            return record_invocation_error(
-                ERR_INVALID_HANDLE,
-                format!("easynet_invocation_submit_signed: handle {handle} is not registered"),
-            );
-        }
-    };
-
-    #[cfg(not(feature = "axon-pb"))]
-    {
-        let _ = (session, signed_id);
-        record_invocation_feature_disabled("easynet_invocation_submit_signed")
-    }
-
-    #[cfg(feature = "axon-pb")]
-    {
-        submit_signed_sync_with_axon_pb(handle, session, signed_id, out_result_json)
     }
 }
 
@@ -1996,54 +1958,6 @@ fn sign_prepared_local_with_axon_pb(
 }
 
 #[cfg(feature = "axon-pb")]
-fn submit_signed_sync_with_axon_pb(
-    owner: EasynetHandle,
-    session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
-    signed_id: SignedInvocationId,
-    out_result_json: *mut *mut c_char,
-) -> i32 {
-    let mut invocation_handle_id: InvocationHandleId = 0;
-    let mut submitted_json_ptr: *mut c_char = std::ptr::null_mut();
-    let submit_code = submit_signed_handle_with_axon_pb(
-        owner,
-        session,
-        signed_id,
-        &mut invocation_handle_id,
-        &mut submitted_json_ptr,
-    );
-    if submit_code != EASYNET_OK {
-        return submit_code;
-    }
-    unsafe { crate::ffi::strings::easynet_string_free(submitted_json_ptr) };
-
-    let handle = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
-        Ok(Some(handle)) => handle,
-        Ok(None) | Err(_) => {
-            return record_invocation_error(
-                ERR_GENERIC,
-                "easynet_invocation_submit_signed: submitted invocation handle disappeared",
-            );
-        }
-    };
-    let (result, tuple_json) = handle.await_result_with_tuple_json();
-    let _ = remove_invocation_handle_for_owner(owner, invocation_handle_id);
-    if let Some(code) = record_sync_submit_terminal_error(&result) {
-        return code;
-    }
-    let json = invocation_result_json_with_tuple(result, tuple_json).to_string();
-    let ptr = alloc_output_cstring(json);
-    if ptr.is_null() {
-        return record_invocation_error(
-            ERR_GENERIC,
-            "easynet_invocation_submit_signed: out-of-memory allocating result JSON",
-        );
-    }
-    unsafe { *out_result_json = ptr };
-    clear_last_error();
-    EASYNET_OK
-}
-
-#[cfg(feature = "axon-pb")]
 fn submit_signed_handle_with_axon_pb(
     owner: EasynetHandle,
     session: std::sync::Arc<crate::ffi::client::handle::ClientSession>,
@@ -2664,10 +2578,6 @@ impl ActiveInvocationHandle {
 
     fn submitted_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
         self.shared.snapshot_json(invocation_handle_id)
-    }
-
-    fn await_result_with_tuple_json(&self) -> (crate::daemon::InvocationResult, serde_json::Value) {
-        self.shared.await_result_with_tuple_json()
     }
 
     #[cfg(test)]
@@ -4846,39 +4756,6 @@ fn runtime_error_summary_for_daemon_error(
 }
 
 #[cfg(feature = "axon-pb")]
-fn sync_submit_error_code_for_result(result: &crate::daemon::InvocationResult) -> Option<i32> {
-    let error = result.error.as_ref()?;
-    match error.code.as_str() {
-        "DAEMON_OFFLINE" | "DAEMON_DOWN" => Some(ERR_DAEMON_DOWN),
-        "CANCELLED" => Some(ERR_CANCELLED),
-        "DEADLINE_EXCEEDED" => Some(ERR_TIMEOUT),
-        "TIMEOUT" => Some(ERR_TIMEOUT),
-        "INVALID_INVOCATION" => Some(ERR_INVALID_ARG),
-        "ADMISSION_DENIED" => Some(ERR_ABILITY_FAILED),
-        "PERMISSION_DENIED" | "UNAUTHENTICATED" => Some(ERR_PERMISSION_DENIED),
-        "ABILITY_NOT_FOUND" | "NOT_FOUND" => Some(ERR_NOT_FOUND),
-        "UNIMPLEMENTED" => Some(ERR_NOT_IMPLEMENTED),
-        "PROTOCOL_MISMATCH" | "UNKNOWN" | "INTERNAL" | "DATA_LOSS" => Some(ERR_PROTOCOL),
-        _ if error.stage == "transport" => Some(ERR_DAEMON_DOWN),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn record_sync_submit_terminal_error(result: &crate::daemon::InvocationResult) -> Option<i32> {
-    let code = sync_submit_error_code_for_result(result)?;
-    let message = result
-        .error
-        .as_ref()
-        .map(|err| err.message.as_str())
-        .unwrap_or("submitted invocation failed before terminal result");
-    Some(record_invocation_error(
-        code,
-        format!("easynet_invocation_submit_signed: {message}"),
-    ))
-}
-
-#[cfg(feature = "axon-pb")]
 fn daemon_error_terminal_phase(err: &crate::daemon::DaemonError) -> InvocationHandlePhase {
     match err {
         crate::daemon::DaemonError::InvokeStatus { code, .. }
@@ -5986,80 +5863,6 @@ mod tests {
     }
 
     #[test]
-    fn invocation_submit_signed_rejects_invalid_client_before_daemon_io() {
-        let mut out: *mut c_char = std::ptr::dangling_mut();
-        let code = unsafe { easynet_invocation_submit_signed(9_999_999, 1, &mut out) };
-        assert_eq!(code, ERR_INVALID_HANDLE);
-        assert!(out.is_null());
-    }
-
-    #[test]
-    fn invocation_submit_signed_consumes_signed_handle_before_transport() {
-        let raw = CString::new(canonical_invocation_json(serde_json::json!({
-            "args": {"probe": true}
-        })))
-        .unwrap();
-        let (prepare_handle, _) = alloc(test_session());
-        let mut prepared_id: PreparedInvocationId = 0;
-        let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
-        let prepare_code = unsafe {
-            easynet_invocation_prepare(
-                prepare_handle,
-                raw.as_ptr(),
-                std::ptr::null(),
-                &mut prepared_id,
-                &mut prepared_json_ptr,
-            )
-        };
-        assert_eq!(prepare_code, EASYNET_OK);
-        unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
-
-        let signature = CString::new(
-            serde_json::json!({
-                "algorithm": "ed25519",
-                "signature_base64": "enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6enp6eg==",
-                "key_id_hint": "caller-key"
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let mut signed_id: SignedInvocationId = 0;
-        let mut signed_json_ptr: *mut c_char = std::ptr::null_mut();
-        let sign_code = unsafe {
-            easynet_invocation_sign_prepared(
-                prepared_id,
-                signature.as_ptr(),
-                &mut signed_id,
-                &mut signed_json_ptr,
-            )
-        };
-        assert_eq!(sign_code, EASYNET_OK);
-        assert!(get_signed(signed_id).is_some());
-        unsafe { crate::ffi::strings::easynet_string_free(signed_json_ptr) };
-
-        let (client_handle, _) = alloc(
-            crate::ffi::client::handle::ClientSession::with_control_path_only(
-                "/tmp/easynet-control.json".to_string(),
-                Some("/tmp/easynet-missing-daemon.sock".to_string()),
-            ),
-        );
-        let mut out: *mut c_char = std::ptr::dangling_mut();
-        let submit_code =
-            unsafe { easynet_invocation_submit_signed(client_handle, signed_id, &mut out) };
-        assert_eq!(submit_code, ERR_DAEMON_DOWN);
-        assert!(out.is_null());
-        assert!(get_signed(signed_id).is_none());
-
-        let mut second_out: *mut c_char = std::ptr::dangling_mut();
-        let second_code =
-            unsafe { easynet_invocation_submit_signed(client_handle, signed_id, &mut second_out) };
-        assert_eq!(second_code, ERR_INVALID_HANDLE);
-        assert!(second_out.is_null());
-        crate::ffi::client::handle::release(prepare_handle);
-        crate::ffi::client::handle::release(client_handle);
-    }
-
-    #[test]
     fn invocation_handle_submit_rejects_invalid_client_before_consuming_signed() {
         let signed_id = new_signed_invocation_id();
         let mut invocation_handle_id: InvocationHandleId = 999;
@@ -6908,27 +6711,6 @@ mod tests {
         assert_eq!(error["stage"], "runtime");
         assert_eq!(error["retry"], "never");
         assert_eq!(error["details"]["abi_code"], ERR_PERMISSION_DENIED);
-        assert_eq!(error["details"]["legacy_untyped"], false);
-    }
-
-    #[test]
-    fn sync_submit_terminal_error_records_typed_last_error() {
-        let mut result = completed_result_for_tuple(signed_fixture_tuple());
-        result.error = Some(crate::daemon::RuntimeErrorSummary {
-            code: "DEADLINE_EXCEEDED".to_string(),
-            stage: "transport".to_string(),
-            message: "runtime deadline exceeded".to_string(),
-            retryable: true,
-        });
-
-        let code = record_sync_submit_terminal_error(&result);
-
-        assert_eq!(code, Some(ERR_TIMEOUT));
-        let error = read_last_error_json();
-        assert_eq!(error["code"], "TIMEOUT");
-        assert_eq!(error["stage"], "transport");
-        assert_eq!(error["retry"], "safe");
-        assert_eq!(error["details"]["abi_code"], ERR_TIMEOUT);
         assert_eq!(error["details"]["legacy_untyped"], false);
     }
 

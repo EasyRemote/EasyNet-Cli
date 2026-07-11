@@ -521,18 +521,15 @@ mod tests {
             .expect("register declarative exec");
 
         assert!(catalog.has_rpc("test.declarative_echo"));
-        let manifest = catalog
-            .control_plane_manifest("test.declarative_echo")
-            .expect("registered plugin ability manifest");
-        assert_eq!(
-            manifest.description(),
-            "test descriptor for test.declarative_echo"
-        );
-        assert_eq!(manifest.input_schema()["type"], "object");
         let record = catalog
             .control_plane_record_for_mode("test.declarative_echo", DescriptorCallMode::Rpc)
             .expect("plugin control-plane lookup is unambiguous")
             .expect("plugin control-plane record");
+        assert_eq!(
+            record.descriptor().description,
+            "test descriptor for test.declarative_echo"
+        );
+        assert_eq!(record.descriptor().input_schema()["type"], "object");
         assert_eq!(
             *record.implementation().source(),
             AbilityImplSource::DeclarativePlugin
@@ -570,14 +567,15 @@ mod tests {
             .expect("hot register declarative exec");
 
         assert!(catalog.has_dynamic("test.declarative_echo"));
-        let manifest = catalog
-            .control_plane_manifest("test.declarative_echo")
-            .expect("hot registered plugin ability manifest");
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_echo", DescriptorCallMode::Rpc)
+            .expect("plugin control-plane lookup is unambiguous")
+            .expect("hot registered plugin canonical descriptor");
         assert_eq!(
-            manifest.description(),
+            record.descriptor().description,
             "test descriptor for test.declarative_echo"
         );
-        assert_eq!(manifest.input_schema()["type"], "object");
+        assert_eq!(record.descriptor().input_schema()["type"], "object");
         let result = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,
@@ -699,14 +697,11 @@ mod tests {
             .expect("MCP plugin control-plane lookup is unambiguous")
             .expect("MCP plugin control-plane record");
         assert_eq!(*record.implementation().source(), AbilityImplSource::Mcp);
-        let manifest = catalog
-            .control_plane_manifest("test.declarative_mcp")
-            .expect("hot registered MCP plugin ability manifest");
         assert_eq!(
-            manifest.description(),
+            record.descriptor().description,
             "test descriptor for test.declarative_mcp"
         );
-        assert_eq!(manifest.input_schema()["type"], "object");
+        assert_eq!(record.descriptor().input_schema()["type"], "object");
         let err = catalog
             .execute_rpc(InvocationTarget {
                 scope: TargetScope::Local,

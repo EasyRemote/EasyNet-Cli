@@ -3,17 +3,9 @@
 //
 // File: src/daemon/federation/init/mod.rs
 //
-// Single seam where the daemon decides whether to participate in
-// federation and, if so, installs the production wiring:
-//
-//   * `BridgeForwardInvoker` — concrete `CliForwardInvoker` that
-//     turns a remote `<agent>.invoke(target=peer)` into a real
-//     `federation.forward_invoke` call over the daemon's
-//     existing gRPC bridge.
-//
-//   * `FederationStatusProbe` — process-wide handle exposing the
-//     decision to observers (the `federation.status`
-//     ability + operator log lines).
+// Boot-time readiness assessment for federation-owned control-plane
+// features. Cross-device product invocation does not install a process-global
+// hook here; callers submit a signed canonical `InvokeRequest` directly.
 //
 // Design contract
 // ---------------
@@ -21,7 +13,7 @@
 // optional `Bridge`:
 //
 //   ```
-//   try_install_federation_routing(...) -> FederationInitOutcome
+//   assess_federation_readiness(...) -> FederationInitOutcome
 //   ```
 //
 // `FederationInitOutcome` is a typed enum reflecting one of four
@@ -31,12 +23,8 @@
 //     credentials, `*.localhost` tenant). Daemon runs in fully
 //     local-only mode; cross-device invokes return
 //     `target_not_registered` like before.
-//   * `Installed { tenant, realm, device_ura }` — invoker is
-//     registered; the next federation-shaped invoke routes
-//     through the bridge.
-//   * `AlreadyInstalled { ... }` — second call after a successful
-//     first call. No-op; mirrors the set-once contract on
-//     `forward::FORWARD_INVOKER`.
+//   * `Installed { tenant, realm, device_ura }` — bridge-backed
+//     federation control-plane features are ready.
 //   * `Failed { stage, reason }` — federation was wanted but a
 //     prerequisite failed (no bridge, keyring lock, etc.). Daemon
 //     keeps running; cross-device invokes are unavailable until
@@ -50,7 +38,7 @@
 // transient hub outage during boot.
 //
 // Tested in isolation: every test in this module exercises
-// `try_install_federation_routing` with hand-built fixtures, no
+// `assess_federation_readiness` with hand-built fixtures, no
 // real bridge / no real daemon. The wiring point in
 // `bin/easynet-daemon.rs` is intentionally a single line so it's
 // trivially correct by inspection.
@@ -69,7 +57,6 @@ pub use probe::FederationStatusProbe;
 use std::sync::Arc;
 
 use super::resolver as tenant_resolver;
-use crate::daemon::keyring::bridge_forward::BridgeForwardInvoker;
 use crate::daemon::persistence::config::Credentials;
 
 /// Environment opt-out. When set to "1" / "true", the daemon
@@ -80,7 +67,7 @@ pub const ENV_FEDERATION_DISABLE: &str = "EASYNET_FEDERATION_DISABLE";
 
 /// Construction-time inputs. Boot reads env vars + config files
 /// **once**, builds this struct, and hands it to
-/// `try_install_federation_routing`. Tests construct it directly.
+/// `assess_federation_readiness`. Tests construct it directly.
 /// Splitting "read env" from "decide what to do" is what makes
 /// the decision logic deterministic + parallel-safe.
 ///
@@ -130,7 +117,7 @@ pub fn read_inputs_from_env<'a>(
 /// unreachable at boot). When `None`, federation init reports
 /// `Failed { stage = NoBridge }` so an operator can diagnose
 /// without needing to read source.
-pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> FederationInitOutcome {
+pub fn assess_federation_readiness(inputs: FederationInitInputs<'_>) -> FederationInitOutcome {
     let FederationInitInputs {
         creds,
         bridge,
@@ -164,38 +151,20 @@ pub fn try_install_federation_routing(inputs: FederationInitInputs<'_>) -> Feder
     }
 
     // ── Prereq: bridge must be connected ───────────────────────
-    let bridge = match bridge {
-        Some(b) => Arc::clone(b),
-        None => {
-            return FederationInitOutcome::Failed {
-                stage: FederationStage::BridgeUnavailable,
-                reason: "daemon bridge is not connected; federation routes will be \
-                         unavailable until the next successful bridge connect"
-                    .into(),
-            };
-        }
-    };
+    if bridge.is_none() {
+        return FederationInitOutcome::Failed {
+            stage: FederationStage::BridgeUnavailable,
+            reason: "daemon bridge is not connected; federation control-plane features are \
+                     unavailable until the next successful bridge connect"
+                .into(),
+        };
+    }
 
     // The joined node ID and realm are the one authoritative source for the
     // daemon caller URA. A key inventory must never be a second identity
     // registry or a routing prerequisite.
     let device_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
 
-    // ── Install (set-once). A second call after a successful
-    //    first call is the AlreadyInstalled outcome.
-    let installed = BridgeForwardInvoker::install_for_daemon(
-        bridge,
-        device_ura.clone(),
-        creds.realm.clone(),
-        creds.realm.clone(),
-    );
-    if !installed {
-        return FederationInitOutcome::AlreadyInstalled {
-            tenant: creds.realm.clone(),
-            realm: creds.realm.clone(),
-            device_ura,
-        };
-    }
     FederationInitOutcome::Installed {
         tenant: creds.realm.clone(),
         realm: creds.realm.clone(),
@@ -247,7 +216,7 @@ mod tests {
     #[test]
     fn disabled_when_operator_opted_out() {
         let c = creds("acme.com", "node-1");
-        let out = try_install_federation_routing(inputs_for(&c, None, true));
+        let out = assess_federation_readiness(inputs_for(&c, None, true));
         match out {
             FederationInitOutcome::Disabled { reason } => {
                 assert!(reason.contains(ENV_FEDERATION_DISABLE), "{reason}");
@@ -259,7 +228,7 @@ mod tests {
     #[test]
     fn disabled_when_credentials_unjoined() {
         let c = creds("", "");
-        let out = try_install_federation_routing(inputs_for(&c, None, false));
+        let out = assess_federation_readiness(inputs_for(&c, None, false));
         match out {
             FederationInitOutcome::Disabled { reason } => {
                 assert!(reason.contains("credentials.json"), "{reason}");
@@ -274,7 +243,7 @@ mod tests {
         // default resolver config — federation routes are
         // deliberately not installed.
         let c = creds("silan.localhost", "node-1");
-        let out = try_install_federation_routing(inputs_for(&c, None, false));
+        let out = assess_federation_readiness(inputs_for(&c, None, false));
         match out {
             FederationInitOutcome::Disabled { reason } => {
                 assert!(reason.contains("Local-fast"), "{reason}");
@@ -289,7 +258,7 @@ mod tests {
         // Daemon should keep running; the operator gets a
         // diagnostic via the status probe.
         let c = creds("acme.com", "node-1");
-        let out = try_install_federation_routing(inputs_for(&c, None, false));
+        let out = assess_federation_readiness(inputs_for(&c, None, false));
         match out {
             FederationInitOutcome::Failed { stage, reason } => {
                 assert_eq!(stage, FederationStage::BridgeUnavailable);
@@ -306,8 +275,8 @@ mod tests {
         assert_eq!(crate::core::ura::device_ura(&c.realm, &c.node_id), expected);
     }
 
-    // Note: the Installed and AlreadyInstalled paths require a
-    // live DendriteBridge to be constructed, which (a) needs the
+    // Note: the Installed path requires a live DendriteBridge to be
+    // constructed, which (a) needs the
     // dendrite bridge dynamic library (b) tries to dial a Hub.
     // Both are out of scope for unit tests; they're exercised by
     // the daemon-boot integration tests in `tests/`.

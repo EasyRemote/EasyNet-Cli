@@ -1,7 +1,7 @@
 # Ability Control-Plane Model
 
 **Status:** current architecture note.
-**Date:** 2026-06-21.
+**Date:** 2026-07-11.
 **Scope:** EasyNet device ability model, daemon dispatch, plugin ability binding, invocation, and receipts.
 
 This document supersedes older shorthand such as "agent owns ability" or
@@ -21,7 +21,7 @@ binding. `Receipt` is the versioned, verifiable execution fact.
 | `Device` | Execution substrate identified by `device_ura`, with `node_id` and local resources. |
 | `Daemon` | Projection and dispatch runtime that registers descriptors, binds implementations, dispatches invocations, and emits receipts. |
 | `DeviceAgent` | Control-plane identity projection for a device. It advertises descriptors; it does not own authority by itself. |
-| `AbilityDescriptor` | Versioned, governed callable interface: name, schema, call mode, visibility, policy, version, and schema hash. |
+| `AbilityDescriptor` | Versioned, governed callable aggregate: identity, schema, call mode, receipt semantics, visibility, allow/deny policy, version, and hashes. |
 | `AuthorityBinding` | Governance predicate that authorizes both descriptor advertisement and invocation. |
 | `AbilityImpl` | Executable binding for a descriptor version, including entrypoint, implementation hash, and runtime environment. |
 | `PluginAbilityImpl` | Local plugin-provided ability implementation loaded and bound by the daemon. |
@@ -58,8 +58,11 @@ class AbilityDescriptor {
   +schema
   +schema_hash
   +call_mode
+  +receipt_semantics
   +visibility
-  +policy_ref
+  +scope_agents
+  +scope_subjects
+  +denied_agents
 }
 
 class AuthorityBinding {
@@ -145,8 +148,9 @@ Minimum descriptor fields:
 - `schema`
 - `schema_hash`
 - `call_mode`
+- `receipt_semantics`
 - `visibility`
-- `policy_ref`
+- caller/subject scope and deny policy
 
 ### Authority Plane
 
@@ -191,6 +195,11 @@ This keeps the invocation axiom general enough for resource mutation, session
 control, ability management, continuation resumption, and governance actions.
 
 ## Receipt Semantics
+
+Transport and state semantics are orthogonal. `CallMode` selects `Rpc`,
+`Stream`, or `Bidi`; it never implies a transition. `ReceiptSemantics` is
+either operational or a validated state transition with a stable
+`<ability>@vN` identity and an operational/canonical transition class.
 
 A receipt is not a return value. It must prove what was admitted, what was run,
 which governed interface version was used, which implementation binding
@@ -250,12 +259,15 @@ Reject these designs:
 
 ## Code Anchors
 
-The current implementation is still converging on this model. Review these
-areas when changing the ability control plane:
+These are the current implementation boundaries. Architecture checks must fail
+when a new interface, authority, implementation, or Invocation model appears
+outside them:
 
-- `src/daemon/ability/dispatch.rs`
-- `src/daemon/ability/catalog/profiles/device.rs`
-- `src/daemon/ability/builtins/`
-- `src/runtime/plugin_host/host_api.rs`
-- `src/daemon/invocation/`
+- `src/daemon/ability/descriptors/` — governed descriptor aggregate.
+- `src/daemon/ability/authority/` — advertise and invoke authority bindings.
+- `src/daemon/ability/impl_bindings/` — executable implementation bindings.
+- `src/daemon/ability/control_plane.rs` — atomic aggregate registration.
+- `src/daemon/plugins/` — product plugin lifecycle and descriptor projections.
+- `src/daemon/invocation/` — daemon policy around Axon's canonical Invocation.
+- `src/daemon/control/runtime_dispatch.rs` — private, lossless Axon execution bridge.
 - `ability-descriptors/system/*.ability.toml`

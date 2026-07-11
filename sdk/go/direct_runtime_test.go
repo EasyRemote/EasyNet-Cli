@@ -243,15 +243,11 @@ func TestDirectRuntimeGRPCErrorClassifiesHTTP2ProtocolReset(t *testing.T) {
 	}
 }
 
-func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughIdentity(t *testing.T) {
-	identityTransport := &memoryIdentityTransport{descriptorJSON: directRuntimeDescriptorProjectionJSON}
-	identity, err := NewIdentityClient(identityTransport)
-	if err != nil {
-		t.Fatalf("NewIdentityClient: %v", err)
-	}
+func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughAddressing(t *testing.T) {
+	addressing := NewCanonicalAddressing()
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS: 3000,
-		Identity:      identity,
+		Addressing:    addressing,
 	})
 	defer cleanup()
 
@@ -262,9 +258,6 @@ func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughIdentity(t *tes
 	if _, err := client.Invoke(context.Background(), directRuntimeDraft(t)); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if identityTransport.seenRequest["descriptor_ref"] != directRuntimeDraft(t).DescriptorRef() {
-		t.Fatalf("descriptor projection request = %#v", identityTransport.seenRequest)
-	}
 	if daemon.seenInvoke == nil || daemon.seenInvoke.GetFunctionName() != "er.weather" {
 		t.Fatalf("daemon function name = %#v", daemon.seenInvoke)
 	}
@@ -274,7 +267,7 @@ func TestDirectDaemonRuntimeTransportPrepareProjectsSignedUserSubject(t *testing
 	identity := directRuntimeUserSubjectIdentity(t)
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS: 3000,
-		Identity:      identity,
+		Addressing:    identity,
 	})
 	defer cleanup()
 	draft := directRuntimeUserSubjectDraft(t)
@@ -306,7 +299,7 @@ func TestDirectDaemonRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubj
 	identity := directRuntimeUserSubjectIdentity(t)
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS: 3000,
-		Identity:      identity,
+		Addressing:    identity,
 	})
 	defer cleanup()
 	preparedJSON, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, directRuntimeUserSubjectDraft(t)), []byte(`{"expires_in_ms":60000,"signer_id":"caller-key"}`))
@@ -607,7 +600,7 @@ func TestDirectDaemonRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 			return ControlDiscovery{InvocationEndpoint: endpoint}, nil
 		}),
 		HandleTransport:      handle,
-		Identity:             directRuntimeIdentityClient(t),
+		Addressing:           directRuntimeIdentityClient(t),
 		CloseHandleTransport: true,
 	})
 	connection, err := NewRuntimeConnection(connector)
@@ -685,8 +678,8 @@ func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRunti
 	if options.DialTimeoutMS == 0 {
 		options.DialTimeoutMS = 3000
 	}
-	if options.Identity == nil {
-		options.Identity = directRuntimeIdentityClient(t)
+	if options.Addressing == nil {
+		options.Addressing = directRuntimeIdentityClient(t)
 	}
 	transport, err := OpenDirectDaemonRuntimeTransport(context.Background(), socket, options)
 	if err != nil {
@@ -821,26 +814,14 @@ func mustMarshalDirectRuntimeDraft(t *testing.T, draft InvocationDraft) []byte {
 	return raw
 }
 
-func directRuntimeIdentityClient(t *testing.T) *IdentityClient {
+func directRuntimeIdentityClient(t *testing.T) Addressing {
 	t.Helper()
-	return mustDirectRuntimeIdentity(t, &memoryIdentityTransport{descriptorJSON: directRuntimeDescriptorProjectionJSON})
+	return NewCanonicalAddressing()
 }
 
-func mustDirectRuntimeIdentity(t *testing.T, transport IdentityTransport) *IdentityClient {
+func directRuntimeUserSubjectIdentity(t *testing.T) Addressing {
 	t.Helper()
-	identity, err := NewIdentityClient(transport)
-	if err != nil {
-		t.Fatalf("NewIdentityClient: %v", err)
-	}
-	return identity
-}
-
-func directRuntimeUserSubjectIdentity(t *testing.T) *IdentityClient {
-	t.Helper()
-	return mustDirectRuntimeIdentity(t, &memoryIdentityTransport{
-		descriptorJSON: directRuntimeMetaListResourcesDescriptorProjectionJSON,
-		buildURAJSON:   directRuntimeProjectedSubjectJSON(directRuntimeUserSubjectResourceURA),
-	})
+	return NewCanonicalAddressing()
 }
 
 const directRuntimeUserSubjectResourceURA = "easynet:///r/example/resource/user.alice/invoke/meta.list_resources"
@@ -873,7 +854,7 @@ func directRuntimeProjectedSubjectJSON(ura string) string {
 		"kind":       "resource",
 		"valid":      true,
 		"ura":        ura,
-		"profile":    "directory_identity",
+		"profile":    "addressing",
 		"components": map[string]any{"owner_ura": "easynet:///r/example/user/alice"},
 		"metadata":   map[string]any{"source": "direct-runtime-test"},
 	})

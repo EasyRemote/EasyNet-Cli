@@ -508,7 +508,7 @@ def signer_handle(public_key_base64: str = "") -> SignerHandle:
     if public_key_base64:
         metadata["public_key_base64"] = public_key_base64
     return SignerHandle(
-        profile="directory_identity",
+        profile="signing",
         signer_id="signer-alice-key-1",
         owner_ura="easynet:///r/example/agent/alice.sdk",
         key_id="alice-key-1",

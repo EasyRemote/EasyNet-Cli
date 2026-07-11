@@ -15,12 +15,11 @@ fail() {
 bad="$(
     rg -n '#\s*\[\s*serde\s*\([^]]*\balias\s*=' \
         src/daemon/invocation/dispatch \
-        src/protocol \
         -g'*.rs' 2>/dev/null || true
 )"
 
 if [[ -n "$bad" ]]; then
-    fail "daemon/protocol request DTOs expose legacy serde input aliases:
+    fail "daemon request DTOs expose legacy serde input aliases:
 $bad"
 fi
 

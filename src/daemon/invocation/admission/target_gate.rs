@@ -352,7 +352,6 @@ mod tests {
 pub(crate) const ROUTE_NEGATIVE_CODE: &str = "ROUTE_NEGATIVE";
 pub(crate) const RESOLVE_SELECTED_HOST_UNAVAILABLE_CODE: &str = "RESOLVE_UNAVAILABLE";
 pub(crate) const ROUTE_PROFILE_BLOCKED_CODE: &str = "ROUTE_PROFILE_BLOCKED";
-pub(crate) const ROUTE_OWNER_MISMATCH_CODE: &str = "ROUTE_OWNER_MISMATCH";
 pub(crate) const ROUTE_SELECTED_REMOTE_HOST_CODE: &str = "ROUTE_SELECTED_REMOTE_HOST";
 
 pub(crate) fn route_negative_message(failure: &ResolveRouteFailure) -> String {
@@ -379,17 +378,6 @@ pub(crate) fn route_profile_blocked_message(selected_route: &SelectedInvokeRoute
 
 pub(crate) fn route_profile_blocked_status(selected_route: &SelectedInvokeRoute) -> Status {
     Status::failed_precondition(route_profile_blocked_message(selected_route))
-}
-
-pub(crate) fn route_owner_mismatch_message(
-    selected_owner_ura: &str,
-    ability_ura: &str,
-    expected_target_ura: &str,
-) -> String {
-    format!(
-        "{ROUTE_OWNER_MISMATCH_CODE}: namespace.resolve selected owner `{selected_owner_ura}` \
-         for ability `{ability_ura}` but request target was `{expected_target_ura}`"
-    )
 }
 
 pub(crate) fn route_selected_remote_host_status(

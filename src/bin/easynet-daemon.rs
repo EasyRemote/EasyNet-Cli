@@ -55,7 +55,6 @@ use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPub
 use easynet_cli::daemon::invocation::receipts::runtime_record::{
     RuntimeCausalContext, RuntimeInvocation,
 };
-use easynet_cli::daemon::invocation::routing::target::{LocalNodeResolver, TargetResolver};
 use easynet_cli::daemon::persistence::config;
 use easynet_cli::daemon::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
@@ -462,11 +461,10 @@ async fn main() -> anyhow::Result<()> {
     // execution itself goes through `local_runtime`.
     let _registry = Arc::clone(&registry);
 
-    // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
-    // by the supervisor from credentials.json) or "self" as a
-    // harness default; controls loopback-vs-remote routing.
-    let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
-    let adapter = RuntimeDispatchAdapter::new_with_runtime(Arc::clone(&local_runtime), resolver);
+    // Runtime-dispatch re-enters Axon with the original externally-signed
+    // envelope. It deliberately has no daemon-local resolver: resolving again
+    // would replace the caller's signed invocation tuple.
+    let adapter = RuntimeDispatchAdapter::new_with_runtime(Arc::clone(&local_runtime));
 
     // Daemon RuntimeInvocation transport: gRPC InvocationServer.
     // Start this BEFORE any other daemon listener binds so

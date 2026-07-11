@@ -90,10 +90,10 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
     let query = AbilityCatalogueQuery::from_args(&args)?;
     let client = AbilityCatalogueClient::new(query.clone());
     // Joint-plan unified path: `--node` is now wired through
-    // `federation.forward_invoke` against the target device URA.
+    // the canonical `Invocation::Invoke` RPC against the target device URA.
     // Each daemon's `meta.list_abilities` ability returns its OWN
     // catalogue; cross-device discovery is the caller's job
-    // (forward_invoke routes through the target's daemon).
+    // (canonical_invoke routes through the target's daemon).
     let abilities = match args.node.as_deref().map(str::trim) {
         None | Some("local") => client.fetch_local_abilities()?,
         Some("") => bail!(
@@ -728,7 +728,7 @@ mod tests {
 
     /// Joint-plan phase 1.5: `--node <other>` no longer hard-bails;
     /// it forwards `meta.list_abilities` to the target device URA
-    /// through `federation.forward_invoke`. The forward path only
+    /// through the canonical `Invocation::Invoke` RPC. The remote path only
     /// exists in builds with `--features axon-pb`; without the
     /// feature `AbilityCatalogueClient::fetch_remote_abilities` short-circuits to
     /// `federation_not_wired_error`, which is asserted by
@@ -737,7 +737,7 @@ mod tests {
     /// features) AND `cargo test --features axon-pb` both pass.
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn run_with_remote_node_routes_through_forward_invoke() {
+    fn run_with_remote_node_routes_through_canonical_invoke() {
         // In a unit-test environment the local daemon UDS is absent,
         // so the call surfaces as either "daemon not running" /
         // "cannot resolve node ... without local credentials" /

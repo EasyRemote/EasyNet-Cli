@@ -9,9 +9,8 @@ from typing import Any, Mapping
 
 from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
-from .identity import AddressingClient, DescriptorRefRequest
+from .axon_addressing import AddressingClient
 from .invocation import InvocationBuilder, InvocationDraft, InvocationSignature
-from .receipt import ReceiptClient
 from .runtime import (
     InvocationCancel,
     InvocationHandle,
@@ -184,9 +183,7 @@ class AbilityInvocationClient:
         version = _required_string(request.descriptor_version, "descriptor_version")
         if selector == "descriptor_ref":
             projection = self.addressing.project_descriptor_ref(
-                DescriptorRefRequest(
-                    _required_string(request.descriptor_ref, "descriptor_ref")
-                )
+                _required_string(request.descriptor_ref, "descriptor_ref")
             )
             descriptor_ref = projection.descriptor_ref
             ability_ura = projection.ability_ura
@@ -287,7 +284,6 @@ class AbilityInvocationClient:
     def child_context(
         self,
         parent: InvocationResult,
-        receipts: ReceiptClient,
         *,
         caller_ura: str,
         nonce_base64: str,
@@ -296,9 +292,14 @@ class AbilityInvocationClient:
         """Create a child-call context from a parent Invocation receipt."""
 
         self._require_open()
-        if receipts is None:
-            raise _invalid_ability_invocation("receipt client is required")
-        causal_context = receipts.causal_context_from_invocation_result(parent)
+        receipt = parent.receipt_summary
+        if receipt is None or not receipt.has_causal_anchor():
+            raise _invalid_ability_invocation("parent result is missing a causal receipt anchor")
+        causal_context = {
+            "form": "scalar",
+            "receipt_ura": receipt.receipt_ura,
+            "receipt_hash_hex": receipt.self_hash_hex,
+        }
         return AbilityChildContext(
             invoker=self,
             caller_ura=_required_string(caller_ura, "caller_ura"),

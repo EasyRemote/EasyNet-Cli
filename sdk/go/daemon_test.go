@@ -208,65 +208,6 @@ func TestDaemonHandleOpenRuntimeRequiresReadyState(t *testing.T) {
 	}
 }
 
-func TestDaemonHandleCompanionLifecycle(t *testing.T) {
-	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
-	handle, err := Start(context.Background(), transport, StartConfig{Mode: ModeHub})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	list, err := handle.CompanionList(context.Background())
-	if err != nil {
-		t.Fatalf("CompanionList: %v", err)
-	}
-	status, err := handle.CompanionStatus(context.Background(), " easynet.desktop.menubar ", " 0.1.0 ")
-	if err != nil {
-		t.Fatalf("CompanionStatus: %v", err)
-	}
-	result, err := handle.CompanionEnable(context.Background(), "easynet.desktop.menubar", "0.1.0")
-	if err != nil {
-		t.Fatalf("CompanionEnable: %v", err)
-	}
-
-	if len(list.Companions) != 1 {
-		t.Fatalf("companions = %d, want 1", len(list.Companions))
-	}
-	if status.ProjectedState != CompanionProjectedRunning {
-		t.Fatalf("projected state = %s", status.ProjectedState)
-	}
-	if result.Action != "enable" || result.StatusAfter == nil || result.StatusAfter.PackageID != status.PackageID {
-		t.Fatalf("unexpected action result: %#v", result)
-	}
-	want := []string{
-		"status:easynet.desktop.menubar@0.1.0",
-		"enable:easynet.desktop.menubar@0.1.0",
-	}
-	if len(transport.companionCalls) != len(want) {
-		t.Fatalf("companion calls = %#v", transport.companionCalls)
-	}
-	for i := range want {
-		if transport.companionCalls[i] != want[i] {
-			t.Fatalf("companion calls = %#v, want %#v", transport.companionCalls, want)
-		}
-	}
-}
-
-func TestDaemonHandleCompanionRequiresPackageID(t *testing.T) {
-	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
-	handle, err := Start(context.Background(), transport, StartConfig{Mode: ModeHub})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	_, err = handle.CompanionStatus(context.Background(), " ", "")
-	if err == nil {
-		t.Fatal("CompanionStatus succeeded with empty package id")
-	}
-	if !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
-	}
-}
-
 func TestConnectLocalDiscoversAttachesOpensAndDetaches(t *testing.T) {
 	transport := &memoryDaemonTransport{
 		discoverJSON: `{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/discovered-daemon.sock"}`,

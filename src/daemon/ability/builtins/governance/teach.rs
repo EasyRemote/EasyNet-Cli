@@ -34,7 +34,8 @@ use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, Owne
 use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
-    block_on_hot_registrar, HotAgentRuntimeSyncOutcome,
+    block_on_hot_registrar, HotAgentRegistrarError, HotAgentRegistrarReadiness,
+    HotAgentRuntimeSyncOutcome,
 };
 use crate::daemon::persistence::config::sync_parent_dir;
 use crate::daemon::persistence::teach_grants::{
@@ -1380,7 +1381,7 @@ struct RuntimeSyncReport {
     /// `runtime_not_ready` (the runtime exists but is not yet wired, which
     /// is transient and retried). Set only by [`Self::nothing_to_converge`].
     runtime_absent: bool,
-    reason: Option<&'static str>,
+    reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1452,7 +1453,7 @@ impl RuntimeSyncReport {
             catalog_not_ready: false,
             rejected_reserved_owner: false,
             runtime_absent: false,
-            reason: Some(reason),
+            reason: Some(reason.to_string()),
         }
     }
 
@@ -1474,33 +1475,66 @@ impl RuntimeSyncReport {
             catalog_not_ready: false,
             rejected_reserved_owner: false,
             runtime_absent: true,
-            reason: Some(reason),
+            reason: Some(reason.to_string()),
         }
     }
 
     fn from_outcome(outcome: HotAgentRuntimeSyncOutcome) -> Self {
-        let ok = !outcome.runtime_not_ready
-            && !outcome.catalog_not_ready
-            && !outcome.rejected_reserved_owner
-            && outcome.failed == 0;
         Self {
             attempted: true,
-            ok,
+            ok: outcome.failed == 0,
             registered: outcome.registered,
             replaced: outcome.replaced,
             failed: outcome.failed,
             removed: outcome.removed,
-            runtime_not_ready: outcome.runtime_not_ready,
-            catalog_not_ready: outcome.catalog_not_ready,
-            rejected_reserved_owner: outcome.rejected_reserved_owner,
+            runtime_not_ready: false,
+            catalog_not_ready: false,
+            rejected_reserved_owner: false,
             runtime_absent: false,
             reason: None,
         }
     }
 
+    fn from_error(error: HotAgentRegistrarError) -> Self {
+        let mut report = Self {
+            attempted: true,
+            ok: false,
+            registered: 0,
+            replaced: 0,
+            failed: 1,
+            removed: 0,
+            runtime_not_ready: false,
+            catalog_not_ready: false,
+            rejected_reserved_owner: false,
+            runtime_absent: false,
+            reason: Some(error.to_string()),
+        };
+        match error {
+            HotAgentRegistrarError::NotReady { readiness } => match readiness {
+                HotAgentRegistrarReadiness::PendingRuntime => report.runtime_not_ready = true,
+                HotAgentRegistrarReadiness::PendingCatalog => report.catalog_not_ready = true,
+                HotAgentRegistrarReadiness::Ready => {}
+            },
+            HotAgentRegistrarError::ReservedOwner { .. } => {
+                report.rejected_reserved_owner = true;
+            }
+            HotAgentRegistrarError::RuntimeSync { outcome, .. } => {
+                report.registered = outcome.registered;
+                report.replaced = outcome.replaced;
+                report.failed = outcome.failed.max(1);
+                report.removed = outcome.removed;
+            }
+            HotAgentRegistrarError::AuthorityEnrollment { .. }
+            | HotAgentRegistrarError::AuthorityScope { .. }
+            | HotAgentRegistrarError::AuthorityRevocation { .. }
+            | HotAgentRegistrarError::SecondWriter { .. } => {}
+        }
+        report
+    }
+
     fn failure_summary(&self) -> String {
         let mut parts = Vec::new();
-        if let Some(reason) = self.reason {
+        if let Some(reason) = self.reason.as_ref() {
             parts.push(format!("reason={reason}"));
         }
         parts.push(format!("attempted={}", self.attempted));
@@ -1529,7 +1563,7 @@ impl RuntimeSyncReport {
             "rejected_reserved_owner": self.rejected_reserved_owner,
         });
         if let Some(reason) = self.reason {
-            value["reason"] = Value::String(reason.to_string());
+            value["reason"] = Value::String(reason);
         }
         value
     }
@@ -1548,14 +1582,15 @@ fn collect_learner_runtime_sync(
     };
     let learner_name = learner.to_string();
     let entry_for_runtime = entry.clone();
-    let Some(outcome) = block_on_hot_registrar(async move {
+    let outcome = block_on_hot_registrar(async move {
         registrar
             .register_agent(&learner_name, &entry_for_runtime)
             .await
-    }) else {
-        return RuntimeSyncReport::not_ready("no_tokio_runtime_for_hot_registrar");
-    };
-    RuntimeSyncReport::from_outcome(outcome)
+    });
+    match outcome {
+        Ok(outcome) => RuntimeSyncReport::from_outcome(outcome),
+        Err(error) => RuntimeSyncReport::from_error(error),
+    }
 }
 
 fn sync_learner_runtime_after_acquire(
@@ -1653,6 +1688,18 @@ mod tests {
 
     fn seed_with_mentor_manifest(mentor_manifest: &str) -> (String, String, String) {
         let home = std::env::var("HOME").expect("HomeGuard sets HOME");
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.test:50051".to_string(),
+                realm: "localhost".to_string(),
+                username: Some("dev".to_string()),
+                user_id: Some("user-dev".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed paired Device credentials");
         let mut registry = AgentRegistry::default();
         for name in ["mentor", "apprentice"] {
             let root = std::path::Path::new(&home).join(format!("agents/{name}"));
@@ -1678,7 +1725,7 @@ mod tests {
         .expect("mentor manifest");
 
         let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: crate::core::ura::device_ura("test", "local"),
+            host_device_agent_ura: crate::core::ura::device_ura("localhost", "dev"),
             ..Default::default()
         };
         let mentor_ura = crate::core::ura::agent_ura("localhost", "dev", "mentor");
@@ -1733,7 +1780,12 @@ mod tests {
     ) -> EnvelopeContext {
         use ed25519_dalek::Signer as _;
 
-        let env = teach_env(caller, owner_ura);
+        let env = EnvelopeContext::for_test_targeted_ability(
+            caller,
+            crate::core::ura::device_ura("localhost", "dev"),
+            TEACH,
+            subject_for(owner_ura, "quote"),
+        );
         let signer = ed25519_dalek::SigningKey::from_bytes(&[0x44; 32]);
         let nonce_hex = hex::encode(env.invocation_nonce());
         let envelope = crate::daemon::ability::HostedAgentDelegationEnvelopeBinding::new(
@@ -1784,8 +1836,21 @@ mod tests {
                     crate::daemon::ability::builtins::agents::discover::BridgeDiscoverFederationResolver,
                 ),
             );
-        registrar.set_runtime(Arc::clone(&runtime));
-        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime(runtime));
+        registrar
+            .set_runtime(Arc::clone(&runtime))
+            .expect("test runtime wired exactly once");
+        let hosted_agent_uras = crate::daemon::persistence::hosted_agent_authority_roots()
+            .expect("test hosted-Agent authority inventory");
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                crate::core::ura::device_ura("localhost", "dev"),
+                hosted_agent_uras,
+            )
+            .expect("test hosted-Agent authority context");
+        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            runtime,
+            authority_context,
+        ));
         dispatch_handle
             .set(catalog)
             .expect("test catalog wired exactly once");
@@ -2082,7 +2147,7 @@ mod tests {
             .expect("learner acquires metadata-only ability");
 
         assert_eq!(resp["runtime_sync"]["attempted"], true);
-        assert_eq!(resp["runtime_sync"]["failed"], 0);
+        assert_eq!(resp["runtime_sync"]["failed"], 0, "response={resp}");
         assert_eq!(resp["descriptor_transaction_status"], "committed");
         assert_eq!(resp["runtime_sync"]["status"], "committed");
         let runtime_key = crate::core::ura::owner_ability_ura(
@@ -2660,7 +2725,7 @@ mod tests {
     fn teach_refuses_unsigned_host_device_authority_for_a_local_owner() {
         let _g = HomeGuard::new();
         let (_, apprentice_ura, mentor_ura) = seed();
-        let host = crate::core::ura::device_ura("test", "local");
+        let host = crate::core::ura::device_ura("localhost", "dev");
 
         let err = teach_handler(
             teach_env(host, &mentor_ura),
@@ -2680,7 +2745,7 @@ mod tests {
         // Hosted-agent delegation is a loopback path: the daemon presents the
         // signed token under its local-system identity, while the delegation's
         // host device (the envelope callee) is the authority being delegated.
-        let host = crate::core::ura::device_ura("test", "local");
+        let host = crate::core::ura::device_ura("localhost", "dev");
 
         let resp = teach_handler(
             teach_env_with_hosted_delegation(

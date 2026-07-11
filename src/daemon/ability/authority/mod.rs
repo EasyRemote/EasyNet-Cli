@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::descriptors::{
-    canonical_json_bytes, is_valid_ability_name, is_valid_descriptor_version, sha256_bytes,
+    canonical_json_bytes, is_valid_ability_name, is_valid_descriptor_version,
     AbilityControlPlaneKey, CallMode,
 };
 use super::AbilityControlPlaneError;
@@ -657,7 +657,7 @@ impl HostedAgentAuthority {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthorityBindingRecord {
+pub struct AuthorityBinding {
     ability: String,
     descriptor_version: String,
     call_mode: CallMode,
@@ -668,25 +668,15 @@ pub struct AuthorityBindingRecord {
     invoke_policy_hash: [u8; 32],
 }
 
-impl AuthorityBindingRecord {
-    pub fn local_self(
+impl AuthorityBinding {
+    pub fn local_self_for_descriptor(
         ability: impl Into<String>,
-        descriptor_version: impl Into<String>,
-        call_mode: CallMode,
         scope: AuthorityScope,
-    ) -> Result<Self, AbilityControlPlaneError> {
-        Self::local_self_with_manifest_policy(ability, descriptor_version, call_mode, scope, None)
-    }
-
-    pub fn local_self_with_manifest_policy(
-        ability: impl Into<String>,
-        descriptor_version: impl Into<String>,
-        call_mode: CallMode,
-        scope: AuthorityScope,
-        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
+        descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
     ) -> Result<Self, AbilityControlPlaneError> {
         let ability = ability.into();
-        let descriptor_version = descriptor_version.into();
+        let descriptor_version = descriptor.version.clone();
+        let call_mode = descriptor.call_mode();
         if ability.trim().is_empty() {
             return Err(AbilityControlPlaneError::EmptyAuthorityAbility);
         }
@@ -711,7 +701,7 @@ impl AuthorityBindingRecord {
             predicate: AuthorityPredicate::advertise_and_invoke(),
             binding_kind: AuthorityBindingKind::SelfBinding,
             invoke_policy_ref: DEFAULT_INVOKE_POLICY_REF.to_string(),
-            invoke_policy_hash: invoke_policy_hash_for_manifest(manifest),
+            invoke_policy_hash: descriptor.access_policy_hash_bytes(),
         })
     }
 
@@ -756,30 +746,17 @@ impl AuthorityBindingRecord {
     }
 }
 
-fn invoke_policy_hash_for_manifest(
-    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-) -> [u8; 32] {
-    let access = manifest
-        .map(crate::daemon::ability::manifest::AbilityManifest::access)
-        .unwrap_or_default();
-    let payload = serde_json::json!({
-        "policy_ref": DEFAULT_INVOKE_POLICY_REF,
-        "access": access,
-    });
-    sha256_bytes(&canonical_json_bytes(&payload))
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct AuthorityBindingRegistry {
-    bindings: BTreeMap<AbilityControlPlaneKey, AuthorityBindingRecord>,
+    bindings: BTreeMap<AbilityControlPlaneKey, AuthorityBinding>,
 }
 
 impl AuthorityBindingRegistry {
-    pub(crate) fn bind(&mut self, binding: AuthorityBindingRecord) {
+    pub(crate) fn bind(&mut self, binding: AuthorityBinding) {
         self.bindings.insert(binding.key(), binding);
     }
 
-    pub(crate) fn get(&self, key: &AbilityControlPlaneKey) -> Option<&AuthorityBindingRecord> {
+    pub(crate) fn get(&self, key: &AbilityControlPlaneKey) -> Option<&AuthorityBinding> {
         self.bindings.get(key)
     }
 
@@ -799,13 +776,22 @@ mod tests {
 
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
 
+    fn descriptor(name: &str) -> crate::daemon::ability::descriptors::AbilityDescriptor {
+        crate::daemon::ability::descriptors::AbilityDescriptor::new(
+            name,
+            LOCAL_DEVICE_URA,
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn authority_predicate_covers_advertise_and_invoke() {
-        let record = AuthorityBindingRecord::local_self(
+        let descriptor = descriptor("fs.read");
+        let record = AuthorityBinding::local_self_for_descriptor(
             "fs.read",
-            "1.0.0",
-            CallMode::Rpc,
             AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+            &descriptor,
         )
         .unwrap();
         assert!(record.predicate().governs_advertise());
@@ -823,23 +809,23 @@ mod tests {
             AbilityControlPlaneError::EmptyAuthorityRoot
         );
         assert_eq!(
-            AuthorityBindingRecord::local_self(
+            AuthorityBinding::local_self_for_descriptor(
                 "bad/name",
-                "1.0.0",
-                CallMode::Rpc,
                 AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                &descriptor("fs.read"),
             )
             .unwrap_err(),
             AbilityControlPlaneError::InvalidAuthorityAbility {
                 ability: "bad/name".to_string()
             }
         );
+        let mut invalid_version = descriptor("fs.read");
+        invalid_version.version = "v1".to_string();
         assert_eq!(
-            AuthorityBindingRecord::local_self(
+            AuthorityBinding::local_self_for_descriptor(
                 "fs.read",
-                "v1",
-                CallMode::Rpc,
                 AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                &invalid_version,
             )
             .unwrap_err(),
             AbilityControlPlaneError::InvalidAuthorityDescriptorVersion {
@@ -913,20 +899,34 @@ mod tests {
                 })
                 .unwrap();
 
-        let base_record = AuthorityBindingRecord::local_self_with_manifest_policy(
+        let base_descriptor =
+            crate::daemon::ability::descriptors::AbilityDescriptor::from_registry_manifest(
+                "mentor.quote",
+                "easynet:///r/default/agent/u.mentor",
+                CallMode::Rpc,
+                Some(&base),
+            )
+            .unwrap();
+        let restricted_descriptor =
+            crate::daemon::ability::descriptors::AbilityDescriptor::from_registry_manifest(
+                "mentor.quote",
+                "easynet:///r/default/agent/u.mentor",
+                CallMode::Rpc,
+                Some(&restricted),
+            )
+            .unwrap();
+        let scope =
+            AuthorityScope::new("agent:mentor", "easynet:///r/default/agent/u.mentor").unwrap();
+        let base_record = AuthorityBinding::local_self_for_descriptor(
             "mentor.quote",
-            "1.0.0",
-            CallMode::Rpc,
-            AuthorityScope::new("agent:mentor", "agent_ura:mentor").unwrap(),
-            Some(&base),
+            scope.clone(),
+            &base_descriptor,
         )
         .unwrap();
-        let restricted_record = AuthorityBindingRecord::local_self_with_manifest_policy(
+        let restricted_record = AuthorityBinding::local_self_for_descriptor(
             "mentor.quote",
-            "1.0.0",
-            CallMode::Rpc,
-            AuthorityScope::new("agent:mentor", "agent_ura:mentor").unwrap(),
-            Some(&restricted),
+            scope,
+            &restricted_descriptor,
         )
         .unwrap();
         assert_ne!(

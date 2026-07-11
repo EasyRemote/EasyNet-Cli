@@ -35,7 +35,7 @@ pub struct FederationStatusProbe;
 impl FederationStatusProbe {
     /// Record the boot-time decision. Idempotent: a second call
     /// with the same outcome is a no-op; a different outcome
-    /// overwrites (the boot path runs `try_install_federation_routing`
+    /// overwrites (the boot path runs `assess_federation_readiness`
     /// once, but tests benefit from the looser contract).
     pub fn set(outcome: FederationInitOutcome) {
         let lock = PROBE.get_or_init(|| Mutex::new(outcome.clone()));

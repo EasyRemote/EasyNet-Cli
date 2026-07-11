@@ -117,6 +117,33 @@ fn registry_with_temp_home() -> (
     (reg, guard)
 }
 
+fn registry_with_joined_temp_home() -> (
+    Arc<AxonAbilityCatalog>,
+    crate::cli::commands::test_support::HomeGuard,
+) {
+    let guard = crate::cli::commands::test_support::HomeGuard::new();
+    crate::daemon::persistence::config::save_credentials(
+        &crate::daemon::persistence::config::Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            realm: "localhost".to_string(),
+            username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("seed joined credentials before authority-context assembly");
+    let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
+        crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+    );
+    config.loaders = Some(Arc::new(Vec::new()));
+    let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
+        .expect("build joined production registry for isolated invocation test")
+        .catalog;
+    (reg, guard)
+}
+
 fn materialise_skill_fixture(
     tag: &str,
     skill_name: &str,
@@ -1478,19 +1505,7 @@ fn real_device_session_list_returns_empty_under_temp_home() {
 
 #[test]
 fn real_device_agent_start_then_stop_agent_round_trip() {
-    let (reg, _g) = registry_with_temp_home();
-    crate::daemon::persistence::config::save_credentials(
-        &crate::daemon::persistence::config::Credentials {
-            node_id: "dev-1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            realm: "localhost".to_string(),
-            username: Some("dev".to_string()),
-            user_id: Some("user-dev".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("seed joined credentials");
+    let (reg, _g) = registry_with_joined_temp_home();
     let d = dispatcher_for(reg);
     let start = d
         .execute_rpc(target(
@@ -1521,19 +1536,7 @@ fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
     // case — it scans the persisted agents through the registrar and
     // returns `ok=true`. A hosted agent with no runtime row to sync simply
     // reports `runtime_registered=0` without failing.
-    let (reg, _g) = registry_with_temp_home();
-    crate::daemon::persistence::config::save_credentials(
-        &crate::daemon::persistence::config::Credentials {
-            node_id: "dev-1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            realm: "localhost".to_string(),
-            username: Some("dev".to_string()),
-            user_id: Some("user-dev".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("seed joined credentials");
+    let (reg, _g) = registry_with_joined_temp_home();
     let d = dispatcher_for(reg);
     d.execute_rpc(target(
         "agent.start",

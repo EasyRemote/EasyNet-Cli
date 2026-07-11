@@ -13,8 +13,8 @@
 // This module centralises the two live steps we do have today:
 //
 //   1. `federation.resolve` against the realm directory.
-//   2. `federation.forward_invoke(target_ura, "observe.health")`
-//      for a direct reachability probe to each device-profile Agent.
+//   2. A signed canonical `InvokeRequest` for `observe.health` against
+//      each device-profile Agent.
 //
 // Keeping the logic here gives one bounded, testable definition of
 // "what devices are visible" and "what counts as reachable" instead of
@@ -26,13 +26,11 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::names::{federation, governance};
 use crate::daemon::federation::advertise::{self, BridgeAbilityInvoker};
-use crate::daemon::federation::client::ability_contract::{ForwardInvokeReceipt, ResolvedAgent};
+use crate::daemon::federation::client::ability_contract::ResolvedAgent;
 use crate::daemon::persistence::config;
 
 const DEVICE_HEALTH_ABILITY: &str = governance::OBSERVE_HEALTH;
@@ -87,13 +85,14 @@ pub(crate) fn local_device_record() -> Option<ResolvedDeviceRecord> {
     }
     let abilities = crate::daemon::ability::catalog::published_abilities()
         .into_iter()
-        .map(|metadata| {
+        .map(|descriptor| {
+            let input_schema = descriptor.input_schema().clone();
             json!({
-                "name": metadata.name,
-                "description": metadata.description,
-                "input_schema": metadata.input_schema,
-                "read_only": metadata.hints.read_only,
-                "idempotent": metadata.hints.idempotent,
+                "name": descriptor.name,
+                "description": descriptor.description,
+                "input_schema": input_schema,
+                "read_only": descriptor.hints.read_only,
+                "idempotent": descriptor.hints.idempotent,
             })
         })
         .collect();
@@ -277,7 +276,7 @@ pub(crate) fn collect_device_view() -> DeviceNetworkView {
         }
         let probe = if probed < MAX_DEVICE_PROBES {
             probed += 1;
-            probe_remote_device(&invoker, &creds.realm, &creds.realm, &agent_ura)
+            probe_remote_device(&agent_ura)
         } else {
             ProbeOutcome {
                 online: true,
@@ -392,7 +391,7 @@ fn resolve_device_record_with_filter(
                 latency_ms: None,
             }
         } else {
-            probe_remote_device(invoker, &creds.realm, &creds.realm, &agent.ura)
+            probe_remote_device(&agent.ura)
         };
 
         return Ok(Some(ResolvedDeviceRecord {
@@ -478,89 +477,37 @@ fn expected_device_public_ability(registry_key: &str) -> &str {
     registry_key.strip_prefix("device.").unwrap_or(registry_key)
 }
 
-fn probe_remote_device(
-    invoker: &BridgeAbilityInvoker<'_>,
-    tenant_id: &str,
-    realm: &str,
-    agent_ura: &str,
-) -> ProbeOutcome {
+fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
     let started = Instant::now();
-    let receipt = advertise::forward_invoke(
-        invoker,
-        tenant_id,
-        realm,
-        agent_ura,
-        DEVICE_HEALTH_ABILITY,
-        &json!({
+    let result = (|| {
+        let target = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+            agent_ura,
+            DEVICE_HEALTH_ABILITY,
+        )?;
+        crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
+            &target,
+            json!({
             "source": "node.list",
             "probe": "alive",
-        }),
-    );
-    match receipt {
-        Ok(receipt) => probe_outcome_from_receipt(receipt, started.elapsed().as_millis() as u64),
+            }),
+            None,
+        )
+    })();
+    match result {
+        Ok(_) => ProbeOutcome {
+            online: true,
+            state: "HEALTHY",
+            probe_status: "reachable",
+            probe_error: None,
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+        },
         Err(e) => ProbeOutcome {
             online: false,
             state: "SUSPECT",
             probe_status: "probe_failed",
-            probe_error: Some(e),
+            probe_error: Some(e.to_string()),
             latency_ms: Some(started.elapsed().as_millis() as u64),
         },
-    }
-}
-
-fn probe_outcome_from_receipt(receipt: ForwardInvokeReceipt, latency_ms: u64) -> ProbeOutcome {
-    if !receipt.ok {
-        let error = format!(
-            "{}{}{}",
-            receipt.error_code,
-            if receipt.error_code.is_empty() || receipt.error_message.is_empty() {
-                ""
-            } else {
-                ": "
-            },
-            receipt.error_message
-        );
-        return ProbeOutcome {
-            online: false,
-            state: "SUSPECT",
-            probe_status: "probe_failed",
-            probe_error: Some(if error.is_empty() {
-                "forward_invoke returned ok=false".to_string()
-            } else {
-                error
-            }),
-            latency_ms: Some(latency_ms),
-        };
-    }
-    if !receipt.result_b64.is_empty() {
-        let decoded = match BASE64_STANDARD.decode(&receipt.result_b64) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                return ProbeOutcome {
-                    online: false,
-                    state: "SUSPECT",
-                    probe_status: "probe_failed",
-                    probe_error: Some(format!("decode forward_invoke result_b64: {e}")),
-                    latency_ms: Some(latency_ms),
-                };
-            }
-        };
-        if let Err(e) = serde_json::from_slice::<Value>(&decoded) {
-            return ProbeOutcome {
-                online: false,
-                state: "SUSPECT",
-                probe_status: "probe_failed",
-                probe_error: Some(format!("parse forward_invoke result body: {e}")),
-                latency_ms: Some(latency_ms),
-            };
-        }
-    }
-    ProbeOutcome {
-        online: true,
-        state: "HEALTHY",
-        probe_status: "reachable",
-        probe_error: None,
-        latency_ms: Some(latency_ms),
     }
 }
 

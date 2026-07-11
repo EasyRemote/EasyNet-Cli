@@ -9,3 +9,6 @@
 
 pub(crate) mod local_invocation;
 pub mod self_identity;
+mod signer_policy;
+
+pub(crate) use signer_policy::signer_policy_ref;

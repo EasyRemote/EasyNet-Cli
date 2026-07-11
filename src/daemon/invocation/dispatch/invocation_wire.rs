@@ -219,6 +219,56 @@ impl ProtoEnvelope {
         Ok(request)
     }
 
+    /// Owner-bound asynchronous variant used by CLI and daemon relay adapters.
+    ///
+    /// Runtime callers receive a [`CanonicalSigner`] rather than the wider
+    /// multi-owner key-service port. The request is otherwise byte-for-byte the
+    /// same descriptor-bound canonical invocation as the synchronous builder.
+    pub async fn signed_descriptor_ref_invoke_request_with_signer(
+        mut self,
+        function_name: impl Into<String>,
+        descriptor_ability_ref: impl Into<String>,
+        arguments: Vec<u8>,
+        signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+    ) -> anyhow::Result<InvokeRequest> {
+        let function_name = function_name.into();
+        if function_name.trim().is_empty() {
+            anyhow::bail!("function_name must not be empty");
+        }
+        let descriptor_ability_ref = descriptor_ability_ref.into();
+        if descriptor_ability_ref.trim().is_empty() {
+            anyhow::bail!("descriptor_ability_ref must not be empty");
+        }
+        let descriptor = self.descriptor_bound_envelope(&descriptor_ability_ref, &arguments)?;
+        let caller_ura = descriptor.envelope().caller.ura.clone();
+        if signer.owner_ura() != caller_ura {
+            anyhow::bail!(
+                "caller signer owner mismatch: envelope caller is `{caller_ura}`, signer is `{}`",
+                signer.owner_ura()
+            );
+        }
+        let signature = signer
+            .sign_canonical(&descriptor.canonical_bytes())
+            .await
+            .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
+        self.inner.caller_signature = Some(CallerSignature {
+            algorithm: "ed25519".to_string(),
+            signature: signature.to_bytes().to_vec(),
+            key_id_hint: caller_ura,
+        });
+        let mut request = InvokeRequest {
+            envelope: Some(self.into_inner()),
+            function_name,
+            arguments,
+            ..InvokeRequest::default()
+        };
+        request.metadata.insert(
+            SIGNED_DESCRIPTOR_REF_METADATA_KEY.to_string(),
+            descriptor_ability_ref,
+        );
+        Ok(request)
+    }
+
     /// Attach an Ed25519 caller signature over Axon's
     /// `DescriptorBoundEnvelope::canonical_bytes()`.
     pub fn sign_descriptor_bound(

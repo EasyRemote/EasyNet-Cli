@@ -615,32 +615,40 @@ impl SnapshotBackend for SyntheticBackend {
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn SnapshotBackend>) {
     let subscribe_backend = Arc::clone(&backend);
     let record_start_backend = Arc::clone(&backend);
-    reg.register_rpc_with_envelope_and_spec(
+    reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_SNAPSHOT,
         OwnerKind::Device,
         media::registry_manifest(ABILITY_CAMERA_SNAPSHOT),
+        media::receipt_semantics(ABILITY_CAMERA_SNAPSHOT)
+            .expect("camera.snapshot receipt semantics"),
         Arc::new(move |env: EnvelopeContext, args: Value| snapshot_handler(&backend, env, args)),
     );
-    reg.register_stream_with_envelope_and_spec(
+    reg.register_stream_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_SUBSCRIBE,
         OwnerKind::Device,
         media::registry_manifest(ABILITY_CAMERA_SUBSCRIBE),
+        media::receipt_semantics(ABILITY_CAMERA_SUBSCRIBE)
+            .expect("camera.subscribe receipt semantics"),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             subscribe_handler(&subscribe_backend, env, args)
         }),
     );
-    reg.register_rpc_with_envelope_and_spec(
+    reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_RECORD_START,
         OwnerKind::Device,
         media::registry_manifest(ABILITY_CAMERA_RECORD_START),
+        media::receipt_semantics(ABILITY_CAMERA_RECORD_START)
+            .expect("camera.record_start receipt semantics"),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             record_start_handler(&record_start_backend, env, args)
         }),
     );
-    reg.register_rpc_with_envelope_and_spec(
+    reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_RECORD_STOP,
         OwnerKind::Device,
         media::registry_manifest(ABILITY_CAMERA_RECORD_STOP),
+        media::receipt_semantics(ABILITY_CAMERA_RECORD_STOP)
+            .expect("camera.record_stop receipt semantics"),
         Arc::new(record_stop_handler),
     );
 }
@@ -1297,10 +1305,10 @@ mod tests {
     }
 
     #[test]
-    fn registration_publishes_camera_manifests_to_catalog_snapshot() {
+    fn registration_publishes_camera_descriptors_to_catalog_snapshot() {
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
-        let rows = reg.ability_catalog_snapshot();
+        let rows = reg.authority_ability_catalog_snapshot();
 
         for ability in [
             ABILITY_CAMERA_SNAPSHOT,
@@ -1308,17 +1316,17 @@ mod tests {
             ABILITY_CAMERA_RECORD_START,
             ABILITY_CAMERA_RECORD_STOP,
         ] {
-            let manifest = rows
+            let descriptor = rows
                 .iter()
                 .find(|row| row.name == ability)
-                .and_then(|row| row.manifest.as_ref())
-                .unwrap_or_else(|| panic!("{ability} must publish schema manifest"));
+                .map(|row| &row.descriptor)
+                .unwrap_or_else(|| panic!("{ability} must publish canonical descriptor"));
             assert_eq!(
-                manifest.description(),
+                descriptor.description,
                 media::description(ability).expect("camera description")
             );
             assert_eq!(
-                manifest.input_schema(),
+                descriptor.input_schema(),
                 &media::input_schema(ability).expect("camera schema")
             );
         }

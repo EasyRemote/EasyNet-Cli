@@ -31,7 +31,7 @@ make_sandbox() {
         "$sandbox/tools/scripts" \
         "$sandbox/axon"
     cp "$REPO_ROOT/src/core/ura/mod.rs" "$sandbox/src/core/ura/mod.rs"
-    cp "$REPO_ROOT/src/daemon/invocation/routing/federation_invoke.rs" "$sandbox/src/daemon/invocation/routing/federation_invoke.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/routing/remote_invoke.rs" "$sandbox/src/daemon/invocation/routing/remote_invoke.rs"
     cp "$REPO_ROOT/src/daemon/invocation/admission/admission_facade.rs" "$sandbox/src/daemon/invocation/admission/admission_facade.rs"
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
@@ -68,7 +68,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "Axon hub-with-tail generation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/daemon/invocation/routing/federation_invoke.rs"
+perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/daemon/invocation/routing/remote_invoke.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

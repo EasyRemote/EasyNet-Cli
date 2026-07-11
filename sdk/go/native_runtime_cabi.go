@@ -23,15 +23,8 @@ func OpenNativeRuntime(ctx context.Context, options NativeRuntimeOptions) (*Nati
 		_ = transport.Close(ctx)
 		return nil, err
 	}
-	identity, identityTransport, err := NewCABIIdentityClient(options.LibraryPath, options.ControlPath)
+	handle, err := newNativeRuntimeHandle(runtime, health, transport.Close)
 	if err != nil {
-		_ = runtime.Close(ctx)
-		_ = transport.Close(ctx)
-		return nil, err
-	}
-	handle, err := newNativeRuntimeHandleWithIdentity(runtime, health, identity, transport.Close)
-	if err != nil {
-		_ = identityTransport.Close(ctx)
 		_ = runtime.Close(ctx)
 		_ = transport.Close(ctx)
 		return nil, err

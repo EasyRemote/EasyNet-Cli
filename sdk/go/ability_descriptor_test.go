@@ -66,27 +66,10 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 	}
 }
 
-func TestProjectAbilityDescriptorRefDelegatesToIdentityClient(t *testing.T) {
-	transport := &memoryIdentityTransport{
-		descriptorJSON: `{
-			"kind":"descriptor_ref",
-			"valid":true,
-			"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
-			"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",
-			"descriptor_version":"1.0.0",
-			"profile":"easynet-strict-v2",
-			"components":{},
-			"metadata":{"grammar_owner":"axon"}
-		}`,
-	}
-	identity, err := NewIdentityClient(transport)
-	if err != nil {
-		t.Fatalf("NewIdentityClient: %v", err)
-	}
-
+func TestProjectAbilityDescriptorRefDelegatesToAddressing(t *testing.T) {
 	ref, err := ProjectAbilityDescriptorRef(
 		context.Background(),
-		identity,
+		NewCanonicalAddressing(),
 		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
 	)
 	if err != nil {
@@ -95,9 +78,6 @@ func TestProjectAbilityDescriptorRefDelegatesToIdentityClient(t *testing.T) {
 
 	if ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" || ref.Version != "1.0.0" {
 		t.Fatalf("descriptor projection = %#v", ref)
-	}
-	if transport.seenRequest["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
-		t.Fatalf("descriptor projection request = %#v", transport.seenRequest)
 	}
 }
 

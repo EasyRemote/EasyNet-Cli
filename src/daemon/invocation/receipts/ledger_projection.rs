@@ -27,6 +27,7 @@ use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTI
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::target_gate::RESOLVE_SELECTED_HOST_UNAVAILABLE_CODE;
 use crate::daemon::invocation::bidi::bidi_dispatcher::terminal_failure_message;
+use crate::daemon::invocation::dispatch::daemon_invocation_service::dispatch_function_name_for_route_table;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_AGENT, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
@@ -66,8 +67,10 @@ pub(crate) fn build_unary_ledger_record(
     let invocation_ura =
         invocation_resource_ura(&realm, &request_id, &subject_ura, &callee_ura, &caller_ura)?;
     let elapsed_ms = completed_unix_ms.saturating_sub(started_unix_ms) as u64;
+    let ability_name =
+        dispatch_function_name_for_route_table(&request.function_name, request.envelope.as_ref());
     let authority_form = ledger_authority_form_for_request(request);
-    let ability_ura = ledger_ability_ura(&callee_ura, &request.function_name)?;
+    let ability_ura = ledger_ability_ura(&callee_ura, &ability_name)?;
 
     let mut builder = easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
         .invocation_ura(invocation_ura)
@@ -78,7 +81,7 @@ pub(crate) fn build_unary_ledger_record(
         .callee_ura(callee_ura)
         .subject_ura(subject_ura)
         .ability_ura(ability_ura)
-        .ability_name(request.function_name.clone())
+        .ability_name(ability_name.clone())
         .started_unix_ms(started_unix_ms)
         .completed_unix_ms(completed_unix_ms)
         .elapsed_ms(elapsed_ms)
@@ -104,11 +107,8 @@ pub(crate) fn build_unary_ledger_record(
             };
             builder = builder.state(state.to_string());
             if state == "failed" {
-                let error = ledger_error_from_invoke_response(
-                    body,
-                    completed_unix_ms,
-                    &request.function_name,
-                );
+                let error =
+                    ledger_error_from_invoke_response(body, completed_unix_ms, &ability_name);
                 builder = builder
                     .error(error.clone())
                     .diagnostics(vec![ledger_error_diagnostic(
@@ -123,7 +123,7 @@ pub(crate) fn build_unary_ledger_record(
             }
         }
         Err(status) => {
-            let error = ledger_error_from_status(status, &request.function_name);
+            let error = ledger_error_from_status(status, &ability_name);
             builder = builder
                 .state("failed".to_string())
                 .error(error.clone())
@@ -330,7 +330,9 @@ fn status_code_retryable(code: tonic::Code) -> bool {
 }
 
 pub(crate) fn ledger_authority_form_for_request(request: &InvokeRequest) -> &'static str {
-    if bootstrap_authority_ability_for_ledger(&request.function_name) {
+    let ability_name =
+        dispatch_function_name_for_route_table(&request.function_name, request.envelope.as_ref());
+    if bootstrap_authority_ability_for_ledger(&ability_name) {
         "bootstrap"
     } else if has_non_empty_metadata(request, HOSTED_AGENT_DELEGATION_METADATA_KEY)
         || has_non_empty_metadata(request, DELEGATION_METADATA_KEY)
@@ -509,146 +511,4 @@ fn short_hash(bytes: &[u8]) -> String {
     hasher.update(bytes);
     let full = hex::encode(hasher.finalize());
     full[..16].to_string()
-}
-
-/// Project a callee-signed carrier-v1 execution receipt into THIS
-/// hub's ledger (DEC-F004: the hub stays OFF the receipt chain — its
-/// account of the forwarded call lives in its own ledger, not in the
-/// chain). The receipt's axiom echo carries caller/callee/subject
-/// bindings but not ability (landing audit 3), so the consumer side
-/// supplies the dispatch context it already holds.
-pub(crate) fn ledger_record_from_remote_receipt(
-    receipt: &easynet_axon::pb::axon::v1::InvocationReceipt,
-    ability_name: &str,
-    started_unix_ms: i64,
-) -> anyhow::Result<easynet_axon::invocation::InvocationLedgerRecord> {
-    use easynet_axon::invocation::{InvocationLedgerRecord, LedgerEventPayload};
-
-    let caller_ura = receipt
-        .caller_binding
-        .as_ref()
-        .map(|c| c.ura.clone())
-        .unwrap_or_default();
-    let callee_ura = receipt
-        .callee_binding
-        .as_ref()
-        .map(|c| c.ura.clone())
-        .unwrap_or_default();
-    let subject_ura = receipt
-        .subject_binding
-        .as_ref()
-        .map(|s| s.ura.clone())
-        .unwrap_or_default();
-    let realm = parse_realm_from_ura(&callee_ura).unwrap_or_else(|| "localhost".to_string());
-    // Error propagation, not shape-minting: a failed derivation must
-    // never put a wild URA into the ledger (F-042; round-31 audit).
-    // Same discipline as the unary path above.
-    let invocation_ura = invocation_resource_ura(
-        &realm,
-        &receipt.invocation_id,
-        &subject_ura,
-        &callee_ura,
-        &caller_ura,
-    )?;
-    // pb enum number → pb screaming name → domain wire label, the
-    // same lowercase format every other ledger row uses.
-    let state = easynet_axon::pb::axon::v1::InvocationState::try_from(receipt.state)
-        .map(|s| {
-            easynet_axon::invocation::InvocationState::from_wire_str(s.as_str_name())
-                .as_str()
-                .to_string()
-        })
-        .unwrap_or_else(|_| format!("state_{}", receipt.state));
-    let proof_diagnostics = remote_receipt_proof_diagnostics(receipt);
-    let ability_ura = ledger_ability_ura(&callee_ura, ability_name)?;
-    Ok(InvocationLedgerRecord {
-        invocation_ura,
-        // Signed usage rides the wire receipt verbatim into the row —
-        // never fabricated here (seven-axes DEC-010 card ①).
-        usage: receipt
-            .usage
-            .as_ref()
-            .map(|u| easynet_axon::invocation::axiom::InvocationUsage {
-                tokens_in: u.tokens_in,
-                tokens_out: u.tokens_out,
-                duration_ms: u.duration_ms,
-                external_calls: u.external_calls,
-            })
-            .unwrap_or_default(),
-        request_id: receipt.invocation_id.clone(),
-        caller_ura,
-        subject_ura,
-        callee_ura,
-        ability_name: ability_name.to_string(),
-        state,
-        ability_ura,
-        trace_id: String::new(),
-        span_id: String::new(),
-        started_unix_ms,
-        completed_unix_ms: Some(receipt.timestamp_unix_ms),
-        elapsed_ms: u64::try_from(receipt.timestamp_unix_ms - started_unix_ms).ok(),
-        // The hub never sees plaintext args for a forwarded call —
-        // record an empty digest; the callee's own ledger row holds
-        // the full payload story.
-        args: LedgerEventPayload::digest("application/octet-stream", &[]),
-        result: None,
-        error: None,
-        diagnostics: proof_diagnostics,
-        causal_links: Vec::new(),
-        receipt_chain: Default::default(),
-        visibility: Default::default(),
-        // A forwarded receipt carries identity bindings but NOT the
-        // caller's authority form (the delegation/session metadata lived
-        // on the originating request, which the hub never sees here).
-        // Record "unknown" rather than minting a classification the
-        // receipt did not assert — the callee's own ledger row holds the
-        // authoritative form. (seven-axes C2: never render a fabricated
-        // authority as fact.)
-        authority_form: "unknown".to_string(),
-    })
-}
-
-fn remote_receipt_proof_diagnostics(
-    receipt: &easynet_axon::pb::axon::v1::InvocationReceipt,
-) -> Vec<easynet_axon::invocation::LedgerDiagnosticRecord> {
-    let descriptor_version = receipt.descriptor_version.trim();
-    let schema_hash = proof_hash_label(&receipt.schema_hash);
-    let impl_hash = proof_hash_label(&receipt.impl_hash);
-    let runtime_env = receipt.runtime_env.trim();
-    if descriptor_version.is_empty()
-        && schema_hash.is_empty()
-        && impl_hash.is_empty()
-        && runtime_env.is_empty()
-    {
-        return Vec::new();
-    }
-    let payload = serde_json::json!({
-        "descriptor_version": descriptor_version,
-        "schema_hash": schema_hash,
-        "impl_hash": impl_hash,
-        "runtime_env": runtime_env,
-    });
-    vec![easynet_axon::invocation::LedgerDiagnosticRecord {
-        timestamp_unix_ms: receipt.timestamp_unix_ms,
-        level: "info".to_string(),
-        source: "remote_receipt".to_string(),
-        code: "REMOTE_RECEIPT_PROOF_FACTS".to_string(),
-        message: format!(
-            "remote receipt proof facts: descriptor_version={descriptor_version:?}, \
-             schema_hash={schema_hash:?}, impl_hash={impl_hash:?}, runtime_env={runtime_env:?}"
-        ),
-        retryable: false,
-        payload: Some(easynet_axon::invocation::LedgerEventPayload::digest(
-            "application/json",
-            payload.to_string().as_bytes(),
-        )),
-    }]
-}
-
-fn proof_hash_label(bytes: &[u8]) -> String {
-    if bytes.is_empty() || bytes.iter().all(|byte| *byte == 0) {
-        String::new()
-    } else {
-        format!("sha256:{}", hex::encode(bytes))
-    }
 }

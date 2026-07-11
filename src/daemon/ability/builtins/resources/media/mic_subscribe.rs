@@ -523,22 +523,22 @@ mod tests {
     }
 
     #[test]
-    fn registration_publishes_mic_manifest_to_catalog_snapshot() {
+    fn registration_publishes_mic_descriptor_to_catalog_snapshot() {
         let mut reg = AxonAbilityCatalog::new();
         register_synthetic(&mut reg);
-        let rows = reg.ability_catalog_snapshot();
-        let manifest = rows
+        let rows = reg.authority_ability_catalog_snapshot();
+        let descriptor = rows
             .iter()
             .find(|row| row.name == ABILITY_MIC_SUBSCRIBE)
-            .and_then(|row| row.manifest.as_ref())
-            .expect("mic.subscribe must publish schema manifest");
+            .map(|row| &row.descriptor)
+            .expect("mic.subscribe must publish canonical descriptor");
 
         assert_eq!(
-            manifest.description(),
+            descriptor.description,
             media::description(ABILITY_MIC_SUBSCRIBE).expect("mic description")
         );
         assert_eq!(
-            manifest.input_schema(),
+            descriptor.input_schema(),
             &media::input_schema(ABILITY_MIC_SUBSCRIBE).expect("mic schema")
         );
     }

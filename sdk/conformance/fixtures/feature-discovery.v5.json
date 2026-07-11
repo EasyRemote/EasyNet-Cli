@@ -1,0 +1,19 @@
+{
+  "abi_version": 5,
+  "sdk_version": "0.96.8",
+  "profiles": {
+    "runtime_core": "provider-backed"
+  },
+  "symbols": {
+    "daemon_lifecycle": true,
+    "generic_invocation": true,
+    "invocation_builder_handles": true,
+    "invocation_handle_observation": true,
+    "stream_bidi_lifecycle": true,
+    "runtime_health": true,
+    "runtime_diagnostics": true,
+    "prepare_sign_submit": true,
+    "typed_error_json": true
+  },
+  "axon_pb": true
+}

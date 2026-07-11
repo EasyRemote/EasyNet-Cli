@@ -27,7 +27,7 @@ from easynet_sdk.direct_runtime import (
     DirectDaemonRuntimeConnector,
     DirectDaemonRuntimeTransport,
 )
-from easynet_sdk.identity import AbilityAddress
+from easynet_sdk import AbilityAddress
 
 from test_runtime import complete_draft
 

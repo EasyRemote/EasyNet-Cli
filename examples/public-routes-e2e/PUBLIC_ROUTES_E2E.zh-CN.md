@@ -93,7 +93,7 @@ calleeURA := axon.AgentURI(realm, username, modelStr)
 // = "easynet:///r/hub-a.local/agent/<username>.probe-agent"
 ```
 
-backend → daemon-grpc → hub daemon's `runtime.invoke_remote` →
+backend → daemon-grpc canonical `Invocation.Invoke` → hub route selection →
 hub `lookup_target_with_agent_fallback(agent/<u>.probe-agent)` 查 AdvertisedAgentStore 找到 host_uri = `<caller-a device URI>` → 通过 PresenceRegistry 取到 caller-a 的 bidi sender → push dispatch frame → caller-a daemon's `matches_self_target_uri` 接受 (本地 host 这个 agent) → 派发到 `probe-agent.chat` → reply 返回原路.
 
 streaming case: 同样路由, daemon 内 `01HUB.openai.chat_completions` adapter 把 chat ability 的 unary reply 切 chunks 在 64 字符边界, 发回 backend, backend 写 `text/event-stream`.

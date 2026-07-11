@@ -43,7 +43,7 @@ type DirectDaemonRuntimeConnector struct {
 
 	mu                   sync.Mutex
 	handle               RuntimeTransport
-	identity             *IdentityClient
+	addressing           Addressing
 	closeHandleTransport bool
 	transports           map[*DirectDaemonRuntimeTransport]struct{}
 	closed               bool
@@ -57,7 +57,7 @@ type DirectDaemonRuntimeConnectorOptions struct {
 	ControlPath          string
 	Reader               ControlDiscoveryReader
 	HandleTransport      RuntimeTransport
-	Identity             *IdentityClient
+	Addressing           Addressing
 	CloseHandleTransport bool
 }
 
@@ -80,7 +80,7 @@ func NewDirectDaemonRuntimeConnectorWithOptions(options DirectDaemonRuntimeConne
 		ControlPath:          options.ControlPath,
 		Reader:               reader,
 		handle:               options.HandleTransport,
-		identity:             options.Identity,
+		addressing:           options.Addressing,
 		closeHandleTransport: options.CloseHandleTransport,
 		transports:           map[*DirectDaemonRuntimeTransport]struct{}{},
 	}
@@ -103,9 +103,9 @@ func (c *DirectDaemonRuntimeConnector) WithHandleTransport(handle RuntimeTranspo
 	return c
 }
 
-// WithIdentityClient sets the Directory + Identity facade used to project
-// DescriptorRef values before direct daemon dispatch.
-func (c *DirectDaemonRuntimeConnector) WithIdentityClient(identity *IdentityClient) *DirectDaemonRuntimeConnector {
+// WithAddressing sets the canonical provider used to project DescriptorRef
+// values and descriptor-bound subjects before direct daemon dispatch.
+func (c *DirectDaemonRuntimeConnector) WithAddressing(addressing Addressing) *DirectDaemonRuntimeConnector {
 	if c == nil {
 		return c
 	}
@@ -114,7 +114,7 @@ func (c *DirectDaemonRuntimeConnector) WithIdentityClient(identity *IdentityClie
 	if c.closed {
 		return c
 	}
-	c.identity = identity
+	c.addressing = addressing
 	return c
 }
 
@@ -163,13 +163,13 @@ func (c *DirectDaemonRuntimeConnector) Handshake(ctx context.Context, endpointJS
 	if err != nil {
 		return nil, nil, err
 	}
-	handleTransport, identity, _ := c.transportConfig(ctx)
+	handleTransport, addressing, _ := c.transportConfig(ctx)
 	transport, err := OpenDirectDaemonRuntimeTransport(ctx, endpoint.Endpoint, DirectRuntimeOptions{
 		DialTimeoutMS:   options.DialTimeoutMS,
 		InvokeTimeoutMS: options.InvokeTimeoutMS,
 		MaxMessageBytes: options.MaxMessageBytes,
 		HandleTransport: handleTransport,
-		Identity:        identity,
+		Addressing:      addressing,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -214,7 +214,7 @@ func (c *DirectDaemonRuntimeConnector) Close(ctx context.Context) error {
 	handle := c.handle
 	closeHandle := c.closeHandleTransport
 	c.handle = nil
-	c.identity = nil
+	c.addressing = nil
 	c.closeHandleTransport = false
 	transports := make([]*DirectDaemonRuntimeTransport, 0, len(c.transports))
 	for transport := range c.transports {
@@ -251,13 +251,13 @@ func (c *DirectDaemonRuntimeConnector) requireOpen(ctx context.Context) error {
 	return nil
 }
 
-func (c *DirectDaemonRuntimeConnector) transportConfig(ctx context.Context) (RuntimeTransport, *IdentityClient, bool) {
+func (c *DirectDaemonRuntimeConnector) transportConfig(ctx context.Context) (RuntimeTransport, Addressing, bool) {
 	if c == nil || ctx == nil {
 		return nil, nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.handle, c.identity, c.closeHandleTransport
+	return c.handle, c.addressing, c.closeHandleTransport
 }
 
 // DirectRuntimeOptions are SDK-internal direct daemon transport knobs.
@@ -266,7 +266,7 @@ type DirectRuntimeOptions struct {
 	InvokeTimeoutMS      int64
 	MaxMessageBytes      int
 	HandleTransport      RuntimeTransport
-	Identity             *IdentityClient
+	Addressing           Addressing
 	CloseHandleTransport bool
 }
 
@@ -278,7 +278,7 @@ type DirectDaemonRuntimeTransport struct {
 	endpoint             string
 	invokeTimeout        time.Duration
 	handle               RuntimeTransport
-	identity             *IdentityClient
+	addressing           Addressing
 	closeHandleTransport bool
 	nextHandleID         uint64
 	handles              map[uint64]directRuntimeHandleSnapshot
@@ -301,8 +301,8 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 	if strings.TrimSpace(endpoint) == "" {
 		return nil, invalidRuntimeClient("endpoint is required")
 	}
-	if options.Identity == nil {
-		return nil, invalidProfileClient(directoryIdentityProfile, "identity client is required for direct runtime descriptor projection")
+	if options.Addressing == nil {
+		return nil, invalidProfileClient(addressingProfile, "addressing provider is required for direct runtime descriptor projection")
 	}
 	dialTimeout := durationFromMillis(options.DialTimeoutMS, defaultDirectRuntimeDialTimeout)
 	invokeTimeout := durationFromMillis(options.InvokeTimeoutMS, defaultDirectRuntimeInvokeTimeout)
@@ -338,7 +338,7 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 		endpoint:             endpoint,
 		invokeTimeout:        invokeTimeout,
 		handle:               options.HandleTransport,
-		identity:             options.Identity,
+		addressing:           options.Addressing,
 		closeHandleTransport: options.CloseHandleTransport,
 		handles:              map[uint64]directRuntimeHandleSnapshot{},
 	}, nil
@@ -349,7 +349,7 @@ func (t *DirectDaemonRuntimeTransport) Invoke(ctx context.Context, draftJSON []b
 	if err != nil {
 		return nil, err
 	}
-	draft, request, err := directInvokeRequestFromDraftJSON(ctx, t.identity, draftJSON)
+	draft, request, err := directInvokeRequestFromDraftJSON(ctx, t.addressing, draftJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +367,7 @@ func (t *DirectDaemonRuntimeTransport) OpenStream(ctx context.Context, draftJSON
 	if err != nil {
 		return nil, nil, err
 	}
-	_, request, err := directStreamRequestFromDraftJSON(ctx, t.identity, draftJSON)
+	_, request, err := directStreamRequestFromDraftJSON(ctx, t.addressing, draftJSON)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -403,7 +403,7 @@ func (t *DirectDaemonRuntimeTransport) OpenBidi(ctx context.Context, draftJSON [
 	if err != nil {
 		return nil, nil, err
 	}
-	openFrame, err := directBidiOpenFrame(ctx, t.identity, draft, streams)
+	openFrame, err := directBidiOpenFrame(ctx, t.addressing, draft, streams)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -435,7 +435,7 @@ func (t *DirectDaemonRuntimeTransport) Prepare(ctx context.Context, draftJSON []
 	} else if ok {
 		return handle.Prepare(ctx, draftJSON, optionsJSON)
 	}
-	return directRuntimePrepare(ctx, t.identity, draftJSON, optionsJSON)
+	return directRuntimePrepare(ctx, t.addressing, draftJSON, optionsJSON)
 }
 
 func (t *DirectDaemonRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
@@ -522,12 +522,12 @@ func (t *DirectDaemonRuntimeTransport) FreeHandle(ctx context.Context, handleID 
 	return nil
 }
 
-func directRuntimePrepare(ctx context.Context, identity *IdentityClient, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+func directRuntimePrepare(ctx context.Context, addressing Addressing, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 	draft, err := NewInvocationDraftFromJSON(draftJSON)
 	if err != nil {
 		return nil, err
 	}
-	draft, err = directPreparedInvocationDraft(ctx, identity, draft)
+	draft, err = directPreparedInvocationDraft(ctx, addressing, draft)
 	if err != nil {
 		return nil, err
 	}
@@ -577,16 +577,16 @@ func directRuntimePrepare(ctx context.Context, identity *IdentityClient, draftJS
 	})
 }
 
-func directPreparedInvocationDraft(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (InvocationDraft, error) {
-	abilityName, err := directLocalAbilityName(ctx, identity, draft)
+func directPreparedInvocationDraft(ctx context.Context, addressing Addressing, draft InvocationDraft) (InvocationDraft, error) {
+	abilityName, err := directLocalAbilityName(ctx, addressing, draft)
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	return directPreparedInvocationDraftWithAbility(ctx, identity, draft, abilityName)
+	return directPreparedInvocationDraftWithAbility(ctx, addressing, draft, abilityName)
 }
 
-func directPreparedInvocationDraftWithAbility(ctx context.Context, identity *IdentityClient, draft InvocationDraft, abilityName string) (InvocationDraft, error) {
-	subjectURA, err := descriptorBoundSubjectURA(ctx, identity, draft.SubjectURA(), abilityName)
+func directPreparedInvocationDraftWithAbility(ctx context.Context, addressing Addressing, draft InvocationDraft, abilityName string) (InvocationDraft, error) {
+	subjectURA, err := descriptorBoundSubjectURA(ctx, addressing, draft.SubjectURA(), abilityName)
 	if err != nil {
 		return InvocationDraft{}, err
 	}
@@ -1098,12 +1098,12 @@ func directRuntimeEndpointJSON(endpoint RuntimeEndpoint, options ConnectOptions)
 	return raw, nil
 }
 
-func directInvokeRequestFromDraftJSON(ctx context.Context, identity *IdentityClient, raw []byte) (InvocationDraft, *axonpb.InvokeRequest, error) {
+func directInvokeRequestFromDraftJSON(ctx context.Context, addressing Addressing, raw []byte) (InvocationDraft, *axonpb.InvokeRequest, error) {
 	draft, err := NewInvocationDraftFromJSON(raw)
 	if err != nil {
 		return InvocationDraft{}, nil, err
 	}
-	fields, err := directInvokeFields(ctx, identity, draft)
+	fields, err := directInvokeFields(ctx, addressing, draft)
 	if err != nil {
 		return InvocationDraft{}, nil, err
 	}
@@ -1118,12 +1118,12 @@ func directInvokeRequestFromDraftJSON(ctx context.Context, identity *IdentityCli
 	}, nil
 }
 
-func directStreamRequestFromDraftJSON(ctx context.Context, identity *IdentityClient, raw []byte) (InvocationDraft, *axonpb.InvokeServerStreamRequest, error) {
+func directStreamRequestFromDraftJSON(ctx context.Context, addressing Addressing, raw []byte) (InvocationDraft, *axonpb.InvokeServerStreamRequest, error) {
 	draft, err := NewInvocationDraftFromJSON(raw)
 	if err != nil {
 		return InvocationDraft{}, nil, err
 	}
-	fields, err := directInvokeFields(ctx, identity, draft)
+	fields, err := directInvokeFields(ctx, addressing, draft)
 	if err != nil {
 		return InvocationDraft{}, nil, err
 	}
@@ -1148,8 +1148,8 @@ type directInvokeFieldSet struct {
 	contentEnvelope *axonpb.ContentEnvelope
 }
 
-func directInvokeFields(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (directInvokeFieldSet, error) {
-	projectedDraft, abilityName, err := directExecutableInvocationDraft(ctx, identity, draft)
+func directInvokeFields(ctx context.Context, addressing Addressing, draft InvocationDraft) (directInvokeFieldSet, error) {
+	projectedDraft, abilityName, err := directExecutableInvocationDraft(ctx, addressing, draft)
 	if err != nil {
 		return directInvokeFieldSet{}, err
 	}
@@ -1196,12 +1196,12 @@ func directInvokeFields(ctx context.Context, identity *IdentityClient, draft Inv
 	}, nil
 }
 
-func directExecutableInvocationDraft(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (InvocationDraft, string, error) {
-	localAbilityName, err := directLocalAbilityName(ctx, identity, draft)
+func directExecutableInvocationDraft(ctx context.Context, addressing Addressing, draft InvocationDraft) (InvocationDraft, string, error) {
+	localAbilityName, err := directLocalAbilityName(ctx, addressing, draft)
 	if err != nil {
 		return InvocationDraft{}, "", err
 	}
-	projected, err := directPreparedInvocationDraftWithAbility(ctx, identity, draft, localAbilityName)
+	projected, err := directPreparedInvocationDraftWithAbility(ctx, addressing, draft, localAbilityName)
 	if err != nil {
 		return InvocationDraft{}, "", err
 	}
@@ -1212,8 +1212,8 @@ func directExecutableInvocationDraft(ctx context.Context, identity *IdentityClie
 	return projected, wireAbilityName, nil
 }
 
-func directBidiOpenFrame(ctx context.Context, identity *IdentityClient, draft InvocationDraft, streams []*axonpb.StreamDescriptor) (*axonpb.InvokeBidiUp, error) {
-	fields, err := directInvokeFields(ctx, identity, draft)
+func directBidiOpenFrame(ctx context.Context, addressing Addressing, draft InvocationDraft, streams []*axonpb.StreamDescriptor) (*axonpb.InvokeBidiUp, error) {
+	fields, err := directInvokeFields(ctx, addressing, draft)
 	if err != nil {
 		return nil, err
 	}
@@ -1252,8 +1252,8 @@ func directInvocationTarget(abilityName string) *axonpb.InvocationTarget {
 	}
 }
 
-func directLocalAbilityName(ctx context.Context, identity *IdentityClient, draft InvocationDraft) (string, error) {
-	ref, err := ProjectAbilityDescriptorRef(ctx, identity, draft.DescriptorRef())
+func directLocalAbilityName(ctx context.Context, addressing Addressing, draft InvocationDraft) (string, error) {
+	ref, err := ProjectAbilityDescriptorRef(ctx, addressing, draft.DescriptorRef())
 	if err != nil {
 		return "", invalidRuntimePayload(fmt.Sprintf("project descriptor_ref: %v", err), err)
 	}

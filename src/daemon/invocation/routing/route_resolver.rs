@@ -328,14 +328,13 @@ pub(crate) struct DelegatedInvokeRoute {
     pub release_profile: axon_pb::ResolverReleaseProfile,
 }
 
-/// Resolver-owned route selection for `federation.forward_invoke`.
+/// Resolver-owned route selection for a canonical `InvokeRequest`.
 ///
-/// Forward invoke is the only daemon surface that may either execute via a
-/// local final route or delegate to a peer hub. Keeping that branch here
-/// prevents dispatchers from parsing `target_ura` and re-implementing locality
-/// policy outside the resolver.
+/// A signed invocation may execute via a local final route or delegate to a
+/// peer hub. Keeping that branch here prevents dispatchers from parsing URAs
+/// and re-implementing locality policy outside the resolver.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ForwardInvokeRouteSelection {
+pub(crate) enum CanonicalInvokeRouteSelection {
     Local(SelectedInvokeRoute),
     Peer(DelegatedInvokeRoute),
 }
@@ -1028,16 +1027,16 @@ impl<'a> DaemonRouteResolver<'a> {
         }))
     }
 
-    pub(crate) fn resolve_forward_invoke_route(
+    pub(crate) fn resolve_canonical_invoke_route(
         &self,
         target_ura: &str,
         ability_ura: &str,
-    ) -> Result<ForwardInvokeRouteSelection, ResolveRouteFailure> {
+    ) -> Result<CanonicalInvokeRouteSelection, ResolveRouteFailure> {
         let selector =
             route_selector_from_query(ability_ura, "").ok_or_else(|| ResolveRouteFailure {
                 query_name: ability_ura.to_string(),
                 reason: axon_pb::NegativeReason::Refused,
-                detail: "federation.forward_invoke requires a full canonical ability_ura"
+                detail: "remote Invoke requires a full canonical ability URA or descriptor ref"
                     .to_string(),
             })?;
         let owner_is_agent = crate::core::ura::parse_ura(&selector.owner_ura)
@@ -1068,7 +1067,7 @@ impl<'a> DaemonRouteResolver<'a> {
                         ),
                     });
                 }
-                Ok(ForwardInvokeRouteSelection::Local(selected_route))
+                Ok(CanonicalInvokeRouteSelection::Local(selected_route))
             }
             Err(local_failure) => {
                 let Some(peer_source) = self.peer_delegation.as_ref() else {
@@ -1086,12 +1085,11 @@ impl<'a> DaemonRouteResolver<'a> {
                     return Err(local_failure);
                 }
                 self.resolve_delegation(ability_ura, "")?
-                    .map(ForwardInvokeRouteSelection::Peer)
+                    .map(CanonicalInvokeRouteSelection::Peer)
                     .ok_or(ResolveRouteFailure {
                         query_name: selector.query_name,
                         reason: axon_pb::NegativeReason::Noroute,
-                        detail: "cross-realm forward invoke had no peer delegation route"
-                            .to_string(),
+                        detail: "cross-realm Invoke had no peer delegation route".to_string(),
                     })
             }
         }
@@ -2292,7 +2290,7 @@ mod tests {
     fn projection_route_for_present_device_owner_is_same_realm_device() {
         // A device-owned ability advertised in the catalog whose owner is
         // present, resolved by a node that is NOT the owner's own daemon
-        // (e.g. the hub resolving `runtime.invoke_remote` for a device it
+        // (e.g. the hub resolving a canonical call for a device it
         // hosts). Selecting where a live owner's ability dispatches — and
         // forwarding to the owning device — is exactly what this resolver
         // is authoritative for, so the route is AuthoritativeLocal. The

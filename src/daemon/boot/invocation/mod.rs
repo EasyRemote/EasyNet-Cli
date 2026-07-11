@@ -77,12 +77,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
+
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     HotAgentAdvertiseOutcome, HotAgentAdvertiseRequest, HotAgentAdvertiser, HotAgentRevokeRequest,
 };
-use crate::daemon::invocation::bidi::invoke_remote_initiator::{
-    RequestOutcome, SessionRequestError,
-};
+use crate::daemon::invocation::bidi::session_wire::{RequestOutcome, SessionRequestError};
 
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
@@ -129,7 +129,7 @@ use trust::{
 /// cap, not an ability payload cap: large files and snapshots must be
 /// chunked above gRPC instead of granting every peer a near-unbounded
 /// single-message allocation. Exposed `pub` because the **client** side
-/// (`session_initiator`, `invoke_remote_initiator`) must apply the
+/// (`session_initiator`, `session_wire`) must apply the
 /// same cap as the server side; without that the asymmetry triggers
 /// `OutOfRange: decoded message length too large` mid-stream.
 pub const MAX_INVOCATION_GRPC_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
@@ -144,13 +144,9 @@ const INITIAL_SESSION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(15);
 /// listeners do come up, they run on the caller's tokio runtime as
 /// detached tasks; they own their `PresenceRegistry` Arc and stay
 /// alive until the runtime shuts down.
-/// **Phase 5c**. `hot_agent_registrar_cell` is the shared
-/// `OnceLock<Arc<HotAgentRegistrar>>` stashed by
-/// `build_registry_with_services`. We call
-/// `registrar.set_runtime(local_runtime)` once `local_runtime` is
-/// constructed below so post-boot `agent.start` invocations
-/// land their `<agent>.{chat,discover,invoke}` rows into the live
-/// Axon runtime instead of skipping runtime registration.
+/// `hot_agent_registrar_cell` is assembled by the ability catalogue against
+/// this same `LocalRuntime`. Transport boot verifies it is `Ready`; it does not
+/// own a second runtime-wiring path.
 /// Owns the session supervisor's cancel oneshot. Dropping it (at
 /// daemon shutdown) resolves the supervisor's `cancel` branch, so the
 /// in-flight `session.open` dial drains cleanly instead of being
@@ -297,7 +293,7 @@ pub fn start_daemon_invocation_transport(
     seed_boot_presence(config.mode(), daemon_ura.as_deref(), &presence);
 
     // Federated_peers cell first so we can hand it to BOTH the
-    // DaemonInvocationService (for cross-hub `forward_invoke`
+    // DaemonInvocationService (for cross-hub `canonical_invoke`
     // routing) and the AdmissionFacade (for `FederatedKeyResolver`
     // cross-realm signature verify against peer hubs).
     let federated_peers_cell = crate::daemon::federation::peers::SharedFederatedPeers::new(
@@ -323,7 +319,7 @@ pub fn start_daemon_invocation_transport(
 
     // PR-N1 commit 9/N + PR-N2 commit 1/N: hub-mode daemons
     // construct one CrossHubDialer that backs both the daemon's
-    // outbound `forward_invoke` routing AND the transport policy gate's
+    // outbound `canonical_invoke` routing AND the transport policy gate's
     // `FederatedKeyResolver` so a cross-realm caller's URA can be
     // resolved via `federation.resolve_key` against the peer hub.
     // Device-mode daemons never originate federation calls, so
@@ -470,38 +466,16 @@ pub fn start_daemon_invocation_transport(
         );
     }
 
-    // **Phase 5c**. Attach the live `LocalRuntime` to the hot-agent
-    // runtime registrar that `build_registry_with_services` constructed
-    // earlier. After this `set_runtime` call, every subsequent
-    // `agent.start` invocation reaches into the registrar's
-    // populated runtime cell and lands `<agent>.{chat,discover,invoke}`
-    // into Axon's `LocalRuntime` — closing the bug where hot-added
-    // agents were visible in product metadata but not materialized in
-    // Axon's runtime, therefore skipping the `LedgerSink` audit row.
-    //
-    // The cell is normally populated by `build_registry_with_services`,
-    // so `.get()` returns `Some`. We log + skip when absent to keep
-    // smoke tests that boot only the transport (without a full registry
-    // build) green: those tests don't call `agent.start`, so a
-    // pending registrar is observably harmless.
-    if let Some(registrar) = hot_agent_registrar_cell.get() {
-        registrar.set_runtime(Arc::clone(&local_runtime));
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = hot_agent_registrar_runtime_attached,
-            message = "HotAgentRegistrar.runtime attached; \
-                       agent.start can now register into LocalRuntime",
-        );
-    } else {
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = hot_agent_registrar_cell_empty,
-            level = "warn",
-            message = "hot_agent_registrar_cell empty at boot — \
-                       agent.start runtime registration will be skipped \
-                       (Invocation transport booted without a populated registry?)",
-        );
-    }
+    // The ability-catalog assembly owns registrar construction and runtime
+    // attachment. Transport boot only verifies that the completed object is
+    // Ready; attaching here as a second writer previously hid an architecture
+    // fork between catalogue boot and transport boot.
+    let hot_agent_registrar = hot_agent_registrar_cell.get().cloned().ok_or_else(|| {
+        anyhow::anyhow!("Invocation transport requires a wired hot-Agent registrar")
+    })?;
+    hot_agent_registrar
+        .require_ready()
+        .context("Invocation transport requires a Ready hot-Agent registrar")?;
 
     let runtime_ability_count = futures::executor::block_on(local_runtime.list_abilities()).len();
     let runtime_ability_count_str = runtime_ability_count.to_string();
@@ -546,14 +520,14 @@ pub fn start_daemon_invocation_transport(
     // and federated_peers cell were constructed above so the
     // AdmissionFacade could pick them up too. Here we forward the
     // same handles to the DaemonInvocationService for the
-    // cross-realm `forward_invoke` dispatch path.
+    // cross-realm `canonical_invoke` dispatch path.
     if let Some(client) = dialer.clone() {
         service = service
             .with_federation_client(client)
             .with_federated_peers_cell(federated_peers_cell.clone());
     }
 
-    // **PR-N6 C4**. Device-mode daemon's `forward_invoke` escalates
+    // **PR-N6 C4**. Device-mode daemon's `canonical_invoke` escalates
     // up the long-lived `session.open` bidi to the hub instead of
     // consulting its (always-empty) local PresenceRegistry. Three
     // collaborators wired here:
@@ -567,7 +541,7 @@ pub fn start_daemon_invocation_transport(
     //      disconnect. The escalation consumer reads it
     //      per-Request.
     //   3. `SessionEscalationHandle` — what the dispatcher's
-    //      `escalate_forward_invoke` arm calls. Wired into the
+    //      `escalate_canonical_invoke` arm calls. Wired into the
     //      service via `with_session_escalation`.
     //
     // Hub / Both modes leave `escalation_state = None`. Their
@@ -585,17 +559,14 @@ pub fn start_daemon_invocation_transport(
                 config.realm().to_string(),
             ),
         );
-        if let (Some(registrar), Some(identity)) =
-            (hot_agent_registrar_cell.get(), daemon_identity.as_ref())
-        {
-            registrar.set_hot_agent_advertiser(Arc::new(SessionHotAgentAdvertiser::new(
-                Arc::clone(&handle),
-                identity.caller_ura.clone(),
-            )));
+        if let Some(identity) = daemon_identity.as_ref() {
+            hot_agent_registrar.set_hot_agent_advertiser(Arc::new(
+                SessionHotAgentAdvertiser::new(Arc::clone(&handle), identity.caller_ura.clone()),
+            ))?;
         }
         service = service.with_session_escalation(Arc::clone(&handle));
         // One DeviceTrustSync per daemon: the self-targeted
-        // `runtime.invoke_remote` dispatch arm (service) and the
+        // canonical session dispatch arm (service) and the
         // `session.open` dispatcher both warm the anchor through
         // this instance, sharing its single-flight map and negative
         // cache. It rides the session escalation channel built above.
@@ -810,10 +781,9 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         let args = match serde_json::to_vec(&body) {
             Ok(args) => args,
             Err(err) => {
-                return HotAgentAdvertiseOutcome {
-                    advertised: false,
-                    error: Some(format!("encode federation.advertise_agent args: {err}")),
-                };
+                return HotAgentAdvertiseOutcome::failed(format!(
+                    "encode federation.advertise_agent args: {err}"
+                ));
             }
         };
         // ISS-002: carry the abilities advertise alongside the identity
@@ -854,22 +824,15 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
             }
             agent_outcome
         }) else {
-            return HotAgentAdvertiseOutcome {
-                advertised: false,
-                error: Some(
-                    "no tokio runtime available for hot federation.advertise_agent".to_string(),
-                ),
-            };
+            return HotAgentAdvertiseOutcome::failed(
+                "no tokio runtime available for hot federation.advertise_agent",
+            );
         };
         match outcome {
-            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome {
-                advertised: true,
-                error: None,
-            },
-            RequestOutcome::Err { error } => HotAgentAdvertiseOutcome {
-                advertised: false,
-                error: Some(render_session_request_error(&error)),
-            },
+            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),
+            RequestOutcome::Err { error } => {
+                HotAgentAdvertiseOutcome::failed(render_session_request_error(&error))
+            }
         }
     }
 
@@ -886,10 +849,9 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         let args = match serde_json::to_vec(&body) {
             Ok(args) => args,
             Err(err) => {
-                return HotAgentAdvertiseOutcome {
-                    advertised: false,
-                    error: Some(format!("encode federation.revoke args: {err}")),
-                };
+                return HotAgentAdvertiseOutcome::failed(format!(
+                    "encode federation.revoke args: {err}"
+                ));
             }
         };
         let escalation = Arc::clone(&self.escalation);
@@ -902,20 +864,15 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
                 )
                 .await
         }) else {
-            return HotAgentAdvertiseOutcome {
-                advertised: false,
-                error: Some("no tokio runtime available for hot federation.revoke".to_string()),
-            };
+            return HotAgentAdvertiseOutcome::failed(
+                "no tokio runtime available for hot federation.revoke",
+            );
         };
         match outcome {
-            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome {
-                advertised: true,
-                error: None,
-            },
-            RequestOutcome::Err { error } => HotAgentAdvertiseOutcome {
-                advertised: false,
-                error: Some(render_session_request_error(&error)),
-            },
+            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),
+            RequestOutcome::Err { error } => {
+                HotAgentAdvertiseOutcome::failed(render_session_request_error(&error))
+            }
         }
     }
 }
@@ -993,9 +950,9 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         None => "system trust roots".to_string(),
     };
     let escalation_state_str = if escalation_state.is_some() {
-        "forward_invoke escalation wired"
+        "canonical_invoke escalation wired"
     } else {
-        "forward_invoke escalation OFF"
+        "canonical_invoke escalation OFF"
     };
     let caller_ura_display = identity.caller_ura.clone();
     crate::op_event!(
@@ -1006,7 +963,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         signing_state = signing_state,
         tls = ca_state,
         escalation_state = escalation_state_str,
-        message = "LocalAxonSessionDispatcher will execute inbound SessionDispatch::Dispatch frames through Axon LocalRuntime",
+        message = "LocalAxonSessionDispatcher will execute canonical DispatchCall frames through Axon LocalRuntime",
     );
     // Cancel oneshot held for the daemon process's lifetime. Hub
     // admission is observed asynchronously below: the local Invocation
@@ -1043,7 +1000,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
     // anchor and can never learn a new key). The Arc is the daemon's
     // single DeviceTrustSync, built next to the escalation consumer
     // in `start_daemon_invocation_transport` and shared with the
-    // service's self-targeted `runtime.invoke_remote` dispatch arm.
+    // service's canonical session dispatch arm.
     if let Some(sync) = device_trust_sync {
         local_dispatcher = local_dispatcher.with_device_trust_sync(sync);
     }
@@ -1406,14 +1363,14 @@ fn spawn_federated_directory_streaming_supervisor(
                     |peer_realm, peer_hub_endpoint| {
                         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
                         let realm_owned = peer_realm.to_string();
-                        let uri_owned = peer_hub_endpoint.to_string();
+                        let endpoint_owned = peer_hub_endpoint.to_string();
                         let caller_owned = caller_ura.clone();
                         let client_clone = Arc::clone(&federation_client_outer);
                         let cell_clone = directory_cell_outer.clone();
                         tokio::spawn(async move {
                             crate::daemon::federation::directory::run_per_peer_supervisor(
                                 realm_owned,
-                                uri_owned,
+                                endpoint_owned,
                                 caller_owned,
                                 client_clone,
                                 cell_clone,

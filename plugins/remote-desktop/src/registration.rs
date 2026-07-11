@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn registration_publishes_remote_desktop_manifest_to_catalog_snapshot() {
+    fn registration_publishes_remote_desktop_descriptor_to_catalog_snapshot() {
         let limits = crate::daemon::plugins::remote_desktop::test_support::test_runtime_limits();
         let mut builder = PluginContributionBuilder::new(
             "easynet.remote_desktop",
@@ -347,19 +347,16 @@ mod tests {
             .bind_set(&contributions)
             .expect("bind remote desktop contribution");
 
-        let rows = reg.ability_catalog_snapshot();
+        let rows = reg.authority_ability_catalog_snapshot();
         let create_session = rows
             .iter()
             .find(|row| row.name == ABILITY_CREATE_SESSION)
             .expect("remote_desktop.create_session must be catalogued");
-        let manifest = create_session
-            .manifest
-            .as_ref()
-            .expect("remote_desktop.create_session must publish schema manifest");
+        let descriptor = &create_session.descriptor;
 
-        assert_eq!(manifest.description(), schema::create_session_description());
+        assert_eq!(descriptor.description, schema::create_session_description());
         assert_eq!(
-            manifest.input_schema(),
+            descriptor.input_schema(),
             &schema::create_session_input_schema()
         );
         let record = reg

@@ -457,11 +457,8 @@ impl FederatedKeyResolver {
         let target_hub_endpoint = peer_hub_endpoint.clone();
         let client_clone = Arc::clone(client);
         let response = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                client_clone
-                    .forward_invoke(&target_hub_endpoint, request)
-                    .await
-            })
+            tokio::runtime::Handle::current()
+                .block_on(async move { client_clone.invoke(&target_hub_endpoint, request).await })
         })
         .map_err(|err| caller_key_not_found(agent_ura, &format!("dial_failed:{err}")))?;
 
@@ -595,7 +592,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl FederationClient for CannedFederationClient {
-        async fn forward_invoke(
+        async fn invoke(
             &self,
             _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
@@ -616,7 +613,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl FederationClient for DialFailedClient {
-        async fn forward_invoke(
+        async fn invoke(
             &self,
             target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
@@ -823,7 +820,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl FederationClient for CountingFederationClient {
-        async fn forward_invoke(
+        async fn invoke(
             &self,
             _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             _request: InvokeRequest,
@@ -864,7 +861,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl FederationClient for EchoPresentedPubkeyClient {
-        async fn forward_invoke(
+        async fn invoke(
             &self,
             _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
             request: InvokeRequest,

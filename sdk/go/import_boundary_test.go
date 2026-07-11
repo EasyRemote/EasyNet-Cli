@@ -113,7 +113,7 @@ func TestPublicGoSDKDoesNotOwnURAGrammar(t *testing.T) {
 }
 
 func TestPublicGoSDKDoesNotAliasAxonBridgeTypes(t *testing.T) {
-	for _, path := range []string{"invoke_remote.go", "ura.go"} {
+	for _, path := range []string{"ura.go"} {
 		body, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
@@ -121,12 +121,6 @@ func TestPublicGoSDKDoesNotAliasAxonBridgeTypes(t *testing.T) {
 		text := string(body)
 		for _, needle := range []string{
 			"type JSONByteSlice = axonsdk.",
-			"type InvokeRemoteContentEnvelope = axonsdk.",
-			"type OriginCallerClaim = axonsdk.",
-			"type InvokeRemoteUpRequest = axonsdk.",
-			"type InvokeRemoteDownChunk = axonsdk.",
-			"type InvokeRemoteDownResult = axonsdk.",
-			"type InvokeRemoteDownFrame = axonsdk.",
 			"type DelegationProofRaw = axonsdk.",
 			"type SessionAuthorityRaw = axonsdk.",
 			"type Ura = axonsdk.",
@@ -155,6 +149,10 @@ func TestTrackedGoSDKSourcesDoNotOwnKeyringPersistence(t *testing.T) {
 			continue
 		}
 		body, err := os.ReadFile(filepath.Join(root, path))
+		if os.IsNotExist(err) {
+			// A tracked source may be intentionally deleted by the change under test.
+			continue
+		}
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
@@ -195,7 +193,7 @@ func allowedPrivateAxonAdapter(path string) bool {
 
 func allowedDelegatedAxonFacade(path string) bool {
 	switch filepath.ToSlash(path) {
-	case "ability_descriptor_axon.go", "authority_axon.go", "invocation_canonical.go", "invoke_remote.go", "ura.go":
+	case "ability_descriptor_axon.go", "authority_axon.go", "invocation_canonical.go", "ura.go":
 		return true
 	default:
 		return false
@@ -209,15 +207,5 @@ func allowedPrivateCABIAdapter(path, text string) bool {
 	}
 	return (base == "cabi_dynamic.go" && strings.Contains(text, "type CABIDiscoveryTransport struct")) ||
 		(base == "cabi_runtime.go" && strings.Contains(text, "type CABIDaemonTransport struct")) ||
-		(base == "cabi_receipt.go" && strings.Contains(text, "type CABIReceiptTransport struct")) ||
-		(base == "cabi_identity.go" && strings.Contains(text, "type CABIIdentityTransport struct")) ||
-		(base == "cabi_publication.go" && strings.Contains(text, "type CABIPublicationTransport struct")) ||
-		(base == "cabi_mission.go" && strings.Contains(text, "type CABIMissionTransport struct")) ||
-		(base == "cabi_host_binding.go" && strings.Contains(text, "type CABIHostBindingTransport struct")) ||
-		(base == "cabi_events.go" && strings.Contains(text, "type CABIEventsTransport struct")) ||
-		(base == "cabi_admin.go" && strings.Contains(text, "type CABIAdminTransport struct")) ||
-		(base == "cabi_surface.go" && strings.Contains(text, "type CABISurfaceTransport struct")) ||
-		(base == "cabi_compatibility.go" && strings.Contains(text, "type CABICompatibilityTransport struct")) ||
-		(base == "cabi_authority.go" && strings.Contains(text, "type CABIAuthorityTransport struct")) ||
 		(base == "cabi_callbacks.go" && strings.Contains(text, "easynetGoStreamCallback"))
 }

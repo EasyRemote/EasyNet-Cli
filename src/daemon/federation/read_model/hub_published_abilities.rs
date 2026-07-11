@@ -19,7 +19,7 @@
 // What this store does NOT do:
 //   * It is not a registration target. The device never invokes
 //     hub-owned abilities through this store; calls to
-//     `hub.openai.*` go through `federation.forward_invoke` to
+//     `hub.openai.*` go through the canonical `Invocation::Invoke` RPC to
 //     the hub. The store is read-mostly metadata.
 //   * It is not persistent. Restart drops the cache; the next
 //     `federation.join` reseeds it. Simpler than disk

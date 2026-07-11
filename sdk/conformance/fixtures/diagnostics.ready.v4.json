@@ -4,7 +4,7 @@
   "state": "Running",
   "ready": true,
   "version": "0.91.30",
-  "abi_version": 4,
+  "abi_version": 5,
   "control_endpoint": "/tmp/easynet/control.json",
   "invocation_endpoint": "/tmp/easynet/daemon.sock",
   "checks": [

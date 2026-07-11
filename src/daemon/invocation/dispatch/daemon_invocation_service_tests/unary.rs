@@ -6,7 +6,6 @@ fn quota_meters_user_abilities_but_exempts_control_plane() {
     assert!(quota_meters_function("agent.todo.run"));
 
     assert!(!quota_meters_function(ABILITY_FEDERATION_HEARTBEAT));
-    assert!(!quota_meters_function(ABILITY_FEDERATION_FORWARD_INVOKE));
     assert!(!quota_meters_function(ABILITY_FEDERATION_STATUS));
     assert!(!quota_meters_function(ABILITY_NAMESPACE_RESOLVE));
     assert!(!quota_meters_function(ABILITY_IDENTITY_REGISTER_PUBKEY));
@@ -23,57 +22,6 @@ fn quota_meters_user_abilities_but_exempts_control_plane() {
 }
 
 #[test]
-fn quota_for_forward_invoke_meters_inner_user_ability_only() {
-    let user_call = InvokeRequest {
-        function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
-        arguments: forward_invoke_args_for_ability(
-            "easynet:///r/test-realm/device/target",
-            "observe.health",
-            serde_json::json!({}),
-        ),
-        ..InvokeRequest::default()
-    };
-    assert_eq!(
-        quota_metered_ability_for_request(&user_call)
-            .expect("forward invoke parses")
-            .as_deref(),
-        Some("observe.health")
-    );
-
-    let control_call = InvokeRequest {
-        function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
-        arguments: forward_invoke_args_for_ability(
-            &crate::core::ura::hub_ura("test-realm"),
-            ABILITY_FEDERATION_HEARTBEAT,
-            serde_json::json!({}),
-        ),
-        ..InvokeRequest::default()
-    };
-    assert_eq!(
-        quota_metered_ability_for_request(&control_call).expect("forward invoke parses"),
-        None,
-        "nested federation control-plane calls stay quota-exempt"
-    );
-
-    let reserved_prefix_user_call = InvokeRequest {
-        function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
-        arguments: forward_invoke_args_for_ability(
-            "easynet:///r/test-realm/device/target",
-            "federation.user_owned_probe",
-            serde_json::json!({}),
-        ),
-        ..InvokeRequest::default()
-    };
-    assert_eq!(
-        quota_metered_ability_for_request(&reserved_prefix_user_call)
-            .expect("forward invoke parses")
-            .as_deref(),
-        Some("federation.user_owned_probe"),
-        "forward_invoke must not give quota amnesty to non-system reserved-prefix names"
-    );
-}
-
-#[test]
 fn hub_daemon_invocation_surface_satisfies_baseline_contract() {
     use crate::daemon::ability::conformance::{DaemonInvocationSurface, HubBaseline};
 
@@ -81,40 +29,6 @@ fn hub_daemon_invocation_surface_satisfies_baseline_contract() {
         .check("hub", HubBaseline::required_abilities());
 
     assert!(report.is_conformant(), "{}", report.panic_message());
-}
-
-#[tokio::test]
-async fn forward_invoke_without_authority_denies_before_quota() {
-    let caller_ura = "easynet:///r/test-realm/device/quota-caller";
-    let rt = runtime_with_json_echo(
-        TEST_DAEMON_URA,
-        "observe.health",
-        "handled_by",
-        "quota-test",
-    )
-    .await;
-    let svc = make_quota_service_for_device_caller(caller_ura, 1).with_local_runtime(rt);
-    publish_test_route(&svc, TEST_DAEMON_URA, "observe.health");
-    let args = forward_invoke_args_for_ability(
-        TEST_DAEMON_URA,
-        "observe.health",
-        serde_json::json!({"probe": true}),
-    );
-
-    let denied = svc
-        .invoke(invoke_request_from_device(
-            caller_ura,
-            ABILITY_FEDERATION_FORWARD_INVOKE,
-            args,
-        ))
-        .await
-        .expect_err("public carrier without grant or AuthorityProof must fail before quota");
-    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
-    assert!(
-        denied.message().contains("POLICY_DENIED"),
-        "carrier denial must remain a policy denial, got: {}",
-        denied.message()
-    );
 }
 
 #[tokio::test]
@@ -585,49 +499,6 @@ fn unary_ledger_rejects_missing_subject_identity() {
     );
 }
 
-#[tokio::test]
-async fn malformed_forward_invoke_quota_parse_error_is_audited() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let ledger = Arc::new(
-        easynet_axon::invocation::InvocationLedger::open(
-            temp.path().join("ledger").join("invocations.redb"),
-        )
-        .expect("ledger"),
-    );
-    let svc = make_service().with_invocation_ledger(Arc::clone(&ledger));
-
-    let err = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_FORWARD_INVOKE,
-            "{not-json",
-        ))
-        .await
-        .expect_err("malformed forward_invoke must reject");
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
-
-    let records = ledger.list_all().expect("ledger list");
-    assert_eq!(
-        records.len(),
-        1,
-        "quota pre-parse errors must still write one failed ledger row"
-    );
-    let record = &records[0];
-    assert_eq!(record.state, "failed");
-    assert_eq!(record.ability_name, ABILITY_FEDERATION_FORWARD_INVOKE);
-    assert_eq!(
-        record.error.as_ref().map(|err| err.code.as_str()),
-        Some("INVALID_ARGUMENT")
-    );
-    assert_eq!(
-        record
-            .error
-            .as_ref()
-            .and_then(|err| err.context.get("transport_status"))
-            .map(String::as_str),
-        Some("invalidargument")
-    );
-}
-
 #[test]
 fn ledger_authority_form_classifies_bootstrap_delegated_session_and_self() {
     let bootstrap = invoke_request(ABILITY_IDENTITY_REGISTER_PUBKEY, "{}").into_inner();
@@ -688,79 +559,6 @@ fn invocation_resource_ura_maps_agent_to_user_owned_namespace() {
         "easynet:///r/test-realm/resource/alice.invocations/agents/frontend/invocations/req-with-spaces-"
     ));
     assert!(!ura.contains("/resource/invocation."));
-}
-
-#[test]
-fn remote_receipt_projection_preserves_ability_identity_authority_and_proof_facts() {
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
-    let receipt = InvocationReceipt {
-        invocation_id: "remote-req-1".to_string(),
-        state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
-        timestamp_unix_ms: 1_200,
-        caller_binding: Some(AgentIdentity {
-            ura: crate::core::ura::agent_ura("caller-realm", "alice", "frontend"),
-            profile: "easynet-strict-v2".to_string(),
-        }),
-        callee_binding: Some(AgentIdentity {
-            ura: crate::core::ura::device_ura("peer-realm", "device-b"),
-            profile: "easynet-strict-v2".to_string(),
-        }),
-        subject_binding: Some(SubjectIdentity {
-            ura: crate::core::ura::user_ura("peer-realm", "bob"),
-            profile: "easynet-strict-v2".to_string(),
-        }),
-        usage: Some(InvocationUsage {
-            tokens_in: 5,
-            tokens_out: 7,
-            duration_ms: 200,
-            external_calls: 1,
-        }),
-        descriptor_version: "descriptor.remote.v1".to_string(),
-        schema_hash: vec![0x11; 32],
-        impl_hash: vec![0x22; 32],
-        runtime_env: "remote-runtime".to_string(),
-        ..InvocationReceipt::default()
-    };
-
-    let record = ledger_record_from_remote_receipt(&receipt, "demo.echo", 1_000)
-        .expect("remote receipt projects");
-    // The forwarded-receipt ability_ura projects from the callee DEVICE
-    // binding (`device-b`), the truthful provenance of where the peer ran
-    // it — not the abstract hub form.
-    assert_eq!(
-        record.ability_ura,
-        crate::core::ura::owner_ability_ura(
-            &crate::core::ura::device_ura("peer-realm", "device-b"),
-            "demo.echo"
-        )
-        .expect("device-form ability URA"),
-        "remote rows must not leave ability_ura empty"
-    );
-    // A forwarded receipt does not carry the caller's authority form
-    // (the delegation/session metadata lived on the originating request,
-    // which the hub never sees). The projection records "unknown" rather
-    // than minting a classification the receipt never asserted — the
-    // callee's own ledger row holds the authoritative form.
-    assert_eq!(record.authority_form, "unknown");
-    assert_eq!(record.usage.tokens_in, 5);
-    assert_eq!(record.usage.tokens_out, 7);
-    assert_eq!(record.elapsed_ms, Some(200));
-    assert_eq!(record.diagnostics.len(), 1);
-    let diagnostic = &record.diagnostics[0];
-    assert_eq!(diagnostic.source, "remote_receipt");
-    assert_eq!(diagnostic.code, "REMOTE_RECEIPT_PROOF_FACTS");
-    assert!(
-        diagnostic.message.contains("descriptor.remote.v1"),
-        "{diagnostic:?}"
-    );
-    assert!(
-        diagnostic.message.contains("remote-runtime"),
-        "{diagnostic:?}"
-    );
-    assert!(
-        diagnostic.payload.is_some(),
-        "proof facts must be digest-addressable in the local ledger projection"
-    );
 }
 
 #[tokio::test]
@@ -2084,31 +1882,6 @@ async fn invoke_dispatches_federation_revoke() {
 }
 
 #[tokio::test]
-async fn invoke_dispatches_federation_forward_invoke() {
-    // DEC-N4 §2.1: empty `inner_envelope_b64` is rejected
-    // up front by `decode_inner_payload` because the
-    // payload must carry a non-empty `call_id`. Earlier
-    // staging code accepted the empty shape and replied
-    // `target_online: false`; the final wire shape requires
-    // a real correlation id, so the wrong shape surfaces as
-    // `Status::invalid_argument`.
-    let svc = make_service();
-    let err = svc
-        .invoke(invoke_request(
-            ABILITY_FEDERATION_FORWARD_INVOKE,
-            r#"{"target_ura":"easynet:///r/realm/device/missing","inner_envelope_b64":""}"#,
-        ))
-        .await
-        .expect_err("empty inner_envelope_b64 must be rejected");
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(
-        err.message().contains("inner_envelope_b64 is empty"),
-        "expected empty-payload error, got: {}",
-        err.message()
-    );
-}
-
-#[tokio::test]
 async fn invoke_rejects_subscribe_directory_via_unary_invoke() {
     let svc = make_service();
     match svc
@@ -2336,9 +2109,14 @@ async fn dispatch_remote_rpc_times_out_when_target_never_replies() {
     let pending = Arc::new(PendingDispatchMap::new());
     let svc = make_service().with_pending(Arc::clone(&pending));
     let (wedged_tx, mut wedged_rx) = mpsc::channel(8);
-    svc.directory
-        .presence
-        .insert(WEDGED_DEVICE_URA.to_string(), wedged_tx);
+    svc.directory.presence.insert_negotiated(
+        WEDGED_DEVICE_URA.to_string(),
+        wedged_tx,
+        crate::daemon::invocation::bidi::state::presence::SessionContract {
+            version: 1,
+            claimant_boot_nonce: vec![7; 16],
+        },
+    );
     publish_test_route(&svc, WEDGED_DEVICE_URA, "observe.health");
 
     let ability_ura = crate::core::ura::owner_ability_ura(WEDGED_DEVICE_URA, "observe.health")
@@ -2466,7 +2244,7 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
         other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
     };
     let request = call.request.expect("carrier-v1 request");
-    assert_eq!(request.function_name, "shell.run");
+    assert_eq!(request.function_name, descriptor_ref);
     assert_eq!(
         request
             .metadata

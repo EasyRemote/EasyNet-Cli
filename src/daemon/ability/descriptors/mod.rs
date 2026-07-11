@@ -17,8 +17,9 @@ use super::AbilityControlPlaneError;
 mod surface;
 
 pub use surface::{
-    AbilityClass, AbilityDescriptor, AbilityHints, AbilityIdentity, AbilitySchemaSummary,
-    DescriptorError, ScopeRule, Visibility,
+    AbilityDescriptor, AbilityHints, AbilityIdentity, AbilitySchemaSummary, DescriptorError,
+    ReceiptSemantics, ScopeRule, StateTransition, StateTransitionError, TransitionClass,
+    Visibility,
 };
 
 pub const DEFAULT_ABILITY_DESCRIPTOR_VERSION: &str =
@@ -173,19 +174,7 @@ impl AbilityControlPlaneKey {
         }
     }
 
-    pub(crate) fn for_descriptor(
-        authority_root: impl Into<String>,
-        descriptor: &AbilityDescriptorRecord,
-    ) -> Self {
-        Self::from_validated_parts(
-            authority_root,
-            descriptor.name.clone(),
-            descriptor.version.to_string(),
-            descriptor.call_mode,
-        )
-    }
-
-    pub(crate) fn for_authority(binding: &crate::daemon::ability::AuthorityBindingRecord) -> Self {
+    pub(crate) fn for_authority(binding: &crate::daemon::ability::AuthorityBinding) -> Self {
         Self::from_validated_parts(
             binding.scope().authority_root().to_string(),
             binding.ability().to_string(),
@@ -238,6 +227,12 @@ pub enum CallMode {
     Bidi,
 }
 
+impl Default for CallMode {
+    fn default() -> Self {
+        Self::Rpc
+    }
+}
+
 impl CallMode {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -282,132 +277,6 @@ impl DescriptorHash {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AbilityDescriptorRecord {
-    ability_ura: String,
-    name: String,
-    version: AbilityDescriptorVersion,
-    call_mode: CallMode,
-    schema_hash: SchemaHash,
-    descriptor_hash: DescriptorHash,
-}
-
-impl AbilityDescriptorRecord {
-    pub fn from_manifest(
-        name: impl Into<String>,
-        call_mode: CallMode,
-        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-    ) -> Result<Self, AbilityControlPlaneError> {
-        let version = manifest
-            .map(crate::daemon::ability::manifest::AbilityManifest::descriptor_version)
-            .unwrap_or(DEFAULT_ABILITY_DESCRIPTOR_VERSION);
-        Self::new(name, version, call_mode, manifest)
-    }
-
-    pub fn new(
-        name: impl Into<String>,
-        version: impl Into<String>,
-        call_mode: CallMode,
-        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-    ) -> Result<Self, AbilityControlPlaneError> {
-        let name = name.into();
-        if name.trim().is_empty() {
-            return Err(AbilityControlPlaneError::EmptyDescriptorName);
-        }
-        if !is_valid_ability_name(&name) {
-            return Err(AbilityControlPlaneError::InvalidDescriptorName { name });
-        }
-        let version = AbilityDescriptorVersion::new(version)?;
-        ensure_manifest_descriptor_version_matches(version.as_str(), manifest)?;
-        let schema_hash = schema_hash_for_manifest(manifest);
-        let ability_ura = local_control_plane_ability_ura(&name);
-        let descriptor_hash = descriptor_hash_for_ability_ura_parts(
-            &ability_ura,
-            &name,
-            version.as_str(),
-            call_mode,
-            schema_hash,
-        );
-        Ok(Self {
-            ability_ura,
-            name,
-            version,
-            call_mode,
-            schema_hash,
-            descriptor_hash,
-        })
-    }
-
-    pub fn for_ability_ura(
-        ability_ura: impl Into<String>,
-        name: impl Into<String>,
-        version: impl Into<String>,
-        call_mode: CallMode,
-        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-    ) -> Result<Self, AbilityControlPlaneError> {
-        let ability_ura = ability_ura.into();
-        validate_descriptor_ability_ura(&ability_ura)?;
-        let mut record = Self::new(name, version, call_mode, manifest)?;
-        record.ability_ura = ability_ura;
-        record.descriptor_hash = descriptor_hash_for_ability_ura_parts(
-            &record.ability_ura,
-            &record.name,
-            record.version.as_str(),
-            record.call_mode,
-            record.schema_hash,
-        );
-        Ok(record)
-    }
-
-    pub fn to_axon_descriptor(
-        &self,
-    ) -> easynet_axon::invocation::axiom::CanonicalAbilityDescriptor {
-        let mut descriptor = easynet_axon::invocation::axiom::CanonicalAbilityDescriptor {
-            ability_ura: self.ability_ura.clone(),
-            name: self.name.clone(),
-            version: self.version.to_string(),
-            call_mode: self.call_mode.axon_call_mode(),
-            schema_hash: self.schema_hash.0,
-            descriptor_hash: [0u8; 32],
-        };
-        descriptor.descriptor_hash =
-            easynet_axon::invocation::axiom::ability_descriptor_hash(&descriptor);
-        descriptor
-    }
-
-    pub fn ability_ura(&self) -> &str {
-        &self.ability_ura
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn version(&self) -> &AbilityDescriptorVersion {
-        &self.version
-    }
-
-    pub fn call_mode(&self) -> CallMode {
-        self.call_mode
-    }
-
-    pub fn schema_hash(&self) -> SchemaHash {
-        self.schema_hash
-    }
-
-    pub fn descriptor_hash(&self) -> DescriptorHash {
-        self.descriptor_hash
-    }
-
-    pub fn key(&self) -> AbilityDescriptorKey {
-        AbilityDescriptorKey {
-            ability: self.name.clone(),
-            descriptor_version: self.version.clone(),
-            call_mode: self.call_mode,
-        }
-    }
-}
-
 pub(crate) fn is_valid_ability_name(name: &str) -> bool {
     if name.trim().is_empty() || name.trim() != name {
         return false;
@@ -423,38 +292,17 @@ pub(crate) fn is_valid_descriptor_version(version: &str) -> bool {
     crate::daemon::ability::manifest::is_valid_descriptor_version(version)
 }
 
-fn ensure_manifest_descriptor_version_matches(
-    registration_version: &str,
-    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-) -> Result<(), AbilityControlPlaneError> {
-    let Some(manifest) = manifest else {
-        return Ok(());
-    };
-    let manifest_version = manifest.descriptor_version();
-    if manifest_version == registration_version {
-        return Ok(());
-    }
-    Err(AbilityControlPlaneError::DescriptorVersionMismatch {
-        manifest_version: manifest_version.to_string(),
-        registration_version: registration_version.to_string(),
-    })
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct AbilityDescriptorRegistry {
-    descriptors: BTreeMap<AbilityControlPlaneKey, AbilityDescriptorRecord>,
+    descriptors: BTreeMap<AbilityControlPlaneKey, AbilityDescriptor>,
 }
 
 impl AbilityDescriptorRegistry {
-    pub(crate) fn register(
-        &mut self,
-        key: AbilityControlPlaneKey,
-        descriptor: AbilityDescriptorRecord,
-    ) {
+    pub(crate) fn register(&mut self, key: AbilityControlPlaneKey, descriptor: AbilityDescriptor) {
         self.descriptors.insert(key, descriptor);
     }
 
-    pub(crate) fn get(&self, key: &AbilityControlPlaneKey) -> Option<&AbilityDescriptorRecord> {
+    pub(crate) fn get(&self, key: &AbilityControlPlaneKey) -> Option<&AbilityDescriptor> {
         self.descriptors.get(key)
     }
 
@@ -467,7 +315,7 @@ impl AbilityDescriptorRegistry {
         authority_root: &str,
         ability: &str,
         call_mode: CallMode,
-    ) -> Vec<(AbilityControlPlaneKey, AbilityDescriptorRecord)> {
+    ) -> Vec<(AbilityControlPlaneKey, AbilityDescriptor)> {
         self.descriptors
             .iter()
             .filter(|(key, _)| {
@@ -507,24 +355,19 @@ impl AbilityDescriptorRegistry {
     }
 }
 
-pub fn schema_hash_for_manifest(
-    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-) -> SchemaHash {
-    let summary = governed_schema_summary_for_manifest(manifest);
-    schema_hash_for_governed_summary(&summary)
-}
-
 pub fn governed_schema_summary(
     input: &Value,
     output: &Value,
     access_policy: Value,
     hints: Value,
+    receipt_semantics: Value,
 ) -> Value {
     serde_json::json!({
         "input": input,
         "output": output,
         "access_policy": access_policy,
         "hints": hints,
+        "receipt_semantics": receipt_semantics,
     })
 }
 
@@ -548,151 +391,6 @@ pub fn schema_hash_for_governed_summary(summary: &Value) -> SchemaHash {
         easynet_axon::invocation::axiom::ability_schema_hash(summary, &empty)
             .expect("Axon ability schema hash must serialize JSON schema values"),
     )
-}
-
-pub fn schema_hash_for_schema_summary(input: &Value, output: &Value) -> SchemaHash {
-    SchemaHash(
-        easynet_axon::invocation::axiom::ability_schema_hash(input, output)
-            .expect("Axon ability schema hash must serialize JSON schema values"),
-    )
-}
-
-pub fn descriptor_hash_for_parts(
-    name: &str,
-    version: &str,
-    call_mode: CallMode,
-    schema_hash: SchemaHash,
-) -> DescriptorHash {
-    descriptor_hash_for_ability_ura_parts(
-        &local_control_plane_ability_ura(name),
-        name,
-        version,
-        call_mode,
-        schema_hash,
-    )
-}
-
-fn local_control_plane_ability_ura(name: &str) -> String {
-    let digest = Sha256::digest(name.as_bytes());
-    let local_name = format!("control.{}", hex::encode(digest));
-    crate::core::ura::owner_ability_ura(&crate::core::ura::hub_ura("local"), &local_name)
-        .expect("validated descriptor name must build a local control-plane Ability URA")
-}
-
-fn validate_descriptor_ability_ura(ability_ura: &str) -> Result<(), AbilityControlPlaneError> {
-    if ability_ura.trim().is_empty() {
-        return Err(AbilityControlPlaneError::EmptyDescriptorAbilityUra);
-    }
-    let parsed = crate::core::ura::parse_ura(ability_ura).map_err(|_| {
-        AbilityControlPlaneError::InvalidDescriptorAbilityUra {
-            ability_ura: ability_ura.to_string(),
-        }
-    })?;
-    if parsed.kind != crate::core::ura::URAKind::Ability {
-        return Err(AbilityControlPlaneError::InvalidDescriptorAbilityUra {
-            ability_ura: ability_ura.to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn governed_schema_summary_for_manifest(
-    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-) -> Value {
-    let empty = Value::Object(Default::default());
-    match manifest {
-        Some(manifest) => {
-            let access = manifest.access();
-            let access_policy = manifest_access_policy_projection(&access);
-            governed_schema_summary(
-                manifest.input_schema(),
-                manifest.output_schema().unwrap_or(&empty),
-                access_policy,
-                serde_json::to_value(crate::daemon::ability::descriptors::AbilityHints::default())
-                    .expect("ability hints serialize"),
-            )
-        }
-        None => {
-            let access = crate::daemon::ability::manifest::AccessPolicy::default();
-            let access_policy = manifest_access_policy_projection(&access);
-            governed_schema_summary(
-                &empty,
-                &empty,
-                access_policy,
-                serde_json::to_value(crate::daemon::ability::descriptors::AbilityHints::default())
-                    .expect("ability hints serialize"),
-            )
-        }
-    }
-}
-
-fn manifest_access_policy_projection(
-    access: &crate::daemon::ability::manifest::AccessPolicy,
-) -> Value {
-    governed_access_policy_summary(
-        serde_json::to_value(manifest_visibility_projection(access.visibility))
-            .expect("manifest visibility projection serializes"),
-        serde_json::to_value(crate::daemon::ability::descriptors::ScopeRule::Any)
-            .expect("scope rule serializes"),
-        serde_json::to_value(manifest_scope_agents_projection(access))
-            .expect("scope rule serializes"),
-        serde_json::to_value(sorted_policy_list(access.deny_callers.as_deref()))
-            .expect("deny caller list serializes"),
-    )
-}
-
-fn manifest_visibility_projection(
-    visibility: crate::daemon::ability::manifest::ManifestAccessScope,
-) -> crate::daemon::ability::descriptors::Visibility {
-    match visibility {
-        crate::daemon::ability::manifest::ManifestAccessScope::Selfish => {
-            crate::daemon::ability::descriptors::Visibility::Private
-        }
-        crate::daemon::ability::manifest::ManifestAccessScope::Device => {
-            crate::daemon::ability::descriptors::Visibility::Scoped
-        }
-        crate::daemon::ability::manifest::ManifestAccessScope::Public => {
-            crate::daemon::ability::descriptors::Visibility::Public
-        }
-    }
-}
-
-fn manifest_scope_agents_projection(
-    access: &crate::daemon::ability::manifest::AccessPolicy,
-) -> crate::daemon::ability::descriptors::ScopeRule {
-    match access.allow_callers.as_ref() {
-        Some(allow) if !allow.is_empty() => {
-            crate::daemon::ability::descriptors::ScopeRule::OnlyMatching(sorted_policy_list(Some(
-                allow.as_slice(),
-            )))
-        }
-        _ => crate::daemon::ability::descriptors::ScopeRule::Any,
-    }
-}
-
-fn sorted_policy_list(values: Option<&[String]>) -> Vec<String> {
-    let mut values = values
-        .unwrap_or_default()
-        .iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    values.sort();
-    values.dedup();
-    values
-}
-
-pub fn descriptor_hash_for_manifest_parts(
-    name: &str,
-    version: &str,
-    call_mode: CallMode,
-    schema_hash: SchemaHash,
-    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-) -> DescriptorHash {
-    let governed_schema_hash = manifest
-        .map(|manifest| schema_hash_for_manifest(Some(manifest)))
-        .unwrap_or(schema_hash);
-    descriptor_hash_for_parts(name, version, call_mode, governed_schema_hash)
 }
 
 pub fn descriptor_hash_for_ability_ura_parts(
@@ -762,148 +460,15 @@ mod tests {
 
     #[test]
     fn descriptor_hash_changes_when_version_changes() {
-        let schema_hash = SchemaHash([7u8; 32]);
-        let v1 = descriptor_hash_for_parts("fs.read", "1.0.0", CallMode::Rpc, schema_hash);
-        let v2 = descriptor_hash_for_parts("fs.read", "2.0.0", CallMode::Rpc, schema_hash);
-        assert_ne!(v1, v2);
+        let descriptor =
+            AbilityDescriptor::new("fs.read", LOCAL_DEVICE_URA, Visibility::Scoped).unwrap();
+        let v1 = descriptor.clone().with_version("1.0.0").unwrap();
+        let v2 = descriptor.with_version("2.0.0").unwrap();
+        assert_ne!(v1.descriptor_hash_bytes(), v2.descriptor_hash_bytes());
     }
 
     #[test]
-    fn descriptor_hash_binds_manifest_access_policy() {
-        let input = json!({"type": "object"});
-        let base = crate::daemon::ability::manifest::AbilityManifest::new(
-            "quote",
-            "emit a quotable line",
-            input.clone(),
-        )
-        .unwrap();
-        let restricted = crate::daemon::ability::manifest::AbilityManifest::new(
-            "quote",
-            "emit a quotable line",
-            input,
-        )
-        .unwrap()
-        .with_access(crate::daemon::ability::manifest::AccessPolicy {
-            visibility: crate::daemon::ability::manifest::ManifestAccessScope::Selfish,
-            allow_callers: None,
-            deny_callers: None,
-        })
-        .unwrap();
-
-        let base_record =
-            AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&base))
-                .unwrap();
-        let restricted_record = AbilityDescriptorRecord::from_manifest(
-            "mentor.quote",
-            CallMode::Rpc,
-            Some(&restricted),
-        )
-        .unwrap();
-        assert_ne!(
-            base_record.descriptor_hash(),
-            restricted_record.descriptor_hash(),
-            "descriptor_hash must change when ability access policy changes"
-        );
-    }
-
-    #[test]
-    fn descriptor_hash_binds_manifest_deny_callers() {
-        let input = json!({"type": "object"});
-        let base = crate::daemon::ability::manifest::AbilityManifest::new(
-            "quote",
-            "emit a quotable line",
-            input.clone(),
-        )
-        .unwrap()
-        .with_access(crate::daemon::ability::manifest::AccessPolicy {
-            visibility: crate::daemon::ability::manifest::ManifestAccessScope::Device,
-            allow_callers: Some(vec!["alice".to_string()]),
-            deny_callers: None,
-        })
-        .unwrap();
-        let deny_alice = crate::daemon::ability::manifest::AbilityManifest::new(
-            "quote",
-            "emit a quotable line",
-            input,
-        )
-        .unwrap()
-        .with_access(crate::daemon::ability::manifest::AccessPolicy {
-            visibility: crate::daemon::ability::manifest::ManifestAccessScope::Device,
-            allow_callers: Some(vec!["alice".to_string()]),
-            deny_callers: Some(vec!["alice".to_string()]),
-        })
-        .unwrap();
-
-        let base_record =
-            AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&base))
-                .unwrap();
-        let deny_record = AbilityDescriptorRecord::from_manifest(
-            "mentor.quote",
-            CallMode::Rpc,
-            Some(&deny_alice),
-        )
-        .unwrap();
-        assert_ne!(
-            base_record.descriptor_hash(),
-            deny_record.descriptor_hash(),
-            "descriptor_hash must bind deny_callers because deny overrides allow at invoke time"
-        );
-    }
-
-    #[test]
-    fn manifest_schema_hash_matches_runtime_descriptor_projection() {
-        let input = json!({
-            "type": "object",
-            "properties": {"topic": {"type": "string"}},
-            "required": ["topic"],
-        });
-        let output = json!({
-            "type": "object",
-            "properties": {"quote": {"type": "string"}},
-            "required": ["quote"],
-        });
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
-            "quote",
-            "emit a quotable line",
-            input.clone(),
-        )
-        .unwrap()
-        .with_output_schema(output.clone())
-        .unwrap()
-        .with_access(crate::daemon::ability::manifest::AccessPolicy {
-            visibility: crate::daemon::ability::manifest::ManifestAccessScope::Device,
-            allow_callers: Some(vec!["alice".to_string(), "bob".to_string()]),
-            deny_callers: None,
-        })
-        .unwrap();
-
-        let control_plane_record =
-            AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&manifest))
-                .unwrap();
-        let runtime_descriptor = crate::daemon::ability::descriptors::AbilityDescriptor::new(
-            "mentor.quote",
-            LOCAL_DEVICE_URA,
-            crate::daemon::ability::descriptors::Visibility::Scoped,
-        )
-        .unwrap()
-        .with_input_schema(input)
-        .with_output_schema(output)
-        .with_scope_agents(
-            crate::daemon::ability::descriptors::ScopeRule::OnlyMatching(vec![
-                "alice".to_string(),
-                "bob".to_string(),
-            ]),
-        );
-
-        assert_eq!(
-            control_plane_record.schema_hash().0,
-            runtime_descriptor.schema_hash_bytes(),
-            "manifest-derived control-plane schema hashes must use the same governed summary as runtime AbilityDescriptor"
-        );
-    }
-
-    #[test]
-    fn descriptor_record_from_manifest_uses_manifest_descriptor_version() {
+    fn manifest_normalization_has_one_descriptor_hash_path() {
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "quote",
             "emit a quotable line",
@@ -912,33 +477,24 @@ mod tests {
         .unwrap()
         .with_descriptor_version("2.0.0")
         .unwrap();
-
-        let record =
-            AbilityDescriptorRecord::from_manifest("mentor.quote", CallMode::Rpc, Some(&manifest))
-                .unwrap();
-        assert_eq!(record.version().as_str(), "2.0.0");
-    }
-
-    #[test]
-    fn descriptor_record_rejects_explicit_version_that_disagrees_with_manifest() {
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
-            "quote",
-            "emit a quotable line",
-            json!({"type": "object"}),
+        let descriptor = AbilityDescriptor::from_registry_manifest(
+            "mentor.quote",
+            "easynet:///r/default/agent/u.mentor",
+            CallMode::Rpc,
+            Some(&manifest),
         )
-        .unwrap()
-        .with_descriptor_version("2.0.0")
         .unwrap();
-
-        let err =
-            AbilityDescriptorRecord::new("mentor.quote", "1.0.0", CallMode::Rpc, Some(&manifest))
-                .unwrap_err();
+        assert_eq!(descriptor.version, "2.0.0");
         assert_eq!(
-            err,
-            AbilityControlPlaneError::DescriptorVersionMismatch {
-                manifest_version: "2.0.0".to_string(),
-                registration_version: "1.0.0".to_string(),
-            }
+            descriptor.descriptor_hash_bytes(),
+            descriptor_hash_for_ability_ura_parts(
+                &descriptor.canonical_ability_ura().unwrap(),
+                &descriptor.public_name(),
+                &descriptor.version,
+                descriptor.call_mode(),
+                SchemaHash(descriptor.schema_hash_bytes()),
+            )
+            .0
         );
     }
 
@@ -949,11 +505,11 @@ mod tests {
             AbilityControlPlaneError::EmptyDescriptorVersion
         );
         assert_eq!(
-            AbilityDescriptorRecord::from_manifest("", CallMode::Rpc, None).unwrap_err(),
+            AbilityDescriptorKey::new("", "1.0.0", CallMode::Rpc).unwrap_err(),
             AbilityControlPlaneError::EmptyDescriptorName
         );
         assert_eq!(
-            AbilityDescriptorRecord::from_manifest("bad/name", CallMode::Rpc, None).unwrap_err(),
+            AbilityDescriptorKey::new("bad/name", "1.0.0", CallMode::Rpc).unwrap_err(),
             AbilityControlPlaneError::InvalidDescriptorName {
                 name: "bad/name".to_string()
             }
@@ -963,7 +519,7 @@ mod tests {
             "fs/read", "fs\\read",
         ] {
             assert_eq!(
-                AbilityDescriptorRecord::from_manifest(invalid, CallMode::Rpc, None).unwrap_err(),
+                AbilityDescriptorKey::new(invalid, "1.0.0", CallMode::Rpc).unwrap_err(),
                 AbilityControlPlaneError::InvalidDescriptorName {
                     name: invalid.to_string()
                 },
@@ -971,7 +527,7 @@ mod tests {
             );
         }
         assert_eq!(
-            AbilityDescriptorRecord::new("fs.read", "v1", CallMode::Rpc, None).unwrap_err(),
+            AbilityDescriptorKey::new("fs.read", "v1", CallMode::Rpc).unwrap_err(),
             AbilityControlPlaneError::InvalidDescriptorVersion {
                 version: "v1".to_string()
             }

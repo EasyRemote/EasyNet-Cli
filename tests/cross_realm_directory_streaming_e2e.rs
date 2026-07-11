@@ -66,12 +66,12 @@ use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 /// `DirectoryEvent` and forwards it to the consumer.
 struct InProcessStreamingForwarder {
     peer_daemon: Arc<DaemonInvocationService>,
-    peer_loopback_uri: String,
+    peer_loopback_ura: String,
 }
 
 #[async_trait]
 impl FederationClient for InProcessStreamingForwarder {
-    async fn forward_invoke(
+    async fn invoke(
         &self,
         _target_hub_endpoint: &HubEndpoint,
         _request: InvokeRequest,
@@ -86,12 +86,12 @@ impl FederationClient for InProcessStreamingForwarder {
         _target_hub_endpoint: &HubEndpoint,
         _request: InvokeServerStreamRequest,
     ) -> Result<DirectoryEventStream, FederationClientError> {
-        // Build a request stamped with the peer's loopback URI
+        // Build a request stamped with the peer's loopback URA
         // so daemon A's admission gate admits via the bypass.
         let request = InvokeServerStreamRequest {
             envelope: Some(easynet_axon::pb::axon::v1::Envelope {
                 caller: Some(easynet_axon::pb::axon::v1::AgentIdentity {
-                    ura: self.peer_loopback_uri.clone(),
+                    ura: self.peer_loopback_ura.clone(),
                     profile: "easynet-strict-v2".to_string(),
                 }),
                 ..Default::default()
@@ -139,7 +139,7 @@ async fn streaming_chain_propagates_presence_event_to_peer_cell() {
     let daemon_b_directory = SharedFederatedDirectoryView::default();
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessStreamingForwarder {
         peer_daemon: Arc::clone(&daemon_a),
-        peer_loopback_uri: daemon_a_loopback.clone(),
+        peer_loopback_ura: daemon_a_loopback.clone(),
     });
 
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
@@ -225,7 +225,7 @@ async fn streaming_chain_propagates_presence_remove() {
     let daemon_b_directory = SharedFederatedDirectoryView::default();
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessStreamingForwarder {
         peer_daemon: Arc::clone(&daemon_a),
-        peer_loopback_uri: daemon_a_loopback.clone(),
+        peer_loopback_ura: daemon_a_loopback.clone(),
     });
 
     let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();

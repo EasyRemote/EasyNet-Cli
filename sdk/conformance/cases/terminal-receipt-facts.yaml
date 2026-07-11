@@ -1,0 +1,12 @@
+id: invocation/terminal_receipt_facts
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: InvocationResult preserves opaque terminal receipt facts for audit and causal continuation without exposing a receipt-history product profile.
+steps:
+  - action: project_terminal_invocation_result
+  - action: preserve_opaque_receipt_facts
+expect:
+  result: terminal_receipt_facts_preserved
+  receipt_history_client: false

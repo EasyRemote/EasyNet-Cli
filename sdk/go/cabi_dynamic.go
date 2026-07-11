@@ -39,7 +39,7 @@ import (
 	"unsafe"
 )
 
-const expectedCABIABIVersion uint32 = 4
+const expectedCABIABIVersion uint32 = 5
 
 // CABIDiscoveryTransport is an optional Go discovery transport backed by
 // libeasynet_cli. It owns no daemon or Axon semantics; it only loads the C ABI

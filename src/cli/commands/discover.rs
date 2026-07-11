@@ -1059,7 +1059,7 @@ fn rank_and_deduplicate_candidates(mut candidates: Vec<Candidate>, limit: usize)
 /// Default top-level discovery uses the daemon-owned aggregate discover
 /// entry. `--as-agent` intentionally opts into one concrete hosted
 /// agent self tier, validates the owner against `agent.list`, and keeps
-/// the wire ability owner-local (`discover`) instead of reusing the
+/// the wire ability on the canonical aggregate (`agent.discover`) instead of reusing the
 /// daemon's historical `<agent>.discover` registry key.
 fn resolve_ladder_target(as_agent: Option<&str>) -> anyhow::Result<DiscoverLadderTarget> {
     let Some(requested_agent) = as_agent.map(str::trim).filter(|agent| !agent.is_empty()) else {

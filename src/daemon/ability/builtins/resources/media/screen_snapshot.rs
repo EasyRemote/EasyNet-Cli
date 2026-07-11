@@ -922,23 +922,23 @@ mod tests {
     }
 
     #[test]
-    fn registration_publishes_screen_manifests_to_catalog_snapshot() {
+    fn registration_publishes_screen_descriptors_to_catalog_snapshot() {
         let mut reg = AxonAbilityCatalog::new();
         register_with_synthetic(&mut reg);
-        let rows = reg.ability_catalog_snapshot();
+        let rows = reg.authority_ability_catalog_snapshot();
 
         for ability in [ABILITY_SCREEN_SNAPSHOT, ABILITY_SCREEN_SUBSCRIBE] {
-            let manifest = rows
+            let descriptor = rows
                 .iter()
                 .find(|row| row.name == ability)
-                .and_then(|row| row.manifest.as_ref())
-                .unwrap_or_else(|| panic!("{ability} must publish schema manifest"));
+                .map(|row| &row.descriptor)
+                .unwrap_or_else(|| panic!("{ability} must publish canonical descriptor"));
             assert_eq!(
-                manifest.description(),
+                descriptor.description,
                 media::description(ability).expect("screen description")
             );
             assert_eq!(
-                manifest.input_schema(),
+                descriptor.input_schema(),
                 &media::input_schema(ability).expect("screen schema")
             );
         }

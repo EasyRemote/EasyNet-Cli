@@ -6,7 +6,6 @@
 // Catalog metadata owner for daemon-owned system abilities.
 
 use super::{build_registry, build_system_registry};
-use std::collections::{BTreeMap, BTreeSet};
 
 use crate::daemon::ability::builtins::{
     agents::{
@@ -45,7 +44,7 @@ use crate::daemon::ability::builtins::{
         voice as voice_call_ability,
     },
 };
-use crate::daemon::ability::catalog::{ability_toml, system_ability_descriptor_path};
+use crate::daemon::ability::catalog::system_ability_descriptor_path;
 use crate::daemon::ability::descriptors::AbilityHints;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::names::{
@@ -96,24 +95,7 @@ pub fn is_publishable_catalog_name(name: &str) -> bool {
     )
 }
 
-/// One row of a system ability's discovery + registration metadata.
-///
-/// Centralises (name, description, input_schema) so every consumer —
-/// the federation label builder (`registry::a2a_labels`), the
-/// runtime-local register publisher (`daemon::federation::publish`), and any
-/// future `easynet ability list --system` surface — pulls from one
-/// table. Adding a new system ability now requires updating exactly
-/// one match arm in `metadata_for`; previously the same name lived
-/// in three places that could (and did) drift.
-#[derive(Debug, Clone)]
-pub struct SystemAbilityMetadata {
-    pub name: String,
-    pub description: String,
-    pub input_schema: serde_json::Value,
-    pub hints: crate::daemon::ability::descriptors::AbilityHints,
-}
-
-/// Every published system ability's metadata, in the deterministic
+/// Every published system ability descriptor, in deterministic
 /// order `published_ability_names()` returns.
 ///
 /// `<agent>.chat` is **excluded** even when the live registry would
@@ -123,7 +105,7 @@ pub struct SystemAbilityMetadata {
 /// them through the system path would double-register with a
 /// different (synthesised) schema. Filter is by suffix because the
 /// agent name varies per install.
-pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
+pub fn published_abilities() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let registry = build_registry();
     published_abilities_from_registry(&registry)
 }
@@ -135,7 +117,7 @@ pub fn published_abilities() -> Vec<SystemAbilityMetadata> {
 /// the catalogue with plugin package registration disabled so descriptor
 /// generation cannot read `$HOME/.easynet/plugins` or write user-local plugin
 /// descriptors by accident.
-pub fn published_system_abilities() -> Vec<SystemAbilityMetadata> {
+pub fn published_system_abilities() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let registry = build_system_registry();
     published_abilities_from_registry(&registry)
 }
@@ -151,7 +133,7 @@ pub fn published_system_abilities() -> Vec<SystemAbilityMetadata> {
 /// device-profile Agent or any hosted sub-profile Agent.
 pub fn published_system_abilities_for_owner(
     owner: crate::daemon::ability::dispatch::OwnerKind,
-) -> Vec<SystemAbilityMetadata> {
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let registry = build_system_registry();
     published_abilities_from_registry_for_owner(&registry, Some(&owner))
 }
@@ -172,40 +154,29 @@ pub fn system_ability_owner(
     registry.control_plane_owner(ability_name)
 }
 
-fn published_abilities_from_registry(registry: &AxonAbilityCatalog) -> Vec<SystemAbilityMetadata> {
+fn published_abilities_from_registry(
+    registry: &AxonAbilityCatalog,
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     published_abilities_from_registry_for_owner(registry, None)
 }
 
 fn published_abilities_from_registry_for_owner(
     registry: &AxonAbilityCatalog,
     owner: Option<&crate::daemon::ability::dispatch::OwnerKind>,
-) -> Vec<SystemAbilityMetadata> {
-    let hint_snapshot = AbilityDiscoveryHintSnapshot::from_registry(registry);
-    let catalog_snapshot = registry.ability_catalog_snapshot();
-    catalog_snapshot
+) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    registry
+        .authority_ability_catalog_snapshot()
         .into_iter()
         .filter(|row| is_publishable_catalog_name(&row.name))
-        .filter(|row| {
-            owner
-                // SPEC §9.1.A Step 5: owner filter reads the control-plane
-                // record, not the legacy `owner` side table.
-                .map(|expected| row.owner.as_ref() == Some(expected))
-                .unwrap_or(true)
-        })
-        .map(|row| row.name)
-        .filter(|name| !name.ends_with(".chat"))
+        .filter(|row| owner.map(|expected| &row.owner == expected).unwrap_or(true))
+        .filter(|row| !row.name.ends_with(".chat"))
         // RFC-002 §3.3 keyring abilities are owner-namespaced under
         // `device` and self-described by `keyring::abilities` — they
         // don't go through the system descriptor table. Filter them
         // for the same reason `<agent>.chat` is filtered: their
         // schema lives inside the registering module, not here.
-        .filter(|name| !name.starts_with("device.keyring."))
-        .map(|name| SystemAbilityMetadata {
-            description: description_for_owned(&name),
-            input_schema: input_schema_for(&name),
-            hints: hint_snapshot.for_name(&name),
-            name,
-        })
+        .filter(|row| !row.name.starts_with("device.keyring."))
+        .map(|row| row.descriptor)
         .collect()
 }
 
@@ -222,39 +193,24 @@ pub fn descriptor_path_for(name: &str) -> String {
     })
 }
 
-/// One catalogue-local call-mode index used while rendering descriptor hints.
-///
-/// The previous implementation derived hints by calling
-/// `registry.has_rpc/has_stream/has_bidi` for each ability. With a runtime
-/// attached those helpers synchronously queried `LocalRuntime::ability_options`,
-/// so a pure list operation fanned out into three async runtime reads per row.
-/// This snapshot is the bounded read model: one control-plane pass, then O(1)
-/// local lookups for every rendered descriptor.
-#[derive(Debug, Clone)]
-pub(crate) struct AbilityDiscoveryHintSnapshot {
-    modes_by_ability: BTreeMap<String, BTreeSet<DescriptorCallMode>>,
-}
-
-impl AbilityDiscoveryHintSnapshot {
-    pub(crate) fn from_registry(registry: &AxonAbilityCatalog) -> Self {
-        Self {
-            modes_by_ability: registry.call_modes_by_ability(),
-        }
-    }
-
-    pub(crate) fn for_name(&self, name: &str) -> AbilityHints {
-        discovery_hints_from_modes(name, self.modes_by_ability.get(name))
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn discovery_hints_for(registry: &AxonAbilityCatalog, name: &str) -> AbilityHints {
-    AbilityDiscoveryHintSnapshot::from_registry(registry).for_name(name)
+    registry
+        .canonical_descriptor_for_ability(name)
+        .ok()
+        .flatten()
+        .map(|descriptor| descriptor.hints)
+        .unwrap_or_default()
 }
 
-pub(crate) fn discovery_hints_for_name(name: &str) -> AbilityHints {
+pub(crate) fn registered_descriptor_for_name(
+    name: &str,
+) -> Option<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let registry = build_registry();
-    AbilityDiscoveryHintSnapshot::from_registry(&registry).for_name(name)
+    registry
+        .canonical_descriptor_for_ability(name)
+        .ok()
+        .flatten()
 }
 
 /// RFC-014 hub-linked-token safe-read projection.
@@ -266,16 +222,12 @@ pub(crate) fn discovery_hints_for_name(name: &str) -> AbilityHints {
 /// session authority. This function is deliberately catalog-owned so
 /// admission and diagnostics do not maintain a parallel allowlist.
 pub(crate) fn safe_read_eligible_for_name(name: &str) -> bool {
-    let hints = discovery_hints_for_name(name);
-    descriptor_safe_read_from_hints(name, &hints)
-}
-
-pub(crate) fn descriptor_safe_read_from_hints(name: &str, hints: &AbilityHints) -> bool {
-    hints.read_only
-        && hints.idempotent
-        && !hints.streaming_only
-        && !hints.bidi_only
-        && exposure_class_for_name(name) == AbilityExposureClass::DescriptorSafeMetadata
+    registered_descriptor_for_name(name).is_some_and(|descriptor| {
+        descriptor.hints.read_only
+            && descriptor.hints.idempotent
+            && descriptor.call_mode() == DescriptorCallMode::Rpc
+            && exposure_class_for_name(name) == AbilityExposureClass::DescriptorSafeMetadata
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,12 +254,7 @@ pub(crate) fn exposure_class_for_name(name: &str) -> AbilityExposureClass {
         | governance_names::ADMIN_STATUS
         | governance_names::META_DESCRIBE
         | governance_names::META_LIST_ABILITIES
-        | federation_names::RESOLVE
-        | federation_names::DISCOVER
         | federation_names::STATUS
-        | federation_names::NAMESPACE_RESOLVE
-        | federation_names::RESOLVE_KEY
-        | federation_names::IDENTITY_LIST_USER_PUBKEYS
         | resource_names::META_LIST_RESOURCES
         | "plugin.status"
         | "plugin.companion_status" => DescriptorSafeMetadata,
@@ -345,6 +292,11 @@ pub(crate) fn exposure_class_for_name(name: &str) -> AbilityExposureClass {
         | device_names::FS_READ
         | device_names::FS_STAT
         | device_names::FS_LIST
+        | federation_names::RESOLVE
+        | federation_names::DISCOVER
+        | federation_names::NAMESPACE_RESOLVE
+        | federation_names::RESOLVE_KEY
+        | federation_names::IDENTITY_LIST_USER_PUBKEYS
         | federation_names::NODE_LIST
         | federation_names::NODE_DESCRIBE
         | integration_names::OPENAI_LIST_MODELS
@@ -356,8 +308,7 @@ pub(crate) fn exposure_class_for_name(name: &str) -> AbilityExposureClass {
 
         // Carriers and long-lived/session-style surfaces are never hub
         // default safe-read, even when a specific frame is idempotent.
-        "federation.forward_invoke"
-        | device_names::SESSION_OPEN
+        device_names::SESSION_OPEN
         | device_names::SESSION_ATTACH
         | device_names::TERMINAL_CREATE
         | device_names::TERMINAL_ATTACH
@@ -383,32 +334,17 @@ pub(crate) fn exposure_class_for_name(name: &str) -> AbilityExposureClass {
     }
 }
 
-fn discovery_hints_from_modes(
-    name: &str,
-    modes: Option<&BTreeSet<DescriptorCallMode>>,
+/// Normalize semantic-layer purity and one exact registered transport into
+/// descriptor hints at the registration boundary.
+///
+/// This function is pure and does not build or inspect a registry. Static and
+/// dynamic registration can therefore attach hints before committing the
+/// canonical descriptor without creating a catalogue-read recursion.
+pub(crate) fn registration_hints(
+    owner_ura: &str,
+    registry_name: &str,
+    call_mode: DescriptorCallMode,
 ) -> AbilityHints {
-    if name.ends_with(".chat") {
-        // Hosted chat abilities are registered on the local stream
-        // surface today, but the user-facing control-plane path still
-        // serves them through unary invoke + OpenAI compatibility.
-        // Advertising them as `streaming_only` would regress the UI
-        // into choosing InvokeStream against a daemon path that is not
-        // yet wired for generic stream fallback.
-        return Default::default();
-    }
-    if name == crate::daemon::ability::builtins::resources::media::ABILITY_CAMERA_SUBSCRIBE {
-        // Camera preview has a unary compatibility path for older
-        // app shells that still call Invoke for the first frame.
-        // Discovery must continue to advertise the canonical stream
-        // shape so correct clients choose Subscribe/InvokeStream.
-        return crate::daemon::ability::descriptors::AbilityHints {
-            streaming_only: true,
-            ..Default::default()
-        };
-    }
-    let has_rpc = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Rpc));
-    let has_stream = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Stream));
-    let has_bidi = modes.is_some_and(|modes| modes.contains(&DescriptorCallMode::Bidi));
     // Derive the purity hints from the ability's semantic layer — one
     // source of truth (classify_ability). Introspection/Observation are
     // pure reads (read_only + idempotent: re-issuing yields the same
@@ -419,7 +355,8 @@ fn discovery_hints_from_modes(
     // re-classifying ability names locally. `destructive` stays a
     // conservative false: the layer model does not assert destructiveness,
     // and the hint is advisory only (RFC §1.6).
-    let (read_only, idempotent) = match classify_ability(name) {
+    let public_name = crate::core::ura::descriptor_public_ability_name(owner_ura, registry_name);
+    let (read_only, idempotent) = match classify_ability(&public_name) {
         Some(AbilityLayer::Introspection) | Some(AbilityLayer::Observation) => (true, true),
         Some(AbilityLayer::Control) => (false, true),
         Some(AbilityLayer::Operational) | None => (false, false),
@@ -427,8 +364,8 @@ fn discovery_hints_from_modes(
     AbilityHints {
         read_only,
         idempotent,
-        streaming_only: has_stream && !has_rpc && !has_bidi,
-        bidi_only: has_bidi,
+        streaming_only: call_mode == DescriptorCallMode::Stream,
+        bidi_only: call_mode == DescriptorCallMode::Bidi,
         ..Default::default()
     }
 }
@@ -939,23 +876,6 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         }),
         _ => serde_json::json!({ "type": "object" }),
     }
-}
-
-/// RFC-006 metadata for a published ability. Returns `None` for
-/// every existing ability — they emit unchanged TOMLs and on-wire
-/// descriptors. PR2 (#196) adds `Some(...)` arms for the eight
-/// physical-channel abilities + meta.list_resources, declaring
-/// their RFC-006 class (Stream / Query). No Transition consumer
-/// exists yet; the renderer + descriptor schema support it but
-/// no name returns a Transition variant in v1.
-pub fn rfc006_for(name: &str) -> Option<ability_toml::Rfc006Metadata> {
-    if let Some(meta) = media::rfc006(name) {
-        return Some(meta);
-    }
-    if name == list_resources_ability::ABILITY_META_LIST_RESOURCES {
-        return Some(list_resources_ability::rfc006());
-    }
-    None
 }
 
 /// Sync bridge so `build_registry_with_services` (sync) can call

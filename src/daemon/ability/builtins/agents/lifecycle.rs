@@ -1,7 +1,19 @@
+//! File: `src/daemon/ability/builtins/agents/lifecycle.rs`
+//! Description: Transactional `agent.{start,stop,refresh}` handlers.
+//!
+//! Protocol responsibility: atomically converge the durable agent registry,
+//! hosted identity index, authority inventory, ability catalog, and live Axon
+//! runtime. A successful response means every local segment committed; Hub
+//! advertisement remains best-effort but is always represented explicitly.
+//!
+//! Implementation approach: lifecycle mutations advance through an explicit
+//! state machine and retain pre-mutation snapshots. Any local failure triggers
+//! reverse-order compensation; incomplete compensation is returned as a typed
+//! partial failure. Registrar readiness is a hard precondition, never a
+//! boot-window no-op or restart repair path.
+//
 // EasyNet CLI — agent.{start,stop} ability handlers
 // =================================================================
-//
-// File: src/daemon/ability/builtins/agents/lifecycle.rs
 //
 // Per RFC §18, the device-profile advertises these abilities under
 // device authority. They match the operator-facing `easynet agent add` /
@@ -61,7 +73,8 @@ use crate::daemon::ability::catalog::profiles::bootstrap::{
 };
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
-    block_on_hot_registrar, HotAgentAdvertiseRequest,
+    block_on_hot_registrar, HotAgentAdvertiseRequest, HotAgentAdvertiseState, HotAgentRegistrar,
+    HotAgentRegistrarError,
 };
 use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
 use crate::daemon::persistence::agent_registry as agents;
@@ -75,21 +88,246 @@ pub const ABILITY_START_AGENT: &str = crate::daemon::ability::names::agents::AGE
 pub const ABILITY_STOP_AGENT: &str = crate::daemon::ability::names::agents::AGENT_STOP;
 pub const ABILITY_REFRESH_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_REFRESH;
 
-/// Late-wired `Arc<HotAgentRegistrar>` shared between boot and the
-/// `agent.start` / `agent.stop` handler closures.
-///
-/// Boot constructs the registrar AFTER the `LocalRuntime` and
-/// `dispatch_handle` OnceLock are both wired. The agent-lifecycle
-/// register call runs EARLIER (during static-registry build), so
-/// the handler closures can't capture the registrar directly. We
-/// thread a `OnceLock<Arc<HotAgentRegistrar>>` instead: the
-/// handlers read through `get()` at dispatch time, and boot
-/// populates the cell once everything else is in place. Pre-set
-/// reads see `None` and skip runtime sync. The disk-side row is
-/// still written; the next daemon boot registers it into
-/// `LocalRuntime` through the normal catalogue build.
+/// Single-assignment registrar shared by catalogue assembly and lifecycle
+/// handler closures. The cell breaks the construction cycle; it is not a
+/// degradation seam. Missing or pending state is a typed hard error before any
+/// lifecycle mutation touches disk.
 pub type SharedHotRegistrarCell =
     std::sync::OnceLock<Arc<crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrar>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentLifecycleState {
+    Prepared,
+    Materialized,
+    DurablePersisted,
+    IdentityPersisted,
+    RuntimeSynchronized,
+    Committed,
+    RollingBack,
+    RolledBack,
+    PartialFailure,
+}
+
+impl std::fmt::Display for AgentLifecycleState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Prepared => "prepared",
+            Self::Materialized => "materialized",
+            Self::DurablePersisted => "durable_persisted",
+            Self::IdentityPersisted => "identity_persisted",
+            Self::RuntimeSynchronized => "runtime_synchronized",
+            Self::Committed => "committed",
+            Self::RollingBack => "rolling_back",
+            Self::RolledBack => "rolled_back",
+            Self::PartialFailure => "partial_failure",
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AgentLifecycleError {
+    #[error("{operation}: hot-Agent registrar is not wired")]
+    RegistrarUnavailable { operation: &'static str },
+    #[error("{operation}: registrar precondition failed: {source}")]
+    Registrar {
+        operation: &'static str,
+        #[source]
+        source: HotAgentRegistrarError,
+    },
+    #[error("{operation} failed in lifecycle state {state}: {cause}; rollback={rollback}")]
+    Mutation {
+        operation: &'static str,
+        state: AgentLifecycleState,
+        cause: String,
+        rollback: String,
+    },
+}
+
+#[derive(Debug, Default)]
+enum MaterializationRollback {
+    #[default]
+    None,
+    Created {
+        root: std::path::PathBuf,
+        root_preexisted: bool,
+    },
+    UpdatedSpec {
+        path: std::path::PathBuf,
+        prior_bytes: Vec<u8>,
+    },
+}
+
+impl MaterializationRollback {
+    fn rollback(&self) -> anyhow::Result<()> {
+        match self {
+            Self::None => Ok(()),
+            Self::UpdatedSpec { path, prior_bytes } => config::atomic_write(path, prior_bytes)
+                .map_err(|error| anyhow::anyhow!("restore {}: {error}", path.display())),
+            Self::Created {
+                root,
+                root_preexisted,
+            } => {
+                if !root.exists() {
+                    return Ok(());
+                }
+                if *root_preexisted {
+                    for relative in [
+                        "agent.toml",
+                        ".env",
+                        "abilities",
+                        "skills",
+                        "memory",
+                        "runs",
+                    ] {
+                        let path = root.join(relative);
+                        match std::fs::remove_dir_all(&path) {
+                            Ok(()) => {}
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(error) if path.is_file() => {
+                                std::fs::remove_file(&path).map_err(|remove_error| {
+                                    anyhow::anyhow!(
+                                        "remove rollback artifact {}: {error}; file removal: {remove_error}",
+                                        path.display()
+                                    )
+                                })?;
+                            }
+                            Err(error) => {
+                                return Err(anyhow::anyhow!(
+                                    "remove rollback artifact {}: {error}",
+                                    path.display()
+                                ));
+                            }
+                        }
+                    }
+                    Ok(())
+                } else {
+                    std::fs::remove_dir_all(root).map_err(|error| {
+                        anyhow::anyhow!("remove created agent root {}: {error}", root.display())
+                    })
+                }
+            }
+        }
+    }
+}
+
+struct AgentLifecycleTransaction {
+    operation: &'static str,
+    state: AgentLifecycleState,
+    original_registry: AgentRegistry,
+    original_local_agents: local_agents::LocalAgentsFile,
+    registry_written: bool,
+    identity_written: bool,
+    materialization: MaterializationRollback,
+}
+
+impl AgentLifecycleTransaction {
+    fn new(
+        operation: &'static str,
+        original_registry: AgentRegistry,
+        original_local_agents: local_agents::LocalAgentsFile,
+    ) -> Self {
+        Self {
+            operation,
+            state: AgentLifecycleState::Prepared,
+            original_registry,
+            original_local_agents,
+            registry_written: false,
+            identity_written: false,
+            materialization: MaterializationRollback::None,
+        }
+    }
+
+    fn record_materialization(&mut self, rollback: MaterializationRollback) {
+        self.materialization = rollback;
+        self.state = AgentLifecycleState::Materialized;
+    }
+
+    fn persist(
+        &mut self,
+        registry: &AgentRegistry,
+        identities: &local_agents::LocalAgentsFile,
+    ) -> Result<(), AgentLifecycleError> {
+        // Mark each segment before the atomic-write call: a post-rename
+        // directory-sync error means the new bytes may already be visible and
+        // therefore still require compensation.
+        self.registry_written = true;
+        if let Err(error) = agents::save_agents(registry) {
+            return Err(
+                self.failure_with_rollback(format!("persist durable agent registry: {error:#}"))
+            );
+        }
+        self.state = AgentLifecycleState::DurablePersisted;
+        self.identity_written = true;
+        if let Err(error) = local_agents::save(identities) {
+            return Err(self.failure_with_rollback(format!(
+                "persist hosted-Agent identity registry: {error:#}"
+            )));
+        }
+        self.state = AgentLifecycleState::IdentityPersisted;
+        Ok(())
+    }
+
+    fn mark_runtime_synchronized(&mut self) {
+        self.state = AgentLifecycleState::RuntimeSynchronized;
+    }
+
+    fn commit(&mut self) {
+        self.state = AgentLifecycleState::Committed;
+    }
+
+    fn failure_with_rollback(&mut self, cause: String) -> AgentLifecycleError {
+        let failed_state = self.state;
+        let rollback_failures = self.rollback();
+        AgentLifecycleError::Mutation {
+            operation: self.operation,
+            state: failed_state,
+            cause,
+            rollback: if rollback_failures.is_empty() {
+                "completed".to_string()
+            } else {
+                format!("partial({})", rollback_failures.join("; "))
+            },
+        }
+    }
+
+    fn rollback(&mut self) -> Vec<String> {
+        self.state = AgentLifecycleState::RollingBack;
+        let mut failures = Vec::new();
+        if self.identity_written {
+            if let Err(error) = local_agents::save(&self.original_local_agents) {
+                failures.push(format!("restore local-agents.json: {error:#}"));
+            }
+        }
+        if self.registry_written {
+            if let Err(error) = agents::save_agents(&self.original_registry) {
+                failures.push(format!("restore agents.json: {error:#}"));
+            }
+        }
+        if let Err(error) = self.materialization.rollback() {
+            failures.push(format!("restore agent directory: {error:#}"));
+        }
+        self.state = if failures.is_empty() {
+            AgentLifecycleState::RolledBack
+        } else {
+            AgentLifecycleState::PartialFailure
+        };
+        failures
+    }
+}
+
+fn require_hot_registrar(
+    hot_registrar: &SharedHotRegistrarCell,
+    operation: &'static str,
+) -> Result<Arc<HotAgentRegistrar>, AgentLifecycleError> {
+    let registrar = hot_registrar
+        .get()
+        .cloned()
+        .ok_or(AgentLifecycleError::RegistrarUnavailable { operation })?;
+    registrar
+        .require_ready()
+        .map_err(|source| AgentLifecycleError::Registrar { operation, source })?;
+    Ok(registrar)
+}
 
 pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegistrarCell>) {
     let registrar_for_start = Arc::clone(&hot_registrar);
@@ -226,9 +464,32 @@ fn start_agent_handler(
     //      programmatic registration, integration tests) — may omit
     //      `entry`; in that case we keep an existing row or create a
     //      minimal one.
-    let mut registry = agents::load_agents().unwrap_or_default();
+    let registrar = require_hot_registrar(hot_registrar, "agent.start")?;
+    let original_registry = agents::load_agents()
+        .map_err(|error| anyhow::anyhow!("agent.start: load durable agent registry: {error:#}"))?;
+    let original_local_agents = local_agents::load()
+        .map_err(|error| anyhow::anyhow!("agent.start: load hosted-Agent identities: {error:#}"))?;
+    let mut transaction = AgentLifecycleTransaction::new(
+        "agent.start",
+        original_registry.clone(),
+        original_local_agents.clone(),
+    );
+    let mut registry = original_registry;
     let existing_entry = registry.agents.get(&name).cloned();
     let replaced_prior = existing_entry.is_some();
+    if agent_type == AgentType::External {
+        let command = custom_command
+            .as_deref()
+            .or_else(|| provided_entry.as_ref().map(|entry| entry.command.as_str()))
+            .or_else(|| existing_entry.as_ref().map(|entry| entry.command.as_str()))
+            .unwrap_or_default();
+        if command.is_empty() {
+            anyhow::bail!(
+                "agent.start: external agents require `command`; use \
+                 `easynet agent add <name> --type external --command <program> [--arg ...]`"
+            );
+        }
+    }
 
     let mut materialized_directory: Option<AgentDirectory> = None;
     let mut created_directory = false;
@@ -250,10 +511,21 @@ fn start_agent_handler(
             );
         }
 
-        let directory = if root.join("agent.toml").exists() {
+        let spec_path = root.join("agent.toml");
+        let directory = if spec_path.exists() {
             let mut directory = AgentDirectory::open(&root)?;
             if update_existing_spec && model_present {
+                let prior_bytes = std::fs::read(&spec_path).map_err(|error| {
+                    anyhow::anyhow!(
+                        "agent.start: snapshot {} before update: {error}",
+                        spec_path.display()
+                    )
+                })?;
                 directory.set_model(model.clone())?;
+                transaction.record_materialization(MaterializationRollback::UpdatedSpec {
+                    path: spec_path.clone(),
+                    prior_bytes,
+                });
                 updated_spec = true;
             }
             directory
@@ -265,8 +537,28 @@ fn start_agent_handler(
             if let Some(label) = label.as_ref() {
                 spec.description = Some(label.clone());
             }
+            let root_preexisted = root.exists();
+            let directory = AgentDirectory::create(&Location::Local { root: root.clone() }, spec)
+                .map_err(|error| {
+                    let rollback = MaterializationRollback::Created {
+                        root: root.clone(),
+                        root_preexisted,
+                    };
+                    match rollback.rollback() {
+                        Ok(()) => anyhow::anyhow!(
+                            "agent.start: materialize agent directory: {error:#}; rollback=completed"
+                        ),
+                        Err(rollback_error) => anyhow::anyhow!(
+                            "agent.start: materialize agent directory: {error:#}; rollback=partial({rollback_error:#})"
+                        ),
+                    }
+                })?;
+            transaction.record_materialization(MaterializationRollback::Created {
+                root,
+                root_preexisted,
+            });
             created_directory = true;
-            AgentDirectory::create(&Location::Local { root }, spec)?
+            directory
         };
         materialized_directory = Some(directory);
     }
@@ -318,10 +610,48 @@ fn start_agent_handler(
     if label.is_some() {
         entry.with_label(label.clone());
     }
-    let agent_ura = agent_ura_for_name(&name)?;
     registry.agents.insert(name.clone(), entry.clone());
-    agents::save_agents(&registry)?;
-    sync_hosted_agents_for_registry(&registry)?;
+    let identities = match hosted_agents_for_registry(&registry, original_local_agents) {
+        Ok(identities) => identities,
+        Err(error) => {
+            return Err(transaction
+                .failure_with_rollback(format!("build hosted-Agent identity projection: {error:#}"))
+                .into());
+        }
+    };
+    let agent_ura = match hosted_agent_ura_from_file(&identities, &name) {
+        Ok(agent_ura) => agent_ura,
+        Err(error) => {
+            return Err(transaction
+                .failure_with_rollback(format!("resolve hosted-Agent identity: {error:#}"))
+                .into());
+        }
+    };
+    transaction.persist(&registry, &identities)?;
+
+    let name_for_registrar = name.clone();
+    let entry_for_registrar = entry.clone();
+    let previous_for_registrar = existing_entry.clone();
+    let registrar_for_sync = Arc::clone(&registrar);
+    let runtime_sync_outcome = block_on_hot_registrar(async move {
+        registrar_for_sync
+            .register_agent_replacing(
+                &name_for_registrar,
+                &entry_for_registrar,
+                previous_for_registrar.as_ref(),
+            )
+            .await
+    });
+    let runtime_sync_outcome = match runtime_sync_outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return Err(transaction
+                .failure_with_rollback(format!("synchronize authority/catalog/runtime: {error}"))
+                .into());
+        }
+    };
+    transaction.mark_runtime_synchronized();
+    transaction.commit();
 
     let mut workspace_projected = false;
     let mut workspace_projection_error: Option<String> = None;
@@ -334,79 +664,12 @@ fn start_agent_handler(
         }
     }
 
-    // ── Phase 5c runtime registration ─────────────────────────────
-    //
-    // The dynamic registration invariant: every hosted agent in
-    // `agents.json` must have its executable `<name>.*` abilities
-    // committed through HotAgentRegistrar. That single transaction
-    // writes catalogue metadata, control-plane facts, dynamic side
-    // tables, and the Axon `LocalRuntime` handler row.
-    //
-    // If the OnceLock is empty (boot not done) we log + skip.
-    // The agent still lands in `agents.json`, so a daemon
-    // restart replays it through the same dynamic registrar after
-    // the catalogue OnceLock is set. The window is small and only
-    // matters for the very first agent added during boot; operators
-    // normally run `agent add` post-boot.
-    // Test path: tests in this file construct the handler with an
-    // `empty_hot_registrar()` whose `OnceLock` is unset; the outer
-    // `else` here emits a `hot_registrar_not_yet_wired_at_boot`
-    // event and returns `None`, which is the documented test seam.
-    // The production path goes through `Some(registrar)` below —
-    // and once the registrar IS wired, the absence of a tokio runtime
-    // is a real bug, not a legitimate skip. The helper also handles
-    // current-thread tokio runtimes by offloading to a fresh runtime
-    // thread, so all registrar sync sites share one bridge policy.
-    let hot_registrar = hot_registrar.get().cloned();
-    let runtime_sync_outcome = if let Some(registrar) = hot_registrar.as_ref() {
-        let registrar = Arc::clone(registrar);
-        let name_for_registrar = name.clone();
-        let entry_for_registrar = entry.clone();
-        let outcome = block_on_hot_registrar(async move {
-            registrar
-                .register_agent(&name_for_registrar, &entry_for_registrar)
-                .await
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "agent.start: hot_registrar is wired but no tokio runtime is \
-                 available on the calling thread — handler must be driven from a \
-                 tokio worker (see daemon boot in `invocation_transport::boot`)"
-            )
-        })?;
-        Some(outcome)
-    } else {
-        crate::op_event!(
-            component = agent_lifecycle,
-            kind = hot_agent_runtime_sync_skipped,
-            agent_name = name.as_str(),
-            reason = "hot_registrar_not_yet_wired_at_boot",
-            message = "agent landed in agents.json but `LocalRuntime` did not get \
-                       <agent>.{chat,discover,invoke} — daemon restart or next \
-                       boot will replay it through the dynamic registrar",
-        );
-        None
-    };
-
-    let (
-        runtime_registered,
-        runtime_replaced,
-        runtime_failed,
-        runtime_removed,
-        runtime_not_ready,
-        runtime_catalog_not_ready,
-    ) = runtime_sync_outcome
-        .map(|o| {
-            (
-                o.registered,
-                o.replaced,
-                o.failed,
-                o.removed,
-                o.runtime_not_ready,
-                o.catalog_not_ready,
-            )
-        })
-        .unwrap_or((0, 0, 0, 0, true, false));
+    let runtime_registered = runtime_sync_outcome.registered;
+    let runtime_replaced = runtime_sync_outcome.replaced;
+    let runtime_failed = runtime_sync_outcome.failed;
+    let runtime_removed = runtime_sync_outcome.removed;
+    let runtime_not_ready = false;
+    let runtime_catalog_not_ready = false;
 
     // ISS-002 closed loop: persist this hot-added agent's owner
     // projection into the cursor file NOW. Previously agent.start only
@@ -421,6 +684,8 @@ fn start_agent_handler(
     // "advertise still attempts" + an op_event, never blocks agent.start.
     let owner_projection_descriptors = build_hot_agent_descriptors(&name, &entry, &agent_ura);
     let mut abilities_payload: Option<Vec<u8>> = None;
+    let mut owner_projection_state = "not_configured";
+    let mut owner_projection_error: Option<String> = None;
     if let Some(host_device_ura) = config::load_credentials()
         .ok()
         .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
@@ -432,6 +697,7 @@ fn start_agent_handler(
             &owner_projection_descriptors,
         ) {
             Ok(publication) => {
+                owner_projection_state = "persisted";
                 // Persisted to the cursor → owner now appears in
                 // `heartbeat_refresh_owner_uras`. Also build the wire
                 // payload so the advertiser pushes it to the hub NOW
@@ -445,48 +711,52 @@ fn start_agent_handler(
                         .map_err(|e| format!("encode advertise_abilities payload: {e}"))
                 }) {
                     Ok(bytes) => abilities_payload = Some(bytes),
-                    Err(err) => crate::op_event!(
-                        component = agent_lifecycle,
-                        kind = hot_agent_abilities_payload_build_failed,
-                        agent_name = name.as_str(),
-                        agent_ura = agent_ura.as_str(),
-                        error = err.as_str(),
-                        message = "owner projection persisted but advertise payload \
-                                   build failed; hub learns abilities on next \
-                                   heartbeat refresh instead",
-                    ),
+                    Err(err) => {
+                        owner_projection_error = Some(err.clone());
+                        crate::op_event!(
+                            component = agent_lifecycle,
+                            kind = hot_agent_abilities_payload_build_failed,
+                            agent_name = name.as_str(),
+                            agent_ura = agent_ura.as_str(),
+                            error = err.as_str(),
+                            message = "owner projection persisted but advertise payload \
+                                       build failed; hub learns abilities on next \
+                                       heartbeat refresh instead",
+                        );
+                    }
                 }
             }
-            Err(err) => crate::op_event!(
-                component = agent_lifecycle,
-                kind = hot_agent_owner_projection_persist_failed,
-                agent_name = name.as_str(),
-                agent_ura = agent_ura.as_str(),
-                error = err.as_str(),
-                message = "agent registered but owner projection cursor was not \
-                           persisted; abilities resolvable locally but may lag in \
-                           the hub directory until next boot republish",
-            ),
+            Err(err) => {
+                owner_projection_state = "failed";
+                owner_projection_error = Some(err.clone());
+                crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = hot_agent_owner_projection_persist_failed,
+                    agent_name = name.as_str(),
+                    agent_ura = agent_ura.as_str(),
+                    error = err.as_str(),
+                    message = "agent registered but owner projection cursor was not \
+                               persisted; abilities resolvable locally but may lag in \
+                               the hub directory until next boot republish",
+                );
+            }
         }
     }
 
-    let hub_advertise_outcome = hot_registrar
-        .as_ref()
-        .and_then(|registrar| registrar.hot_agent_advertiser())
-        .map(|advertiser| {
-            advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
-                agent_ura: agent_ura.clone(),
-                abilities_payload: abilities_payload.clone(),
-            })
-        });
+    let hub_advertise_outcome = registrar.hot_agent_advertiser().map(|advertiser| {
+        advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
+            agent_ura: agent_ura.clone(),
+            abilities_payload: abilities_payload.clone(),
+        })
+    });
     if let Some(outcome) = hub_advertise_outcome.as_ref() {
-        if let Some(err) = outcome.error.as_ref() {
+        if let Some(err) = outcome.error() {
             crate::op_event!(
                 component = agent_lifecycle,
                 kind = hot_agent_hub_advertise_soft_failed,
                 agent_name = name.as_str(),
                 agent_ura = agent_ura.as_str(),
-                error = err.as_str(),
+                error = err,
                 message = "agent registered locally but hub advertise failed; \
                            frontend remote invokes may need a session reconnect",
             );
@@ -504,11 +774,18 @@ fn start_agent_handler(
         "runtime_catalog_not_ready": runtime_catalog_not_ready,
         "hub_advertised": hub_advertise_outcome
             .as_ref()
-            .map(|outcome| outcome.advertised)
+            .map(|outcome| outcome.advertised())
             .unwrap_or(false),
+        "hub_advertise_state": match hub_advertise_outcome.as_ref() {
+            None => "not_configured",
+            Some(outcome) if outcome.state() == HotAgentAdvertiseState::Succeeded => "succeeded",
+            Some(_) => "failed",
+        },
         "hub_advertise_error": hub_advertise_outcome
             .as_ref()
-            .and_then(|outcome| outcome.error.clone()),
+            .and_then(|outcome| outcome.error().map(str::to_string)),
+        "owner_projection_state": owner_projection_state,
+        "owner_projection_error": owner_projection_error,
         "created_directory": created_directory,
         "updated_spec": updated_spec,
         "workspace_projected": workspace_projected,
@@ -533,32 +810,19 @@ fn build_hot_agent_descriptors(
     agent_ura: &str,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let live_registry = crate::daemon::ability::catalog::build_registry();
-    let hint_snapshot =
-        crate::daemon::ability::catalog::AbilityDiscoveryHintSnapshot::from_registry(
-            &live_registry,
-        );
     let mut descriptors = Vec::new();
     for spec in crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
         name, entry,
     ) {
         let registry_name = spec.name();
-        let owner_local_name =
-            crate::daemon::execution::mission::agent_ability_specs::public_agent_ability_name(
-                agent_ura,
-                name,
-                registry_name,
-            );
-        match crate::daemon::ability::descriptors::AbilityDescriptor::new(
-            owner_local_name,
+        match crate::daemon::ability::catalog::profiles::llm::descriptor_for_agent_spec(
+            &live_registry,
             agent_ura,
-            crate::daemon::ability::descriptors::Visibility::Scoped,
+            name,
+            &spec,
         ) {
             Ok(desc) => {
                 let mut desc = desc
-                    .with_description(spec.description())
-                    .with_input_schema(spec.parameters().clone())
-                    .with_hints(hint_snapshot.for_name(registry_name))
-                    .with_source(format!("agent:{name}"))
                     .with_metadata_entry("runtime", entry.agent_type.to_string())
                     .with_metadata_entry("agent_type", entry.agent_type.to_string())
                     .with_metadata_entry("base_runtime", entry.agent_type.to_string());
@@ -606,57 +870,100 @@ fn stop_agent_handler(
     args: Value,
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<Value> {
-    let mut registry = agents::load_agents().unwrap_or_default();
+    let original_registry = agents::load_agents()
+        .map_err(|error| anyhow::anyhow!("agent.stop: load durable agent registry: {error:#}"))?;
     let name = stop_agent_name_from_args(&args)?;
-    let removed_entry = registry.agents.remove(&name);
-    let ack = removed_entry.is_some();
-    if ack {
-        agents::save_agents(&registry)?;
-        remove_hosted_llm_agent(&name)?;
+    let Some(removed_entry) = original_registry.agents.get(&name).cloned() else {
+        return Ok(json!({
+            "ack": false,
+            "runtime_removed": 0,
+            "removed_entry": Value::Null,
+            "hub_tombstone_state": "not_applicable",
+            "hub_tombstone_error": Value::Null,
+            "hub_revoke_state": "not_applicable",
+            "hub_revoke_error": Value::Null,
+        }));
+    };
+    let registrar = require_hot_registrar(hot_registrar, "agent.stop")?;
+    let original_local_agents = local_agents::load()
+        .map_err(|error| anyhow::anyhow!("agent.stop: load hosted-Agent identities: {error:#}"))?;
+    let agent_ura = hosted_agent_ura_from_file(&original_local_agents, &name)
+        .map_err(|error| anyhow::anyhow!("agent.stop: {error:#}"))?;
+
+    // Phase one removes runtime/catalog rows while durable lifecycle state
+    // still proves that this daemon owns the Agent authority.
+    let registrar_for_remove = Arc::clone(&registrar);
+    let name_for_remove = name.clone();
+    let entry_for_remove = removed_entry.clone();
+    let removal = block_on_hot_registrar(async move {
+        registrar_for_remove
+            .unregister_agent(&name_for_remove, &entry_for_remove)
+            .await
+    })
+    .map_err(|source| AgentLifecycleError::Registrar {
+        operation: "agent.stop",
+        source,
+    })?;
+    let runtime_removed = removal.outcome().removed;
+
+    let mut registry = original_registry.clone();
+    registry.agents.remove(&name);
+    let mut identities = original_local_agents.clone();
+    identities
+        .hosted_agents
+        .retain(|entry| !(entry.profile == "llm" && entry.name == name));
+    let mut transaction =
+        AgentLifecycleTransaction::new("agent.stop", original_registry, original_local_agents);
+    transaction.mark_runtime_synchronized();
+    if let Err(error) = transaction.persist(&registry, &identities) {
+        let registrar_for_restore = Arc::clone(&registrar);
+        let name_for_restore = name.clone();
+        let entry_for_restore = removed_entry.clone();
+        let restore = block_on_hot_registrar(async move {
+            registrar_for_restore
+                .register_agent(&name_for_restore, &entry_for_restore)
+                .await
+        });
+        return match restore {
+            Ok(_) => Err(error.into()),
+            Err(restore_error) => Err(AgentLifecycleError::Mutation {
+                operation: "agent.stop",
+                state: AgentLifecycleState::PartialFailure,
+                cause: error.to_string(),
+                rollback: format!("partial(restore runtime/catalog: {restore_error})"),
+            }
+            .into()),
+        };
     }
 
-    // Runtime-sync reverse: persist the registry removal first, then
-    // tear down every dynamic hosted-agent row whose decoded
-    // owner-local public name is `<name>.*`. A crash between the two
-    // steps can leave stale live rows for the current process, but the
-    // next boot replay only installs agents still present in
-    // `agents.json`.
-    // Symmetric to `start_agent_handler`: an unset registrar cell
-    // is the documented test seam (with a warn-level event so a
-    // production occurrence is operator-visible); a wired registrar
-    // without a tokio runtime is a hard error rather than a silent
-    // skip. Current-thread tokio runtimes are handled by the same
-    // helper-thread runtime bridge as start/refresh.
-    let runtime_removed = if ack {
-        if let Some(registrar) = hot_registrar.get() {
-            let registrar = Arc::clone(registrar);
-            let name_for_registrar = name.clone();
-            Some(
-                block_on_hot_registrar(async move {
-                    registrar.unregister_agent(&name_for_registrar).await
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "agent.stop: hot_registrar is wired but no tokio runtime is \
-                     available on the calling thread — handler must be driven from a \
-                     tokio worker (see daemon boot in `invocation_transport::boot`)"
-                    )
-                })?,
-            )
-        } else {
-            crate::op_event!(
-                component = agent_lifecycle,
-                kind = hot_agent_runtime_sync_skipped,
-                agent_name = name.as_str(),
-                reason = "hot_registrar_not_yet_wired_at_boot",
-                message = "agent row removed from agents.json but `LocalRuntime` did \
-                           not drop its handlers — daemon restart will resync",
-            );
-            None
+    // Phase two proves both lifecycle rows are gone before revoking authority.
+    if let Err(error) = registrar.commit_agent_removal(&removal) {
+        let rollback_failures = transaction.rollback();
+        let registrar_for_restore = Arc::clone(&registrar);
+        let name_for_restore = name.clone();
+        let entry_for_restore = removed_entry.clone();
+        let runtime_restore = block_on_hot_registrar(async move {
+            registrar_for_restore
+                .register_agent(&name_for_restore, &entry_for_restore)
+                .await
+        });
+        let mut failures = rollback_failures;
+        if let Err(restore_error) = runtime_restore {
+            failures.push(format!("restore runtime/catalog: {restore_error}"));
         }
-    } else {
-        None
-    };
+        return Err(AgentLifecycleError::Mutation {
+            operation: "agent.stop",
+            state: AgentLifecycleState::IdentityPersisted,
+            cause: format!("revoke hosted-Agent authority: {error}"),
+            rollback: if failures.is_empty() {
+                "completed".to_string()
+            } else {
+                format!("partial({})", failures.join("; "))
+            },
+        }
+        .into());
+    }
+    transaction.commit();
 
     // ISS-002 closed loop (stop side, symmetric to start): tell the hub
     // the agent's abilities are gone NOW instead of waiting for the next
@@ -665,27 +972,27 @@ fn stop_agent_handler(
     // (removed = old − ∅), and we drop the local cursor so the owner
     // leaves the heartbeat refresh batch. Best-effort: failures degrade
     // to "reconciles on next boot/heartbeat" + an op_event.
-    if ack {
-        if let (Ok(agent_ura), Some(host_device_ura)) = (
-            agent_ura_for_name(&name),
-            config::load_credentials()
-                .ok()
-                .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
-                .filter(|ura| !ura.is_empty()),
-        ) {
-            let advertiser = hot_registrar
-                .get()
-                .and_then(|registrar| registrar.hot_agent_advertiser());
+    let mut hub_tombstone_state = "not_configured";
+    let mut hub_tombstone_error: Option<String> = None;
+    let mut hub_revoke_state = "not_configured";
+    let mut hub_revoke_error: Option<String> = None;
+    if let Some(host_device_ura) = config::load_credentials()
+        .ok()
+        .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+        .filter(|ura| !ura.is_empty())
+    {
+        let advertiser = registrar.hot_agent_advertiser();
 
-            // Step 1: tombstone the agent's abilities (empty complete-set
-            // → hub removes all prior projected abilities) + drop the
-            // local cursor so the owner leaves the heartbeat batch.
-            match crate::daemon::federation::read_model::owner_projection::prepare_removal_and_persist(
-                &agent_ura,
-                &host_device_ura,
-            ) {
-                Ok(Some(publication)) => {
-                    let tombstone_payload = crate::daemon::federation::advertise::advertise_abilities_payload(
+        // Step 1: tombstone the agent's abilities (empty complete-set
+        // → hub removes all prior projected abilities) + drop the
+        // local cursor so the owner leaves the heartbeat batch.
+        match crate::daemon::federation::read_model::owner_projection::prepare_removal_and_persist(
+            &agent_ura,
+            &host_device_ura,
+        ) {
+            Ok(Some(publication)) => {
+                let tombstone_payload =
+                    crate::daemon::federation::advertise::advertise_abilities_payload(
                         &agent_ura,
                         &publication,
                     )
@@ -693,73 +1000,97 @@ fn stop_agent_handler(
                         serde_json::to_vec(&payload).map_err(|e| {
                             format!("encode advertise_abilities tombstone payload: {e}")
                         })
-                    })
-                    .ok();
-                    if let (Some(payload), Some(advertiser)) =
-                        (tombstone_payload, advertiser.as_ref())
-                    {
+                    });
+                match (tombstone_payload, advertiser.as_ref()) {
+                    (Ok(payload), Some(advertiser)) => {
                         let outcome = advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
                             agent_ura: agent_ura.clone(),
                             abilities_payload: Some(payload),
                         });
-                        if let Some(err) = outcome.error.as_ref() {
+                        hub_tombstone_state =
+                            if outcome.state() == HotAgentAdvertiseState::Succeeded {
+                                "succeeded"
+                            } else {
+                                "failed"
+                            };
+                        hub_tombstone_error = outcome.error().map(str::to_string);
+                        if let Some(err) = outcome.error() {
                             crate::op_event!(
                                 component = agent_lifecycle,
                                 kind = hot_agent_stop_tombstone_soft_failed,
                                 agent_name = name.as_str(),
                                 agent_ura = agent_ura.as_str(),
-                                error = err.as_str(),
+                                error = err,
                                 message = "agent stopped locally but hub ability \
-                                           tombstone advertise failed; hub reconciles \
-                                           on next heartbeat refresh",
+                                               tombstone advertise failed; hub reconciles \
+                                               on next heartbeat refresh",
                             );
                         }
                     }
+                    (Ok(_), None) => {}
+                    (Err(error), _) => {
+                        hub_tombstone_state = "failed";
+                        hub_tombstone_error = Some(error);
+                    }
                 }
-                Ok(None) => {}
-                Err(err) => crate::op_event!(
+            }
+            Ok(None) => hub_tombstone_state = "not_applicable",
+            Err(err) => {
+                hub_tombstone_state = "failed";
+                hub_tombstone_error = Some(err.clone());
+                crate::op_event!(
                     component = agent_lifecycle,
                     kind = hot_agent_stop_tombstone_build_failed,
                     agent_name = name.as_str(),
                     agent_ura = agent_ura.as_str(),
                     error = err.as_str(),
                     message = "agent stopped but owner projection tombstone could \
-                               not be built; hub reconciles on next heartbeat",
-                ),
-            }
-
-            // Step 2: revoke the agent IDENTITY from the hub directory
-            // (federation.revoke), symmetric to advertise_hosted_agent on
-            // start. Without this the agent record lingers in the hub
-            // catalogue after stop (with lease cancelled it would not age
-            // out on its own). ISS-002.
-            if let Some(advertiser) = advertiser.as_ref() {
-                let outcome = advertiser.revoke_hosted_agent(
-                    crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest {
-                        agent_ura: agent_ura.clone(),
-                        reason: "agent.stop".to_string(),
-                    },
+                                   not be built; hub reconciles on next heartbeat",
                 );
-                if let Some(err) = outcome.error.as_ref() {
-                    crate::op_event!(
-                        component = agent_lifecycle,
-                        kind = hot_agent_stop_revoke_soft_failed,
-                        agent_name = name.as_str(),
-                        agent_ura = agent_ura.as_str(),
-                        error = err.as_str(),
-                        message = "agent stopped locally but hub identity revoke \
+            }
+        }
+
+        // Step 2: revoke the agent IDENTITY from the hub directory
+        // (federation.revoke), symmetric to advertise_hosted_agent on
+        // start. Without this the agent record lingers in the hub
+        // catalogue after stop (with lease cancelled it would not age
+        // out on its own). ISS-002.
+        if let Some(advertiser) = advertiser.as_ref() {
+            let outcome = advertiser.revoke_hosted_agent(
+                crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest {
+                    agent_ura: agent_ura.clone(),
+                    reason: "agent.stop".to_string(),
+                },
+            );
+            hub_revoke_state = if outcome.state() == HotAgentAdvertiseState::Succeeded {
+                "succeeded"
+            } else {
+                "failed"
+            };
+            hub_revoke_error = outcome.error().map(str::to_string);
+            if let Some(err) = outcome.error() {
+                crate::op_event!(
+                    component = agent_lifecycle,
+                    kind = hot_agent_stop_revoke_soft_failed,
+                    agent_name = name.as_str(),
+                    agent_ura = agent_ura.as_str(),
+                    error = err,
+                    message = "agent stopped locally but hub identity revoke \
                                    failed; the agent record may linger in the hub \
                                    directory until operator revoke or hub restart",
-                    );
-                }
+                );
             }
         }
     }
 
     Ok(json!({
-        "ack": ack,
-        "runtime_removed": runtime_removed.unwrap_or(0),
+        "ack": true,
+        "runtime_removed": runtime_removed,
         "removed_entry": removed_entry,
+        "hub_tombstone_state": hub_tombstone_state,
+        "hub_tombstone_error": hub_tombstone_error,
+        "hub_revoke_state": hub_revoke_state,
+        "hub_revoke_error": hub_revoke_error,
     }))
 }
 
@@ -781,7 +1112,9 @@ fn refresh_agents_handler(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let registry = agents::load_agents().unwrap_or_default();
+    let registry = agents::load_agents().map_err(|error| {
+        anyhow::anyhow!("agent.refresh: load durable agent registry: {error:#}")
+    })?;
     let rows: Vec<(String, AgentEntry)> = match requested_name.as_ref() {
         Some(name) => {
             let entry = registry.agents.get(name).cloned().ok_or_else(|| {
@@ -796,55 +1129,26 @@ fn refresh_agents_handler(
             .collect(),
     };
 
-    let Some(registrar) = hot_registrar.get() else {
-        // Boot-window state: agents.json exists but LocalRuntime is
-        // not yet wired. Operator-visible event so a stuck cell is
-        // not invisible.
-        crate::op_event!(
-            component = agent_lifecycle,
-            kind = hot_agent_runtime_sync_skipped,
-            reason = "hot_registrar_not_yet_wired_at_boot",
-            message = "agent.refresh invoked before LocalRuntime hot \
-                       registrar was wired",
-        );
-        return Ok(json!({
-            "ok": false,
-            "runtime_not_ready": true,
-            "runtime_catalog_not_ready": false,
-            "agents_scanned": rows.len(),
-            "runtime_registered": 0,
-            "runtime_failed": 0,
-            "agents": [],
-        }));
-    };
-    let registrar = Arc::clone(registrar);
-
-    // Registrar IS wired — no tokio runtime here is a real bug
-    // (the daemon always drives RPC handlers from a tokio worker).
-    // Surface it as a hard error instead of returning a
-    // `runtime_not_ready` envelope the operator might confuse with
-    // the boot-window case above.
-    let Some(agent_results) = block_on_hot_registrar(async move {
+    let registrar = require_hot_registrar(hot_registrar, "agent.refresh")?;
+    let agent_results = block_on_hot_registrar(async move {
         let mut agent_results = Vec::with_capacity(rows.len());
         for (name, entry) in rows {
-            let outcome = registrar.register_agent(&name, &entry).await;
+            let outcome = registrar.register_agent(&name, &entry).await?;
             agent_results.push(json!({
                 "name": name,
                 "runtime_registered": outcome.registered,
                 "runtime_failed": outcome.failed,
                 "runtime_removed": outcome.removed,
-                "runtime_not_ready": outcome.runtime_not_ready,
-                "runtime_catalog_not_ready": outcome.catalog_not_ready,
+                "runtime_not_ready": false,
+                "runtime_catalog_not_ready": false,
             }));
         }
-        agent_results
-    }) else {
-        return Err(anyhow::anyhow!(
-            "agent.refresh: hot_registrar is wired but no tokio runtime is \
-             available on the calling thread — handler must be driven from a \
-             tokio worker (see daemon boot in `invocation_transport::boot`)"
-        ));
-    };
+        Ok::<_, HotAgentRegistrarError>(agent_results)
+    })
+    .map_err(|source| AgentLifecycleError::Registrar {
+        operation: "agent.refresh",
+        source,
+    })?;
 
     let runtime_registered = agent_results
         .iter()
@@ -858,20 +1162,10 @@ fn refresh_agents_handler(
         .iter()
         .filter_map(|row| row.get("runtime_removed").and_then(Value::as_u64))
         .sum::<u64>();
-    let runtime_not_ready = agent_results.iter().any(|row| {
-        row.get("runtime_not_ready")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    });
-    let runtime_catalog_not_ready = agent_results.iter().any(|row| {
-        row.get("runtime_catalog_not_ready")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    });
     Ok(json!({
-        "ok": !runtime_not_ready && !runtime_catalog_not_ready && runtime_failed == 0,
-        "runtime_not_ready": runtime_not_ready,
-        "runtime_catalog_not_ready": runtime_catalog_not_ready,
+        "ok": true,
+        "runtime_not_ready": false,
+        "runtime_catalog_not_ready": false,
         "agents_scanned": agent_results.len(),
         "runtime_registered": runtime_registered,
         "runtime_failed": runtime_failed,
@@ -880,43 +1174,71 @@ fn refresh_agents_handler(
     }))
 }
 
-fn sync_hosted_agents_for_registry(
+fn hosted_agents_for_registry(
     registry: &AgentRegistry,
+    mut file: local_agents::LocalAgentsFile,
 ) -> anyhow::Result<local_agents::LocalAgentsFile> {
-    let plan = hosted_agent_bootstrap_plan(registry);
-    let mut file = local_agents::load().unwrap_or_default();
+    let plan = hosted_agent_bootstrap_plan(registry)?;
     bootstrap::bootstrap_local_agents(&plan, &mut file, &UuidMinter);
-    local_agents::save(&file)?;
     Ok(file)
 }
 
-fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> BootstrapPlan {
-    let (realm, user_id, username, host_device_ura) = config::load_credentials()
-        .ok()
-        .map(|creds| {
-            let realm = creds.realm.trim().to_string();
-            let node_id = creds.node_id.trim().to_string();
-            let user_id = creds
-                .user_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .unwrap_or("")
-                .to_string();
-            let username = creds
-                .username_slug()
-                .map(str::to_string)
-                .unwrap_or_default();
-            let host_device_ura = if realm.is_empty() || node_id.is_empty() {
-                String::new()
-            } else {
-                crate::core::ura::device_ura(&realm, &node_id)
-            };
-            (realm, user_id, username, host_device_ura)
-        })
-        .unwrap_or_else(|| (String::new(), String::new(), String::new(), String::new()));
+fn hosted_agent_ura_from_file(
+    file: &local_agents::LocalAgentsFile,
+    name: &str,
+) -> anyhow::Result<String> {
+    let mut matches = file
+        .hosted_agents
+        .iter()
+        .filter(|entry| entry.profile == "llm" && entry.name == name);
+    let entry = matches
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("hosted Agent {name:?} has no llm identity row"))?;
+    if matches.next().is_some() {
+        anyhow::bail!("hosted Agent {name:?} has multiple llm identity rows");
+    }
+    let parsed = crate::core::ura::parse_ura(&entry.agent_ura).map_err(|error| {
+        anyhow::anyhow!("invalid hosted Agent URA {:?}: {error}", entry.agent_ura)
+    })?;
+    let Some((_, agent_id)) = parsed.agent_ids() else {
+        anyhow::bail!(
+            "hosted Agent {name:?} identity {:?} is not a user-hosted Agent URA",
+            entry.agent_ura
+        );
+    };
+    if parsed.kind != crate::core::ura::URAKind::Agent || agent_id != name {
+        anyhow::bail!(
+            "hosted Agent {name:?} identity {:?} has a mismatched Agent id",
+            entry.agent_ura
+        );
+    }
+    Ok(entry.agent_ura.clone())
+}
 
-    BootstrapPlan {
+fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> anyhow::Result<BootstrapPlan> {
+    let credentials = config::load_credentials().map_err(|error| {
+        anyhow::anyhow!(
+            "agent.start requires joined credentials before deriving hosted-Agent identity: {error:#}"
+        )
+    })?;
+    let realm = credentials.realm.trim().to_string();
+    let node_id = credentials.node_id.trim().to_string();
+    let username = credentials.username_slug()?.to_string();
+    if realm.is_empty() || node_id.is_empty() {
+        anyhow::bail!(
+            "agent.start requires joined credentials with non-empty realm and Device node id"
+        );
+    }
+    let user_id = credentials
+        .user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_string();
+    let host_device_ura = crate::core::ura::device_ura(&realm, &node_id);
+
+    Ok(BootstrapPlan {
         realm,
         user_id,
         username,
@@ -932,55 +1254,7 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> BootstrapPlan {
                 model: entry.model.clone(),
             })
             .collect(),
-    }
-}
-
-fn remove_hosted_llm_agent(name: &str) -> anyhow::Result<()> {
-    let mut file = local_agents::load().unwrap_or_default();
-    let before = file.hosted_agents.len();
-    file.hosted_agents
-        .retain(|entry| !(entry.profile == "llm" && entry.name == name));
-    if file.hosted_agents.len() != before {
-        local_agents::save(&file)?;
-    }
-    Ok(())
-}
-
-fn agent_ura_for_name(name: &str) -> anyhow::Result<String> {
-    if let Some(ura) = local_agents_ura_for_name(name) {
-        return Ok(ura);
-    }
-    let (realm, username) = crate::daemon::persistence::config::load_credentials()
-        .and_then(|creds| {
-            let username = creds.username_slug()?.to_string();
-            let realm = creds.realm.trim().to_string();
-            if realm.is_empty() {
-                anyhow::bail!("credentials file is missing realm");
-            }
-            Ok((realm, username))
-        })
-        .map_err(|err| {
-            anyhow::anyhow!(
-                "agent.start requires joined credentials before deriving hosted-agent URA: {err}"
-            )
-        })?;
-    Ok(crate::core::ura::agent_ura(&realm, &username, name))
-}
-
-fn local_agents_ura_for_name(name: &str) -> Option<String> {
-    crate::daemon::persistence::local_agents::load()
-        .ok()?
-        .hosted_agents
-        .into_iter()
-        .find(|entry| {
-            entry.profile == "llm"
-                && entry.name == name
-                && matches!(
-                    crate::core::ura::parse_ura(&entry.agent_ura).map(|parsed| parsed.kind),
-                    Ok(crate::core::ura::URAKind::Agent)
-                )
-        })
-        .map(|entry| entry.agent_ura)
+    })
 }
 
 fn stop_agent_name_from_args(args: &Value) -> anyhow::Result<String> {
@@ -1027,13 +1301,12 @@ fn agent_name_from_ura(ura: &str) -> anyhow::Result<String> {
              lifecycle-managed as hosted agents on this surface"
         );
     }
-    if let Some(entry) = crate::daemon::persistence::local_agents::load()
-        .ok()
-        .and_then(|file| {
-            file.hosted_agents
-                .into_iter()
-                .find(|entry| entry.profile == "llm" && entry.agent_ura == ura)
-        })
+    let identities = crate::daemon::persistence::local_agents::load()
+        .map_err(|error| anyhow::anyhow!("agent.stop: load hosted-Agent identities: {error:#}"))?;
+    if let Some(entry) = identities
+        .hosted_agents
+        .into_iter()
+        .find(|entry| entry.profile == "llm" && entry.agent_ura == ura)
     {
         return Ok(entry.name);
     }
@@ -1168,12 +1441,8 @@ mod tests {
         f();
     }
 
-    /// Empty hot-registrar cell for unit tests. The handlers see
-    /// `get() == None` and skip `LocalRuntime` registration entirely
-    /// — every test in this module only validates the disk-side
-    /// (`agents.json`) semantics.
-    fn empty_hot_registrar() -> SharedHotRegistrarCell {
-        SharedHotRegistrarCell::new()
+    fn ready_hot_registrar() -> SharedHotRegistrarCell {
+        ready_hot_registrar_fixture(None, "localhost").cell
     }
 
     fn seed_joined_credentials() {
@@ -1204,40 +1473,91 @@ mod tests {
             request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest,
         ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
             self.requests.lock().unwrap().push(request.agent_ura);
-            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
-                advertised: true,
-                error: None,
-            }
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
+        }
+
+        fn revoke_hosted_agent(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            self.requests.lock().unwrap().push(request.agent_ura);
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
         }
     }
 
     fn hot_registrar_with_advertiser(
         advertiser: Arc<RecordingHotAdvertiser>,
     ) -> SharedHotRegistrarCell {
+        let advertiser: Arc<
+            dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+        > = advertiser;
+        ready_hot_registrar_fixture(Some(advertiser), "localhost").cell
+    }
+
+    struct ReadyHotRegistrarFixture {
+        cell: SharedHotRegistrarCell,
+        runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+        catalog: Arc<AxonAbilityCatalog>,
+    }
+
+    fn ready_hot_registrar_fixture(
+        advertiser: Option<
+            Arc<dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser>,
+        >,
+        authority_realm: &str,
+    ) -> ReadyHotRegistrarFixture {
         let cell = SharedHotRegistrarCell::new();
+        let dispatch_handle = Arc::new(std::sync::OnceLock::new());
         let registrar =
             crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
                 Arc::new(Vec::new()),
-                Arc::new(std::sync::OnceLock::new()),
+                Arc::clone(&dispatch_handle),
                 Arc::new(
                     crate::daemon::ability::builtins::agents::discover::BridgeDiscoverFederationResolver,
                 ),
             );
-        let advertiser: Arc<
-            dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
-        > = advertiser;
-        registrar.set_hot_agent_advertiser(advertiser);
+        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        registrar
+            .set_runtime(Arc::clone(&runtime))
+            .expect("test runtime wired once");
+        let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura(authority_realm, "dev-1"),
+            Vec::<String>::new(),
+        )
+        .expect("test Device authority context");
+        let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            Arc::clone(&runtime),
+            authority_context,
+        ));
+        dispatch_handle
+            .set(Arc::clone(&catalog))
+            .expect("test catalog wired once");
+        if let Some(advertiser) = advertiser {
+            registrar
+                .set_hot_agent_advertiser(advertiser)
+                .expect("test advertiser wired once");
+        }
         assert!(
             cell.set(registrar).is_ok(),
             "test cell must accept its first registrar"
         );
-        cell
+        ReadyHotRegistrarFixture {
+            cell,
+            runtime,
+            catalog,
+        }
+    }
+
+    fn hosted_runtime_key(agent_ura: &str, registry_ability: &str) -> String {
+        let public_name = crate::core::ura::owner_local_ability_name(agent_ura, registry_ability);
+        crate::core::ura::owner_ability_ura(agent_ura, &public_name)
+            .expect("hosted Agent runtime Ability URA")
     }
 
     #[test]
     fn registration_makes_lifecycle_abilities_dispatchable() {
         let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg, Arc::new(empty_hot_registrar()));
+        register(&mut reg, Arc::new(ready_hot_registrar()));
         assert!(reg.get_rpc(ABILITY_START_AGENT).is_some());
         assert!(reg.get_rpc(ABILITY_STOP_AGENT).is_some());
         assert!(reg.get_rpc(ABILITY_REFRESH_AGENTS).is_some());
@@ -1269,7 +1589,7 @@ mod tests {
                         "name": name,
                         "agent_type": "claude-code",
                     }),
-                    &empty_hot_registrar(),
+                    &ready_hot_registrar(),
                 )
                 .expect_err("device-owned identity must be refused (DEC-F048)");
                 let msg = err.to_string();
@@ -1301,7 +1621,7 @@ mod tests {
                     "agent_type": "claude-code",
                     "model": "sonnet",
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .expect_err("unjoined daemon must not mint placeholder hosted-agent URAs");
             assert!(
@@ -1330,7 +1650,7 @@ mod tests {
                     "model": "sonnet",
                     "materialize_directory": true,
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
 
@@ -1347,6 +1667,157 @@ mod tests {
             assert!(
                 root.join("abilities").join("chat.ability.toml").exists(),
                 "agent add must seed the default chat ability manifest"
+            );
+        });
+    }
+
+    #[test]
+    fn start_agent_enrolls_authority_and_registers_runtime_without_restart() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let fixture = ready_hot_registrar_fixture(None, "localhost");
+            let response = start_agent_handler(
+                json!({
+                    "name": "hot-worker",
+                    "agent_type": "claude-code",
+                }),
+                &fixture.cell,
+            )
+            .expect("new hosted Agent must converge in one call");
+
+            let agent_ura = response["agent_ura"].as_str().unwrap();
+            assert_eq!(
+                fixture
+                    .catalog
+                    .enrolled_hot_agent_authority_root("hot-worker")
+                    .as_deref(),
+                Some(agent_ura),
+                "authority inventory must enroll the durable hosted-Agent root"
+            );
+            let chat_key = hosted_runtime_key(agent_ura, "hot-worker.chat");
+            assert!(
+                block_on_hot_registrar(fixture.runtime.has_ability(&chat_key)),
+                "hot Agent chat row must be live before agent.start returns"
+            );
+        });
+    }
+
+    #[test]
+    fn authority_inventory_rejects_unpersisted_agent_identity() {
+        with_isolated_home(|| {
+            let fixture = ready_hot_registrar_fixture(None, "localhost");
+            let error = fixture
+                .catalog
+                .enroll_persisted_hot_agent_authority("forged")
+                .expect_err("an arbitrary name cannot widen authority inventory");
+            assert!(
+                matches!(
+                    error,
+                    crate::daemon::ability::dispatch::HotAgentAuthorityInventoryError::DurableAgentMissing { .. }
+                ),
+                "unexpected enrollment error: {error}"
+            );
+
+            let mut registry = AgentRegistry::default();
+            registry.agents.insert(
+                "forged".to_string(),
+                AgentEntry::new(AgentType::ClaudeCode, None),
+            );
+            agents::save_agents(&registry).unwrap();
+            let error = fixture
+                .catalog
+                .enroll_persisted_hot_agent_authority("forged")
+                .expect_err("durable row without hosted identity cannot enroll");
+            assert!(
+                matches!(
+                    error,
+                    crate::daemon::ability::dispatch::HotAgentAuthorityInventoryError::IdentityMissing { .. }
+                ),
+                "unexpected enrollment error: {error}"
+            );
+        });
+    }
+
+    #[test]
+    fn start_agent_authority_failure_rolls_back_all_local_segments() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let fixture = ready_hot_registrar_fixture(None, "foreign-realm");
+            let root = config::agents_root().join("rollback-worker");
+            let error = start_agent_handler(
+                json!({
+                    "name": "rollback-worker",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture.cell,
+            )
+            .expect_err("foreign authority inventory must reject enrollment");
+            assert!(error.to_string().contains("rollback=completed"), "{error}");
+            assert!(!agents::load_agents()
+                .unwrap()
+                .agents
+                .contains_key("rollback-worker"));
+            assert_eq!(
+                local_agents::lookup_hosted_ura(
+                    &local_agents::load().unwrap(),
+                    "llm",
+                    "rollback-worker"
+                ),
+                None
+            );
+            assert!(
+                !root.exists(),
+                "created Agent directory must be compensated"
+            );
+            assert_eq!(
+                fixture
+                    .catalog
+                    .enrolled_hot_agent_authority_root("rollback-worker"),
+                None
+            );
+            let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "rollback-worker");
+            let chat_key = hosted_runtime_key(&agent_ura, "rollback-worker.chat");
+            assert!(!block_on_hot_registrar(
+                fixture.runtime.has_ability(&chat_key)
+            ));
+        });
+    }
+
+    #[test]
+    fn stop_agent_revokes_authority_and_runtime_rows() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let fixture = ready_hot_registrar_fixture(None, "localhost");
+            let response = start_agent_handler(
+                json!({
+                    "name": "ephemeral",
+                    "agent_type": "claude-code",
+                }),
+                &fixture.cell,
+            )
+            .unwrap();
+            let agent_ura = response["agent_ura"].as_str().unwrap().to_string();
+            let chat_key = hosted_runtime_key(&agent_ura, "ephemeral.chat");
+            assert!(block_on_hot_registrar(
+                fixture.runtime.has_ability(&chat_key)
+            ));
+            assert!(fixture
+                .catalog
+                .enrolled_hot_agent_authority_root("ephemeral")
+                .is_some());
+
+            let response = stop_agent_handler(json!({"name": "ephemeral"}), &fixture.cell).unwrap();
+            assert_eq!(response["ack"], true);
+            assert!(!block_on_hot_registrar(
+                fixture.runtime.has_ability(&chat_key)
+            ));
+            assert_eq!(
+                fixture
+                    .catalog
+                    .enrolled_hot_agent_authority_root("ephemeral"),
+                None,
+                "stop commit must revoke the catalog-owned authority root"
             );
         });
     }
@@ -1392,7 +1863,7 @@ mod tests {
                     "name": "claude",
                     "agent_type": "claude-code",
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
             let resp = start_agent_handler(
@@ -1400,7 +1871,7 @@ mod tests {
                     "name": "claude",
                     "agent_type": "codex",
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
             assert_eq!(
@@ -1422,7 +1893,7 @@ mod tests {
 
     #[test]
     fn start_agent_rejects_missing_name() {
-        let err = start_agent_handler(json!({"agent_type": "claude-code"}), &empty_hot_registrar())
+        let err = start_agent_handler(json!({"agent_type": "claude-code"}), &ready_hot_registrar())
             .unwrap_err();
         assert!(format!("{err}").contains("name"));
     }
@@ -1439,7 +1910,7 @@ mod tests {
                     "command_args": ["--number"],
                     "materialize_directory": true,
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
             assert_eq!(resp["agent_type"], "external");
@@ -1461,7 +1932,7 @@ mod tests {
                     "agent_type": "external",
                     "materialize_directory": true,
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap_err();
             assert!(format!("{err}").contains("external agents require `command`"));
@@ -1481,7 +1952,7 @@ mod tests {
                         "label": "Codex rich row"
                     }
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
             assert_eq!(resp["agent_type"], "codex");
@@ -1504,7 +1975,7 @@ mod tests {
                     "agent_type": "codex"
                 }
             }),
-            &empty_hot_registrar(),
+            &ready_hot_registrar(),
         )
         .unwrap_err();
         assert!(format!("{err}").contains("does not match"));
@@ -1512,7 +1983,7 @@ mod tests {
 
     #[test]
     fn start_agent_rejects_missing_agent_type_when_entry_absent() {
-        let err = start_agent_handler(json!({"name": "x"}), &empty_hot_registrar()).unwrap_err();
+        let err = start_agent_handler(json!({"name": "x"}), &ready_hot_registrar()).unwrap_err();
         assert!(format!("{err}").contains("agent_type"));
     }
 
@@ -1532,7 +2003,7 @@ mod tests {
                     "root_path": custom_root,
                     "materialize_directory": true,
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
 
@@ -1545,7 +2016,7 @@ mod tests {
                     "materialize_directory": true,
                     "update_existing_spec": true,
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
 
@@ -1577,7 +2048,7 @@ mod tests {
                 "name": "x",
                 "agent_type": "totally-not-a-runtime",
             }),
-            &empty_hot_registrar(),
+            &ready_hot_registrar(),
         )
         .unwrap_err();
         assert!(format!("{err}").contains("unknown agent type"));
@@ -1592,12 +2063,12 @@ mod tests {
                     "name": "claude",
                     "agent_type": "claude-code",
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
 
             let resp =
-                stop_agent_handler(json!({"name": "claude"}), &empty_hot_registrar()).unwrap();
+                stop_agent_handler(json!({"name": "claude"}), &ready_hot_registrar()).unwrap();
             assert_eq!(resp["ack"], true);
             assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
             assert_eq!(
@@ -1618,7 +2089,7 @@ mod tests {
                     "agent_type": "claude-code",
                     "materialize_directory": true,
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
 
@@ -1628,7 +2099,7 @@ mod tests {
                 Some(agent_ura.clone())
             );
 
-            let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &empty_hot_registrar())
+            let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &ready_hot_registrar())
                 .unwrap();
             assert_eq!(resp["ack"], true);
             assert!(!agents::load_agents()
@@ -1647,7 +2118,7 @@ mod tests {
         with_isolated_home(|| {
             // Never registered; stop should report ack=false (not error).
             let resp =
-                stop_agent_handler(json!({"name": "ghost"}), &empty_hot_registrar()).unwrap();
+                stop_agent_handler(json!({"name": "ghost"}), &ready_hot_registrar()).unwrap();
             assert_eq!(resp["ack"], false);
         });
     }
@@ -1661,11 +2132,11 @@ mod tests {
                     "name": "claude",
                     "agent_type": "claude-code",
                 }),
-                &empty_hot_registrar(),
+                &ready_hot_registrar(),
             )
             .unwrap();
             let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "claude");
-            let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &empty_hot_registrar())
+            let resp = stop_agent_handler(json!({"agent_ura": agent_ura}), &ready_hot_registrar())
                 .unwrap();
             assert_eq!(resp["ack"], true);
             assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
@@ -1676,7 +2147,7 @@ mod tests {
     fn stop_agent_rejects_non_agent_ura() {
         let err = stop_agent_handler(
             json!({"agent_ura": crate::core::ura::device_ura("acme", "device-1")}),
-            &empty_hot_registrar(),
+            &ready_hot_registrar(),
         )
         .unwrap_err();
         assert!(format!("{err}").contains("Agent URA"));

@@ -20,7 +20,7 @@ already uses — no parallel API surface, no second-pass refactor.
 trait PlannerFacingKernelApi {
     // Ability discovery — enumerate callable primitives
     fn discover_abilities(&self, filter: AbilityFilter) -> Vec<AbilityDescriptor>;
-    fn get_ability_schema(&self, ability: AbilityUri) -> AbilitySchema;
+    fn get_ability_schema(&self, ability: AbilityUra) -> AbilitySchema;
 
     // Cost estimation — the signal the planner uses to decide "run
     // locally or push to peer B?". v1 returns best-effort (one

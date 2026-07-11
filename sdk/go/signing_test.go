@@ -510,7 +510,7 @@ func signerHandle(publicKeyBase64 string) SignerHandle {
 		metadata["public_key_base64"] = publicKeyBase64
 	}
 	return SignerHandle{
-		Profile:   "directory_identity",
+		Profile:   "signing",
 		SignerID:  "signer-alice-key-1",
 		OwnerURA:  "easynet:///r/example/agent/alice.sdk",
 		KeyID:     "alice-key-1",

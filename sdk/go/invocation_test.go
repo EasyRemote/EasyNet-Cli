@@ -214,7 +214,7 @@ func TestInvocationBuilderDoesNotOwnDescriptorRefGrammar(t *testing.T) {
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("opaque-descriptor-ref-from-identity-profile").
+		WithDescriptorRef("opaque-descriptor-ref-from-addressing-provider").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -222,9 +222,9 @@ func TestInvocationBuilderDoesNotOwnDescriptorRefGrammar(t *testing.T) {
 		WithContentType("application/json").
 		Build()
 	if err != nil {
-		t.Fatalf("Build rejected Identity-owned descriptor_ref grammar: %v", err)
+		t.Fatalf("Build rejected opaque descriptor_ref projection: %v", err)
 	}
-	if draft.DescriptorRef() != "opaque-descriptor-ref-from-identity-profile" {
+	if draft.DescriptorRef() != "opaque-descriptor-ref-from-addressing-provider" {
 		t.Fatalf("descriptor_ref = %q", draft.DescriptorRef())
 	}
 }

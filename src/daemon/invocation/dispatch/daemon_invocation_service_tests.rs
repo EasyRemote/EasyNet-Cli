@@ -31,27 +31,22 @@ use crate::daemon::invocation::admission::{
 };
 use crate::daemon::invocation::bidi::bidi_dispatcher::{
     build_bidi_terminal_receipt, build_remote_bidi_open_dispatch_frame,
-    build_remote_bidi_open_frame_for_contract, build_session_request_result_frame,
-    extract_envelope_open, map_local_bidi_ability_frame, map_local_bidi_handler_frame,
-    map_local_bidi_up_payload, push_session_request_result,
+    build_remote_bidi_open_frame_for_contract, extract_envelope_open, map_local_bidi_ability_frame,
+    map_local_bidi_handler_frame, map_local_bidi_up_payload,
     refresh_session_owner_projection_lease_at, remote_bidi_target_ura, validate_session_realm,
     LocalBidiDownStream, LocalBidiHandlerFrame, LocalBidiUpFrame, LocalBidiWireKind,
     REASON_BIDI_FIRST_FRAME_SEQUENCE, REASON_BIDI_NON_STRICT_ORDERING,
 };
-use crate::daemon::invocation::bidi::invoke_remote_initiator::{
-    InvokeRemoteDown, RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,
-    INVOKE_REMOTE_STREAM_ID,
-};
 use crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN;
+use crate::daemon::invocation::bidi::session_wire::SessionDispatch;
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
-use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 use crate::daemon::invocation::dispatch::federation_wrappers;
 use crate::daemon::invocation::dispatch::invocation_wire::FEDERATION_RESULT_CONTENT_TYPE;
 use crate::daemon::invocation::dispatch::invocation_wire::{
     DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY,
 };
 use crate::daemon::invocation::receipts::ledger_projection::{
-    invocation_resource_ura, ledger_authority_form_for_request, ledger_record_from_remote_receipt,
+    invocation_resource_ura, ledger_authority_form_for_request,
 };
 use crate::daemon::invocation::ProtoEnvelope;
 use crate::daemon::persistence::access_control::AccessControlStore;
@@ -64,17 +59,14 @@ use easynet_axon::pb::axon::v1::{
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
-use easynet_axon::pb::axon::v1::{
-    AgentIdentity, CallerSignature, Envelope, InvocationReceipt, InvocationUsage, SubjectIdentity,
-};
+use easynet_axon::pb::axon::v1::{AgentIdentity, CallerSignature, Envelope, SubjectIdentity};
 
 /// Test helper daemon URA — admitted by the test admission
 /// facade via the loopback bypass. Tests that exercise
 /// admission rejection construct a different facade.
 // URA v4.1.4: daemons are devices, not agents. Fixtures use the
-// canonical shape because forward_invoke no longer repairs legacy
+// canonical shape because invoke no longer repairs legacy
 // `agent/<bare-id>` device aliases at the request boundary.
 const TEST_DAEMON_URA: &str = "easynet:///r/test-realm/device/test-daemon";
 const TEST_DEVICE_SIGNING_SEED: [u8; 32] = [0x33; 32];
@@ -164,10 +156,6 @@ fn publish_test_route_hosted_by(
     );
 }
 
-fn session_request_ability_ura(realm: &str, ability: &str) -> String {
-    crate::core::ura::hub_ability_ura(realm, ability)
-}
-
 async fn signed_delegation_metadata_for_test(
     signer: &dyn CanonicalSigner,
     issuer_ura: &str,
@@ -210,31 +198,6 @@ async fn signed_delegation_metadata_for_test(
         "signature": BASE64_STANDARD.encode(signature.to_bytes()),
     });
     BASE64_STANDARD.encode(serde_json::to_vec(&raw).expect("delegation proof"))
-}
-
-fn make_quota_service_for_device_caller(caller_ura: &str, cap: i32) -> DaemonInvocationService {
-    use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-
-    let signing_key = test_device_signing_key();
-    let anchor = RealmTrustAnchor::from_entries(vec![TrustedAgent {
-        agent_ura: caller_ura.to_string(),
-        public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
-        role: TrustedAgentRole::Device,
-        added_at_unix_ms: 1_700_000_000_000,
-        origin_realm: None,
-        hub_endpoint: None,
-        tls_ca_pem_path: None,
-    }])
-    .expect("quota test anchor");
-    let quota = crate::daemon::persistence::daemon_config::QuotaConfig::new(
-        cap,
-        60_000,
-        std::collections::BTreeMap::new(),
-    );
-    let admission = AdmissionFacade::new(Arc::new(anchor), Some(TEST_DAEMON_URA.to_string()))
-        .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(quota)));
-    DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
-        .with_hub_signer(test_hub_signer("test-realm"))
 }
 
 async fn runtime_with_json_echo(
@@ -367,6 +330,7 @@ fn invoke_request_for_callee(
 ) -> Request<InvokeRequest> {
     let arguments = args_json.as_bytes().to_vec();
     let signing_key = test_device_signing_key();
+    let descriptor_ref = test_descriptor_ref(callee_ura, function_name);
     Request::new(InvokeRequest {
         envelope: Some(signed_test_envelope(
             TEST_DAEMON_URA,
@@ -376,38 +340,12 @@ fn invoke_request_for_callee(
             &arguments,
             &signing_key,
         )),
-        function_name: function_name.to_string(),
+        function_name: descriptor_ref.clone(),
         arguments,
         metadata: std::collections::HashMap::from([(
             crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
                 .to_string(),
-            test_descriptor_ref(callee_ura, function_name),
-        )]),
-        ..InvokeRequest::default()
-    })
-}
-
-fn invoke_request_from_device(
-    caller_ura: &str,
-    function_name: &str,
-    arguments: Vec<u8>,
-) -> Request<InvokeRequest> {
-    let signing_key = test_device_signing_key();
-    Request::new(InvokeRequest {
-        envelope: Some(signed_test_envelope(
-            caller_ura,
-            TEST_DAEMON_URA,
-            TEST_DAEMON_URA,
-            function_name,
-            &arguments,
-            &signing_key,
-        )),
-        function_name: function_name.to_string(),
-        arguments,
-        metadata: std::collections::HashMap::from([(
-            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                .to_string(),
-            test_descriptor_ref(TEST_DAEMON_URA, function_name),
+            descriptor_ref,
         )]),
         ..InvokeRequest::default()
     })
@@ -419,23 +357,9 @@ fn parse_response_body<T: serde::de::DeserializeOwned>(resp: Response<InvokeResp
     serde_json::from_slice(&body.result).expect("response body deserialises")
 }
 
-fn assert_route_negative_noroute(message: &str) {
-    assert!(
-        message.contains(ROUTE_NEGATIVE_CODE),
-        "expected typed route negative code, got: {message}"
-    );
-    assert!(
-        message.contains(easynet_axon::pb::axon::v1::NegativeReason::Noroute.as_str_name()),
-        "expected NOROUTE negative reason, got: {message}"
-    );
-}
-
 // Shared invoke_remote frame helpers used by stream and bidi tests.
-// ── PR-3 commit 1/3 — runtime.invoke_remote helpers + early returns ────
+// Canonical session dispatch helpers.
 
-use crate::daemon::invocation::bidi::invoke_remote_initiator::{
-    InvokeRemoteUp, ABILITY_INVOKE_REMOTE,
-};
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{BidiControl, EnvelopeOpen, InvocationTarget, InvokeBidiUp};
 fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
@@ -479,89 +403,10 @@ fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
     }
 }
 
-// Shared forward_invoke payload helpers used across unary, forward, and session-request tests.
-fn forward_invoke_args(target_ura: &str) -> Vec<u8> {
-    // Test fixture: a base64-encoded JSON `{ability, args,
-    // call_id}` payload that mirrors what `support::
-    // federation_invoke::invoke_via_federation_forward`
-    // ships from the CLI bridge. PR-N1 commit 11/N decodes
-    // this on the peer-dispatch path so the rebuilt
-    // `peer_request` carries the real inner ability + args;
-    // C1a / DEC-N4 §2.1 added the required `call_id` field
-    // for response correlation.
-    forward_invoke_args_for_ability(target_ura, "observe.health", serde_json::json!({}))
-}
-
-/// Parameterised sibling of `forward_invoke_args` for tests
-/// that need to drive a specific inner ability + args
-/// (e.g. PR-1 commit 7/9 self-target dispatch tests against
-/// `fs.read`).
-fn forward_invoke_args_for_ability(
-    target_ura: &str,
-    ability: &str,
-    args: serde_json::Value,
-) -> Vec<u8> {
-    let ability_ura = test_owner_ability_ura(target_ura, ability);
-    forward_invoke_args_for_ability_subject(
-        target_ura,
-        &ability_ura,
-        default_forward_test_subject_ura(target_ura, &ability_ura).as_str(),
-        args,
-    )
-}
-
-fn forward_invoke_args_for_ability_subject(
-    target_ura: &str,
-    ability_ura: &str,
-    subject_ura: &str,
-    args: serde_json::Value,
-) -> Vec<u8> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    let inner = serde_json::json!({
-        "ability_ura": ability_ura,
-        "subject_ura": subject_ura,
-        "args": args,
-        "call_id": "test-call-id-1",
-    });
-    let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
-    format!(r#"{{"target_ura":"{target_ura}","inner_envelope_b64":"{inner_b64}"}}"#).into_bytes()
-}
-
-fn forward_invoke_args_for_ability_ura(
-    target_ura: &str,
-    ability_ura: &str,
-    args: serde_json::Value,
-) -> Vec<u8> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    let inner = serde_json::json!({
-        "ability_ura": ability_ura,
-        "subject_ura": default_forward_test_subject_ura(target_ura, ability_ura),
-        "args": args,
-        "call_id": "test-call-id-1",
-    });
-    let inner_b64 = STANDARD.encode(serde_json::to_vec(&inner).unwrap());
-    format!(r#"{{"target_ura":"{target_ura}","inner_envelope_b64":"{inner_b64}"}}"#).into_bytes()
-}
-
-fn default_forward_test_subject_ura(target_ura: &str, ability_ura: &str) -> String {
-    match crate::core::ura::parse_ura(target_ura) {
-        Ok(parsed) if parsed.kind == crate::core::ura::URAKind::Hub => ability_ura.to_string(),
-        Ok(_) => target_ura.to_string(),
-        Err(_) => ability_ura.to_string(),
-    }
-}
-
 fn test_owner_ability_ura(target_ura: &str, ability: &str) -> String {
     let public_ability = crate::core::ura::owner_local_ability_name(target_ura, ability);
     crate::core::ura::owner_ability_ura(target_ura, &public_ability)
         .unwrap_or_else(|| panic!("derive test ability URA for {target_ura} {public_ability}"))
-}
-
-fn test_user_invoke_subject_ura(owner_user_id: &str, ability: &str) -> String {
-    crate::daemon::persistence::resources::build_resource_ura(
-        "test-realm",
-        &format!("user.{owner_user_id}/invoke/{ability}"),
-    )
 }
 
 fn grant_child_access_for_test(
@@ -614,7 +459,7 @@ fn grant_child_access_for_test(
 }
 
 /// Test fixture: a `FederationClient` that records every
-/// `forward_invoke` call and returns a canned response. Lets
+/// `invoke` call and returns a canned response. Lets
 /// tests assert the cross-realm arm dialed the right peer
 /// hub with the right ability + arguments.
 struct RecordingFederationClient {
@@ -647,7 +492,7 @@ impl RecordingFederationClient {
 
 #[async_trait::async_trait]
 impl FederationClient for RecordingFederationClient {
-    async fn forward_invoke(
+    async fn invoke(
         &self,
         target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
         request: InvokeRequest,
@@ -663,11 +508,9 @@ impl FederationClient for RecordingFederationClient {
 #[path = "daemon_invocation_service_tests/bidi.rs"]
 mod bidi;
 #[path = "daemon_invocation_service_tests/forward.rs"]
-mod forward;
+mod canonical_relay;
 #[path = "daemon_invocation_service_tests/local_rpc.rs"]
 mod local_rpc;
-#[path = "daemon_invocation_service_tests/session_request.rs"]
-mod session_request;
 #[path = "daemon_invocation_service_tests/stream.rs"]
 mod stream;
 #[path = "daemon_invocation_service_tests/unary.rs"]

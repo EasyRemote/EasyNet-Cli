@@ -15,7 +15,6 @@ pub(crate) mod hosted_agent_publication;
 pub(crate) mod identity_write_gate;
 pub mod list_user_pubkeys;
 pub(crate) mod nonce_replay;
-pub mod origin_caller;
 pub(crate) mod owner_projection_publication;
 pub mod owner_resolution;
 pub(crate) mod peer_envelope_signer;

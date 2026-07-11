@@ -79,9 +79,10 @@ pub fn register<F>(
     registry_provider: F,
     local_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> anyhow::Result<AgentRegistry> + Send + Sync + 'static,
 {
-    let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(registry_provider);
+    let provider: Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync> =
+        Arc::new(registry_provider);
     let provider_for_list = Arc::clone(&provider);
     reg.register_rpc_with_owner(
         ABILITY_LIST_SKILLS,
@@ -102,9 +103,11 @@ pub fn register<F>(
 /// here means an in-process caller doesn't have to re-parse the
 /// label encoding to read it back.
 fn list_skills_handler(
-    registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
+    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync>,
 ) -> anyhow::Result<Value> {
-    let registry = registry_provider();
+    let registry = registry_provider().map_err(|error| {
+        anyhow::anyhow!("a2a.bridge.list_skills: load agent registry: {error:#}")
+    })?;
     Ok(crate::daemon::federation::read_model::a2a_labels::build_agents_envelope(&registry))
 }
 
@@ -125,7 +128,7 @@ fn list_skills_handler(
 /// success/error envelope is what callers actually want; the
 /// streaming flavour ships when an A2A peer needs it.
 fn send_task_handler(
-    registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
+    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync>,
     local_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
@@ -150,7 +153,8 @@ fn send_task_handler(
     // Visibility re-check against the live AgentRegistry. If the
     // agent isn't registered, send_task refuses — the catalogue is
     // the source of truth for "which agents accept tasks here."
-    let registry = registry_provider();
+    let registry = registry_provider()
+        .map_err(|error| anyhow::anyhow!("a2a.bridge.send_task: load agent registry: {error:#}"))?;
     if !registry.agents.contains_key(&agent_name) {
         return Ok(error_response(&format!(
             "agent `{agent_name}` not found in the local registry"
@@ -158,11 +162,11 @@ fn send_task_handler(
     }
 
     let target = format!("{agent_name}.{skill_name}");
-    let Some(local) = local_registry_handle.get() else {
-        return Ok(error_response(
-            "registry handle not initialised (build-site forgot to set the OnceLock)",
-        ));
-    };
+    let local = local_registry_handle.get().ok_or_else(|| {
+        anyhow::anyhow!(
+            "a2a.bridge.send_task: live ability catalog is not initialized; daemon assembly is incomplete"
+        )
+    })?;
     match local.invoke_rpc_json(&target, task_args) {
         Ok(value) => Ok(json!({
             "ok": true,
@@ -231,7 +235,7 @@ mod tests {
     /// so send_task tests have something real to dispatch into.
     fn build_bridge_registry<F>(provider: F, echo_agents: &[&str]) -> Arc<AxonAbilityCatalog>
     where
-        F: Fn() -> AgentRegistry + Send + Sync + 'static,
+        F: Fn() -> anyhow::Result<AgentRegistry> + Send + Sync + 'static,
     {
         let mut reg = AxonAbilityCatalog::new();
         for a in echo_agents {
@@ -260,14 +264,14 @@ mod tests {
 
     #[test]
     fn registration_makes_both_dispatchable() {
-        let arc = build_bridge_registry(AgentRegistry::default, &[]);
+        let arc = build_bridge_registry(|| Ok(AgentRegistry::default()), &[]);
         assert!(arc.get_rpc(ABILITY_LIST_SKILLS).is_some());
         assert!(arc.get_rpc(ABILITY_SEND_TASK).is_some());
     }
 
     #[test]
     fn list_skills_returns_v2_agents_envelope_for_empty_registry() {
-        let arc = build_bridge_registry(AgentRegistry::default, &[]);
+        let arc = build_bridge_registry(|| Ok(AgentRegistry::default()), &[]);
         let handler = arc.get_rpc(ABILITY_LIST_SKILLS).unwrap();
         let resp = handler(json!({})).unwrap();
         let agents = resp["agents"]
@@ -290,7 +294,7 @@ mod tests {
         use std::sync::Mutex;
         let snapshot: Arc<Mutex<AgentRegistry>> = Arc::new(Mutex::new(AgentRegistry::default()));
         let snap_for_provider = Arc::clone(&snapshot);
-        let arc = build_bridge_registry(move || snap_for_provider.lock().unwrap().clone(), &[]);
+        let arc = build_bridge_registry(move || Ok(snap_for_provider.lock().unwrap().clone()), &[]);
         let handler = arc.get_rpc(ABILITY_LIST_SKILLS).unwrap();
 
         let first = handler(json!({})).unwrap();
@@ -304,6 +308,14 @@ mod tests {
         assert_eq!(second["agents"].as_array().unwrap().len(), 1);
     }
 
+    #[test]
+    fn list_skills_propagates_registry_load_failure() {
+        let arc = build_bridge_registry(|| Err(anyhow::anyhow!("corrupt agents.json")), &[]);
+        let handler = arc.get_rpc(ABILITY_LIST_SKILLS).unwrap();
+        let error = handler(json!({})).expect_err("durable registry failure must fail closed");
+        assert!(error.to_string().contains("corrupt agents.json"));
+    }
+
     // ── send_task ─────────────────────────────────────────────
 
     #[test]
@@ -311,7 +323,7 @@ mod tests {
         // Happy path: agent `claude` is in the registry, `claude.echo`
         // is in the local registry; send_task forwards args and wraps
         // the response.
-        let arc = build_bridge_registry(|| registry_with("claude"), &["claude"]);
+        let arc = build_bridge_registry(|| Ok(registry_with("claude")), &["claude"]);
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
             "agent_name": "claude",
@@ -327,7 +339,7 @@ mod tests {
     #[test]
     fn send_task_unknown_agent_returns_ok_false() {
         // Agent registry is empty → send_task refuses cleanly.
-        let arc = build_bridge_registry(AgentRegistry::default, &["claude"]);
+        let arc = build_bridge_registry(|| Ok(AgentRegistry::default()), &["claude"]);
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
             "agent_name": "ghost",
@@ -345,7 +357,7 @@ mod tests {
         // Agent IS in the registry but the skill name doesn't
         // resolve to a registered RPC handler. send_task surfaces
         // the lookup target so an operator can grep for it.
-        let arc = build_bridge_registry(|| registry_with("claude"), &[]); // no claude.echo
+        let arc = build_bridge_registry(|| Ok(registry_with("claude")), &[]); // no claude.echo
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
             "agent_name": "claude",
@@ -363,7 +375,7 @@ mod tests {
 
     #[test]
     fn send_task_missing_agent_name_returns_ok_false() {
-        let arc = build_bridge_registry(AgentRegistry::default, &[]);
+        let arc = build_bridge_registry(|| Ok(AgentRegistry::default()), &[]);
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({"skill_name": "echo"})).unwrap();
         assert_eq!(resp["ok"], false);
@@ -372,7 +384,7 @@ mod tests {
 
     #[test]
     fn send_task_missing_skill_name_returns_ok_false() {
-        let arc = build_bridge_registry(|| registry_with("claude"), &[]);
+        let arc = build_bridge_registry(|| Ok(registry_with("claude")), &[]);
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({"agent_name": "claude"})).unwrap();
         assert_eq!(resp["ok"], false);
@@ -388,7 +400,11 @@ mod tests {
             OwnerKind::Device,
             Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
         );
-        register(&mut reg, || registry_with("claude"), Arc::clone(&handle));
+        register(
+            &mut reg,
+            || Ok(registry_with("claude")),
+            Arc::clone(&handle),
+        );
         let arc = Arc::new(reg);
         let _ = handle.set(arc.clone());
 
@@ -406,7 +422,7 @@ mod tests {
 
     #[test]
     fn send_task_tolerates_missing_args_field() {
-        let arc = build_bridge_registry(|| registry_with("claude"), &["claude"]);
+        let arc = build_bridge_registry(|| Ok(registry_with("claude")), &["claude"]);
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
         let resp = handler(json!({
             "agent_name": "claude",
@@ -426,19 +442,22 @@ mod tests {
     }
 
     #[test]
-    fn send_task_unset_registry_handle_returns_ok_false_no_panic() {
+    fn send_task_unset_registry_handle_fails_closed() {
         let mut reg = AxonAbilityCatalog::new();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
-        register(&mut reg, || registry_with("claude"), Arc::clone(&handle));
+        register(
+            &mut reg,
+            || Ok(registry_with("claude")),
+            Arc::clone(&handle),
+        );
         let arc = Arc::new(reg);
         // Deliberately do NOT set the handle.
         let handler = arc.get_rpc(ABILITY_SEND_TASK).unwrap();
-        let resp = handler(json!({
+        let error = handler(json!({
             "agent_name": "claude",
             "skill_name": "echo"
         }))
-        .unwrap();
-        assert_eq!(resp["ok"], false);
-        assert!(resp["error"].as_str().unwrap().contains("not initialised"));
+        .expect_err("an unwired catalog is a daemon assembly failure");
+        assert!(error.to_string().contains("not initialized"));
     }
 }

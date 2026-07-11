@@ -647,11 +647,16 @@ mod tests {
             ABILITY_TRACE_GET,
             ABILITY_HISTORY_PATH,
         ] {
-            let manifest = reg
-                .control_plane_manifest(ability)
-                .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
+            let record = reg
+                .control_plane_record_for_mode(ability, crate::daemon::ability::CallMode::Rpc)
+                .expect("control-plane lookup must be unambiguous")
+                .unwrap_or_else(|| panic!("{ability} must publish a canonical descriptor"));
             assert_eq!(
-                manifest.input_schema().get("type").and_then(Value::as_str),
+                record
+                    .descriptor()
+                    .input_schema()
+                    .get("type")
+                    .and_then(Value::as_str),
                 Some("object"),
                 "{ability} must publish an object input schema"
             );

@@ -49,7 +49,7 @@ reject_grep() {
 
 require_file "$AXON_URA_RS"
 require_file src/core/ura/mod.rs
-require_file src/daemon/invocation/routing/federation_invoke.rs
+require_file src/daemon/invocation/routing/remote_invoke.rs
 require_file src/daemon/invocation/admission/admission_facade.rs
 require_file src/daemon/invocation/dispatch/daemon_invocation_service.rs
 require_file src/daemon/invocation/admission/register_device_pubkey.rs
@@ -78,17 +78,17 @@ require_grep 'easynet:///r/localhost/hub' src/core/ura/mod.rs \
 reject_grep 'hub       easynet:///r/<realm>/hub/<id>' src/core/ura/mod.rs \
     "CLI URA facade docs must not advertise Hub identities with tail"
 
-require_any_grep src/daemon/invocation/routing/federation_invoke.rs \
+require_any_grep src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura must delegate grammar to Axon" \
     'use easynet_axon::ura::{parse_ura, URAKind};' \
     'use easynet_axon::ura::{URAKind, parse_ura};'
-require_grep 'whose clean protocol identity is `easynet:///r/<realm>/hub`' src/daemon/invocation/routing/federation_invoke.rs \
+require_grep 'whose clean protocol identity is `easynet:///r/<realm>/hub`' src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura docs must state the canonical /hub identity"
-require_grep 'fn parse_node_ura_accepts_protocol_hub_identity()' src/daemon/invocation/routing/federation_invoke.rs \
+require_grep 'fn parse_node_ura_accepts_protocol_hub_identity()' src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura tests must accept literal canonical /hub"
-require_grep 'fn parse_node_ura_rejects_hub_with_tail()' src/daemon/invocation/routing/federation_invoke.rs \
+require_grep 'fn parse_node_ura_rejects_hub_with_tail()' src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura tests must reject Hub URAs with tail"
-require_grep 'parse_node_ura("easynet:///r/realm/hub/extra")' src/daemon/invocation/routing/federation_invoke.rs \
+require_grep 'parse_node_ura("easynet:///r/realm/hub/extra")' src/daemon/invocation/routing/remote_invoke.rs \
     "parse_node_ura negative fixture must pin Hub tail rejection"
 require_grep 'assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"));' \
     src/daemon/invocation/admission/admission_facade.rs \

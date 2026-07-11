@@ -7,7 +7,29 @@
 
 use serde_json::Value;
 
-use crate::daemon::ability::manifest::AbilityManifest;
+use crate::daemon::ability::manifest::{AbilityManifest, AccessPolicy, ManifestAccessScope};
+
+/// Import the daemon's pure system metadata for a schema-less static
+/// registration.
+///
+/// This is a registration-boundary adapter, not a discovery overlay. The
+/// resulting manifest is immediately normalized into the control-plane
+/// `AbilityDescriptor` and is never retained as a parallel read model.
+pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<AbilityManifest> {
+    let manifest_name = ability_key.rsplit('.').next().unwrap_or(ability_key);
+    let mut manifest = AbilityManifest::new(
+        manifest_name,
+        super::description_for_owned(ability_key),
+        super::input_schema_for(ability_key),
+    )?;
+    if ability_key.starts_with("observe.") {
+        manifest = manifest.with_access(AccessPolicy {
+            visibility: ManifestAccessScope::Public,
+            ..Default::default()
+        })?;
+    }
+    Ok(manifest)
+}
 
 /// Build the manifest metadata attached to a daemon-owned ability registration.
 ///

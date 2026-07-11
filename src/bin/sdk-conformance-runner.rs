@@ -331,7 +331,7 @@ impl FixtureSchemaBindings {
         }
         let mut bindings = BTreeMap::new();
         for binding in manifest.bindings {
-            validate_manifest_file_name(&binding.fixture, ".v4.json")
+            validate_fixture_file_name(&binding.fixture)
                 .with_context(|| format!("invalid fixture binding `{}`", binding.fixture))?;
             validate_manifest_file_name(&binding.schema, ".schema.json")
                 .with_context(|| format!("invalid schema binding `{}`", binding.schema))?;
@@ -372,6 +372,27 @@ fn validate_manifest_file_name(raw: &str, suffix: &str) -> Result<()> {
         anyhow::bail!("file name must stay relative to the conformance directory");
     }
     Ok(())
+}
+
+fn validate_fixture_file_name(raw: &str) -> Result<()> {
+    validate_manifest_file_name(raw, ".json")?;
+    if !is_versioned_fixture_file_name(raw) {
+        anyhow::bail!("expected versioned fixture name ending with `.v<major>.json`");
+    }
+    Ok(())
+}
+
+fn is_versioned_fixture_file_name(raw: &str) -> bool {
+    let Some((stem, version_suffix)) = raw.rsplit_once(".v") else {
+        return false;
+    };
+    let Some(version) = version_suffix.strip_suffix(".json") else {
+        return false;
+    };
+    !stem.is_empty()
+        && !version.is_empty()
+        && version.bytes().all(|byte| byte.is_ascii_digit())
+        && version.parse::<u64>().is_ok_and(|version| version > 0)
 }
 
 fn validate_adapter_evidence(
@@ -620,7 +641,7 @@ impl CaseReferences {
             Value::String(raw) if raw.ends_with(".schema.json") => {
                 self.schemas.insert(raw.clone());
             }
-            Value::String(raw) if raw.ends_with(".v4.json") => {
+            Value::String(raw) if is_versioned_fixture_file_name(raw) => {
                 self.fixtures.insert(raw.clone());
             }
             Value::Array(values) => {

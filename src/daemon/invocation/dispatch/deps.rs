@@ -83,7 +83,7 @@ pub(crate) struct FederationDial {
     /// `DaemonConfig::federated_peers`; SIGHUP reloads surface to the
     /// next dispatch within ~50ms.
     pub(crate) peers: SharedFederatedPeers,
-    /// Owner-bound hub signer for cross-hub `federation.forward_invoke`
+    /// Owner-bound hub signer for cross-hub `Invocation::Invoke`
     /// peer-envelope signatures. `None` is valid only for deployments without
     /// federation; an attempted peer request fails closed.
     pub(crate) hub_signer: Option<Arc<dyn CanonicalSigner>>,
@@ -95,11 +95,11 @@ pub(crate) struct FederationDial {
 }
 
 /// Device<->hub session correlation plane: per-call dispatch maps for
-/// `runtime.invoke_remote`, the device-mode escalation handle, and the
+/// typed session dispatch, the device-mode escalation handle, and the
 /// on-miss device trust sync that rides the same session channel.
 #[derive(Clone)]
 pub(crate) struct SessionPlane {
-    /// Cross-call correlation for `runtime.invoke_remote` dispatches
+    /// Cross-call correlation for typed session dispatches
     /// awaiting a target-device reply. `None` ⇒ the ability is
     /// unavailable on this daemon (`failed_precondition`).
     pub(crate) pending: Option<Arc<PendingDispatchMap>>,
@@ -107,7 +107,7 @@ pub(crate) struct SessionPlane {
     /// replies; same-hub `fs.transfer` is the first consumer.
     pub(crate) pending_stream: Option<Arc<PendingStreamDispatchMap>>,
     /// Device-mode escalation handle: when `Some`, federation
-    /// forward_invoke routes through the existing `session.open`
+    /// canonical_invoke routes through the existing `session.open`
     /// bidi to the hub instead of the (empty) local PresenceRegistry.
     pub(crate) escalation: Option<Arc<SessionEscalationHandle>>,
     /// On-miss device trust sync shared with the device's

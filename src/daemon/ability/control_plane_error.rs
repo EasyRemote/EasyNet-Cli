@@ -12,6 +12,9 @@
 /// hit them; deployed manifests and future federation/catalog inputs can.
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum AbilityControlPlaneError {
+    /// The canonical descriptor aggregate rejected a daemon import row.
+    #[error("ability descriptor construction failed: {reason}")]
+    DescriptorConstruction { reason: String },
     /// Descriptor version was supplied as an empty or whitespace-only string.
     #[error("ability descriptor version must be non-empty")]
     EmptyDescriptorVersion,
@@ -32,12 +35,6 @@ pub enum AbilityControlPlaneError {
     /// represented as a canonical ability name.
     #[error("ability descriptor name has invalid format: {name:?}")]
     InvalidDescriptorName { name: String },
-    /// Canonical descriptor Ability URA was empty.
-    #[error("ability descriptor URA must be non-empty")]
-    EmptyDescriptorAbilityUra,
-    /// Canonical descriptor Ability URA was not a valid Ability URA.
-    #[error("ability descriptor URA has invalid format: {ability_ura:?}")]
-    InvalidDescriptorAbilityUra { ability_ura: String },
     /// Descriptor Ability URA could not be derived from the authority root.
     #[error("ability descriptor URA cannot be derived from authority root {authority_root:?} and ability {ability:?}")]
     DescriptorAbilityUraDerivationFailed {

@@ -388,25 +388,25 @@ impl DeviceRuntimeBinding {
             anyhow::bail!(
                 "device ability runtime binding mode drift for {:?}: manifest implies {:?}, \
                  control-plane record has {:?}",
-                record.descriptor().name(),
+                record.ability(),
                 call_mode,
                 record.descriptor().call_mode()
             );
         }
-        if record.descriptor().version().as_str() != manifest.descriptor_version() {
+        if record.descriptor().version.as_str() != manifest.descriptor_version() {
             anyhow::bail!(
                 "device ability runtime binding version drift for {:?}: manifest has {}, \
                  control-plane record has {}",
-                record.descriptor().name(),
+                record.ability(),
                 manifest.descriptor_version(),
-                record.descriptor().version().as_str()
+                record.descriptor().version.as_str()
             );
         }
         let axon_call_mode = axon_call_mode_for_descriptor_mode(call_mode);
         let options = options.with_mode_descriptor_proof(
             axon_call_mode,
-            record.descriptor().version().as_str(),
-            record.descriptor().schema_hash().0,
+            record.descriptor().version.as_str(),
+            record.descriptor().schema_hash_bytes(),
             record.implementation().impl_hash(),
         );
         assert_runtime_options_are_proof_bound(&options, axon_call_mode, record)?;
@@ -1296,28 +1296,28 @@ fn assert_runtime_options_are_proof_bound(
     if !proof.is_bound() {
         anyhow::bail!(
             "runtime ability {:?} has no descriptor proof for {:?}",
-            record.descriptor().name(),
+            record.ability(),
             record.descriptor().call_mode()
         );
     }
-    if proof.descriptor_version != record.descriptor().version().as_str() {
+    if proof.descriptor_version != record.descriptor().version.as_str() {
         anyhow::bail!(
             "runtime ability {:?} descriptor version mismatch: runtime {}, control-plane {}",
-            record.descriptor().name(),
+            record.ability(),
             proof.descriptor_version,
-            record.descriptor().version().as_str()
+            record.descriptor().version.as_str()
         );
     }
-    if proof.schema_hash != record.descriptor().schema_hash().0 {
+    if proof.schema_hash != record.descriptor().schema_hash_bytes() {
         anyhow::bail!(
             "runtime ability {:?} schema hash does not match control-plane descriptor",
-            record.descriptor().name()
+            record.ability()
         );
     }
     if proof.impl_hash != record.implementation().impl_hash() {
         anyhow::bail!(
             "runtime ability {:?} impl hash does not match control-plane implementation",
-            record.descriptor().name()
+            record.ability()
         );
     }
     Ok(())
@@ -1653,7 +1653,7 @@ mod tests {
         assert_eq!(proof.descriptor_version, "2.3.0");
         assert_eq!(
             proof.schema_hash,
-            control_plane_record.descriptor().schema_hash().0
+            control_plane_record.descriptor().schema_hash_bytes()
         );
         assert_eq!(
             proof.impl_hash,
@@ -1823,7 +1823,7 @@ mod tests {
             .await
             .unwrap();
         let old_record = stream_control_plane_record(&catalog);
-        let old_descriptor_version = old_record.descriptor().version().as_str().to_string();
+        let old_descriptor_version = old_record.descriptor().version.clone();
         let old_impl_hash = old_record.implementation().impl_hash();
 
         registrar.fail_next_runtime_replace_for_test();
@@ -1842,7 +1842,7 @@ mod tests {
 
         let restored_record = stream_control_plane_record(&catalog);
         assert_eq!(
-            restored_record.descriptor().version().as_str(),
+            restored_record.descriptor().version.as_str(),
             old_descriptor_version,
             "failed redeploy must restore the previous descriptor version"
         );

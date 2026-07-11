@@ -1,7 +1,7 @@
 //! On-miss trust sync for origin-caller claims.
 //!
 //! An executing device verifies a forwarded invocation's
-//! `OriginCallerClaim` against its LOCAL realm trust anchor
+//! the canonical invocation caller against its local realm trust anchor
 //! (INV-1: admission is local-anchor-authoritative). But it cannot
 //! pre-know every caller that may address it. Device keys are
 //! registered at the realm hub (`register_device_pubkey` during
@@ -26,8 +26,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::daemon::invocation::bidi::invoke_remote_initiator::RequestOutcome;
 use crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle;
+use crate::daemon::invocation::bidi::session_wire::RequestOutcome;
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// How long a hub "unknown caller" answer suppresses re-resolving the
@@ -158,26 +158,6 @@ impl DeviceTrustSync {
             state: tokio::sync::Mutex::new(HashMap::new()),
             source,
         }
-    }
-
-    /// Test seam for sibling-module tests: a sync whose hub
-    /// round-trip is a pure function. The service's self-targeted
-    /// dispatch arm pins its warm-on-miss contract against this
-    /// (`daemon_invocation_service` tests); production construction
-    /// stays escalation-only via `new`.
-    #[cfg(test)]
-    pub(crate) fn with_static_source_for_tests(
-        daemon_realm: String,
-        trust_anchor_path: PathBuf,
-        cell: SharedTrustAnchor,
-        resolver: fn(&str) -> anyhow::Result<Vec<String>>,
-    ) -> Self {
-        Self::with_source(
-            daemon_realm,
-            trust_anchor_path,
-            cell,
-            KeySource::Static(resolver),
-        )
     }
 
     async fn resolve_from_hub(

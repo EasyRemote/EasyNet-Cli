@@ -77,11 +77,9 @@ instead of being ignored. Evidence kind must match the report language, for
 example `rust_test`, `c_abi_test`, `go_test`, or `python_test`; cross-language
 evidence is rejected.
 
-Rust, C ABI, Go, Python, and shipped P1 seam reports such as Node, Java, and Swift must
-consume shared cases from
-`sdk/conformance/cases` and shared fixtures from `sdk/conformance/fixtures` for
-shipped local DTO/actions and projection-only profile behavior, including
-Runtime Core, Directory + Identity, Mission, Admin + Gateway, Publication,
-Events, Surface, Compatibility, Receipt, Host Binding, and Wrapper profile
-adapters. Inline samples may remain as focused unit tests, but they do not
-replace the shared case-aware parity gate.
+Every adapter consumes the generic runtime cases explicitly listed for its
+language in `required_for`. The shared manifest contains no product profile
+cases. Product repositories own their workflow tests and prove that their local
+facades lower to generic Invocation, Addressing, stream, bidi, health and
+authority interfaces. Inline samples may remain as focused unit tests, but they
+do not replace the shared case-aware parity gate.

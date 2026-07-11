@@ -21,9 +21,15 @@ Directory + Identity, Receipt, Publication, Host Binding, Mission,
 Admin + Gateway, Events multi-stream subscription, Surface page seam, and Compatibility
 OpenAI adapter seam, and Convenience Wrapper execution seam
 provider-backed. The package exposes typed
+Axon-backed `AddressingClient` through both `SdkEnvironment.addressing_client()`
+and `NativeRuntimeHandle.addressing()`. This provider is process-local and
+product-neutral; it does not resolve a daemon Identity profile or own signing
+keys.
+
+The package also exposes typed
 feature/version discovery with root client close, public `SdkEnvironment`
 process-root factories with default daemon control-path resolution, direct control-plane UDS boot/status IPC over
-`control.json`/`control.sock`, private C ABI v4 discovery, daemon
+`control.json`/`control.sock`, private generic C ABI v5 discovery, daemon
 lifecycle/open-runtime, identity projection, runtime
 health/unary/stream/bidi/prepare-submit handle transports, and direct daemon
 Axon gRPC-over-UDS unary/server-stream transport plus
@@ -62,7 +68,7 @@ invoke/invoke-stream/open-bidi/prepare/prepare-and-sign/submit-signed/close
 methods behind narrow transport protocols with timeout-aware stream/bidi receive,
 plus public
 DaemonInvocationTransport dict/JSON unary, stream, and bidi facade with
-RuntimeConnection-owned session lifecycle over C ABI v4 plus explicit direct
+RuntimeConnection-owned session lifecycle over generic C ABI v5 plus explicit direct
 daemon Axon gRPC-over-UDS unary/server-stream connection, DirectoryClient resolve/list read-model pages,
 C ABI-backed resolve/list read-model execution through Runtime Core invoke,
 list/resolve Invocation carrier builders, directory

@@ -19,33 +19,36 @@ type NativeRuntimeOptions struct {
 
 // NativeRuntimeHandle owns SDK facades opened from one native daemon provider.
 type NativeRuntimeHandle struct {
-	mu       sync.Mutex
-	client   *RuntimeClient
-	health   *HealthClient
-	identity *IdentityClient
-	closeFn  func(context.Context) error
-	closed   bool
+	mu         sync.Mutex
+	client     *RuntimeClient
+	health     *HealthClient
+	addressing Addressing
+	closeFn    func(context.Context) error
+	closed     bool
 }
 
 func newNativeRuntimeHandle(client *RuntimeClient, health *HealthClient, closeFn func(context.Context) error) (*NativeRuntimeHandle, error) {
-	return newNativeRuntimeHandleWithIdentity(client, health, nil, closeFn)
+	return newNativeRuntimeHandleWithAddressing(client, health, NewCanonicalAddressing(), closeFn)
 }
 
-func newNativeRuntimeHandleWithIdentity(client *RuntimeClient, health *HealthClient, identity *IdentityClient, closeFn func(context.Context) error) (*NativeRuntimeHandle, error) {
+func newNativeRuntimeHandleWithAddressing(client *RuntimeClient, health *HealthClient, addressing Addressing, closeFn func(context.Context) error) (*NativeRuntimeHandle, error) {
 	if client == nil {
 		return nil, invalidRuntimeClient("native runtime client is required")
 	}
 	if health == nil {
 		return nil, invalidRuntimeClient("native runtime health client is required")
 	}
+	if addressing == nil {
+		return nil, invalidRuntimeClient("native runtime addressing provider is required")
+	}
 	if closeFn == nil {
 		closeFn = func(context.Context) error { return nil }
 	}
 	return &NativeRuntimeHandle{
-		client:   client,
-		health:   health,
-		identity: identity,
-		closeFn:  closeFn,
+		client:     client,
+		health:     health,
+		addressing: addressing,
+		closeFn:    closeFn,
 	}, nil
 }
 
@@ -81,10 +84,9 @@ func (h *NativeRuntimeHandle) Health() (*HealthClient, error) {
 	return h.health, nil
 }
 
-// Identity returns the canonical Identity facade opened by this native
-// provider. Consumers must use this facade rather than re-opening C ABI
-// identity transports or recreating identity grammar locally.
-func (h *NativeRuntimeHandle) Identity() (*IdentityClient, error) {
+// Addressing returns the canonical Axon-backed Addressing seam owned by this
+// native provider. It is always present for every open native Runtime handle.
+func (h *NativeRuntimeHandle) Addressing() (Addressing, error) {
 	if h == nil {
 		return nil, invalidRuntimeClient("native runtime handle is not initialized")
 	}
@@ -93,10 +95,10 @@ func (h *NativeRuntimeHandle) Identity() (*IdentityClient, error) {
 	if h.closed {
 		return nil, invalidRuntimeClient("native runtime handle is closed")
 	}
-	if h.identity == nil {
-		return nil, invalidRuntimeClient("native runtime identity client is not initialized")
+	if h.addressing == nil {
+		return nil, invalidRuntimeClient("native runtime addressing provider is not initialized")
 	}
-	return h.identity, nil
+	return h.addressing, nil
 }
 
 // Close releases the RuntimeClient and native provider resources exactly once.
@@ -114,18 +116,14 @@ func (h *NativeRuntimeHandle) Close(ctx context.Context) error {
 	}
 	h.closed = true
 	client := h.client
-	identity := h.identity
 	closeFn := h.closeFn
 	h.client = nil
 	h.health = nil
-	h.identity = nil
+	h.addressing = nil
 	h.closeFn = nil
 	h.mu.Unlock()
 
 	var first error
-	if identity != nil {
-		first = identity.Close(ctx)
-	}
 	if client != nil {
 		if err := client.Close(ctx); err != nil && first == nil {
 			first = err

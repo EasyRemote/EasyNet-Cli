@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::daemon::ability::catalog::{
-    build_registry, build_registry_for_daemon_result, build_registry_with_services,
+    build_registry, build_registry_for_daemon_result, build_registry_with_services_result,
     build_system_registry, published_abilities, published_ability_names,
     published_system_abilities, recover_descriptor_import_transactions_before_daemon_registry_boot,
     RegistryBuildConfig, RegistryBuildServices, RegistryDaemonBuildConfig,
@@ -24,17 +24,32 @@ fn sha256_hex_for_test(bytes: &[u8]) -> String {
 /// runtime. Each tuple is `(profile, name)`; the agent URA is the canonical
 /// `agent/<name>.<profile>` form under the local realm. Call inside a
 /// `HomeGuard` so the file lands in the test's temp HOME.
-fn seed_hosted_agents_for_chat(agents: &[(&str, &str)]) {
+fn seed_hosted_agents_for_chat(agent_names: &[&str]) {
     use crate::daemon::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
+    use crate::daemon::persistence::{agent_registry, config};
+    config::save_credentials(&config::Credentials {
+        node_id: "dev".to_string(),
+        credential_token: "token".to_string(),
+        hub_endpoint: "axon://hub.test:50051".to_string(),
+        realm: "localhost".to_string(),
+        username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
+        ..Default::default()
+    })
+    .expect("seed paired Device credentials");
     let mut local = LocalAgentsFile::default();
-    for (profile, name) in agents {
-        // Agent URA is `agent/<user>.<name>`; the registrar verifies its
-        // agent-id (the after-dot segment) equals the registry name, so
-        // `name` must be the third arg.
-        let agent_ura = crate::core::ura::agent_ura("localhost", profile, name);
-        upsert_hosted_agent(&mut local, profile, name, &agent_ura);
+    local.host_device_agent_ura = crate::core::ura::device_ura("localhost", "dev");
+    let mut durable = AgentRegistry::default();
+    for name in agent_names {
+        let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
+        upsert_hosted_agent(&mut local, "llm", name, &agent_ura);
+        durable.agents.insert(
+            (*name).to_string(),
+            agent_registry::AgentEntry::new(agent_registry::AgentType::ClaudeCode, None),
+        );
     }
     save(&local).expect("seed local-agents.json for chat handlers");
+    agent_registry::save_agents(&durable).expect("seed durable Agent registry");
 }
 
 #[test]
@@ -110,9 +125,9 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
 }
 
 #[test]
-fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
+fn build_registry_publishes_canonical_descriptors_for_device_media_and_remote_desktop() {
     let reg = build_registry();
-    let rows = reg.ability_catalog_snapshot();
+    let rows = reg.authority_ability_catalog_snapshot();
 
     for ability in [
         "mic.subscribe",
@@ -127,12 +142,8 @@ fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
             .iter()
             .find(|row| row.name == ability)
             .unwrap_or_else(|| panic!("{ability} must be registered at daemon boot"));
-        let manifest = row
-            .manifest
-            .as_ref()
-            .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
         assert_eq!(
-            manifest.input_schema()["type"],
+            row.descriptor.input_schema()["type"],
             serde_json::json!("object"),
             "{ability} must expose an object input schema"
         );
@@ -162,17 +173,15 @@ fn discovery_hints_read_only_tracks_ability_layer() {
     let h = discovery_hints_for(&reg, "meta.list_resources");
     assert!(h.read_only && h.idempotent, "introspection read: {h:?}");
     for name in [
-        "federation.resolve",
-        "federation.discover",
-        "federation.status",
-        "federation.resolve_key",
-        "namespace.resolve",
-        "identity.list_user_pubkeys",
+        "agent.list",
+        "invocation.history.list",
+        "invocation.history.path",
+        "meta.list_resources",
     ] {
         let h = discovery_hints_for(&reg, name);
         assert!(
             h.read_only && h.idempotent,
-            "RFC-014 resolver read: {name}: {h:?}"
+            "registered introspection read: {name}: {h:?}"
         );
     }
     // Observation read → read_only + idempotent.
@@ -328,9 +337,8 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
                 continue;
             }
         };
-        let _ = rfc006_for(&meta.name);
         let expected =
-            ability_toml::render_ability_toml(&meta.name, &meta.description, &meta.input_schema);
+            ability_toml::render_ability_toml(&meta.name, &meta.description, meta.input_schema());
         if on_disk != expected {
             drift.push(meta.name.clone());
         }
@@ -633,7 +641,9 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_hub_roots(
         )
         .expect("combined authority context"),
     );
-    let registry = build_registry_with_services_result(config).catalog;
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble registry")
+        .catalog;
 
     assert!(
         registry.static_authority_exclusion_snapshot().is_empty(),
@@ -672,7 +682,9 @@ fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
         .expect("pages test Device authority context"),
     );
 
-    let registry = build_registry_with_services_result(config).catalog;
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble registry")
+        .catalog;
     let record = registry
         .control_plane_record_for_authority_mode(
             &pages_agent,
@@ -697,7 +709,9 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
             .expect("Hub authority context"),
     );
-    let registry = build_registry_with_services_result(config).catalog;
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble registry")
+        .catalog;
 
     let rows = registry.authority_ability_catalog_snapshot();
     assert!(
@@ -707,7 +721,7 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     assert!(
         rows.iter().all(
             |row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
-                && row.owner_ura == hub_ura
+                && row.descriptor.owner_ura == hub_ura
         ),
         "Hub registry leaked a non-Hub authority row: {rows:?}"
     );
@@ -833,10 +847,10 @@ fn published_abilities_includes_skill_list_with_real_metadata() {
     // axon-runtime stores). Empty `{}` would also pass `is_object`,
     // so additionally pin the `type` field.
     assert_eq!(
-        skill.input_schema.get("type").and_then(|v| v.as_str()),
+        skill.input_schema().get("type").and_then(|v| v.as_str()),
         Some("object"),
         "input schema must declare type:object; got {:?}",
-        skill.input_schema
+        skill.input_schema()
     );
     assert!(
         !skill.hints.streaming_only && !skill.hints.bidi_only,
@@ -930,12 +944,15 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
 #[test]
 fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
+    seed_hosted_agents_for_chat(&["alice"]);
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
     let mut agents = AgentRegistry::default();
     agents
         .agents
         .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
     let hints = discovery_hints_for(&reg, "alice.chat");
     assert!(
         !hints.streaming_only && !hints.bidi_only,
@@ -954,12 +971,14 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
     // `published_abilities()` enforces this; pin it.
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    seed_hosted_agents_for_chat(&[("claude", "alice")]);
+    seed_hosted_agents_for_chat(&["alice"]);
     let mut agents = AgentRegistry::default();
     agents
         .agents
         .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
     // Sanity: the registry itself does include alice.chat.
     assert!(reg.list_abilities().iter().any(|n| n == "alice.chat"));
     // But the system publisher's view excludes it. We can't call
@@ -1028,7 +1047,7 @@ fn registry_includes_chat_handler_per_registered_agent() {
     // same registry as ping/session/permission.
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    seed_hosted_agents_for_chat(&[("claude", "alice"), ("codex", "bob")]);
+    seed_hosted_agents_for_chat(&["alice", "bob"]);
     let mut agents = AgentRegistry::default();
     agents
         .agents
@@ -1036,7 +1055,9 @@ fn registry_includes_chat_handler_per_registered_agent() {
     agents
         .agents
         .insert("bob".into(), AgentEntry::new(AgentType::Codex, None));
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
     let names = reg.list_abilities();
     assert!(
         names.iter().any(|n| n == "alice.chat"),
@@ -1051,7 +1072,9 @@ fn registry_includes_chat_handler_per_registered_agent() {
 #[test]
 fn build_registry_always_registers_key_service_abilities() {
     let agents = AgentRegistry::default();
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
     let names = reg.list_abilities();
 
     // Administrative projections are present under device.keyring.*. Raw
@@ -1102,7 +1125,7 @@ fn published_catalogue_does_not_duplicate_device_owner_prefix() {
 
 /// **M5 lint** — the legacy self alias token never appears as a first
 /// segment in the published catalogue. The wire-pinned trio
-/// (`session.open`, `runtime.invoke_remote`,
+/// (`session.open`,
 /// `identity.register_pubkey`) goes through wire-only
 /// constants; they are NOT registered into the discoverable
 /// catalogue. If they ever leak, this test fails and the

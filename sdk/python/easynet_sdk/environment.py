@@ -8,8 +8,6 @@ from typing import Protocol, TypeVar
 
 from .ability_invocation import AbilityInvocationClient
 from .client import Client, FeatureSet
-from .admin import AdminClient
-from .compatibility import CompatibilityClient, RuntimeCompatibilityTransport
 from .connection import (
     ConnectOptions,
     ControlDiscoveryRuntimeConnector,
@@ -17,19 +15,11 @@ from .connection import (
 )
 from .control_ipc import ControlIpcClient, default_control_path
 from .daemon import DaemonControl
-from .directory import DirectoryClient
 from .errors import ErrorCode, RetryHint, SDKError
-from .events import EventClient
 from .health import HealthClient
-from .host_binding import HostBindingClient
-from .identity import AddressingClient, IdentityClient
-from .mission import MissionClient, RuntimeMissionTransport
-from .publication import PublicationClient, RuntimePublicationTransport
-from .receipt import ReceiptClient
+from .axon_addressing import AddressingClient
 from .runtime import RuntimeClient
-from .surface import RuntimeSurfaceTransport, SurfaceClient
 from .transport import DaemonInvocationTransport
-from .wrappers import RuntimeWrapperTransport, WrapperClient
 
 
 class _Closable(Protocol):
@@ -42,19 +32,32 @@ _TClosable = TypeVar("_TClosable", bound=_Closable)
 
 @dataclass
 class NativeRuntimeHandle:
-    """One SDK-owned native Runtime, Health, and Identity provider lifecycle.
+    """One SDK-owned native Runtime and Health provider lifecycle.
 
-    The three facades are generic canonical-runtime concepts. Health borrows
-    Runtime's transport, while Identity owns its independent daemon profile
-    transport. Callers receive facades without ownership transfer; closing the
-    handle releases them in reverse dependency order exactly once.
+    Health borrows Runtime's transport. Addressing is an Axon-backed local
+    provider and never depends on a product profile exported by generic ABI v5.
     """
 
     _runtime: RuntimeClient
     _health: HealthClient
-    _identity: IdentityClient
+    _addressing: AddressingClient
     _closed: bool = field(default=False, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("runtime", self._runtime),
+            ("health", self._health),
+            ("addressing", self._addressing),
+        ):
+            if value is None:
+                raise SDKError(
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    stage="sdk",
+                    retry=RetryHint.NEVER,
+                    retryable=False,
+                    message=f"native runtime {name} provider is required",
+                )
 
     def client(self) -> RuntimeClient:
         """Return the provider's Runtime Core facade."""
@@ -68,11 +71,11 @@ class NativeRuntimeHandle:
         self._require_open()
         return self._health
 
-    def identity(self) -> IdentityClient:
-        """Return the provider's canonical Identity facade."""
+    def addressing(self) -> AddressingClient:
+        """Return the provider-backed product-neutral Addressing facade."""
 
         self._require_open()
-        return self._identity
+        return self._addressing
 
     def close(self) -> None:
         """Close all provider-owned facades exactly once."""
@@ -82,7 +85,9 @@ class NativeRuntimeHandle:
                 return
             self._closed = True
         first_error: SDKError | None = None
-        for client in (self._health, self._identity, self._runtime):
+        for client in (self._health, self._addressing, self._runtime):
+            if client is None:
+                continue
             try:
                 client.close()
             except SDKError as exc:
@@ -193,27 +198,19 @@ class SdkEnvironment:
     def runtime_connection_direct(
         self, options: ConnectOptions = ConnectOptions()
     ) -> RuntimeConnection:
-        """Open a stateful RuntimeConnection over daemon Axon gRPC UDS."""
+        """Open a direct Axon runtime connection with canonical Addressing."""
 
         self._require_open()
-        from . import _cabi
         from .direct_runtime import DirectDaemonRuntimeConnector
 
-        options = self._connect_options(options)
-        identity = AddressingClient(
-            _cabi.open_cabi_identity_transport(
-                control_path=options.control_path,
-                library_path=self.library_path,
-            )
+        addressing = _canonical_addressing_client()
+        connector = DirectDaemonRuntimeConnector(
+            control_path=self.resolved_control_path(),
+            identity=addressing,
+            close_identity=True,
         )
-        connection = RuntimeConnection(
-            DirectDaemonRuntimeConnector(
-                control_path=options.control_path,
-                identity=identity,
-                close_identity=True,
-            )
-        )
-        connection.connect(options)
+        connection = RuntimeConnection(connector)
+        connection.connect(self._connect_options(options))
         return self._track(connection)
 
     def runtime_client(self) -> RuntimeClient:
@@ -231,12 +228,7 @@ class SdkEnvironment:
     def native_runtime(
         self, options: ConnectOptions = ConnectOptions()
     ) -> NativeRuntimeHandle:
-        """Open one owned native Runtime, Health, and Identity provider.
-
-        This mirrors the Go SDK native provider shape. Runtime and Health share
-        a transport; Identity opens the daemon's dedicated canonical identity
-        profile using the same resolved control endpoint and library options.
-        """
+        """Open one owned native Runtime and Health provider."""
 
         self._require_open()
         from . import _cabi
@@ -248,18 +240,8 @@ class SdkEnvironment:
         )
         runtime = RuntimeClient(runtime_transport)
         health = HealthClient(runtime_transport, owns_transport=False)
-        try:
-            identity = IdentityClient(
-                _cabi.open_cabi_identity_transport(
-                    control_path=resolved.control_path,
-                    library_path=self.library_path,
-                )
-            )
-        except Exception:
-            health.close()
-            runtime.close()
-            raise
-        return self._track(NativeRuntimeHandle(runtime, health, identity))
+        addressing = _canonical_addressing_client()
+        return self._track(NativeRuntimeHandle(runtime, health, addressing))
 
     def runtime_client_direct(
         self, options: ConnectOptions = ConnectOptions()
@@ -294,25 +276,11 @@ class SdkEnvironment:
         )
 
     def ability_invocation_client(self) -> AbilityInvocationClient:
-        """Open the ability Invocation convenience facade."""
+        """Open the generic complete-Invocation facade."""
 
         self._require_open()
-        from . import _cabi
-
-        control_path = self.resolved_control_path()
-        runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=control_path,
-            library_path=self.library_path,
-        )
-        identity_transport = _cabi.open_cabi_identity_transport(
-            control_path=control_path,
-            library_path=self.library_path,
-        )
         return self._track(
-            AbilityInvocationClient(
-                runtime=RuntimeClient(runtime_transport),
-                addressing=AddressingClient(identity_transport),
-            )
+            AbilityInvocationClient(self.runtime_client(), _canonical_addressing_client())
         )
 
     def health_client(self) -> HealthClient:
@@ -328,178 +296,11 @@ class SdkEnvironment:
         self._track(transport)
         return HealthClient(transport)
 
-    def identity_client(self) -> IdentityClient:
-        """Open the identity and addressing facade."""
-
-        self._require_open()
-        from . import _cabi
-
-        transport = _cabi.open_cabi_identity_transport(
-            control_path=self.resolved_control_path(),
-            library_path=self.library_path,
-        )
-        return self._track(IdentityClient(transport))
-
     def addressing_client(self) -> AddressingClient:
-        """Open the Axon-delegated URA and DescriptorRef helper facade."""
+        """Open the product-neutral Axon-backed Addressing provider."""
 
         self._require_open()
-        from . import _cabi
-
-        transport = _cabi.open_cabi_identity_transport(
-            control_path=self.resolved_control_path(),
-            library_path=self.library_path,
-        )
-        return self._track(AddressingClient(transport))
-
-    def directory_client(self) -> DirectoryClient:
-        """Open the Directory profile facade."""
-
-        from . import _cabi
-
-        return self._track(
-            DirectoryClient(
-                self._profile_transport(_cabi.open_cabi_directory_transport)
-            )
-        )
-
-    def receipt_client(self) -> ReceiptClient:
-        """Open the Receipt profile facade."""
-
-        from . import _cabi
-
-        return self._track(
-            ReceiptClient(self._profile_transport(_cabi.open_cabi_receipt_transport))
-        )
-
-    def publication_client(self) -> PublicationClient:
-        """Open the Publication profile facade."""
-
-        from . import _cabi
-
-        control_path = self.resolved_control_path()
-        carrier = self._profile_transport(_cabi.open_cabi_publication_transport)
-        runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=control_path,
-            library_path=self.library_path,
-        )
-        return self._track(
-            PublicationClient(
-                RuntimePublicationTransport(
-                    carrier=carrier,
-                    runtime=RuntimeClient(runtime_transport),
-                )
-            )
-        )
-
-    def host_binding_client(self) -> HostBindingClient:
-        """Open the Host Binding profile facade."""
-
-        from . import _cabi
-
-        return self._track(
-            HostBindingClient(
-                self._profile_transport(_cabi.open_cabi_host_binding_transport)
-            )
-        )
-
-    def mission_client(self) -> MissionClient:
-        """Open the Mission profile facade."""
-
-        from . import _cabi
-
-        control_path = self.resolved_control_path()
-        carrier = self._profile_transport(_cabi.open_cabi_mission_transport)
-        runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=control_path,
-            library_path=self.library_path,
-        )
-        return self._track(
-            MissionClient(
-                RuntimeMissionTransport(
-                    carrier=carrier,
-                    runtime=RuntimeClient(runtime_transport),
-                )
-            )
-        )
-
-    def admin_client(self) -> AdminClient:
-        """Open the Admin + Gateway profile facade."""
-
-        from . import _cabi
-
-        return self._track(
-            AdminClient(self._profile_transport(_cabi.open_cabi_admin_transport))
-        )
-
-    def event_client(self) -> EventClient:
-        """Open the Events profile facade."""
-
-        from . import _cabi
-
-        return self._track(
-            EventClient(self._profile_transport(_cabi.open_cabi_events_transport))
-        )
-
-    def surface_client(self) -> SurfaceClient:
-        """Open the Surface profile facade."""
-
-        from . import _cabi
-
-        control_path = self.resolved_control_path()
-        carrier = self._profile_transport(_cabi.open_cabi_surface_transport)
-        runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=control_path,
-            library_path=self.library_path,
-        )
-        return self._track(
-            SurfaceClient(
-                RuntimeSurfaceTransport(
-                    carrier=carrier,
-                    runtime=RuntimeClient(runtime_transport),
-                )
-            )
-        )
-
-    def compatibility_client(self) -> CompatibilityClient:
-        """Open the Compatibility profile facade."""
-
-        from . import _cabi
-
-        control_path = self.resolved_control_path()
-        carrier = self._profile_transport(_cabi.open_cabi_compatibility_transport)
-        runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=control_path,
-            library_path=self.library_path,
-        )
-        return self._track(
-            CompatibilityClient(
-                RuntimeCompatibilityTransport(
-                    carrier=carrier,
-                    runtime=RuntimeClient(runtime_transport),
-                )
-            )
-        )
-
-    def wrapper_client(self) -> WrapperClient:
-        """Open the Convenience Wrapper profile facade."""
-
-        from . import _cabi
-
-        control_path = self.resolved_control_path()
-        carrier = self._profile_transport(_cabi.open_cabi_wrapper_transport)
-        runtime_transport = _cabi.open_cabi_runtime_transport(
-            control_path=control_path,
-            library_path=self.library_path,
-        )
-        return self._track(
-            WrapperClient(
-                RuntimeWrapperTransport(
-                    carrier=carrier,
-                    runtime=RuntimeClient(runtime_transport),
-                )
-            )
-        )
+        return self._track(_canonical_addressing_client())
 
     def close(self) -> None:
         """Close SDK-owned resources without stopping daemon processes."""
@@ -579,3 +380,9 @@ def _expected_abi_version() -> int:
     from . import _cabi
 
     return _cabi.EXPECTED_ABI_VERSION
+
+
+def _canonical_addressing_client() -> AddressingClient:
+    from .axon_addressing import AxonAddressingTransport
+
+    return AddressingClient(AxonAddressingTransport())

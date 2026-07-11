@@ -16,7 +16,7 @@ mkfinal() {
   touch "$dir/Cargo.toml" "$dir/Cargo.lock" "$dir/README.md" "$dir/PROJECT_STRUCTURE.md" "$dir/build.rs"
   touch "$dir/README.pdf" "$dir/VERSION"
   mkdir -p "$dir/include"
-  touch "$dir/include/easynet_cli.h"
+  touch "$dir/include/easynet_cli.h" "$dir/include/easynet_cli.exports.v5"
 
   mkdir -p "$dir/src/bin"
   touch \
@@ -29,7 +29,6 @@ mkfinal() {
     "$dir/src/bin/real-publish-smoke.rs"
 
   mkdir -p \
-    "$dir/src/core/ability" \
     "$dir/src/core/agent" \
     "$dir/src/core/identity" \
     "$dir/src/core/ura" \
@@ -66,7 +65,6 @@ mkfinal() {
     "$dir/src/daemon/resources/context" \
     "$dir/src/daemon/resources/files" \
     "$dir/src/daemon/resources/media" \
-    "$dir/src/daemon/resources/remote_desktop" \
     "$dir/src/daemon/identity" \
     "$dir/src/daemon/trust" \
     "$dir/src/daemon/keyring" \
@@ -83,19 +81,8 @@ mkfinal() {
     "$dir/src/ffi/client" \
     "$dir/src/ffi/invocation" \
     "$dir/src/ffi/errors" \
+    "$dir/src/ffi/features" \
     "$dir/src/ffi/strings" \
-    "$dir/src/ffi/profile_json" \
-    "$dir/src/ffi/identity" \
-    "$dir/src/ffi/directory" \
-    "$dir/src/ffi/receipt" \
-    "$dir/src/ffi/publication" \
-    "$dir/src/ffi/host_binding" \
-    "$dir/src/ffi/mission" \
-    "$dir/src/ffi/events" \
-    "$dir/src/ffi/admin_gateway" \
-    "$dir/src/ffi/surface" \
-    "$dir/src/ffi/compatibility" \
-    "$dir/src/ffi/wrappers" \
     "$dir/src/eal/parser" \
     "$dir/src/eal/interpreter" \
     "$dir/src/eal/runtime" \
@@ -119,7 +106,7 @@ mkfinal() {
     "$dir/plugins" "$dir/skills" "$dir/examples" "$dir/gallery" "$dir/docs" \
     "$dir/tests/e2e" "$dir/tests/conformance" "$dir/tests/fixtures" "$dir/tests/scripts" "$dir/tests/support" \
     "$dir/tools/benches" "$dir/packaging/docker" "$dir/packaging/release" \
-    "$dir/platforms/macos" "$dir/platforms/windows" "$dir/.github/workflows"
+    "$dir/.github/workflows"
   touch "$dir/schemas/control_plane.proto" "$dir/schemas/common.proto"
 }
 

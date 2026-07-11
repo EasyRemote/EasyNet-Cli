@@ -29,12 +29,7 @@
 
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BaselineCallMode {
-    Rpc,
-    Stream,
-    Bidi,
-}
+use crate::daemon::ability::CallMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaselineSurface {
@@ -71,7 +66,7 @@ pub enum BaselineDomain {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BaselineAbility {
     pub name: &'static str,
-    pub call_mode: BaselineCallMode,
+    pub call_mode: CallMode,
     pub surface: BaselineSurface,
     pub domain: BaselineDomain,
 }
@@ -81,7 +76,7 @@ impl BaselineAbility {
     pub const fn rpc(name: &'static str, surface: BaselineSurface, domain: BaselineDomain) -> Self {
         Self {
             name,
-            call_mode: BaselineCallMode::Rpc,
+            call_mode: CallMode::Rpc,
             surface,
             domain,
         }
@@ -95,7 +90,7 @@ impl BaselineAbility {
     ) -> Self {
         Self {
             name,
-            call_mode: BaselineCallMode::Stream,
+            call_mode: CallMode::Stream,
             surface,
             domain,
         }
@@ -109,7 +104,7 @@ impl BaselineAbility {
     ) -> Self {
         Self {
             name,
-            call_mode: BaselineCallMode::Bidi,
+            call_mode: CallMode::Bidi,
             surface,
             domain,
         }
@@ -193,7 +188,6 @@ pub const ABILITY_FEDERATION_HEARTBEAT: &str = "federation.heartbeat";
 pub const ABILITY_FEDERATION_RESOLVE: &str = "federation.resolve";
 pub const ABILITY_NAMESPACE_RESOLVE: &str = "namespace.resolve";
 pub const ABILITY_NAMESPACE_PROXY_RESOLVE: &str = "namespace.proxy_resolve";
-pub const ABILITY_FEDERATION_FORWARD_INVOKE: &str = "federation.forward_invoke";
 pub const ABILITY_FEDERATION_RESOLVE_KEY: &str = "federation.resolve_key";
 pub const ABILITY_FEDERATION_DISCOVER: &str = "federation.discover";
 pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY: &str = "federation.subscribe_directory";
@@ -208,7 +202,6 @@ pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_sel
 pub const ABILITY_META_LIST_ABILITIES: &str = "meta.list_abilities";
 pub const ABILITY_FEDERATION_STATUS: &str = "federation.status";
 pub const ABILITY_SESSION_OPEN: &str = "session.open";
-pub const ABILITY_RUNTIME_INVOKE_REMOTE: &str = "runtime.invoke_remote";
 
 #[cfg(test)]
 const FORBIDDEN_BACKEND_AGGREGATE_ALIAS: &str = "aggregate.list_abilities_catalog";
@@ -221,7 +214,6 @@ const HUB_BASELINE: &[BaselineAbility] = &[
     daemon_rpc!(ABILITY_FEDERATION_RESOLVE, HubFederation),
     daemon_rpc!(ABILITY_NAMESPACE_RESOLVE, HubNamespace),
     daemon_rpc!(ABILITY_NAMESPACE_PROXY_RESOLVE, HubNamespace),
-    daemon_rpc!(ABILITY_FEDERATION_FORWARD_INVOKE, HubFederation),
     daemon_rpc!(ABILITY_FEDERATION_RESOLVE_KEY, HubFederation),
     daemon_rpc!(ABILITY_FEDERATION_DISCOVER, HubFederation),
     daemon_stream!(ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY, HubFederation),
@@ -233,15 +225,13 @@ const HUB_BASELINE: &[BaselineAbility] = &[
     daemon_rpc!(ABILITY_IDENTITY_LIST_USER_PUBKEYS, HubIdentity),
     daemon_rpc!(ABILITY_IDENTITY_REVOKE_USER_PUBKEY, HubIdentity),
     runtime_admin_rpc!(ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY, HubRuntimeAdmin),
-    // `session.open` and `runtime.invoke_remote` ride the daemon bidi
-    // carrier (`InvokeBidi`), not the local registry or the unary/stream
+    // `session.open` rides the daemon bidi carrier (`InvokeBidi`), not the local registry or the unary/stream
     // Invocation route table. They are prefix-bypassed in dispatch (SPEC
     // §9.1 item 13) and verified against the installed runtime-admin
     // surface by `RuntimeAdminConformance`, never by `RegistryConformance`
     // or `DaemonInvocationSurface`. SPEC §7.1 notes 6/7 fix their owner as
     // the daemon runtime, not an EasyNet backend wrapper.
     runtime_admin_bidi!(ABILITY_SESSION_OPEN, HubRuntimeAdmin),
-    runtime_admin_bidi!(ABILITY_RUNTIME_INVOKE_REMOTE, HubRuntimeAdmin),
     local_rpc!(ABILITY_META_LIST_ABILITIES, HubIntrospection),
     daemon_rpc!(ABILITY_FEDERATION_STATUS, HubFederation),
 ];
@@ -462,12 +452,12 @@ impl<'a> RegistryConformance<'a> {
 }
 
 pub struct DaemonInvocationSurface {
-    routes: BTreeSet<(&'static str, BaselineCallMode)>,
+    routes: BTreeSet<(&'static str, CallMode)>,
 }
 
 impl DaemonInvocationSurface {
     #[must_use]
-    pub fn new(routes: impl IntoIterator<Item = (&'static str, BaselineCallMode)>) -> Self {
+    pub fn new(routes: impl IntoIterator<Item = (&'static str, CallMode)>) -> Self {
         Self {
             routes: routes.into_iter().collect(),
         }
@@ -510,7 +500,7 @@ impl DaemonInvocationSurface {
 
 /// Verifies that `AxonRuntimeAdmin` baseline rows are actually installed
 /// on the daemon runtime-admin surface — the named `InvokeBidi` route set
-/// the bidi dispatcher serves (`session.open`, `runtime.invoke_remote`)
+/// the bidi dispatcher serves (`session.open`)
 /// plus any RPC-shaped runtime-admin handshakes installed on the Axon
 /// `LocalRuntime` (`runtime.bootstrap_self_identity`).
 ///
@@ -534,7 +524,7 @@ impl RuntimeAdminConformance {
 
     /// Build the conformance checker from the daemon's *actual* installed
     /// runtime-admin surface: the bidi dispatcher's named route table
-    /// (`session.open`, `runtime.invoke_remote`) plus the runtime-admin
+    /// (`session.open`) plus the runtime-admin
     /// RPC handshake (`runtime.bootstrap_self_identity`).
     ///
     /// This is the production-derived constructor — callers (boot gate,
@@ -592,9 +582,9 @@ fn registry_supports(
     ability: BaselineAbility,
 ) -> bool {
     match ability.call_mode {
-        BaselineCallMode::Rpc => registry.has_rpc(ability.name),
-        BaselineCallMode::Stream => registry.has_stream(ability.name),
-        BaselineCallMode::Bidi => registry.has_bidi(ability.name),
+        CallMode::Rpc => registry.has_rpc(ability.name),
+        CallMode::Stream => registry.has_stream(ability.name),
+        CallMode::Bidi => registry.has_bidi(ability.name),
     }
 }
 
@@ -728,10 +718,7 @@ mod tests {
         // prove the report flags it. This pins the failure semantics so a
         // future regression that silently removes the dispatcher arm is
         // caught rather than passing on an empty `missing` list.
-        let installed = vec![
-            ABILITY_RUNTIME_INVOKE_REMOTE,
-            ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
-        ];
+        let installed = vec![ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY];
         let report =
             RuntimeAdminConformance::new(installed).check("hub", HubBaseline::required_abilities());
         assert!(!report.is_conformant());
@@ -743,19 +730,19 @@ mod tests {
     }
 
     #[test]
-    fn session_open_and_invoke_remote_are_runtime_admin_bidi_rows() {
-        // Pin the surface/call-mode classification: these two carriers ride
+    fn session_open_is_a_runtime_admin_bidi_row() {
+        // Pin the surface/call-mode classification: this carrier rides
         // the daemon bidi surface, not the local registry. If a refactor
         // ever reclassifies them as `LocalRegistry`, `RegistryConformance`
         // would start asserting a handler that does not exist.
         let hub = HubBaseline::required_abilities();
-        for name in [ABILITY_SESSION_OPEN, ABILITY_RUNTIME_INVOKE_REMOTE] {
+        for name in [ABILITY_SESSION_OPEN] {
             let row = hub
                 .iter()
                 .find(|ability| ability.name == name)
                 .unwrap_or_else(|| panic!("hub baseline must contain {name}"));
             assert_eq!(row.surface, BaselineSurface::AxonRuntimeAdmin);
-            assert_eq!(row.call_mode, BaselineCallMode::Bidi);
+            assert_eq!(row.call_mode, CallMode::Bidi);
             assert_eq!(row.domain, BaselineDomain::HubRuntimeAdmin);
         }
     }

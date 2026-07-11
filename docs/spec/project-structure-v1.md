@@ -36,7 +36,8 @@ EasyNet-Cli/
 ├─ README.md
 ├─ build.rs
 ├─ include/
-│  └─ easynet_cli.h
+│  ├─ easynet_cli.h
+│  └─ easynet_cli.exports.v5
 ├─ src/
 │  ├─ lib.rs
 │  ├─ bin/
@@ -48,7 +49,6 @@ EasyNet-Cli/
 │  │  ├─ real-user-smoke.rs
 │  │  └─ real-publish-smoke.rs
 │  ├─ core/
-│  │  ├─ ability/
 │  │  ├─ agent/
 │  │  ├─ identity/
 │  │  ├─ ura/
@@ -90,8 +90,7 @@ EasyNet-Cli/
 │  │  │  ├─ pages/
 │  │  │  ├─ context/
 │  │  │  ├─ files/
-│  │  │  ├─ media/
-│  │  │  └─ remote_desktop/
+│  │  │  └─ media/
 │  │  ├─ identity/
 │  │  ├─ trust/
 │  │  ├─ keyring/
@@ -110,19 +109,8 @@ EasyNet-Cli/
 │  │  ├─ client/
 │  │  ├─ invocation/
 │  │  ├─ errors/
-│  │  ├─ strings/
-│  │  ├─ profile_json/
-│  │  ├─ identity/
-│  │  ├─ directory/
-│  │  ├─ receipt/
-│  │  ├─ publication/
-│  │  ├─ host_binding/
-│  │  ├─ mission/
-│  │  ├─ events/
-│  │  ├─ admin_gateway/
-│  │  ├─ surface/
-│  │  ├─ compatibility/
-│  │  └─ wrappers/
+│  │  ├─ features/
+│  │  └─ strings/
 │  ├─ eal/
 │  │  ├─ parser/
 │  │  ├─ interpreter/
@@ -173,9 +161,7 @@ EasyNet-Cli/
 ├─ packaging/
 │  ├─ docker/
 │  └─ release/
-├─ platforms/
-│  ├─ macos/
-│  └─ windows/
+├─ pr/
 └─ .github/
    └─ workflows/
 ```
@@ -224,7 +210,7 @@ EasyNet-Cli/
 | `tests/` | Cargo integration tests, e2e, conformance, fixtures, test scripts/support | product modules |
 | `tools/` | maintainer tools, benchmark entry points, descriptor generation wrappers, audits, repo checks | product runtime modules |
 | `packaging/` | docker and release packaging | platform app source |
-| `platforms/` | OS-specific app/tray/launcher source | release packaging |
+| `pr/` | checked-in delivery intent, invariants, and verification evidence | runtime source or generated output |
 | `.github/workflows/` | GitHub Actions workflow entry points | non-GitHub CI implementation roots |
 
 ## Source Ownership
@@ -252,8 +238,6 @@ logic belongs in `src/bin/`.
 
 Zero-dependency domain/value layer:
 
-- `ability/`: core ability identity/value types that do not depend on daemon
-  execution, descriptor storage, or transport.
 - `agent/`: core agent identity/spec value types.
 - `identity/`: identity value objects and pure validation helpers.
 - `ura/`: URA value objects, parsing wrappers, and route-independent helpers.
@@ -338,14 +322,23 @@ Rust/C ABI projection over daemon control and generic Invocation submission:
 - `client/`: client handle ABI.
 - `invocation/`: complete Invocation submission/projection ABI.
 - `errors/`: stable FFI error representation.
+- `features/`: capability-neutral feature-discovery catalogue.
 - `strings/`: allocation and string ownership ABI.
-- `profile_json/`: shared JSON boundary validation for profile projections.
-- `identity/`, `directory/`, `receipt/`, `publication/`, `host_binding/`,
-  `mission/`, `events/`, `admin_gateway/`, `surface/`, `compatibility/`, and
-  `wrappers/`: ABI v4 Daemon SDK profile projections over the same Runtime Core.
 
-The stable model is generic daemon/Invocation APIs plus profile-owned carrier
-and projection helpers, not one exported ABI method per user Ability.
+The stable model is the exact generic daemon/Invocation boundary in
+`include/easynet_cli.exports.v5`. Identity, Directory, Receipt, Publication,
+Host Binding, Mission, Events, Admin/Gateway, Surface, Compatibility, Wrappers,
+and companion control remain language-SDK provider responsibilities and must
+not grow corresponding FFI directories or exports.
+
+### Product projection ownership
+
+Product-specific JSON projections live inside the daemon domain that owns their
+semantics. Companion status projection belongs to `daemon/plugins/companion/`,
+OpenAI file projection belongs to the OpenAI compatibility ability, host-stream
+framing belongs to its mission executor, and signer policy binding belongs to
+daemon identity. Generic C ABI callback projection remains internal to
+`src/ffi/`. There is no cross-domain product protocol layer.
 
 ### `src/eal/`
 
@@ -524,8 +517,8 @@ new permanent root.
 5. Move docker/release harnesses into `packaging/{docker,release}/`.
 6. Fold root `demos/` into `examples/`, `docs/`, or `tools/` by function.
 7. Remove root `engineering/` and root `scripts/` as ownership roots.
-8. Reshape `src/core/` into `ability/`, `agent/`, `identity/`, `ura/`, and
-   `domain/`.
+8. Reshape `src/core/` into `agent/`, `identity/`, `ura/`, and `domain/`;
+   daemon-imported ability manifests belong to the daemon catalogue boundary.
 9. Reshape `src/daemon/` into the final semantic directories, especially
    `boot/`, `invocation/{admission,routing,dispatch,receipts,streams,bidi}`,
    `execution/{pty,mcp,mission,schedule,loop_instance,permission,session}`,

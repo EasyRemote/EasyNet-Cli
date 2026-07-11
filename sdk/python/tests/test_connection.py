@@ -29,7 +29,7 @@ class MemoryRuntimeConnector:
         return (
             b'{"endpoint":"unix:///tmp/daemon.sock",'
             b'"control_path":"/tmp/control.sock",'
-            b'"protocol_version":"v4","abi_version":4}'
+            b'"protocol_version":"v4","abi_version":5}'
         )
 
     def handshake(self, endpoint_json: bytes):

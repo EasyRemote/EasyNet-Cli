@@ -29,7 +29,7 @@ use crate::daemon::ability::{
 /// [`crate::daemon::persistence::daemon_config::resolved_local_uds_path_with_env_override`]
 /// kept here so the existing CLI call sites
 /// (`cli/federation_discover.rs`, `cli/start.rs`,
-/// `support/federation_invoke.rs`) need no rewrite. The body itself
+/// `support/remote_invoke.rs`) need no rewrite. The body itself
 /// lives in `persistence/` because it consults `daemon-config.toml`
 /// — keeping it there preserves the `support/` leaf-layer invariant
 /// documented in `src/support/mod.rs`.
@@ -557,14 +557,50 @@ fn invoke_agent_management_in_process(
     function_name: &str,
     payload_json: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    let mut catalog = crate::daemon::ability::dispatch::AxonAbilityCatalog::new();
-    crate::daemon::ability::builtins::agents::list::register(&mut catalog, || {
-        crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default()
-    });
-    let hot_registrar: std::sync::Arc<
+    use std::sync::{Arc, OnceLock};
+
+    let runtime = easynet_axon::invocation::LocalRuntime::new();
+    let dispatch_handle = Arc::new(OnceLock::new());
+    let registrar = crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
+        Arc::new(Vec::new()),
+        Arc::clone(&dispatch_handle),
+        Arc::new(
+            crate::daemon::ability::builtins::agents::discover::BridgeDiscoverFederationResolver,
+        ),
+    );
+    registrar
+        .set_runtime(Arc::clone(&runtime))
+        .map_err(|error| anyhow::anyhow!("wire in-process agent registrar runtime: {error}"))?;
+
+    let hot_registrar: Arc<
         crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
-    > = std::sync::Arc::new(std::sync::OnceLock::new());
-    crate::daemon::ability::builtins::agents::lifecycle::register(&mut catalog, hot_registrar);
+    > = Arc::new(OnceLock::new());
+    hot_registrar
+        .set(registrar)
+        .map_err(|_| anyhow::anyhow!("wire in-process agent registrar cell twice"))?;
+
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura("localhost", "test-device"),
+            Vec::<String>::new(),
+        )
+        .map_err(|error| anyhow::anyhow!("build in-process agent authority: {error}"))?;
+    let mut catalog = crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        runtime,
+        authority_context,
+    );
+    crate::daemon::ability::builtins::agents::list::register(&mut catalog, || {
+        crate::daemon::persistence::agent_registry::load_agents()
+            .map_err(|error| anyhow::anyhow!("test agent.list registry load: {error:#}"))
+    });
+    crate::daemon::ability::builtins::agents::lifecycle::register(
+        &mut catalog,
+        Arc::clone(&hot_registrar),
+    );
+    let catalog = Arc::new(catalog);
+    dispatch_handle
+        .set(Arc::clone(&catalog))
+        .map_err(|_| anyhow::anyhow!("wire in-process agent dispatch handle twice"))?;
     catalog.invoke_rpc_json(function_name, payload_json)
 }
 

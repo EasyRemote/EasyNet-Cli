@@ -3,9 +3,7 @@
 //!
 //! Goal
 //! ----
-//! Collapse the existing `dispatch_invoke_remote` /
-//! `dispatch_self_targeted_invoke_remote` /
-//! `dispatch_self_targeted_forward_invoke` family into **one** path:
+//! Keep one descriptor-bound execution path for every daemon ingress:
 //!
 //!   1. Take the wire pieces (`pb::axon::v1::Envelope` from
 //!      `EnvelopeOpen.envelope` + `target.ability_name` from
@@ -681,37 +679,6 @@ pub async fn dispatch_rpc_local_with_subject(
     }
 }
 
-/// Project an `RpcDispatchOutcome` into the (payload, error_string)
-/// pair the wire layer needs to build an
-/// `InvokeRemoteDown::Result` frame.
-///
-/// `error_string` is `None` iff the dispatch completed cleanly
-/// (`state == Completed`, `error == None`). Every operational
-/// failure — `Failed` / `TimedOut` / `Cancelled` / pre-admission
-/// rejection — produces `Some(<diagnostic>)` with the original
-/// `AxonError`'s `Display` rendering. Caller wires this directly
-/// into the in-band terminal frame helper at
-/// `daemon::invocation::dispatch::daemon_invocation_service::
-///  invoke_remote_inband_error_response` (already in place from
-/// the earlier Phase-2 follow-up).
-///
-/// One canonical mapping site so the in-band-error wire shape
-/// stays consistent across every dispatch site that flips to
-/// Axon-routed dispatch.
-#[must_use]
-pub fn outcome_to_invoke_remote_result(outcome: RpcDispatchOutcome) -> (Vec<u8>, Option<String>) {
-    let RpcDispatchOutcome {
-        invocation_id: _,
-        state: _,
-        admission_receipt: _,
-        terminal_receipt: _,
-        payload_bytes,
-        error,
-    } = outcome;
-    let error_string = error.map(|e| e.to_string());
-    (payload_bytes, error_string)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1134,40 +1101,6 @@ mod tests {
             err.to_string().contains("unknown_ability")
                 || err.to_string().contains("does not support"),
             "diagnostic must name the gate: {err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn outcome_to_invoke_remote_result_completed_drops_error() {
-        let outcome = RpcDispatchOutcome {
-            invocation_id: None,
-            state: InvocationState::Completed,
-            payload_bytes: b"ok".to_vec(),
-            error: None,
-            admission_receipt: None,
-            terminal_receipt: None,
-        };
-        let (payload, err) = outcome_to_invoke_remote_result(outcome);
-        assert_eq!(payload, b"ok");
-        assert!(err.is_none());
-    }
-
-    #[tokio::test]
-    async fn outcome_to_invoke_remote_result_failed_carries_diagnostic_string() {
-        let outcome = RpcDispatchOutcome {
-            invocation_id: None,
-            state: InvocationState::Failed,
-            payload_bytes: Vec::new(),
-            error: Some(AxonError::internal("synthetic boom")),
-            admission_receipt: None,
-            terminal_receipt: None,
-        };
-        let (payload, err) = outcome_to_invoke_remote_result(outcome);
-        assert!(payload.is_empty());
-        let msg = err.expect("failed outcome must carry an error string");
-        assert!(
-            msg.contains("synthetic boom"),
-            "diagnostic must round-trip: {msg}"
         );
     }
 

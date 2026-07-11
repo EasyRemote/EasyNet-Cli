@@ -15,7 +15,7 @@
 // 1. `~/.easynet/daemon-config.toml` `[daemon.federated_peers]`
 //    table — the operator-curated `realm → hub_endpoint` map. Every
 //    entry here is a realm the local daemon will route
-//    cross-hub `federation.forward_invoke` calls to.
+//    cross-hub `Invocation::Invoke` calls to.
 // 2. `<EASYNET_REALM_TRUST_PATH or /etc/easynet/realm-trust.toml>`
 //    `[[trusted_agent]]` blocks with `role = "hub"`. These are
 //    the peer hubs the cross-hub dialer's TLS gate accepts. The

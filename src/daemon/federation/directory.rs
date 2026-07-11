@@ -750,10 +750,7 @@ pub async fn poll_once(
             ..InvokeRequest::default()
         };
 
-        match federation_client
-            .forward_invoke(peer_hub_endpoint, request)
-            .await
-        {
+        match federation_client.invoke(peer_hub_endpoint, request).await {
             Ok(response) => {
                 let parsed: Result<
                     crate::daemon::invocation::dispatch::federation_wrappers::DiscoverResponse,
@@ -1044,7 +1041,7 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         // `InvalidArgument: InvokeStream request missing
         // envelope` if either the envelope or its caller /
         // callee / subject / nonce fields are absent. We mirror
-        // the same shape the CLI bridge uses for forward_invoke:
+        // the same shape the CLI bridge uses for invoke:
         // caller URA = this daemon's own URA, callee + subject =
         // the peer's hub URA as the address being subscribed to,
         // and a fresh 16-byte invocation nonce per dial. The
@@ -1892,7 +1889,7 @@ mod tests {
 
         #[async_trait]
         impl FederationClient for OneShotStreamingClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
                 _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
@@ -1929,7 +1926,7 @@ mod tests {
 
         #[async_trait]
         impl FederationClient for StalledStreamingClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
                 _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
@@ -1953,7 +1950,7 @@ mod tests {
 
         #[async_trait]
         impl FederationClient for CaptureSubscribeRequestClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
                 _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
@@ -2314,7 +2311,7 @@ mod tests {
 
             #[async_trait]
             impl FederationClient for DelayedStreamingClient {
-                async fn forward_invoke(
+                async fn invoke(
                     &self,
                     _target_hub_endpoint: &HubEndpoint,
                     _request: InvokeRequest,
@@ -2915,7 +2912,7 @@ mod tests {
 
         #[async_trait]
         impl FederationClient for CannedClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
                 target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
@@ -2937,7 +2934,7 @@ mod tests {
         struct DialFailedClient;
         #[async_trait]
         impl FederationClient for DialFailedClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
                 target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,

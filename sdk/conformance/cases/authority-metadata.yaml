@@ -1,0 +1,12 @@
+id: authority/metadata
+profile: authority
+required_for:
+  - go
+  - python
+description: Authority metadata has one typed projection and ambiguous delegation/session authority is rejected before Invocation preparation.
+steps:
+  - action: project_authority_metadata
+  - action: reject_ambiguous_authority_metadata
+expect:
+  result: canonical_authority_metadata
+  ambiguous_authority: rejected

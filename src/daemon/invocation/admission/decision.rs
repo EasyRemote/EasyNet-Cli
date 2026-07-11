@@ -134,7 +134,6 @@ pub enum PolicyDecisionReason {
     MissingGrant,
     GrantReconfirmationRequired,
     TokenScopeDenied,
-    MissingOriginCaller,
     CallerNotOwner,
     OwnerUnresolved,
     InteractiveApprovalRequired,

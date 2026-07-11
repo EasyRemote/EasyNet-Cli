@@ -55,6 +55,7 @@ use crate::daemon::execution::pty::PtyService;
 use crate::daemon::execution::schedule::ScheduleService;
 use crate::daemon::execution::session::SessionService;
 use crate::daemon::persistence::agent_registry::AgentRegistry;
+use anyhow::Context as _;
 use std::sync::Arc;
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
@@ -69,7 +70,10 @@ use std::sync::Arc;
 /// determined by the compile-time feature set and current target
 /// platform only. Installed plugin packages remain daemon-only state.
 ///
-/// **Process-cached (CQRS read model).** This function is
+/// **Deterministic snapshot profile; never daemon boot.** Production daemon
+/// assembly goes only through [`build_registry_for_daemon_result`], which is
+/// fallible and accepts explicit runtime/authority/lifecycle dependencies.
+/// This function is a process-cached CQRS read model: it is
 /// deterministic by construction (fixed services, empty agent
 /// registry, env-gate-free plugin mode), yet runtime reflection
 /// surfaces — `published_abilities()`, MCP reflective refresh,
@@ -96,6 +100,7 @@ fn build_registry_uncached() -> Arc<AxonAbilityCatalog> {
         RegistryBuildConfig::new(RegistryBuildServices::fresh(), &AgentRegistry::default()),
         PluginRegistryMode::BuiltinOnlyDeterministic,
     )
+    .expect("canonical builtin ability catalog must assemble")
     .catalog
 }
 
@@ -114,6 +119,7 @@ fn build_system_registry_uncached() -> Arc<AxonAbilityCatalog> {
         RegistryBuildConfig::new(RegistryBuildServices::fresh(), &AgentRegistry::default()),
         PluginRegistryMode::None,
     )
+    .expect("canonical system ability catalog must assemble")
     .catalog
 }
 
@@ -128,11 +134,10 @@ fn build_system_registry_uncached() -> Arc<AxonAbilityCatalog> {
 /// in `Arc`, so boot replay, `agent.start`, `agent.refresh`, and
 /// `agent.stop` share the same control-plane/runtime transaction.
 ///
-/// `hot_agent_registrar_cell` is a late-wired
-/// `OnceLock<Arc<HotAgentRegistrar>>`. The lifecycle handlers read
-/// through this cell at dispatch time. If a call lands before the
-/// registrar is available, durable agent state still wins and the
-/// handler emits an op_event with runtime sync skipped.
+/// `hot_agent_registrar_cell` breaks the catalogue/handler construction cycle.
+/// Assembly wires the shared runtime and completed catalogue before returning;
+/// lifecycle handlers treat a missing or pending registrar as a hard
+/// precondition failure before durable state is mutated.
 /// Result of constructing the daemon's local ability registry.
 ///
 /// What this is NOT: a runtime executor. `catalog` owns handler metadata and
@@ -290,7 +295,7 @@ impl RegistryDaemonBuildConfig {
 
 pub fn build_registry_with_services_result(
     config: RegistryBuildConfig<'_>,
-) -> BuiltAbilityRegistry {
+) -> anyhow::Result<BuiltAbilityRegistry> {
     build_registry_with_services_result_inner(config, PluginRegistryMode::DefaultDaemon)
 }
 
@@ -309,48 +314,31 @@ enum PluginRegistryMode {
 
 fn build_plugin_runtime_manager(
     mode: PluginRegistryMode,
-) -> Arc<crate::daemon::plugins::PluginRuntimeManager> {
-    match mode {
-        PluginRegistryMode::None => {
-            Arc::new(crate::daemon::plugins::PluginRuntimeManager::from_state(
-                crate::daemon::plugins::PluginRuntimeState::from_index(
-                    crate::daemon::plugins::PluginPackageIndex::default(),
-                ),
-            ))
-        }
+) -> anyhow::Result<Arc<crate::daemon::plugins::PluginRuntimeManager>> {
+    let manager = match mode {
+        PluginRegistryMode::None => crate::daemon::plugins::PluginRuntimeManager::from_state(
+            crate::daemon::plugins::PluginRuntimeState::from_index(
+                crate::daemon::plugins::PluginPackageIndex::default(),
+            ),
+        ),
         PluginRegistryMode::BuiltinOnlyDeterministic => {
-            let state = match crate::daemon::plugins::PluginPackageIndex::builtin() {
-                Ok(index) => crate::daemon::plugins::PluginRuntimeState::from_index_with_planner(
-                    index,
-                    crate::daemon::plugins::PluginLoadPlanner::current_without_env_gates(),
-                ),
-                Err(err) => {
-                    let error = err.to_string();
-                    crate::op_event!(
-                        component = plugin_host,
-                        kind = deterministic_builtin_index_failed,
-                        error = error.as_str(),
-                        message = "deterministic builtin plugin index failed; daemon core abilities remain registered",
-                    );
-                    crate::daemon::plugins::PluginRuntimeState::from_index(
-                        crate::daemon::plugins::PluginPackageIndex::default(),
-                    )
-                }
-            };
-            Arc::new(crate::daemon::plugins::PluginRuntimeManager::from_state(
-                state,
-            ))
+            let index = crate::daemon::plugins::PluginPackageIndex::builtin()
+                .context("build deterministic builtin plugin package index")?;
+            let state = crate::daemon::plugins::PluginRuntimeState::from_index_with_planner(
+                index,
+                crate::daemon::plugins::PluginLoadPlanner::current_without_env_gates(),
+            );
+            crate::daemon::plugins::PluginRuntimeManager::from_state(state)
         }
-        PluginRegistryMode::DefaultDaemon => {
-            Arc::new(crate::daemon::plugins::PluginRuntimeManager::new())
-        }
-    }
+        PluginRegistryMode::DefaultDaemon => crate::daemon::plugins::PluginRuntimeManager::new(),
+    };
+    Ok(Arc::new(manager))
 }
 
 fn build_registry_with_services_result_inner(
     config: RegistryBuildConfig<'_>,
     plugin_registry_mode: PluginRegistryMode,
-) -> BuiltAbilityRegistry {
+) -> anyhow::Result<BuiltAbilityRegistry> {
     let RegistryBuildConfig {
         services,
         invocation_ledger,
@@ -539,30 +527,18 @@ fn build_registry_with_services_result_inner(
     // Stateful device plugins. Package discovery, boot-time load decisions, and
     // handler registration stay separate so install/remove/update state cannot
     // leak into runtime call semantics.
-    let plugin_runtime_manager = build_plugin_runtime_manager(plugin_registry_mode);
+    let plugin_runtime_manager = build_plugin_runtime_manager(plugin_registry_mode)?;
     match plugin_registry_mode {
         PluginRegistryMode::None => {}
         PluginRegistryMode::BuiltinOnlyDeterministic => {
-            if let Err(err) = plugin_runtime_manager.register_current_plugins(&mut reg) {
-                let error = err.to_string();
-                crate::op_event!(
-                    component = plugin_host,
-                    kind = deterministic_builtin_registration_failed,
-                    error = error.as_str(),
-                    message = "deterministic builtin plugin registration failed; daemon core abilities remain registered",
-                );
-            }
+            plugin_runtime_manager
+                .register_current_plugins(&mut reg)
+                .context("register deterministic builtin plugins")?;
         }
         PluginRegistryMode::DefaultDaemon => {
-            if let Err(err) = plugin_runtime_manager.register_default_plugins(&mut reg) {
-                let error = err.to_string();
-                crate::op_event!(
-                    component = plugin_host,
-                    kind = default_registration_failed,
-                    error = error.as_str(),
-                    message = "default plugin host registration failed; daemon core abilities remain registered",
-                );
-            }
+            plugin_runtime_manager
+                .register_default_plugins(&mut reg)
+                .context("register configured daemon plugins")?;
         }
     }
     session_ability::register(&mut reg, sessions);
@@ -607,7 +583,9 @@ fn build_registry_with_services_result_inner(
                 Arc::clone(&local_registry_handle),
                 Arc::clone(&discover_federation_resolver),
             );
-        hot_registrar.set_runtime(Arc::clone(&runtime));
+        hot_registrar
+            .set_runtime(Arc::clone(&runtime))
+            .context("wire hosted-Agent registrar runtime")?;
         // Mirror ProcessSingleton::once()::set's diagnostic: a
         // second writer on this `OnceLock` is a boot-wiring bug
         // (`build_registry` is supposed to run exactly once per
@@ -749,14 +727,17 @@ fn build_registry_with_services_result_inner(
     // — otherwise the LLM's discovery flow would not see this
     // ability and would fall back to fabricating answers.
     mission_ability::register(&mut reg);
-    // The device-owned aggregate `discover` owns the top-level view and
+    // The device-owned aggregate `agent.discover` owns the top-level view and
     // reloads `agents.json` per call, so it never chooses a random first
     // agent as a synthetic self. Per-agent `<agent>.discover` /
     // `<agent>.invoke` are hosted-agent lifecycle rows; they are replayed
     // through HotAgentRegistrar after `Arc::new(reg)` below.
     discover_ability::register_device_aggregate_with_resolver(
         &mut reg,
-        || crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default(),
+        || {
+            crate::daemon::persistence::agent_registry::load_agents()
+                .map_err(|error| anyhow::anyhow!("load discover agent registry: {error:#}"))
+        },
         Arc::clone(&local_registry_handle),
         Arc::clone(&discover_federation_resolver),
     );
@@ -796,23 +777,20 @@ fn build_registry_with_services_result_inner(
         Arc::clone(&shared_stores.hub_published_abilities),
     );
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
-    // bridge above, but for the A2A agent-card surface. Closes over
-    // a clone of the AgentRegistry passed in here. v1 has no
-    // hot-reload of `agents.json`, so the snapshot stays accurate
-    // for the daemon's lifetime; the closure is still cheap to call.
-    let agents_for_a2a = agents.clone();
+    // bridge above, but for the A2A agent-card surface. The provider
+    // reloads durable state per call and propagates corruption/read failures;
+    // it never substitutes the boot snapshot as a plausible stale catalog.
     a2a_bridge_ability::register(
         &mut reg,
-        move || {
+        || {
             crate::daemon::persistence::agent_registry::load_agents()
-                .unwrap_or_else(|_| agents_for_a2a.clone())
+                .map_err(|error| anyhow::anyhow!("load A2A agent registry: {error:#}"))
         },
         Arc::clone(&local_registry_handle),
     );
-    // a2a.client.send_task — outbound A2A. The handler dials the
-    // daemon-hosted `federation.forward_invoke` Axon ability; tests
-    // run without a daemon socket and verify it returns ok:false
-    // instead of panicking.
+    // a2a.client.send_task — outbound A2A. The handler submits a signed
+    // descriptor-bound InvokeRequest to the local daemon's canonical
+    // Invocation service.
     a2a_client_ability::register(&mut reg);
     // mcp.client.{list,call} — outbound MCP. Boots an
     // McpClientService from ~/.easynet/mcps.json (missing
@@ -823,22 +801,10 @@ fn build_registry_with_services_result_inner(
     // upstreams" condition.
     let mcp_svc = if hosts_device_authority {
         let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path();
-        match crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path) {
-            Ok(svc) => Arc::new(svc),
-            Err(e) => {
-                let path_display = format!("{}", mcps_path.display());
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = mcp,
-                    kind = config_load_failed,
-                    level = "warn",
-                    path = path_display,
-                    error = err_msg,
-                    fallback = "empty_service",
-                );
-                Arc::new(crate::daemon::execution::mcp::McpClientService::new())
-            }
-        }
+        Arc::new(
+            crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path)
+                .with_context(|| format!("load MCP client config {}", mcps_path.display()))?,
+        )
     } else {
         Arc::new(crate::daemon::execution::mcp::McpClientService::new())
     };
@@ -904,10 +870,9 @@ fn build_registry_with_services_result_inner(
     // agent.list — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
-    let agents_for_device_view = agents.clone();
-    agent_list_ability::register(&mut reg, move || {
+    agent_list_ability::register(&mut reg, || {
         crate::daemon::persistence::agent_registry::load_agents()
-            .unwrap_or_else(|_| agents_for_device_view.clone())
+            .map_err(|error| anyhow::anyhow!("agent.list: load durable agent registry: {error:#}"))
     });
     // meta.teach / meta.acquire / meta.forget — GET route B
     // (seven-axes T3.3): owner-conferred capability transfer.
@@ -968,25 +933,13 @@ fn build_registry_with_services_result_inner(
     if hosts_device_authority {
         if let Some(hot_registrar) = hot_agent_registrar_cell.get().cloned() {
             for (agent_name, entry) in agents.agents.iter() {
-                let outcome = crate::support::async_bridge::run_blocking(
+                crate::support::async_bridge::run_blocking(
                     hot_registrar.register_agent(agent_name, entry),
                     crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
-                );
-                if outcome.runtime_not_ready || outcome.catalog_not_ready || outcome.failed > 0 {
-                    let failed = outcome.failed.to_string();
-                    let runtime_not_ready = outcome.runtime_not_ready.to_string();
-                    let catalog_not_ready = outcome.catalog_not_ready.to_string();
-                    crate::op_event!(
-                        component = agents_boot,
-                        kind = hosted_agent_dynamic_replay_failed,
-                        level = "warn",
-                        agent = agent_name.as_str(),
-                        failed = failed.as_str(),
-                        runtime_not_ready = runtime_not_ready.as_str(),
-                        catalog_not_ready = catalog_not_ready.as_str(),
-                        message = "hosted-agent ability replay did not fully register",
-                    );
-                }
+                )
+                .with_context(|| {
+                    format!("replay hosted-Agent {agent_name:?} into live catalog/runtime")
+                })?;
             }
 
             // Forget tombstones converge here, after the learner runtimes are
@@ -1035,15 +988,11 @@ fn build_registry_with_services_result_inner(
     // compute its own once the background reflection pass finishes.
     reflection_plan.apply(Arc::clone(&mcp_svc), Arc::clone(&arc));
 
-    BuiltAbilityRegistry {
+    Ok(BuiltAbilityRegistry {
         catalog: arc,
         plugin_runtime_manager,
         device_registrar_cell,
-    }
-}
-
-pub fn build_registry_with_services(config: RegistryBuildConfig<'_>) -> Arc<AxonAbilityCatalog> {
-    build_registry_with_services_result(config).catalog
+    })
 }
 
 /// Daemon-side assembly entry point. Loads the agent registry and builds the
@@ -1113,7 +1062,7 @@ pub fn build_registry_for_daemon_result(
             &services.schedule,
         )))
     });
-    Ok(build_registry_with_services_result(RegistryBuildConfig {
+    build_registry_with_services_result(RegistryBuildConfig {
         services,
         invocation_ledger,
         agents: &agents,
@@ -1123,7 +1072,8 @@ pub fn build_registry_for_daemon_result(
         authority_context,
         hot_agent_registrar_cell,
         shared_stores,
-    }))
+    })
+    .context("assemble daemon ability catalog")
 }
 
 pub(crate) fn recover_descriptor_import_transactions_before_daemon_registry_boot(

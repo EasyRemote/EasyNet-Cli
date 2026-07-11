@@ -180,13 +180,13 @@ pub(crate) async fn sign_peer_request_envelope(
 ) -> Result<String, Status> {
     let realm = local_realm.ok_or_else(|| {
         Status::failed_precondition(
-            "cross-hub forward_invoke signing requires configured local realm",
+            "cross-hub canonical_invoke signing requires configured local realm",
         )
     })?;
     let descriptor_ref = descriptor_ref.trim();
     if descriptor_ref.is_empty() {
         return Err(Status::invalid_argument(
-            "cross-hub forward_invoke signing requires explicit descriptor ref",
+            "cross-hub canonical_invoke signing requires explicit descriptor ref",
         ));
     }
 
@@ -196,13 +196,13 @@ pub(crate) async fn sign_peer_request_envelope(
         .map(|caller| caller.ura.trim())
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
-            Status::internal("cross-hub forward_invoke signing: caller URA missing after rewrite")
+            Status::internal("cross-hub canonical_invoke signing: caller URA missing after rewrite")
         })?
         .to_string();
     let expected_hub_ura = crate::core::ura::hub_ura(realm);
     if caller_ura != expected_hub_ura {
         return Err(Status::failed_precondition(format!(
-            "cross-hub forward_invoke signing: caller `{caller_ura}` does not match local hub `{expected_hub_ura}`"
+            "cross-hub canonical_invoke signing: caller `{caller_ura}` does not match local hub `{expected_hub_ura}`"
         )));
     }
     let callee_ura = envelope
@@ -211,7 +211,7 @@ pub(crate) async fn sign_peer_request_envelope(
         .map(|callee| callee.ura.trim())
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
-            Status::internal("cross-hub forward_invoke signing: callee URA missing after rewrite")
+            Status::internal("cross-hub canonical_invoke signing: callee URA missing after rewrite")
         })?
         .to_string();
     let subject_ura = envelope
@@ -220,13 +220,15 @@ pub(crate) async fn sign_peer_request_envelope(
         .map(|subject| subject.ura.trim())
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
-            Status::internal("cross-hub forward_invoke signing: subject URA missing after rewrite")
+            Status::internal(
+                "cross-hub canonical_invoke signing: subject URA missing after rewrite",
+            )
         })?
         .to_string();
     let descriptor_subject_ura = descriptor_subject_ura_for(&callee_ura, &subject_ura, ability)
         .map_err(|err| {
             Status::internal(format!(
-                "cross-hub forward_invoke signing: derive descriptor subject: {err}"
+                "cross-hub canonical_invoke signing: derive descriptor subject: {err}"
             ))
         })?;
     if descriptor_subject_ura != subject_ura {
@@ -243,7 +245,7 @@ pub(crate) async fn sign_peer_request_envelope(
     }
     if envelope.invocation_nonce.len() != 16 {
         return Err(Status::internal(
-            "cross-hub forward_invoke signing: invocation_nonce must be 16 bytes",
+            "cross-hub canonical_invoke signing: invocation_nonce must be 16 bytes",
         ));
     }
     let descriptor_ref =
@@ -253,7 +255,7 @@ pub(crate) async fn sign_peer_request_envelope(
         )
         .map_err(|err| {
             Status::internal(format!(
-                "cross-hub forward_invoke signing: invalid explicit descriptor ref for `{ability}`: {err}"
+                "cross-hub canonical_invoke signing: invalid explicit descriptor ref for `{ability}`: {err}"
             ))
         })?;
 
@@ -265,18 +267,18 @@ pub(crate) async fn sign_peer_request_envelope(
     )
     .map_err(|err| {
         Status::internal(format!(
-            "cross-hub forward_invoke signing: build descriptor-bound envelope: {err}"
+            "cross-hub canonical_invoke signing: build descriptor-bound envelope: {err}"
         ))
     })?;
 
     let hub_signer = hub_signer.ok_or_else(|| {
         Status::failed_precondition(
-            "cross-hub forward_invoke signing requires a configured hub signer",
+            "cross-hub canonical_invoke signing requires a configured hub signer",
         )
     })?;
     if hub_signer.owner_ura() != expected_hub_ura {
         return Err(Status::failed_precondition(format!(
-            "cross-hub forward_invoke signing: signer owner `{}` does not match local hub `{expected_hub_ura}`",
+            "cross-hub canonical_invoke signing: signer owner `{}` does not match local hub `{expected_hub_ura}`",
             hub_signer.owner_ura()
         )));
     }
@@ -285,7 +287,7 @@ pub(crate) async fn sign_peer_request_envelope(
         .await
         .map_err(|err| {
             Status::internal(format!(
-                "cross-hub forward_invoke signing: canonical signer failed: {err}"
+                "cross-hub canonical_invoke signing: canonical signer failed: {err}"
             ))
         })?;
     envelope.caller_signature = Some(CallerSignature {
@@ -303,7 +305,7 @@ fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Resul
         .map(|callee| callee.ura.trim())
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| {
-            Status::internal("cross-hub forward_invoke signing: callee URA missing after rewrite")
+            Status::internal("cross-hub canonical_invoke signing: callee URA missing after rewrite")
         })?;
     crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
         callee_ura,
@@ -312,7 +314,7 @@ fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Resul
     )
     .map_err(|err| {
         Status::internal(format!(
-            "cross-hub forward_invoke signing: derive peer descriptor ref for `{ability}`: {err}"
+            "cross-hub canonical_invoke signing: derive peer descriptor ref for `{ability}`: {err}"
         ))
     })
 }
@@ -330,21 +332,6 @@ fn descriptor_subject_ura_for(
             "subject `{subject_ura}` is not descriptor-bound and callee `{callee_ura}` \
              cannot own ability `{ability}`"
         )
-    })
-}
-
-/// Decode the base64-encoded inner envelope carried by
-/// `federation.forward_invoke`. Errors map to
-/// `Status::invalid_argument` with a useful message.
-pub(crate) fn decode_inner_envelope(b64: &str) -> Result<Vec<u8>, Status> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    if b64.is_empty() {
-        return Ok(Vec::new());
-    }
-    STANDARD.decode(b64).map_err(|err| {
-        Status::invalid_argument(format!(
-            "federation.forward_invoke: inner_envelope_b64 is not valid base64: {err}"
-        ))
     })
 }
 

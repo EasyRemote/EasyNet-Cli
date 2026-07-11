@@ -104,11 +104,11 @@ fn invoke_remote_catalogue(
 ) -> anyhow::Result<Value> {
     let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+    let target_call = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
         &target_ura,
         "meta.list_abilities",
     )?;
-    crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
+    crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
         &target_call,
         request,
         caller_ura.as_deref(),

@@ -18,8 +18,6 @@ typedef int32_t (*easynet_daemon_stop_fn)(uint64_t handle);
 typedef int32_t (*easynet_daemon_detach_fn)(uint64_t handle);
 typedef int32_t (*easynet_daemon_status_fn)(uint64_t handle, char **out_status_json);
 typedef int32_t (*easynet_daemon_open_client_fn)(uint64_t daemon_handle, uint64_t *out_handle);
-typedef int32_t (*easynet_companion_list_fn)(uint64_t handle, char **out_json);
-typedef int32_t (*easynet_companion_action_fn)(uint64_t handle, const char *package_id, const char *version_or_null, char **out_json);
 typedef int32_t (*easynet_shutdown_fn)(uint64_t handle);
 typedef int32_t (*easynet_runtime_health_fn)(uint64_t handle, char **out_health_json);
 typedef int32_t (*easynet_runtime_diagnostics_fn)(uint64_t handle, char **out_diagnostics_json);
@@ -86,14 +84,6 @@ static int32_t easynet_runtime_call_daemon_status(void *fn, uint64_t handle, cha
 
 static int32_t easynet_runtime_call_daemon_open_client(void *fn, uint64_t daemon_handle, uint64_t *out_handle) {
 	return ((easynet_daemon_open_client_fn)fn)(daemon_handle, out_handle);
-}
-
-static int32_t easynet_runtime_call_companion_list(void *fn, uint64_t handle, char **out_json) {
-	return ((easynet_companion_list_fn)fn)(handle, out_json);
-}
-
-static int32_t easynet_runtime_call_companion_action(void *fn, uint64_t handle, const char *package_id, const char *version_or_null, char **out_json) {
-	return ((easynet_companion_action_fn)fn)(handle, package_id, version_or_null, out_json);
 }
 
 static int32_t easynet_runtime_call_shutdown(void *fn, uint64_t handle) {
@@ -192,7 +182,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"sync"
 	"unsafe"
 )
@@ -208,12 +197,6 @@ type cabiRuntimeSymbols struct {
 	daemonDetach       unsafe.Pointer
 	daemonStatus       unsafe.Pointer
 	daemonOpenClient   unsafe.Pointer
-	companionList      unsafe.Pointer
-	companionStatus    unsafe.Pointer
-	companionEnable    unsafe.Pointer
-	companionDisable   unsafe.Pointer
-	companionStart     unsafe.Pointer
-	companionStop      unsafe.Pointer
 	shutdown           unsafe.Pointer
 	runtimeHealth      unsafe.Pointer
 	runtimeDiagnostics unsafe.Pointer
@@ -404,99 +387,6 @@ func (t *CABIDaemonTransport) OpenRuntime(ctx context.Context, handleID string, 
 	t.runtimes[runtime] = struct{}{}
 	t.mu.Unlock()
 	return runtime, []byte(fmt.Sprintf(`{"ready":true,"abi_version":%d,"transport":"c_abi"}`, expectedCABIABIVersion)), nil
-}
-
-// OpenIdentityTransport opens a handle-owned Identity profile transport from a
-// daemon lifecycle handle. The profile transport shares this dynamic library
-// and owns only the C ABI client handle returned by easynet_daemon_open_client.
-func (t *CABIDaemonTransport) OpenIdentityTransport(ctx context.Context, handleID string) (*CABIIdentityTransport, error) {
-	if err := t.requireOpen(ctx); err != nil {
-		return nil, err
-	}
-	daemonHandle, err := t.requireDaemonHandle(handleID)
-	if err != nil {
-		return nil, err
-	}
-	t.mu.Lock()
-	library := t.library
-	t.mu.Unlock()
-	if library == nil {
-		return nil, invalidRuntimeClient("C ABI daemon transport library is closed")
-	}
-	symbols, err := bindCABIIdentitySymbols(library)
-	if err != nil {
-		return nil, err
-	}
-	identityHandle, err := t.openClientHandle(daemonHandle, "identity")
-	if err != nil {
-		return nil, err
-	}
-	return &CABIIdentityTransport{
-		library:     library,
-		ownsLibrary: false,
-		symbols:     symbols,
-		handle:      identityHandle,
-	}, nil
-}
-
-func (t *CABIDaemonTransport) CompanionList(ctx context.Context, handleID string) ([]byte, error) {
-	handle, err := t.companionHandle(ctx, handleID)
-	if err != nil {
-		return nil, err
-	}
-	var out *C.char
-	code := int32(C.easynet_runtime_call_companion_list(t.symbols.companionList, C.uint64_t(handle), &out))
-	if code != 0 {
-		return nil, t.lastErrorOrCode(code, "C ABI companion list failed")
-	}
-	return cabiTakeCString(t.symbols.stringFree, out), nil
-}
-
-func (t *CABIDaemonTransport) CompanionStatus(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return t.companionAction(ctx, handleID, packageID, packageVersion, t.symbols.companionStatus, "status")
-}
-
-func (t *CABIDaemonTransport) CompanionEnable(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return t.companionAction(ctx, handleID, packageID, packageVersion, t.symbols.companionEnable, "enable")
-}
-
-func (t *CABIDaemonTransport) CompanionDisable(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return t.companionAction(ctx, handleID, packageID, packageVersion, t.symbols.companionDisable, "disable")
-}
-
-func (t *CABIDaemonTransport) CompanionStart(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return t.companionAction(ctx, handleID, packageID, packageVersion, t.symbols.companionStart, "start")
-}
-
-func (t *CABIDaemonTransport) CompanionStop(ctx context.Context, handleID string, packageID string, packageVersion string) ([]byte, error) {
-	return t.companionAction(ctx, handleID, packageID, packageVersion, t.symbols.companionStop, "stop")
-}
-
-func (t *CABIDaemonTransport) companionAction(ctx context.Context, handleID string, packageID string, packageVersion string, symbol unsafe.Pointer, action string) ([]byte, error) {
-	handle, err := t.companionHandle(ctx, handleID)
-	if err != nil {
-		return nil, err
-	}
-	packageID = strings.TrimSpace(packageID)
-	if packageID == "" {
-		return nil, invalidRuntimePayload("package_id is required", nil)
-	}
-	packageVersion = strings.TrimSpace(packageVersion)
-	var out *C.char
-	code := int32(cabiWithCompanionCStringPair(packageID, packageVersion, func(cPackage *C.char, cVersion *C.char) C.int32_t {
-		return C.easynet_runtime_call_companion_action(symbol, C.uint64_t(handle), cPackage, cVersion, &out)
-	}))
-	if code != 0 {
-		return nil, t.lastErrorOrCode(code, "C ABI companion "+action+" failed")
-	}
-	return cabiTakeCString(t.symbols.stringFree, out), nil
-}
-
-func (t *CABIDaemonTransport) companionHandle(ctx context.Context, handleID string) (uint64, error) {
-	if err := t.requireOpen(ctx); err != nil {
-		return 0, err
-	}
-	return t.requireDaemonHandle(handleID)
 }
 
 func (t *CABIDaemonTransport) Stop(ctx context.Context, handleID string, optionsJSON []byte) ([]byte, error) {
@@ -1416,12 +1306,6 @@ func bindCABIRuntimeSymbols(library unsafe.Pointer) (cabiRuntimeSymbols, error) 
 		{"easynet_daemon_detach", &symbols.daemonDetach},
 		{"easynet_daemon_status", &symbols.daemonStatus},
 		{"easynet_daemon_open_client", &symbols.daemonOpenClient},
-		{"easynet_companion_list", &symbols.companionList},
-		{"easynet_companion_status", &symbols.companionStatus},
-		{"easynet_companion_enable", &symbols.companionEnable},
-		{"easynet_companion_disable", &symbols.companionDisable},
-		{"easynet_companion_start", &symbols.companionStart},
-		{"easynet_companion_stop", &symbols.companionStop},
 		{"easynet_shutdown", &symbols.shutdown},
 		{"easynet_runtime_health", &symbols.runtimeHealth},
 		{"easynet_runtime_diagnostics", &symbols.runtimeDiagnostics},
@@ -1477,17 +1361,6 @@ func cabiWithCStringPair(left []byte, right []byte, call func(*C.char, *C.char) 
 	cRight := C.CString(string(right))
 	defer C.free(unsafe.Pointer(cRight))
 	return call(cLeft, cRight)
-}
-
-func cabiWithCompanionCStringPair(packageID string, packageVersion string, call func(*C.char, *C.char) C.int32_t) C.int32_t {
-	cPackage := C.CString(packageID)
-	defer C.free(unsafe.Pointer(cPackage))
-	var cVersion *C.char
-	if packageVersion != "" {
-		cVersion = C.CString(packageVersion)
-		defer C.free(unsafe.Pointer(cVersion))
-	}
-	return call(cPackage, cVersion)
 }
 
 func cabiTakeCString(stringFree unsafe.Pointer, value *C.char) []byte {

@@ -116,7 +116,7 @@ async fn list_changed_push_triggers_dynamic_refresh() {
     // and write tool_a directly so the test isolates the
     // list_changed → refresh path.
     {
-        let manifest = easynet_cli::core::ability_spec::AbilityManifest::new(
+        let manifest = easynet_cli::daemon::ability::manifest::AbilityManifest::new(
             "tool_a",
             "Initial tool",
             serde_json::json!({"type": "object"}),

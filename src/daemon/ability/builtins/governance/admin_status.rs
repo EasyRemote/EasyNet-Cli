@@ -66,7 +66,8 @@ where
 }
 
 fn handler(ability_count_provider: &Arc<dyn Fn() -> usize + Send + Sync>) -> anyhow::Result<Value> {
-    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
+    let local = crate::daemon::persistence::local_agents::load()
+        .map_err(|error| anyhow::anyhow!("admin.status: load hosted-agent URA index: {error:#}"))?;
     let joined = !local.host_device_agent_ura.is_empty();
     let ability_count = ability_count_provider();
     let hosted_count = local.hosted_agents.len();

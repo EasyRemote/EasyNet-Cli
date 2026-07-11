@@ -187,7 +187,7 @@ public struct DelegationRequest: Sendable, Equatable {
     }
 
     func jsonData() throws -> Data {
-        try encodeJSONObject([
+        try encodeAuthorityJSONObject([
             "issuer_ura": .string(issuerURA),
             "subject_ura": .string(subjectURA),
             "caller_ura": .string(callerURA),
@@ -235,7 +235,7 @@ public struct SessionAuthorityRequest: Sendable, Equatable {
     }
 
     func jsonData() throws -> Data {
-        try encodeJSONObject([
+        try encodeAuthorityJSONObject([
             "issuer_ura": .string(issuerURA),
             "session_id": .string(sessionID),
             "session_owner_user_id": .string(sessionOwnerUserID),
@@ -469,4 +469,28 @@ private func requiredAuthorityObject(_ object: [String: JSONValue], _ field: Str
 
 private func invalidAuthority(_ message: String) -> SDKError {
     SDKError.validation(authorityProfile, message)
+}
+
+private func encodeAuthorityJSONObject(_ object: [String: JSONValue]) throws -> Data {
+    try JSONSerialization.data(
+        withJSONObject: object.mapValues(authorityJSONCompatible),
+        options: [.sortedKeys]
+    )
+}
+
+private func authorityJSONCompatible(_ value: JSONValue) -> Any {
+    switch value {
+    case .null:
+        return NSNull()
+    case let .bool(value):
+        return value
+    case let .number(value):
+        return value
+    case let .string(value):
+        return value
+    case let .array(values):
+        return values.map(authorityJSONCompatible)
+    case let .object(object):
+        return object.mapValues(authorityJSONCompatible)
+    }
 }

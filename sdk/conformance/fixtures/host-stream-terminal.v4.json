@@ -1,8 +1,0 @@
-{
-  "output_hash": "sha256:8196e03ca122ac3b47b3527c8f555735e53c0d3fe1eb8e30c0f974293cd5cd15",
-  "frames": 1,
-  "metadata": {
-    "canonical_json": "{\"token\":\"hello\"}",
-    "previous_output_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-  }
-}

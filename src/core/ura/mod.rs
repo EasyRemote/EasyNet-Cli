@@ -261,10 +261,11 @@ pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
 /// Project a registry name into the public descriptor name for an authority.
 ///
 /// User-owned Agents carry their Agent id in the Ability owner token, so their
-/// descriptor name is owner-local (`chat`). Device-sponsored Agents publish
-/// under the Device owner token by Axon contract; their Agent id therefore has
-/// to remain in the descriptor name (`terminal.screenshot`) or two hosted
-/// Agents exposing the same verb would collapse to one Ability URA.
+/// descriptor name is owner-local. A device-sponsored Agent may expose a bare
+/// verb such as `screenshot`; in that case its Agent id supplies the required
+/// namespace (`terminal.screenshot`). Already-namespaced abilities such as
+/// `consent.decide` remain unchanged—the Agent identity is already encoded in
+/// the Ability owner token and must not be duplicated into the public name.
 pub fn descriptor_public_ability_name(owner_ura: &str, ability_name: &str) -> String {
     let owner_local_name = owner_local_ability_name(owner_ura, ability_name);
     let Ok(owner) = parse_ura(owner_ura) else {
@@ -274,7 +275,7 @@ pub fn descriptor_public_ability_name(owner_ura: &str, ability_name: &str) -> St
         return owner_local_name;
     };
     let prefix = format!("{agent_id}.");
-    if owner_local_name.starts_with(&prefix) {
+    if owner_local_name.contains('.') || owner_local_name.starts_with(&prefix) {
         owner_local_name
     } else {
         format!("{prefix}{owner_local_name}")
@@ -394,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_public_name_keeps_device_sponsored_agent_identity() {
+    fn descriptor_public_name_qualifies_only_bare_device_agent_verbs() {
         let owner = "easynet:///r/localhost/agent/device.dev-1.terminal";
         assert_eq!(
             descriptor_public_ability_name(owner, "terminal.screenshot"),
@@ -403,6 +404,11 @@ mod tests {
         assert_eq!(
             descriptor_public_ability_name(owner, "screenshot"),
             "terminal.screenshot"
+        );
+        assert_eq!(
+            descriptor_public_ability_name(owner, "consent.decide"),
+            "consent.decide",
+            "an authored namespace must not gain a second Agent prefix"
         );
         assert_eq!(
             owner_ability_ura(

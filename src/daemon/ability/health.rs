@@ -230,16 +230,18 @@ struct ScanPlan {
 /// manifest. Canonical ability URAs are built with the same
 /// `owner_ability_ura` builder the descriptor path uses, so store
 /// keys and catalog keys can never drift apart.
-fn scan() -> ScanPlan {
+fn scan() -> anyhow::Result<ScanPlan> {
     let mut plan = ScanPlan {
         monitored: Vec::new(),
         unmonitored: Vec::new(),
         live: BTreeSet::new(),
     };
-    let Ok(registry) = crate::daemon::persistence::agent_registry::load_agents() else {
-        return plan;
-    };
-    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
+    let registry = crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
+        anyhow::anyhow!("load durable agent registry for health scan: {error:#}")
+    })?;
+    let local = crate::daemon::persistence::local_agents::load().map_err(|error| {
+        anyhow::anyhow!("load hosted-agent URA index for health scan: {error:#}")
+    })?;
     for (agent_name, entry) in &registry.agents {
         let Some(owner_ura) =
             crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent_name)
@@ -276,7 +278,7 @@ fn scan() -> ScanPlan {
             }
         }
     }
-    plan
+    Ok(plan)
 }
 
 // ── Scheduling rules (pure) ─────────────────────────────────────────
@@ -413,7 +415,19 @@ fn run_loop() {
 }
 
 fn tick(now_ms: i64) {
-    let plan = scan();
+    let plan = match scan() {
+        Ok(plan) => plan,
+        Err(error) => {
+            let error = error.to_string();
+            crate::op_event!(
+                component = ability_health,
+                kind = scan_failed,
+                error = error.as_str(),
+                message = "preserving the last known health snapshot; corrupt durable state is not an empty catalog",
+            );
+            return;
+        }
+    };
     for ability_ura in &plan.unmonitored {
         mark_unmonitored(ability_ura, now_ms);
     }

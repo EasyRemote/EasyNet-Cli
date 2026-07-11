@@ -12,10 +12,10 @@ const addressingProfile = "addressing"
 // AbilityDescriptorRef operations. Runtime transports depend on this narrow
 // contract; signing-key lifecycle is supplied by a separate provider.
 type Addressing interface {
-	ProjectDescriptorRef(context.Context, DescriptorRefRequest) (AddressingProjection, error)
+	ProjectDescriptorRef(context.Context, CanonicalDescriptorRefRequest) (AddressingProjection, error)
 	ProjectIdentity(context.Context, URAProjectionRequest) (AddressingProjection, error)
-	BuildURA(context.Context, URABuildRequest) (AddressingProjection, error)
-	BuildDescriptorRef(context.Context, DescriptorRefBuildRequest) (AddressingProjection, error)
+	BuildURA(context.Context, CanonicalURABuildRequest) (AddressingProjection, error)
+	BuildDescriptorRef(context.Context, CanonicalDescriptorRefBuildRequest) (AddressingProjection, error)
 	OwnerAbilityURA(context.Context, string, string) (string, error)
 	ResourceURA(context.Context, string, string) (string, error)
 	OwnerURAForAbility(context.Context, string) (string, error)
@@ -25,7 +25,7 @@ type Addressing interface {
 	DescriptorBoundResourceSubjectURA(context.Context, string, string) (string, error)
 }
 
-type DescriptorRefRequest struct {
+type CanonicalDescriptorRefRequest struct {
 	DescriptorRef string         `json:"descriptor_ref"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
 }
@@ -36,7 +36,7 @@ type URAProjectionRequest struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
-type URABuildRequest struct {
+type CanonicalURABuildRequest struct {
 	Kind        string         `json:"kind"`
 	Realm       string         `json:"realm,omitempty"`
 	UserID      string         `json:"user_id,omitempty"`
@@ -49,7 +49,7 @@ type URABuildRequest struct {
 	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
-type DescriptorRefBuildRequest struct {
+type CanonicalDescriptorRefBuildRequest struct {
 	AbilityURA        string         `json:"ability_ura"`
 	DescriptorVersion string         `json:"descriptor_version"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
@@ -80,7 +80,7 @@ func NewCanonicalAddressing() *CanonicalAddressing {
 	return &CanonicalAddressing{}
 }
 
-func (a *CanonicalAddressing) ProjectDescriptorRef(ctx context.Context, req DescriptorRefRequest) (AddressingProjection, error) {
+func (a *CanonicalAddressing) ProjectDescriptorRef(ctx context.Context, req CanonicalDescriptorRefRequest) (AddressingProjection, error) {
 	if err := requireAddressing(ctx, a); err != nil {
 		return AddressingProjection{}, err
 	}
@@ -121,7 +121,7 @@ func (a *CanonicalAddressing) ProjectIdentity(ctx context.Context, req URAProjec
 	return projection, nil
 }
 
-func (a *CanonicalAddressing) BuildURA(ctx context.Context, req URABuildRequest) (AddressingProjection, error) {
+func (a *CanonicalAddressing) BuildURA(ctx context.Context, req CanonicalURABuildRequest) (AddressingProjection, error) {
 	if err := requireAddressing(ctx, a); err != nil {
 		return AddressingProjection{}, err
 	}
@@ -172,7 +172,7 @@ func (a *CanonicalAddressing) BuildURA(ctx context.Context, req URABuildRequest)
 	return projection, nil
 }
 
-func (a *CanonicalAddressing) BuildDescriptorRef(ctx context.Context, req DescriptorRefBuildRequest) (AddressingProjection, error) {
+func (a *CanonicalAddressing) BuildDescriptorRef(ctx context.Context, req CanonicalDescriptorRefBuildRequest) (AddressingProjection, error) {
 	if err := requireAddressing(ctx, a); err != nil {
 		return AddressingProjection{}, err
 	}
@@ -189,7 +189,7 @@ func (a *CanonicalAddressing) BuildDescriptorRef(ctx context.Context, req Descri
 }
 
 func (a *CanonicalAddressing) OwnerAbilityURA(ctx context.Context, ownerURA string, abilityName string) (string, error) {
-	projection, err := a.BuildURA(ctx, URABuildRequest{Kind: "ability", OwnerURA: ownerURA, AbilityName: abilityName})
+	projection, err := a.BuildURA(ctx, CanonicalURABuildRequest{Kind: "ability", OwnerURA: ownerURA, AbilityName: abilityName})
 	if err != nil {
 		return "", err
 	}
@@ -197,7 +197,7 @@ func (a *CanonicalAddressing) OwnerAbilityURA(ctx context.Context, ownerURA stri
 }
 
 func (a *CanonicalAddressing) ResourceURA(ctx context.Context, ownerURA string, path string) (string, error) {
-	projection, err := a.BuildURA(ctx, URABuildRequest{Kind: "resource", OwnerURA: ownerURA, Path: path})
+	projection, err := a.BuildURA(ctx, CanonicalURABuildRequest{Kind: "resource", OwnerURA: ownerURA, Path: path})
 	if err != nil {
 		return "", err
 	}
@@ -231,9 +231,9 @@ func (a *CanonicalAddressing) CanonicalAbilityDescriptorRef(ctx context.Context,
 	var projection AddressingProjection
 	var err error
 	if version := strings.TrimSpace(descriptorVersion); version != "" {
-		projection, err = a.BuildDescriptorRef(ctx, DescriptorRefBuildRequest{AbilityURA: value, DescriptorVersion: version})
+		projection, err = a.BuildDescriptorRef(ctx, CanonicalDescriptorRefBuildRequest{AbilityURA: value, DescriptorVersion: version})
 	} else {
-		projection, err = a.ProjectDescriptorRef(ctx, DescriptorRefRequest{DescriptorRef: value})
+		projection, err = a.ProjectDescriptorRef(ctx, CanonicalDescriptorRefRequest{DescriptorRef: value})
 	}
 	if err != nil {
 		return "", err
@@ -242,7 +242,7 @@ func (a *CanonicalAddressing) CanonicalAbilityDescriptorRef(ctx context.Context,
 }
 
 func (a *CanonicalAddressing) AbilityURAFromDescriptorRef(ctx context.Context, descriptorRef string) (string, error) {
-	projection, err := a.ProjectDescriptorRef(ctx, DescriptorRefRequest{DescriptorRef: descriptorRef})
+	projection, err := a.ProjectDescriptorRef(ctx, CanonicalDescriptorRefRequest{DescriptorRef: descriptorRef})
 	if err != nil {
 		return "", err
 	}

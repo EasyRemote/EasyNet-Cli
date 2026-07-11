@@ -12,15 +12,14 @@ from easynet_sdk import (
     InvocationObjectAdapter,
     InvocationWireProjector,
     PrepareOptions,
-    ReceiptClient,
     RuntimeClient,
     SDKError,
     Signer,
     is_code,
 )
-from easynet_sdk.identity import AddressingClient
+from easynet_sdk import AddressingClient
 
-from test_identity import MemoryIdentityTransport
+from addressing_fake import MemoryAddressingTransport
 from test_runtime import MemoryRuntimeTransport
 from test_signing import signer_handle
 
@@ -433,7 +432,6 @@ class AbilityInvocationClientTests(unittest.TestCase):
     def test_child_context_anchors_child_invocation_to_parent_receipt(self) -> None:
         identity = _identity_transport()
         runtime = MemoryRuntimeTransport()
-        receipt_transport = ChildReceiptTransport()
         client = AbilityInvocationClient(
             runtime=RuntimeClient(runtime),
             addressing=AddressingClient(identity),
@@ -442,7 +440,6 @@ class AbilityInvocationClientTests(unittest.TestCase):
 
         child = client.child_context(
             parent,
-            ReceiptClient(receipt_transport),
             caller_ura="easynet:///r/example/agent/child.sdk",
             nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
             metadata={"trace_id": "parent-1"},
@@ -475,7 +472,6 @@ class AbilityInvocationClientTests(unittest.TestCase):
             },
         )
         self.assertEqual(request.metadata, {"trace_id": "parent-1", "attempt": 1})
-        self.assertIsNotNone(receipt_transport.seen_receipt)
         assert runtime.seen_draft is not None
         self.assertEqual(runtime.seen_draft["caller_ura"], request.caller_ura)
         self.assertEqual(runtime.seen_draft["causal_context"], request.causal_context)
@@ -488,7 +484,6 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         child = client.child_context(
             _parent_result_with_receipt(),
-            ReceiptClient(ChildReceiptTransport()),
             caller_ura="easynet:///r/example/agent/child.sdk",
             nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
             metadata={"trace_id": "parent-1"},
@@ -535,8 +530,8 @@ class ChildReceiptTransport:
         )
 
 
-def _identity_transport() -> MemoryIdentityTransport:
-    transport = MemoryIdentityTransport()
+def _identity_transport() -> MemoryAddressingTransport:
+    transport = MemoryAddressingTransport()
     transport.identity_json = (
         b'{"kind":"ability","valid":true,'
         b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'

@@ -32,7 +32,7 @@ from .errors import (
     canonical_terminal_state_code,
 )
 from .invocation import InvocationDraft
-from .identity import AbilityAddress
+from .axon_addressing import AbilityAddress
 from .runtime import RuntimeTransport
 from .bidi import BidiFrame, BidiTransport
 from .stream import StreamTransport

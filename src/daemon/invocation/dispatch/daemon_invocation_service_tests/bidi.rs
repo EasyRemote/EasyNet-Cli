@@ -1,5 +1,7 @@
 use super::*;
 
+const TEST_BIDI_ABILITY: &str = "test.bidi";
+
 #[test]
 fn remote_bidi_target_ura_preserves_canonical_device_ura() {
     let open = make_envelope_open_with_callee("  easynet:///r/test-realm/device/dev-B  ");
@@ -26,15 +28,12 @@ fn extract_envelope_open_returns_inner_for_envelope_open_frame() {
         sequence: 0,
         mac: Vec::new(),
         payload: Some(UpPayload::EnvelopeOpen(make_envelope_open(
-            ABILITY_INVOKE_REMOTE,
+            TEST_BIDI_ABILITY,
             b"{}".to_vec(),
         ))),
     };
     let eo = extract_envelope_open(&frame).expect("extracted");
-    assert_eq!(
-        eo.target.as_ref().unwrap().ability_name,
-        ABILITY_INVOKE_REMOTE
-    );
+    assert_eq!(eo.target.as_ref().unwrap().ability_name, TEST_BIDI_ABILITY);
 }
 
 #[test]
@@ -43,7 +42,7 @@ fn validate_and_extract_bidi_frame0_rejects_non_zero_sequence() {
         sequence: 7,
         mac: Vec::new(),
         payload: Some(UpPayload::EnvelopeOpen(make_envelope_open(
-            ABILITY_INVOKE_REMOTE,
+            TEST_BIDI_ABILITY,
             b"{}".to_vec(),
         ))),
     };
@@ -58,7 +57,7 @@ fn validate_and_extract_bidi_frame0_rejects_non_zero_sequence() {
 
 #[test]
 fn validate_and_extract_bidi_frame0_rejects_non_strict_ordering() {
-    let mut envelope_open = make_envelope_open(ABILITY_INVOKE_REMOTE, b"{}".to_vec());
+    let mut envelope_open = make_envelope_open(TEST_BIDI_ABILITY, b"{}".to_vec());
     envelope_open.streams.push(StreamDescriptor {
         stream_id: 9,
         ordering: "UNORDERED".to_string(),
@@ -669,7 +668,10 @@ fn build_remote_bidi_open_dispatch_frame_carries_resource_binding() {
         DownPayload::BinaryChunk(chunk) => chunk,
         _ => panic!("expected BinaryChunk"),
     };
-    assert_eq!(payload.stream_id, INVOKE_REMOTE_STREAM_ID);
+    assert_eq!(
+        payload.stream_id,
+        crate::daemon::invocation::bidi::session_initiator::SESSION_STREAM_ID
+    );
     let parsed: SessionDispatch =
         serde_json::from_slice(&payload.data).expect("decode SessionDispatch");
     match parsed {
@@ -786,57 +788,8 @@ async fn remote_bidi_open_frame_rides_carrier_by_negotiated_contract() {
     );
 }
 
-#[test]
-fn invoke_remote_up_request_serde_round_trip_via_session_dispatch_pin() {
-    // Pins the invariant that PR-3 sub-spec §2.1 frame-0 JSON
-    // (InvokeRemoteUp::Request) and PR-3 sub-spec §2.3 session
-    // dispatch JSON (SessionDispatch::Dispatch) are *separate*
-    // wire shapes. A regression that conflates them would let
-    // a frame from one side decode into the other type — this
-    // test asserts they don't.
-    let req_json = serde_json::to_vec(&InvokeRemoteUp::Request {
-        subject_device: "easynet:///r/realm/device/dev-B".into(),
-        subject_ura: "easynet:///r/realm/device/dev-B".into(),
-        ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
-        args: b"hi".to_vec(),
-        args_content_envelope: SessionContentEnvelope::plaintext_json(),
-        metadata: HashMap::new(),
-        origin_caller: None,
-    })
-    .unwrap();
-    // Decoding as the wrong type must fail.
-    let mistaken: Result<SessionDispatch, _> = serde_json::from_slice(&req_json);
-    assert!(
-        mistaken.is_err(),
-        "InvokeRemoteUp::Request must NOT decode as SessionDispatch — \
-         the discriminator tags differ ('request' vs 'dispatch')"
-    );
-}
-
-// dispatch_invoke_remote happy/sad-path integration tests
-// require a real `tonic::Streaming<InvokeBidiUp>` which is
-// gRPC-codegen-only constructible (no public `new_empty()`
-// ctor). The same constraint that `#[ignore]`-marked
-// `invoke_bidi_test_deferred_to_pr2_tier1` above applies here:
-// those paths land as Tier 1 integration tests once PR-2's
-// `session.open` accept enables a real round-trip. Until
-// then the helpers below pin the units this method composes.
-//
-// Coverage assertion: every early-return code path of
-// `dispatch_invoke_remote` is reachable from the helpers
-// tested above:
-//   * malformed initial_args → serde_json::from_slice (covered
-//     by invoke_remote_up_request_serde_round_trip in
-//     `invoke_remote_initiator::tests`)
-//   * pending map None → trivial Option::ok_or_else (no-op
-//     to test in isolation)
-//   * target offline → PresenceRegistry::lookup returns None
-//     (covered by presence_registry tests)
-//   * try_send Full / Closed → matched by literal pattern,
-//     same shape as commit 8/9's try_push_forward_invoke_frame
-//     which is integration-tested
-//   * pending oneshot dropped → covered by pending_dispatch
-//     `dropped_completer_surfaces_to_handle_as_recv_error`
+// Remote canonical relay coverage lives in canonical_relay.rs.
+// Legacy JSON dispatch tests were removed with the wrapper protocol.
 
 #[tokio::test]
 async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {

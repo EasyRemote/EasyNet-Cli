@@ -1,54 +1,27 @@
 # Java/JVM Daemon SDK
 
-Java/JVM is a P1 facade for enterprise and Android-adjacent integrations.
+The Java package is a dependency-free generic Runtime Core seam. Its public
+model is limited to:
 
-Current status: Runtime Core plus Health plus Authority plus Directory + Identity plus Receipt plus Publication plus Host Binding plus Mission plus Admin + Gateway plus Events plus Surface plus Compatibility plus Wrappers seam. The package exposes dependency-free Java
-objects for typed SDK errors, feature discovery, complete Invocation draft
-construction, `PreparedInvocation`/`SigningMaterial`/`SignedInvocation`
-prepare-sign-submit seams over an injected transport, `RuntimeClient` dispatch,
-and bounded stream/bidi retained-history state. `AsyncRuntimeClient` exposes
-`CompletableFuture`-based invocation/open/cancel methods, and stream/bidi
-handles implement `Iterator` over the same bounded lifecycle state. Health DTOs
-and `HealthClient` decode shared health and diagnostics payloads over injected
-transports. Authority DTOs and `AuthorityClient` project delegated/session
-authority metadata, preserve mutually-exclusive Invocation metadata, and
-delegate minting to injected transports without owning canonical signing,
-verification, or product policy. Directory + Identity DTOs and clients build read-model and
-directory subscription carrier requests, project pages/resolved refs and
-subscription state, open subscription stream handles over injected transports,
-and delegate descriptor projection without SDK-owned route selection or fan-out.
-Receipt DTOs and `ReceiptClient` build fetch carriers, project summary
-receipts, and require explicit receipt URA plus hash facts for causal refs.
-Publication DTOs and `PublicationClient` build daemon-authored resource-ref
-requests, package validation inputs, and complete deploy/unpublish Invocation
-carriers over injected transports without package inspection or product catalog
-state. Host Binding DTOs and `HostBindingClient` build host-stream binding
-requests, decode request envelopes, project item/error/terminal frames, validate
-output-hash cursor state, and drive explicit readiness/cleanup lifecycle
-providers without owning product host process warmth or user-code execution. It
-also exposes Mission request/status/event DTOs and `MissionClient` carrier,
-projection, and Runtime Core stream-adapter methods over injected transports
-without SDK-owned Mission execution, scheduler policy, or receipt fabrication.
-It exposes Admin + Gateway request/status/session DTOs and `AdminClient`
-carrier/projection methods over injected transports without owning gateway
-process policy, certificate provisioning, account state, or product session
-policy. It exposes Events request/filter/cursor/frame/page DTOs and `EventClient`
-carrier/projection/stream methods over injected transports without SDK-owned
-event fan-out. Surface DTOs and `SurfaceClient` build page, manifest, and health
-carriers and project daemon page facts without backend rendering or HTTP route
-ownership. Compatibility DTOs and `CompatibilityClient` build OpenAI-compatible
-model/chat carriers, project chat/model/file DTOs, and leave product HTTP auth,
-quota, billing, storage, and stream fanout outside the SDK. Wrappers DTOs and
-`WrapperClient` project file, terminal, remote
-desktop, browser, and media session records over injected transports without
-owning backend HTTP/WebSocket bridges, storage policy, or product UI protocols.
-It does not include a daemon or C ABI provider, generated DTOs for every profile,
-provider-backed transport evidence, or product cutover evidence. Maven package
-metadata exists for this seam, is verified by
-`tools/scripts/check-java-sdk-seam.sh`, and declares only directly exercised
-Runtime Core cases through
-`sdk/conformance/runner/java-action-adapter-report.json`.
+- feature discovery and explicit client lifecycle;
+- typed SDK errors and stable error classes;
+- runtime health and diagnostics;
+- complete Invocation tuple construction;
+- prepare, caller-sign, submit, and invocation-handle state;
+- delegated and session authority metadata;
+- bounded stream and bidirectional-session lifecycle;
+- synchronous and `CompletableFuture` runtime clients.
 
-This package must not import generated Axon wire types or daemon internals in
-public APIs. See `../SDK_PARITY.md` before claiming provider-backed or package
-stable support.
+`InvocationResult` preserves daemon-provided receipt facts as an opaque map. It
+does not expose a receipt-history client or interpret product receipt policy.
+
+Product profiles are deliberately absent. Admin/Gateway, Companion,
+OpenAI-compatibility, Directory/Identity projections, Events, Host Binding,
+Mission, Publication, Receipt history, Surface/Pages, and Wrapper behavior
+belong to their downstream products. The Java SDK provides no aliases or empty
+transport placeholders for those surfaces.
+
+The package currently has no bundled daemon transport or C ABI provider.
+`tools/scripts/check-java-sdk-seam.sh` compiles all sources with
+`javac -Xlint:all -Werror`, runs the Runtime Core state-machine tests, and checks
+the source boundary.

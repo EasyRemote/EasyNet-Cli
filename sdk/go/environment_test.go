@@ -17,7 +17,7 @@ func (t *closeableDaemonTransport) Close(context.Context) error {
 
 func TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime(t *testing.T) {
 	discovery := &memoryDiscoveryTransport{payload: []byte(`{
-		"abi_version": 4,
+		"abi_version": 5,
 		"sdk_version": "0.91.30",
 		"profiles": {"runtime_core": "provider-backed"},
 		"symbols": {"runtime_health": true}
@@ -27,7 +27,7 @@ func TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime(t *testing.T) {
 		attachJSON:   readyDaemonStatus(),
 	}}
 	env, err := NewSdkEnvironment(discovery, daemon, SdkEnvironmentOptions{
-		ExpectedABIVersion: 4,
+		ExpectedABIVersion: 5,
 		Discover:           DiscoverOptions{ControlPath: "/tmp/control.sock"},
 		Connect:            ConnectOptions{MaxMessageBytes: 4096},
 	})
@@ -39,7 +39,7 @@ func TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequireABI: %v", err)
 	}
-	if features.ABIVersion != 4 || discovery.featureCalls != 1 {
+	if features.ABIVersion != 5 || discovery.featureCalls != 1 {
 		t.Fatalf("unexpected feature discovery: %#v calls=%d", features, discovery.featureCalls)
 	}
 
@@ -85,7 +85,7 @@ func TestSdkEnvironmentRejectsMissingRequiredBoundaries(t *testing.T) {
 		t.Fatalf("nil discovery error = %v", err)
 	}
 	if _, err := NewSdkEnvironment(DiscoveryTransportFunc(func(context.Context) ([]byte, error) {
-		return []byte(`{"abi_version":4}`), nil
+		return []byte(`{"abi_version":5}`), nil
 	}), nil, SdkEnvironmentOptions{}); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("nil daemon error = %v", err)
 	}
@@ -93,7 +93,7 @@ func TestSdkEnvironmentRejectsMissingRequiredBoundaries(t *testing.T) {
 
 func TestSdkEnvironmentRequireABIRequiresConfiguredVersion(t *testing.T) {
 	env, err := NewSdkEnvironment(
-		DiscoveryTransportFunc(func(context.Context) ([]byte, error) { return []byte(`{"abi_version":4}`), nil }),
+		DiscoveryTransportFunc(func(context.Context) ([]byte, error) { return []byte(`{"abi_version":5}`), nil }),
 		&memoryDaemonTransport{},
 		SdkEnvironmentOptions{},
 	)

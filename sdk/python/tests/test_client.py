@@ -33,7 +33,7 @@ class ClientTests(unittest.TestCase):
         client = Client(
             StaticTransport(
                 b"""{
-                    "abi_version": 4,
+                    "abi_version": 5,
                     "sdk_version": "0.91.30",
                     "profiles": {"runtime_core": "provider-backed"},
                     "symbols": {"runtime_health": true},
@@ -44,14 +44,14 @@ class ClientTests(unittest.TestCase):
 
         features = client.feature_discovery()
 
-        self.assertEqual(features.version().abi_version, 4)
+        self.assertEqual(features.version().abi_version, 5)
         self.assertTrue(features.symbols["runtime_health"])
 
     def test_require_abi_returns_typed_version_mismatch(self) -> None:
         client = Client(StaticTransport(b'{"abi_version": 3, "sdk_version": "0.91.30"}'))
 
         with self.assertRaises(SDKError) as caught:
-            client.require_abi(4)
+            client.require_abi(5)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
 
@@ -76,12 +76,12 @@ class ClientTests(unittest.TestCase):
         client = Client(StaticTransport(b'{"abi_version": 0, "sdk_version": "0.91.30"}'))
 
         with self.assertRaises(SDKError) as caught:
-            client.require_abi(4)
+            client.require_abi(5)
 
         self.assertTrue(is_code(caught.exception, ErrorCode.VERSION_MISMATCH))
 
     def test_close_delegates_once_and_fails_closed(self) -> None:
-        transport = StaticTransport(b'{"abi_version": 4, "sdk_version": "0.91.30"}')
+        transport = StaticTransport(b'{"abi_version": 5, "sdk_version": "0.91.30"}')
         client = Client(transport)
 
         client.close()
@@ -94,7 +94,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(transport.feature_calls, 0)
 
     def test_close_failure_is_terminal(self) -> None:
-        transport = StaticTransport(b'{"abi_version": 4, "sdk_version": "0.91.30"}')
+        transport = StaticTransport(b'{"abi_version": 5, "sdk_version": "0.91.30"}')
         transport.close_error = RuntimeError("close failed")
         client = Client(transport)
 
@@ -104,7 +104,7 @@ class ClientTests(unittest.TestCase):
         self.assertIsInstance(close_caught.exception.cause, RuntimeError)
 
         with self.assertRaises(SDKError) as require_caught:
-            client.require_abi(4)
+            client.require_abi(5)
         self.assertTrue(is_code(require_caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertEqual(transport.feature_calls, 0)
 

@@ -271,7 +271,7 @@ mod tests {
     }
 
     fn companion_status_dto() -> Value {
-        crate::protocol::companion_contract::project_status(&json!({
+        crate::daemon::plugins::companion::project_status(&json!({
             "package_id": "easynet.desktop.menubar",
             "package_version": "0.1.0",
             "display_name": "EasyNet Menu Bar",

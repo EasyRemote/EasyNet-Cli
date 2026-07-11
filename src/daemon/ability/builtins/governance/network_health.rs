@@ -63,7 +63,9 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 }
 
 fn handler() -> anyhow::Result<Value> {
-    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
+    let local = crate::daemon::persistence::local_agents::load().map_err(|error| {
+        anyhow::anyhow!("observe.network_health: load hosted-agent URA index: {error:#}")
+    })?;
     let view = federation_probe::collect_device_view();
     let self_node = view.nodes.iter().find(|n| n.is_self);
     let joined =
