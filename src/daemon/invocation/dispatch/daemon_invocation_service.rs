@@ -1187,7 +1187,7 @@ impl Invocation for DaemonInvocationService {
                 streams.dispatch_subscribe_directory_initial()
             }
             Some(DaemonStreamRoute::FederationSubscribeDirectoryV2) => {
-                streams.dispatch_subscribe_directory_v2()
+                streams.dispatch_subscribe_directory_v2(&inner.arguments)
             }
             None => streams.dispatch_selected_route(&inner).await,
         }

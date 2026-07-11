@@ -11,6 +11,7 @@ import (
 const (
 	DefaultDirectoryPageLimit uint32 = 50
 	MaxDirectoryPageLimit     uint32 = 500
+	maxDirectoryCursorLen            = 4096
 )
 
 type DirectoryEntry = axonsdk.DirectoryEntry
@@ -55,6 +56,7 @@ type DirectoryResolution struct {
 	RouteCandidates []map[string]any  `json:"route_candidates,omitempty"`
 	Records         []DirectoryRecord `json:"records"`
 	Negative        map[string]any    `json:"negative,omitempty"`
+	NextCursor      string            `json:"next_cursor,omitempty"`
 	ReleaseProfile  string            `json:"release_profile,omitempty"`
 	Authority       map[string]any    `json:"authority,omitempty"`
 	CachePolicy     map[string]any    `json:"cache_policy,omitempty"`
@@ -145,8 +147,8 @@ func (c *DirectoryClient) Subscribe(ctx context.Context, request DirectorySubscr
 }
 
 // RuntimeDirectoryProvider lowers Directory operations through the canonical
-// RuntimeAbilityClient. List cursors and resume remain explicit seams until the
-// daemon provider supports stable snapshot cursors.
+// RuntimeAbilityClient. Cursor and resume tokens are daemon-owned opaque
+// values; the SDK forwards and validates bounded progression only.
 type RuntimeDirectoryProvider struct {
 	ability *RuntimeAbilityClient
 }
@@ -189,32 +191,67 @@ func (p *RuntimeDirectoryProvider) Resolve(ctx context.Context, request Director
 }
 
 func (p *RuntimeDirectoryProvider) List(ctx context.Context, request DirectoryListRequest) (DirectoryPage, error) {
-	if strings.TrimSpace(request.Cursor) != "" {
-		return DirectoryPage{}, invalidDirectory("runtime Directory list cursor provider is not available", nil)
+	if p == nil || p.ability == nil {
+		return DirectoryPage{}, invalidDirectory("runtime Directory provider is not initialized", nil)
 	}
 	limit, err := directoryLimit(request.Limit)
 	if err != nil {
 		return DirectoryPage{}, err
 	}
-	resolution, err := p.Resolve(ctx, DirectoryResolveRequest{
-		Call:     request.Call,
-		QueryURA: request.URAPrefix,
-		Kind:     DirectoryResolveListing,
-	})
+	cursor, err := directoryCursor(request.Cursor)
 	if err != nil {
 		return DirectoryPage{}, err
+	}
+	args := map[string]any{
+		"qtype": string(DirectoryResolveListing),
+		"limit": limit,
+	}
+	if prefix := strings.TrimSpace(request.URAPrefix); prefix != "" {
+		args["query_name"] = prefix
+	}
+	if cursor != "" {
+		args["cursor"] = cursor
+	}
+	output, err := p.ability.Invoke(ctx, request.Call, "namespace.resolve", args)
+	if err != nil {
+		return DirectoryPage{}, err
+	}
+	resolution, err := projectDirectoryResolution(output)
+	if err != nil {
+		return DirectoryPage{}, err
+	}
+	if resolution.AnswerKind == "RESOLVE_ANSWER_KIND_NEGATIVE" || len(resolution.Negative) != 0 {
+		return DirectoryPage{}, invalidDirectory(directoryNegativeDetail(resolution), nil)
 	}
 	if uint32(len(resolution.Records)) > limit {
 		return DirectoryPage{}, invalidDirectory("runtime Directory listing exceeds the bounded page and has no stable cursor", nil)
 	}
-	return DirectoryPage{Records: resolution.Records, Limit: limit}, nil
+	nextCursor, err := directoryCursor(resolution.NextCursor)
+	if err != nil {
+		return DirectoryPage{}, err
+	}
+	if nextCursor != "" && nextCursor == cursor {
+		return DirectoryPage{}, invalidDirectory("runtime Directory listing returned a repeated cursor", nil)
+	}
+	return DirectoryPage{Records: resolution.Records, Limit: limit, NextCursor: nextCursor}, nil
 }
 
 func (p *RuntimeDirectoryProvider) Subscribe(ctx context.Context, request DirectorySubscribeRequest) (*DirectorySubscription, error) {
-	if request.ResumeCursor != nil && request.ResumeCursor.Sequence != 0 {
-		return nil, invalidDirectory("runtime Directory resume provider is not available", nil)
+	if p == nil || p.ability == nil {
+		return nil, invalidDirectory("runtime Directory provider is not initialized", nil)
 	}
-	handle, err := p.ability.OpenStream(ctx, request.Call, "federation.subscribe_directory_v2", map[string]any{})
+	args := map[string]any{}
+	if request.ResumeCursor != nil {
+		token, err := directoryCursor(request.ResumeCursor.Token)
+		if err != nil {
+			return nil, err
+		}
+		args["resume_sequence"] = request.ResumeCursor.Sequence
+		if token != "" {
+			args["resume_token"] = token
+		}
+	}
+	handle, err := p.ability.OpenStream(ctx, request.Call, "federation.subscribe_directory_v2", args)
 	if err != nil {
 		return nil, err
 	}
@@ -335,6 +372,7 @@ func projectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 		RouteCandidates: directoryMapSlice(output["route_candidates"]),
 		Records:         records,
 		Negative:        directoryMap(output["negative"]),
+		NextCursor:      directoryString(output, "next_cursor"),
 		ReleaseProfile:  directoryString(output, "release_profile"),
 		Authority:       directoryMap(output["authority"]),
 		CachePolicy:     directoryMap(output["cache_policy"]),
@@ -380,6 +418,24 @@ func directoryLimit(limit uint32) (uint32, error) {
 		return 0, invalidDirectory("Directory limit exceeds the maximum page bound", nil)
 	}
 	return limit, nil
+}
+
+func directoryCursor(value string) (string, error) {
+	cursor := strings.TrimSpace(value)
+	if len(cursor) > maxDirectoryCursorLen {
+		return "", invalidDirectory("Directory cursor exceeds the maximum bound", nil)
+	}
+	return cursor, nil
+}
+
+func directoryNegativeDetail(resolution DirectoryResolution) string {
+	if detail, ok := resolution.Negative["detail"].(string); ok && strings.TrimSpace(detail) != "" {
+		return strings.TrimSpace(detail)
+	}
+	if reason, ok := resolution.Negative["reason"].(string); ok && strings.TrimSpace(reason) != "" {
+		return "runtime Directory listing returned a negative answer: " + strings.TrimSpace(reason)
+	}
+	return "runtime Directory listing returned a negative answer"
 }
 
 func directoryString(value map[string]any, keys ...string) string {

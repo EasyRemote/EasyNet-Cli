@@ -24,6 +24,7 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 				"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
 				"ledger_path": "/state/invocations.redb",
 				"records":     []any{receiptLedgerRecordFixture()},
+				"next_cursor": "receipt-history:v1:cursor-1",
 			}
 		case strings.Contains(descriptor, "invocation.history.get"):
 			output = map[string]any{
@@ -63,6 +64,9 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 	}
 	if len(page.Records) != 1 || page.Records[0].RequestID != "req-1" || page.Source.LedgerPath != "/state/invocations.redb" {
 		t.Fatalf("unexpected page: %#v", page)
+	}
+	if page.NextCursor != "receipt-history:v1:cursor-1" {
+		t.Fatalf("next cursor not projected: %#v", page)
 	}
 
 	lookup := ReceiptLookup{RequestID: "req-1"}
@@ -110,11 +114,56 @@ func TestReceiptReferenceDelegatesScalarCausalProjectionToAxon(t *testing.T) {
 	}
 }
 
-func TestRuntimeReceiptProviderKeepsUnsupportedCursorExplicit(t *testing.T) {
-	provider := &RuntimeReceiptProvider{}
-	_, err := provider.List(context.Background(), ReceiptListRequest{Cursor: "receipt-page:2"})
-	if err == nil || !strings.Contains(err.Error(), "provider is not available") {
-		t.Fatalf("cursor error = %v", err)
+func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
+	var arguments map[string]any
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+		var draft map[string]any
+		if err := json.Unmarshal(raw, &draft); err != nil {
+			return nil, err
+		}
+		arguments, _ = draft["args"].(map[string]any)
+		output, _ := json.Marshal(map[string]any{
+			"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
+			"ledger_path": "/state/invocations.redb",
+			"records":     []any{},
+			"next_cursor": "receipt-history:v1:cursor-2",
+		})
+		return runtimeAbilityResultJSON(true, string(output), "", false), nil
+	}}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeReceiptProvider(ability)
+	page, err := provider.List(context.Background(), ReceiptListRequest{
+		Call:   runtimeAbilityTestContext(),
+		Cursor: " receipt-history:v1:cursor-1 ",
+		Limit:  2,
+	})
+	if err != nil {
+		t.Fatalf("List with cursor: %v", err)
+	}
+	if arguments["cursor"] != "receipt-history:v1:cursor-1" {
+		t.Fatalf("cursor not forwarded: %#v", arguments)
+	}
+	if page.NextCursor != "receipt-history:v1:cursor-2" {
+		t.Fatalf("next cursor not preserved: %#v", page)
+	}
+
+	repeated := runtimeReceiptProviderWithOutput(t, map[string]any{
+		"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
+		"ledger_path": "/state/invocations.redb",
+		"records":     []any{},
+		"next_cursor": "receipt-history:v1:cursor-1",
+	})
+	_, err = repeated.List(context.Background(), ReceiptListRequest{
+		Call:   runtimeAbilityTestContext(),
+		Cursor: "receipt-history:v1:cursor-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "repeated cursor") {
+		t.Fatalf("repeated cursor error = %v", err)
+	}
+
+	if _, err := receiptHistoryCursor(strings.Repeat("x", maxReceiptHistoryCursorLen+1)); err == nil {
+		t.Fatal("oversized history cursor was accepted")
 	}
 	if _, err := receiptHistoryLimit(MaxReceiptHistoryLimit + 1); err == nil {
 		t.Fatal("oversized history page was accepted")

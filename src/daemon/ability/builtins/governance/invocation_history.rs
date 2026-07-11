@@ -21,13 +21,16 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::daemon_config::{
     default_config_path, default_ledger_dir, DaemonConfig,
 };
-use easynet_axon::invocation::{InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery};
+use easynet_axon::invocation::{
+    InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery, InvocationLedgerRecord,
+};
 
 pub const ABILITY_HISTORY_LIST: &str =
     crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
@@ -133,6 +136,8 @@ fn record_by_query(
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
+const HISTORY_CURSOR_PREFIX: &str = "receipt-history:v1:";
+const MAX_HISTORY_CURSOR_LEN: usize = 4096;
 
 pub fn register(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
     let reader = Arc::new(InvocationLedgerReader::new(ledger));
@@ -194,19 +199,14 @@ impl InvocationLedgerReader {
 
     fn list_history(&self, args: Value) -> anyhow::Result<Value> {
         let requested_limit = bounded_limit(args.get("limit").and_then(Value::as_u64));
+        let cursor_anchor = history_cursor_anchor(args.get("cursor").and_then(non_empty_str))?;
         let exclude_ability_uras = string_set_arg(&args, "exclude_ability_uras");
         let include_ability_uras = filter_string_set(&args, "ability_uras");
-        let needs_post_filter =
-            !exclude_ability_uras.is_empty() || !include_ability_uras.is_empty();
-        // Post-filters run after fetch, so over-fetch to keep a full page
-        // after retention. Single-valued predicates (caller/callee/subject/
-        // state/trace) are still applied at the query source.
-        let query_limit = if needs_post_filter {
-            requested_limit.saturating_mul(5).min(MAX_LIMIT)
-        } else {
-            requested_limit
-        };
-        let query = query_from_args(&args)?.limit(query_limit);
+        // Cursor semantics are defined over the daemon-owned, already sorted
+        // Axon ledger projection after all supported predicates have been
+        // applied. The SDK treats the cursor as opaque; only this provider
+        // decodes the anchor and decides the next page boundary.
+        let query = query_from_args(&args)?.limit(0);
         let compact = args
             .get("compact")
             .and_then(Value::as_bool)
@@ -214,19 +214,22 @@ impl InvocationLedgerReader {
         let path = ledger_path_from_config();
         let mut records = self.fetch_records(&path, query)?;
         retain_by_ability_ura_sets(&mut records, &include_ability_uras, &exclude_ability_uras);
-        if needs_post_filter {
-            records.truncate(requested_limit);
-        }
+        apply_history_cursor(&mut records, cursor_anchor.as_deref())?;
+        let next_cursor = next_history_cursor(&mut records, requested_limit);
         let records = if compact {
             compact_records(&records)?
         } else {
             json!(records)
         };
-        Ok(json!({
+        let mut response = json!({
             "ledger_ura": ledger_resource_ura(),
             "ledger_path": path.display().to_string(),
             "records": records,
-        }))
+        });
+        if let Some(cursor) = next_cursor {
+            response["next_cursor"] = Value::String(cursor);
+        }
+        Ok(response)
     }
 
     fn get_history(&self, args: Value) -> anyhow::Result<Value> {
@@ -283,7 +286,7 @@ impl InvocationLedgerReader {
         &self,
         path: &Path,
         query: InvocationLedgerQuery,
-    ) -> anyhow::Result<Vec<easynet_axon::invocation::InvocationLedgerRecord>> {
+    ) -> anyhow::Result<Vec<InvocationLedgerRecord>> {
         if let Some(ledger) = self.shared.as_ref() {
             return Ok(ledger.fetch(query)?);
         }
@@ -294,7 +297,7 @@ impl InvocationLedgerReader {
         &self,
         path: &Path,
         query: InvocationLedgerQuery,
-    ) -> anyhow::Result<Option<easynet_axon::invocation::InvocationLedgerRecord>> {
+    ) -> anyhow::Result<Option<InvocationLedgerRecord>> {
         if let Some(ledger) = self.shared.as_ref() {
             return Ok(ledger.fetch_one(query)?);
         }
@@ -320,9 +323,66 @@ fn bounded_limit(raw: Option<u64>) -> usize {
         .min(MAX_LIMIT)
 }
 
-fn compact_records(
-    records: &[easynet_axon::invocation::InvocationLedgerRecord],
-) -> anyhow::Result<Value> {
+fn history_cursor_anchor(raw: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(cursor) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if cursor.len() > MAX_HISTORY_CURSOR_LEN {
+        anyhow::bail!("invocation.history.list cursor exceeds the maximum bound");
+    }
+    let encoded = cursor.strip_prefix(HISTORY_CURSOR_PREFIX).ok_or_else(|| {
+        anyhow::anyhow!("invocation.history.list cursor is not a recognized receipt history cursor")
+    })?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded.as_bytes())
+        .map_err(|err| anyhow::anyhow!("invocation.history.list cursor is not valid: {err}"))?;
+    let invocation_ura = String::from_utf8(bytes)
+        .map_err(|err| anyhow::anyhow!("invocation.history.list cursor is not UTF-8: {err}"))?;
+    if invocation_ura.trim().is_empty() {
+        anyhow::bail!("invocation.history.list cursor anchor must not be empty");
+    }
+    Ok(Some(invocation_ura))
+}
+
+fn history_cursor_for(record: &InvocationLedgerRecord) -> String {
+    format!(
+        "{HISTORY_CURSOR_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(record.invocation_ura.as_bytes())
+    )
+}
+
+fn apply_history_cursor(
+    records: &mut Vec<InvocationLedgerRecord>,
+    cursor_anchor: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(anchor) = cursor_anchor else {
+        return Ok(());
+    };
+    let Some(position) = records
+        .iter()
+        .position(|record| record.invocation_ura == anchor)
+    else {
+        anyhow::bail!("invocation.history.list cursor does not match the current query");
+    };
+    records.drain(..=position);
+    Ok(())
+}
+
+fn next_history_cursor(
+    records: &mut Vec<InvocationLedgerRecord>,
+    requested_limit: usize,
+) -> Option<String> {
+    if records.len() <= requested_limit {
+        return None;
+    }
+    let next = records
+        .get(requested_limit.saturating_sub(1))
+        .map(history_cursor_for);
+    records.truncate(requested_limit);
+    next
+}
+
+fn compact_records(records: &[InvocationLedgerRecord]) -> anyhow::Result<Value> {
     let mut out = Vec::with_capacity(records.len());
     for record in records {
         let value = serde_json::to_value(record)?;
@@ -372,7 +432,7 @@ fn value_string_set(value: Option<&Value>) -> HashSet<String> {
 /// Apply include/exclude Ability URA sets in place. Empty sets are
 /// no-ops, so callers can pass either or both.
 fn retain_by_ability_ura_sets(
-    records: &mut Vec<easynet_axon::invocation::InvocationLedgerRecord>,
+    records: &mut Vec<InvocationLedgerRecord>,
     include: &HashSet<String>,
     exclude: &HashSet<String>,
 ) {
@@ -531,7 +591,7 @@ fn ledger_resource_ura() -> Option<String> {
 fn fetch_records_from_path(
     path: &Path,
     query: InvocationLedgerQuery,
-) -> anyhow::Result<Vec<easynet_axon::invocation::InvocationLedgerRecord>> {
+) -> anyhow::Result<Vec<InvocationLedgerRecord>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -541,7 +601,7 @@ fn fetch_records_from_path(
 fn fetch_one_from_path(
     path: &Path,
     query: InvocationLedgerQuery,
-) -> anyhow::Result<Option<easynet_axon::invocation::InvocationLedgerRecord>> {
+) -> anyhow::Result<Option<InvocationLedgerRecord>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -587,6 +647,12 @@ pub fn list_history_input_schema() -> Value {
         "type": "object",
         "properties": {
             "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LIMIT },
+            "cursor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_HISTORY_CURSOR_LEN,
+                "description": "Opaque receipt history cursor returned by the previous invocation.history.list page."
+            },
             "compact": { "type": "boolean" },
             "exclude_ability_uras": {
                 "type": "array",
@@ -719,6 +785,20 @@ mod tests {
     }
 
     #[test]
+    fn list_history_schema_exposes_opaque_cursor() {
+        let schema = list_history_input_schema();
+        let cursor = schema
+            .get("properties")
+            .and_then(|properties| properties.get("cursor"))
+            .expect("cursor schema");
+        assert_eq!(cursor.get("type").and_then(Value::as_str), Some("string"));
+        assert_eq!(
+            cursor.get("maxLength").and_then(Value::as_u64),
+            Some(MAX_HISTORY_CURSOR_LEN as u64)
+        );
+    }
+
+    #[test]
     fn missing_ledger_returns_empty_history() {
         let dir = tempfile::tempdir().expect("tempdir");
         let records = fetch_records_from_path(
@@ -841,6 +921,100 @@ mod tests {
         assert_eq!(
             records[0].get("request_id").and_then(Value::as_str),
             Some("req-wanted")
+        );
+    }
+
+    #[test]
+    fn list_history_returns_stable_cursor_and_resumes_after_anchor() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("invocations.redb");
+        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let mut newest = sample_record("req-newest");
+        newest.started_unix_ms = 30;
+        let mut middle = sample_record("req-middle");
+        middle.started_unix_ms = 20;
+        let mut oldest = sample_record("req-oldest");
+        oldest.started_unix_ms = 10;
+        ledger.put(&oldest).unwrap();
+        ledger.put(&newest).unwrap();
+        ledger.put(&middle).unwrap();
+
+        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let first = reader.list_history(json!({ "limit": 1 })).unwrap();
+        let first_records = first["records"].as_array().expect("first records");
+        assert_eq!(first_records.len(), 1);
+        assert_eq!(
+            first_records[0].get("request_id").and_then(Value::as_str),
+            Some("req-newest")
+        );
+        let first_cursor = first["next_cursor"].as_str().expect("first cursor");
+        assert_eq!(first_cursor, history_cursor_for(&newest));
+
+        let second = reader
+            .list_history(json!({ "limit": 1, "cursor": first_cursor }))
+            .unwrap();
+        let second_records = second["records"].as_array().expect("second records");
+        assert_eq!(second_records.len(), 1);
+        assert_eq!(
+            second_records[0].get("request_id").and_then(Value::as_str),
+            Some("req-middle")
+        );
+        let second_cursor = second["next_cursor"].as_str().expect("second cursor");
+        assert_eq!(second_cursor, history_cursor_for(&middle));
+
+        let third = reader
+            .list_history(json!({ "limit": 5, "cursor": second_cursor }))
+            .unwrap();
+        let third_records = third["records"].as_array().expect("third records");
+        assert_eq!(third_records.len(), 1);
+        assert_eq!(
+            third_records[0].get("request_id").and_then(Value::as_str),
+            Some("req-oldest")
+        );
+        assert!(third.get("next_cursor").is_none());
+    }
+
+    #[test]
+    fn list_history_rejects_cursor_outside_current_query() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("invocations.redb");
+        let ledger = Arc::new(easynet_axon::invocation::InvocationLedger::open(&path).unwrap());
+        let mut kept = sample_record("req-kept");
+        kept.ability_ura = "easynet:///r/test/ability/kept".to_string();
+        let mut excluded = sample_record("req-excluded");
+        excluded.ability_ura = "easynet:///r/test/ability/excluded".to_string();
+        ledger.put(&kept).unwrap();
+        ledger.put(&excluded).unwrap();
+
+        let reader = InvocationLedgerReader::new(Some(Arc::clone(&ledger)));
+        let err = reader
+            .list_history(json!({
+                "limit": 1,
+                "cursor": history_cursor_for(&excluded),
+                "filter": {
+                    "ability_uras": ["easynet:///r/test/ability/kept"]
+                }
+            }))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cursor does not match the current query"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn list_history_rejects_malformed_cursor() {
+        let reader = InvocationLedgerReader::new(None);
+        let err = reader
+            .list_history(json!({
+                "cursor": "not-a-receipt-history-cursor"
+            }))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("recognized receipt history cursor"),
+            "got {err}"
         );
     }
 

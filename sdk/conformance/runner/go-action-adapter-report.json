@@ -291,14 +291,14 @@
       "status": "passed"
     },
     {
-      "case_id": "directory/resolution_seam",
+      "case_id": "directory/resolution_provider",
       "evidence": [
         {
           "kind": "go_test",
           "ref_path": "sdk/go/directory_test.go"
         }
       ],
-      "message": "Go Directory facade resolves, lists, and subscribes through the generic runtime ability contract with bounded page/cursor behavior and no product read-model projection.",
+      "message": "Go Directory facade resolves, lists with daemon-owned opaque cursors, and subscribes with explicit resume cursors through the generic runtime ability contract without product read-model projection.",
       "profile": "directory",
       "status": "passed"
     },
@@ -327,14 +327,14 @@
       "status": "passed"
     },
     {
-      "case_id": "receipt/history_seam",
+      "case_id": "receipt/history_provider",
       "evidence": [
         {
           "kind": "go_test",
           "ref_path": "sdk/go/receipt_test.go"
         }
       ],
-      "message": "Go Receipt facade provides bounded list/get/trace reads over the runtime provider while leaving canonical receipt verification and ledger semantics Axon-owned.",
+      "message": "Go Receipt facade provides daemon-backed bounded list/get/trace reads with opaque cursor forwarding while leaving canonical receipt verification and ledger semantics Axon-owned.",
       "profile": "receipts",
       "status": "passed"
     },

@@ -538,8 +538,8 @@ issues a product-neutral enrollment capability, joins a Device over the Hub URA
 with `--principal-ura` plus `--principal-enrollment-id`, and verifies the Hub
 RuntimeTrust owner binding from Device URA to User Principal URA. It is still
 not standalone-Hub cutover-ready until recovery UX edge cases,
-receipt-history continuity, Backend/EasyRemote private-key process audits and
-the Backend-present E2E gate pass. The same real two-HOME CLI binary
+downstream Receipt consumer cutover, Backend/EasyRemote private-key process
+audits and the Backend-present E2E gate pass. The same real two-HOME CLI binary
 E2E now extends the TCP+TLS Hub daemon path to the multi-user lifecycle
 scenario: Alice and Bob are enrolled through product-neutral capabilities,
 both receive at least two public-key bindings, Alice exercises add-key,
@@ -550,17 +550,23 @@ projection and Device-to-Principal owner binding without Backend HTTP state.
 Go and Python PrincipalLifecycle projection decoders now reject forbidden
 custody fields recursively, matching the managed-signing public-projection
 guard, and the real CLI TLS lifecycle E2E scans PrincipalLifecycle JSON output
-for private-key custody fields. Backend-present mapping to the same runtime,
-stable receipt-history/cursor evidence and Backend/EasyRemote process-level
-private-key audits still remain before section 14.3 is cutover-ready.
-Directory
-is still a seam; receipt/history now has a symmetric bounded seam but no
-stable cursor or downstream cutover; runtime events and runtime administration
-now have symmetric provider-backed Go/Python facades; access control now has
-symmetric provider-backed Go/Python SDK facades over daemon
+for private-key custody fields. Backend-present mapping to the same runtime and
+Backend/EasyRemote process-level private-key audits still remain before section
+14.3 is cutover-ready.
+Directory now has daemon-backed resolution, stable listing cursors and explicit
+subscription resume in symmetric Go/Python providers; receipt/history now has a
+daemon-backed stable cursor provider and symmetric Go/Python cursor forwarding;
+neither Directory nor Receipt has downstream Backend/EasyRemote cutover yet.
+Runtime events and runtime administration now have symmetric provider-backed
+Go/Python facades; access control now has symmetric provider-backed Go/Python
+SDK facades over daemon
 `authority.binding.*` abilities, while Backend product role mapping and
 standalone-Hub governance cutover remain incomplete; and the backend still
 owns product-local runtime-profile lowering.
+AbilityDescriptor projection now has symmetric provider-backed Go/Python
+facades over daemon `meta.list_abilities`, so descriptor schema, call mode,
+hashes, visibility and hints remain daemon catalog facts rather than
+SDK-inferred product facts.
 Backend-free multi-user closure remains partial as described above. Passing
 baseline tests must not be reported as standalone-Hub delivery evidence until
 sections 14.2 and 14.3 and the cross-language parity gates pass.
@@ -622,16 +628,20 @@ Migration follows dependency direction. Destructive deletion is last.
 
 The interrupted restoration conflict described in section 14.4 has been
 resolved. Public API inventory, the symmetric capability matrix, generic
-PrincipalLifecycle seams, canonical Invocation lowering, the first Directory
-provider migration, the bounded Receipt/causal/history/trace seam, and
-provider-backed runtime Events/Admin and AccessControl facades have landed.
+PrincipalLifecycle seams, canonical Invocation lowering, provider-backed
+Directory resolution, the daemon-backed Receipt/causal/history/trace provider,
+provider-backed AbilityDescriptor projection, and provider-backed runtime
+Events/Admin and AccessControl facades have landed.
 They are intermediate convergence evidence, not completion of downstream
 product cutover or the standalone-Hub PrincipalLifecycle closure.
 
 The current remaining work is:
 
-- add a stable Receipt history cursor/anchor provider and cut over every
-  downstream Receipt consumer before promoting the bounded seam;
+- cut over every downstream Receipt consumer to the stable daemon-backed
+  Receipt history cursor/anchor provider before promoting the capability to
+  cutover-ready;
+- cut over every downstream Directory consumer to the stable daemon-backed
+  Directory provider before promoting the capability to cutover-ready;
 - migrate Backend access-control role/account mapping onto the generic Go SDK
   AccessControl facade and delete remaining product-local runtime lowering;
 - finish migrating Backend off duplicated `internal/runtimeprofile` lowering,
@@ -640,8 +650,8 @@ The current remaining work is:
   Directory, receipt and event capabilities;
 - close the remaining standalone-Hub acceptance evidence that is not covered by
   the real TCP+TLS lifecycle E2E and SDK/CLI projection audit yet, especially
-  stable receipt-history/cursor persistence and Backend/EasyRemote private-key
-  process audits;
+  downstream Receipt consumer cutover and Backend/EasyRemote private-key process
+  audits;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates
   only after their consumers have migrated;
 - run the full Rust default/`axon-pb`, Go, Python, Backend and EasyRemote

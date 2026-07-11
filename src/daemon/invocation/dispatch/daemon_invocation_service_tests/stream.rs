@@ -169,6 +169,43 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
 }
 
 #[tokio::test]
+async fn invoke_stream_subscribe_directory_v2_accepts_resume_sequence() {
+    use crate::daemon::federation::directory::DirectoryEvent;
+    use futures::StreamExt;
+
+    let presence = Arc::new(PresenceRegistry::new());
+    let admission = AdmissionFacade::new(
+        Arc::new(RealmTrustAnchor::default()),
+        Some(TEST_DAEMON_URA.to_string()),
+    );
+    let svc = DaemonInvocationService::new(Arc::clone(&presence), admission);
+
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(test_envelope()),
+            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2.to_string(),
+            arguments: serde_json::to_vec(&serde_json::json!({
+                "resume_sequence": 7_u64,
+                "resume_token": "directory:7",
+            }))
+            .expect("resume args"),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("v2 resume dispatch returns Ok");
+
+    let mut stream = resp.into_inner();
+    let first = stream.next().await.expect("first frame").expect("Ok");
+    assert_eq!(first.sequence, 8, "snapshot resumes after supplied cursor");
+    let evt: DirectoryEvent =
+        serde_json::from_slice(&first.payload).expect("decodes DirectoryEvent");
+    assert!(
+        matches!(evt, DirectoryEvent::Snapshot { .. }),
+        "resume still starts from a convergent snapshot"
+    );
+}
+
+#[tokio::test]
 async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
     // PR-N3 N3-streaming-6. Confirm the v2 stream emits a
     // DirectoryEvent::Heartbeat after the heartbeat

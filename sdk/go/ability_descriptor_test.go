@@ -2,6 +2,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -90,5 +91,102 @@ func TestParseAbilityDescriptorRefUsesCanonicalAxonProjection(t *testing.T) {
 		ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" ||
 		ref.Version != "1.0.0" {
 		t.Fatalf("descriptor ref projection = %#v", ref)
+	}
+}
+
+func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
+	var seen map[string]any
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+		if err := json.Unmarshal(raw, &seen); err != nil {
+			return nil, err
+		}
+		args := seen["args"].(map[string]any)
+		if args["agent_ura"] != "easynet:///r/example/hub" || args["scope"] != "realm" {
+			t.Fatalf("provider did not lower filters to daemon catalog args: %#v", args)
+		}
+		return runtimeAbilityResultJSON(true, `{"abilities":[{
+			"name":"namespace.resolve",
+			"ability_ura":"easynet:///r/example/ability/hub.namespace.resolve",
+			"owner_ura":"easynet:///r/example/hub",
+			"version":"1.0.0",
+			"schema_hash":"sha256:abc",
+			"descriptor_hash":"sha256:def",
+			"call_mode":"rpc",
+			"receipt_semantics":{"kind":"terminal"},
+			"visibility":"public",
+			"description":"Resolve names",
+			"source":"kernel:built-in",
+			"hints":{"read_only":true,"idempotent":true},
+			"schema_summary":{"input":{"type":"object"}},
+			"metadata":{"stable":"true"}
+		}]}`, "", false), nil
+	}}
+	runtime, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	ability, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	provider, err := NewRuntimeAbilityDescriptorProvider(ability)
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityDescriptorProvider: %v", err)
+	}
+	page, err := provider.List(context.Background(), AbilityDescriptorListRequest{
+		Call:     runtimeAbilityTestContext(),
+		Scope:    "realm",
+		OwnerURA: "easynet:///r/example/hub",
+	})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if seen["descriptor_ref"] != "easynet:///r/example/ability/hub.meta.list_abilities@1.0.0" {
+		t.Fatalf("descriptor_ref = %q", seen["descriptor_ref"])
+	}
+	if len(page.Descriptors) != 1 {
+		t.Fatalf("descriptor count = %d", len(page.Descriptors))
+	}
+	got := page.Descriptors[0]
+	if got.AbilityURA != "easynet:///r/example/ability/hub.namespace.resolve" ||
+		got.Version != "1.0.0" ||
+		got.SchemaHash != "sha256:abc" ||
+		got.CallMode != "rpc" ||
+		!got.Hints.ReadOnly ||
+		got.InputSchema["type"] != "object" ||
+		got.Metadata["stable"] != "true" {
+		t.Fatalf("descriptor projection lost daemon facts: %#v", got)
+	}
+}
+
+func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testing.T) {
+	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+		return runtimeAbilityResultJSON(true, `{"abilities":[
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/hub.observe.health","owner_ura":"easynet:///r/example/hub","version":"1.0.0","call_mode":"rpc"},
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/hub.observe.health","owner_ura":"easynet:///r/example/hub","version":"2.0.0","call_mode":"rpc"}
+		]}`, "", false), nil
+	}}
+	runtime, _ := NewRuntimeClient(transport)
+	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+	_, err := provider.Get(context.Background(), AbilityDescriptorGetRequest{
+		Call:       runtimeAbilityTestContext(),
+		AbilityURA: "easynet:///r/example/ability/hub.observe.health",
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ambiguous descriptor error = %v", err)
+	}
+
+	got, err := provider.Get(context.Background(), AbilityDescriptorGetRequest{
+		Call:              runtimeAbilityTestContext(),
+		AbilityURA:        "easynet:///r/example/ability/hub.observe.health",
+		DescriptorVersion: "2.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Get with descriptor_version: %v", err)
+	}
+	if got.Version != "2.0.0" {
+		t.Fatalf("version = %q", got.Version)
 	}
 }

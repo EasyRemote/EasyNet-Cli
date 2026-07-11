@@ -26,6 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde_json::{json, Value};
 
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
@@ -39,6 +40,11 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
 use crate::daemon::invocation::routing::hub_resolver::{HubResolution, HubResolver};
 
 use easynet_axon::pb::axon::v1 as axon_pb;
+
+const DEFAULT_DIRECTORY_LIMIT: usize = 50;
+const MAX_DIRECTORY_LIMIT: usize = 500;
+const DIRECTORY_CURSOR_PREFIX: &str = "directory:v1:";
+const MAX_DIRECTORY_CURSOR_LEN: usize = 4096;
 
 /// Local runtime namespace authority (RFC-005 §4 / D105).
 ///
@@ -1124,6 +1130,18 @@ impl<'a> DaemonRouteResolver<'a> {
             self.self_device_ura(),
             self.now_unix_ms,
         );
+        let requested_limit = directory_page_limit(query.get("limit").and_then(Value::as_u64));
+        let cursor_anchor =
+            match directory_cursor_anchor(query.get("cursor").and_then(Value::as_str)) {
+                Ok(anchor) => anchor,
+                Err(detail) => {
+                    return negative_answer_json(
+                        query_name,
+                        axon_pb::NegativeReason::Refused,
+                        Some(&detail),
+                    )
+                }
+            };
         let mut records = Vec::new();
         for agent in &directory.agents {
             records.push(id_record(&agent.ura, self.now_unix_ms));
@@ -1157,16 +1175,105 @@ impl<'a> DaemonRouteResolver<'a> {
                 records.push(selected.route_record(self.now_unix_ms));
             }
         }
+        if let Err(detail) = apply_directory_cursor(&mut records, cursor_anchor.as_deref()) {
+            return negative_answer_json(
+                query_name,
+                axon_pb::NegativeReason::Refused,
+                Some(&detail),
+            );
+        }
+        let next_cursor = next_directory_cursor(&mut records, requested_limit);
 
-        json!({
+        let mut answer = json!({
             "answer_kind": axon_pb::ResolveAnswerKind::NonDispatchable.as_str_name(),
             "canonical_name": (!query_name.is_empty()).then_some(query_name),
             "records": records,
             "release_profile": axon_pb::ResolverReleaseProfile::AuthoritativeLocal.as_str_name(),
             "authority": authority_for_query(query_name),
             "cache_policy": cache_policy_json(),
-        })
+        });
+        if let Some(cursor) = next_cursor {
+            answer["next_cursor"] = Value::String(cursor);
+        }
+        answer
     }
+}
+
+fn directory_page_limit(raw: Option<u64>) -> usize {
+    raw.map(|n| n as usize)
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_DIRECTORY_LIMIT)
+        .min(MAX_DIRECTORY_LIMIT)
+}
+
+fn directory_cursor_anchor(raw: Option<&str>) -> Result<Option<String>, String> {
+    let Some(cursor) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if cursor.len() > MAX_DIRECTORY_CURSOR_LEN {
+        return Err("namespace.resolve Directory cursor exceeds the maximum bound".to_string());
+    }
+    let encoded = cursor
+        .strip_prefix(DIRECTORY_CURSOR_PREFIX)
+        .ok_or_else(|| {
+            "namespace.resolve cursor is not a recognized Directory cursor".to_string()
+        })?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded.as_bytes())
+        .map_err(|err| format!("namespace.resolve Directory cursor is not valid: {err}"))?;
+    let anchor = String::from_utf8(bytes)
+        .map_err(|err| format!("namespace.resolve Directory cursor is not UTF-8: {err}"))?;
+    if anchor.trim().is_empty() {
+        return Err("namespace.resolve Directory cursor anchor must not be empty".to_string());
+    }
+    Ok(Some(anchor))
+}
+
+fn directory_cursor_for(record: &Value) -> Option<String> {
+    let key = directory_record_cursor_key(record)?;
+    Some(format!(
+        "{DIRECTORY_CURSOR_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(key.as_bytes())
+    ))
+}
+
+fn directory_record_cursor_key(record: &Value) -> Option<String> {
+    let record_type = record.get("record_type")?.as_str()?.trim();
+    let name = record.get("name")?.as_str()?.trim();
+    if record_type.is_empty() || name.is_empty() {
+        return None;
+    }
+    Some(format!("{record_type}\u{1f}{name}"))
+}
+
+fn apply_directory_cursor(
+    records: &mut Vec<Value>,
+    cursor_anchor: Option<&str>,
+) -> Result<(), String> {
+    let Some(anchor) = cursor_anchor else {
+        return Ok(());
+    };
+    let Some(position) = records
+        .iter()
+        .position(|record| directory_record_cursor_key(record).as_deref() == Some(anchor))
+    else {
+        return Err(
+            "namespace.resolve Directory cursor does not match the current query".to_string(),
+        );
+    };
+    records.drain(..=position);
+    Ok(())
+}
+
+fn next_directory_cursor(records: &mut Vec<Value>, requested_limit: usize) -> Option<String> {
+    if records.len() <= requested_limit {
+        return None;
+    }
+    let next = records
+        .get(requested_limit.saturating_sub(1))
+        .and_then(directory_cursor_for);
+    records.truncate(requested_limit);
+    next
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2559,6 +2666,73 @@ mod tests {
         assert_eq!(
             route_value["dispatch_name"],
             selected.dispatch_name.as_str()
+        );
+    }
+
+    #[test]
+    fn directory_listing_returns_stable_cursor_and_resumes() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+        publish_ability(&catalog, &owner_ura, &owner_ura, "fs", "read");
+
+        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog)).at(TEST_NOW_MS);
+        let first = resolver.resolve_query_json(&json!({
+            "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+            "query_name": owner_ura,
+            "limit": 1,
+        }));
+        let first_records = first["records"].as_array().expect("first records");
+        assert_eq!(first_records.len(), 1);
+        let first_cursor = first["next_cursor"].as_str().expect("first cursor");
+
+        let second = resolver.resolve_query_json(&json!({
+            "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+            "query_name": owner_ura,
+            "limit": 1,
+            "cursor": first_cursor,
+        }));
+        let second_records = second["records"].as_array().expect("second records");
+        assert_eq!(second_records.len(), 1);
+        assert_ne!(
+            directory_record_cursor_key(&first_records[0]),
+            directory_record_cursor_key(&second_records[0])
+        );
+        assert!(second["next_cursor"].as_str().is_some());
+    }
+
+    #[test]
+    fn directory_listing_rejects_cursor_outside_current_query() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
+
+        let missing_cursor = directory_cursor_for(&json!({
+            "record_type": axon_pb::RecordType::Route.as_str_name(),
+            "name": "easynet:///r/test-realm/resource/missing-route",
+        }))
+        .expect("cursor");
+        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+                "query_name": owner_ura,
+                "cursor": missing_cursor,
+            }));
+        assert_eq!(
+            answer["answer_kind"],
+            axon_pb::ResolveAnswerKind::Negative.as_str_name()
+        );
+        assert!(
+            answer["negative"]["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("cursor does not match"),
+            "answer = {answer:#?}"
         );
     }
 }

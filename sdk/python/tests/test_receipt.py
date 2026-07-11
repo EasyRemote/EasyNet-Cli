@@ -126,7 +126,9 @@ def test_receipt_reference_requires_daemon_or_axon_issued_ura() -> None:
 
 def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     provider, transport = _provider()
-    transport.output_json = _output(records=[_record()])
+    transport.output_json = _output(
+        records=[_record()], next_cursor="receipt-history:v1:cursor-1"
+    )
     page = provider.list(
         ReceiptListRequest(
             call=_call(),
@@ -149,7 +151,7 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     )
 
     assert page.limit == DEFAULT_RECEIPT_PAGE_LIMIT
-    assert page.next_cursor == ""
+    assert page.next_cursor == "receipt-history:v1:cursor-1"
     assert page.source.ledger_ura == LEDGER_URA
     assert page.source.ledger_path == LEDGER_PATH
     assert len(page.records) == 1
@@ -210,11 +212,30 @@ def test_runtime_receipt_list_rejects_invalid_page_bound(limit: object) -> None:
         provider.list(ReceiptListRequest(call=_call(), limit=limit))  # type: ignore[arg-type]
 
 
-def test_runtime_receipt_list_rejects_nonempty_cursor_before_invocation() -> None:
+def test_runtime_receipt_list_forwards_and_validates_cursor() -> None:
     provider, transport = _provider()
-    with pytest.raises(SDKError, match="cursor provider is not available"):
-        provider.list(ReceiptListRequest(call=_call(), cursor="next-page"))
-    assert transport.seen == {}
+    transport.output_json = _output(records=[], next_cursor="receipt-history:v1:cursor-2")
+    page = provider.list(
+        ReceiptListRequest(
+            call=_call(),
+            cursor=" receipt-history:v1:cursor-1 ",
+            limit=2,
+        )
+    )
+    assert transport.seen["args"] == {
+        "limit": 2,
+        "cursor": "receipt-history:v1:cursor-1",
+    }
+    assert page.next_cursor == "receipt-history:v1:cursor-2"
+
+    transport.output_json = _output(records=[], next_cursor="receipt-history:v1:cursor-1")
+    with pytest.raises(SDKError, match="repeated cursor"):
+        provider.list(
+            ReceiptListRequest(call=_call(), cursor="receipt-history:v1:cursor-1")
+        )
+
+    with pytest.raises(SDKError, match="cursor exceeds"):
+        provider.list(ReceiptListRequest(call=_call(), cursor="x" * 4097))
 
 
 def test_runtime_receipt_list_rejects_noncanonical_and_duplicate_ura_filters() -> None:

@@ -1,6 +1,6 @@
 """Product-neutral EasyNet runtime SDK."""
 
-from .ability_descriptor import AbilityDescriptorRef, parse_ability_descriptor_ref
+from .ability_descriptor import *
 from .access_control import *
 from .ability_invocation import (
     AbilityCallRequest,

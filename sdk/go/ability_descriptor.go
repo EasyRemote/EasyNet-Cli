@@ -2,8 +2,12 @@ package easynet
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 )
+
+const abilityDescriptorListAbility = "meta.list_abilities"
 
 // AbilityDescriptorHints mirrors descriptor tool-annotation booleans that
 // consumers may render without parsing ability names.
@@ -19,14 +23,20 @@ type AbilityDescriptorHints struct {
 // advertised AbilityDescriptor. Product-specific display conventions remain in
 // Metadata; this type owns only generic runtime descriptor fields.
 type AbilityDescriptorProjection struct {
-	AbilityURA  string
-	Name        string
-	OwnerURA    string
-	Source      string
-	Description string
-	Hints       AbilityDescriptorHints
-	InputSchema map[string]any
-	Metadata    map[string]any
+	AbilityURA       string
+	Name             string
+	OwnerURA         string
+	Version          string
+	SchemaHash       string
+	DescriptorHash   string
+	CallMode         string
+	ReceiptSemantics map[string]any
+	Visibility       string
+	Source           string
+	Description      string
+	Hints            AbilityDescriptorHints
+	InputSchema      map[string]any
+	Metadata         map[string]any
 }
 
 // AbilityDescriptorRef is the SDK DTO projection of a descriptor identity.
@@ -37,6 +47,148 @@ type AbilityDescriptorRef struct {
 	Raw        string
 	AbilityURA string
 	Version    string
+}
+
+// AbilityDescriptorListRequest asks the daemon-owned runtime catalog for
+// generic AbilityDescriptor rows. The SDK exposes product-neutral filter names
+// and lowers them to the historical daemon argument fields.
+type AbilityDescriptorListRequest struct {
+	Call       RuntimeCallContext `json:"call"`
+	Scope      string             `json:"scope,omitempty"`
+	OwnerURA   string             `json:"owner_ura,omitempty"`
+	AbilityURA string             `json:"ability_ura,omitempty"`
+}
+
+type AbilityDescriptorGetRequest struct {
+	Call              RuntimeCallContext `json:"call"`
+	AbilityURA        string             `json:"ability_ura"`
+	DescriptorVersion string             `json:"descriptor_version,omitempty"`
+	CallMode          string             `json:"call_mode,omitempty"`
+	Scope             string             `json:"scope,omitempty"`
+}
+
+type AbilityDescriptorPage struct {
+	Descriptors []AbilityDescriptorProjection `json:"descriptors"`
+}
+
+// AbilityDescriptorProvider is the product-neutral catalog provider seam.
+// Implementations must use runtime facts instead of name-derived governance.
+type AbilityDescriptorProvider interface {
+	List(context.Context, AbilityDescriptorListRequest) (AbilityDescriptorPage, error)
+	Get(context.Context, AbilityDescriptorGetRequest) (AbilityDescriptorProjection, error)
+}
+
+type AbilityDescriptorClient struct {
+	provider AbilityDescriptorProvider
+}
+
+func NewAbilityDescriptorClient(provider AbilityDescriptorProvider) (*AbilityDescriptorClient, error) {
+	if provider == nil {
+		return nil, invalidAbilityDescriptor("AbilityDescriptor provider is required", nil)
+	}
+	return &AbilityDescriptorClient{provider: provider}, nil
+}
+
+func (c *AbilityDescriptorClient) List(ctx context.Context, request AbilityDescriptorListRequest) (AbilityDescriptorPage, error) {
+	if c == nil || c.provider == nil {
+		return AbilityDescriptorPage{}, invalidAbilityDescriptor("AbilityDescriptor client is not initialized", nil)
+	}
+	return c.provider.List(ctx, request)
+}
+
+func (c *AbilityDescriptorClient) Get(ctx context.Context, request AbilityDescriptorGetRequest) (AbilityDescriptorProjection, error) {
+	if c == nil || c.provider == nil {
+		return AbilityDescriptorProjection{}, invalidAbilityDescriptor("AbilityDescriptor client is not initialized", nil)
+	}
+	return c.provider.Get(ctx, request)
+}
+
+// RuntimeAbilityDescriptorProvider reads the daemon-owned
+// `meta.list_abilities` catalog through the generic RuntimeAbilityClient.
+type RuntimeAbilityDescriptorProvider struct {
+	ability *RuntimeAbilityClient
+}
+
+func NewRuntimeAbilityDescriptorProvider(ability *RuntimeAbilityClient) (*RuntimeAbilityDescriptorProvider, error) {
+	if ability == nil {
+		return nil, invalidAbilityDescriptor("runtime ability client is required", nil)
+	}
+	return &RuntimeAbilityDescriptorProvider{ability: ability}, nil
+}
+
+func (p *RuntimeAbilityDescriptorProvider) List(ctx context.Context, request AbilityDescriptorListRequest) (AbilityDescriptorPage, error) {
+	if p == nil || p.ability == nil {
+		return AbilityDescriptorPage{}, invalidAbilityDescriptor("runtime AbilityDescriptor provider is not initialized", nil)
+	}
+	args := map[string]any{}
+	if scope := strings.TrimSpace(request.Scope); scope != "" {
+		args["scope"] = scope
+	}
+	if ownerURA := strings.TrimSpace(request.OwnerURA); ownerURA != "" {
+		args["agent_ura"] = ownerURA
+	}
+	if abilityURA := strings.TrimSpace(request.AbilityURA); abilityURA != "" {
+		args["subject_ura"] = abilityURA
+	}
+	output, err := p.ability.Invoke(ctx, request.Call, abilityDescriptorListAbility, args)
+	if err != nil {
+		return AbilityDescriptorPage{}, err
+	}
+	rawAbilities, ok := output["abilities"].([]any)
+	if !ok {
+		return AbilityDescriptorPage{}, invalidAbilityDescriptor("meta.list_abilities output must include abilities array", nil)
+	}
+	descriptors := make([]AbilityDescriptorProjection, 0, len(rawAbilities))
+	for i, raw := range rawAbilities {
+		row, ok := raw.(map[string]any)
+		if !ok {
+			return AbilityDescriptorPage{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d must be an object", i), nil)
+		}
+		projection := ProjectAbilityDescriptor(row)
+		if strings.TrimSpace(projection.AbilityURA) == "" || strings.TrimSpace(projection.OwnerURA) == "" || strings.TrimSpace(projection.Name) == "" {
+			return AbilityDescriptorPage{}, invalidAbilityDescriptor(fmt.Sprintf("ability descriptor row %d is missing identity fields", i), nil)
+		}
+		descriptors = append(descriptors, projection)
+	}
+	return AbilityDescriptorPage{Descriptors: descriptors}, nil
+}
+
+func (p *RuntimeAbilityDescriptorProvider) Get(ctx context.Context, request AbilityDescriptorGetRequest) (AbilityDescriptorProjection, error) {
+	abilityURA := strings.TrimSpace(request.AbilityURA)
+	if abilityURA == "" {
+		return AbilityDescriptorProjection{}, invalidAbilityDescriptor("ability_ura is required", nil)
+	}
+	page, err := p.List(ctx, AbilityDescriptorListRequest{
+		Call:       request.Call,
+		Scope:      request.Scope,
+		AbilityURA: abilityURA,
+	})
+	if err != nil {
+		return AbilityDescriptorProjection{}, err
+	}
+	version := strings.TrimSpace(request.DescriptorVersion)
+	callMode := strings.TrimSpace(request.CallMode)
+	matches := make([]AbilityDescriptorProjection, 0, len(page.Descriptors))
+	for _, descriptor := range page.Descriptors {
+		if descriptor.AbilityURA != abilityURA {
+			return AbilityDescriptorProjection{}, invalidAbilityDescriptor("daemon returned descriptor outside requested ability_ura", nil)
+		}
+		if version != "" && descriptor.Version != version {
+			continue
+		}
+		if callMode != "" && descriptor.CallMode != callMode {
+			continue
+		}
+		matches = append(matches, descriptor)
+	}
+	switch len(matches) {
+	case 0:
+		return AbilityDescriptorProjection{}, abilityDescriptorNotFound(abilityURA)
+	case 1:
+		return matches[0], nil
+	default:
+		return AbilityDescriptorProjection{}, invalidAbilityDescriptor("ability descriptor selection is ambiguous; specify descriptor_version or call_mode", nil)
+	}
 }
 
 // ProjectAbilityDescriptorRef projects a DescriptorRef through the
@@ -65,12 +217,18 @@ func ProjectAbilityDescriptorRef(ctx context.Context, addressing Addressing, raw
 func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 	values := mergeAbilityDescriptorMap(raw)
 	projection := AbilityDescriptorProjection{
-		AbilityURA:  descriptorString(values["ability_ura"]),
-		Name:        descriptorString(values["name"]),
-		OwnerURA:    descriptorString(values["owner_ura"]),
-		Source:      descriptorString(values["source"]),
-		Description: descriptorString(values["description"]),
-		Metadata:    descriptorMap(values["metadata"]),
+		AbilityURA:       descriptorString(values["ability_ura"]),
+		Name:             descriptorString(values["name"]),
+		OwnerURA:         descriptorString(values["owner_ura"]),
+		Version:          descriptorString(values["version"]),
+		SchemaHash:       descriptorString(values["schema_hash"]),
+		DescriptorHash:   descriptorString(values["descriptor_hash"]),
+		CallMode:         descriptorString(values["call_mode"]),
+		ReceiptSemantics: descriptorMap(values["receipt_semantics"]),
+		Visibility:       descriptorString(values["visibility"]),
+		Source:           descriptorString(values["source"]),
+		Description:      descriptorString(values["description"]),
+		Metadata:         descriptorMap(values["metadata"]),
 	}
 	if projection.Name == "" {
 		projection.Name = joinAbilityDescriptorName(
@@ -143,5 +301,40 @@ func descriptorMap(value any) map[string]any {
 	if ok {
 		return typed
 	}
+	if typed, ok := value.(map[string]string); ok {
+		mapped := make(map[string]any, len(typed))
+		for key, raw := range typed {
+			mapped[key] = raw
+		}
+		return mapped
+	}
+	if raw, err := json.Marshal(value); err == nil {
+		var mapped map[string]any
+		if json.Unmarshal(raw, &mapped) == nil {
+			return mapped
+		}
+	}
 	return nil
+}
+
+func invalidAbilityDescriptor(message string, cause error) error {
+	return &SDKError{
+		Code:      ErrInvalidArgument,
+		Stage:     "ability_descriptor",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   message,
+		Cause:     cause,
+	}
+}
+
+func abilityDescriptorNotFound(abilityURA string) error {
+	return &SDKError{
+		Code:      ErrNotFound,
+		Stage:     "ability_descriptor",
+		Retry:     RetryNever,
+		Retryable: false,
+		Message:   "ability descriptor not found",
+		Details:   map[string]any{"ability_ura": abilityURA},
+	}
 }

@@ -57,6 +57,7 @@ __all__ = [
 
 DEFAULT_RECEIPT_PAGE_LIMIT = 50
 MAX_RECEIPT_PAGE_LIMIT = 500
+MAX_RECEIPT_CURSOR_LENGTH = 4096
 
 
 class _RuntimeReceiptAbility:
@@ -232,14 +233,14 @@ class RuntimeReceiptProvider:
     def list(self, request: ReceiptListRequest) -> ReceiptHistoryPage:
         if not isinstance(request, ReceiptListRequest):
             raise _invalid("Receipt list request is required")
-        cursor = _optional_text(request.cursor, "cursor")
-        if cursor:
-            raise _invalid("runtime Receipt history cursor provider is not available")
+        cursor = _receipt_cursor(request.cursor)
         limit = _receipt_limit(request.limit)
         arguments = _query_arguments(
             request.lookup, request.filter, lookup_required=False
         )
         arguments["limit"] = limit
+        if cursor:
+            arguments["cursor"] = cursor
         excluded = _ura_sequence(
             request.exclude_ability_uras,
             "exclude_ability_uras",
@@ -258,11 +259,15 @@ class RuntimeReceiptProvider:
             raise _invalid(
                 "runtime Receipt history exceeds the bounded page and has no stable cursor"
             )
+        next_cursor = _optional_output_text(output, "next_cursor")
+        if next_cursor and next_cursor == cursor:
+            raise _invalid("runtime Receipt history returned a repeated cursor")
         records = tuple(_parse_record(item) for item in records_raw)
         return ReceiptHistoryPage(
             source=_project_source(output),
             records=records,
             limit=limit,
+            next_cursor=next_cursor,
         )
 
     def get(self, request: ReceiptGetRequest) -> ReceiptGetResult:
@@ -385,6 +390,22 @@ def _receipt_limit(limit: int) -> int:
     if limit > MAX_RECEIPT_PAGE_LIMIT:
         raise _invalid("Receipt history limit exceeds the maximum page bound")
     return limit
+
+
+def _receipt_cursor(value: object) -> str:
+    cursor = _optional_text(value, "cursor")
+    if len(cursor) > MAX_RECEIPT_CURSOR_LENGTH:
+        raise _invalid("Receipt history cursor exceeds the maximum bound")
+    return cursor
+
+
+def _optional_output_text(value: Mapping[str, object], name: str) -> str:
+    if name not in value or value.get(name) is None:
+        return ""
+    projected = _required_text(value.get(name), name)
+    if name == "next_cursor" and len(projected) > MAX_RECEIPT_CURSOR_LENGTH:
+        raise _invalid("Receipt history next_cursor exceeds the maximum bound")
+    return projected
 
 
 def _mapping_text(value: Mapping[str, object], name: str) -> str:

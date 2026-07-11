@@ -14,6 +14,7 @@ import (
 const (
 	DefaultReceiptHistoryLimit uint32 = 50
 	MaxReceiptHistoryLimit     uint32 = 500
+	maxReceiptHistoryCursorLen        = 4096
 	receiptHistoryListAbility         = "invocation.history.list"
 	receiptHistoryGetAbility          = "invocation.history.get"
 	receiptTraceGetAbility            = "invocation.trace.get"
@@ -270,13 +271,14 @@ func NewRuntimeReceiptProvider(ability *RuntimeAbilityClient) (*RuntimeReceiptPr
 }
 
 func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRequest) (ReceiptHistoryPage, error) {
-	if strings.TrimSpace(request.Cursor) != "" {
-		return ReceiptHistoryPage{}, invalidReceipt("runtime Receipt history cursor provider is not available", nil)
-	}
 	if err := p.requireReady(); err != nil {
 		return ReceiptHistoryPage{}, err
 	}
 	limit, err := receiptHistoryLimit(request.Limit)
+	if err != nil {
+		return ReceiptHistoryPage{}, err
+	}
+	cursor, err := receiptHistoryCursor(request.Cursor)
 	if err != nil {
 		return ReceiptHistoryPage{}, err
 	}
@@ -285,6 +287,9 @@ func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRe
 		return ReceiptHistoryPage{}, err
 	}
 	args["limit"] = limit
+	if cursor != "" {
+		args["cursor"] = cursor
+	}
 	excluded, err := receiptURAList(request.ExcludeAbilityURAs, "exclude_ability_uras")
 	if err != nil {
 		return ReceiptHistoryPage{}, err
@@ -303,6 +308,13 @@ func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRe
 	if uint32(len(records)) > limit {
 		return ReceiptHistoryPage{}, invalidReceipt("runtime Receipt history exceeds the bounded page and has no stable cursor", nil)
 	}
+	nextCursor, err := optionalReceiptString(output, "next_cursor")
+	if err != nil {
+		return ReceiptHistoryPage{}, err
+	}
+	if nextCursor != "" && nextCursor == cursor {
+		return ReceiptHistoryPage{}, invalidReceipt("runtime Receipt history returned a repeated cursor", nil)
+	}
 	source, err := receiptLedgerSource(output)
 	if err != nil {
 		return ReceiptHistoryPage{}, err
@@ -311,7 +323,7 @@ func (p *RuntimeReceiptProvider) List(ctx context.Context, request ReceiptListRe
 		Source:     source,
 		Records:    records,
 		Limit:      limit,
-		NextCursor: "",
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -465,9 +477,36 @@ func receiptHistoryLimit(limit uint32) (uint32, error) {
 	return limit, nil
 }
 
+func receiptHistoryCursor(value string) (string, error) {
+	cursor := strings.TrimSpace(value)
+	if len(cursor) > maxReceiptHistoryCursorLen {
+		return "", invalidReceipt("Receipt history cursor exceeds the maximum bound", nil)
+	}
+	return cursor, nil
+}
+
 func receiptString(value map[string]any, key string) string {
 	text, _ := value[key].(string)
 	return strings.TrimSpace(text)
+}
+
+func optionalReceiptString(output map[string]any, key string) (string, error) {
+	value, present := output[key]
+	if !present || value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", invalidReceipt(key+" must be a string", nil)
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", invalidReceipt(key+" must be non-empty when present", nil)
+	}
+	if key == "next_cursor" && len(text) > maxReceiptHistoryCursorLen {
+		return "", invalidReceipt("Receipt history next_cursor exceeds the maximum bound", nil)
+	}
+	return text, nil
 }
 
 func requiredReceiptArray(value any, field string) ([]any, error) {

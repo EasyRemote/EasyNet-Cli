@@ -43,6 +43,7 @@ __all__ = [
 
 DEFAULT_DIRECTORY_PAGE_LIMIT = 50
 MAX_DIRECTORY_PAGE_LIMIT = 500
+MAX_DIRECTORY_CURSOR_LENGTH = 4096
 
 
 class DirectoryResolveKind(StrEnum):
@@ -83,6 +84,7 @@ class DirectoryResolution:
     selected_route: Mapping[str, object] = field(default_factory=dict)
     route_candidates: tuple[Mapping[str, object], ...] = ()
     negative: Mapping[str, object] = field(default_factory=dict)
+    next_cursor: str = ""
     release_profile: str = ""
     authority: Mapping[str, object] = field(default_factory=dict)
     cache_policy: Mapping[str, object] = field(default_factory=dict)
@@ -181,27 +183,46 @@ class RuntimeDirectoryProvider:
         return _project_resolution(output)
 
     def list(self, request: DirectoryListRequest) -> DirectoryPage:
-        if request.cursor.strip():
-            raise _invalid("runtime Directory list cursor provider is not available")
         limit = _directory_limit(request.limit)
-        resolution = self.resolve(
-            DirectoryResolveRequest(
-                call=request.call,
-                query_ura=request.ura_prefix,
-                kind=DirectoryResolveKind.DIRECTORY_LISTING,
-            )
+        cursor = _directory_cursor(request.cursor)
+        arguments: dict[str, object] = {
+            "qtype": DirectoryResolveKind.DIRECTORY_LISTING.value,
+            "limit": limit,
+        }
+        if request.ura_prefix.strip():
+            arguments["query_name"] = request.ura_prefix.strip()
+        if cursor:
+            arguments["cursor"] = cursor
+        resolution = _project_resolution(
+            self._ability.invoke(request.call, "namespace.resolve", arguments)
         )
+        if (
+            resolution.answer_kind == "RESOLVE_ANSWER_KIND_NEGATIVE"
+            or resolution.negative
+        ):
+            raise _invalid(_negative_detail(resolution))
         if len(resolution.records) > limit:
             raise _invalid(
                 "runtime Directory listing exceeds the bounded page and has no stable cursor"
             )
-        return DirectoryPage(records=resolution.records, limit=limit)
+        next_cursor = _directory_cursor(resolution.next_cursor)
+        if next_cursor and next_cursor == cursor:
+            raise _invalid("runtime Directory listing returned a repeated cursor")
+        return DirectoryPage(
+            records=resolution.records,
+            limit=limit,
+            next_cursor=next_cursor,
+        )
 
     def subscribe(self, request: DirectorySubscribeRequest) -> "DirectorySubscription":
-        if request.resume_cursor is not None and request.resume_cursor.sequence != 0:
-            raise _invalid("runtime Directory resume provider is not available")
+        arguments: dict[str, object] = {}
+        if request.resume_cursor is not None:
+            token = _directory_cursor(request.resume_cursor.token)
+            arguments["resume_sequence"] = request.resume_cursor.sequence
+            if token:
+                arguments["resume_token"] = token
         handle = self._ability.open_stream(
-            request.call, "federation.subscribe_directory_v2", {}
+            request.call, "federation.subscribe_directory_v2", arguments
         )
         return DirectorySubscription(handle)
 
@@ -286,6 +307,7 @@ def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
         route_candidates=_mapping_sequence(output.get("route_candidates")),
         records=records,
         negative=_mapping(output.get("negative")),
+        next_cursor=_mapping_text(output, "next_cursor"),
         release_profile=_mapping_text(output, "release_profile"),
         authority=_mapping(output.get("authority")),
         cache_policy=_mapping(output.get("cache_policy")),
@@ -313,6 +335,25 @@ def _directory_limit(limit: int) -> int:
     if limit > MAX_DIRECTORY_PAGE_LIMIT:
         raise _invalid("Directory limit exceeds the maximum page bound")
     return limit
+
+
+def _directory_cursor(value: object) -> str:
+    if not isinstance(value, str):
+        raise _invalid("Directory cursor must be a string")
+    cursor = value.strip()
+    if len(cursor) > MAX_DIRECTORY_CURSOR_LENGTH:
+        raise _invalid("Directory cursor exceeds the maximum bound")
+    return cursor
+
+
+def _negative_detail(resolution: DirectoryResolution) -> str:
+    detail = resolution.negative.get("detail")
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    reason = resolution.negative.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        return f"runtime Directory listing returned a negative answer: {reason.strip()}"
+    return "runtime Directory listing returned a negative answer"
 
 
 def _mapping_text(value: Mapping[str, object], *keys: str) -> str:

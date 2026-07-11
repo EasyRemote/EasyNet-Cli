@@ -196,11 +196,18 @@ impl StreamDispatcher {
     /// daemon shutdown.
     pub(crate) fn dispatch_subscribe_directory_v2(
         &self,
+        arguments: &[u8],
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         use crate::daemon::federation::directory::{
             presence_event_to_directory_event, DirectoryEvent,
         };
 
+        let resume_sequence = subscribe_directory_resume_sequence(arguments)?;
+        let first_sequence = if resume_sequence == 0 {
+            0
+        } else {
+            resume_sequence.saturating_add(1)
+        };
         let initial_evt =
             federation_wrappers::build_subscribe_directory_v2_snapshot(&self.directory.presence);
         let initial_bytes = serde_json::to_vec(&initial_evt).map_err(|err| {
@@ -211,7 +218,7 @@ impl StreamDispatcher {
         let initial_chunk = InvokeStreamChunk {
             content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
             payload: initial_bytes,
-            sequence: 0,
+            sequence: first_sequence,
             ..InvokeStreamChunk::default()
         };
 
@@ -225,9 +232,10 @@ impl StreamDispatcher {
         // Skip-on-missed-tick keeps cadence aligned when a real
         // event arrives close to the deadline.
         let heartbeat_interval_ms: u64 = self.directory.subscribe_v2_heartbeat_interval_ms;
+        let next_sequence = first_sequence.saturating_add(1);
         let initial_stream = futures::stream::once(async move { Ok(initial_chunk) });
         let event_stream = futures::stream::unfold(
-            (events, presence_weak, heartbeat_interval_ms, 1_u64),
+            (events, presence_weak, heartbeat_interval_ms, next_sequence),
             |(mut events, presence_weak, hb_ms, next_sequence)| async move {
                 use tokio::sync::broadcast::error::RecvError;
 
@@ -678,6 +686,32 @@ impl StreamDispatcher {
             return Err(route_profile_blocked_status(&selected_route));
         }
         Ok(selected_route)
+    }
+}
+
+fn subscribe_directory_resume_sequence(arguments: &[u8]) -> Result<u64, Status> {
+    if arguments.is_empty() {
+        return Ok(0);
+    }
+    let value: serde_json::Value = serde_json::from_slice(arguments).map_err(|err| {
+        Status::invalid_argument(format!(
+            "federation.subscribe_directory_v2 arguments must be JSON: {err}"
+        ))
+    })?;
+    if value.is_null() {
+        return Ok(0);
+    }
+    let object = value.as_object().ok_or_else(|| {
+        Status::invalid_argument("federation.subscribe_directory_v2 arguments must be an object")
+    })?;
+    match object.get("resume_sequence") {
+        Some(value) if value.is_null() => Ok(0),
+        Some(value) => value.as_u64().ok_or_else(|| {
+            Status::invalid_argument(
+                "federation.subscribe_directory_v2 resume_sequence must be a non-negative integer",
+            )
+        }),
+        None => Ok(0),
     }
 }
 

@@ -187,7 +187,7 @@
         "sdk/conformance/cases/ability-descriptor-projection.yaml"
       ],
       "go": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [
           {
             "kind": "go_test",
@@ -196,15 +196,15 @@
         ]
       },
       "python": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [
           {
             "kind": "python_test",
-            "ref": "sdk/python/tests/test_invocation.py"
+            "ref": "sdk/python/tests/test_ability_descriptor.py"
           }
         ]
       },
-      "remaining": "The generic projection is shipped; catalog ownership and product display policy remain outside the SDK."
+      "remaining": "Provider-backed through daemon meta.list_abilities; product display policy remains outside the SDK."
     },
     {
       "capability_id": "authority_metadata",
@@ -481,10 +481,10 @@
       "capability_id": "directory_resolution",
       "profile": "directory",
       "shared_cases": [
-        "sdk/conformance/cases/directory-resolution-seam.yaml"
+        "sdk/conformance/cases/directory-resolution-provider.yaml"
       ],
       "go": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [
           {
             "kind": "go_test",
@@ -493,7 +493,7 @@
         ]
       },
       "python": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [
           {
             "kind": "python_test",
@@ -501,16 +501,16 @@
           }
         ]
       },
-      "remaining": "Resolve and stream projection exist; implement stable daemon list cursors and resumable subscription provider before provider-backed status."
+      "remaining": "Daemon-backed resolution, stable listing cursors and explicit subscription resume are provider-backed. Downstream Backend/EasyRemote Directory consumers must still cut over before cutover-ready status."
     },
     {
       "capability_id": "receipt_history",
       "profile": "receipts",
       "shared_cases": [
-        "sdk/conformance/cases/receipt-history-seam.yaml"
+        "sdk/conformance/cases/receipt-history-provider.yaml"
       ],
       "go": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [
           {
             "kind": "go_test",
@@ -519,7 +519,7 @@
         ]
       },
       "python": {
-        "status": "seam",
+        "status": "provider-backed",
         "evidence": [
           {
             "kind": "python_test",
@@ -527,7 +527,7 @@
           }
         ]
       },
-      "remaining": "Bounded typed history, exact lookup, trace graph, causal references, and Axon-owned verification exist; add a stable cursor/anchor provider and migrate all downstream consumers before provider-backed or cutover-ready status."
+      "remaining": "Daemon-backed bounded history now returns stable opaque cursors and Go/Python SDKs forward and validate them. Downstream Backend/EasyRemote Receipt consumers must still cut over before cutover-ready status."
     },
     {
       "capability_id": "runtime_events",
