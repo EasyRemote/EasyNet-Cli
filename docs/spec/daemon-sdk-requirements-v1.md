@@ -645,12 +645,23 @@ custody/process/FFI escapes are guarded by
 They are intermediate convergence evidence, not completion of the
 Backend-present PrincipalLifecycle E2E or standalone-Hub recovery UX closure.
 
+The Backend-present evidence has advanced by one boundary: the Backend now has
+a tested ServiceContext SDK profile graph proving PrincipalLifecycle, Receipt,
+Directory, Events, Admin and AccessControl clients are all derived from one Go
+SDK native runtime provider and not from parallel daemon/key-service/trust-store
+construction. The account signing-key product flow now also has an in-process
+test through the real Go SDK PrincipalLifecycle adapter proving
+`get -> create -> bind_first_key` lowering for a Backend account User URA. This
+is necessary evidence for section 14.3, but it is not yet the live
+Backend-present account-flow E2E gate.
+
 The current remaining work is:
 
 - close Backend-present PrincipalLifecycle E2E by attaching Backend account
   authentication to the same daemon runtime, Principal URA, key-service,
   grants, admission state and receipts without a second daemon/key-service or
-  trust store;
+  trust store. The single SDK profile graph is now pinned; the remaining proof
+  is a live account-flow E2E against the same daemon runtime;
 - close the remaining standalone-Hub recovery UX edge cases beyond the
   existing TCP+TLS two-HOME lifecycle E2E. Provider and CLI evidence now pin
   replayed recovery proofs, suspended-principal recovery and deleted-principal

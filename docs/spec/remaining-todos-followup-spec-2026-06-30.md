@@ -606,8 +606,16 @@ the rotated sibling remains active, configures recovery, recovers, suspends and
 reactivates Alice, deletes Bob through an admin grant, restarts the Hub daemon,
 and verifies persisted PrincipalLifecycle state, grant state, RuntimeTrust
 revocation projection and Device→Principal owner binding. Backend-present
-mapping to the same runtime and recovery UX edge-case closure remain required
-before section 6 can be marked complete. Go and Python PrincipalLifecycle projection
+mapping has advanced: the Backend ServiceContext now has a tested single SDK
+profile graph proving PrincipalLifecycle, Receipt, Directory, Events, Admin and
+AccessControl clients derive from the same Go SDK native runtime provider rather
+than a second daemon/key-service/trust-store construction. Backend account
+signing-key logic is also tested through the real Go SDK PrincipalLifecycle
+adapter, proving product account input lowers as `principal.lifecycle.get`,
+`principal.lifecycle.create` and `principal.lifecycle.bind_first_key` without
+legacy identity mutation. A live Backend-present account-flow E2E and recovery
+UX edge-case closure remain required before section 6 can be marked complete.
+Go and Python PrincipalLifecycle projection
 decoders now reject forbidden custody fields recursively, matching the
 managed-signing public-projection guard, and the real CLI TLS lifecycle E2E
 scans PrincipalLifecycle JSON output for private-key custody fields.

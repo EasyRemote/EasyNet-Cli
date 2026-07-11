@@ -95,13 +95,21 @@ def check_backend() -> None:
     ]:
         forbid_contains(receipt_adapter, forbidden, "backend:receipt")
 
-    service_context = require_file(backend, "internal/svc/servicecontext.go", "backend:receipt_boot")
+    service_context = require_file(backend, "internal/svc/servicecontext.go", "backend:profile_graph_boot")
+    for required in [
+        "newSDKProfileGraph(provider, backendIdentity)",
+        "receipts = graph.Receipts",
+        "principal = graph.Principal",
+    ]:
+        require_contains(service_context, required, "backend:profile_graph_boot")
+
+    profile_graph = require_file(backend, "internal/svc/sdk_profile_graph.go", "backend:receipt_boot")
     for required in [
         "easynetsdk.NewRuntimeReceiptProvider",
         "easynetsdk.NewReceiptClient",
         "sdkreceipt.NewClient",
     ]:
-        require_contains(service_context, required, "backend:receipt_boot")
+        require_contains(profile_graph, required, "backend:receipt_boot")
 
     events = require_file(backend, "internal/sdkevents/events.go", "backend:events")
     for required in [
@@ -194,6 +202,27 @@ def check_backend() -> None:
         '"identity.register_pubkey"',
     ]:
         forbid_contains(user_key_registration, forbidden, "backend:user_signing_key_principal")
+
+    user_key_flow_test = require_file(
+        backend,
+        "internal/logic/user/registerUserSigningKeyLogic_test.go",
+        "backend:user_signing_key_sdk_flow",
+    )
+    for required in [
+        "TestRegisterUserSigningKey_AccountFlowUsesRealSDKPrincipalAdapter",
+        "principalprofile.NewClient",
+        "easynetsdk.NewRuntimeClient",
+        '"principal.lifecycle.get"',
+        '"principal.lifecycle.create"',
+        '"principal.lifecycle.bind_first_key"',
+    ]:
+        require_contains(user_key_flow_test, required, "backend:user_signing_key_sdk_flow")
+    for forbidden in [
+        "Identity.RegisterSigningKey",
+        "identityprofile.SigningKeyRegistrationRequest",
+        '"identity.register_pubkey"',
+    ]:
+        forbid_contains(user_key_flow_test, forbidden, "backend:user_signing_key_sdk_flow")
 
     user_key_list = require_file(
         backend,
@@ -381,6 +410,11 @@ EOF
   cat >"$good_backend/internal/svc/servicecontext.go" <<'EOF'
 package svc
 
+var _ = []string{"newSDKProfileGraph(provider, backendIdentity)", "receipts = graph.Receipts", "principal = graph.Principal"}
+EOF
+  cat >"$good_backend/internal/svc/sdk_profile_graph.go" <<'EOF'
+package svc
+
 var _ = []string{"easynetsdk.NewRuntimeReceiptProvider", "easynetsdk.NewReceiptClient", "sdkreceipt.NewClient"}
 EOF
   cat >"$good_backend/internal/sdkevents/events.go" <<'EOF'
@@ -412,6 +446,19 @@ EOF
 package auth
 
 var _ = []string{"svcCtx.Principal.Get", "svcCtx.Principal.Create", "svcCtx.Principal.BindFirstKey", "svcCtx.Principal.AddKey", "PrincipalCarrierBase", "PrincipalProofBootstrap", "PrincipalProofActiveKey"}
+EOF
+  mkdir -p "$good_backend/internal/logic/user"
+  cat >"$good_backend/internal/logic/user/registerUserSigningKeyLogic_test.go" <<'EOF'
+package user
+
+var _ = []string{
+  "TestRegisterUserSigningKey_AccountFlowUsesRealSDKPrincipalAdapter",
+  "principalprofile.NewClient",
+  "easynetsdk.NewRuntimeClient",
+  "principal.lifecycle.get",
+  "principal.lifecycle.create",
+  "principal.lifecycle.bind_first_key",
+}
 EOF
   cat >"$good_backend/internal/logic/auth/list_user_pubkeys.go" <<'EOF'
 package auth
