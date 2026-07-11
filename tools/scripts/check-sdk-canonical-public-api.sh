@@ -3,8 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST="$ROOT/sdk/conformance/canonical-public-api.json"
+PYTHON_BIN="${PYTHON:-python3}"
 
-python3 - "$MANIFEST" <<'PY'
+"$PYTHON_BIN" - "$MANIFEST" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -27,7 +28,7 @@ while IFS= read -r symbol; do
   }
 done < <(jq -r '.languages.go[]' "$MANIFEST")
 
-PYTHONPATH="$ROOT/sdk/python:$ROOT/../EasyNet-Axon/sdk/python${PYTHONPATH:+:$PYTHONPATH}" python3 - "$MANIFEST" <<'PY'
+PYTHONPATH="$ROOT/sdk/python:$ROOT/../EasyNet-Axon/sdk/python${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" - "$MANIFEST" <<'PY'
 import json
 import sys
 from pathlib import Path

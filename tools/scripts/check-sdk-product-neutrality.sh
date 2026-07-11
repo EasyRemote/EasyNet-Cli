@@ -53,7 +53,7 @@ if ((${#production_sources[@]} == 0)); then
   fail "no SDK production sources found"
 fi
 
-forbidden_type_pattern='\b(Mission(Client|Transport|Status|Run|Event|Plan)?|Admin(Client|Transport|Carrier|Gateway|Agent|Session)?|Gateway(Status|Client|Transport|Lifecycle)?|IdentityClient|Publication(Client|Transport|Catalog|Resource)?|HostBinding(Client|Transport|Lifecycle)?|Surface(Client|Transport|Page|Manifest|Health)?|Compatibility(Client|Transport|Carrier|Model|Chat|File)?|Wrapper(Client|Transport|Carrier|File|Terminal|Browser|Media|RemoteDesktop)?|Companion(Client|Transport|Desired|Observed|Projected|Supervisor|Boot|Stop)?|AccessControl(Client|Transport|Carrier)?|EventClient|EventsCarrierBase|RuntimeProfileBundle|DaemonProfileBridge|DaemonHandleProfiles)\b'
+forbidden_type_pattern='\b(Mission(Client|Transport|Status|Run|Event|Plan)?|Admin(Client|Transport|Carrier|Gateway|Agent|Session)?|Gateway(Status|Client|Transport|Lifecycle)?|IdentityClient|Publication(Client|Transport|Catalog|Resource)?|HostBinding(Client|Transport|Lifecycle)?|Surface(Client|Transport|Page|Manifest|Health)?|Compatibility(Client|Transport|Carrier|Model|Chat|File)?|Wrapper(Client|Transport|Carrier|File|Terminal|Browser|Media|RemoteDesktop)?|Companion(Client|Transport|Desired|Observed|Projected|Supervisor|Boot|Stop)?|AccessControlCarrier|EventClient|EventsCarrierBase|RuntimeProfileBundle|DaemonProfileBridge|DaemonHandleProfiles)\b'
 
 if rg -n "$forbidden_type_pattern" "${production_sources[@]}"; then
   fail "product type or profile bundle leaked into runtime SDK production source"
@@ -115,7 +115,7 @@ if find sdk/conformance/cases -maxdepth 1 -type f \( \
   fail "product conformance cases remain in the runtime SDK"
 fi
 
-if jq -e '.capabilities[] | select(.capability_id == "mission" or .capability_id == "admin_gateway" or .capability_id == "directory_identity" or .capability_id == "publication" or .capability_id == "host_binding" or .capability_id == "events" or .capability_id == "surface" or .capability_id == "compatibility" or .capability_id == "wrappers" or .capability_id == "access_control" or .capability_id == "runtime_companion_control")' sdk/conformance/sdk-parity-matrix.json >/dev/null; then
+if jq -e '.capabilities[] | select(.capability_id == "mission" or .capability_id == "admin_gateway" or .capability_id == "directory_identity" or .capability_id == "publication" or .capability_id == "host_binding" or .capability_id == "events" or .capability_id == "surface" or .capability_id == "compatibility" or .capability_id == "wrappers" or .capability_id == "runtime_companion_control")' sdk/conformance/sdk-parity-matrix.json >/dev/null; then
   fail "product capability row remains in Go/Python runtime matrix"
 fi
 

@@ -23,7 +23,7 @@ SPEC_REF = "docs/spec/daemon-sdk-requirements-v1.md#10-capability-state-matrix"
 LANGUAGES = ("go", "python")
 STATUS_ORDER = ("unsupported", "seam", "provider-backed", "cutover-ready")
 PROFILES = {
-    "runtime_core", "addressing", "authority", "managed_signing",
+    "runtime_core", "addressing", "authority", "managed_signing", "access_control",
     "principal", "directory", "receipts", "runtime_events",
     "runtime_administration", "conformance",
 }
@@ -40,7 +40,12 @@ REQUIRED_CAPABILITIES = (
     "complete_invocation_draft",
     "prepare_sign_submit",
     "managed_signing",
+    "access_control",
     "principal_lifecycle",
+    "principal_enrollment",
+    "principal_public_key_bindings",
+    "principal_recovery",
+    "principal_authorization_grants",
     "directory_resolution",
     "receipt_history",
     "runtime_events",

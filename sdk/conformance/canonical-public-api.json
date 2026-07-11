@@ -2,6 +2,11 @@
   "schema_version": 1,
   "languages": {
     "go": [
+      "AccessControlClient",
+      "AccessControlGrant",
+      "AccessControlGrantState",
+      "AccessControlPolicyDecision",
+      "AccessControlProvider",
       "Addressing",
       "AuthorizationGrant",
       "BindPrincipalKeyRequest",
@@ -50,6 +55,11 @@
       "SdkEnvironment"
     ],
     "python": [
+      "AccessControlClient",
+      "AccessControlGrant",
+      "AccessControlGrantState",
+      "AccessControlPolicyDecision",
+      "AccessControlProvider",
       "AddressingClient",
       "AuthorizationGrant",
       "BindPrincipalKeyRequest",

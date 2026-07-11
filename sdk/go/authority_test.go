@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -294,6 +295,72 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 	}
 	if transport.seenSession["audience"] != "easynet:///r/example/device/dev-a" {
 		t.Fatalf("transport did not receive session request: %#v", transport.seenSession)
+	}
+}
+
+func TestAuthorityClientProjectsCanonicalPrincipalURAsToCurrentSessionWire(t *testing.T) {
+	payload := sessionAuthorityPayloadFixture()
+	payload["creator_principal_id"] = "easynet:///r/example/hub"
+	value := authorityMetadataFixture(t, payload, []byte("session-signature"))
+	transport := &memoryAuthorityTransport{
+		sessionJSON: []byte(`{"metadata":{"` + SessionAuthorityMetadataKey + `":"` + value + `"}}`),
+	}
+	client, err := NewAuthorityClient(transport)
+	if err != nil {
+		t.Fatalf("NewAuthorityClient: %v", err)
+	}
+
+	authority, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerURA:          "easynet:///r/example/user/alice",
+		CreatorPrincipalURA:      "easynet:///r/example/hub",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
+	})
+	if err != nil {
+		t.Fatalf("MintSessionAuthority: %v", err)
+	}
+	if authority.SessionOwnerURA != "easynet:///r/example/user/alice" || authority.CreatorPrincipalURA != "easynet:///r/example/hub" {
+		t.Fatalf("canonical authority principals not projected: %#v", authority)
+	}
+	if transport.seenSession["session_owner_user_id"] != "alice" || transport.seenSession["creator_principal_id"] != "easynet:///r/example/hub" {
+		t.Fatalf("canonical principals not lowered to current wire: %#v", transport.seenSession)
+	}
+	if _, ok := transport.seenSession["session_owner_ura"]; ok {
+		t.Fatalf("staged daemon wire must not leak session_owner_ura yet: %#v", transport.seenSession)
+	}
+}
+
+func TestAuthorityClientRejectsConflictingCanonicalPrincipalURAs(t *testing.T) {
+	client, err := NewAuthorityClient(&memoryAuthorityTransport{sessionJSON: []byte(`{"metadata":{}}`)})
+	if err != nil {
+		t.Fatalf("NewAuthorityClient: %v", err)
+	}
+
+	_, err = client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerUserID:       "bob",
+		SessionOwnerURA:          "easynet:///r/example/user/alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
+	})
+	if !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "session_owner_user_id must match session_owner_ura") {
+		t.Fatalf("MintSessionAuthority mismatch error = %v", err)
 	}
 }
 

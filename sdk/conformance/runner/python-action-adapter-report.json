@@ -87,6 +87,18 @@
       "status": "passed"
     },
     {
+      "case_id": "access_control/provider",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_access_control.py"
+        }
+      ],
+      "message": "Python AccessControl lowers canonical owner/principal URAs through the generic runtime ability path without Backend account or product role fields.",
+      "profile": "access_control",
+      "status": "passed"
+    },
+    {
       "case_id": "authority/mutual_exclusion",
       "evidence": [
         {

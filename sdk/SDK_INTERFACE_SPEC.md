@@ -35,6 +35,7 @@ SdkEnvironment
        -> Addressing
        -> RuntimeIdentityClient
        -> ManagedSigningClient
+       -> AccessControlClient
        -> PrincipalClient
        -> DirectoryClient
        -> ReceiptClient
@@ -47,6 +48,7 @@ SdkEnvironment
             -> Addressing
             -> RuntimeIdentityClient
             -> ManagedSigningClient
+            -> AccessControlClient
             -> PrincipalClient
             -> DirectoryClient
             -> ReceiptClient
@@ -76,6 +78,7 @@ return `nil`/`None` to represent a missing required provider.
 | `Addressing` | Delegate URA, AbilityDescriptorRef and descriptor-bound subject build/parse to Axon | local grammar, string-prefix inference, product labels |
 | `RuntimeIdentityClient` | Project runtime identities and owner-bound sign-only capabilities | private-key export, account records, role aliases |
 | `ManagedSigningClient` | Create/list/rotate/revoke subject-bound managed keys through key-service | vault access, user enrollment policy |
+| `AccessControlClient` | Project and invoke product-neutral grants, policy decisions and authority proofs | product roles, account sessions, product permission UX |
 | `PrincipalClient` | Operate the admitted PrincipalLifecycle and public-key bindings | passwords, OAuth sessions, private-key custody |
 | `DirectoryClient` | Resolve and subscribe to canonical URA/ability reachability facts | product dashboard rows, UI aggregation |
 | `AbilityDescriptorProjection` | Project the governed descriptor aggregate | deployment configuration, handler binding, product catalog rows |

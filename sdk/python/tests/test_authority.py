@@ -97,6 +97,8 @@ class AuthorityTests(unittest.TestCase):
             authority.subject_ura,
             "easynet:///r/example/resource/user.alice/session/session-1",
         )
+        self.assertEqual(authority.session_owner_ura, "easynet:///r/example/user/alice")
+        self.assertEqual(authority.creator_principal_ura, "")
         self.assertEqual(authority.signature, b"session-signature")
         metadata = authority.metadata()
         self.assertEqual(metadata.key, SESSION_AUTHORITY_METADATA_KEY)
@@ -229,6 +231,71 @@ class AuthorityTests(unittest.TestCase):
         self.assertEqual(authority.audience, "easynet:///r/example/device/dev-a")
         self.assertEqual(authority.metadata().value, value)
         self.assertEqual(transport.seen_session["audience"], "easynet:///r/example/device/dev-a")
+
+    def test_authority_client_projects_canonical_principal_uras_to_current_session_wire(self) -> None:
+        payload = _session_authority_payload()
+        payload["creator_principal_id"] = "easynet:///r/example/hub"
+        value = _authority_metadata(payload, b"session-signature")
+        transport = _MemoryAuthorityTransport(
+            session_json=json.dumps(
+                {"metadata": {SESSION_AUTHORITY_METADATA_KEY: value}}
+            ).encode("utf-8")
+        )
+        client = AuthorityClient(transport)
+
+        authority = client.mint_session_authority(
+            SessionAuthorityRequest(
+                issuer_ura="easynet:///r/example/agent/backend",
+                session_id="session-1",
+                session_owner_user_id="",
+                creator_principal_id="",
+                session_owner_ura="easynet:///r/example/user/alice",
+                creator_principal_ura="easynet:///r/example/hub",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                audience="easynet:///r/example/device/dev-a",
+                scopes=("device.observe.*",),
+                allowed_actions=("read",),
+                allowed_followup_abilities=("device.observe.health",),
+                issued_at_ms=1000,
+                expires_at_ms=2000,
+            )
+        )
+
+        self.assertEqual(authority.session_owner_ura, "easynet:///r/example/user/alice")
+        self.assertEqual(
+            authority.creator_principal_ura, "easynet:///r/example/hub"
+        )
+        self.assertEqual(transport.seen_session["session_owner_user_id"], "alice")
+        self.assertEqual(
+            transport.seen_session["creator_principal_id"],
+            "easynet:///r/example/hub",
+        )
+        self.assertNotIn("session_owner_ura", transport.seen_session)
+
+    def test_authority_client_rejects_conflicting_canonical_principal_uras(self) -> None:
+        client = AuthorityClient(_MemoryAuthorityTransport())
+
+        with self.assertRaises(SDKError) as caught:
+            client.mint_session_authority(
+                SessionAuthorityRequest(
+                    issuer_ura="easynet:///r/example/agent/backend",
+                    session_id="session-1",
+                    session_owner_user_id="bob",
+                    session_owner_ura="easynet:///r/example/user/alice",
+                    creator_principal_id="easynet:///r/example/agent/backend",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                    audience="easynet:///r/example/device/dev-a",
+                    scopes=("device.observe.*",),
+                    allowed_actions=("read",),
+                    allowed_followup_abilities=("device.observe.health",),
+                    issued_at_ms=1000,
+                    expires_at_ms=2000,
+                )
+            )
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("session_owner_user_id must match", str(caught.exception))
 
     def test_authority_client_rejects_invalid_mint_before_transport(self) -> None:
         transport = _MemoryAuthorityTransport()

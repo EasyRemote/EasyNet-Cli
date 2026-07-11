@@ -100,12 +100,52 @@
       "remaining": "Product key-administration workflows remain downstream."
     },
     {
+      "capability_id": "access_control",
+      "profile": "access_control",
+      "shared_cases": ["sdk/conformance/cases/access-control-provider.yaml"],
+      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/access_control_test.go"}]},
+      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_access_control.py"}]},
+      "remaining": "Generic grant, decision and proof projection is provider-backed; Backend product role mapping and standalone-Hub governance cutover remain downstream."
+    },
+    {
       "capability_id": "principal_lifecycle",
       "profile": "principal",
       "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
       "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
       "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
       "remaining": "Implement the single persistent provider, admitted proof construction, replay protection and standalone-Hub cutover."
+    },
+    {
+      "capability_id": "principal_enrollment",
+      "profile": "principal",
+      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
+      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
+      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
+      "remaining": "Public enrollment command/proof vocabulary exists; first-user bootstrap, invitation proof admission, replay-bounded durable mutation and standalone-Hub enrollment E2E are not implemented."
+    },
+    {
+      "capability_id": "principal_public_key_bindings",
+      "profile": "principal",
+      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
+      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
+      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
+      "remaining": "The public projection models multiple keys per Principal URA; SDK provider-backed add/rotate/revoke operations, active-key authorization and Hub restart persistence remain incomplete."
+    },
+    {
+      "capability_id": "principal_recovery",
+      "profile": "principal",
+      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
+      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
+      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
+      "remaining": "Recovery policy and command vocabulary exists; replay-protected single-use recovery proofs, provider enforcement and recovery E2E are not implemented."
+    },
+    {
+      "capability_id": "principal_authorization_grants",
+      "profile": "principal",
+      "shared_cases": ["sdk/conformance/cases/principal-lifecycle-seam.yaml"],
+      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/principal_test.go"}]},
+      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_principal.py"}]},
+      "remaining": "Grant projection and command vocabulary exists; durable grant issuance/revocation, admission enforcement and standalone multi-user governance closure remain incomplete."
     },
     {
       "capability_id": "directory_resolution",

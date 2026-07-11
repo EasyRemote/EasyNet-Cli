@@ -1,0 +1,15 @@
+id: access_control/provider
+profile: access_control
+required_for:
+  - go
+  - python
+description: Go and Python expose one product-neutral access-control provider over daemon authority.binding abilities.
+steps:
+  - action: require_access_control_grant_projection
+  - action: require_access_control_decision_projection
+  - action: require_runtime_ability_lowering
+  - action: require_owner_ura_to_current_wire_derivation
+  - action: reject_product_account_fields
+expect:
+  result: access_control_provider
+  provider_required: true

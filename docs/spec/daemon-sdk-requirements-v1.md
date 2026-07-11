@@ -497,8 +497,11 @@ current Go compilation conflict to repair. The remaining defect is
 architectural and functional: PrincipalLifecycle and Directory are still seams;
 receipt/history now has a symmetric bounded seam but no stable cursor or
 downstream cutover; runtime events and runtime administration now have
-symmetric provider-backed Go/Python facades, while access control remains
-incomplete; and the backend still owns product-local runtime-profile lowering.
+symmetric provider-backed Go/Python facades; access control now has symmetric
+provider-backed Go/Python SDK facades over daemon `authority.binding.*`
+abilities, while Backend product role mapping and standalone-Hub governance
+cutover remain incomplete; and the backend still owns product-local
+runtime-profile lowering.
 Backend-free multi-user closure remains partial as described above. Passing
 baseline tests must not be reported as standalone-Hub delivery evidence until
 sections 14.2 and 14.3 and the cross-language parity gates pass.
@@ -562,15 +565,16 @@ The interrupted restoration conflict described in section 14.4 has been
 resolved. Public API inventory, the symmetric capability matrix, generic
 PrincipalLifecycle seams, canonical Invocation lowering, the first Directory
 provider migration, the bounded Receipt/causal/history/trace seam, and
-provider-backed runtime Events/Admin facades have landed. They are intermediate
-convergence evidence, not completion of downstream product cutover or the
-standalone-Hub PrincipalLifecycle closure.
+provider-backed runtime Events/Admin and AccessControl facades have landed.
+They are intermediate convergence evidence, not completion of downstream
+product cutover or the standalone-Hub PrincipalLifecycle closure.
 
 The current remaining work is:
 
 - add a stable Receipt history cursor/anchor provider and cut over every
   downstream Receipt consumer before promoting the bounded seam;
-- complete symmetric Go/Python access-control clients and providers;
+- migrate Backend access-control role/account mapping onto the generic Go SDK
+  AccessControl facade and delete remaining product-local runtime lowering;
 - finish migrating Backend off duplicated `internal/runtimeprofile` lowering,
   including receipt, event, administration and principal lifecycle paths;
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,

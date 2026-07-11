@@ -75,6 +75,18 @@
       "status": "passed"
     },
     {
+      "case_id": "access_control/provider",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/access_control_test.go"
+        }
+      ],
+      "message": "Go AccessControl lowers canonical owner/principal URAs through the generic runtime ability path without Backend account or product role fields.",
+      "profile": "access_control",
+      "status": "passed"
+    },
+    {
       "case_id": "authority/mutual_exclusion",
       "evidence": [
         {

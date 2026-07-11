@@ -78,7 +78,9 @@ type SessionAuthority struct {
 	IssuerURA                string
 	SessionID                string
 	SessionOwnerUserID       string
+	SessionOwnerURA          string
 	CreatorPrincipalID       string
+	CreatorPrincipalURA      string
 	CalleeURA                string
 	SubjectURA               string
 	Audience                 string
@@ -113,7 +115,9 @@ type SessionAuthorityRequest struct {
 	IssuerURA                string         `json:"issuer_ura"`
 	SessionID                string         `json:"session_id"`
 	SessionOwnerUserID       string         `json:"session_owner_user_id"`
+	SessionOwnerURA          string         `json:"session_owner_ura,omitempty"`
 	CreatorPrincipalID       string         `json:"creator_principal_id"`
+	CreatorPrincipalURA      string         `json:"creator_principal_ura,omitempty"`
 	CalleeURA                string         `json:"callee_ura"`
 	SubjectURA               string         `json:"subject_ura"`
 	Audience                 string         `json:"audience"`
@@ -254,7 +258,9 @@ func NewSessionAuthorityFromMetadata(value string) (SessionAuthority, error) {
 		IssuerURA:                payload.IssuerURA,
 		SessionID:                payload.SessionID,
 		SessionOwnerUserID:       payload.SessionOwnerUserID,
+		SessionOwnerURA:          sessionOwnerURAFromPayload(payload),
 		CreatorPrincipalID:       payload.CreatorPrincipalID,
+		CreatorPrincipalURA:      canonicalURAOrEmpty(payload.CreatorPrincipalID),
 		CalleeURA:                payload.CalleeURA,
 		SubjectURA:               payload.SubjectURA,
 		Audience:                 payload.Audience,
@@ -368,10 +374,29 @@ func marshalDelegationRequest(req DelegationRequest) ([]byte, error) {
 }
 
 func marshalSessionAuthorityRequest(req SessionAuthorityRequest) ([]byte, error) {
+	normalized, err := normalizeSessionAuthorityRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateSessionAuthorityRequest(req); err != nil {
 		return nil, err
 	}
-	raw, err := json.Marshal(req)
+	wire := sessionAuthorityRequestWire{
+		IssuerURA:                normalized.IssuerURA,
+		SessionID:                normalized.SessionID,
+		SessionOwnerUserID:       normalized.SessionOwnerUserID,
+		CreatorPrincipalID:       normalized.CreatorPrincipalID,
+		CalleeURA:                normalized.CalleeURA,
+		SubjectURA:               normalized.SubjectURA,
+		Audience:                 normalized.Audience,
+		Scopes:                   normalized.Scopes,
+		AllowedActions:           normalized.AllowedActions,
+		AllowedFollowupAbilities: normalized.AllowedFollowupAbilities,
+		IssuedAtMS:               normalized.IssuedAtMS,
+		ExpiresAtMS:              normalized.ExpiresAtMS,
+		Metadata:                 normalized.Metadata,
+	}
+	raw, err := json.Marshal(wire)
 	if err != nil {
 		return nil, invalidProfilePayload(authorityProfile, fmt.Sprintf("encode session authority request: %v", err), err)
 	}
@@ -396,25 +421,31 @@ func validateDelegationRequest(req DelegationRequest) error {
 }
 
 func validateSessionAuthorityRequest(req SessionAuthorityRequest) error {
+	normalized, err := normalizeSessionAuthorityRequest(req)
+	if err != nil {
+		return err
+	}
 	authority := SessionAuthority{
-		IssuerURA:                req.IssuerURA,
-		SessionID:                req.SessionID,
-		SessionOwnerUserID:       req.SessionOwnerUserID,
-		CreatorPrincipalID:       req.CreatorPrincipalID,
-		CalleeURA:                req.CalleeURA,
-		SubjectURA:               req.SubjectURA,
-		Audience:                 req.Audience,
-		Scopes:                   req.Scopes,
-		AllowedActions:           req.AllowedActions,
-		AllowedFollowupAbilities: req.AllowedFollowupAbilities,
-		IssuedAtMS:               req.IssuedAtMS,
-		ExpiresAtMS:              req.ExpiresAtMS,
+		IssuerURA:                normalized.IssuerURA,
+		SessionID:                normalized.SessionID,
+		SessionOwnerUserID:       normalized.SessionOwnerUserID,
+		SessionOwnerURA:          normalized.SessionOwnerURA,
+		CreatorPrincipalID:       normalized.CreatorPrincipalID,
+		CreatorPrincipalURA:      normalized.CreatorPrincipalURA,
+		CalleeURA:                normalized.CalleeURA,
+		SubjectURA:               normalized.SubjectURA,
+		Audience:                 normalized.Audience,
+		Scopes:                   normalized.Scopes,
+		AllowedActions:           normalized.AllowedActions,
+		AllowedFollowupAbilities: normalized.AllowedFollowupAbilities,
+		IssuedAtMS:               normalized.IssuedAtMS,
+		ExpiresAtMS:              normalized.ExpiresAtMS,
 		Signature:                []byte("shape-only"),
 	}
 	if err := validateSessionAuthority(authority); err != nil {
 		return err
 	}
-	return rejectAuthorityPrivateKeyMetadata(req.Metadata)
+	return rejectAuthorityPrivateKeyMetadata(normalized.Metadata)
 }
 
 func newAuthoritySigningMaterial(raw []byte, wantKey string, wantKind AuthorityKind) (AuthoritySigningMaterial, error) {
@@ -522,6 +553,22 @@ type delegationAuthorityPayload struct {
 	ExpiresAtMS int64    `json:"expires_at_ms"`
 }
 
+type sessionAuthorityRequestWire struct {
+	IssuerURA                string         `json:"issuer_ura"`
+	SessionID                string         `json:"session_id"`
+	SessionOwnerUserID       string         `json:"session_owner_user_id"`
+	CreatorPrincipalID       string         `json:"creator_principal_id"`
+	CalleeURA                string         `json:"callee_ura"`
+	SubjectURA               string         `json:"subject_ura"`
+	Audience                 string         `json:"audience"`
+	Scopes                   []string       `json:"scopes"`
+	AllowedActions           []string       `json:"allowed_actions"`
+	AllowedFollowupAbilities []string       `json:"allowed_followup_abilities"`
+	IssuedAtMS               int64          `json:"issued_at_ms"`
+	ExpiresAtMS              int64          `json:"expires_at_ms"`
+	Metadata                 map[string]any `json:"metadata,omitempty"`
+}
+
 type sessionAuthorityPayload struct {
 	IssuerURA                string   `json:"issuer_ura"`
 	SessionID                string   `json:"session_id"`
@@ -535,6 +582,87 @@ type sessionAuthorityPayload struct {
 	AllowedFollowupAbilities []string `json:"allowed_followup_abilities"`
 	IssuedAtMS               int64    `json:"issued_at_ms"`
 	ExpiresAtMS              int64    `json:"expires_at_ms"`
+}
+
+func normalizeSessionAuthorityRequest(req SessionAuthorityRequest) (SessionAuthorityRequest, error) {
+	req.SessionOwnerUserID = strings.TrimSpace(req.SessionOwnerUserID)
+	req.SessionOwnerURA = strings.TrimSpace(req.SessionOwnerURA)
+	req.CreatorPrincipalID = strings.TrimSpace(req.CreatorPrincipalID)
+	req.CreatorPrincipalURA = strings.TrimSpace(req.CreatorPrincipalURA)
+	if req.SessionOwnerURA == "" {
+		derived := sessionOwnerURAFromUserSubject(req.SubjectURA, req.SessionOwnerUserID)
+		if derived != "" {
+			req.SessionOwnerURA = derived
+		}
+	}
+	if req.SessionOwnerURA != "" {
+		ownerUserID, err := userIDFromUserURA(req.SessionOwnerURA, "session_owner_ura")
+		if err != nil {
+			return SessionAuthorityRequest{}, err
+		}
+		if req.SessionOwnerUserID != "" && req.SessionOwnerUserID != ownerUserID {
+			return SessionAuthorityRequest{}, invalidProfilePayload(authorityProfile, "session_owner_user_id must match session_owner_ura user id", nil)
+		}
+		req.SessionOwnerUserID = ownerUserID
+	}
+	if req.CreatorPrincipalURA != "" {
+		if _, err := ParseURAParts(req.CreatorPrincipalURA); err != nil {
+			return SessionAuthorityRequest{}, invalidProfilePayload(authorityProfile, "creator_principal_ura must be a canonical URA", err)
+		}
+		if req.CreatorPrincipalID != "" && req.CreatorPrincipalID != req.CreatorPrincipalURA {
+			return SessionAuthorityRequest{}, invalidProfilePayload(authorityProfile, "creator_principal_id must match creator_principal_ura", nil)
+		}
+		req.CreatorPrincipalID = req.CreatorPrincipalURA
+	}
+	return req, nil
+}
+
+func userIDFromUserURA(raw string, field string) (string, error) {
+	parts, err := ParseURAParts(strings.TrimSpace(raw))
+	if err != nil {
+		return "", invalidProfilePayload(authorityProfile, field+" must be a canonical User URA", err)
+	}
+	if parts.Kind != URAKindUser || strings.TrimSpace(parts.UserID) == "" {
+		return "", invalidProfilePayload(authorityProfile, field+" must be a canonical User URA", nil)
+	}
+	return strings.TrimSpace(parts.UserID), nil
+}
+
+func sessionOwnerURAFromPayload(payload sessionAuthorityPayload) string {
+	return sessionOwnerURAFromUserSubject(payload.SubjectURA, payload.SessionOwnerUserID)
+}
+
+func sessionOwnerURAFromUserSubject(subjectURA string, ownerUserID string) string {
+	ownerUserID = strings.TrimSpace(ownerUserID)
+	if ownerUserID == "" {
+		return ""
+	}
+	parts, err := ParseURAParts(strings.TrimSpace(subjectURA))
+	if err != nil {
+		return ""
+	}
+	switch parts.Kind {
+	case URAKindUser:
+		if parts.UserID == ownerUserID {
+			return parts.Raw
+		}
+	case URAKindResource:
+		if strings.TrimSpace(parts.OwnerID) == "user."+ownerUserID {
+			return UserURA(parts.Realm, ownerUserID)
+		}
+	}
+	return ""
+}
+
+func canonicalURAOrEmpty(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if _, err := ParseURAParts(raw); err != nil {
+		return ""
+	}
+	return raw
 }
 
 func decodeAuthorityMetadata(value string, payload any, label string) ([]byte, error) {
@@ -589,6 +717,11 @@ func validateDelegationProof(proof DelegationProof) error {
 }
 
 func validateSessionAuthority(authority SessionAuthority) error {
+	var err error
+	authority, err = normalizeSessionAuthority(authority)
+	if err != nil {
+		return err
+	}
 	if strings.TrimSpace(authority.IssuerURA) == "" ||
 		strings.TrimSpace(authority.SessionID) == "" ||
 		strings.TrimSpace(authority.SessionOwnerUserID) == "" ||
@@ -614,6 +747,41 @@ func validateSessionAuthority(authority SessionAuthority) error {
 		return invalidInvocation("session authority signature is required", nil)
 	}
 	return nil
+}
+
+func normalizeSessionAuthority(authority SessionAuthority) (SessionAuthority, error) {
+	authority.SessionOwnerUserID = strings.TrimSpace(authority.SessionOwnerUserID)
+	authority.SessionOwnerURA = strings.TrimSpace(authority.SessionOwnerURA)
+	authority.CreatorPrincipalID = strings.TrimSpace(authority.CreatorPrincipalID)
+	authority.CreatorPrincipalURA = strings.TrimSpace(authority.CreatorPrincipalURA)
+	if authority.SessionOwnerURA == "" {
+		authority.SessionOwnerURA = sessionOwnerURAFromUserSubject(authority.SubjectURA, authority.SessionOwnerUserID)
+	}
+	if authority.SessionOwnerURA != "" {
+		ownerUserID, err := userIDFromUserURA(authority.SessionOwnerURA, "session_owner_ura")
+		if err != nil {
+			return SessionAuthority{}, err
+		}
+		if authority.SessionOwnerUserID != "" && authority.SessionOwnerUserID != ownerUserID {
+			return SessionAuthority{}, invalidProfilePayload(authorityProfile, "session_owner_user_id must match session_owner_ura user id", nil)
+		}
+		authority.SessionOwnerUserID = ownerUserID
+	}
+	if authority.CreatorPrincipalURA != "" {
+		if _, err := ParseURAParts(authority.CreatorPrincipalURA); err != nil {
+			return SessionAuthority{}, invalidProfilePayload(authorityProfile, "creator_principal_ura must be a canonical URA", err)
+		}
+		if authority.CreatorPrincipalID != "" && authority.CreatorPrincipalID != authority.CreatorPrincipalURA {
+			return SessionAuthority{}, invalidProfilePayload(authorityProfile, "creator_principal_id must match creator_principal_ura", nil)
+		}
+		authority.CreatorPrincipalID = authority.CreatorPrincipalURA
+	}
+	if authority.CreatorPrincipalURA == "" && strings.HasPrefix(authority.CreatorPrincipalID, URAScheme) {
+		if _, err := ParseURAParts(authority.CreatorPrincipalID); err == nil {
+			authority.CreatorPrincipalURA = authority.CreatorPrincipalID
+		}
+	}
+	return authority, nil
 }
 
 func containsBlankString(values []string) bool {

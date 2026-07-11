@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Mapping, Protocol
 
+from .axon_addressing import parse_ura, user_ura
 from .errors import ErrorCode, RetryHint, SDKError
 
 DELEGATION_METADATA_KEY = "x-easynet-delegation"
@@ -160,6 +161,8 @@ class SessionAuthority:
     issued_at_ms: int
     expires_at_ms: int
     signature: bytes
+    session_owner_ura: str = ""
+    creator_principal_ura: str = ""
     metadata_value: str = field(default="", repr=False)
 
     @classmethod
@@ -189,6 +192,12 @@ class SessionAuthority:
             issued_at_ms=_required_payload_int(payload, "issued_at_ms", "session authority"),
             expires_at_ms=_required_payload_int(payload, "expires_at_ms", "session authority"),
             signature=signature,
+            session_owner_ura=_session_owner_ura_from_payload(payload),
+            creator_principal_ura=_canonical_ura_or_empty(
+                _required_payload_string(
+                    payload, "creator_principal_id", "session authority"
+                )
+            ),
             metadata_value=value.strip(),
         )
         _validate_session_authority(authority)
@@ -251,26 +260,14 @@ class SessionAuthorityRequest:
     allowed_followup_abilities: tuple[str, ...]
     issued_at_ms: int
     expires_at_ms: int
+    session_owner_ura: str = ""
+    creator_principal_ura: str = ""
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def to_json(self) -> bytes:
-        _validate_session_authority_request(self)
+        wire = _session_authority_request_wire(self)
         return json.dumps(
-            {
-                "issuer_ura": self.issuer_ura,
-                "session_id": self.session_id,
-                "session_owner_user_id": self.session_owner_user_id,
-                "creator_principal_id": self.creator_principal_id,
-                "callee_ura": self.callee_ura,
-                "subject_ura": self.subject_ura,
-                "audience": self.audience,
-                "scopes": list(self.scopes),
-                "allowed_actions": list(self.allowed_actions),
-                "allowed_followup_abilities": list(self.allowed_followup_abilities),
-                "issued_at_ms": self.issued_at_ms,
-                "expires_at_ms": self.expires_at_ms,
-                "metadata": dict(self.metadata),
-            },
+            wire,
             separators=(",", ":"),
         ).encode("utf-8")
 
@@ -497,8 +494,8 @@ def _decode_session_authority_request(raw: bytes) -> SessionAuthorityRequest:
         request = SessionAuthorityRequest(
             issuer_ura=decoded["issuer_ura"],
             session_id=decoded["session_id"],
-            session_owner_user_id=decoded["session_owner_user_id"],
-            creator_principal_id=decoded["creator_principal_id"],
+            session_owner_user_id=str(decoded.get("session_owner_user_id", "")),
+            creator_principal_id=str(decoded.get("creator_principal_id", "")),
             callee_ura=decoded["callee_ura"],
             subject_ura=decoded["subject_ura"],
             audience=decoded["audience"],
@@ -507,6 +504,8 @@ def _decode_session_authority_request(raw: bytes) -> SessionAuthorityRequest:
             allowed_followup_abilities=tuple(decoded["allowed_followup_abilities"]),
             issued_at_ms=decoded["issued_at_ms"],
             expires_at_ms=decoded["expires_at_ms"],
+            session_owner_ura=str(decoded.get("session_owner_ura", "")),
+            creator_principal_ura=str(decoded.get("creator_principal_ura", "")),
             metadata=decoded.get("metadata", {}),
         )
         request.to_json()
@@ -542,20 +541,21 @@ def _delegation_payload(request: DelegationRequest) -> bytes:
 
 
 def _session_authority_payload(request: SessionAuthorityRequest) -> bytes:
+    wire = _session_authority_request_wire(request)
     return _canonical_json(
         {
-            "allowed_actions": list(request.allowed_actions),
-            "allowed_followup_abilities": list(request.allowed_followup_abilities),
-            "audience": request.audience,
-            "callee_ura": request.callee_ura,
-            "creator_principal_id": request.creator_principal_id,
-            "expires_at_ms": request.expires_at_ms,
-            "issued_at_ms": request.issued_at_ms,
-            "issuer_ura": request.issuer_ura,
-            "scopes": list(request.scopes),
-            "session_id": request.session_id,
-            "session_owner_user_id": request.session_owner_user_id,
-            "subject_ura": request.subject_ura,
+            "allowed_actions": wire["allowed_actions"],
+            "allowed_followup_abilities": wire["allowed_followup_abilities"],
+            "audience": wire["audience"],
+            "callee_ura": wire["callee_ura"],
+            "creator_principal_id": wire["creator_principal_id"],
+            "expires_at_ms": wire["expires_at_ms"],
+            "issued_at_ms": wire["issued_at_ms"],
+            "issuer_ura": wire["issuer_ura"],
+            "scopes": wire["scopes"],
+            "session_id": wire["session_id"],
+            "session_owner_user_id": wire["session_owner_user_id"],
+            "subject_ura": wire["subject_ura"],
         }
     )
 
@@ -610,6 +610,174 @@ def _required_mapping(value: object, label: str) -> Mapping[str, object]:
     return value
 
 
+def _session_authority_request_wire(
+    request: SessionAuthorityRequest,
+) -> dict[str, object]:
+    normalized = _normalized_session_authority_request(request)
+    _validate_session_authority_request(normalized)
+    return {
+        "issuer_ura": normalized.issuer_ura,
+        "session_id": normalized.session_id,
+        "session_owner_user_id": normalized.session_owner_user_id,
+        "creator_principal_id": normalized.creator_principal_id,
+        "callee_ura": normalized.callee_ura,
+        "subject_ura": normalized.subject_ura,
+        "audience": normalized.audience,
+        "scopes": list(normalized.scopes),
+        "allowed_actions": list(normalized.allowed_actions),
+        "allowed_followup_abilities": list(normalized.allowed_followup_abilities),
+        "issued_at_ms": normalized.issued_at_ms,
+        "expires_at_ms": normalized.expires_at_ms,
+        "metadata": dict(normalized.metadata),
+    }
+
+
+def _normalized_session_authority_request(
+    request: SessionAuthorityRequest,
+) -> SessionAuthorityRequest:
+    session_owner_user_id = request.session_owner_user_id.strip()
+    session_owner_ura = request.session_owner_ura.strip()
+    if not session_owner_ura:
+        session_owner_ura = _session_owner_ura_from_subject(
+            request.subject_ura, session_owner_user_id
+        )
+    if session_owner_ura:
+        derived = _user_id_from_user_ura(session_owner_ura, "session_owner_ura")
+        if session_owner_user_id and session_owner_user_id != derived:
+            raise _invalid_authority(
+                "session_owner_user_id must match session_owner_ura user id"
+            )
+        session_owner_user_id = derived
+
+    creator_principal_id = request.creator_principal_id.strip()
+    creator_principal_ura = request.creator_principal_ura.strip()
+    if creator_principal_ura:
+        _parse_required_ura(creator_principal_ura, "creator_principal_ura")
+        if creator_principal_id and creator_principal_id != creator_principal_ura:
+            raise _invalid_authority(
+                "creator_principal_id must match creator_principal_ura"
+            )
+        creator_principal_id = creator_principal_ura
+    elif creator_principal_id.startswith("easynet:///"):
+        try:
+            _parse_required_ura(creator_principal_id, "creator_principal_id")
+            creator_principal_ura = creator_principal_id
+        except SDKError:
+            creator_principal_ura = ""
+
+    return SessionAuthorityRequest(
+        issuer_ura=request.issuer_ura,
+        session_id=request.session_id,
+        session_owner_user_id=session_owner_user_id,
+        creator_principal_id=creator_principal_id,
+        callee_ura=request.callee_ura,
+        subject_ura=request.subject_ura,
+        audience=request.audience,
+        scopes=request.scopes,
+        allowed_actions=request.allowed_actions,
+        allowed_followup_abilities=request.allowed_followup_abilities,
+        issued_at_ms=request.issued_at_ms,
+        expires_at_ms=request.expires_at_ms,
+        session_owner_ura=session_owner_ura,
+        creator_principal_ura=creator_principal_ura,
+        metadata=request.metadata,
+    )
+
+
+def _session_authority_with_canonical_principals(
+    authority: SessionAuthority,
+) -> SessionAuthority:
+    request = _normalized_session_authority_request(
+        SessionAuthorityRequest(
+            issuer_ura=authority.issuer_ura,
+            session_id=authority.session_id,
+            session_owner_user_id=authority.session_owner_user_id,
+            creator_principal_id=authority.creator_principal_id,
+            callee_ura=authority.callee_ura,
+            subject_ura=authority.subject_ura,
+            audience=authority.audience,
+            scopes=authority.scopes,
+            allowed_actions=authority.allowed_actions,
+            allowed_followup_abilities=authority.allowed_followup_abilities,
+            issued_at_ms=authority.issued_at_ms,
+            expires_at_ms=authority.expires_at_ms,
+            session_owner_ura=authority.session_owner_ura,
+            creator_principal_ura=authority.creator_principal_ura,
+        )
+    )
+    return SessionAuthority(
+        issuer_ura=authority.issuer_ura,
+        session_id=authority.session_id,
+        session_owner_user_id=request.session_owner_user_id,
+        creator_principal_id=request.creator_principal_id,
+        callee_ura=authority.callee_ura,
+        subject_ura=authority.subject_ura,
+        audience=authority.audience,
+        scopes=authority.scopes,
+        allowed_actions=authority.allowed_actions,
+        allowed_followup_abilities=authority.allowed_followup_abilities,
+        issued_at_ms=authority.issued_at_ms,
+        expires_at_ms=authority.expires_at_ms,
+        signature=authority.signature,
+        session_owner_ura=request.session_owner_ura,
+        creator_principal_ura=request.creator_principal_ura,
+        metadata_value=authority.metadata_value,
+    )
+
+
+def _session_owner_ura_from_payload(payload: Mapping[str, object]) -> str:
+    return _session_owner_ura_from_subject(
+        str(payload.get("subject_ura", "")),
+        str(payload.get("session_owner_user_id", "")),
+    )
+
+
+def _session_owner_ura_from_subject(subject_ura: str, owner_user_id: str) -> str:
+    owner_user_id = owner_user_id.strip()
+    if not owner_user_id:
+        return ""
+    try:
+        projection = parse_ura(subject_ura.strip())
+    except SDKError:
+        return ""
+    if projection.kind == "user" and projection.components.get("user_id") == owner_user_id:
+        return projection.ura
+    if (
+        projection.kind == "resource"
+        and projection.components.get("owner_id") == f"user.{owner_user_id}"
+    ):
+        return user_ura(projection.realm, owner_user_id)
+    return ""
+
+
+def _user_id_from_user_ura(value: str, field_name: str) -> str:
+    projection = _parse_required_ura(value, field_name)
+    if projection.kind != "user":
+        raise _invalid_authority(f"{field_name} must be a canonical User URA")
+    user_id = projection.components.get("user_id")
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise _invalid_authority(f"{field_name} must include a user id")
+    return user_id.strip()
+
+
+def _parse_required_ura(value: str, field_name: str):
+    try:
+        return parse_ura(value.strip())
+    except SDKError as exc:
+        raise _invalid_authority(f"{field_name} must be a canonical URA", exc) from exc
+
+
+def _canonical_ura_or_empty(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    try:
+        parse_ura(value)
+    except SDKError:
+        return ""
+    return value
+
+
 def _decode_base64(value: str, label: str) -> bytes:
     try:
         decoded = base64.b64decode(value, validate=True)
@@ -637,6 +805,7 @@ def _validate_delegation(proof: DelegationProof) -> None:
 
 
 def _validate_session_authority(authority: SessionAuthority) -> None:
+    authority = _session_authority_with_canonical_principals(authority)
     if not (
         authority.issuer_ura.strip()
         and authority.session_id.strip()
@@ -684,6 +853,7 @@ def _validate_delegation_request(request: DelegationRequest) -> None:
 
 
 def _validate_session_authority_request(request: SessionAuthorityRequest) -> None:
+    request = _normalized_session_authority_request(request)
     _validate_session_authority(
         SessionAuthority(
             issuer_ura=request.issuer_ura,
@@ -699,6 +869,8 @@ def _validate_session_authority_request(request: SessionAuthorityRequest) -> Non
             issued_at_ms=request.issued_at_ms,
             expires_at_ms=request.expires_at_ms,
             signature=b"shape-only",
+            session_owner_ura=request.session_owner_ura,
+            creator_principal_ura=request.creator_principal_ura,
         )
     )
     _reject_private_key_metadata(request.metadata)

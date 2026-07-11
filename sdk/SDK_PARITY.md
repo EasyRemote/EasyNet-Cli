@@ -31,7 +31,8 @@ The matrix may contain only product-neutral capabilities from these families:
 | authority | canonical authority metadata projection/materialization |
 | identity material | runtime identity, public projection and sign-only capability |
 | managed signing | subject-bound create/list/rotate/revoke/expiry through key-service |
-| principal lifecycle | enrollment, public-key binding, recovery, suspension and grants |
+| access control | product-neutral grants, decisions and authority proofs over daemon governance abilities |
+| principal lifecycle | lifecycle aggregate, enrollment, public-key binding, recovery, suspension and grants; each sub-capability remains separately represented in the matrix until provider-backed |
 | Directory | canonical resolve and subscription, not product dashboard rows |
 | receipts | verifiable receipt/causal facts and continuation references |
 | runtime events | bounded streams, typed cursors and resume semantics |

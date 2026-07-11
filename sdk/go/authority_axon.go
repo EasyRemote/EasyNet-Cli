@@ -132,22 +132,26 @@ func (a *SessionAuthority) CanonicalPayload() ([]byte, error) {
 	if len(shape.Signature) == 0 {
 		shape.Signature = []byte("shape-only")
 	}
+	shape, err := normalizeSessionAuthority(shape)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateSessionAuthority(shape); err != nil {
 		return nil, err
 	}
 	payload := map[string]any{
 		"allowed_actions":            append([]string(nil), a.AllowedActions...),
 		"allowed_followup_abilities": append([]string(nil), a.AllowedFollowupAbilities...),
-		"audience":                   a.Audience,
-		"callee_ura":                 a.CalleeURA,
-		"creator_principal_id":       a.CreatorPrincipalID,
-		"expires_at_ms":              a.ExpiresAtMS,
-		"issued_at_ms":               a.IssuedAtMS,
-		"issuer_ura":                 a.IssuerURA,
-		"scopes":                     append([]string(nil), a.Scopes...),
-		"session_id":                 a.SessionID,
-		"session_owner_user_id":      a.SessionOwnerUserID,
-		"subject_ura":                a.SubjectURA,
+		"audience":                   shape.Audience,
+		"callee_ura":                 shape.CalleeURA,
+		"creator_principal_id":       shape.CreatorPrincipalID,
+		"expires_at_ms":              shape.ExpiresAtMS,
+		"issued_at_ms":               shape.IssuedAtMS,
+		"issuer_ura":                 shape.IssuerURA,
+		"scopes":                     append([]string(nil), shape.Scopes...),
+		"session_id":                 shape.SessionID,
+		"session_owner_user_id":      shape.SessionOwnerUserID,
+		"subject_ura":                shape.SubjectURA,
 	}
 	return json.Marshal(payload)
 }
