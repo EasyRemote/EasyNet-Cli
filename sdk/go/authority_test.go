@@ -297,6 +297,71 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 	}
 }
 
+func TestCanonicalAuthorityClientMintsSessionMetadataWithOpaqueSigner(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	client, err := NewCanonicalAuthorityClient(testCanonicalSigner{
+		publicKey: publicKey,
+		sign: func(payload []byte) ([]byte, error) {
+			return ed25519.Sign(privateKey, payload), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewCanonicalAuthorityClient: %v", err)
+	}
+
+	authority, err := client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-1",
+		SessionOwnerUserID:       "alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
+	})
+	if err != nil {
+		t.Fatalf("MintSessionAuthority: %v", err)
+	}
+	if err := authority.Verify(publicKey); err != nil {
+		t.Fatalf("authority signature: %v", err)
+	}
+	metadata, err := authority.Metadata()
+	if err != nil {
+		t.Fatalf("authority metadata: %v", err)
+	}
+	if metadata.Key() != SessionAuthorityMetadataKey || metadata.Value() == "" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	_, err = client.MintSessionAuthority(context.Background(), SessionAuthorityRequest{
+		IssuerURA:                "easynet:///r/example/agent/backend",
+		SessionID:                "session-2",
+		SessionOwnerUserID:       "alice",
+		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
+		CalleeURA:                "easynet:///r/example/device/dev-a",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-2",
+		Audience:                 "easynet:///r/example/device/dev-a",
+		Scopes:                   []string{"device.observe.*"},
+		AllowedActions:           []string{"read"},
+		AllowedFollowupAbilities: []string{"device.observe.health"},
+		IssuedAtMS:               1000,
+		ExpiresAtMS:              2000,
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("MintSessionAuthority after close = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestAuthorityClientRejectsInvalidMintBeforeTransport(t *testing.T) {
 	transport := &memoryAuthorityTransport{}
 	client, err := NewAuthorityClient(transport)

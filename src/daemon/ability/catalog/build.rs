@@ -117,19 +117,6 @@ fn build_system_registry_uncached() -> Arc<AxonAbilityCatalog> {
     .catalog
 }
 
-/// Build the standard system catalogue and write every registered
-/// handler into the supplied Axon runtime. This is the compact test
-/// and compatibility constructor for code paths that need the live
-/// daemon execution surface but do not own Kernel sub-services.
-pub fn build_registry_with_runtime(
-    runtime: Arc<easynet_axon::invocation::LocalRuntime>,
-) -> Arc<AxonAbilityCatalog> {
-    let agents = AgentRegistry::default();
-    let mut config = RegistryBuildConfig::new(RegistryBuildServices::fresh(), &agents);
-    config.local_runtime = Some(runtime);
-    build_registry_with_services(config)
-}
-
 /// Build a `AxonAbilityCatalog` with sub-service handles wired
 /// in. The daemon bin calls this with the Kernel's actual handles
 /// at boot; tests construct a fresh registry per case.
@@ -1092,12 +1079,6 @@ fn key_service_for_daemon(
 /// `LocalRuntime` + dispatch handle are wired. Passed through to
 /// the `agent.start` / `.stop` handlers so post-boot agent
 /// additions are registered into `LocalRuntime`.
-pub fn build_registry_for_daemon(config: RegistryDaemonBuildConfig) -> Arc<AxonAbilityCatalog> {
-    build_registry_for_daemon_result(config)
-        .expect("build daemon ability registry")
-        .catalog
-}
-
 pub fn build_registry_for_daemon_result(
     config: RegistryDaemonBuildConfig,
 ) -> anyhow::Result<BuiltAbilityRegistry> {

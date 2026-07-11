@@ -108,6 +108,8 @@ from .authority import (
     DELEGATION_METADATA_KEY,
     SESSION_AUTHORITY_METADATA_KEY,
     AuthorityClient,
+    CanonicalAuthorityTransport,
+    CanonicalSigner,
     AuthorityMetadata,
     AuthoritySignature,
     AuthoritySignatureProvider,
@@ -118,6 +120,7 @@ from .authority import (
     SessionAuthorityRequest,
     SessionAuthority,
     validate_authority_metadata,
+    new_canonical_authority_client,
 )
 from .bidi import (
     MAX_BIDI_BUFFERED_FRAMES,
@@ -601,6 +604,8 @@ __all__ = [
     "AdminSystemAbility",
     "AdminTransport",
     "AuthorityClient",
+    "CanonicalAuthorityTransport",
+    "CanonicalSigner",
     "AuthorityMetadata",
     "AuthoritySignature",
     "AuthoritySignatureProvider",
@@ -978,4 +983,5 @@ __all__ = [
     "resource_ura",
     "start_daemon",
     "validate_authority_metadata",
+    "new_canonical_authority_client",
 ]

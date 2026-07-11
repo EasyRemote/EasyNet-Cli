@@ -57,6 +57,12 @@ No public object in this graph may expose raw Axon client/proto/runtime types.
 `PreparedInvocation` is not executable. `SignedInvocation` is the only
 submit-ready pre-runtime object.
 
+`AuthorityClient` is the canonical authority metadata boundary. Its
+`CanonicalAuthorityTransport` variant accepts only an opaque canonical signer,
+constructs the generic authority payload, and returns the standard mutually
+exclusive metadata projection. Product policy may select scope, subject,
+audience, and expiry, but must not serialize or sign authority payloads.
+
 Python's `InvocationWireProjector` is a stateless binding adapter over
 `AddressingClient`: it may project a host seven-tuple object to an
 `InvocationDraft` or wire DTO, but owns neither Runtime transport nor lifecycle.

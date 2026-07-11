@@ -15,11 +15,56 @@ from easynet_sdk import (
     SessionAuthority,
     AuthoritySignature,
     is_code,
+    new_canonical_authority_client,
 )
 from easynet_sdk._cabi import CABIAuthorityTransport
 
 
 class AuthorityTests(unittest.TestCase):
+    def test_canonical_authority_client_mints_with_opaque_signer(self) -> None:
+        signer = _CanonicalSigner()
+        client = new_canonical_authority_client(signer)
+
+        authority = client.mint_session_authority(
+            SessionAuthorityRequest(
+                issuer_ura="easynet:///r/example/agent/backend",
+                session_id="session-1",
+                session_owner_user_id="alice",
+                creator_principal_id="easynet:///r/example/agent/backend",
+                callee_ura="easynet:///r/example/device/dev-a",
+                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                audience="easynet:///r/example/device/dev-a",
+                scopes=("device.observe.*",),
+                allowed_actions=("read",),
+                allowed_followup_abilities=("device.observe.health",),
+                issued_at_ms=1000,
+                expires_at_ms=2000,
+            )
+        )
+
+        self.assertEqual(authority.audience, "easynet:///r/example/device/dev-a")
+        self.assertEqual(len(authority.signature), 64)
+        self.assertEqual(len(signer.payloads), 1)
+
+        client.close()
+        with self.assertRaises(SDKError):
+            client.mint_session_authority(
+                SessionAuthorityRequest(
+                    issuer_ura="easynet:///r/example/agent/backend",
+                    session_id="session-2",
+                    session_owner_user_id="alice",
+                    creator_principal_id="easynet:///r/example/agent/backend",
+                    callee_ura="easynet:///r/example/device/dev-a",
+                    subject_ura="easynet:///r/example/resource/user.alice/session/session-2",
+                    audience="easynet:///r/example/device/dev-a",
+                    scopes=("device.observe.*",),
+                    allowed_actions=("read",),
+                    allowed_followup_abilities=("device.observe.health",),
+                    issued_at_ms=1000,
+                    expires_at_ms=2000,
+                )
+            )
+
     def test_delegation_metadata_projects_typed_authority(self) -> None:
         value = _authority_metadata(
             {
@@ -359,6 +404,15 @@ class _MemoryAuthorityTransport:
         self.session_calls += 1
         self.seen_session = json.loads(request_json.decode("utf-8"))
         return self.session_json
+
+
+class _CanonicalSigner:
+    def __init__(self) -> None:
+        self.payloads: list[bytes] = []
+
+    def sign_canonical(self, payload: bytes) -> bytes:
+        self.payloads.append(payload)
+        return b"s" * 64
 
 
 class _RecordingAuthoritySigner:

@@ -285,6 +285,70 @@ class AuthorityTransport(Protocol):
         ...
 
 
+class CanonicalSigner(Protocol):
+    """Opaque signer for SDK-owned canonical authority payloads."""
+
+    def sign_canonical(self, canonical_bytes: bytes) -> bytes:
+        ...
+
+
+class CanonicalAuthorityTransport:
+    """Authority provider backed by one opaque canonical signer.
+
+    The transport owns authority DTO construction and raw metadata encoding;
+    the signer owns key custody. It has no product, daemon, or identity policy.
+    """
+
+    def __init__(self, signer: CanonicalSigner):
+        if signer is None or not callable(getattr(signer, "sign_canonical", None)):
+            raise _invalid_authority("canonical authority signer is required")
+        self._signer = signer
+        self._closed = False
+
+    def mint_delegation_proof(self, request_json: bytes) -> bytes:
+        self._require_open()
+        request = _decode_delegation_request(request_json)
+        payload = _delegation_payload(request)
+        signature = self._sign(payload)
+        return _authority_projection_bytes(DELEGATION_METADATA_KEY, payload, signature)
+
+    def mint_session_authority(self, request_json: bytes) -> bytes:
+        self._require_open()
+        request = _decode_session_authority_request(request_json)
+        payload = _session_authority_payload(request)
+        signature = self._sign(payload)
+        return _authority_projection_bytes(
+            SESSION_AUTHORITY_METADATA_KEY, payload, signature
+        )
+
+    def close(self) -> None:
+        self._closed = True
+        self._signer = None
+
+    def _require_open(self) -> None:
+        if self._closed or self._signer is None:
+            raise _invalid_authority("canonical authority transport is closed")
+
+    def _sign(self, payload: bytes) -> bytes:
+        try:
+            signature = self._signer.sign_canonical(payload)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _invalid_authority("canonical authority signing failed", exc) from exc
+        if not isinstance(signature, bytes) or len(signature) != 64:
+            raise _invalid_authority(
+                "canonical authority signer must return a 64-byte signature"
+            )
+        return signature
+
+
+def new_canonical_authority_client(signer: CanonicalSigner) -> "AuthorityClient":
+    """Create an AuthorityClient over the generic canonical provider."""
+
+    return AuthorityClient(CanonicalAuthorityTransport(signer))
+
+
 class AuthorityClient:
     """Typed authority metadata minting facade."""
 
@@ -406,6 +470,109 @@ def _authority_metadata_projection(raw: bytes | str, metadata_key: str, label: s
             raise _invalid_authority(f"{label} metadata value must be a string")
         return value.strip()
     return stripped
+
+
+def _decode_delegation_request(raw: bytes) -> DelegationRequest:
+    decoded = _decode_authority_request(raw, "delegation")
+    try:
+        request = DelegationRequest(
+            issuer_ura=decoded["issuer_ura"],
+            subject_ura=decoded["subject_ura"],
+            caller_ura=decoded["caller_ura"],
+            audience=decoded["audience"],
+            scopes=tuple(decoded["scopes"]),
+            issued_at_ms=decoded["issued_at_ms"],
+            expires_at_ms=decoded["expires_at_ms"],
+            metadata=decoded.get("metadata", {}),
+        )
+        request.to_json()
+        return request
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _invalid_authority("decode delegation request", exc) from exc
+
+
+def _decode_session_authority_request(raw: bytes) -> SessionAuthorityRequest:
+    decoded = _decode_authority_request(raw, "session authority")
+    try:
+        request = SessionAuthorityRequest(
+            issuer_ura=decoded["issuer_ura"],
+            session_id=decoded["session_id"],
+            session_owner_user_id=decoded["session_owner_user_id"],
+            creator_principal_id=decoded["creator_principal_id"],
+            callee_ura=decoded["callee_ura"],
+            subject_ura=decoded["subject_ura"],
+            audience=decoded["audience"],
+            scopes=tuple(decoded["scopes"]),
+            allowed_actions=tuple(decoded["allowed_actions"]),
+            allowed_followup_abilities=tuple(decoded["allowed_followup_abilities"]),
+            issued_at_ms=decoded["issued_at_ms"],
+            expires_at_ms=decoded["expires_at_ms"],
+            metadata=decoded.get("metadata", {}),
+        )
+        request.to_json()
+        return request
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _invalid_authority("decode session authority request", exc) from exc
+
+
+def _decode_authority_request(raw: bytes, label: str) -> Mapping[str, object]:
+    if not isinstance(raw, bytes) or not raw:
+        raise _invalid_authority(f"{label} authority request JSON is required")
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _invalid_authority(f"decode {label} authority request", exc) from exc
+    if not isinstance(decoded, dict):
+        raise _invalid_authority(f"{label} authority request must be an object")
+    return decoded
+
+
+def _delegation_payload(request: DelegationRequest) -> bytes:
+    return _canonical_json(
+        {
+            "audience": request.audience,
+            "caller_ura": request.caller_ura,
+            "expires_at_ms": request.expires_at_ms,
+            "issued_at_ms": request.issued_at_ms,
+            "issuer_ura": request.issuer_ura,
+            "scopes": list(request.scopes),
+            "subject_ura": request.subject_ura,
+        }
+    )
+
+
+def _session_authority_payload(request: SessionAuthorityRequest) -> bytes:
+    return _canonical_json(
+        {
+            "allowed_actions": list(request.allowed_actions),
+            "allowed_followup_abilities": list(request.allowed_followup_abilities),
+            "audience": request.audience,
+            "callee_ura": request.callee_ura,
+            "creator_principal_id": request.creator_principal_id,
+            "expires_at_ms": request.expires_at_ms,
+            "issued_at_ms": request.issued_at_ms,
+            "issuer_ura": request.issuer_ura,
+            "scopes": list(request.scopes),
+            "session_id": request.session_id,
+            "session_owner_user_id": request.session_owner_user_id,
+            "subject_ura": request.subject_ura,
+        }
+    )
+
+
+def _canonical_json(value: Mapping[str, object]) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _authority_projection_bytes(key: str, payload: bytes, signature: bytes) -> bytes:
+    raw = _canonical_json(
+        {
+            "payload": json.loads(payload.decode("utf-8")),
+            "signature": base64.b64encode(signature).decode("ascii"),
+        }
+    )
+    value = base64.b64encode(raw).decode("ascii")
+    return _canonical_json({"metadata": {key: value}})
 
 
 def _required_payload_string(payload: Mapping[str, object], field_name: str, label: str) -> str:

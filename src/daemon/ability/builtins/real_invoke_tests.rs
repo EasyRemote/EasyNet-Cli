@@ -105,13 +105,15 @@ fn registry_with_temp_home() -> (
     crate::cli::commands::test_support::HomeGuard,
 ) {
     let guard = crate::cli::commands::test_support::HomeGuard::new();
-    // build_registry_for_daemon does the agent-registry load that
+    // build_registry_for_daemon_result does the agent-registry load that
     // some abilities need (agent.list, chat-per-agent etc).
     let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
         crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
     );
     config.loaders = Some(Arc::new(Vec::new()));
-    let reg = crate::daemon::ability::catalog::build_registry_for_daemon(config);
+    let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
+        .expect("build production registry for isolated invocation test")
+        .catalog;
     (reg, guard)
 }
 

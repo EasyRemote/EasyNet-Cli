@@ -63,7 +63,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
 - Go and Python now expose typed `DelegationProof`/`SessionAuthority`
   metadata projections, InvocationBuilder authority attachment guardrails, and
   provider-backed `AuthorityClient` minting facades for delegation/session
-  authority metadata. The shared `authority/mutual_exclusion` conformance case
+  authority metadata, including matching lifecycle-free canonical transports
+  over opaque signers. The shared `authority/mutual_exclusion` conformance case
   now pins projection parity and ambiguous metadata rejection. C ABI now exposes
   daemon-core-backed `easynet_authority_prepare_*` and
   `easynet_authority_materialize_*` helpers so canonical authority payload
