@@ -25,6 +25,8 @@ use super::{
     KeyringRequest, KeyringResponse, MasterKeySource, Vault, KEY_SERVICE_PROTOCOL_VERSION,
     MAX_KEY_SERVICE_CANONICAL_BYTES, MAX_KEY_SERVICE_FRAME_BYTES,
 };
+#[cfg(test)]
+use super::ManagedSigningKeyProjection;
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 
 const MAX_CONCURRENT_KEY_SERVICE_CONNECTIONS: usize = 4;
@@ -543,6 +545,63 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
                 });
             }
         }
+    }
+}
+
+/// Run a bounded real key-service instance for cross-module tests.
+///
+/// Unlike in-memory provider fixtures, this helper exercises the production
+/// vault dispatcher and framed Unix transport. It is test-only so production
+/// lifecycle code cannot acquire a second service entry point.
+#[cfg(all(test, unix))]
+pub(crate) fn run_test_unix_key_service(
+    socket_path: std::path::PathBuf,
+    vault_path: std::path::PathBuf,
+    passphrase: String,
+    caller: String,
+    expected_connections: usize,
+    ready: std::sync::mpsc::Sender<Result<ManagedSigningKeyProjection, String>>,
+) {
+    let result = (|| -> Result<_, String> {
+        let runtime = KeyServiceRuntime::open(vault_path, passphrase)
+            .map_err(|error| format!("open test key service: {error}"))?;
+        let runtime_driver = tokio::runtime::Runtime::new()
+            .map_err(|error| format!("create test key-service runtime: {error}"))?;
+        let entry = runtime_driver.block_on(runtime.dispatch(KeyringRequest::InventoryCreate {
+            purpose: "agent_signing".to_string(),
+            bound_subject: Some(caller),
+        }));
+        let entry = match entry {
+            KeyringResponse::InventoryKey { entry } => entry,
+            other => return Err(format!("create test managed key: {other:?}")),
+        };
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+            .map_err(|error| format!("bind test key-service socket: {error}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("set test key-service socket nonblocking: {error}"))?;
+        ready
+            .send(Ok(entry))
+            .map_err(|_| "test key-service caller dropped".to_string())?;
+        let listener = tokio::net::UnixListener::from_std(listener)
+            .map_err(|error| format!("adopt test key-service listener: {error}"))?;
+        runtime_driver.block_on(async move {
+            for _ in 0..expected_connections {
+                let (stream, _) = listener
+                    .accept()
+                    .await
+                    .map_err(|error| format!("accept test key-service connection: {error}"))?;
+                handle_connection(stream, runtime.clone())
+                    .await
+                    .map_err(|error| format!("serve test key-service connection: {error}"))?;
+            }
+            Ok::<(), String>(())
+        })?;
+        let _ = std::fs::remove_file(socket_path);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = ready.send(Err(error));
     }
 }
 

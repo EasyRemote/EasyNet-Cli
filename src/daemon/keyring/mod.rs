@@ -1673,10 +1673,7 @@ pub fn default_socket_path() -> PathBuf {
 
 /// Default encrypted vault path owned exclusively by the key-service process.
 pub fn default_vault_path() -> PathBuf {
-    std::env::var_os("EASYNET_KEYRING_VAULT_PATH")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_relative(DEFAULT_VAULT_REL))
+    home_relative(DEFAULT_VAULT_REL)
 }
 
 /// Default path of the key-service-owned passphrase file.

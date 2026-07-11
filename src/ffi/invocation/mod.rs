@@ -5246,72 +5246,25 @@ mod tests {
             socket: std::env::var_os("EASYNET_KEYRING_SOCKET_PATH"),
         };
         std::env::set_var("EASYNET_KEYRING_SOCKET_PATH", &socket);
-
-        let mut vault = crate::daemon::keyring::Vault::init(
-            &temp.path().join("key-service.enc"),
-            &crate::daemon::keyring::MasterKeySource::Explicit("test-passphrase".into()),
-        )
-        .unwrap();
         let caller = "easynet:///r/acme/device/dev-a";
-        let entry = vault
-            .inventory_create("agent_signing".into(), Some(caller.into()))
-            .unwrap();
-        let vault = std::sync::Arc::new(std::sync::Mutex::new(vault));
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-        let server = std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            for _ in 0..expected_connections {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut len = [0u8; 4];
-                stream.read_exact(&mut len).unwrap();
-                let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
-                stream.read_exact(&mut body).unwrap();
-                let request: crate::daemon::keyring::KeyringRequest =
-                    serde_json::from_slice(&body).unwrap();
-                let response = match request {
-                    crate::daemon::keyring::KeyringRequest::InventoryPublicKey { key_id } => {
-                        match vault.lock().unwrap().inventory_public_key(&key_id) {
-                            Ok(entry) => {
-                                crate::daemon::keyring::KeyringResponse::InventoryKey { entry }
-                            }
-                            Err(error) => crate::daemon::keyring::vault_error_to_response(error),
-                        }
-                    }
-                    crate::daemon::keyring::KeyringRequest::InventorySign {
-                        key_id,
-                        expected_purpose,
-                        subject_ura,
-                        signer_policy_ref,
-                        canonical_bytes_b64,
-                    } => {
-                        use base64::Engine;
-                        let canonical = base64::engine::general_purpose::STANDARD
-                            .decode(canonical_bytes_b64)
-                            .unwrap();
-                        match vault.lock().unwrap().inventory_sign_bound(
-                            &key_id,
-                            &expected_purpose,
-                            &subject_ura,
-                            &signer_policy_ref,
-                            &canonical,
-                        ) {
-                            Ok(signature) => crate::daemon::keyring::KeyringResponse::Signature {
-                                signature_b64: base64::engine::general_purpose::STANDARD
-                                    .encode(signature.to_bytes()),
-                            },
-                            Err(error) => crate::daemon::keyring::vault_error_to_response(error),
-                        }
-                    }
-                    other => panic!("unexpected key-service request: {other:?}"),
-                };
-                let encoded = serde_json::to_vec(&response).unwrap();
-                stream
-                    .write_all(&(encoded.len() as u32).to_be_bytes())
-                    .unwrap();
-                stream.write_all(&encoded).unwrap();
-            }
-        });
 
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let socket_path = socket.clone();
+        let vault_path = temp.path().join("key-service.enc");
+        let server = std::thread::spawn(move || {
+            crate::daemon::keyring::service::run_test_unix_key_service(
+                socket_path,
+                vault_path,
+                "test-passphrase".to_string(),
+                caller.to_string(),
+                expected_connections,
+                ready_tx,
+            );
+        });
+        let entry = ready_rx
+            .recv()
+            .expect("test key service must report readiness")
+            .expect("test key service must start");
         f(entry);
         server.join().unwrap();
     }

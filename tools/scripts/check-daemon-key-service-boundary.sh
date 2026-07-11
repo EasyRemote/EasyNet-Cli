@@ -21,6 +21,14 @@ if rg -n --glob '*.rs' --glob '!src/daemon/keyring/passphrase.rs' \
   exit 1
 fi
 
+# The encrypted vault location is key-service lifecycle policy, not a public
+# caller override. A caller may select the explicit socket endpoint, but it
+# must never redirect custody to a caller-supplied vault path.
+if rg -n --glob '*.rs' 'EASYNET_KEYRING_VAULT_PATH' src tests; then
+  echo "daemon key-service boundary violation: vault path escaped key-service custody" >&2
+  exit 1
+fi
+
 if rg -n --glob '*.rs' 'KeyringRequest::Put|Put[[:space:]]*\{[^}]*seed_hex' src tests; then
   echo "daemon key-service boundary violation: seed-bearing protocol request found" >&2
   exit 1
@@ -99,6 +107,16 @@ if rg -n --glob '*.rs' \
   'pub enum Keyring(Request|Response)|pub fn inventory_sign\(|KeyringRequest::List|KeyringResponse::List' \
   src; then
   echo "daemon key-service boundary violation: raw or unbounded signing protocol is public" >&2
+  exit 1
+fi
+
+# FFI local-sign tests must cross the same framed daemon endpoint as
+# production. They may assert on public projections, but must not construct or
+# mutate an in-process Vault as a fake service.
+if rg -n \
+  'daemon::keyring::(Vault|MasterKeySource)|inventory_(create|public_key|sign_bound)' \
+  src/ffi; then
+  echo "daemon key-service boundary violation: FFI reaches in-process vault inventory" >&2
   exit 1
 fi
 

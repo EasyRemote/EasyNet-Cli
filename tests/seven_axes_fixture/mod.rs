@@ -40,7 +40,6 @@ use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacad
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
-use easynet_cli::daemon::keyring::{home_relative, DEFAULT_VAULT_REL};
 use easynet_cli::daemon::persistence::config::{self, RuntimeKind, RuntimeState};
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
@@ -119,13 +118,8 @@ fn start_test_keyring(primary_self: String) -> (TestKeyring, String) {
     }
     let _ = std::fs::remove_file(&socket_path);
 
-    let vault_path = home_relative(DEFAULT_VAULT_REL);
-    if let Some(parent) = vault_path.parent() {
-        std::fs::create_dir_all(parent).expect("keyring vault parent");
-    }
     let child = Command::new(env!("CARGO_BIN_EXE_easynet-keyring"))
         .env("EASYNET_KEYRING_SOCKET_PATH", &socket_path)
-        .env("EASYNET_KEYRING_VAULT_PATH", &vault_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

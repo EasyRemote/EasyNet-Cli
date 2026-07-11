@@ -393,6 +393,11 @@ for source in production_go_files(backend):
         literal in RUNTIME_SUBPROCESS_TARGETS for _, literal in string_literals
     ):
         violations.append((relative, 1, "runtime_subprocess", "exec.Command easynet/easynet-daemon"))
+    if relative == "cmd/seed-dev/main.go" and (
+        "NewKeyFromSeed" in code_without_comments
+        or "ed25519.PrivateKey" in code_without_comments
+    ):
+        violations.append((relative, 1, "local_key_custody", "seed-dev must use the daemon key-service SDK"))
 
 for source in namespace_resolve_carrier_go_files(backend):
     text = source.read_text(encoding="utf-8", errors="replace")

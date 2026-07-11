@@ -64,11 +64,9 @@ impl Drop for TestKeyService {
 fn start_test_key_service() -> (Arc<dyn ManagedSigningProvider>, TestKeyService) {
     let home = tempfile::tempdir().expect("test key service home");
     let socket_path = home.path().join("key-service.sock");
-    let vault_path = home.path().join("key-service.enc");
     let child = Command::new(env!("CARGO_BIN_EXE_easynet-keyring"))
         .env("HOME", home.path())
         .env("EASYNET_KEYRING_SOCKET_PATH", &socket_path)
-        .env("EASYNET_KEYRING_VAULT_PATH", &vault_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
