@@ -45,6 +45,8 @@ pub struct PrincipalArgs {
 pub enum PrincipalAction {
     /// Create the first Principal and bind its first daemon-managed key.
     Bootstrap(BootstrapArgs),
+    /// Consume an enrollment capability and bind the Principal's first key.
+    Enroll(EnrollArgs),
     /// Create a pending Principal URA through the daemon lifecycle aggregate.
     Create(CreateArgs),
     /// Issue a one-time enrollment capability for another Principal URA.
@@ -105,6 +107,29 @@ pub struct BootstrapArgs {
     /// Optional one-time bootstrap proof reference shared by create and bind.
     #[arg(long)]
     pub proof_ref: Option<String>,
+    #[arg(long)]
+    pub actor_ura: Option<String>,
+    #[arg(long)]
+    pub create_idempotency_key: Option<String>,
+    #[arg(long)]
+    pub bind_idempotency_key: Option<String>,
+    #[arg(long)]
+    pub key_id: Option<String>,
+    #[arg(long)]
+    pub expires_unix_ms: Option<i64>,
+    #[arg(long)]
+    pub show_pubkey: bool,
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct EnrollArgs {
+    #[arg(long)]
+    pub principal_ura: String,
+    /// Enrollment capability id issued for this Principal URA.
+    #[arg(long)]
+    pub enrollment_id: String,
     #[arg(long)]
     pub actor_ura: Option<String>,
     #[arg(long)]
@@ -410,6 +435,7 @@ pub struct GetArgs {
 pub fn run(args: PrincipalArgs) -> anyhow::Result<()> {
     match args.action {
         PrincipalAction::Bootstrap(args) => run_bootstrap(args),
+        PrincipalAction::Enroll(args) => run_enroll(args),
         PrincipalAction::Create(args) => run_create(args),
         PrincipalAction::IssueEnrollment(args) => run_issue_enrollment(args),
         PrincipalAction::RevokeEnrollment(args) => run_revoke_enrollment(args),
@@ -458,6 +484,37 @@ fn run_bootstrap(args: BootstrapArgs) -> anyhow::Result<()> {
     let response = invoke_principal_ability("principal.lifecycle.bind_first_key", bind_request)?;
     render_snapshot(
         "Bootstrapped principal",
+        response,
+        args.json,
+        if args.show_pubkey {
+            Some(format!("public_key_b64={}", key.public_key_b64))
+        } else {
+            None
+        },
+    )
+}
+
+fn run_enroll(args: EnrollArgs) -> anyhow::Result<()> {
+    let key = ensure_principal_signing_key(&KeyringClient::default_path(), &args.principal_ura)?;
+    let create_idempotency_key =
+        command_id_with_prefix(args.create_idempotency_key, "principal-enroll-create");
+    let bind_idempotency_key =
+        command_id_with_prefix(args.bind_idempotency_key, "principal-enroll-bind");
+    let (create_request, bind_request) = principal_enrollment_requests(
+        &args.principal_ura,
+        args.actor_ura.as_deref(),
+        &args.enrollment_id,
+        &create_idempotency_key,
+        &bind_idempotency_key,
+        args.key_id.as_deref().unwrap_or(key.key_id.as_str()),
+        &key.public_key_b64,
+        args.expires_unix_ms,
+    );
+
+    invoke_principal_ability("principal.lifecycle.create", create_request)?;
+    let response = invoke_principal_ability("principal.lifecycle.bind_first_key", bind_request)?;
+    render_snapshot(
+        "Enrolled principal",
         response,
         args.json,
         if args.show_pubkey {
@@ -815,6 +872,53 @@ fn principal_bootstrap_requests(
     public_key_b64: &str,
     expires_unix_ms: Option<i64>,
 ) -> (Value, Value) {
+    principal_create_and_bind_first_key_requests(
+        principal_ura,
+        actor_ura,
+        ProofKindArg::Bootstrap,
+        proof_ref,
+        create_idempotency_key,
+        bind_idempotency_key,
+        key_id,
+        public_key_b64,
+        expires_unix_ms,
+    )
+}
+
+fn principal_enrollment_requests(
+    principal_ura: &str,
+    actor_ura: Option<&str>,
+    enrollment_id: &str,
+    create_idempotency_key: &str,
+    bind_idempotency_key: &str,
+    key_id: &str,
+    public_key_b64: &str,
+    expires_unix_ms: Option<i64>,
+) -> (Value, Value) {
+    principal_create_and_bind_first_key_requests(
+        principal_ura,
+        actor_ura,
+        ProofKindArg::Enrollment,
+        enrollment_id,
+        create_idempotency_key,
+        bind_idempotency_key,
+        key_id,
+        public_key_b64,
+        expires_unix_ms,
+    )
+}
+
+fn principal_create_and_bind_first_key_requests(
+    principal_ura: &str,
+    actor_ura: Option<&str>,
+    proof_kind: ProofKindArg,
+    proof_ref: &str,
+    create_idempotency_key: &str,
+    bind_idempotency_key: &str,
+    key_id: &str,
+    public_key_b64: &str,
+    expires_unix_ms: Option<i64>,
+) -> (Value, Value) {
     let create_request = principal_create_request(
         principal_ura,
         principal_command(
@@ -822,7 +926,7 @@ fn principal_bootstrap_requests(
             principal_ura,
             create_idempotency_key,
             None,
-            ProofKindArg::Bootstrap,
+            proof_kind,
             proof_ref,
         ),
     );
@@ -835,7 +939,7 @@ fn principal_bootstrap_requests(
             principal_ura,
             bind_idempotency_key,
             Some(1),
-            ProofKindArg::Bootstrap,
+            proof_kind,
             proof_ref,
         ),
         expires_unix_ms,
@@ -1356,6 +1460,78 @@ mod tests {
             ),
             "explicit-proof"
         );
+    }
+
+    #[test]
+    fn enrollment_requests_consume_capability_for_create_and_bind() {
+        let (create_request, bind_request) = principal_enrollment_requests(
+            " easynet:///r/realm/user/bob ",
+            None,
+            " enrollment_1 ",
+            "create-bob",
+            "bind-bob",
+            "key-bob",
+            "BOB_PUB",
+            Some(98765),
+        );
+
+        assert_eq!(
+            create_request["request"]["principal_ura"],
+            "easynet:///r/realm/user/bob"
+        );
+        assert_eq!(
+            create_request["request"]["command"]["actor_ura"],
+            "easynet:///r/realm/user/bob"
+        );
+        assert_eq!(
+            create_request["request"]["command"]["proof"]["kind"],
+            "enrollment"
+        );
+        assert_eq!(
+            create_request["request"]["command"]["proof"]["reference"],
+            "enrollment_1"
+        );
+        assert!(create_request["request"]["command"]
+            .get("expected_version")
+            .is_none());
+
+        assert_eq!(
+            bind_request["request"]["command"]["proof"]["kind"],
+            "enrollment"
+        );
+        assert_eq!(
+            bind_request["request"]["command"]["proof"]["reference"],
+            "enrollment_1"
+        );
+        assert_eq!(bind_request["request"]["command"]["expected_version"], 1);
+        assert_eq!(bind_request["request"]["key_id"], "key-bob");
+        assert_eq!(bind_request["request"]["public_key_b64"], "BOB_PUB");
+        assert_eq!(bind_request["request"]["expires_unix_ms"], 98765);
+    }
+
+    #[test]
+    fn enrollment_requests_have_no_product_account_or_private_key_fields() {
+        let (create_request, bind_request) = principal_enrollment_requests(
+            "easynet:///r/realm/user/bob",
+            Some("easynet:///r/realm/user/bob"),
+            "enrollment_1",
+            "create-bob",
+            "bind-bob",
+            "key-bob",
+            "BOB_PUB",
+            None,
+        );
+
+        assert!(create_request["request"].get("username").is_none());
+        assert!(create_request["request"].get("user_id").is_none());
+        assert!(create_request["request"].get("account_id").is_none());
+        assert!(create_request["request"].get("session").is_none());
+        assert!(bind_request["request"].get("username").is_none());
+        assert!(bind_request["request"].get("user_id").is_none());
+        assert!(bind_request["request"].get("account_id").is_none());
+        assert!(bind_request["request"].get("session").is_none());
+        assert!(bind_request["request"].get("private_key").is_none());
+        assert!(bind_request["request"].get("seed").is_none());
     }
 
     #[test]

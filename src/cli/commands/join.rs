@@ -2,28 +2,32 @@
 // ===========
 //
 // File: src/cli/commands/join.rs
-// Description: `easynet device join <token>` — pair this device with EasyNet Hub via a one-time
-//              pairing token, establishing a persistent trust relationship.
+// Description: `easynet device join <token-or-hub-ura>` — join this device to
+//              an EasyNet Hub via the staged HTTP pairing facade or the
+//              canonical Hub URA federation path.
 //
 // Protocol Responsibility:
-// - Validates a one-time pairing token (32-64 hex chars) against the Hub REST API.
-// - POST /api/v1/devices/pairing/{token}/validate with device sysinfo (hostname, OS, arch).
-// - Receives and persists: node_id, credential_token, hub_endpoint, realm, deploy_signature.
-// - This is the ONLY command that creates ~/.easynet/credentials.json; all other commands consume it.
+// - Preserves the historical Backend HTTP pairing path while the staged
+//   product facade remains.
+// - Supports Hub URA joins through Axon `federation.join`.
+// - Carries optional product-neutral PrincipalLifecycle proof for Hub URA joins.
+// - Creates ~/.easynet/credentials.json; other commands consume it.
 //
 // Implementation Approach:
-// - Synchronous HTTP via ureq with 30s timeout. No retry — pairing tokens are one-shot.
-// - Token format validation before network call to fail fast on typos.
-// - Supports --hub for self-hosted Hubs (defaults to https://easynet.run).
+// - Routes `easynet:///r/<realm>/hub` through the daemon federation client.
+// - Routes legacy tokens through synchronous HTTP until the SPEC authorizes
+//   irreversible deletion.
+// - Lowers PrincipalLifecycle proof without product account fields.
 //
 // Usage Contract:
-// - Run once per device. Re-running overwrites existing credentials (re-pair).
-// - Requires network access to Hub REST API (not the gRPC Axon endpoint).
+// - Run once per device. Re-running overwrites existing credentials.
+// - Principal proof options are valid only on the Hub URA path.
 // - After join, run `easynet connect` to start the device agent.
 //
 // Architectural Position:
-// - Entry point of the device lifecycle: join → start → (heartbeat loop) → stop → reset.
-// - Bridges the Hub's web-based pairing flow with the CLI's local credential store.
+// - Device lifecycle entrypoint: join → start → heartbeat → stop → reset.
+// - The Hub URA path is the canonical runtime model; HTTP pairing is a staged
+//   Backend product facade pending SPEC cutover.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -122,6 +126,9 @@ pub struct JoinArgs {
     /// Principal URA to bind this joined device to on the Hub URA path.
     #[arg(long)]
     pub principal_ura: Option<String>,
+    /// Enrollment capability id for joining this device as --principal-ura.
+    #[arg(long)]
+    pub principal_enrollment_id: Option<String>,
     /// PrincipalLifecycle proof kind for --principal-ura.
     #[arg(long)]
     pub principal_proof_kind: Option<String>,
@@ -186,6 +193,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
     let creds = if target.starts_with(crate::core::ura::URA_SCHEME) {
         let principal_enrollment = join_principal_enrollment_from_args(
             args.principal_ura.as_deref(),
+            args.principal_enrollment_id.as_deref(),
             args.principal_proof_kind.as_deref(),
             args.principal_proof_ref.as_deref(),
         )?;
@@ -200,6 +208,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         if args.principal_ura.is_some()
             || args.principal_proof_kind.is_some()
             || args.principal_proof_ref.is_some()
+            || args.principal_enrollment_id.is_some()
         {
             anyhow::bail!(
                 "principal enrollment proof is supported only for hub URA joins; use easynet:///r/<realm>/hub"
@@ -418,42 +427,60 @@ fn run_ura_join_stages(
 
 fn join_principal_enrollment_from_args(
     principal_ura: Option<&str>,
+    enrollment_id: Option<&str>,
     proof_kind: Option<&str>,
     proof_ref: Option<&str>,
 ) -> anyhow::Result<
     Option<crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof>,
 > {
-    match (principal_ura, proof_kind, proof_ref) {
-        (None, None, None) => Ok(None),
-        (Some(principal_ura), Some(kind), Some(reference)) => {
-            let principal_ura = principal_ura.trim();
-            let kind = kind.trim();
-            let reference = reference.trim();
-            if principal_ura.is_empty() || kind.is_empty() || reference.is_empty() {
-                anyhow::bail!(
-                    "--principal-ura, --principal-proof-kind and --principal-proof-ref must not be empty"
-                );
-            }
-            let parsed = crate::core::ura::parse_ura(principal_ura).map_err(|err| {
-                anyhow::anyhow!("invalid --principal-ura `{principal_ura}`: {err}")
-            })?;
-            if parsed.kind != crate::core::ura::URAKind::User {
-                anyhow::bail!("--principal-ura must identify a User URA");
-            }
-            Ok(Some(
-                crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof {
-                    principal_ura: principal_ura.to_string(),
-                    proof: crate::daemon::federation::client::ability_contract::PrincipalProofRef {
-                        kind: kind.to_string(),
-                        reference: reference.to_string(),
-                    },
-                },
-            ))
+    if enrollment_id.is_some() && (proof_kind.is_some() || proof_ref.is_some()) {
+        anyhow::bail!(
+            "--principal-enrollment-id cannot be combined with --principal-proof-kind or --principal-proof-ref"
+        );
+    }
+    match (principal_ura, enrollment_id, proof_kind, proof_ref) {
+        (None, None, None, None) => Ok(None),
+        (Some(principal_ura), Some(enrollment_id), None, None) => {
+            join_principal_enrollment_proof(principal_ura, "enrollment", enrollment_id)
+        }
+        (Some(principal_ura), None, Some(kind), Some(reference)) => {
+            join_principal_enrollment_proof(principal_ura, kind, reference)
         }
         _ => anyhow::bail!(
-            "--principal-ura, --principal-proof-kind and --principal-proof-ref must be supplied together"
+            "--principal-ura plus either --principal-enrollment-id or the complete --principal-proof-kind/--principal-proof-ref pair must be supplied together"
         ),
     }
+}
+
+fn join_principal_enrollment_proof(
+    principal_ura: &str,
+    kind: &str,
+    reference: &str,
+) -> anyhow::Result<
+    Option<crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof>,
+> {
+    let principal_ura = principal_ura.trim();
+    let kind = kind.trim();
+    let reference = reference.trim();
+    if principal_ura.is_empty() || kind.is_empty() || reference.is_empty() {
+        anyhow::bail!(
+            "--principal-ura, --principal-proof-kind and --principal-proof-ref must not be empty"
+        );
+    }
+    let parsed = crate::core::ura::parse_ura(principal_ura)
+        .map_err(|err| anyhow::anyhow!("invalid --principal-ura `{principal_ura}`: {err}"))?;
+    if parsed.kind != crate::core::ura::URAKind::User {
+        anyhow::bail!("--principal-ura must identify a User URA");
+    }
+    Ok(Some(
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof {
+            principal_ura: principal_ura.to_string(),
+            proof: crate::daemon::federation::client::ability_contract::PrincipalProofRef {
+                kind: kind.to_string(),
+                reference: reference.to_string(),
+            },
+        },
+    ))
 }
 
 #[derive(Debug)]
@@ -1615,6 +1642,7 @@ mod tests {
     fn join_principal_enrollment_requires_complete_product_neutral_proof() {
         let err = join_principal_enrollment_from_args(
             Some("easynet:///r/tenant-a/user/alice"),
+            None,
             Some("active_key"),
             None,
         )
@@ -1626,6 +1654,7 @@ mod tests {
     fn join_principal_enrollment_lowers_without_product_account_fields() {
         let proof = join_principal_enrollment_from_args(
             Some("easynet:///r/tenant-a/user/alice"),
+            None,
             Some("active_key"),
             Some("binding-1"),
         )
@@ -1638,6 +1667,41 @@ mod tests {
         assert_eq!(value["proof"]["reference"], "binding-1");
         assert!(value.get("username").is_none());
         assert!(value.get("user_id").is_none());
+    }
+
+    #[test]
+    fn join_principal_enrollment_id_lowers_to_enrollment_proof() {
+        let proof = join_principal_enrollment_from_args(
+            Some(" easynet:///r/tenant-a/user/bob "),
+            Some(" enrollment_1 "),
+            None,
+            None,
+        )
+        .expect("proof")
+        .expect("present");
+        let value = serde_json::to_value(&proof).expect("json");
+
+        assert_eq!(value["principal_ura"], "easynet:///r/tenant-a/user/bob");
+        assert_eq!(value["proof"]["kind"], "enrollment");
+        assert_eq!(value["proof"]["reference"], "enrollment_1");
+        assert!(value.get("username").is_none());
+        assert!(value.get("user_id").is_none());
+        assert!(value.get("account_id").is_none());
+    }
+
+    #[test]
+    fn join_principal_enrollment_id_rejects_generic_proof_mix() {
+        let err = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant-a/user/bob"),
+            Some("enrollment_1"),
+            Some("enrollment"),
+            None,
+        )
+        .expect_err("mixed shorthand and generic proof must fail");
+
+        assert!(err
+            .to_string()
+            .contains("cannot be combined with --principal-proof-kind"));
     }
 
     #[test]

@@ -618,7 +618,8 @@ The current remaining work is:
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,
   Directory, receipt and event capabilities;
 - lift the real daemon gRPC PrincipalLifecycle evidence into a CLI/SDK Hub flow
-  beyond the product-neutral first-principal bootstrap facade, including
+  beyond the product-neutral first-principal bootstrap and enrollment-consume
+  facades plus the Hub URA join enrollment-id shorthand, including
   additional-key authorization, key
   rotation/revocation, recovery, suspension/reactivation/deletion and grants;
 - prove URA-only `federation.join` plus Principal enrollment without Backend

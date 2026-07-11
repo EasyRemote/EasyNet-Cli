@@ -420,7 +420,7 @@ multi-user lifecycle without EasyNet Backend is not.
 | Multi-user signature verification and admission | implemented |
 | Create the first user without Backend | provider enforces explicit bootstrap and bind-first-key proof continuity; CLI first-principal bootstrap facade exists; standalone-Hub E2E workflow incomplete |
 | User login, authentication and recovery without Backend | recovery policy proof is provider-enforced; login/recovery CLI flow and E2E incomplete |
-| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state with active-key, grant and recovery proof enforcement; CLI flow and E2E incomplete |
+| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state with active-key, grant and recovery proof enforcement; CLI active-key flow exists; device enrollment UX and E2E incomplete |
 | Multi-user administration and permission governance without Backend | partial capabilities; no standalone-Hub closure |
 
 The implementation already establishes these lower-level facts:
@@ -569,9 +569,21 @@ standalone/backend-present end-to-end gates remain required. The CLI
 `principal bootstrap` facade now composes `principal.lifecycle.create` and
 `principal.lifecycle.bind_first_key` with one bootstrap proof reference,
 separate idempotency keys, fixed bind expected-version `1`, and daemon
-key-service public-key projection only. This closes the first-principal CLI
-entrypoint but does not close additional-device enrollment, recovery UX,
-standalone-Hub E2E or Backend-present E2E.
+key-service public-key projection only. The CLI `principal enroll` facade now
+consumes an issued enrollment capability by composing the same create and
+bind-first-key transition pair with `proof.kind = enrollment`, the shared
+enrollment id, separate idempotency keys and fixed bind expected-version `1`.
+These close the first-principal and enrollment-consume CLI entrypoints. The
+Hub URA join CLI now also accepts `--principal-enrollment-id` as a
+product-neutral shorthand for `proof.kind = enrollment`, reducing device join
+proof assembly to `--principal-ura` plus the issued enrollment id. This closes
+the CLI proof-lowering UX for device enrollment but does not close the full
+cross-device/TLS standalone-Hub E2E, recovery UX, standalone-Hub E2E or
+Backend-present E2E. A real CLI binary E2E now executes
+`principal bootstrap`, `principal issue-enrollment`, `principal enroll` and
+`principal get` against the in-process daemon UDS fixture plus daemon
+key-service, proving the first-principal and enrollment-consume facades lower
+to the daemon-owned aggregate without Backend account state.
 
 ---
 
