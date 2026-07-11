@@ -3,6 +3,7 @@ package easynet
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -111,6 +112,29 @@ func TestReceiptReferenceDelegatesScalarCausalProjectionToAxon(t *testing.T) {
 	}
 	if _, err := NewReceiptReference(reference.ReceiptURA, []byte{0xab, 0xcd}); err == nil {
 		t.Fatal("short receipt hash was accepted")
+	}
+}
+
+func TestReceiptReferenceFromRuntimeReceiptUsesSummaryAnchor(t *testing.T) {
+	reference, err := ReceiptReferenceFromRuntimeReceipt(RuntimeReceipt{
+		ReceiptURA:  "easynet:///r/example/resource/device.dev-a/invocation/req-1/receipt/1",
+		SelfHashHex: strings.Repeat("cd", 32),
+	})
+	if err != nil {
+		t.Fatalf("ReceiptReferenceFromRuntimeReceipt: %v", err)
+	}
+	if reference.ReceiptURA != "easynet:///r/example/resource/device.dev-a/invocation/req-1/receipt/1" ||
+		hex.EncodeToString(reference.ReceiptHash[:]) != strings.Repeat("cd", 32) {
+		t.Fatalf("unexpected reference: %#v", reference)
+	}
+	if _, err := ReceiptReferenceFromRuntimeReceipt(RuntimeReceipt{SelfHashHex: strings.Repeat("cd", 32)}); err == nil {
+		t.Fatal("runtime receipt summary without receipt_ura was accepted")
+	}
+	if _, err := ReceiptReferenceFromRuntimeReceipt(RuntimeReceipt{
+		ReceiptURA:  reference.ReceiptURA,
+		SelfHashHex: "not-hex",
+	}); err == nil {
+		t.Fatal("runtime receipt summary with malformed hash was accepted")
 	}
 }
 

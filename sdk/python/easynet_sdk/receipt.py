@@ -169,6 +169,23 @@ class ReceiptReference:
             raise _invalid("receipt anchor hash must be hexadecimal", error) from error
         return cls(receipt_ura=anchor.receipt_ura, receipt_hash=receipt_hash)
 
+    @classmethod
+    def from_runtime_receipt(cls, receipt: object) -> "ReceiptReference":
+        """Build a causal reference from a daemon runtime receipt summary."""
+
+        receipt_ura = _summary_value(receipt, "receipt_ura")
+        self_hash_hex = _summary_value(receipt, "self_hash_hex")
+        if not receipt_ura:
+            raise _invalid("runtime receipt summary is missing receipt_ura")
+        try:
+            receipt_hash = bytes.fromhex(self_hash_hex)
+        except (TypeError, ValueError) as error:
+            raise _invalid(
+                "runtime receipt summary self_hash_hex must be hexadecimal",
+                error,
+            ) from error
+        return cls(receipt_ura=receipt_ura, receipt_hash=receipt_hash)
+
     def causal_context(self) -> Mapping[str, object]:
         """Project this anchor through Axon's canonical scalar JSON codec."""
 
@@ -380,6 +397,16 @@ def _parse_record(value: object) -> InvocationLedgerRecord:
         return parse_invocation_ledger_record(value)
     except Exception as error:
         raise _invalid("invalid Axon invocation ledger projection", error) from error
+
+
+def _summary_value(receipt: object, name: str) -> str:
+    if isinstance(receipt, Mapping):
+        value = receipt.get(name)
+    else:
+        value = getattr(receipt, name, None)
+    if value is None:
+        return ""
+    return _required_text(value, name)
 
 
 def _receipt_limit(limit: int) -> int:

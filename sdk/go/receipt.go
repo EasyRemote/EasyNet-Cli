@@ -57,6 +57,21 @@ func ReceiptReferenceFromAnchor(anchor InvocationReceiptAnchor) (ReceiptReferenc
 	return NewReceiptReference(anchor.ReceiptURA, receiptHash)
 }
 
+// ReceiptReferenceFromRuntimeReceipt projects a daemon runtime receipt summary
+// into the scalar causal reference used by Invocation builders. The SDK owns
+// receipt URA and hash validation; products must not fabricate anchors from
+// partial summaries.
+func ReceiptReferenceFromRuntimeReceipt(receipt RuntimeReceipt) (ReceiptReference, error) {
+	if strings.TrimSpace(receipt.ReceiptURA) == "" {
+		return ReceiptReference{}, invalidReceipt("runtime receipt summary is missing receipt_ura", nil)
+	}
+	receiptHash, err := hex.DecodeString(strings.TrimSpace(receipt.SelfHashHex))
+	if err != nil {
+		return ReceiptReference{}, invalidReceipt("runtime receipt summary self_hash_hex must be hexadecimal", err)
+	}
+	return NewReceiptReference(receipt.ReceiptURA, receiptHash)
+}
+
 func (r ReceiptReference) Validate() error {
 	if strings.TrimSpace(r.ReceiptURA) == "" {
 		return invalidReceipt("receipt_ura is required", nil)

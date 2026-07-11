@@ -124,6 +124,31 @@ def test_receipt_reference_requires_daemon_or_axon_issued_ura() -> None:
         )
 
 
+def test_receipt_reference_from_runtime_receipt_summary() -> None:
+    reference = ReceiptReference.from_runtime_receipt(
+        {
+            "receipt_ura": (
+                "easynet:///r/example/resource/alice.invocations/request-1/receipt/1"
+            ),
+            "self_hash_hex": "cd" * 32,
+        }
+    )
+    assert reference.receipt_ura == (
+        "easynet:///r/example/resource/alice.invocations/request-1/receipt/1"
+    )
+    assert reference.receipt_hash == b"\xcd" * 32
+
+    with pytest.raises(SDKError, match="missing receipt_ura"):
+        ReceiptReference.from_runtime_receipt({"self_hash_hex": "cd" * 32})
+    with pytest.raises(SDKError, match="self_hash_hex must be hexadecimal"):
+        ReceiptReference.from_runtime_receipt(
+            {
+                "receipt_ura": reference.receipt_ura,
+                "self_hash_hex": "not-hex",
+            }
+        )
+
+
 def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     provider, transport = _provider()
     transport.output_json = _output(

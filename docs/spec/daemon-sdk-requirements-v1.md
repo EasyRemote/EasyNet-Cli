@@ -567,6 +567,9 @@ AbilityDescriptor projection now has symmetric provider-backed Go/Python
 facades over daemon `meta.list_abilities`, so descriptor schema, call mode,
 hashes, visibility and hints remain daemon catalog facts rather than
 SDK-inferred product facts.
+Receipt summary causal-anchor projection now has symmetric Go/Python SDK
+helpers, and EasyRemote child Context dispatch consumes the Python SDK
+`ReceiptReference` instead of deciding receipt-anchor validity in product code.
 Backend-free multi-user closure remains partial as described above. Passing
 baseline tests must not be reported as standalone-Hub delivery evidence until
 sections 14.2 and 14.3 and the cross-language parity gates pass.
@@ -631,7 +634,9 @@ resolved. Public API inventory, the symmetric capability matrix, generic
 PrincipalLifecycle seams, canonical Invocation lowering, provider-backed
 Directory resolution, the daemon-backed Receipt/causal/history/trace provider,
 provider-backed AbilityDescriptor projection, and provider-backed runtime
-Events/Admin and AccessControl facades have landed.
+Events/Admin and AccessControl facades have landed. EasyRemote child
+causality now consumes the SDK receipt-reference projection, but broader
+EasyRemote receipt/event/directory cutover remains in progress.
 They are intermediate convergence evidence, not completion of downstream
 product cutover or the standalone-Hub PrincipalLifecycle closure.
 

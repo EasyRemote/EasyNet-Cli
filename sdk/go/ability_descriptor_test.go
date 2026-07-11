@@ -107,11 +107,13 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 		return runtimeAbilityResultJSON(true, `{"abilities":[{
 			"name":"namespace.resolve",
 			"ability_ura":"easynet:///r/example/ability/hub.namespace.resolve",
+			"descriptor_ref":"easynet:///r/example/ability/hub.namespace.resolve@1.0.0",
 			"owner_ura":"easynet:///r/example/hub",
-			"version":"1.0.0",
+			"descriptor_version":"1.0.0",
 			"schema_hash":"sha256:abc",
 			"descriptor_hash":"sha256:def",
 			"call_mode":"rpc",
+			"class":"runtime",
 			"receipt_semantics":{"kind":"terminal"},
 			"visibility":"public",
 			"description":"Resolve names",
@@ -149,10 +151,13 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 	}
 	got := page.Descriptors[0]
 	if got.AbilityURA != "easynet:///r/example/ability/hub.namespace.resolve" ||
+		got.DescriptorRef != "easynet:///r/example/ability/hub.namespace.resolve@1.0.0" ||
 		got.Version != "1.0.0" ||
+		got.Class != "runtime" ||
 		got.SchemaHash != "sha256:abc" ||
 		got.CallMode != "rpc" ||
 		!got.Hints.ReadOnly ||
+		got.SchemaSummary["input"] == nil ||
 		got.InputSchema["type"] != "object" ||
 		got.Metadata["stable"] != "true" {
 		t.Fatalf("descriptor projection lost daemon facts: %#v", got)

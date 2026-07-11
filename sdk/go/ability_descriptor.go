@@ -24,17 +24,20 @@ type AbilityDescriptorHints struct {
 // Metadata; this type owns only generic runtime descriptor fields.
 type AbilityDescriptorProjection struct {
 	AbilityURA       string
+	DescriptorRef    string
 	Name             string
 	OwnerURA         string
 	Version          string
 	SchemaHash       string
 	DescriptorHash   string
 	CallMode         string
+	Class            string
 	ReceiptSemantics map[string]any
 	Visibility       string
 	Source           string
 	Description      string
 	Hints            AbilityDescriptorHints
+	SchemaSummary    map[string]any
 	InputSchema      map[string]any
 	Metadata         map[string]any
 }
@@ -218,12 +221,14 @@ func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 	values := mergeAbilityDescriptorMap(raw)
 	projection := AbilityDescriptorProjection{
 		AbilityURA:       descriptorString(values["ability_ura"]),
+		DescriptorRef:    descriptorString(values["descriptor_ref"]),
 		Name:             descriptorString(values["name"]),
 		OwnerURA:         descriptorString(values["owner_ura"]),
-		Version:          descriptorString(values["version"]),
+		Version:          firstDescriptorString(values["version"], values["descriptor_version"]),
 		SchemaHash:       descriptorString(values["schema_hash"]),
 		DescriptorHash:   descriptorString(values["descriptor_hash"]),
 		CallMode:         descriptorString(values["call_mode"]),
+		Class:            descriptorString(values["class"]),
 		ReceiptSemantics: descriptorMap(values["receipt_semantics"]),
 		Visibility:       descriptorString(values["visibility"]),
 		Source:           descriptorString(values["source"]),
@@ -246,6 +251,7 @@ func ProjectAbilityDescriptor(raw map[string]any) AbilityDescriptorProjection {
 		}
 	}
 	if schema := descriptorMap(values["schema_summary"]); schema != nil {
+		projection.SchemaSummary = schema
 		projection.InputSchema = descriptorMap(schema["input"])
 	}
 	return projection
@@ -287,6 +293,15 @@ func joinAbilityDescriptorName(namespace string, localName string) string {
 func descriptorString(value any) string {
 	if typed, ok := value.(string); ok {
 		return typed
+	}
+	return ""
+}
+
+func firstDescriptorString(values ...any) string {
+	for _, value := range values {
+		if text := strings.TrimSpace(descriptorString(value)); text != "" {
+			return text
+		}
 	}
 	return ""
 }

@@ -41,17 +41,20 @@ class AbilityDescriptorProjection:
     """Generic SDK read model for one daemon-owned AbilityDescriptor row."""
 
     ability_ura: str = ""
+    descriptor_ref: str = ""
     name: str = ""
     owner_ura: str = ""
     version: str = ""
     schema_hash: str = ""
     descriptor_hash: str = ""
     call_mode: str = ""
+    class_: str = ""
     receipt_semantics: Mapping[str, object] = field(default_factory=dict)
     visibility: str = ""
     source: str = ""
     description: str = ""
     hints: AbilityDescriptorHints = field(default_factory=AbilityDescriptorHints)
+    schema_summary: Mapping[str, object] = field(default_factory=dict)
     input_schema: Mapping[str, object] = field(default_factory=dict)
     metadata: Mapping[str, object] = field(default_factory=dict)
 
@@ -231,12 +234,14 @@ def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorPr
     schema = _mapping(values.get("schema_summary"))
     return AbilityDescriptorProjection(
         ability_ura=_text(values.get("ability_ura")),
+        descriptor_ref=_text(values.get("descriptor_ref")),
         name=name,
         owner_ura=_text(values.get("owner_ura")),
-        version=_text(values.get("version")),
+        version=_first_text(values.get("version"), values.get("descriptor_version")),
         schema_hash=_text(values.get("schema_hash")),
         descriptor_hash=_text(values.get("descriptor_hash")),
         call_mode=_text(values.get("call_mode")),
+        class_=_text(values.get("class")),
         receipt_semantics=_mapping(values.get("receipt_semantics")),
         visibility=_text(values.get("visibility")),
         source=_text(values.get("source")),
@@ -248,6 +253,7 @@ def project_ability_descriptor(raw: Mapping[str, object]) -> AbilityDescriptorPr
             streaming_only=_bool(hints.get("streaming_only")),
             bidi_only=_bool(hints.get("bidi_only")),
         ),
+        schema_summary=schema,
         input_schema=_mapping(schema.get("input")),
         metadata=_mapping(values.get("metadata")),
     )
@@ -283,6 +289,14 @@ def _join_name(namespace: str, local_name: str) -> str:
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _first_text(*values: object) -> str:
+    for value in values:
+        text = _text(value)
+        if text:
+            return text
+    return ""
 
 
 def _bool(value: object) -> bool:

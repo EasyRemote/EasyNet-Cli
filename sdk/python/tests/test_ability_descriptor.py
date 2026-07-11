@@ -86,11 +86,13 @@ def test_runtime_ability_descriptor_provider_lists_daemon_descriptors() -> None:
             {
                 "name": "namespace.resolve",
                 "ability_ura": "easynet:///r/example/ability/hub.namespace.resolve",
+                "descriptor_ref": "easynet:///r/example/ability/hub.namespace.resolve@1.0.0",
                 "owner_ura": "easynet:///r/example/hub",
-                "version": "1.0.0",
+                "descriptor_version": "1.0.0",
                 "schema_hash": "sha256:abc",
                 "descriptor_hash": "sha256:def",
                 "call_mode": "rpc",
+                "class": "runtime",
                 "receipt_semantics": {"kind": "terminal"},
                 "visibility": "public",
                 "description": "Resolve names",
@@ -120,10 +122,16 @@ def test_runtime_ability_descriptor_provider_lists_daemon_descriptors() -> None:
     assert len(page.descriptors) == 1
     descriptor = page.descriptors[0]
     assert descriptor.ability_ura == "easynet:///r/example/ability/hub.namespace.resolve"
+    assert (
+        descriptor.descriptor_ref
+        == "easynet:///r/example/ability/hub.namespace.resolve@1.0.0"
+    )
     assert descriptor.version == "1.0.0"
+    assert descriptor.class_ == "runtime"
     assert descriptor.schema_hash == "sha256:abc"
     assert descriptor.call_mode == "rpc"
     assert descriptor.hints.read_only
+    assert descriptor.schema_summary["input"]
     assert descriptor.input_schema["type"] == "object"
     assert descriptor.metadata["stable"] == "true"
 
