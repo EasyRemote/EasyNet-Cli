@@ -119,12 +119,16 @@ visible state. This is the only recovery from durability uncertainty.
    vault lifetime; concurrent independent snapshots are rejected.
 8. Device mode never provisions or publishes Hub signing authority. Hub-only
    mode never reads Device credentials.
-9. One process-wide lifecycle manager owns attach/spawn/restart transitions and
+9. The daemon-local `_system.local` caller is a daemon-key-service runtime
+   owner, not an in-process private key. LocalRuntime admission and
+   daemon-issued hosted-agent delegation both use its public projection and
+   sign-only capability.
+10. One process-wide lifecycle manager owns attach/spawn/restart transitions and
    every spawned child until it is reaped. Startup readiness failure always
    kills and waits for the owned child; a reachable but protocol-unhealthy
    owned child is also reaped before supervised restart. An unhealthy external
    service is never preempted.
-10. The key-service process is the only reader/creator of the single
+11. The key-service process is the only reader/creator of the single
     passphrase file. Lifecycle code only attaches or spawns and never reads or
     forwards the secret. The file is single-assignment: `create_new`, exactly
     64 lowercase hexadecimal bytes, Unix mode `0600`, `write_all`, file

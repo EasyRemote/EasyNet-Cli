@@ -35,9 +35,7 @@ use easynet_axon::invocation::{
     DescriptorBoundInvocationRequest,
 };
 
-use crate::daemon::identity::local_invocation::{
-    process_local_system_identity, LOCAL_SYSTEM_AGENT_URA,
-};
+use crate::daemon::identity::local_invocation::{sign_system_canonical, LOCAL_SYSTEM_AGENT_URA};
 
 /// Daemon classification of one descriptor-bound ingress into Axon
 /// `LocalRuntime`.
@@ -104,12 +102,21 @@ impl LocalRuntimeRequestFactory {
                         envelope.envelope().caller.ura
                     )));
                 }
-                let system_identity = process_local_system_identity();
-                DescriptorBoundInvocationRequest::signed(
+                let signature =
+                    sign_system_canonical(&envelope.canonical_bytes()).map_err(|error| {
+                        AxonError::internal(format!(
+                        "sign daemon-local descriptor-bound invocation through key service: {error}"
+                    ))
+                    })?;
+                DescriptorBoundInvocationRequest::externally_signed(
                     mode,
                     envelope,
+                    CallerSignature {
+                        algorithm: "ed25519".to_string(),
+                        signature: signature.to_bytes().to_vec(),
+                        key_id_hint: String::new(),
+                    },
                     payload,
-                    system_identity.signing_key(),
                 )
             }
         };

@@ -27,7 +27,6 @@
 use std::collections::HashMap;
 
 use easynet_axon::pb::axon::v1::Envelope;
-use ed25519_dalek::Signer as _;
 use tonic::Status;
 
 use crate::daemon::ability::{
@@ -128,9 +127,14 @@ impl HostedAgentDelegationIssuer {
         let claims = request
             .into_claims("host_device", binding)
             .map_err(|err| Status::invalid_argument(format!("hosted_agent_delegation: {err}")))?;
-        let signature = crate::daemon::identity::local_invocation::process_local_system_identity()
-            .signing_key()
-            .sign(&claims.signing_payload_bytes(caller_ura));
+        let signature = crate::daemon::identity::local_invocation::sign_system_canonical(
+            &claims.signing_payload_bytes(caller_ura),
+        )
+        .map_err(|error| {
+            Status::internal(format!(
+                "hosted_agent_delegation: daemon-local signer unavailable: {error}"
+            ))
+        })?;
         let signed_metadata = claims
             .signed_metadata_value(caller_ura, &signature)
             .map_err(|err| Status::internal(format!("hosted_agent_delegation: {err}")))?;
@@ -199,7 +203,9 @@ mod tests {
         HostedAgentDelegationContext::from_signed_metadata(
             raw,
             &binding,
-            crate::daemon::identity::local_invocation::system_verifying_key(),
+            crate::daemon::identity::local_invocation::system_verifying_key().expect(
+                "test daemon-local system identity must resolve through configured key service",
+            ),
         )
         .expect("daemon-issued token verifies with daemon local-system key");
     }

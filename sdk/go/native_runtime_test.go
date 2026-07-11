@@ -20,8 +20,13 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
+	identityTransportClosed := false
+	identity, err := NewIdentityClient(nativeRuntimeIdentityTransport{closed: &identityTransportClosed})
+	if err != nil {
+		t.Fatalf("NewIdentityClient: %v", err)
+	}
 	providerClosed := false
-	handle, err := newNativeRuntimeHandle(runtime, health, func(context.Context) error {
+	handle, err := newNativeRuntimeHandleWithIdentity(runtime, health, identity, func(context.Context) error {
 		providerClosed = true
 		return nil
 	})
@@ -43,11 +48,18 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if healthClient != health {
 		t.Fatalf("Health returned different client")
 	}
+	identityClient, err := handle.Identity()
+	if err != nil {
+		t.Fatalf("Identity: %v", err)
+	}
+	if identityClient != identity {
+		t.Fatalf("Identity returned different client")
+	}
 	if err := handle.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if !transportClosed || !providerClosed {
-		t.Fatalf("close did not release client/provider: client=%v provider=%v", transportClosed, providerClosed)
+	if !transportClosed || !identityTransportClosed || !providerClosed {
+		t.Fatalf("close did not release client/identity/provider: client=%v identity=%v provider=%v", transportClosed, identityTransportClosed, providerClosed)
 	}
 	if _, err := handle.Client(); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("Client after close error = %v, want %s", err, ErrInvalidArgument)
@@ -55,9 +67,22 @@ func TestNativeRuntimeHandleClosesClientAndProvider(t *testing.T) {
 	if _, err := handle.Health(); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("Health after close error = %v, want %s", err, ErrInvalidArgument)
 	}
+	if _, err := handle.Identity(); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Identity after close error = %v, want %s", err, ErrInvalidArgument)
+	}
 	if err := handle.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
+}
+
+type nativeRuntimeIdentityTransport struct {
+	IdentityTransportFunc
+	closed *bool
+}
+
+func (t nativeRuntimeIdentityTransport) Close(context.Context) error {
+	*t.closed = true
+	return nil
 }
 
 func TestNativeRuntimeHandleRequiresHealthFacade(t *testing.T) {

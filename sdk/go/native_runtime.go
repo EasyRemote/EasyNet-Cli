@@ -19,14 +19,19 @@ type NativeRuntimeOptions struct {
 
 // NativeRuntimeHandle owns SDK facades opened from one native daemon provider.
 type NativeRuntimeHandle struct {
-	mu      sync.Mutex
-	client  *RuntimeClient
-	health  *HealthClient
-	closeFn func(context.Context) error
-	closed  bool
+	mu       sync.Mutex
+	client   *RuntimeClient
+	health   *HealthClient
+	identity *IdentityClient
+	closeFn  func(context.Context) error
+	closed   bool
 }
 
 func newNativeRuntimeHandle(client *RuntimeClient, health *HealthClient, closeFn func(context.Context) error) (*NativeRuntimeHandle, error) {
+	return newNativeRuntimeHandleWithIdentity(client, health, nil, closeFn)
+}
+
+func newNativeRuntimeHandleWithIdentity(client *RuntimeClient, health *HealthClient, identity *IdentityClient, closeFn func(context.Context) error) (*NativeRuntimeHandle, error) {
 	if client == nil {
 		return nil, invalidRuntimeClient("native runtime client is required")
 	}
@@ -36,7 +41,12 @@ func newNativeRuntimeHandle(client *RuntimeClient, health *HealthClient, closeFn
 	if closeFn == nil {
 		closeFn = func(context.Context) error { return nil }
 	}
-	return &NativeRuntimeHandle{client: client, health: health, closeFn: closeFn}, nil
+	return &NativeRuntimeHandle{
+		client:   client,
+		health:   health,
+		identity: identity,
+		closeFn:  closeFn,
+	}, nil
 }
 
 // Client returns the Runtime Core facade opened by this native provider.
@@ -71,6 +81,24 @@ func (h *NativeRuntimeHandle) Health() (*HealthClient, error) {
 	return h.health, nil
 }
 
+// Identity returns the canonical Identity facade opened by this native
+// provider. Consumers must use this facade rather than re-opening C ABI
+// identity transports or recreating identity grammar locally.
+func (h *NativeRuntimeHandle) Identity() (*IdentityClient, error) {
+	if h == nil {
+		return nil, invalidRuntimeClient("native runtime handle is not initialized")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil, invalidRuntimeClient("native runtime handle is closed")
+	}
+	if h.identity == nil {
+		return nil, invalidRuntimeClient("native runtime identity client is not initialized")
+	}
+	return h.identity, nil
+}
+
 // Close releases the RuntimeClient and native provider resources exactly once.
 func (h *NativeRuntimeHandle) Close(ctx context.Context) error {
 	if h == nil {
@@ -86,15 +114,22 @@ func (h *NativeRuntimeHandle) Close(ctx context.Context) error {
 	}
 	h.closed = true
 	client := h.client
+	identity := h.identity
 	closeFn := h.closeFn
 	h.client = nil
 	h.health = nil
+	h.identity = nil
 	h.closeFn = nil
 	h.mu.Unlock()
 
 	var first error
+	if identity != nil {
+		first = identity.Close(ctx)
+	}
 	if client != nil {
-		first = client.Close(ctx)
+		if err := client.Close(ctx); err != nil && first == nil {
+			first = err
+		}
 	}
 	if closeFn != nil {
 		if err := closeFn(ctx); err != nil && first == nil {

@@ -146,6 +146,12 @@ fn ensure_daemon_runtime_identity(config: &DaemonConfig) -> anyhow::Result<()> {
         .context("start or attach daemon key service")?;
     let client = KeyringClient::default_path();
 
+    // `_system.local` is the daemon's internal caller identity. It uses the
+    // same daemon-owned custody service as Device and Hub identities; a
+    // process-local generated key would create a second authentication root.
+    easynet_cli::daemon::identity::self_identity::ensure_daemon_local_system_identity(&client)
+        .map_err(|error| anyhow::anyhow!("ensure daemon-local runtime identity: {error}"))?;
+
     match config.mode() {
         DaemonMode::Hub => {
             let hub_ura = easynet_cli::core::ura::hub_ura(config.realm());

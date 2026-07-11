@@ -134,7 +134,10 @@ fn register_management_abilities(
     config: &PagesConfig,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
-    let owner = OwnerKind::Agent("pages".to_string());
+    // Pages transitions are accountable to the user. The `pages` Agent is an
+    // execution host declared in the daemon authority inventory, not a second
+    // product ownership root.
+    let owner = OwnerKind::User(config.user.clone());
     let authority_scope = pages_management_authority_scope(config);
 
     let user = config.user.clone();
@@ -219,10 +222,19 @@ fn register_management_abilities(
 
 fn pages_management_authority_scope(config: &PagesConfig) -> AuthorityScope {
     AuthorityScope::new(
-        "agent:pages",
-        crate::core::ura::agent_ura(&config.realm, &config.user, "pages"),
+        format!("user:{}", config.user),
+        management_agent_ura(&config.realm, &config.user),
     )
     .expect("static pages management authority scope is well-formed")
+}
+
+/// Execution host for the user-owned Pages management family.
+///
+/// The root is intentionally separate from the control-plane owner:
+/// `user:<user>` remains accountable for Pages transitions, while this Agent
+/// identifies the daemon-hosted executor that serves the descriptor.
+pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
+    crate::core::ura::agent_ura(realm, user, "pages")
 }
 
 fn register_management_rpc(

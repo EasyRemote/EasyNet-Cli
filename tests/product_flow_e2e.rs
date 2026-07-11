@@ -17,6 +17,9 @@
 //! agent registry → `<agent>.invoke` → forward routing
 //! (RFC-002 §5.2, RFC-002.2 §2.3) → fake remote daemon handler.
 
+#[path = "key_service_fixture.rs"]
+mod key_service_fixture;
+
 use easynet_axon::invocation::LocalRuntime;
 use easynet_cli::daemon::ability::builtins::agents::invoke as invoke_ability;
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
@@ -64,6 +67,7 @@ impl ProductRuntimeHarness {
 }
 
 fn build_registry_with_invoke(self_agent: &str, agents: AgentRegistry) -> ProductRuntimeHarness {
+    key_service_fixture::install();
     let runtime = LocalRuntime::new();
     let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
     let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
@@ -258,6 +262,7 @@ fn unknown_remote_target_falls_through_to_typed_error() {
 #[test]
 fn agent1_can_invoke_local_agent_without_federation_path() {
     let _g = product_test_lock();
+    key_service_fixture::install();
 
     // Same device, two co-located agents. agent1 invokes
     // agent2.summarize on the same device — must NOT go through

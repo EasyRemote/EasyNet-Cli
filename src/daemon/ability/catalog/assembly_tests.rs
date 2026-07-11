@@ -654,6 +654,38 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_hub_roots(
 }
 
 #[test]
+fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("pages-owner", "dev-1");
+    let pages_agent = crate::core::ura::agent_ura("pages-owner", "alice", "pages");
+    let mut config = registry_config_for_agents(&agents);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("alice".to_string()),
+        realm: Some("pages-owner".to_string()),
+        listener_port: Some(8787),
+    };
+    config.authority_context = Some(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            device_ura,
+        )
+        .expect("pages test Device authority context"),
+    );
+
+    let registry = build_registry_with_services_result(config).catalog;
+    let record = registry
+        .control_plane_record_for_authority_mode(
+            &pages_agent,
+            "pages.publish",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("Pages control-plane lookup")
+        .expect("Pages publish must be registered under its declared execution Agent");
+    assert_eq!(record.authority().scope().owner_projection(), "user:alice");
+    assert_eq!(record.authority().scope().authority_root(), pages_agent);
+}
+
+#[test]
 fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();

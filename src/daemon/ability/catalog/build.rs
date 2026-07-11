@@ -384,8 +384,28 @@ fn build_registry_with_services_result_inner(
         discover_federation_resolver,
     } = services;
 
-    let authority_context = authority_context.unwrap_or_default();
+    let mut authority_context = authority_context.unwrap_or_default();
     let hosts_device_authority = authority_context.hosts_device_authority();
+    // Pages management is user-owned but executes through the stable
+    // `<user>.pages` daemon Agent. Declare that host from the same explicit
+    // boot identity that drives Pages registration so authority admission
+    // never falls back to ambient local-agent state.
+    if hosts_device_authority {
+        if let Some(user) = pages_identity.user.as_deref() {
+            let realm = pages_identity
+                .realm
+                .as_deref()
+                .unwrap_or(crate::core::ura::REALM_EASYNET);
+            let pages_host = pages::management_agent_ura(realm, user);
+            authority_context = authority_context
+                .with_declared_agent_authority_root(pages_host)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "Pages execution host cannot be admitted by the daemon authority context: {error}"
+                    )
+                });
+        }
+    }
     // Hub-only assembly must not consult or replay Device product state. Keep
     // one empty registry view for provider constructors while static owner
     // admission remains centralized in `StaticRegistration::commit`.

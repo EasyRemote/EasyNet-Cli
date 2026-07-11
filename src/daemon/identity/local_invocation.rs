@@ -9,8 +9,7 @@
 use easynet_axon::invocation::{
     AgentIdentity, AxonError, ErrorCode, ErrorStage, KeyResolver, SecurityClass, UraProfile,
 };
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand::RngCore as _;
+use ed25519_dalek::{Signature, VerifyingKey};
 use std::sync::{Arc, OnceLock};
 
 pub(crate) use crate::core::ura::LOCAL_SYSTEM_AGENT_URA;
@@ -28,45 +27,110 @@ pub(crate) fn system_agent_identity() -> AgentIdentity {
     agent_identity(LOCAL_SYSTEM_AGENT_URA)
 }
 
-/// Process-local capability for daemon-internal LocalRuntime calls.
-///
-/// It is deliberately generated at process boot instead of derived from a
-/// source-code constant. The private key never leaves this process; external
-/// wire callers cannot reproduce a `_system.local` signature.
+/// Daemon-key-service-backed capability for daemon-internal LocalRuntime
+/// calls. `_system.local` is an ordinary runtime owner: it has a public
+/// projection and can request signatures, but the daemon process never owns
+/// its private key.
 pub(crate) struct LocalSystemIdentity {
-    signing_key: SigningKey,
+    public_key: VerifyingKey,
+    provider: Arc<dyn super::self_identity::SelfIdentity>,
 }
 
 impl LocalSystemIdentity {
-    fn generate() -> Self {
-        let mut seed = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
-        Self {
-            signing_key: SigningKey::from_bytes(&seed),
-        }
+    #[cfg(not(test))]
+    fn load_from_key_service() -> Result<Self, super::self_identity::SelfIdentityError> {
+        let client = Arc::new(super::self_identity::KeyringClient::default_path());
+        let public_key = client.ensure(LOCAL_SYSTEM_AGENT_URA)?;
+        Ok(Self {
+            public_key,
+            provider: client,
+        })
     }
 
-    pub(crate) fn signing_key(&self) -> &SigningKey {
-        &self.signing_key
+    fn sign_canonical(
+        &self,
+        canonical_bytes: &[u8],
+    ) -> Result<Signature, super::self_identity::SelfIdentityError> {
+        self.provider
+            .sign_bound(LOCAL_SYSTEM_AGENT_URA, &self.public_key, canonical_bytes)
     }
 
     pub(crate) fn verifying_key(&self) -> VerifyingKey {
-        self.signing_key.verifying_key()
+        self.public_key
     }
 }
 
+#[cfg(not(test))]
 static PROCESS_LOCAL_SYSTEM_IDENTITY: OnceLock<Arc<LocalSystemIdentity>> = OnceLock::new();
 
-/// Return the process-local `_system.local` capability.
-pub(crate) fn process_local_system_identity() -> Arc<LocalSystemIdentity> {
-    Arc::clone(
-        PROCESS_LOCAL_SYSTEM_IDENTITY.get_or_init(|| Arc::new(LocalSystemIdentity::generate())),
-    )
+/// Return the daemon-key-service-backed `_system.local` capability.
+///
+/// The daemon lifecycle provisions this owner before building LocalRuntime. A
+/// failed early lookup is deliberately not cached so a supervised key-service
+/// restart can recover the next request without recreating an in-process key.
+#[cfg(not(test))]
+fn process_local_system_identity(
+) -> Result<Arc<LocalSystemIdentity>, super::self_identity::SelfIdentityError> {
+    if let Some(identity) = PROCESS_LOCAL_SYSTEM_IDENTITY.get() {
+        return Ok(Arc::clone(identity));
+    }
+    let candidate = Arc::new(LocalSystemIdentity::load_from_key_service()?);
+    let _ = PROCESS_LOCAL_SYSTEM_IDENTITY.set(candidate);
+    Ok(Arc::clone(PROCESS_LOCAL_SYSTEM_IDENTITY.get().expect(
+        "local system identity must be installed after successful key-service load",
+    )))
+}
+
+/// Unit tests exercise the same vault state machine in memory so they do not
+/// depend on a process-global UDS endpoint. This is deliberately compiled
+/// only in the library test target; production and integration consumers have
+/// no in-process signing fallback.
+#[cfg(test)]
+fn process_local_system_identity(
+) -> Result<Arc<LocalSystemIdentity>, super::self_identity::SelfIdentityError> {
+    use super::self_identity::InMemoryVault;
+    use crate::daemon::keyring::{MasterKeySource, Vault};
+
+    static TEST_SYSTEM_IDENTITY: OnceLock<Arc<LocalSystemIdentity>> = OnceLock::new();
+    let identity = TEST_SYSTEM_IDENTITY.get_or_init(|| {
+        let directory =
+            tempfile::tempdir().expect("create daemon-local system identity test vault directory");
+        let path = directory.path().join("key-service.enc");
+        let mut vault = Vault::open_or_init(
+            &path,
+            &MasterKeySource::Explicit("test-daemon-local-system-identity".into()),
+        )
+        .expect("open daemon-local system identity test vault");
+        vault
+            .ensure(LOCAL_SYSTEM_AGENT_URA)
+            .expect("provision daemon-local system identity in test vault");
+        std::mem::forget(directory);
+
+        let provider: Arc<dyn super::self_identity::SelfIdentity> =
+            Arc::new(InMemoryVault::new(vault));
+        let public_key = provider
+            .public_key(LOCAL_SYSTEM_AGENT_URA)
+            .expect("project daemon-local system identity from test vault");
+        Arc::new(LocalSystemIdentity {
+            public_key,
+            provider,
+        })
+    });
+    Ok(Arc::clone(identity))
+}
+
+/// Sign daemon-internal canonical bytes through the key-service custody
+/// boundary. This is the only signing capability for `_system.local`.
+pub(crate) fn sign_system_canonical(
+    canonical_bytes: &[u8],
+) -> Result<Signature, super::self_identity::SelfIdentityError> {
+    process_local_system_identity()?.sign_canonical(canonical_bytes)
 }
 
 /// Return the verifying key for daemon-internal loopback signatures.
-pub(crate) fn system_verifying_key() -> VerifyingKey {
-    process_local_system_identity().verifying_key()
+pub(crate) fn system_verifying_key() -> Result<VerifyingKey, super::self_identity::SelfIdentityError>
+{
+    Ok(process_local_system_identity()?.verifying_key())
 }
 
 /// Device URA used by local daemon clients when no more specific loopback
@@ -107,15 +171,11 @@ fn persisted_local_device_ura() -> Option<String> {
 /// resolver.
 pub(crate) struct LocalSystemKeyResolver {
     upstream: Option<Arc<dyn KeyResolver>>,
-    system_verifying_key: VerifyingKey,
 }
 
 impl LocalSystemKeyResolver {
     pub(crate) fn new(upstream: Option<Arc<dyn KeyResolver>>) -> Self {
-        Self {
-            upstream,
-            system_verifying_key: system_verifying_key(),
-        }
+        Self { upstream }
     }
 
     fn unknown_agent_key(agent_ura: &str) -> AxonError {
@@ -130,7 +190,11 @@ impl LocalSystemKeyResolver {
 impl KeyResolver for LocalSystemKeyResolver {
     fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
         if agent_ura == LOCAL_SYSTEM_AGENT_URA {
-            return Ok(self.system_verifying_key);
+            return system_verifying_key().map_err(|error| {
+                AxonError::internal(format!(
+                    "daemon-local system identity unavailable from key service: {error}"
+                ))
+            });
         }
         self.upstream
             .as_ref()
@@ -140,11 +204,35 @@ impl KeyResolver for LocalSystemKeyResolver {
 
     fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
         if agent_ura == LOCAL_SYSTEM_AGENT_URA {
-            return Ok(vec![self.system_verifying_key]);
+            return system_verifying_key()
+                .map(|key| vec![key])
+                .map_err(|error| {
+                    AxonError::internal(format!(
+                        "daemon-local system identity unavailable from key service: {error}"
+                    ))
+                });
         }
         self.upstream
             .as_ref()
             .ok_or_else(|| Self::unknown_agent_key(agent_ura))?
             .resolve_all(agent_ura)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::Verifier as _;
+
+    use super::{sign_system_canonical, system_verifying_key};
+
+    #[test]
+    fn system_signing_capability_verifies_against_the_shared_runtime_projection() {
+        let canonical = b"daemon-local canonical invocation";
+        let signature = sign_system_canonical(canonical)
+            .expect("test key-service state machine signs daemon-local canonical bytes");
+        system_verifying_key()
+            .expect("test key-service state machine projects daemon-local public key")
+            .verify(canonical, &signature)
+            .expect("daemon-local signature verifies against its shared public projection");
     }
 }

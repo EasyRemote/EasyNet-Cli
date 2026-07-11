@@ -805,7 +805,11 @@ fn parse_hosted_agent_delegation_context(
     HostedAgentDelegationContext::from_signed_metadata(
         raw,
         envelope,
-        crate::daemon::identity::local_invocation::system_verifying_key(),
+        crate::daemon::identity::local_invocation::system_verifying_key().map_err(|error| {
+            AxonError::internal(format!(
+                "hosted_agent_delegation: daemon-local signer unavailable: {error}"
+            ))
+        })?,
     )
     .map(Some)
     .map_err(|err| AxonError::invalid_argument(format!("hosted_agent_delegation: {err}")))
@@ -1381,6 +1385,12 @@ impl AbilityAuthoritySet {
 #[derive(Debug, Clone)]
 pub struct AbilityAuthorityContext {
     authorities: AbilityAuthoritySet,
+    /// Runtime-owned Agent roots declared by static daemon capabilities during
+    /// assembly. These are distinct from the persisted hosted-agent
+    /// lifecycle inventory: a daemon-native executor such as Pages is
+    /// deterministic from boot configuration and must not depend on ambient
+    /// local-agent lookup to prove its authority root.
+    declared_agent_roots: BTreeMap<String, String>,
 }
 
 impl Default for AbilityAuthorityContext {
@@ -1398,6 +1408,7 @@ impl AbilityAuthorityContext {
                 device,
                 subordinate_source: DeviceSubordinateAuthoritySource::LocalEnvironment,
             },
+            declared_agent_roots: BTreeMap::new(),
         }
     }
 
@@ -1411,6 +1422,7 @@ impl AbilityAuthorityContext {
                 hub,
                 subordinate_source: DeviceSubordinateAuthoritySource::LocalEnvironment,
             },
+            declared_agent_roots: BTreeMap::new(),
         }
     }
 
@@ -1423,6 +1435,7 @@ impl AbilityAuthorityContext {
                 device,
                 subordinate_source: DeviceSubordinateAuthoritySource::DeviceScoped,
             },
+            declared_agent_roots: BTreeMap::new(),
         })
     }
 
@@ -1443,6 +1456,7 @@ impl AbilityAuthorityContext {
                     hosted_agent_roots,
                 ),
             },
+            declared_agent_roots: BTreeMap::new(),
         })
     }
 
@@ -1459,6 +1473,7 @@ impl AbilityAuthorityContext {
                 hub,
                 subordinate_source: DeviceSubordinateAuthoritySource::DeviceScoped,
             },
+            declared_agent_roots: BTreeMap::new(),
         })
     }
 
@@ -1479,6 +1494,7 @@ impl AbilityAuthorityContext {
                     hosted_agent_roots,
                 ),
             },
+            declared_agent_roots: BTreeMap::new(),
         })
     }
 
@@ -1491,7 +1507,42 @@ impl AbilityAuthorityContext {
         let hub = CanonicalHubAuthority::parse(hub_authority_root.into())?;
         Ok(Self {
             authorities: AbilityAuthoritySet::Hub { hub },
+            declared_agent_roots: BTreeMap::new(),
         })
+    }
+
+    /// Declare one daemon-native Agent execution root captured from explicit
+    /// boot configuration. The root must belong to this Device authority's
+    /// realm (and, for a device-qualified agent, this exact Device). A Hub
+    /// runtime cannot host such an Agent root.
+    pub fn with_declared_agent_authority_root(
+        mut self,
+        authority_root: impl Into<String>,
+    ) -> Result<Self, AbilityControlPlaneError> {
+        let authority_root = authority_root.into();
+        let (device, _) = self.authorities.device().ok_or_else(|| {
+            AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
+                owner_projection: "agent".to_string(),
+                authority_set: self.authorities.label(),
+            }
+        })?;
+        let mut roots = hosted_agent_roots_for_device(device, [authority_root.clone()])?;
+        let (agent_id, authority_root) = roots
+            .pop_first()
+            .expect("one validated hosted agent root must produce one agent id");
+        if let Some(existing) = self.declared_agent_roots.get(&agent_id) {
+            if existing != &authority_root {
+                return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
+            }
+            return Ok(self);
+        }
+        if let Some(existing) = self.persisted_hosted_agent_root(&agent_id) {
+            if existing != authority_root {
+                return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
+            }
+        }
+        self.declared_agent_roots.insert(agent_id, authority_root);
+        Ok(self)
     }
 
     pub(crate) fn local_runtime_owners(&self) -> Vec<OwnerKind> {
@@ -1564,9 +1615,7 @@ impl AbilityAuthorityContext {
                 self.authorities.device().is_some()
                     && authority_root == self.agent_authority_root(agent_id)
             }
-            OwnerKind::User(user_id) => self.authorities.device().is_some_and(|(device, _)| {
-                authority_root == crate::core::ura::agent_ura(&device.realm, user_id, "account")
-            }),
+            OwnerKind::User(user_id) => self.user_authority_root_is_hosted(user_id, authority_root),
         }
     }
 
@@ -1597,6 +1646,9 @@ impl AbilityAuthorityContext {
     }
 
     fn agent_authority_root(&self, agent_id: &str) -> String {
+        if let Some(authority_root) = self.declared_agent_roots.get(agent_id) {
+            return authority_root.clone();
+        }
         let (device, source) = self
             .authorities
             .device()
@@ -1650,6 +1702,44 @@ impl AbilityAuthorityContext {
             .device()
             .expect("User owner support requires Device authority");
         crate::core::ura::agent_ura(&device.realm, user_id, "account")
+    }
+
+    fn persisted_hosted_agent_root(&self, agent_id: &str) -> Option<String> {
+        let (_, source) = self.authorities.device()?;
+        match source {
+            DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(roots) => {
+                roots.get(agent_id).cloned()
+            }
+            DeviceSubordinateAuthoritySource::LocalEnvironment => {
+                let local_agents = crate::daemon::persistence::local_agents::load().ok()?;
+                crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
+                    &local_agents,
+                    agent_id,
+                )
+                .ok()
+                .flatten()
+                .map(|entry| entry.agent_ura.clone())
+            }
+            DeviceSubordinateAuthoritySource::DeviceScoped => None,
+        }
+    }
+
+    fn user_authority_root_is_hosted(&self, user_id: &str, authority_root: &str) -> bool {
+        let Some((device, _)) = self.authorities.device() else {
+            return false;
+        };
+        if authority_root == self.user_authority_root(user_id) {
+            return true;
+        }
+        let Ok(parsed) = crate::core::ura::parse_ura(authority_root) else {
+            return false;
+        };
+        let Some((host_user, agent_id)) = parsed.agent_ids() else {
+            return false;
+        };
+        parsed.realm == device.realm
+            && host_user == user_id
+            && authority_root == self.agent_authority_root(agent_id)
     }
 }
 
@@ -5859,6 +5949,54 @@ mod tests {
         assert!(error.to_string().contains("is not hosted by authority set"));
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
         assert!(!catalog.has_dynamic("meta.foreign_scope"));
+    }
+
+    #[test]
+    fn user_owner_may_delegate_to_its_explicitly_hosted_agent_only() {
+        let pages_agent = crate::core::ura::agent_ura("scope-test", "user-a", "pages");
+        let context = AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura("scope-test", "dev-1"),
+            vec![pages_agent.clone()],
+        )
+        .expect("fixed hosted Agent authority context");
+        let owner = OwnerKind::User("user-a".to_string());
+        let accepted =
+            AuthorityScope::new("user:user-a", &pages_agent).expect("user-owned Pages scope");
+        context
+            .ensure_explicit_scope_supported(&owner, &accepted)
+            .expect("user-owned ability may execute on that user's hosted agent");
+
+        let foreign_owner = OwnerKind::User("user-b".to_string());
+        let rejected = context
+            .ensure_explicit_scope_supported(
+                &foreign_owner,
+                &AuthorityScope::new("user:user-b", &pages_agent)
+                    .expect("structurally valid foreign user scope"),
+            )
+            .expect_err("a user's ability must not execute on another user's hosted agent");
+        assert!(matches!(
+            rejected,
+            AbilityControlPlaneError::AuthorityScopeRootNotHosted { .. }
+        ));
+    }
+
+    #[test]
+    fn declared_agent_root_cannot_override_persisted_hosted_identity() {
+        let persisted_pages = crate::core::ura::agent_ura("scope-test", "user-a", "pages");
+        let conflicting_pages = crate::core::ura::agent_ura("scope-test", "user-b", "pages");
+        let context = AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura("scope-test", "dev-1"),
+            vec![persisted_pages],
+        )
+        .expect("fixed hosted Agent authority context");
+
+        let error = context
+            .with_declared_agent_authority_root(conflicting_pages)
+            .expect_err("static capability must not replace persisted hosted Agent identity");
+        assert!(matches!(
+            error,
+            AbilityControlPlaneError::InvalidAuthorityRoot { .. }
+        ));
     }
 
     #[test]

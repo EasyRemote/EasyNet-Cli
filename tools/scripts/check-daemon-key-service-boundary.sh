@@ -53,6 +53,15 @@ if rg -n --glob '*.go' --glob '!**/*_test.go' \
   exit 1
 fi
 
+# The daemon-local loopback caller is a runtime owner, not an independent
+# process key. It may only hold a public projection and a key-service port.
+if rg -n \
+  'SigningKey|signing_key|fill_bytes\(&mut seed\)|OsRng' \
+  src/daemon/identity/local_invocation.rs; then
+  echo "daemon key-service boundary violation: local system caller owns private signing material" >&2
+  exit 1
+fi
+
 # Private-key field names remain valid only inside fail-closed metadata
 # rejection lists. Match declarations, assignments, constructors, and crypto
 # materialization so those negative guards are not mistaken for custody.

@@ -751,7 +751,8 @@ mod tests {
     impl KeyResolver for FixedKey {
         fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
             if agent_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
-                return Ok(crate::daemon::identity::local_invocation::system_verifying_key());
+                return crate::daemon::identity::local_invocation::system_verifying_key()
+                    .map_err(|error| AxonError::internal(error.to_string()));
             }
             Ok(self.0)
         }

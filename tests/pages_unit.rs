@@ -26,6 +26,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#[path = "key_service_fixture.rs"]
+mod key_service_fixture;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -101,6 +104,7 @@ struct Fixture {
 impl Fixture {
     fn new(name_seed: &str) -> Self {
         let home = TestHomeGuard::new();
+        key_service_fixture::install();
         // unique project_id per call to dodge the duplicate-publish
         // rejection (U8 explicitly tests dup, others rely on
         // uniqueness for isolation)
@@ -460,8 +464,18 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     let _home = TestHomeGuard::new();
     let runtime = LocalRuntime::new();
     let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
-    let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
     let user = "alice-runtime";
+    let pages_agent = ura::agent_ura("easynet.run", user, "pages");
+    let authority_context = easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+        ura::device_ura("easynet.run", "pages-test-device"),
+    )
+    .expect("pages test Device authority context")
+    .with_declared_agent_authority_root(pages_agent.clone())
+    .expect("pages execution Agent is explicitly hosted by the test daemon");
+    let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        Arc::clone(&runtime),
+        authority_context,
+    );
 
     pages::register(
         &mut reg,
@@ -479,7 +493,6 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     // `agent/<user>.pages`. The local dispatch key stays owner-qualified, but
     // the control-plane authority root must be the pages agent, not the
     // user's account-agent fallback.
-    let pages_agent = ura::agent_ura("easynet.run", user, "pages");
     let ability = ura::local_dispatch_ability_key(&pages_agent, "project_list");
     assert_eq!(ability, "pages.project_list");
     assert!(reg.has_rpc(&ability));
@@ -487,7 +500,7 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
         .runtime_binding_facts_for_mode(&ability, easynet_cli::daemon::ability::CallMode::Rpc)
         .expect("runtime facts lookup")
         .expect("project_list runtime facts");
-    assert_eq!(facts.authority_owner_projection, "agent:pages");
+    assert_eq!(facts.authority_owner_projection, "user:alice-runtime");
     assert_eq!(facts.authority_root, pages_agent);
     let public_name = ura::owner_local_ability_name(&facts.authority_root, "project_list");
     let runtime_ability = ura::owner_ability_ura(&facts.authority_root, &public_name)

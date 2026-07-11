@@ -44,6 +44,9 @@
 
 #![cfg(feature = "axon-pb")]
 
+#[path = "key_service_fixture.rs"]
+mod key_service_fixture;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -268,6 +271,7 @@ impl Drop for TestHub {
 /// and joins the spawned task. The hub admits both DEVICE_A_URA
 /// and DEVICE_B_URA via a synthetic realm trust anchor.
 async fn start_in_process_hub() -> TestHub {
+    key_service_fixture::install();
     use std::io::Write;
 
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -347,6 +351,7 @@ added_at_unix_ms = 0
 }
 
 async fn start_in_process_local_device() -> TestHub {
+    key_service_fixture::install();
     use std::io::Write;
 
     let tempdir = tempfile::tempdir().expect("tempdir");

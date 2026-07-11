@@ -869,6 +869,17 @@ impl KeyringClient {
     }
 }
 
+/// Provision the daemon's synthetic loopback caller in the canonical key
+/// service. The caller remains daemon-internal, but its signing authority is
+/// subject to the same custody, projection, and lifecycle rules as every
+/// other runtime owner.
+pub fn ensure_daemon_local_system_identity(
+    client: &KeyringClient,
+) -> Result<(), SelfIdentityError> {
+    client.ensure(crate::core::ura::LOCAL_SYSTEM_AGENT_URA)?;
+    Ok(())
+}
+
 fn decode_signature(signature_b64: String) -> Result<Signature, SelfIdentityError> {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
