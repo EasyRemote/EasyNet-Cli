@@ -195,6 +195,47 @@ def check_backend() -> None:
     ]:
         forbid_contains(user_key_registration, forbidden, "backend:user_signing_key_principal")
 
+    user_key_list = require_file(
+        backend,
+        "internal/logic/auth/list_user_pubkeys.go",
+        "backend:user_signing_key_list_principal",
+    )
+    for required in [
+        "svcCtx.Principal.Get",
+        "PrincipalCarrierBase",
+        "PrincipalSnapshot",
+        "PublicKeyBindingStateActive",
+        "PublicKeyBindingStateRevoked",
+        "PublicKeyBindingStateRotated",
+    ]:
+        require_contains(user_key_list, required, "backend:user_signing_key_list_principal")
+    for forbidden in [
+        "Identity.ListSigningKeys",
+        "identityprofile.SigningKeyListRequest",
+        '"identity.list_user_pubkeys"',
+    ]:
+        forbid_contains(user_key_list, forbidden, "backend:user_signing_key_list_principal")
+
+    user_key_revoke = require_file(
+        backend,
+        "internal/logic/auth/revoke_user_pubkey.go",
+        "backend:user_signing_key_revoke_principal",
+    )
+    for required in [
+        "svcCtx.Principal.Get",
+        "svcCtx.Principal.RevokeKey",
+        "PrincipalCarrierBase",
+        "RevokePrincipalKeyRequest",
+        "PrincipalProofActiveKey",
+    ]:
+        require_contains(user_key_revoke, required, "backend:user_signing_key_revoke_principal")
+    for forbidden in [
+        "Identity.RevokeSigningKey",
+        "identityprofile.SigningKeyRevokeRequest",
+        '"identity.revoke_user_pubkey"',
+    ]:
+        forbid_contains(user_key_revoke, forbidden, "backend:user_signing_key_revoke_principal")
+
 
 def check_easyremote() -> None:
     if not easyremote.exists() or not (easyremote / "pyproject.toml").is_file():
@@ -372,6 +413,16 @@ package auth
 
 var _ = []string{"svcCtx.Principal.Get", "svcCtx.Principal.Create", "svcCtx.Principal.BindFirstKey", "svcCtx.Principal.AddKey", "PrincipalCarrierBase", "PrincipalProofBootstrap", "PrincipalProofActiveKey"}
 EOF
+  cat >"$good_backend/internal/logic/auth/list_user_pubkeys.go" <<'EOF'
+package auth
+
+var _ = []string{"svcCtx.Principal.Get", "PrincipalCarrierBase", "PrincipalSnapshot", "PublicKeyBindingStateActive", "PublicKeyBindingStateRevoked", "PublicKeyBindingStateRotated"}
+EOF
+  cat >"$good_backend/internal/logic/auth/revoke_user_pubkey.go" <<'EOF'
+package auth
+
+var _ = []string{"svcCtx.Principal.Get", "svcCtx.Principal.RevokeKey", "PrincipalCarrierBase", "RevokePrincipalKeyRequest", "PrincipalProofActiveKey"}
+EOF
   printf '%s\n' '[project]' 'name = "easyremote"' >"$good_remote/pyproject.toml"
   cat >"$good_remote/easyremote/config.py" <<'EOF'
 import easynet_sdk
@@ -442,6 +493,13 @@ EOF
     exit 1
   fi
   grep -Fq "easyremote:mission:forbidden:namespace.resolve" "$tmp/bad2.out"
+
+  printf '%s\n' 'var _ = "Identity.RevokeSigningKey"' >>"$good_backend/internal/logic/auth/revoke_user_pubkey.go"
+  if run_audit "$good_backend" "$good_remote" >"$tmp/bad3.out" 2>&1; then
+    echo "self-test expected Backend legacy user signing-key revoke fixture to fail" >&2
+    exit 1
+  fi
+  grep -Fq "backend:user_signing_key_revoke_principal:forbidden:Identity.RevokeSigningKey" "$tmp/bad3.out"
 
   echo "check-downstream-sdk-consumer-cutover self-test ok"
   exit 0

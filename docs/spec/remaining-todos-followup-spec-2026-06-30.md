@@ -584,9 +584,10 @@ capability, joins a Device by Hub URA with `--hub-ca`, `--principal-ura` and
 HTTP credential token, persisted `join_receipt_hash`, pinned CA persistence,
 in-band Hub key import through `federation.resolve_key`, and the Hub
 RuntimeTrust owner binding from Device URA to User Principal URA.
-Recovery UX edge cases, downstream Receipt consumer cutover,
-Backend/EasyRemote private-key process audits and Backend-present E2E remain
-required. A real CLI
+Recovery UX edge cases and Backend-present E2E remain required. The downstream
+SDK consumer cutover and product private-key custody gates now cover
+Backend/EasyRemote Receipt/Directory/runtime consumer usage and reject product
+private-key custody, raw daemon process spawning and raw FFI escape paths. A real CLI
 binary E2E
 now executes
 `principal bootstrap`, `principal issue-enrollment`, `principal enroll`,
@@ -605,9 +606,8 @@ the rotated sibling remains active, configures recovery, recovers, suspends and
 reactivates Alice, deletes Bob through an admin grant, restarts the Hub daemon,
 and verifies persisted PrincipalLifecycle state, grant state, RuntimeTrust
 revocation projection and Device→Principal owner binding. Backend-present
-mapping to the same runtime, downstream Receipt consumer cutover and the
-Backend/EasyRemote process-level private-key audits remain required before
-section 6 can be marked complete. Go and Python PrincipalLifecycle projection
+mapping to the same runtime and recovery UX edge-case closure remain required
+before section 6 can be marked complete. Go and Python PrincipalLifecycle projection
 decoders now reject forbidden custody fields recursively, matching the
 managed-signing public-projection guard, and the real CLI TLS lifecycle E2E
 scans PrincipalLifecycle JSON output for private-key custody fields.

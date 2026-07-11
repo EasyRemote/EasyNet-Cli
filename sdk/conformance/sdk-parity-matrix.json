@@ -489,6 +489,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/directory_test.go"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-downstream-sdk-consumer-cutover.sh"
           }
         ]
       },
@@ -498,10 +502,14 @@
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_directory.py"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-downstream-sdk-consumer-cutover.sh"
           }
         ]
       },
-      "remaining": "Daemon-backed resolution, stable listing cursors and explicit subscription resume are provider-backed. Downstream Backend/EasyRemote Directory consumers must still cut over before cutover-ready status."
+      "remaining": "Daemon-backed resolution, stable listing cursors and explicit subscription resume are provider-backed, and downstream Backend/EasyRemote Directory consumer cutover is guarded. Cutover-ready still requires the final cross-repository regression/E2E suite."
     },
     {
       "capability_id": "receipt_history",
@@ -515,6 +523,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/receipt_test.go"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-downstream-sdk-consumer-cutover.sh"
           }
         ]
       },
@@ -524,10 +536,14 @@
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_receipt.py"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-downstream-sdk-consumer-cutover.sh"
           }
         ]
       },
-      "remaining": "Daemon-backed bounded history now returns stable opaque cursors and Go/Python SDKs forward and validate them. Downstream Backend/EasyRemote Receipt consumers must still cut over before cutover-ready status."
+      "remaining": "Daemon-backed bounded history now returns stable opaque cursors and Go/Python SDKs forward and validate them, and downstream Backend/EasyRemote Receipt consumer cutover is guarded. Cutover-ready still requires the final cross-repository regression/E2E suite."
     },
     {
       "capability_id": "runtime_events",
@@ -541,6 +557,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/runtime_events_test.go"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/check-downstream-sdk-consumer-cutover.sh"
           }
         ]
       },
@@ -553,7 +573,7 @@
           }
         ]
       },
-      "remaining": "Generic bounded handle-event reads are provider-backed; downstream Backend/EasyRemote event consumers still need cutover and durable subscription cursors."
+      "remaining": "Generic bounded handle-event reads are provider-backed, and Backend runtime-event adapter cutover is guarded. Durable subscription cursors and final cross-repository event E2E remain before cutover-ready."
     },
     {
       "capability_id": "runtime_administration",

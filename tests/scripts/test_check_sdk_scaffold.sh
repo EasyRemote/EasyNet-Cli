@@ -67,6 +67,7 @@ make_sandbox() {
     check-node-sdk-seam.sh \
     check-sdk-completion-audit.sh \
     check-sdk-conformance-reports.sh \
+    check-sdk-canonical-public-api.sh \
     check-sdk-cutover-readiness.sh \
     check-sdk-package-metadata.sh \
     check-sdk-parity-matrix.sh \

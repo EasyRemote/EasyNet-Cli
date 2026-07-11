@@ -537,9 +537,11 @@ backend-free `federation.join`, empty HTTP credential token, persisted
 issues a product-neutral enrollment capability, joins a Device over the Hub URA
 with `--principal-ura` plus `--principal-enrollment-id`, and verifies the Hub
 RuntimeTrust owner binding from Device URA to User Principal URA. It is still
-not standalone-Hub cutover-ready until recovery UX edge cases,
-downstream Receipt consumer cutover, Backend/EasyRemote private-key process
-audits and the Backend-present E2E gate pass. The same real two-HOME CLI binary
+not standalone-Hub cutover-ready until recovery UX edge cases and the
+Backend-present E2E gate pass. The downstream SDK consumer cutover and product
+key-custody gates now cover Backend/EasyRemote Receipt/Directory/runtime
+consumer usage and reject product private-key custody, raw daemon process
+spawning and raw FFI escape paths. The same real two-HOME CLI binary
 E2E now extends the TCP+TLS Hub daemon path to the multi-user lifecycle
 scenario: Alice and Bob are enrolled through product-neutral capabilities,
 both receive at least two public-key bindings, Alice exercises add-key,
@@ -551,12 +553,13 @@ Go and Python PrincipalLifecycle projection decoders now reject forbidden
 custody fields recursively, matching the managed-signing public-projection
 guard, and the real CLI TLS lifecycle E2E scans PrincipalLifecycle JSON output
 for private-key custody fields. Backend-present mapping to the same runtime and
-Backend/EasyRemote process-level private-key audits still remain before section
-14.3 is cutover-ready.
+recovery UX edge-case closure still remain before section 14.3 is
+cutover-ready.
 Directory now has daemon-backed resolution, stable listing cursors and explicit
 subscription resume in symmetric Go/Python providers; receipt/history now has a
 daemon-backed stable cursor provider and symmetric Go/Python cursor forwarding;
-neither Directory nor Receipt has downstream Backend/EasyRemote cutover yet.
+downstream Backend/EasyRemote Directory and Receipt consumer cutover is now
+covered by `tools/scripts/check-downstream-sdk-consumer-cutover.sh`.
 Runtime events and runtime administration now have symmetric provider-backed
 Go/Python facades; access control now has symmetric provider-backed Go/Python
 SDK facades over daemon
@@ -634,29 +637,27 @@ resolved. Public API inventory, the symmetric capability matrix, generic
 PrincipalLifecycle seams, canonical Invocation lowering, provider-backed
 Directory resolution, the daemon-backed Receipt/causal/history/trace provider,
 provider-backed AbilityDescriptor projection, and provider-backed runtime
-Events/Admin and AccessControl facades have landed. EasyRemote child
-causality now consumes the SDK receipt-reference projection, but broader
-EasyRemote receipt/event/directory cutover remains in progress.
-They are intermediate convergence evidence, not completion of downstream
-product cutover or the standalone-Hub PrincipalLifecycle closure.
+Events/Admin and AccessControl facades have landed. Backend and EasyRemote
+Directory/Receipt/runtime consumer cutover is now guarded by
+`tools/scripts/check-downstream-sdk-consumer-cutover.sh`, and product key
+custody/process/FFI escapes are guarded by
+`tools/scripts/check-product-key-custody-boundary.sh`.
+They are intermediate convergence evidence, not completion of the
+Backend-present PrincipalLifecycle E2E or standalone-Hub recovery UX closure.
 
 The current remaining work is:
 
-- cut over every downstream Receipt consumer to the stable daemon-backed
-  Receipt history cursor/anchor provider before promoting the capability to
-  cutover-ready;
-- cut over every downstream Directory consumer to the stable daemon-backed
-  Directory provider before promoting the capability to cutover-ready;
-- migrate Backend access-control role/account mapping onto the generic Go SDK
-  AccessControl facade and delete remaining product-local runtime lowering;
-- finish migrating Backend off duplicated `internal/runtimeprofile` lowering,
-  including receipt, event, administration and principal lifecycle paths;
-- migrate EasyRemote to canonical typed Python SDK configuration, identity,
-  Directory, receipt and event capabilities;
+- close Backend-present PrincipalLifecycle E2E by attaching Backend account
+  authentication to the same daemon runtime, Principal URA, key-service,
+  grants, admission state and receipts without a second daemon/key-service or
+  trust store;
+- close standalone-Hub recovery UX edge cases beyond the existing TCP+TLS
+  two-HOME lifecycle E2E, especially failed recovery proofs, replayed recovery
+  proofs and recovery after suspension/deletion boundaries;
+- finish runtime event durable subscription cursor evidence before promoting
+  runtime events to cutover-ready;
 - close the remaining standalone-Hub acceptance evidence that is not covered by
-  the real TCP+TLS lifecycle E2E and SDK/CLI projection audit yet, especially
-  downstream Receipt consumer cutover and Backend/EasyRemote private-key process
-  audits;
+  the real TCP+TLS lifecycle E2E and SDK/CLI projection audit yet;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates
   only after their consumers have migrated;
 - run the full Rust default/`axon-pb`, Go, Python, Backend and EasyRemote

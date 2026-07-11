@@ -91,6 +91,7 @@ status=0
 
 run_gate "SDK scaffold" bash "$SELF_DIR/check-sdk-scaffold.sh" || status=1
 run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-test || status=1
+run_gate "SDK canonical public API" bash "$SELF_DIR/check-sdk-canonical-public-api.sh" || status=1
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_gate "SDK conformance reports" bash "$SELF_DIR/check-sdk-conformance-reports.sh" || status=1
 run_gate "generic FFI ABI v5 exact surface" bash "$SELF_DIR/check-ffi-abi-v5-header.sh" || status=1
