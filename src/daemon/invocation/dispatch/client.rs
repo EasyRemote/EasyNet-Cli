@@ -278,7 +278,7 @@ impl RuntimeClient {
         let tuple = signed.prepared().tuple();
         let response = self.inner.invoke(signed.into_daemon_invocation()).await?;
         Ok(InvocationHandle {
-            result: InvocationResult::from_invoke_response(tuple, response),
+            outcome: InvocationOutcome::from_invoke_response(tuple, response),
         })
     }
 
@@ -322,16 +322,39 @@ pub struct RuntimeHealth {
 /// boundary required by stream/bidi and future async observation.
 #[derive(Debug, Clone)]
 pub struct InvocationHandle {
-    result: InvocationResult,
+    outcome: InvocationOutcome,
 }
 
 impl InvocationHandle {
+    /// Consume the handle and return its established terminal-result
+    /// projection.
+    ///
+    /// This method intentionally preserves the original SDK surface. Call
+    /// [`Self::await_outcome`] when both receipt checkpoints are required.
     pub fn await_result(self) -> InvocationResult {
-        self.result
+        self.outcome.into_result()
     }
 
+    /// Read the established terminal-result projection.
     pub fn result(&self) -> &InvocationResult {
-        &self.result
+        self.outcome.result()
+    }
+
+    /// Read the admission and terminal receipt checkpoints associated with
+    /// this invocation.
+    pub fn stages(&self) -> &InvocationReceiptStages {
+        self.outcome.stages()
+    }
+
+    /// Read the complete immutable invocation outcome.
+    pub fn outcome(&self) -> &InvocationOutcome {
+        &self.outcome
+    }
+
+    /// Consume the handle and return the complete immutable invocation
+    /// outcome.
+    pub fn await_outcome(self) -> InvocationOutcome {
+        self.outcome
     }
 }
 
@@ -345,17 +368,61 @@ pub struct InvocationResult {
     pub selected_node_id: String,
     pub scheduling_reason: String,
     pub elapsed_ms: u64,
+    /// Terminal execution receipt. The field is retained for source
+    /// compatibility; admission and terminal checkpoints are available
+    /// together through [`InvocationHandle::stages`].
     pub receipt: Option<ReceiptSummary>,
     pub error: Option<RuntimeErrorSummary>,
 }
 
-impl InvocationResult {
-    fn from_invoke_response(
+/// Receipt checkpoints produced while an Invocation advances from admission
+/// to its deterministic terminal state.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct InvocationReceiptStages {
+    pub admission: Option<ReceiptSummary>,
+    pub terminal: Option<ReceiptSummary>,
+}
+
+impl InvocationReceiptStages {
+    /// Admission checkpoint, when the runtime emitted one.
+    pub fn admission(&self) -> Option<&ReceiptSummary> {
+        self.admission.as_ref()
+    }
+
+    /// Terminal execution checkpoint, when the runtime emitted one.
+    pub fn terminal(&self) -> Option<&ReceiptSummary> {
+        self.terminal.as_ref()
+    }
+}
+
+/// Immutable unary Invocation outcome.
+///
+/// `InvocationResult` remains the source-compatible terminal result DTO.
+/// This additive aggregate owns the two-checkpoint receipt model so callers
+/// do not have to overload or extend that established DTO.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct InvocationOutcome {
+    result: InvocationResult,
+    stages: InvocationReceiptStages,
+}
+
+impl InvocationOutcome {
+    pub(crate) fn from_invoke_response(
         tuple: InvocationTuple,
         response: easynet_axon::pb::axon::v1::InvokeResponse,
     ) -> Self {
         let error = response.error.as_ref().map(RuntimeErrorSummary::from_wire);
-        Self {
+        let stages = InvocationReceiptStages {
+            admission: response
+                .admission_receipt
+                .as_ref()
+                .map(ReceiptSummary::from_wire),
+            terminal: response
+                .terminal_receipt
+                .as_ref()
+                .map(ReceiptSummary::from_wire),
+        };
+        let result = InvocationResult {
             tuple,
             terminal_state: invocation_state_name(response.state),
             output_content_type: response.result_content_type,
@@ -363,11 +430,41 @@ impl InvocationResult {
             selected_node_id: response.selected_node_id,
             scheduling_reason: response.scheduling_reason,
             elapsed_ms: response.elapsed_ms.max(0) as u64,
-            receipt: response
-                .admission_receipt
-                .as_ref()
-                .map(ReceiptSummary::from_wire),
+            receipt: stages.terminal.clone(),
             error,
+        };
+        Self::new(result, stages)
+    }
+
+    pub(crate) fn new(result: InvocationResult, stages: InvocationReceiptStages) -> Self {
+        debug_assert_eq!(result.receipt, stages.terminal);
+        Self { result, stages }
+    }
+
+    /// Read the source-compatible terminal result DTO.
+    pub fn result(&self) -> &InvocationResult {
+        &self.result
+    }
+
+    /// Read the admission and terminal receipt checkpoints.
+    pub fn stages(&self) -> &InvocationReceiptStages {
+        &self.stages
+    }
+
+    /// Consume the outcome and return the source-compatible result DTO.
+    pub fn into_result(self) -> InvocationResult {
+        self.result
+    }
+
+    pub(crate) fn into_parts(self) -> (InvocationResult, InvocationReceiptStages) {
+        (self.result, self.stages)
+    }
+
+    pub(crate) fn without_receipts(result: InvocationResult) -> Self {
+        debug_assert!(result.receipt.is_none());
+        Self {
+            result,
+            stages: InvocationReceiptStages::default(),
         }
     }
 }

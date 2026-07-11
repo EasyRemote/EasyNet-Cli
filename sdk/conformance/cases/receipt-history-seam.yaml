@@ -3,11 +3,17 @@ profile: receipts
 required_for:
   - go
   - python
-description: Receipt, causal, history and trace queries use one generic runtime contract.
+description: Receipt, causal, history and trace reads use one bounded generic runtime contract while canonical receipt parsing and verification remain Axon-owned.
 steps:
-  - action: require_receipt_reference
-  - action: require_causal_link
+  - action: project_axon_receipt_reference
+  - action: delegate_axon_receipt_verification
   - action: require_bounded_history_query
+  - action: require_exact_history_lookup
+  - action: require_typed_trace_graph
+  - action: reject_unstable_cursor
 expect:
   result: receipt_history_contract
   provider_required: true
+  maximum_page_size: 500
+  stable_cursor_available: false
+  product_projection: false

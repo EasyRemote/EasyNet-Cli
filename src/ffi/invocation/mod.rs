@@ -144,8 +144,9 @@ fn record_invocation_feature_disabled(function: &str) -> i32 {
 ///
 /// On success, `*out_receipt_json` receives a JSON response summary
 /// containing the daemon result, content type, selected scheduling
-/// metadata, the echoed nonce, and any admission receipt summary the
-/// daemon returned. The caller frees it with `easynet_string_free`.
+/// metadata, the echoed nonce, and terminal plus admission receipt
+/// checkpoints returned by the daemon. The caller frees it with
+/// `easynet_string_free`.
 ///
 /// # Safety
 /// - `handle` must be a valid handle from `easynet_init`.
@@ -1764,8 +1765,8 @@ fn invoke_with_axon_pb(
         );
     }
 
-    let output = invocation_result_json_with_tuple(
-        invocation_result_from_invoke_response(tuple, response),
+    let output = invocation_outcome_json_with_tuple(
+        crate::daemon::InvocationOutcome::from_invoke_response(tuple, response),
         tuple_json,
     );
     let json = match serde_json::to_string(&output) {
@@ -2155,17 +2156,17 @@ async fn run_invocation_handle_task(
     shared: Arc<InvocationHandleShared>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let result = tokio::select! {
-        _ = cancel.cancelled() => invocation_cancelled_result(&tuple, Some("cancelled before runtime terminal")),
+    let outcome = tokio::select! {
+        _ = cancel.cancelled() => invocation_cancelled_outcome(&tuple, Some("cancelled before runtime terminal")),
         outcome = async {
             let client = crate::daemon::RuntimeClient::connect(endpoint)?;
-            client.submit_signed(signed).await.map(|handle| handle.await_result())
+            client.submit_signed(signed).await.map(|handle| handle.await_outcome())
         } => match outcome {
-            Ok(result) => result,
-            Err(err) => invocation_failed_result(&tuple, err),
+            Ok(outcome) => outcome,
+            Err(err) => invocation_failed_outcome(&tuple, err),
         },
     };
-    let _ = shared.mark_terminal(result);
+    let _ = shared.mark_terminal(outcome);
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2586,8 +2587,8 @@ impl ActiveInvocationHandle {
     }
 
     fn await_result_json(&self) -> serde_json::Value {
-        let (result, tuple_json) = self.shared.await_result_with_tuple_json();
-        invocation_result_json_with_tuple(result, tuple_json)
+        let (outcome, tuple_json) = self.shared.await_outcome_with_tuple_json();
+        invocation_outcome_json_with_tuple(outcome, tuple_json)
     }
 
     fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
@@ -2621,9 +2622,11 @@ impl InvocationHandleShared {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn await_result_with_tuple_json(&self) -> (crate::daemon::InvocationResult, serde_json::Value) {
+    fn await_outcome_with_tuple_json(
+        &self,
+    ) -> (crate::daemon::InvocationOutcome, serde_json::Value) {
         let mut state = self.lock();
-        while state.terminal_result.is_none() {
+        while state.terminal_outcome.is_none() {
             state = self
                 .terminal
                 .wait(state)
@@ -2631,16 +2634,16 @@ impl InvocationHandleShared {
         }
         (
             state
-                .terminal_result
+                .terminal_outcome
                 .clone()
-                .expect("terminal result is present after wait"),
+                .expect("terminal outcome is present after wait"),
             state.tuple_json.clone(),
         )
     }
 
     #[cfg(test)]
     fn await_result(&self) -> crate::daemon::InvocationResult {
-        self.await_result_with_tuple_json().0
+        self.await_outcome_with_tuple_json().0.into_result()
     }
 
     fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
@@ -2652,12 +2655,12 @@ impl InvocationHandleShared {
                 terminal: true,
             };
         }
-        let result = invocation_cancelled_result(&state.tuple, reason.as_deref());
+        let outcome = invocation_cancelled_outcome(&state.tuple, reason.as_deref());
         state.push_terminal(
             InvocationHandlePhase::Cancelled,
             "cancelled",
             reason,
-            result,
+            outcome,
         );
         self.terminal.notify_all();
         InvocationHandleCancelOutcome {
@@ -2667,13 +2670,13 @@ impl InvocationHandleShared {
         }
     }
 
-    fn mark_terminal(&self, result: crate::daemon::InvocationResult) -> bool {
+    fn mark_terminal(&self, outcome: crate::daemon::InvocationOutcome) -> bool {
         let mut state = self.lock();
         if state.phase.is_terminal() {
             return false;
         }
-        let phase = terminal_phase_for_result(&result);
-        state.push_terminal(phase, phase.event_kind(), None, result);
+        let phase = terminal_phase_for_result(outcome.result());
+        state.push_terminal(phase, phase.event_kind(), None, outcome);
         self.terminal.notify_all();
         true
     }
@@ -2691,7 +2694,7 @@ struct InvocationHandleState {
     phase: InvocationHandlePhase,
     next_sequence: u64,
     events: Vec<InvocationHandleEvent>,
-    terminal_result: Option<crate::daemon::InvocationResult>,
+    terminal_outcome: Option<crate::daemon::InvocationOutcome>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2708,9 +2711,9 @@ impl InvocationHandleState {
                 kind: "submitted".to_string(),
                 terminal: false,
                 reason: None,
-                result: None,
+                outcome: None,
             }],
-            terminal_result: None,
+            terminal_outcome: None,
         }
     }
 
@@ -2719,7 +2722,7 @@ impl InvocationHandleState {
         phase: InvocationHandlePhase,
         kind: &'static str,
         reason: Option<String>,
-        result: crate::daemon::InvocationResult,
+        outcome: crate::daemon::InvocationOutcome,
     ) {
         self.phase = phase;
         self.events.push(InvocationHandleEvent {
@@ -2728,10 +2731,10 @@ impl InvocationHandleState {
             kind: kind.to_string(),
             terminal: true,
             reason,
-            result: Some(result.clone()),
+            outcome: Some(outcome.clone()),
         });
         self.next_sequence += 1;
-        self.terminal_result = Some(result);
+        self.terminal_outcome = Some(outcome);
     }
 
     fn snapshot_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
@@ -2740,7 +2743,7 @@ impl InvocationHandleState {
             "state": self.phase.as_str(),
             "terminal": self.phase.is_terminal(),
             "events": self.events.iter().map(|event| event.to_json(&self.tuple_json)).collect::<Vec<_>>(),
-            "result": self.terminal_result.clone().map(|result| invocation_result_json_with_tuple(result, self.tuple_json.clone())),
+            "result": self.terminal_outcome.clone().map(|outcome| invocation_outcome_json_with_tuple(outcome, self.tuple_json.clone())),
         })
     }
 }
@@ -2753,7 +2756,7 @@ struct InvocationHandleEvent {
     kind: String,
     terminal: bool,
     reason: Option<String>,
-    result: Option<crate::daemon::InvocationResult>,
+    outcome: Option<crate::daemon::InvocationOutcome>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2765,7 +2768,7 @@ impl InvocationHandleEvent {
             "state": self.state.as_str(),
             "terminal": self.terminal,
             "reason": self.reason,
-            "result": self.result.clone().map(|result| invocation_result_json_with_tuple(result, tuple_json.clone())),
+            "result": self.outcome.clone().map(|outcome| invocation_outcome_json_with_tuple(outcome, tuple_json.clone())),
         })
     }
 }
@@ -4635,40 +4638,19 @@ fn signed_invocation_json(signed: &crate::daemon::SignedInvocation) -> serde_jso
 }
 
 #[cfg(feature = "axon-pb")]
-fn invocation_result_from_invoke_response(
-    tuple: crate::daemon::InvocationTuple,
-    response: easynet_axon::pb::axon::v1::InvokeResponse,
-) -> crate::daemon::InvocationResult {
-    crate::daemon::InvocationResult {
-        tuple,
-        terminal_state: axon_state_name_from_i32(response.state),
-        output_content_type: response.result_content_type,
-        output: response.result,
-        selected_node_id: response.selected_node_id,
-        scheduling_reason: response.scheduling_reason,
-        elapsed_ms: response.elapsed_ms.max(0) as u64,
-        receipt: response
-            .admission_receipt
-            .as_ref()
-            .map(crate::daemon::ReceiptSummary::from_wire),
-        error: response
-            .error
-            .as_ref()
-            .map(crate::daemon::RuntimeErrorSummary::from_wire),
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn invocation_result_json_with_tuple(
-    result: crate::daemon::InvocationResult,
+fn invocation_outcome_json_with_tuple(
+    outcome: crate::daemon::InvocationOutcome,
     tuple_json: serde_json::Value,
 ) -> serde_json::Value {
     use base64::Engine;
+    let (result, stages) = outcome.into_parts();
+    debug_assert_eq!(result.receipt, stages.terminal);
     let output_json = if result.output_content_type == "application/json" {
         serde_json::from_slice::<serde_json::Value>(&result.output).ok()
     } else {
         None
     };
+    let terminal_receipt = stages.terminal;
     serde_json::json!({
         "ok": result.error.is_none(),
         "tuple": tuple_json,
@@ -4679,17 +4661,19 @@ fn invocation_result_json_with_tuple(
         "selected_node_id": result.selected_node_id,
         "scheduling_reason": result.scheduling_reason,
         "elapsed_ms": result.elapsed_ms,
-        "receipt": result.receipt.map(receipt_summary_dto_json),
+        "receipt": terminal_receipt.clone().map(receipt_summary_dto_json),
+        "admission_receipt": stages.admission.map(receipt_summary_dto_json),
+        "terminal_receipt": terminal_receipt.map(receipt_summary_dto_json),
         "error": result.error.map(runtime_error_json),
     })
 }
 
 #[cfg(feature = "axon-pb")]
-fn invocation_cancelled_result(
+fn invocation_cancelled_outcome(
     tuple: &crate::daemon::InvocationTuple,
     reason: Option<&str>,
-) -> crate::daemon::InvocationResult {
-    crate::daemon::InvocationResult {
+) -> crate::daemon::InvocationOutcome {
+    crate::daemon::InvocationOutcome::without_receipts(crate::daemon::InvocationResult {
         tuple: tuple.clone(),
         terminal_state: axon_state_wire_string(
             easynet_axon::invocation::InvocationState::Cancelled,
@@ -4706,16 +4690,16 @@ fn invocation_cancelled_result(
             message: reason.unwrap_or("invocation handle cancelled").to_string(),
             retryable: false,
         }),
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-fn invocation_failed_result(
+fn invocation_failed_outcome(
     tuple: &crate::daemon::InvocationTuple,
     err: crate::daemon::DaemonError,
-) -> crate::daemon::InvocationResult {
+) -> crate::daemon::InvocationOutcome {
     let phase = daemon_error_terminal_phase(&err);
-    crate::daemon::InvocationResult {
+    crate::daemon::InvocationOutcome::without_receipts(crate::daemon::InvocationResult {
         tuple: tuple.clone(),
         terminal_state: phase.to_axon_wire_state_string(),
         output_content_type: "application/json".to_string(),
@@ -4725,7 +4709,7 @@ fn invocation_failed_result(
         elapsed_ms: 0,
         receipt: None,
         error: Some(runtime_error_summary_for_daemon_error(&err)),
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5288,6 +5272,58 @@ mod tests {
             receipt: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn unary_result_projects_terminal_receipt_without_losing_admission_checkpoint() {
+        use easynet_axon::pb::axon::v1::{InvocationReceipt, InvokeResponse};
+
+        let admission = InvocationReceipt {
+            index: 0,
+            invocation_id: "inv-receipt-stage".to_string(),
+            receipt_type: "admitted".to_string(),
+            ..InvocationReceipt::default()
+        };
+        let terminal = InvocationReceipt {
+            index: 1,
+            invocation_id: "inv-receipt-stage".to_string(),
+            receipt_type: "completed".to_string(),
+            cleanup_complete: true,
+            ..InvocationReceipt::default()
+        };
+        let response = InvokeResponse {
+            state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+            admission_receipt: Some(admission),
+            terminal_receipt: Some(terminal),
+            ..InvokeResponse::default()
+        };
+
+        let outcome = crate::daemon::InvocationOutcome::from_invoke_response(
+            signed_fixture_tuple(),
+            response,
+        );
+        assert_eq!(
+            outcome
+                .result()
+                .receipt
+                .as_ref()
+                .map(|receipt| receipt.index),
+            Some(1)
+        );
+        assert_eq!(
+            outcome.stages().admission().map(|receipt| receipt.index),
+            Some(0)
+        );
+        assert_eq!(
+            outcome.stages().terminal().map(|receipt| receipt.index),
+            Some(1)
+        );
+
+        let json = invocation_outcome_json_with_tuple(outcome, serde_json::json!({}));
+        assert_eq!(json["receipt"]["index"], 1);
+        assert_eq!(json["admission_receipt"]["index"], 0);
+        assert_eq!(json["terminal_receipt"]["index"], 1);
+        assert_eq!(json["receipt"], json["terminal_receipt"]);
     }
 
     fn active_bidi_session(
@@ -6076,7 +6112,11 @@ mod tests {
         let outcome = handle.cancel(Some("client stop".to_string()));
         assert!(outcome.cancelled);
         assert_eq!(outcome.state, InvocationHandlePhase::Cancelled);
-        assert!(!shared.mark_terminal(completed_result_for_tuple(tuple)));
+        assert!(
+            !shared.mark_terminal(crate::daemon::InvocationOutcome::without_receipts(
+                completed_result_for_tuple(tuple)
+            ))
+        );
         let result = handle.await_result();
         assert_eq!(
             terminal_phase_for_result(&result),

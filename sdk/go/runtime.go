@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -405,18 +406,98 @@ func (c *RuntimeClient) Close(ctx context.Context) error {
 
 // InvocationResult is the unary invocation terminal result projection.
 type InvocationResult struct {
-	ok                bool
-	tuple             InvocationDraft
-	invocationID      string
-	terminalState     string
-	outputContentType string
-	outputBase64      string
-	outputJSON        json.RawMessage
-	selectedNodeID    string
-	schedulingReason  string
-	elapsedMS         int64
-	receipt           json.RawMessage
-	failure           *InvocationFailure
+	ok                      bool
+	tuple                   InvocationDraft
+	invocationID            string
+	terminalState           string
+	outputContentType       string
+	outputBase64            string
+	outputJSON              json.RawMessage
+	selectedNodeID          string
+	schedulingReason        string
+	elapsedMS               int64
+	admissionReceipt        json.RawMessage
+	terminalReceipt         json.RawMessage
+	admissionReceiptSummary *RuntimeReceipt
+	terminalReceiptSummary  *RuntimeReceipt
+	failure                 *InvocationFailure
+}
+
+// RuntimeReceipt is a non-verifying terminal/admission receipt projection.
+// Cryptographic verification requires a full Axon InvocationReceipt and is
+// deliberately exposed by ReceiptClient instead of this summary.
+type RuntimeReceipt struct {
+	Raw                map[string]any `json:"-"`
+	ReceiptID          string         `json:"receipt_id,omitempty"`
+	ReceiptURA         string         `json:"receipt_ura,omitempty"`
+	InvocationID       string         `json:"invocation_id,omitempty"`
+	ReceiptType        string         `json:"receipt_type,omitempty"`
+	State              string         `json:"state,omitempty"`
+	Index              uint64         `json:"index,omitempty"`
+	TimestampUnixMS    int64          `json:"timestamp_unix_ms,omitempty"`
+	PrevReceiptHashHex string         `json:"prev_receipt_hash_hex,omitempty"`
+	SelfHashHex        string         `json:"self_hash_hex,omitempty"`
+	CleanupComplete    *bool          `json:"cleanup_complete,omitempty"`
+	Reason             string         `json:"reason,omitempty"`
+	ChildInvocationID  string         `json:"child_invocation_id,omitempty"`
+}
+
+func NewRuntimeReceiptFromJSON(raw []byte) (RuntimeReceipt, error) {
+	var dto struct {
+		ReceiptID          string `json:"receipt_id"`
+		ReceiptURA         string `json:"receipt_ura"`
+		InvocationID       string `json:"invocation_id"`
+		ReceiptType        string `json:"receipt_type"`
+		State              string `json:"state"`
+		Index              int64  `json:"index"`
+		TimestampUnixMS    int64  `json:"timestamp_unix_ms"`
+		PrevReceiptHashHex string `json:"prev_receipt_hash_hex"`
+		SelfHashHex        string `json:"self_hash_hex"`
+		CleanupComplete    *bool  `json:"cleanup_complete"`
+		Reason             string `json:"reason"`
+		ChildInvocationID  string `json:"child_invocation_id"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return RuntimeReceipt{}, invalidRuntimePayload(fmt.Sprintf("decode runtime receipt JSON: %v", err), err)
+	}
+	if dto.Index < 0 || dto.TimestampUnixMS < 0 {
+		return RuntimeReceipt{}, invalidRuntimePayload("runtime receipt index and timestamp_unix_ms must be non-negative", nil)
+	}
+	var rawMap map[string]any
+	if err := json.Unmarshal(raw, &rawMap); err != nil || rawMap == nil {
+		return RuntimeReceipt{}, invalidRuntimePayload("runtime receipt must be an object", err)
+	}
+	return RuntimeReceipt{
+		Raw:                rawMap,
+		ReceiptID:          dto.ReceiptID,
+		ReceiptURA:         dto.ReceiptURA,
+		InvocationID:       dto.InvocationID,
+		ReceiptType:        dto.ReceiptType,
+		State:              dto.State,
+		Index:              uint64(dto.Index),
+		TimestampUnixMS:    dto.TimestampUnixMS,
+		PrevReceiptHashHex: dto.PrevReceiptHashHex,
+		SelfHashHex:        dto.SelfHashHex,
+		CleanupComplete:    dto.CleanupComplete,
+		Reason:             dto.Reason,
+		ChildInvocationID:  dto.ChildInvocationID,
+	}, nil
+}
+
+func (r RuntimeReceipt) HasCausalAnchor() bool {
+	return strings.TrimSpace(r.ReceiptURA) != "" && strings.TrimSpace(r.SelfHashHex) != ""
+}
+
+func (r RuntimeReceipt) RawProjection() map[string]any {
+	encoded, err := json.Marshal(r.Raw)
+	if err != nil {
+		return nil
+	}
+	var clone map[string]any
+	if err := json.Unmarshal(encoded, &clone); err != nil {
+		return nil
+	}
+	return clone
 }
 
 // InvocationFailure is the runtime error embedded in a terminal invocation result.
@@ -468,7 +549,31 @@ func (r InvocationResult) ElapsedMS() int64 {
 }
 
 func (r InvocationResult) Receipt() json.RawMessage {
-	return append(json.RawMessage(nil), r.receipt...)
+	return r.TerminalReceipt()
+}
+
+// AdmissionReceipt returns the pre-execution admission checkpoint, when the
+// runtime emitted one.
+func (r InvocationResult) AdmissionReceipt() json.RawMessage {
+	return append(json.RawMessage(nil), r.admissionReceipt...)
+}
+
+// TerminalReceipt returns the execution terminal checkpoint. Receipt is the
+// public compatibility projection of this same value.
+func (r InvocationResult) TerminalReceipt() json.RawMessage {
+	return append(json.RawMessage(nil), r.terminalReceipt...)
+}
+
+func (r InvocationResult) ReceiptSummary() *RuntimeReceipt {
+	return r.TerminalReceiptSummary()
+}
+
+func (r InvocationResult) AdmissionReceiptSummary() *RuntimeReceipt {
+	return cloneRuntimeReceipt(r.admissionReceiptSummary)
+}
+
+func (r InvocationResult) TerminalReceiptSummary() *RuntimeReceipt {
+	return cloneRuntimeReceipt(r.terminalReceiptSummary)
 }
 
 func (r InvocationResult) Failure() *InvocationFailure {
@@ -509,6 +614,8 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		SchedulingReason  string          `json:"scheduling_reason"`
 		ElapsedMS         int64           `json:"elapsed_ms"`
 		Receipt           json.RawMessage `json:"receipt"`
+		AdmissionReceipt  json.RawMessage `json:"admission_receipt"`
+		TerminalReceipt   json.RawMessage `json:"terminal_receipt"`
 		Error             json.RawMessage `json:"error"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
@@ -540,20 +647,98 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	if !*dto.OK && failure == nil {
 		return InvocationResult{}, invalidRuntimePayload("failed result must include error", nil)
 	}
+	terminalReceipt, err := normalizeTerminalReceipt(dto.Receipt, dto.TerminalReceipt)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	admissionReceiptSummary, err := decodeRuntimeReceiptSummary(dto.AdmissionReceipt)
+	if err != nil {
+		return InvocationResult{}, err
+	}
+	terminalReceiptSummary, err := decodeRuntimeReceiptSummary(terminalReceipt)
+	if err != nil {
+		return InvocationResult{}, err
+	}
 	return InvocationResult{
-		ok:                *dto.OK,
-		tuple:             tuple,
-		invocationID:      dto.InvocationID,
-		terminalState:     dto.TerminalState,
-		outputContentType: dto.OutputContentType,
-		outputBase64:      dto.OutputBase64,
-		outputJSON:        append(json.RawMessage(nil), dto.OutputJSON...),
-		selectedNodeID:    dto.SelectedNodeID,
-		schedulingReason:  dto.SchedulingReason,
-		elapsedMS:         dto.ElapsedMS,
-		receipt:           append(json.RawMessage(nil), dto.Receipt...),
-		failure:           failure,
+		ok:                      *dto.OK,
+		tuple:                   tuple,
+		invocationID:            dto.InvocationID,
+		terminalState:           dto.TerminalState,
+		outputContentType:       dto.OutputContentType,
+		outputBase64:            dto.OutputBase64,
+		outputJSON:              append(json.RawMessage(nil), dto.OutputJSON...),
+		selectedNodeID:          dto.SelectedNodeID,
+		schedulingReason:        dto.SchedulingReason,
+		elapsedMS:               dto.ElapsedMS,
+		admissionReceipt:        cloneOptionalJSON(dto.AdmissionReceipt),
+		terminalReceipt:         terminalReceipt,
+		admissionReceiptSummary: admissionReceiptSummary,
+		terminalReceiptSummary:  terminalReceiptSummary,
+		failure:                 failure,
 	}, nil
+}
+
+func decodeRuntimeReceiptSummary(raw json.RawMessage) (*RuntimeReceipt, error) {
+	raw = cloneOptionalJSON(raw)
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	receipt, err := NewRuntimeReceiptFromJSON(raw)
+	if err != nil {
+		return nil, err
+	}
+	return &receipt, nil
+}
+
+func cloneRuntimeReceipt(receipt *RuntimeReceipt) *RuntimeReceipt {
+	if receipt == nil {
+		return nil
+	}
+	clone := *receipt
+	clone.Raw = receipt.RawProjection()
+	if receipt.CleanupComplete != nil {
+		value := *receipt.CleanupComplete
+		clone.CleanupComplete = &value
+	}
+	return &clone
+}
+
+func normalizeTerminalReceipt(compatibility, terminal json.RawMessage) (json.RawMessage, error) {
+	compatibility = cloneOptionalJSON(compatibility)
+	terminal = cloneOptionalJSON(terminal)
+	if len(terminal) == 0 {
+		terminal = compatibility
+	}
+	if len(compatibility) == 0 {
+		compatibility = terminal
+	}
+	if len(compatibility) != 0 && len(terminal) != 0 {
+		var compatibilityValue any
+		var terminalValue any
+		if err := json.Unmarshal(compatibility, &compatibilityValue); err != nil {
+			return nil, invalidRuntimePayload(fmt.Sprintf("decode receipt JSON: %v", err), err)
+		}
+		if err := json.Unmarshal(terminal, &terminalValue); err != nil {
+			return nil, invalidRuntimePayload(fmt.Sprintf("decode terminal_receipt JSON: %v", err), err)
+		}
+		if !jsonValuesEqual(compatibilityValue, terminalValue) {
+			return nil, invalidRuntimePayload("receipt must equal terminal_receipt", nil)
+		}
+	}
+	return terminal, nil
+}
+
+func cloneOptionalJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
+}
+
+func jsonValuesEqual(left, right any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func decodeInvocationFailure(raw json.RawMessage) (*InvocationFailure, error) {

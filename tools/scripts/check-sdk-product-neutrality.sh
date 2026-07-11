@@ -59,7 +59,7 @@ if rg -n "$forbidden_type_pattern" "${production_sources[@]}"; then
   fail "product type or profile bundle leaked into runtime SDK production source"
 fi
 
-forbidden_ability_pattern="[\"'](mission\\.|agent\\.(start|stop|refresh|list)|openai\\.|pages\\.|project_list[\"']|invocation\\.history\\.)"
+forbidden_ability_pattern="[\"'](mission\\.|agent\\.(start|stop|refresh|list)|openai\\.|pages\\.|project_list[\"'])"
 if rg -n "$forbidden_ability_pattern" "${production_sources[@]}"; then
   fail "product ability literal leaked into runtime SDK production source"
 fi

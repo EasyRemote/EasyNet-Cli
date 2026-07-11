@@ -119,25 +119,25 @@
       "capability_id": "receipt_history",
       "profile": "receipts",
       "shared_cases": ["sdk/conformance/cases/receipt-history-seam.yaml"],
-      "go": {"status": "unsupported"},
-      "python": {"status": "unsupported"},
-      "remaining": "Restore verifiable receipt, causal, history and trace query contracts beyond terminal invocation facts."
+      "go": {"status": "seam", "evidence": [{"kind": "go_test", "ref": "sdk/go/receipt_test.go"}]},
+      "python": {"status": "seam", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_receipt.py"}]},
+      "remaining": "Bounded typed history, exact lookup, trace graph, causal references, and Axon-owned verification exist; add a stable cursor/anchor provider and migrate all downstream consumers before provider-backed or cutover-ready status."
     },
     {
       "capability_id": "runtime_events",
       "profile": "runtime_events",
       "shared_cases": ["sdk/conformance/cases/runtime-events-seam.yaml"],
-      "go": {"status": "unsupported"},
-      "python": {"status": "unsupported"},
-      "remaining": "Restore typed cursors and bounded generic runtime event subscriptions."
+      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_events_test.go"}]},
+      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_runtime_events.py"}]},
+      "remaining": "Generic bounded handle-event reads are provider-backed; downstream Backend/EasyRemote event consumers still need cutover and durable subscription cursors."
     },
     {
       "capability_id": "runtime_administration",
       "profile": "runtime_administration",
       "shared_cases": ["sdk/conformance/cases/runtime-administration-seam.yaml"],
-      "go": {"status": "unsupported"},
-      "python": {"status": "unsupported"},
-      "remaining": "Restore typed product-neutral runtime administration without hosted-agent or account workflows."
+      "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_admin_test.go"}]},
+      "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_runtime_admin.py"}]},
+      "remaining": "Generic runtime lifecycle/readiness administration is provider-backed; product account, hosted-agent, page, and standalone-Hub governance workflows remain downstream or PrincipalLifecycle work."
     },
     {
       "capability_id": "unary_invoke",
@@ -169,7 +169,7 @@
       "shared_cases": ["sdk/conformance/cases/terminal-receipt-facts.yaml"],
       "go": {"status": "provider-backed", "evidence": [{"kind": "go_test", "ref": "sdk/go/runtime_test.go"}]},
       "python": {"status": "provider-backed", "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_runtime.py"}]},
-      "remaining": "Receipt history, ledger pages, and product resource naming remain downstream."
+      "remaining": "Admission and terminal checkpoints are distinct and terminal receipt compatibility is stable; full receipt domain decoding remains Axon-owned while downstream consumers still need cutover."
     },
     {
       "capability_id": "conformance_runner",

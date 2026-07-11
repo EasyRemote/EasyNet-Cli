@@ -17,37 +17,27 @@ from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMateri
 class RuntimeTransport(Protocol):
     """Narrow transport seam owned by the application integration layer."""
 
-    def invoke(self, draft_json: bytes) -> bytes:
-        ...
+    def invoke(self, draft_json: bytes) -> bytes: ...
 
-    def open_stream(self, draft_json: bytes) -> tuple[StreamTransport, bytes]:
-        ...
+    def open_stream(self, draft_json: bytes) -> tuple[StreamTransport, bytes]: ...
 
     def open_bidi(
         self, draft_json: bytes, streams_json: bytes
-    ) -> tuple[BidiTransport, bytes]:
-        ...
+    ) -> tuple[BidiTransport, bytes]: ...
 
-    def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
-        ...
+    def prepare(self, draft_json: bytes, options_json: bytes) -> bytes: ...
 
-    def submit_signed(self, signed_json: bytes) -> bytes:
-        ...
+    def submit_signed(self, signed_json: bytes) -> bytes: ...
 
-    def await_handle(self, handle_id: int) -> bytes:
-        ...
+    def await_handle(self, handle_id: int) -> bytes: ...
 
-    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
-        ...
+    def cancel_handle(self, handle_id: int, reason: str) -> bytes: ...
 
-    def handle_events(self, handle_id: int) -> bytes:
-        ...
+    def handle_events(self, handle_id: int) -> bytes: ...
 
-    def free_handle(self, handle_id: int) -> None:
-        ...
+    def free_handle(self, handle_id: int) -> None: ...
 
-    def close(self) -> None:
-        ...
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -106,7 +96,9 @@ class InvocationHandle:
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             decoded = json.loads(text)
         except Exception as exc:
-            raise _invalid_runtime(f"decode invocation handle JSON: {exc}", exc) from exc
+            raise _invalid_runtime(
+                f"decode invocation handle JSON: {exc}", exc
+            ) from exc
         if not isinstance(decoded, dict):
             raise _invalid_runtime("invocation handle JSON must be an object")
 
@@ -183,8 +175,11 @@ class RuntimeReceipt:
         return cls(
             raw=dict(decoded),
             receipt_id=_optional_string(decoded.get("receipt_id"), "receipt_id") or "",
-            receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura") or "",
-            invocation_id=_optional_string(decoded.get("invocation_id"), "invocation_id")
+            receipt_ura=_optional_string(decoded.get("receipt_ura"), "receipt_ura")
+            or "",
+            invocation_id=_optional_string(
+                decoded.get("invocation_id"), "invocation_id"
+            )
             or "",
             receipt_type=_optional_string(decoded.get("receipt_type"), "receipt_type")
             or "",
@@ -197,7 +192,9 @@ class RuntimeReceipt:
                 decoded.get("prev_receipt_hash_hex"), "prev_receipt_hash_hex"
             )
             or "",
-            self_hash_hex=_optional_string(decoded.get("self_hash_hex"), "self_hash_hex")
+            self_hash_hex=_optional_string(
+                decoded.get("self_hash_hex"), "self_hash_hex"
+            )
             or "",
             cleanup_complete=_optional_bool(
                 decoded.get("cleanup_complete"), "cleanup_complete"
@@ -234,6 +231,10 @@ class InvocationResult:
     receipt: Optional[Mapping[str, object]] = None
     receipt_summary: Optional[RuntimeReceipt] = None
     error: Optional[InvocationFailure] = None
+    admission_receipt: Optional[Mapping[str, object]] = None
+    admission_receipt_summary: Optional[RuntimeReceipt] = None
+    terminal_receipt: Optional[Mapping[str, object]] = None
+    terminal_receipt_summary: Optional[RuntimeReceipt] = None
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "InvocationResult":
@@ -241,7 +242,9 @@ class InvocationResult:
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             decoded = json.loads(text)
         except Exception as exc:
-            raise _invalid_runtime(f"decode invocation result JSON: {exc}", exc) from exc
+            raise _invalid_runtime(
+                f"decode invocation result JSON: {exc}", exc
+            ) from exc
         if not isinstance(decoded, dict):
             raise _invalid_runtime("invocation result JSON must be an object")
         ok = _required_bool(decoded, "ok")
@@ -255,7 +258,31 @@ class InvocationResult:
         if not ok and failure is None:
             raise _invalid_runtime("failed result must include error")
         receipt = _optional_mapping(decoded.get("receipt"), "receipt")
+        admission_receipt = _optional_mapping(
+            decoded.get("admission_receipt"), "admission_receipt"
+        )
+        terminal_receipt = _optional_mapping(
+            decoded.get("terminal_receipt"), "terminal_receipt"
+        )
+        if terminal_receipt is None:
+            terminal_receipt = receipt
+        if receipt is None:
+            receipt = terminal_receipt
+        if (
+            receipt is not None
+            and terminal_receipt is not None
+            and receipt != terminal_receipt
+        ):
+            raise _invalid_runtime("receipt must equal terminal_receipt")
         receipt_summary = RuntimeReceipt.from_mapping(receipt) if receipt else None
+        admission_receipt_summary = (
+            RuntimeReceipt.from_mapping(admission_receipt)
+            if admission_receipt
+            else None
+        )
+        terminal_receipt_summary = (
+            RuntimeReceipt.from_mapping(terminal_receipt) if terminal_receipt else None
+        )
         return cls(
             ok=ok,
             tuple=draft,
@@ -264,7 +291,9 @@ class InvocationResult:
                 decoded.get("output_content_type"), "output_content_type"
             )
             or "",
-            output_base64=_optional_string(decoded.get("output_base64"), "output_base64")
+            output_base64=_optional_string(
+                decoded.get("output_base64"), "output_base64"
+            )
             or "",
             output_json=decoded.get("output_json"),
             selected_node_id=_optional_string(
@@ -278,6 +307,10 @@ class InvocationResult:
             elapsed_ms=elapsed_ms,
             receipt=receipt,
             receipt_summary=receipt_summary,
+            admission_receipt=admission_receipt,
+            admission_receipt_summary=admission_receipt_summary,
+            terminal_receipt=terminal_receipt,
+            terminal_receipt_summary=terminal_receipt_summary,
             error=failure,
         )
 
@@ -297,7 +330,9 @@ class InvocationCancel:
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             decoded = json.loads(text)
         except Exception as exc:
-            raise _invalid_runtime(f"decode invocation cancel JSON: {exc}", exc) from exc
+            raise _invalid_runtime(
+                f"decode invocation cancel JSON: {exc}", exc
+            ) from exc
         if not isinstance(decoded, dict):
             raise _invalid_runtime("invocation cancel JSON must be an object")
         return cls(
@@ -578,9 +613,7 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     return value
 
 
-def _optional_mapping(
-    value: object, field_name: str
-) -> Optional[Mapping[str, object]]:
+def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, object]]:
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -598,9 +631,7 @@ def _invalid_runtime_client(message: str) -> SDKError:
     )
 
 
-def _invalid_runtime(
-    message: str, cause: Optional[BaseException] = None
-) -> SDKError:
+def _invalid_runtime(message: str, cause: Optional[BaseException] = None) -> SDKError:
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="runtime",

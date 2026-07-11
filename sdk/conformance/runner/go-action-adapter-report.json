@@ -279,6 +279,66 @@
       "status": "passed"
     },
     {
+      "case_id": "directory/resolution_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/directory_test.go"
+        }
+      ],
+      "message": "Go Directory facade resolves, lists, and subscribes through the generic runtime ability contract with bounded page/cursor behavior and no product read-model projection.",
+      "profile": "directory",
+      "status": "passed"
+    },
+    {
+      "case_id": "principal/lifecycle_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/principal_test.go"
+        }
+      ],
+      "message": "Go PrincipalLifecycle exposes the canonical generic transition vocabulary without Backend account or EasyRemote product concepts.",
+      "profile": "principal",
+      "status": "passed"
+    },
+    {
+      "case_id": "receipt/history_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/receipt_test.go"
+        }
+      ],
+      "message": "Go Receipt facade provides bounded list/get/trace reads over the runtime provider while leaving canonical receipt verification and ledger semantics Axon-owned.",
+      "profile": "receipts",
+      "status": "passed"
+    },
+    {
+      "case_id": "runtime/administration_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_admin_test.go"
+        }
+      ],
+      "message": "Go runtime administration remains a generic daemon health/lifecycle surface without product account, page, or workflow policy.",
+      "profile": "runtime_administration",
+      "status": "passed"
+    },
+    {
+      "case_id": "runtime/events_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_events_test.go"
+        }
+      ],
+      "message": "Go runtime events preserve bounded cursor/resume projection through the generic runtime contract without product event naming.",
+      "profile": "runtime_events",
+      "status": "passed"
+    },
+    {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {

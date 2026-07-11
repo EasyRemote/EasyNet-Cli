@@ -1045,6 +1045,16 @@ def _invoke_response_json(
     output_content_type = response.result_content_type
     output_base64 = base64.b64encode(response.result).decode("ascii")
     error = _response_failure(response, terminal_state)
+    admission_receipt = (
+        _receipt(response.admission_receipt)
+        if response.HasField("admission_receipt")
+        else None
+    )
+    terminal_receipt = (
+        _receipt(response.terminal_receipt)
+        if response.HasField("terminal_receipt")
+        else None
+    )
     result: dict[str, object] = {
         "ok": error is None,
         "tuple": draft.to_json_dict(),
@@ -1055,9 +1065,9 @@ def _invoke_response_json(
         "selected_node_id": response.selected_node_id,
         "scheduling_reason": response.scheduling_reason,
         "elapsed_ms": response.elapsed_ms,
-        "receipt": _receipt(response.terminal_receipt)
-        if response.HasField("terminal_receipt")
-        else None,
+        "receipt": terminal_receipt,
+        "admission_receipt": admission_receipt,
+        "terminal_receipt": terminal_receipt,
         "error": error,
     }
     return _json_bytes(result)

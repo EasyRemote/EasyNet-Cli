@@ -1,5 +1,6 @@
 import json
 import unittest
+from dataclasses import fields
 
 from easynet_sdk import (
     BidiStreamDescriptor,
@@ -64,7 +65,9 @@ class MemoryRuntimeTransport:
 
         return (
             MemoryStreamTransport(
-                [b'{"sequence":1,"event":"terminal","state":"Completed","terminal":true}']
+                [
+                    b'{"sequence":1,"event":"terminal","state":"Completed","terminal":true}'
+                ]
             ),
             b'{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}',
         )
@@ -112,8 +115,7 @@ class MemoryRuntimeTransport:
     def cancel_handle(self, handle_id: int, reason: str) -> bytes:
         self.seen_cancel_reason = reason
         return (
-            b'{"handle_id":7,"cancelled":true,'
-            b'"state":"Cancelled","terminal":true}'
+            b'{"handle_id":7,"cancelled":true,' b'"state":"Cancelled","terminal":true}'
         )
 
     def handle_events(self, handle_id: int) -> bytes:
@@ -222,6 +224,47 @@ class RuntimeTests(unittest.TestCase):
         assert result.receipt is not None
         self.assertEqual(result.receipt["invocation_id"], "inv-1")
 
+    def test_invocation_result_separates_admission_and_terminal_receipts(self) -> None:
+        payload = {
+            "ok": True,
+            "tuple": complete_draft().to_json_dict(),
+            "terminal_state": "Completed",
+            "receipt": {"index": 1, "state": "Completed"},
+            "admission_receipt": {"index": 0, "state": "Admitted"},
+            "terminal_receipt": {"index": 1, "state": "Completed"},
+            "error": None,
+        }
+        result = InvocationResult.from_json(json.dumps(payload))
+
+        self.assertEqual(result.receipt, result.terminal_receipt)
+        self.assertEqual(result.admission_receipt, {"index": 0, "state": "Admitted"})
+        assert result.terminal_receipt_summary is not None
+        self.assertEqual(result.terminal_receipt_summary.index, 1)
+
+        payload["receipt"] = {"index": 0, "state": "Admitted"}
+        with self.assertRaises(SDKError) as caught:
+            InvocationResult.from_json(json.dumps(payload))
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_invocation_result_preserves_stable_positional_field_prefix(self) -> None:
+        self.assertEqual(
+            [field.name for field in fields(InvocationResult)][:12],
+            [
+                "ok",
+                "tuple",
+                "terminal_state",
+                "output_content_type",
+                "output_base64",
+                "output_json",
+                "selected_node_id",
+                "scheduling_reason",
+                "elapsed_ms",
+                "receipt",
+                "receipt_summary",
+                "error",
+            ],
+        )
+
     def test_invocation_result_rejects_malformed_runtime_receipt_fields(self) -> None:
         result = {
             "ok": True,
@@ -276,7 +319,13 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             transport.seen_streams,
-            [{"content_type": "application/json", "ordering": "ordered", "stream_id": 1}],
+            [
+                {
+                    "content_type": "application/json",
+                    "ordering": "ordered",
+                    "stream_id": 1,
+                }
+            ],
         )
 
     def test_prepare_delegates_to_transport(self) -> None:
@@ -411,7 +460,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(bidi.session_id, "bidi-1")
         self.assertEqual(
             transport.seen_streams,
-            [{"content_type": "application/json", "ordering": "ordered", "stream_id": 1}],
+            [
+                {
+                    "content_type": "application/json",
+                    "ordering": "ordered",
+                    "stream_id": 1,
+                }
+            ],
         )
 
     def test_unbound_lifecycle_objects_reject_object_methods(self) -> None:

@@ -1434,6 +1434,8 @@ func directBidiStreamDescriptors(raw []byte) ([]*axonpb.StreamDescriptor, error)
 func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResponse) ([]byte, error) {
 	stateName := directStateName(response.GetState())
 	errorValue := directResponseFailure(response.GetError(), stateName, "direct_runtime.invoke")
+	admissionReceipt := directReceipt(response.GetAdmissionReceipt())
+	terminalReceipt := directReceipt(response.GetTerminalReceipt())
 	value := map[string]any{
 		"ok":                  errorValue == nil,
 		"tuple":               draft,
@@ -1444,7 +1446,9 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 		"selected_node_id":    response.GetSelectedNodeId(),
 		"scheduling_reason":   response.GetSchedulingReason(),
 		"elapsed_ms":          response.GetElapsedMs(),
-		"receipt":             directReceipt(response.GetTerminalReceipt()),
+		"receipt":             terminalReceipt,
+		"admission_receipt":   admissionReceipt,
+		"terminal_receipt":    terminalReceipt,
 		"error":               errorValue,
 	}
 	return json.Marshal(value)

@@ -11,6 +11,7 @@ class ImportBoundaryTests(unittest.TestCase):
         private_cabi = root / "_cabi.py"
         axon_addressing = root / "axon_addressing.py"
         directory = root / "directory.py"
+        receipt = root / "receipt.py"
         forbidden = [
             "import ctypes",
             "from ctypes",
@@ -29,7 +30,10 @@ class ImportBoundaryTests(unittest.TestCase):
                 continue
             body = path.read_text()
             for needle in forbidden:
-                if path in {axon_addressing, directory} and needle == "easynet_":
+                if (
+                    path in {axon_addressing, directory, receipt}
+                    and needle == "easynet_"
+                ):
                     continue
                 self.assertNotIn(needle, body, f"{path} contains {needle!r}")
 
@@ -37,6 +41,15 @@ class ImportBoundaryTests(unittest.TestCase):
         self.assertIn("from easynet_axon", addressing_body)
         self.assertNotIn("service_locator", addressing_body)
         self.assertNotIn("open_cabi", addressing_body)
+
+        receipt_body = receipt.read_text()
+        self.assertIn("from easynet_axon.invocation import", receipt_body)
+        self.assertIn("parse_invocation_ledger_record", receipt_body)
+        self.assertIn("parse_invocation_trace_graph", receipt_body)
+        self.assertIn("verify_receipt_chain", receipt_body)
+        self.assertNotIn("_axon_pb", receipt_body)
+        self.assertNotIn("direct_runtime", receipt_body)
+        self.assertNotIn("_cabi", receipt_body)
 
     def test_raw_cabi_is_confined_to_private_transport_adapter(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
@@ -57,12 +70,19 @@ class ImportBoundaryTests(unittest.TestCase):
             "ChatCompletionRequest",
             "StreamChatCompletionRequest",
             "GatewayLifecycleFacade",
-            "ReceiptClient",
             "MissionClient",
         ):
             self.assertNotIn(name, exported)
             self.assertFalse(hasattr(easynet_sdk, name), name)
-        for name in ("AddressingClient", "DirectoryClient", "RuntimeClient", "InvocationDraft"):
+        for name in (
+            "AddressingClient",
+            "DirectoryClient",
+            "InvocationDraft",
+            "ReceiptClient",
+            "ReceiptReference",
+            "RuntimeClient",
+            "RuntimeReceiptProvider",
+        ):
             self.assertIn(name, exported)
             self.assertTrue(hasattr(easynet_sdk, name), name)
 

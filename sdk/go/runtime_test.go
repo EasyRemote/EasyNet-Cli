@@ -1,10 +1,12 @@
 package easynet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -317,6 +319,43 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 	}
 	if string(result.OutputJSON()) != `{"ready": true}` {
 		t.Fatalf("output JSON not preserved: %s", result.OutputJSON())
+	}
+}
+
+func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
+	draftJSON, err := json.Marshal(completeDraftForRuntimeTest(t))
+	if err != nil {
+		t.Fatalf("marshal draft: %v", err)
+	}
+	raw := []byte(fmt.Sprintf(`{
+		"ok":true,
+		"tuple":%s,
+		"terminal_state":"Completed",
+		"receipt":{"index":1,"state":"Completed"},
+		"admission_receipt":{"index":0,"state":"Admitted"},
+		"terminal_receipt":{"index":1,"state":"Completed"},
+		"error":null
+	}`, draftJSON))
+	result, err := NewInvocationResultFromJSON(raw)
+	if err != nil {
+		t.Fatalf("NewInvocationResultFromJSON: %v", err)
+	}
+	if string(result.Receipt()) != string(result.TerminalReceipt()) {
+		t.Fatalf("compatibility receipt must project terminal receipt: receipt=%s terminal=%s", result.Receipt(), result.TerminalReceipt())
+	}
+	if !strings.Contains(string(result.AdmissionReceipt()), `"index":0`) {
+		t.Fatalf("admission receipt = %s", result.AdmissionReceipt())
+	}
+	if summary := result.TerminalReceiptSummary(); summary == nil || summary.Index != 1 || summary.State != "Completed" {
+		t.Fatalf("terminal receipt summary = %#v", summary)
+	}
+	if summary := result.AdmissionReceiptSummary(); summary == nil || summary.Index != 0 || summary.State != "Admitted" {
+		t.Fatalf("admission receipt summary = %#v", summary)
+	}
+
+	mismatched := bytes.Replace(raw, []byte(`"receipt":{"index":1,"state":"Completed"}`), []byte(`"receipt":{"index":0,"state":"Admitted"}`), 1)
+	if _, err := NewInvocationResultFromJSON(mismatched); err == nil || !strings.Contains(err.Error(), "receipt must equal terminal_receipt") {
+		t.Fatalf("mismatched receipt error = %v", err)
 	}
 }
 

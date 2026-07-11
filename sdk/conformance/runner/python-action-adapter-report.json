@@ -255,6 +255,66 @@
       "status": "passed"
     },
     {
+      "case_id": "directory/resolution_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_directory.py"
+        }
+      ],
+      "message": "Python Directory facade resolves, lists, and subscribes through the generic runtime ability contract with bounded page/cursor behavior and no product read-model projection.",
+      "profile": "directory",
+      "status": "passed"
+    },
+    {
+      "case_id": "principal/lifecycle_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_principal.py"
+        }
+      ],
+      "message": "Python PrincipalLifecycle exposes the canonical generic transition vocabulary without Backend account or EasyRemote product concepts.",
+      "profile": "principal",
+      "status": "passed"
+    },
+    {
+      "case_id": "receipt/history_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_receipt.py"
+        }
+      ],
+      "message": "Python Receipt facade provides bounded list/get/trace reads over the runtime provider while leaving canonical receipt verification and ledger semantics Axon-owned.",
+      "profile": "receipts",
+      "status": "passed"
+    },
+    {
+      "case_id": "runtime/administration_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime_admin.py"
+        }
+      ],
+      "message": "Python runtime administration remains a generic daemon health/lifecycle surface without product account, page, or workflow policy.",
+      "profile": "runtime_administration",
+      "status": "passed"
+    },
+    {
+      "case_id": "runtime/events_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime_events.py"
+        }
+      ],
+      "message": "Python runtime events preserve bounded cursor/resume projection through the generic runtime contract without product event naming.",
+      "profile": "runtime_events",
+      "status": "passed"
+    },
+    {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {
