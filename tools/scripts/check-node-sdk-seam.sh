@@ -1,7 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/check-sdk-ura-naming.sh"
+
+if [[ "${1:-}" == "--self-test" ]]; then
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  good="$tmp/good.ts"
+  bad="$tmp/bad.ts"
+  cat >"$good" <<'EOF'
+export const SECURITY = "identity";
+export const security = "identity";
+export const SecurityClass = "identity";
+export const SECURITY_CLASS = "identity";
+export const securityClass = "identity";
+EOF
+  cat >"$bad" <<'EOF'
+export const AgentURI = "easynet:///r/example/agent/alice.sdk";
+export const AbilityUri = "easynet:///r/example/ability/alice.echo";
+export const agentUri = "easynet:///r/example/agent/alice.sdk";
+export const DEVICE_URI = "easynet:///r/example/device/dev-a";
+EOF
+  sdk_ura_naming_scan_files "$good"
+  if sdk_ura_naming_scan_files "$bad" >"$tmp/out" 2>&1; then
+    echo "check-node-sdk-seam: self-test expected URI-era naming to fail" >&2
+    exit 1
+  fi
+  for expected in AgentURI AbilityUri agentUri DEVICE_URI; do
+    grep -Fq "$expected" "$tmp/out"
+  done
+  echo "check-node-sdk-seam self-test ok"
+  exit 0
+fi
+
+ROOT="${1:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "check-node-sdk-seam: node is required" >&2
@@ -11,13 +45,15 @@ fi
 npm test --prefix "$ROOT/sdk/node" >/dev/null
 node --check "$ROOT/sdk/node/index.js" >/dev/null
 
-if grep -RInE '\bURI\b|\bUri\b|\buri\b|_uri\b|uri_' "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' | grep -v 'node_modules' >/tmp/easynet-node-uri-scan.out 2>/dev/null; then
+uri_scan="$(mktemp)"
+trap 'rm -f "$uri_scan"' EXIT
+if grep -RInE "$SDK_URA_NAMING_PATTERN" "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' --exclude-dir='node_modules' >"$uri_scan" 2>/dev/null; then
   echo "check-node-sdk-seam: URI-era naming found in Node SDK" >&2
-  cat /tmp/easynet-node-uri-scan.out >&2
-  rm -f /tmp/easynet-node-uri-scan.out
+  cat "$uri_scan" >&2
   exit 1
 fi
-rm -f /tmp/easynet-node-uri-scan.out
+rm -f "$uri_scan"
+trap - EXIT
 
 if grep -RInE '\bbackend_ura\b|\buser_ura\b|backendURA|userURA' "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' >/tmp/easynet-node-authority-scan.out 2>/dev/null; then
   echo "check-node-sdk-seam: product-specific authority fields found in Node SDK" >&2

@@ -13,6 +13,30 @@ import (
 	"time"
 )
 
+func TestRuntimeSigningIdentityRequiresExplicitDaemonEndpoint(t *testing.T) {
+	if _, err := DefaultRuntimeIdentitySocketPath(); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("DefaultRuntimeIdentitySocketPath error = %v, want INVALID_ARGUMENT", err)
+	}
+
+	for _, socketPath := range []string{"", " \t\n "} {
+		_, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
+			OwnerURA:   "easynet:///r/acme/hub",
+			SocketPath: socketPath,
+		})
+		if !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("LoadRuntimeSigningIdentity(%q) error = %v, want INVALID_ARGUMENT", socketPath, err)
+		}
+
+		_, err = EnsureRuntimeSigningIdentity(EnsureRuntimeSigningIdentityRequest{
+			OwnerURA:   "easynet:///r/acme/hub",
+			SocketPath: socketPath,
+		})
+		if !IsCode(err, ErrInvalidArgument) {
+			t.Fatalf("EnsureRuntimeSigningIdentity(%q) error = %v, want INVALID_ARGUMENT", socketPath, err)
+		}
+	}
+}
+
 func TestLoadRuntimeSigningIdentityUsesDaemonKeyringProjection(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
@@ -60,6 +84,11 @@ func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
 			if request["canonical_bytes_b64"] != base64.StdEncoding.EncodeToString(message) {
 				t.Fatalf("canonical bytes were not forwarded exactly: %#v", request)
 			}
+			publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey)
+			if request["public_key_b64"] != publicKeyBase64 ||
+				request["signer_policy_ref"] != identitySignerPolicyRef("easynet:///r/acme/hub", "easynet:///r/acme/hub", publicKeyBase64) {
+				t.Fatalf("signing request is not bound to the runtime projection: %#v", request)
+			}
 			return map[string]any{
 				"result":        "signature",
 				"signature_b64": base64.StdEncoding.EncodeToString(signature),
@@ -82,6 +111,33 @@ func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
 	}
 }
 
+func TestRuntimeSigningIdentityRejectsSignatureFromAnotherKey(t *testing.T) {
+	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	wrongKey := ed25519.NewKeyFromSeed(bytesOf(9, ed25519.SeedSize))
+	requests := 0
+	socketPath := startRuntimeKeyringTestServer(t, func(map[string]any) map[string]any {
+		requests++
+		if requests == 1 {
+			return map[string]any{
+				"result": "public_key", "public_key_b64": base64.StdEncoding.EncodeToString(publicKey),
+			}
+		}
+		return map[string]any{
+			"result": "signature", "signature_b64": base64.StdEncoding.EncodeToString(ed25519.Sign(wrongKey, []byte("canonical"))),
+		}
+	})
+	identity, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
+		OwnerURA: "easynet:///r/acme/hub", SocketPath: socketPath,
+	})
+	if err != nil {
+		t.Fatalf("LoadRuntimeSigningIdentity: %v", err)
+	}
+	if _, err := identity.Sign([]byte("canonical")); !IsCode(err, ErrProtocol) {
+		t.Fatalf("identity.Sign error = %v, want PROTOCOL", err)
+	}
+}
+
 func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
@@ -91,15 +147,17 @@ func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
 		if _, containsSeed := request["seed_hex"]; containsSeed {
 			t.Fatal("SDK must not generate or transmit key seeds")
 		}
+		if _, containsRoleOverlays := request["role_overlays"]; containsRoleOverlays {
+			t.Fatal("SDK must not bind multiple owner roles to one runtime key")
+		}
 		return map[string]any{
 			"result":         "public_key",
 			"public_key_b64": base64.StdEncoding.EncodeToString(publicKey),
 		}
 	})
 	identity, err := EnsureRuntimeSigningIdentity(EnsureRuntimeSigningIdentityRequest{
-		OwnerURA:     "easynet:///r/acme/hub",
-		RoleOverlays: []string{"easynet:///r/acme/device/node-a"},
-		SocketPath:   socketPath,
+		OwnerURA:   "easynet:///r/acme/hub",
+		SocketPath: socketPath,
 	})
 	if err != nil {
 		t.Fatalf("EnsureRuntimeSigningIdentity: %v", err)

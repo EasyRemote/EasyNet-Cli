@@ -58,6 +58,18 @@ impl ExclusiveFileLock {
         let (file, path) = open_and_lock(data_path, LockMode::Exclusive)?;
         Ok(Self { file, path })
     }
+
+    /// Try to acquire the process-spanning lease without waiting. Long-lived
+    /// service owners use this at boot so a second process fails explicitly
+    /// instead of hanging behind the active owner.
+    pub(crate) fn try_acquire_for_data_path(data_path: &Path) -> anyhow::Result<Option<Self>> {
+        let (file, path) = open_lock_file(data_path)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self { file, path })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(anyhow::anyhow!("try lock {}: {error}", path.display())),
+        }
+    }
 }
 
 impl Drop for ExclusiveFileLock {
@@ -86,6 +98,12 @@ impl Drop for SharedFileLock {
 /// shared guards is `mode`; sharing this body means a future change to the
 /// open or error-handling path is made once.
 fn open_and_lock(data_path: &Path, mode: LockMode) -> anyhow::Result<(File, PathBuf)> {
+    let (file, lock_path) = open_lock_file(data_path)?;
+    mode.apply(&file, &lock_path)?;
+    Ok((file, lock_path))
+}
+
+fn open_lock_file(data_path: &Path) -> anyhow::Result<(File, PathBuf)> {
     let lock_path = lock_path_for(data_path);
     let parent = lock_path
         .parent()
@@ -99,7 +117,6 @@ fn open_and_lock(data_path: &Path, mode: LockMode) -> anyhow::Result<(File, Path
         .write(true)
         .open(&lock_path)
         .map_err(|e| anyhow::anyhow!("open lock {}: {e}", lock_path.display()))?;
-    mode.apply(&file, &lock_path)?;
     Ok((file, lock_path))
 }
 

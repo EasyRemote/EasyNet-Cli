@@ -4,6 +4,17 @@ Python is the P0 facade for EasyRemote and local automation. It may use the C
 ABI internally, but EasyRemote product code must not own ctypes loaders, raw
 handles, Invocation JSON codecs, or host-stream wire/hash semantics.
 
+## Signing custody
+
+`SignatureProvider` is the generic seam for signatures produced by an
+external signer selected by the consumer. The Python SDK never accepts or
+stores a private key or seed. Keys managed by the local EasyNet runtime are
+available only through the daemon-backed `RuntimeSigningIdentity` and
+`ManagedSigner` surfaces; `StaticSignatureProvider` adapts a signature that
+was already produced outside the SDK. These provider surfaces require an
+explicit daemon endpoint; the SDK neither discovers product directories nor
+reads product environment variables to infer one.
+
 Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
 errors/connect-local lifecycle composition/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
 Directory + Identity, Receipt, Publication, Host Binding, Mission,
@@ -67,9 +78,9 @@ AddressingClient and package-level Axon-delegated `parse_ura`, `device_ura`,
 IdentityClient descriptor/resource projection, C ABI-backed signing-key
 register/list/revoke execution through daemon identity abilities, and
 C ABI-backed signer-handle projection from daemon key inventory with
-SDK-owned signer workflow acquisition, signer-handle provenance/policy-proof guardrails, plus
-`Ed25519SignatureProvider` for local signatures over daemon/Axon-provided
-canonical signing material.
+SDK-owned signer workflow acquisition, signer-handle provenance/policy-proof guardrails,
+generic external-signer provider composition, and daemon-backed runtime and
+managed signing.
 It also exposes ReceiptClient fetch/project/verify/causal-ref projection,
 receipt-derived child `causal_context` adapters, `AbilityInvocationClient`
 child-context helpers for generic host nested calls, C ABI-backed fetch plus

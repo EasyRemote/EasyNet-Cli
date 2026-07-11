@@ -35,94 +35,55 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use easynet_cli::daemon::identity::self_identity::KeyringClient;
 use easynet_cli::daemon::keyring::abilities::{
     handle_consume_federate_user_token, handle_create, handle_federate_user_identity_token,
     ManagedSigningProvider,
 };
 use easynet_cli::daemon::keyring::federated_bindings::FederatedBindingsStore;
 use easynet_cli::daemon::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
-use easynet_cli::daemon::keyring::{
-    ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus, MasterKeySource, Vault,
-};
 
-struct TestProvider(std::sync::Mutex<Vault>);
+struct TestKeyService {
+    child: Child,
+    _home: tempfile::TempDir,
+}
 
-impl ManagedSigningProvider for TestProvider {
-    fn create(
-        &self,
-        purpose: String,
-        bound_subject: Option<String>,
-    ) -> anyhow::Result<ManagedSigningKeyProjection> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .inventory_create(purpose, bound_subject)?)
+impl Drop for TestKeyService {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
-    fn list(
-        &self,
-        purpose: Option<String>,
-        status: Option<ManagedSigningStatus>,
-    ) -> anyhow::Result<Vec<ManagedSigningKeyProjection>> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .inventory_list(purpose.as_deref(), status))
+}
+
+fn start_test_key_service() -> (Arc<dyn ManagedSigningProvider>, TestKeyService) {
+    let home = tempfile::tempdir().expect("test key service home");
+    let socket_path = home.path().join("key-service.sock");
+    let vault_path = home.path().join("key-service.enc");
+    let child = Command::new(env!("CARGO_BIN_EXE_easynet-keyring"))
+        .env("HOME", home.path())
+        .env("EASYNET_KEYRING_SOCKET_PATH", &socket_path)
+        .env("EASYNET_KEYRING_VAULT_PATH", &vault_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn test key service");
+    let client = KeyringClient::new(&socket_path);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while client.health().is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "test key service did not become ready"
+        );
+        std::thread::sleep(Duration::from_millis(20));
     }
-    fn public_key(&self, key_id: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
-        Ok(self.0.lock().unwrap().inventory_public_key(key_id)?)
-    }
-    fn sign(
-        &self,
-        key_id: &str,
-        canonical_bytes: &[u8],
-    ) -> anyhow::Result<ed25519_dalek::Signature> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .inventory_sign(key_id, canonical_bytes)?)
-    }
-    fn rotate(&self, key_id: &str) -> anyhow::Result<ManagedSigningKeyProjection> {
-        Ok(self.0.lock().unwrap().inventory_rotate(key_id)?)
-    }
-    fn revoke(&self, key_id: &str) -> anyhow::Result<i64> {
-        Ok(self.0.lock().unwrap().inventory_revoke(key_id)?)
-    }
-    fn set_expiry(&self, key_id: &str, expires_unix_ms: i64) -> anyhow::Result<()> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .inventory_set_expiry(key_id, expires_unix_ms)?)
-    }
-    fn bind_subject(&self, key_id: &str, subject_ura: &str) -> anyhow::Result<()> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .inventory_bind_subject(key_id, subject_ura.to_string())?)
-    }
-    fn peer_add(
-        &self,
-        peer_ura: &str,
-        public_key_b64: &str,
-        via_hub: Option<String>,
-    ) -> anyhow::Result<bool> {
-        Ok(self.0.lock().unwrap().inventory_peer_add(
-            peer_ura.to_string(),
-            public_key_b64.to_string(),
-            via_hub,
-        )?)
-    }
-    fn peer_list(&self) -> anyhow::Result<Vec<ManagedPeer>> {
-        Ok(self.0.lock().unwrap().inventory_peer_list())
-    }
+    (Arc::new(client), TestKeyService { child, _home: home })
 }
 
 /// Stand up realm A's daemon: keyring + agent_signing entry +
@@ -132,15 +93,9 @@ fn boot_realm_a_daemon() -> (
     Arc<dyn ManagedSigningProvider>,
     String,
     String,
-    tempfile::TempDir,
+    TestKeyService,
 ) {
-    let dir = tempfile::tempdir().unwrap();
-    let vault = Vault::open_or_init(
-        &dir.path().join("realm-a-key-service.enc"),
-        &MasterKeySource::Explicit("passphrase-a".into()),
-    )
-    .unwrap();
-    let h: Arc<dyn ManagedSigningProvider> = Arc::new(TestProvider(std::sync::Mutex::new(vault)));
+    let (h, service) = start_test_key_service();
     let user_ura = "easynet:///r/realm-a/user/user-c".to_string();
     let created = handle_create(
         &h,
@@ -154,7 +109,7 @@ fn boot_realm_a_daemon() -> (
         h,
         user_ura,
         created["key_id"].as_str().unwrap().to_string(),
-        dir,
+        service,
     )
 }
 

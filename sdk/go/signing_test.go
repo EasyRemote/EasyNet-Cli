@@ -418,17 +418,14 @@ func TestSignerRejectsForgedHandleProvenance(t *testing.T) {
 	}
 }
 
-func TestEd25519ProviderSignsDaemonCanonicalBytes(t *testing.T) {
+func TestExternalSignatureProviderImplementsGenericSigningSeam(t *testing.T) {
 	seed := bytes.Repeat([]byte{0x11}, ed25519.SeedSize)
 	publicKeyBase64 := ed25519PublicKeyBase64(seed)
 	prepared, err := NewPreparedInvocationFromJSON([]byte(preparedFixture))
 	if err != nil {
 		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
 	}
-	provider, err := NewEd25519SignatureProvider(seed, publicKeyBase64)
-	if err != nil {
-		t.Fatalf("NewEd25519SignatureProvider: %v", err)
-	}
+	provider := newTestEd25519SignatureProvider(seed)
 	signer, err := NewSigner(signerHandle(publicKeyBase64), provider)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
@@ -456,65 +453,6 @@ func TestEd25519ProviderSignsDaemonCanonicalBytes(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey)
 	if !ed25519.Verify(publicKey, canonicalBytes, signature) {
 		t.Fatalf("ed25519 signature did not verify")
-	}
-}
-
-func TestEd25519ProviderRejectsHandlePublicKeyMismatch(t *testing.T) {
-	seed := bytes.Repeat([]byte{0x11}, ed25519.SeedSize)
-	wrongPublicKey := ed25519PublicKeyBase64(bytes.Repeat([]byte{0x22}, ed25519.SeedSize))
-	prepared, err := NewPreparedInvocationFromJSON([]byte(preparedFixture))
-	if err != nil {
-		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
-	}
-	provider, err := NewEd25519SignatureProvider(seed, "")
-	if err != nil {
-		t.Fatalf("NewEd25519SignatureProvider: %v", err)
-	}
-	signer, err := NewSigner(signerHandle(wrongPublicKey), provider)
-	if err != nil {
-		t.Fatalf("NewSigner: %v", err)
-	}
-
-	_, err = signer.Sign(prepared)
-	if err == nil {
-		t.Fatalf("Sign succeeded, want invalid argument")
-	}
-	if !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
-	}
-}
-
-func TestEd25519ProviderRejectsMalformedSeed(t *testing.T) {
-	_, err := NewEd25519SignatureProvider([]byte("short"), "")
-	if err == nil {
-		t.Fatalf("NewEd25519SignatureProvider succeeded, want invalid argument")
-	}
-	if !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
-	}
-}
-
-func TestEd25519ProviderRejectsUnsupportedMaterialAlgorithm(t *testing.T) {
-	prepared, err := NewPreparedInvocationFromJSON([]byte(preparedFixture))
-	if err != nil {
-		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
-	}
-	prepared.signingMaterial.algorithm = "secp256k1"
-	provider, err := NewEd25519SignatureProvider(bytes.Repeat([]byte{0x11}, ed25519.SeedSize), "")
-	if err != nil {
-		t.Fatalf("NewEd25519SignatureProvider: %v", err)
-	}
-	signer, err := NewSigner(signerHandle(""), provider)
-	if err != nil {
-		t.Fatalf("NewSigner: %v", err)
-	}
-
-	_, err = signer.Sign(prepared)
-	if err == nil {
-		t.Fatalf("Sign succeeded, want invalid argument")
-	}
-	if !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -593,4 +531,29 @@ func ed25519PublicKeyBase64(seed []byte) string {
 	privateKey := ed25519.NewKeyFromSeed(seed)
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	return base64.StdEncoding.EncodeToString(publicKey)
+}
+
+// testEd25519SignatureProvider demonstrates that consumers can implement the
+// product-neutral SignatureProvider seam without giving private material to
+// the production SDK package.
+type testEd25519SignatureProvider struct {
+	privateKey ed25519.PrivateKey
+}
+
+func newTestEd25519SignatureProvider(seed []byte) testEd25519SignatureProvider {
+	return testEd25519SignatureProvider{privateKey: ed25519.NewKeyFromSeed(seed)}
+}
+
+func (p testEd25519SignatureProvider) Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error) {
+	canonicalBytes, err := base64.StdEncoding.DecodeString(material.CanonicalBytesBase64())
+	if err != nil {
+		return InvocationSignature{}, err
+	}
+	publicKey := p.privateKey.Public().(ed25519.PublicKey)
+	return InvocationSignature{
+		Algorithm:             "ed25519",
+		SignatureBase64:       base64.StdEncoding.EncodeToString(ed25519.Sign(p.privateKey, canonicalBytes)),
+		KeyIDHint:             handle.SignerID,
+		SignerPublicKeyBase64: base64.StdEncoding.EncodeToString(publicKey),
+	}, nil
 }

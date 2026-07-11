@@ -64,7 +64,7 @@ func TestCABIAuthorityTransportMintsViaCoreAndSigner(t *testing.T) {
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
 		CalleeURA:                "easynet:///r/example/device/dev-a",
-		SubjectURA:               "easynet:///r/example/session/session-1",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
 		Audience:                 "easynet:///r/example/device/dev-a",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
@@ -181,7 +181,7 @@ int32_t easynet_authority_materialize_delegation(const char *request_json, const
 
 int32_t easynet_authority_prepare_session(const char *request_json, char **out_material_json) {
 	(void)request_json;
-	*out_material_json = dup_json("{\"profile\":\"authority\",\"kind\":\"session_authority\",\"algorithm\":\"ed25519\",\"metadata_key\":\"x-easynet-session-authority\",\"canonical_bytes_base64\":\"Y2Fub24=\",\"canonical_hash_hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signed_fields\":[\"issuer_ura\",\"session_id\",\"session_owner_user_id\",\"creator_principal_id\",\"callee_ura\",\"subject_ura\",\"audience\",\"scopes\",\"allowed_actions\",\"allowed_followup_abilities\",\"issued_at_ms\",\"expires_at_ms\"],\"payload\":{\"issuer_ura\":\"easynet:///r/example/agent/backend\",\"session_id\":\"session-1\",\"session_owner_user_id\":\"alice\",\"creator_principal_id\":\"easynet:///r/example/agent/backend\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"subject_ura\":\"easynet:///r/example/session/session-1\",\"audience\":\"easynet:///r/example/device/dev-a\",\"scopes\":[\"device.observe.*\"],\"allowed_actions\":[\"read\"],\"allowed_followup_abilities\":[\"device.observe.health\"],\"issued_at_ms\":1000,\"expires_at_ms\":2000}}");
+	*out_material_json = dup_json("{\"profile\":\"authority\",\"kind\":\"session_authority\",\"algorithm\":\"ed25519\",\"metadata_key\":\"x-easynet-session-authority\",\"canonical_bytes_base64\":\"Y2Fub24=\",\"canonical_hash_hex\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"signed_fields\":[\"issuer_ura\",\"session_id\",\"session_owner_user_id\",\"creator_principal_id\",\"callee_ura\",\"subject_ura\",\"audience\",\"scopes\",\"allowed_actions\",\"allowed_followup_abilities\",\"issued_at_ms\",\"expires_at_ms\"],\"payload\":{\"issuer_ura\":\"easynet:///r/example/agent/backend\",\"session_id\":\"session-1\",\"session_owner_user_id\":\"alice\",\"creator_principal_id\":\"easynet:///r/example/agent/backend\",\"callee_ura\":\"easynet:///r/example/device/dev-a\",\"subject_ura\":\"easynet:///r/example/resource/user.alice/session/session-1\",\"audience\":\"easynet:///r/example/device/dev-a\",\"scopes\":[\"device.observe.*\"],\"allowed_actions\":[\"read\"],\"allowed_followup_abilities\":[\"device.observe.health\"],\"issued_at_ms\":1000,\"expires_at_ms\":2000}}");
 	return 0;
 }
 

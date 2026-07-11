@@ -258,6 +258,29 @@ pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
     }
 }
 
+/// Project a registry name into the public descriptor name for an authority.
+///
+/// User-owned Agents carry their Agent id in the Ability owner token, so their
+/// descriptor name is owner-local (`chat`). Device-sponsored Agents publish
+/// under the Device owner token by Axon contract; their Agent id therefore has
+/// to remain in the descriptor name (`terminal.screenshot`) or two hosted
+/// Agents exposing the same verb would collapse to one Ability URA.
+pub fn descriptor_public_ability_name(owner_ura: &str, ability_name: &str) -> String {
+    let owner_local_name = owner_local_ability_name(owner_ura, ability_name);
+    let Ok(owner) = parse_ura(owner_ura) else {
+        return owner_local_name;
+    };
+    let Some((_device_id, agent_id)) = owner.device_agent_ids() else {
+        return owner_local_name;
+    };
+    let prefix = format!("{agent_id}.");
+    if owner_local_name.starts_with(&prefix) {
+        owner_local_name
+    } else {
+        format!("{prefix}{owner_local_name}")
+    }
+}
+
 /// Convert an owner-local ability name back to the daemon registry key
 /// used for local dispatch.
 ///
@@ -367,6 +390,27 @@ mod tests {
                 "screenshot"
             ),
             "terminal.screenshot"
+        );
+    }
+
+    #[test]
+    fn descriptor_public_name_keeps_device_sponsored_agent_identity() {
+        let owner = "easynet:///r/localhost/agent/device.dev-1.terminal";
+        assert_eq!(
+            descriptor_public_ability_name(owner, "terminal.screenshot"),
+            "terminal.screenshot"
+        );
+        assert_eq!(
+            descriptor_public_ability_name(owner, "screenshot"),
+            "terminal.screenshot"
+        );
+        assert_eq!(
+            owner_ability_ura(
+                owner,
+                &descriptor_public_ability_name(owner, "terminal.screenshot")
+            )
+            .as_deref(),
+            Some("easynet:///r/localhost/ability/device.dev-1.terminal.screenshot")
         );
     }
 

@@ -31,10 +31,10 @@ use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
 use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
+use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle;
-use crate::daemon::invocation::bidi::session_initiator::SessionSigningSeed;
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     PendingDispatchMap, PendingStreamDispatchMap,
 };
@@ -72,7 +72,7 @@ pub(crate) struct DirectoryPlane {
 }
 
 /// Cross-realm dial plane: the federation client, the operator-curated
-/// peer map, the hub signing seed for peer-envelope signatures, and
+/// peer map, the owner-bound hub signer for peer-envelope signatures, and
 /// the directory-auto-route security posture.
 #[derive(Clone)]
 pub(crate) struct FederationDial {
@@ -83,10 +83,10 @@ pub(crate) struct FederationDial {
     /// `DaemonConfig::federated_peers`; SIGHUP reloads surface to the
     /// next dispatch within ~50ms.
     pub(crate) peers: SharedFederatedPeers,
-    /// Hub signing seed for cross-hub `federation.forward_invoke`
-    /// peer-envelope signatures. `None` preserves the on-demand read
-    /// from the SDK runtime keyring.
-    pub(crate) hub_signing_seed: Option<SessionSigningSeed>,
+    /// Owner-bound hub signer for cross-hub `federation.forward_invoke`
+    /// peer-envelope signatures. `None` is valid only for deployments without
+    /// federation; an attempted peer request fails closed.
+    pub(crate) hub_signer: Option<Arc<dyn CanonicalSigner>>,
     /// When `false` (default) the dispatcher refuses to dial a peer
     /// hub whose endpoint came from an observed `federated_directory`
     /// entry — see [`crate::daemon::invocation::routing::hub_resolver`]

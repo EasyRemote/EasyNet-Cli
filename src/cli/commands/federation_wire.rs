@@ -48,7 +48,6 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -258,7 +257,7 @@ pub fn auto_wire_federated_peer_from_credentials(
         return Ok(());
     }
 
-    if let Err(err) = atomic_write(&path, updated.as_bytes()) {
+    if let Err(err) = config::atomic_write(&path, updated.as_bytes()) {
         anyhow::bail!("could not write daemon-config.toml for federated_peers: {err}");
     }
 
@@ -290,10 +289,9 @@ pub fn auto_wire_federated_peer_from_credentials(
 /// the backend is mocked or absent, so the trust anchor stays
 /// empty and the local daemon rejects its own paired device's
 /// `session.open` admission. This helper closes that gap by
-/// pre-populating the device's self-entry on `easynet device join`,
-/// derived deterministically from `(realm, node_id)` via the
-/// same `derive_owner_public_key_b64` the runtime publish path
-/// uses. Production deploys with a real backend continue to use
+/// pre-populating the device's self-entry on `easynet device join`
+/// from the daemon key service's public projection. Production
+/// deploys with a real backend continue to use
 /// the canonical pairing-flow writer; this helper is a no-op when
 /// the entry is already present (idempotent).
 ///
@@ -319,6 +317,32 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     if creds.realm.trim().is_empty() || creds.node_id.trim().is_empty() {
         return Ok(());
     }
+    if creds
+        .hub_pubkey_b64
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        anyhow::bail!("pairing credentials missing hub_public_key_b64");
+    }
+    use crate::daemon::identity::self_identity::{CanonicalSigner as _, RuntimeSigningIdentity};
+    use base64::Engine as _;
+
+    let agent_ura = crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim());
+    let identity = RuntimeSigningIdentity::load_default(agent_ura.clone())
+        .map_err(|error| anyhow::anyhow!("resolve joined Device runtime identity: {error}"))?;
+    let public_key = identity
+        .signing_public_key()
+        .map_err(|error| anyhow::anyhow!("project joined Device public key: {error}"))?;
+    let public_key_b64 = base64::engine::general_purpose::STANDARD.encode(public_key.to_bytes());
+    auto_wire_self_realm_trust_with_public_key(creds, &public_key_b64)
+}
+
+fn auto_wire_self_realm_trust_with_public_key(
+    creds: &Credentials,
+    public_key_b64: &str,
+) -> anyhow::Result<()> {
     let path = realm_trust_path_for_join();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.exists() {
@@ -347,10 +371,6 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // shape would land in a parallel namespace the parser
     // strict-rejects.
     let agent_ura = crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim());
-    let public_key_b64 = crate::daemon::federation::publish::derive_owner_public_key_b64(
-        creds.realm.trim(),
-        creds.node_id.trim(),
-    );
     let added_at_unix_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -374,7 +394,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         .filter(|s| !s.is_empty());
 
     let after_device =
-        match upsert_self_trusted_agent(&raw, &agent_ura, &public_key_b64, added_at_unix_ms) {
+        match upsert_self_trusted_agent(&raw, &agent_ura, public_key_b64, added_at_unix_ms) {
             Ok(s) => s,
             Err(err) => {
                 anyhow::bail!("could not edit realm-trust.toml for device entry: {err}");
@@ -410,7 +430,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         return Ok(());
     }
 
-    if let Err(err) = atomic_write(&path, updated.as_bytes()) {
+    if let Err(err) = config::atomic_write(&path, updated.as_bytes()) {
         anyhow::bail!("could not write realm-trust.toml: {err}");
     }
 
@@ -476,7 +496,7 @@ fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    atomic_write(&path, &pem)?;
+    config::atomic_write(&path, &pem)?;
     Ok(Some(path))
 }
 
@@ -677,42 +697,6 @@ fn upsert_daemon_hub_endpoint_in_toml(raw: &str, hub_endpoint: &str) -> anyhow::
     daemon_table.insert("hub_endpoint", value(hub_endpoint));
 
     Ok(doc.to_string())
-}
-
-/// Atomic write: write to a sibling tempfile, fsync, then
-/// `rename(2)` on top of the existing file. POSIX guarantees
-/// rename is atomic for same-filesystem replacements; mirrors
-/// the discipline `realm_trust_anchor::save` uses for the trust
-/// anchor file.
-fn atomic_write(path: &Path, body: &[u8]) -> anyhow::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp_name = match path.file_name() {
-        Some(name) => {
-            let mut s = name.to_os_string();
-            s.push(".tmp");
-            s
-        }
-        None => anyhow::bail!("daemon-config path has no file name component"),
-    };
-    let tmp_path = parent.join(tmp_name);
-
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_path)
-            .with_context(|| format!("open {} for write", tmp_path.display()))?;
-        file.write_all(body)
-            .with_context(|| format!("write {}", tmp_path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("fsync {}", tmp_path.display()))?;
-    }
-    fs::rename(&tmp_path, path).with_context(|| {
-        let _ = fs::remove_file(&tmp_path);
-        format!("atomic rename {} → {}", tmp_path.display(), path.display())
-    })?;
-    Ok(())
 }
 
 /// Send SIGHUP to the running easynet-daemon, if any. Returns
@@ -1133,7 +1117,7 @@ added_at_unix_ms = 1
         // EASYNET_REALM_TRUST_PATH at a tempdir-rooted path and using
         // the pairing response's hub_public_key_b64. Asserts the file
         // contains BOTH:
-        //   - device entry (deterministic pubkey derivation)
+        //   - device entry (daemon key-service public projection)
         //   - hub entry (pubkey supplied by pairing)
         //
         // HomeGuard serialises HOME mutation against every other
@@ -1153,6 +1137,8 @@ added_at_unix_ms = 1
         let signing = SigningKey::from_bytes(&staged_seed);
         let expected_hub_pk =
             base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
+        let expected_dev_pk = base64::engine::general_purpose::STANDARD
+            .encode(SigningKey::from_bytes(&[41; 32]).verifying_key().to_bytes());
 
         let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
         std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
@@ -1182,7 +1168,7 @@ added_at_unix_ms = 1
             ),
             join_receipt_hash: None,
         };
-        auto_wire_self_realm_trust_from_credentials(&creds).expect("auto-wire ok");
+        auto_wire_self_realm_trust_with_public_key(&creds, &expected_dev_pk).expect("auto-wire ok");
 
         let body = std::fs::read_to_string(&trust_path).expect("file exists");
         let parsed: toml::Value = body.parse().expect("parses");
@@ -1208,13 +1194,10 @@ added_at_unix_ms = 1
             device_row.get("agent_ura").and_then(|v| v.as_str()),
             Some("easynet:///r/tenant-a/device/dev-1"),
         );
-        let expected_dev_pk =
-            crate::daemon::federation::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
         assert_eq!(
             device_row.get("public_key_b64").and_then(|v| v.as_str()),
             Some(expected_dev_pk.as_str()),
-            "device pubkey must be the deterministic derivation (matches what \
-             identity.register_pubkey would write)"
+            "device pubkey must be the daemon key-service public projection"
         );
 
         let hub_row = arr
@@ -1253,7 +1236,8 @@ added_at_unix_ms = 1
 
         // Re-running is idempotent: file size unchanged.
         let body_before = body;
-        auto_wire_self_realm_trust_from_credentials(&creds).expect("second auto-wire is a no-op");
+        auto_wire_self_realm_trust_with_public_key(&creds, &expected_dev_pk)
+            .expect("second auto-wire is a no-op");
         let body_after = std::fs::read_to_string(&trust_path).expect("file exists");
         assert_eq!(body_after, body_before, "second run is byte-identical");
     }

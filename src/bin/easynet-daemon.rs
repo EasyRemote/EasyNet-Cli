@@ -29,6 +29,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use anyhow::Context as _;
 use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::daemon::ability::builtins::agents::{
@@ -138,6 +139,50 @@ fn assert_daemon_baseline_conformance(
     }
 }
 
+fn ensure_daemon_runtime_identity(config: &DaemonConfig) -> anyhow::Result<()> {
+    use easynet_cli::daemon::identity::self_identity::KeyringClient;
+
+    easynet_cli::daemon::keyring::lifecycle::ensure_key_service_running()
+        .context("start or attach daemon key service")?;
+    let client = KeyringClient::default_path();
+
+    match config.mode() {
+        DaemonMode::Hub => {
+            let hub_ura = easynet_cli::core::ura::hub_ura(config.realm());
+            client
+                .ensure(&hub_ura)
+                .map_err(|error| anyhow::anyhow!("ensure Hub runtime identity: {error}"))?;
+        }
+        DaemonMode::Device | DaemonMode::Both => {
+            let credentials = config::load_credentials().with_context(|| {
+                format!(
+                    "{} daemon requires paired credentials before identity provisioning",
+                    config.mode().as_str()
+                )
+            })?;
+            if credentials.realm_str() != config.realm() {
+                anyhow::bail!(
+                    "daemon credentials realm `{}` does not match configured realm `{}`",
+                    credentials.realm_str(),
+                    config.realm()
+                );
+            }
+            let owner_ura =
+                easynet_cli::core::ura::device_ura(credentials.realm_str(), &credentials.node_id);
+            client
+                .ensure(&owner_ura)
+                .map_err(|error| anyhow::anyhow!("ensure Device runtime identity: {error}"))?;
+            if config.mode() == DaemonMode::Both {
+                let hub_ura = easynet_cli::core::ura::hub_ura(config.realm());
+                client
+                    .ensure(&hub_ura)
+                    .map_err(|error| anyhow::anyhow!("ensure Hub runtime identity: {error}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     // Refuse non-empty argv. `easynet-daemon` does not parse
@@ -189,6 +234,13 @@ async fn main() -> anyhow::Result<()> {
             return Err(err.into());
         }
     };
+
+    boot_bus.emit_started("daemon-key-service");
+    if let Err(error) = ensure_daemon_runtime_identity(&daemon_config) {
+        boot_bus.emit_failed("daemon-key-service", error.to_string());
+        return Err(error);
+    }
+    boot_bus.emit_ok("daemon-key-service");
 
     // Bind sub-services that have a disk-backed store to the
     // current tenant so persistence actually works across daemon
@@ -281,22 +333,42 @@ async fn main() -> anyhow::Result<()> {
     // registry build is deterministic and free of global env
     // state.
     boot_bus.emit_started("ability-registry");
-    let pages_identity =
-        easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
+    let pages_identity = match daemon_config.mode() {
+        DaemonMode::Device | DaemonMode::Both => {
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env()
+        }
+        DaemonMode::Hub => {
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::default()
+        }
+    };
     let invocation_ledger = open_invocation_ledger();
     let local_runtime = easynet_axon::invocation::LocalRuntime::new();
     let hub_published_abilities = HubPublishedAbilityStore::new();
-    let authority_context = match config::load_credentials() {
-        Ok(creds) => Some(
-            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id),
+    let authority_context = match daemon_config.mode() {
+        DaemonMode::Hub => Some(
+            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+                easynet_cli::core::ura::hub_ura(daemon_config.realm()),
             )?,
         ),
-        Err(_) if daemon_config.mode() == DaemonMode::Hub => None,
-        Err(err) => return Err(anyhow::anyhow!(
-            "daemon ability registry requires paired credentials in {} mode: {err}",
-            daemon_config.mode().as_str()
-        )),
+        DaemonMode::Device | DaemonMode::Both => {
+            let creds = config::load_credentials().map_err(|err| {
+                anyhow::anyhow!(
+                    "daemon ability registry requires paired credentials in {} mode: {err}",
+                    daemon_config.mode().as_str()
+                )
+            })?;
+            let device_ura =
+                easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+            let hosted_agent_uras = easynet_cli::daemon::persistence::hosted_agent_authority_roots()
+                .map_err(|err| anyhow::anyhow!(
+                    "daemon ability registry requires readable hosted-agent lifecycle state: {err}"
+                ))?;
+            Some(match daemon_config.mode() {
+                DaemonMode::Device => easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(device_ura, hosted_agent_uras)?,
+                DaemonMode::Both => easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(device_ura, hosted_agent_uras)?,
+                DaemonMode::Hub => unreachable!("Hub mode handled above"),
+            })
+        }
     };
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
@@ -365,20 +437,18 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Attach the live runtime to the device-ability registrar and replay
-    // any durably-installed device abilities back into it. This is the
-    // boot half of the `ability.deploy` install transaction: without it
-    // the registrar's runtime cell stays empty and deploy fails honestly
-    // ("registrar not wired"); with it, every previously-deployed device
-    // ability (host_stream generators, shell forwarders) is re-bound and
-    // routable before the first invocation can land. Boot replay is
-    // idempotent and reports stale/errored rows rather than skipping
-    // silently (plan invariant 7).
-    if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
-        device_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
-        device_registrar.set_runtime(Arc::clone(&local_runtime))?;
-        let report = device_registrar.replay_from_store().await;
-        report_device_ability_replay(&report)?;
+    // Attach and replay the Device ability registrar only when this process
+    // actually hosts Device authority. Hub-only mode has no Device runtime
+    // plane, so it must not read or materialize durable Device deployments.
+    // In Device/Both this is the boot half of the `ability.deploy` install
+    // transaction and remains fail-closed on stale or errored rows.
+    if matches!(daemon_config.mode(), DaemonMode::Device | DaemonMode::Both) {
+        if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
+            device_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
+            device_registrar.set_runtime(Arc::clone(&local_runtime))?;
+            let report = device_registrar.replay_from_store().await;
+            report_device_ability_replay(&report)?;
+        }
     }
 
     // Keep the registry object alive for dynamic side tables whose

@@ -108,16 +108,17 @@ mod trust;
 
 use crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default;
 #[cfg(test)]
+use identity::{canonical_caller_ura_from_stored_identity, StoredDeviceIdentity};
 use identity::{
-    canonical_caller_ura_from_stored_identity, daemon_identity_from_stored, StoredDeviceIdentity,
+    load_daemon_identity_for_mode, load_runtime_signer, maybe_bootstrap_runtime_self_identity,
+    DaemonIdentity,
 };
-use identity::{load_daemon_identity, maybe_bootstrap_runtime_self_identity, DaemonIdentity};
 use listeners::{spawn_tcp_tls_listener, spawn_uds_listener};
 use paths::expand_home;
 use presence_seed::seed_boot_presence;
 use trust::{
     load_trust_anchor_from, reload_daemon_config_cells_from, reload_trust_anchor_cell_from,
-    upsert_hub_identity_from_keyring,
+    upsert_hub_identity,
 };
 
 /// Maximum decoded gRPC message size for InvocationServer/Client on
@@ -222,7 +223,19 @@ pub fn start_daemon_invocation_transport(
         }
     };
 
-    let daemon_identity = load_daemon_identity();
+    let daemon_identity = load_daemon_identity_for_mode(config.mode())?;
+    if matches!(config.mode(), DaemonMode::Device | DaemonMode::Both) && daemon_identity.is_none() {
+        anyhow::bail!(
+            "{} daemon requires a daemon-owned Device runtime identity; run `easynet join <token>` first",
+            config.mode().as_str()
+        );
+    }
+    let hub_signer = if matches!(config.mode(), DaemonMode::Hub | DaemonMode::Both) {
+        let hub_ura = crate::core::ura::hub_ura(config.realm());
+        Some(load_runtime_signer(&hub_ura)?)
+    } else {
+        None
+    };
     let daemon_ura = transport_daemon_ura(config.mode(), config.realm(), daemon_identity.as_ref());
     if let Some(identity) = daemon_identity.as_ref() {
         maybe_bootstrap_runtime_self_identity(identity);
@@ -235,11 +248,15 @@ pub fn start_daemon_invocation_transport(
     // intentionally narrow (one path, no other behaviour change) so
     // production paths cannot diverge accidentally.
     let trust_anchor_path = trust_anchor_path_from_env_or_default();
-    let trust_anchor = upsert_hub_identity_from_keyring(
-        config.realm(),
-        &trust_anchor_path,
-        load_trust_anchor_from(&trust_anchor_path),
-    );
+    let trust_anchor = match hub_signer.as_deref() {
+        Some(signer) => upsert_hub_identity(
+            config.realm(),
+            signer,
+            &trust_anchor_path,
+            load_trust_anchor_from(&trust_anchor_path),
+        ),
+        None => load_trust_anchor_from(&trust_anchor_path),
+    };
     // PR-7 commit 5/N: wrap the boot-time anchor in a reload-friendly
     // cell. The same cell is handed to the admission facade *and* to
     // `identity.register_pubkey`'s handler context — a successful
@@ -321,19 +338,13 @@ pub fn start_daemon_invocation_transport(
         } else {
             None
         };
-    let hub_signing_seed =
-        crate::daemon::invocation::admission::peer_envelope_signer::read_hub_identity_seed(
-            config.realm(),
-        )
-        .ok();
-
     let mut admission =
         AdmissionFacade::with_trust_anchor_cell(trust_anchor_cell.clone(), daemon_ura.clone());
     if let Some(client) = dialer.clone() {
         admission = admission.with_federation(client, federated_peers_cell.clone());
     }
-    if let Some(seed) = hub_signing_seed {
-        admission = admission.with_hub_signing_seed(seed);
+    if let Some(signer) = hub_signer.as_ref() {
+        admission = admission.with_hub_signer(Arc::clone(signer));
     }
     // #185: one hot-swappable quota gate is shared by both listeners.
     // The gate exists even when quota starts disabled so SIGHUP can
@@ -525,8 +536,8 @@ pub fn start_daemon_invocation_transport(
     service = service.with_local_runtime(Arc::clone(&local_runtime));
     service = service.with_ability_wire_registry(Arc::clone(&ability_wire_registry));
 
-    if let Some(seed) = hub_signing_seed {
-        service = service.with_hub_signing_seed(seed);
+    if let Some(signer) = hub_signer.as_ref() {
+        service = service.with_hub_signer(Arc::clone(signer));
     }
 
     // PR-N1 commit 6/N (boot wiring) + commit 9/N (SIGHUP-aware
@@ -976,11 +987,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
     // `namespace.resolve` while the local daemon could still dispatch them.
     let ability_descriptors =
         device_owner_session_descriptors(&identity.caller_ura, plugin_runtime_manager.as_deref());
-    let signing_state = if identity.signing_seed.is_some() {
-        "signed frame0"
-    } else {
-        "unsigned session prelude frame0"
-    };
+    let signing_state = "daemon-custodied canonical signer";
     let ca_state = match hub_ca_pem_path.as_deref() {
         Some(path) => format!("pinned CA `{}`", path.display()),
         None => "system trust roots".to_string(),
@@ -1046,8 +1053,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
     tokio::spawn(run_session_supervisor(
         crate::daemon::invocation::bidi::session_initiator::SessionSupervisorRunConfig {
             hub_endpoint,
-            caller_ura: identity.caller_ura,
-            signing_seed: identity.signing_seed,
+            signer: identity.signer,
             hub_ca_pem_path,
             dispatcher,
             escalation_outbox: outbox,
@@ -1055,6 +1061,9 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
             hub_published_abilities,
             initial_admission: Some(initial_admission),
             user_trust_sync: Some(user_trust_sync),
+            connection_state_sink: Arc::new(
+                crate::daemon::invocation::bidi::session_initiator::PersistentSessionConnectionStateSink,
+            ),
             cancel: cancel_rx,
         },
     ));
@@ -1436,10 +1445,22 @@ fn spawn_federated_directory_streaming_supervisor(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::SessionShutdown;
+    use crate::daemon::identity::self_identity::{CanonicalSigner, TestCanonicalSigner};
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
+
+    fn test_signer(owner_ura: &str, seed: [u8; 32]) -> Arc<dyn CanonicalSigner> {
+        Arc::new(TestCanonicalSigner::new(owner_ura, seed))
+    }
+
+    fn test_daemon_identity(owner_ura: &str) -> DaemonIdentity {
+        DaemonIdentity::bind(owner_ura.to_string(), test_signer(owner_ura, [0x33; 32]))
+            .expect("bind test daemon identity")
+    }
 
     #[tokio::test]
     async fn session_shutdown_drop_resolves_the_cancel_receiver() {
@@ -1584,15 +1605,38 @@ mod tests {
 }"#;
         let stored = serde_json::from_str::<StoredDeviceIdentity>(raw)
             .expect("modern credentials.json must parse despite extra fields");
-        let identity = daemon_identity_from_stored(&stored).expect("must derive a device identity");
+        let caller_ura = canonical_caller_ura_from_stored_identity(&stored)
+            .expect("must derive a device identity");
         assert_eq!(
-            identity.caller_ura,
+            caller_ura,
             "easynet:///r/localhost/device/01a5b007-f9c3-41f9-aa6f-7531267651bc",
         );
-        assert!(
-            identity.signing_seed.is_some(),
-            "device identity must carry a signing seed so `session.open` can dial the hub"
-        );
+    }
+
+    #[test]
+    fn hub_only_identity_loading_does_not_require_device_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        let home = tempfile::tempdir().expect("hub-only test HOME");
+        std::env::set_var("HOME", home.path());
+
+        let identity = load_daemon_identity_for_mode(DaemonMode::Hub)
+            .expect("Hub-only mode must not read missing device credentials");
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn hub_only_identity_loading_ignores_malformed_device_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        let home = tempfile::tempdir().expect("hub-only test HOME");
+        let state = home.path().join(".easynet");
+        std::fs::create_dir_all(&state).expect("create test state directory");
+        std::fs::write(state.join("credentials.json"), b"{not-json")
+            .expect("write malformed credentials");
+        std::env::set_var("HOME", home.path());
+
+        let identity = load_daemon_identity_for_mode(DaemonMode::Hub)
+            .expect("Hub-only mode must not parse device credentials");
+        assert!(identity.is_none());
     }
 
     #[test]
@@ -1603,23 +1647,13 @@ mod tests {
             node_id: Some("device-123".to_string()),
             _retired_tenant_id: None,
         };
-        let identity = daemon_identity_from_stored(&stored).expect("identity");
-        assert_eq!(
-            identity.caller_ura,
-            "easynet:///r/realm-a/device/device-123"
-        );
-        assert!(
-            identity.signing_seed.is_some(),
-            "realm+node credentials must derive a signing seed"
-        );
+        let caller_ura = canonical_caller_ura_from_stored_identity(&stored).expect("identity");
+        assert_eq!(caller_ura, "easynet:///r/realm-a/device/device-123");
     }
 
     #[test]
     fn hub_mode_transport_identity_uses_hub_ura_not_device_credentials() {
-        let identity = DaemonIdentity {
-            caller_ura: "easynet:///r/cli/device/local".to_string(),
-            signing_seed: None,
-        };
+        let identity = test_daemon_identity("easynet:///r/cli/device/local");
         assert_eq!(
             transport_daemon_ura(DaemonMode::Hub, "hub-a.local", Some(&identity)).as_deref(),
             Some("easynet:///r/hub-a.local/hub"),
@@ -1632,10 +1666,7 @@ mod tests {
 
     #[test]
     fn device_mode_transport_identity_uses_device_credentials() {
-        let identity = DaemonIdentity {
-            caller_ura: "easynet:///r/hub-a.local/device/dev-1".to_string(),
-            signing_seed: None,
-        };
+        let identity = test_daemon_identity("easynet:///r/hub-a.local/device/dev-1");
         assert_eq!(
             transport_daemon_ura(DaemonMode::Device, "hub-a.local", Some(&identity)).as_deref(),
             Some("easynet:///r/hub-a.local/device/dev-1"),
@@ -1655,109 +1686,21 @@ mod tests {
             _retired_tenant_id: None,
         };
         assert!(
-            daemon_identity_from_stored(&stored).is_none(),
+            canonical_caller_ura_from_stored_identity(&stored).is_none(),
             "agent_ura is no longer a fallback daemon identity"
         );
     }
 
     #[test]
-    fn daemon_identity_prefers_keyring_seed_over_deterministic_derive() {
-        use crate::daemon::keyring::{MasterKeySource, Vault};
-        use ed25519_dalek::SigningKey;
-        use std::sync::Mutex;
-        // Serialise against other env-mutating tests in this file
-        // (HOME, EASYNET_KEYRING_*). They all set_var at top of body
-        // without a guard; this guard ensures no two of them race.
-        static ENV_GUARD: Mutex<()> = Mutex::new(());
-        let _guard = ENV_GUARD.lock().unwrap();
-
-        let temp = tempfile::tempdir().expect("tempdir");
-        let vault_path = temp.path().join("keyring.enc");
-        let pass = "phase3d-daemon-boot-test";
-
-        // Seed 0xAA repeated 32 times — distinguishable from
-        // anything `derive_subject_keypair` would produce, so we
-        // can pin the test on "this seed came from the vault".
-        let seed = [0xAAu8; 32];
-
-        let primary = "easynet:///r/host-test/device/dev-uuid";
-        let hub_overlay = crate::core::ura::hub_ura("host-test");
-
-        let source = MasterKeySource::Explicit(pass.to_string());
-        let mut vault = Vault::init(&vault_path, &source).expect("init vault");
-        vault
-            .put(primary, vec![hub_overlay.to_string()], hex::encode(seed))
-            .expect("put");
-        vault.seal().expect("seal");
-
-        std::env::set_var("EASYNET_KEYRING_PASSPHRASE", pass);
-        std::env::set_var("EASYNET_KEYRING_VAULT_PATH", &vault_path);
-
-        let stored = StoredDeviceIdentity {
-            agent_ura: None,
-            realm: Some("host-test".to_string()),
-            node_id: Some("dev-uuid".to_string()),
-            _retired_tenant_id: None,
-        };
-        let identity = daemon_identity_from_stored(&stored).expect("identity");
-
-        std::env::remove_var("EASYNET_KEYRING_PASSPHRASE");
-        std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
-
-        assert_eq!(identity.caller_ura, primary);
-        let got = identity.signing_seed.expect("seed");
-        assert_eq!(
-            got, seed,
-            "daemon must use the vault's seed, not the deterministic derive"
-        );
-
-        // Sanity: the resulting keypair is the SAME one as what the
-        // backend (Phase 3D Go reader) will pull from this vault
-        // for the hub overlay — that's the load-bearing v4.1.5
-        // host-mode invariant.
-        let _signer = SigningKey::from_bytes(&got);
-    }
-
-    #[test]
-    fn daemon_identity_falls_back_when_keyring_env_unset() {
-        use std::sync::Mutex;
-        static ENV_GUARD: Mutex<()> = Mutex::new(());
-        let _guard = ENV_GUARD.lock().unwrap();
-        std::env::remove_var("EASYNET_KEYRING_PASSPHRASE");
-        std::env::remove_var("EASYNET_KEYRING_VAULT_PATH");
-
-        let stored = StoredDeviceIdentity {
-            agent_ura: None,
-            realm: Some("realm-no-vault".to_string()),
-            node_id: Some("dev-uuid".to_string()),
-            _retired_tenant_id: None,
-        };
-        let identity = daemon_identity_from_stored(&stored).expect("identity");
-        assert!(
-            identity.signing_seed.is_some(),
-            "deterministic derive must still work when the keyring is not opted into"
-        );
-    }
-
-    #[test]
-    fn hub_identity_keyring_upsert_replaces_stale_trust_anchor_key() {
+    fn hub_identity_projection_replaces_stale_trust_anchor_key() {
         let _hg = crate::cli::commands::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
-        std::env::set_var("EASYNET_KEYRING_PASSPHRASE", "test-passphrase");
-        let vault_path = temp.path().join(".easynet").join("keyring.enc");
-        std::env::set_var("EASYNET_KEYRING_VAULT_PATH", &vault_path);
 
         let realm = "realm-upsert";
         let hub_ura = crate::core::ura::hub_ura(realm);
         let new_seed = [0x42u8; 32];
-        let source = crate::daemon::keyring::MasterKeySource::Explicit("test-passphrase".into());
-        let mut vault = crate::daemon::keyring::Vault::open_or_init(&vault_path, &source)
-            .expect("keyring vault");
-        vault
-            .put(&hub_ura, vec![], hex::encode(new_seed))
-            .expect("put hub identity");
-        vault.seal().expect("seal keyring vault");
+        let signer = test_signer(&hub_ura, new_seed);
 
         let old_key = SigningKey::from_bytes(&[0x41u8; 32]);
         let old_pub = BASE64_STANDARD.encode(old_key.verifying_key().to_bytes());
@@ -1773,7 +1716,7 @@ mod tests {
         }])
         .expect("stale anchor");
 
-        let updated = upsert_hub_identity_from_keyring(realm, &trust_path, stale);
+        let updated = upsert_hub_identity(realm, signer.as_ref(), &trust_path, stale);
         let want_pub =
             BASE64_STANDARD.encode(SigningKey::from_bytes(&new_seed).verifying_key().to_bytes());
         assert_eq!(
@@ -1794,17 +1737,12 @@ mod tests {
     }
 
     #[test]
-    fn hub_identity_keyring_upsert_skips_missing_vault() {
+    fn hub_identity_projection_rejects_mismatched_signer_owner() {
         let _hg = crate::cli::commands::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
-        std::env::set_var("EASYNET_KEYRING_PASSPHRASE", "test-passphrase");
-        std::env::set_var(
-            "EASYNET_KEYRING_VAULT_PATH",
-            temp.path().join(".easynet").join("missing.enc"),
-        );
 
-        let realm = "realm-missing-keyring";
+        let realm = "realm-mismatched-signer";
         let hub_ura = crate::core::ura::hub_ura(realm);
         let old_key = SigningKey::from_bytes(&[0x41u8; 32]);
         let old_pub = BASE64_STANDARD.encode(old_key.verifying_key().to_bytes());
@@ -1819,15 +1757,20 @@ mod tests {
         }])
         .expect("stale anchor");
 
-        let updated =
-            upsert_hub_identity_from_keyring(realm, &temp.path().join("realm-trust.toml"), stale);
+        let wrong_signer = test_signer(&crate::core::ura::hub_ura("another-realm"), [0x42; 32]);
+        let updated = upsert_hub_identity(
+            realm,
+            wrong_signer.as_ref(),
+            &temp.path().join("realm-trust.toml"),
+            stale,
+        );
         assert_eq!(
             updated
                 .lookup(&hub_ura)
                 .expect("existing entry")
                 .public_key_b64,
             old_pub,
-            "missing SDK keyring identity must not fabricate a replacement key"
+            "a signer bound to another owner must not replace the trust entry"
         );
     }
 
@@ -1836,10 +1779,7 @@ mod tests {
         let _hg = crate::cli::commands::test_support::HomeGuard::new();
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
-        let identity = DaemonIdentity {
-            caller_ura: "easynet:///r/realm-a/device/device-123".to_string(),
-            signing_seed: None,
-        };
+        let identity = test_daemon_identity("easynet:///r/realm-a/device/device-123");
         maybe_bootstrap_runtime_self_identity(&identity);
     }
 

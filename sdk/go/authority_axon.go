@@ -34,20 +34,6 @@ func (p *DelegationProof) CanonicalPayload() ([]byte, error) {
 	return (&proof).CanonicalPayload()
 }
 
-// Sign signs this delegated-authority payload with the issuer private key.
-func (p *DelegationProof) Sign(privateKey ed25519.PrivateKey) error {
-	if p == nil {
-		return invalidInvocation("delegation authority is required", nil)
-	}
-	proof := p.toAxonDelegationProof()
-	if err := (&proof).Sign(privateKey); err != nil {
-		return err
-	}
-	p.Signature = append(p.Signature[:0], proof.Signature...)
-	p.metadataValue = ""
-	return nil
-}
-
 // SignWith signs this delegated authority through an opaque runtime signer.
 func (p *DelegationProof) SignWith(signer CanonicalSigner) error {
 	if p == nil {
@@ -164,23 +150,6 @@ func (a *SessionAuthority) CanonicalPayload() ([]byte, error) {
 		"subject_ura":                a.SubjectURA,
 	}
 	return json.Marshal(payload)
-}
-
-// Sign signs this session-authority payload with the issuer private key.
-func (a *SessionAuthority) Sign(privateKey ed25519.PrivateKey) error {
-	if a == nil {
-		return invalidInvocation("session authority is required", nil)
-	}
-	if len(privateKey) != ed25519.PrivateKeySize {
-		return invalidInvocation("session authority private key has invalid size", nil)
-	}
-	payload, err := a.CanonicalPayload()
-	if err != nil {
-		return err
-	}
-	a.Signature = append(a.Signature[:0], ed25519.Sign(privateKey, payload)...)
-	a.metadataValue = ""
-	return nil
 }
 
 // SignWith signs this session authority through an opaque runtime signer.

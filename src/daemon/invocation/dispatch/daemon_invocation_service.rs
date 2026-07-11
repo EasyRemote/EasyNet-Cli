@@ -109,6 +109,7 @@ use crate::daemon::ability::builtins::governance::invocation_history::{
 use crate::daemon::ability::conformance::BaselineCallMode;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
+use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::quota_meter::quota_metered_ability_for_request;
@@ -118,7 +119,6 @@ use crate::daemon::invocation::admission::target_gate::TargetGate;
 use crate::daemon::invocation::bidi::bidi_dispatcher::{
     validate_and_extract_bidi_frame0, BidiDispatcher, BidiDispatcherDeps,
 };
-use crate::daemon::invocation::bidi::session_initiator::SessionSigningSeed;
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RegisterPubkeyContext, RuntimePlane,
     SessionPlane,
@@ -333,8 +333,8 @@ pub struct DaemonInvocationService {
     /// Directory read plane: presence, hosted-agent rows, ability
     /// catalogs, federated directory view. See [`DirectoryPlane`].
     directory: DirectoryPlane,
-    /// Cross-realm dial plane: federation client, peer map, hub
-    /// signing seed, auto-route posture. See [`FederationDial`].
+    /// Cross-realm dial plane: federation client, peer map, owner-bound hub
+    /// signer, auto-route posture. See [`FederationDial`].
     federation: FederationDial,
     /// Device<->hub correlation plane: pending dispatch maps,
     /// escalation handle, device trust sync. See [`SessionPlane`].
@@ -356,8 +356,12 @@ impl std::fmt::Debug for DaemonInvocationService {
             .field("runtime_trust", &self.identity.runtime_trust)
             .field("session_realm", &self.identity.session_realm)
             .field(
-                "hub_signing_seed",
-                &self.federation.hub_signing_seed.as_ref().map(|_| "<seed>"),
+                "hub_signer",
+                &self
+                    .federation
+                    .hub_signer
+                    .as_ref()
+                    .map(|signer| signer.owner_ura()),
             )
             .field(
                 "federation_client",
@@ -427,7 +431,7 @@ impl DaemonInvocationService {
             federation: FederationDial {
                 client: None,
                 peers: SharedFederatedPeers::default(),
-                hub_signing_seed: None,
+                hub_signer: None,
                 allow_directory_auto_route: false,
             },
             sessions: SessionPlane {
@@ -712,14 +716,12 @@ impl DaemonInvocationService {
         self
     }
 
-    /// Attach the hub identity seed used to sign cross-hub
-    /// peer-envelope rewrites. Boot wires this best-effort from
-    /// the SDK runtime keyring; tests can inject a deterministic fixture
-    /// to avoid relying on process environment.
+    /// Attach the owner-bound hub capability used to sign cross-hub
+    /// peer-envelope rewrites. No private material enters dispatch.
     #[must_use]
-    pub fn with_hub_signing_seed(mut self, seed: SessionSigningSeed) -> Self {
-        self.admission = self.admission.with_hub_signing_seed(seed);
-        self.federation.hub_signing_seed = Some(seed);
+    pub fn with_hub_signer(mut self, signer: Arc<dyn CanonicalSigner>) -> Self {
+        self.admission = self.admission.with_hub_signer(Arc::clone(&signer));
+        self.federation.hub_signer = Some(signer);
         self
     }
 

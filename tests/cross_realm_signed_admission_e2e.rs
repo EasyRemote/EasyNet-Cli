@@ -63,7 +63,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use sha2::Digest as _;
 
 use easynet_axon::invocation::axiom::{
@@ -81,6 +81,7 @@ use easynet_cli::daemon::federation::client::{
     FederationClient, FederationClientError, HubEndpoint,
 };
 use easynet_cli::daemon::federation::peers::SharedFederatedPeers;
+use easynet_cli::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
@@ -109,7 +110,7 @@ const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-re
 /// dispatches an ability against itself.
 struct InProcessForwarder {
     peer: Arc<DaemonInvocationService>,
-    peer_loopback_uri: String,
+    peer_loopback_ura: String,
 }
 
 #[async_trait]
@@ -124,15 +125,15 @@ impl FederationClient for InProcessForwarder {
         // proceeds straight to the trust-anchor read.
         let loopback_envelope = Envelope {
             caller: Some(PbAgentIdentity {
-                ura: self.peer_loopback_uri.clone(),
+                ura: self.peer_loopback_ura.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             callee: Some(PbAgentIdentity {
-                ura: self.peer_loopback_uri.clone(),
+                ura: self.peer_loopback_ura.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             subject: Some(PbSubjectIdentity {
-                ura: self.peer_loopback_uri.clone(),
+                ura: self.peer_loopback_ura.clone(),
                 profile: "easynet-strict-v2".to_string(),
             }),
             ..Envelope::default()
@@ -148,6 +149,33 @@ impl FederationClient for InProcessForwarder {
             })?;
         Ok(response.into_inner())
     }
+}
+
+struct IntegrationSigner {
+    owner_ura: String,
+    signing_key: SigningKey,
+}
+
+#[async_trait]
+impl CanonicalSigner for IntegrationSigner {
+    fn owner_ura(&self) -> &str {
+        &self.owner_ura
+    }
+
+    async fn sign_canonical(&self, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+        Ok(self.signing_key.sign(canonical_bytes))
+    }
+
+    fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError> {
+        Ok(self.signing_key.verifying_key())
+    }
+}
+
+fn test_hub_signer(realm: &str) -> Arc<dyn CanonicalSigner> {
+    Arc::new(IntegrationSigner {
+        owner_ura: easynet_cli::core::ura::hub_ura(realm),
+        signing_key: SigningKey::from_bytes(&REALM_B_HUB_SIGNING_SEED),
+    })
 }
 
 /// Mirrors the production descriptor-bound signing path so admission
@@ -219,7 +247,7 @@ fn signed_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
+async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
     const REALM_A: &str = "realm-a";
     const REALM_B: &str = "realm-b";
     const DEVICE_A_URA: &str = "easynet:///r/realm-a/device/device-A";
@@ -260,7 +288,7 @@ async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
     // any caller in realm-a.
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: easynet_cli::core::ura::hub_ura(REALM_A),
+        peer_loopback_ura: easynet_cli::core::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
@@ -271,7 +299,7 @@ async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
         Some(daemon_b_ura.clone()),
     )
     .with_federation(Arc::clone(&federation_client), peers_cell.clone())
-    .with_hub_signing_seed(REALM_B_HUB_SIGNING_SEED);
+    .with_hub_signer(test_hub_signer(REALM_B));
     let daemon_b = DaemonInvocationService::new(
         Arc::new(PresenceRegistry::new()),
         daemon_b_admission.clone(),
@@ -287,9 +315,9 @@ async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
     // `self.echo` does not need to actually be implemented for the
     // test — admission acceptance is the assertion target. Daemon B
     // has an empty LocalRuntime wired, so resolve-first dispatch now
-    // rejects the unbound ability with ROUTE_NEGATIVE/NODATA AFTER
-    // admission has already passed; the test catches that as the
-    // success signal.
+    // reaches either the authority policy gate or resolve-first dispatch
+    // after caller authentication. Both are downstream of federated key
+    // resolution and signature verification.
     let signed = signed_request(
         DEVICE_A_URA,
         &daemon_b_ura,
@@ -308,21 +336,16 @@ async fn cross_realm_signed_caller_accepted_via_federated_resolve_key() {
             // working dispatcher returns Ok we accept that too.
         }
         Err(status) => {
-            // Admission acceptance is proven by reaching the
-            // resolve-first route gate: this is a post-admission
-            // unbound-ability miss, not a §5.2 signature/nonce
-            // rejection (`PermissionDenied` / `InvalidArgument`).
-            assert_eq!(
-                status.code(),
-                tonic::Code::FailedPrecondition,
-                "expected post-admission unbound-ability route miss, but got code={:?} message={}",
-                status.code(),
-                status.message()
-            );
+            let route_negative = status.code() == tonic::Code::FailedPrecondition
+                && status.message().contains("ROUTE_NEGATIVE")
+                && status.message().contains("NEGATIVE_REASON_NODATA");
+            let policy_after_signature = status.code() == tonic::Code::PermissionDenied
+                && status.message().contains("POLICY_DENIED")
+                && status.message().contains("signature_key_id");
             assert!(
-                status.message().contains("ROUTE_NEGATIVE")
-                    && status.message().contains("NEGATIVE_REASON_NODATA"),
-                "expected route NODATA after admission, got message={}",
+                route_negative || policy_after_signature,
+                "expected a policy/route outcome downstream of caller signature verification, got code={:?} message={}",
+                status.code(),
                 status.message()
             );
         }
@@ -460,7 +483,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
     // ── Daemon B: empty trust + federated_peers → daemon A ──
     let federation_client: Arc<dyn FederationClient> = Arc::new(InProcessForwarder {
         peer: Arc::clone(&daemon_a),
-        peer_loopback_uri: easynet_cli::core::ura::hub_ura(REALM_A),
+        peer_loopback_ura: easynet_cli::core::ura::hub_ura(REALM_A),
     });
     let mut peers = std::collections::BTreeMap::new();
     peers.insert(REALM_A.to_string(), PEER_HUB_URA.to_string());
@@ -471,7 +494,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
         Some(daemon_b_ura.clone()),
     )
     .with_federation(Arc::clone(&federation_client), peers_cell)
-    .with_hub_signing_seed(REALM_B_HUB_SIGNING_SEED);
+    .with_hub_signer(test_hub_signer(REALM_B));
     let daemon_b =
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_b_admission)
             .with_session_realm(REALM_B)

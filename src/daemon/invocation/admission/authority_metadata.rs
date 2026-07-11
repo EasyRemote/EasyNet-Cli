@@ -309,8 +309,9 @@ pub(crate) fn validate_session_authority_payload_shape(
             "session authority must carry issuer, session id, owner, creator principal, callee, subject, audience, scopes, allowed actions, and follow-up abilities",
         ));
     }
+    let subject_kind = authority_subject_kind(&payload.subject_ura);
     if !matches!(
-        authority_subject_kind(&payload.subject_ura),
+        subject_kind,
         AuthoritySubjectKind::User | AuthoritySubjectKind::Session
     ) {
         return Err(AuthorityMetadataError::new(
@@ -321,6 +322,46 @@ pub(crate) fn validate_session_authority_payload_shape(
             ),
         ));
     }
+    if subject_kind == AuthoritySubjectKind::User {
+        let parsed = crate::core::ura::parse_ura(payload.subject_ura.trim()).map_err(|err| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!("session authority subject_ura parse failed: {err}"),
+            )
+        })?;
+        if parsed.user_id() != Some(payload.session_owner_user_id.as_str()) {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!(
+                    "session authority user subject must match session_owner_user_id `{}`",
+                    payload.session_owner_user_id
+                ),
+            ));
+        }
+    } else if subject_kind == AuthoritySubjectKind::Session {
+        let parsed = crate::core::ura::parse_ura(payload.subject_ura.trim()).map_err(|err| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!("session authority subject_ura parse failed: {err}"),
+            )
+        })?;
+        let (owner_user_id, session_id) =
+            canonical_session_resource_parts(&parsed).ok_or_else(|| {
+                AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                "session authority subject_ura must name one canonical user-owned session resource",
+            )
+            })?;
+        if owner_user_id != payload.session_owner_user_id || session_id != payload.session_id {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!(
+                    "session authority subject_ura owner/session must match session_owner_user_id `{}` and session_id `{}`",
+                    payload.session_owner_user_id, payload.session_id
+                ),
+            ));
+        }
+    }
     validate_expiry(
         "session authority",
         payload.issued_at_ms,
@@ -330,11 +371,36 @@ pub(crate) fn validate_session_authority_payload_shape(
 }
 
 pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind {
-    match top_level_subject_role(subject_ura) {
-        Some("user" | "users") => AuthoritySubjectKind::User,
-        Some("session" | "sessions") => AuthoritySubjectKind::Session,
+    let Ok(parsed) = crate::core::ura::parse_ura(subject_ura.trim()) else {
+        return AuthoritySubjectKind::Other;
+    };
+    match parsed.kind {
+        crate::core::ura::URAKind::User => AuthoritySubjectKind::User,
+        crate::core::ura::URAKind::Resource
+            if canonical_session_resource_parts(&parsed).is_some() =>
+        {
+            AuthoritySubjectKind::Session
+        }
         _ => AuthoritySubjectKind::Other,
     }
+}
+
+fn canonical_session_resource_parts(parsed: &crate::core::ura::ParsedURA) -> Option<(&str, &str)> {
+    let Some(owner_user_id) = parsed
+        .resource_owner_id()
+        .and_then(|owner| owner.strip_prefix("user."))
+    else {
+        return None;
+    };
+    if owner_user_id.is_empty() || owner_user_id.contains('.') {
+        return None;
+    }
+
+    let session_id = parsed
+        .resource_path()
+        .and_then(|path| path.strip_prefix("session/"))
+        .filter(|session_id| !session_id.is_empty() && !session_id.contains('/'))?;
+    Some((owner_user_id, session_id))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,17 +634,6 @@ fn reject_private_key_metadata_key(key: &str) -> Result<(), AuthorityMetadataErr
     Ok(())
 }
 
-fn top_level_subject_role(ura: &str) -> Option<&str> {
-    let rest = ura.trim().strip_prefix(crate::core::ura::URA_SCHEME)?;
-    let mut segments = rest.split('/');
-    let realm = segments.next()?;
-    let role = segments.next()?;
-    if realm.is_empty() || role.is_empty() {
-        return None;
-    }
-    Some(role)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -599,7 +654,7 @@ mod tests {
       "session_owner_user_id":"alice",
       "creator_principal_id":"easynet:///r/example/agent/backend",
       "callee_ura":"easynet:///r/example/device/dev-a",
-      "subject_ura":"easynet:///r/example/session/session-1",
+      "subject_ura":"easynet:///r/example/resource/user.alice/session/session-1",
       "audience":"easynet:///r/example/device/dev-a",
       "scopes":["device.observe.*"],
       "allowed_actions":["read"],
@@ -643,7 +698,7 @@ mod tests {
         );
         assert_eq!(
             wire_json["payload"]["subject_ura"],
-            "easynet:///r/example/session/session-1"
+            "easynet:///r/example/resource/user.alice/session/session-1"
         );
         assert_eq!(wire_json["payload"]["session_id"], "session-1");
         assert_eq!(wire_json["payload"]["allowed_actions"][0], "read");
@@ -655,7 +710,7 @@ mod tests {
         let err = prepare_session_authority_from_json(
             r#"{
               "issuer_ura":"easynet:///r/example/agent/backend",
-              "subject_ura":"easynet:///r/example/session/session-1",
+              "subject_ura":"easynet:///r/example/resource/user.alice/session/session-1",
               "audience":"easynet:///r/example/device/dev-a",
               "scopes":["device.observe.*"],
               "issued_at_ms":1000,
@@ -664,6 +719,28 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+    }
+
+    #[test]
+    fn session_authority_binds_subject_resource_to_declared_owner_and_session() {
+        for request in [
+            SESSION_REQUEST.replace("resource/user.alice", "resource/user.bob"),
+            SESSION_REQUEST.replace("session/session-1", "session/session-2"),
+            SESSION_REQUEST.replace("resource/user.alice/session/session-1", "session/session-1"),
+        ] {
+            let err = prepare_session_authority_from_json(&request).unwrap_err();
+            assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        }
+
+        let mismatched_user_subject =
+            SESSION_REQUEST.replace("resource/user.alice/session/session-1", "user/bob");
+        let err = prepare_session_authority_from_json(&mismatched_user_subject).unwrap_err();
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+
+        let matching_user_subject =
+            SESSION_REQUEST.replace("resource/user.alice/session/session-1", "user/alice");
+        prepare_session_authority_from_json(&matching_user_subject)
+            .expect("the declared session owner remains a canonical user subject");
     }
 
     #[test]
@@ -692,5 +769,34 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+    }
+
+    #[test]
+    fn authority_subject_kind_accepts_only_canonical_user_or_session_resources() {
+        assert_eq!(
+            authority_subject_kind("easynet:///r/example/user/alice"),
+            AuthoritySubjectKind::User
+        );
+        assert_eq!(
+            authority_subject_kind("easynet:///r/example/resource/user.alice/session/session-1"),
+            AuthoritySubjectKind::Session
+        );
+        assert_eq!(
+            authority_subject_kind("easynet:///r/example/session/session-1"),
+            AuthoritySubjectKind::Other,
+            "the Axon URA grammar has no top-level session role"
+        );
+        assert_eq!(
+            authority_subject_kind("easynet:///r/example/resource/device.dev-a/session/session-1"),
+            AuthoritySubjectKind::Other,
+            "session resources are owned by the session user"
+        );
+        assert_eq!(
+            authority_subject_kind(
+                "easynet:///r/example/resource/user.alice/session/session-1/child"
+            ),
+            AuthoritySubjectKind::Other,
+            "a session subject names one session resource, not a descendant path"
+        );
     }
 }

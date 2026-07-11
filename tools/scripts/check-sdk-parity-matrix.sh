@@ -41,6 +41,7 @@ REQUIRED_CAPABILITIES = (
     "typed_errors",
     "complete_invocation_draft",
     "prepare_sign_submit",
+    "managed_signing",
     "unary_invoke",
     "stream",
     "bidi",

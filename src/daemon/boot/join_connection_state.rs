@@ -388,6 +388,7 @@ pub fn save_snapshot(snapshot: &JoinConnectionSnapshot) -> anyhow::Result<()> {
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_vec_pretty(snapshot)?;
     config::atomic_write_with_permissions(&snapshot_path(), &json, WritePermissions::OwnerReadWrite)
+        .map_err(Into::into)
 }
 
 pub fn load_snapshot() -> anyhow::Result<JoinConnectionSnapshot> {

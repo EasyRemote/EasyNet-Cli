@@ -828,129 +828,29 @@ fn ensure_device_runtime_identity(
     crate::daemon::identity::self_identity::KeyringClient,
     ed25519_dalek::VerifyingKey,
 )> {
-    use crate::daemon::identity::self_identity::{canonical_self_uras, KeyringClient};
+    use crate::daemon::identity::self_identity::KeyringClient;
 
     let realm = realm.trim();
     let node_id = node_id.trim();
     if realm.is_empty() || node_id.is_empty() {
         anyhow::bail!("credentials missing realm or node_id");
     }
-    let (primary_self, role_overlays) = canonical_self_uras(realm, node_id);
+    let primary_self = crate::core::ura::device_ura(realm, node_id);
 
     let client = KeyringClient::default_path();
-    // Probe reachability with a lightweight `list` first. When the
+    // Probe reachability with the constant-size health operation first. When the
     // daemon is already up (operator started it, or a prior join
     // spawned it) we go straight to `ensure`. When it is down we
     // auto-provision it below so the encrypted vault is the default
     // posture rather than something only `dev-backend.sh` sets up.
-    if client.list().is_err() {
-        ensure_keyring_daemon_running()?;
+    if client.health().is_err() {
+        crate::daemon::keyring::lifecycle::ensure_key_service_running()?;
     }
 
     let public_key = client
-        .ensure(&primary_self, role_overlays)
+        .ensure(&primary_self)
         .map_err(|error| anyhow::anyhow!("ensure runtime identity: {error}"))?;
     Ok((primary_self, client, public_key))
-}
-
-/// Spawn the `easynet-keyring` daemon and wait until its socket
-/// answers, auto-provisioning a passphrase if the operator has not
-/// supplied one.
-///
-/// Mirrors the daemon-spawn shape in `daemon::boot::process`: locate the
-/// sibling binary next to the running `easynet` executable, run it
-/// detached (`setsid`, stdio to a log), and poll the socket until it
-/// accepts a `list` RPC. The passphrase comes from
-/// `keyring::load_or_create_passphrase`, which is also what `start`
-/// injects into the `easynet-daemon` environment so the daemon can
-/// read the same vault across restarts.
-fn ensure_keyring_daemon_running() -> anyhow::Result<()> {
-    use crate::daemon::identity::self_identity::KeyringClient;
-    use crate::daemon::keyring::{default_socket_path, load_or_create_passphrase};
-    use anyhow::Context as _;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-
-    let (passphrase, _generated) =
-        load_or_create_passphrase().context("provision keyring passphrase")?;
-
-    // A stale socket file (previous daemon crashed without unlinking)
-    // makes `easynet-keyring` refuse to bind. Remove it iff nothing is
-    // listening — the `list` ping above already failed, so a leftover
-    // file here is dead.
-    let socket_path = default_socket_path();
-    #[cfg(unix)]
-    if socket_path.exists() {
-        let _ = std::fs::remove_file(&socket_path);
-    }
-
-    let binary = resolve_keyring_bin();
-    let log_path = config::state_dir().join("logs").join("easynet-keyring.log");
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .with_context(|| format!("open keyring log at {}", log_path.display()))?;
-
-    let mut cmd = Command::new(&binary);
-    cmd.env("EASYNET_KEYRING_PASSPHRASE", &passphrase);
-    cmd.stdin(Stdio::null());
-    if let Ok(out) = log.try_clone() {
-        cmd.stdout(Stdio::from(out));
-    }
-    cmd.stderr(Stdio::from(log));
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    cmd.spawn()
-        .with_context(|| format!("spawn easynet-keyring at {}", binary.display()))?;
-
-    // Poll the socket until the daemon answers. The keyring binds and
-    // serves in well under a second on a warm disk; 5s covers a cold
-    // Argon2id KDF on the first vault init.
-    let client = KeyringClient::default_path().with_timeout(Duration::from_secs(2));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if client.list().is_ok() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!(
-                "easynet-keyring did not become ready within 5s (see {})",
-                log_path.display()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// Locate the `easynet-keyring` binary. Prefers an explicit
-/// `EASYNET_KEYRING_BIN` override, then the sibling of the running
-/// executable (the install layout ships all three binaries in one
-/// dir), then bare `easynet-keyring` on `PATH`.
-fn resolve_keyring_bin() -> std::path::PathBuf {
-    use std::path::PathBuf;
-    const KEYRING_BIN: &str = "easynet-keyring";
-    std::env::var_os("EASYNET_KEYRING_BIN")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join(KEYRING_BIN)))
-        })
-        .unwrap_or_else(|| PathBuf::from(KEYRING_BIN))
 }
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {

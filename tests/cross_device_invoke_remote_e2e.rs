@@ -91,8 +91,9 @@ use tokio_stream::wrappers::{ReceiverStream, UnixListenerStream};
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tonic::Request;
 
-const DEVICE_A_URI: &str = "easynet:///r/test-realm/device/device-a";
-const DEVICE_B_URI: &str = "easynet:///r/test-realm/device/device-b";
+const DEVICE_A_URA: &str = "easynet:///r/test-realm/device/device-a";
+const DEVICE_B_URA: &str = "easynet:///r/test-realm/device/device-b";
+const HUB_URA: &str = "easynet:///r/test-realm/hub";
 const DEVICE_B_ECHO_ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-b.test.echo";
 const DEVICE_B_ECHO_PUBLIC_NAME: &str = "test.echo";
 const ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
@@ -116,8 +117,8 @@ const REPLY_MARKER: &[u8] = b"hello-from-device-b";
 
 fn signing_key_for(caller_ura: &str) -> SigningKey {
     match caller_ura {
-        DEVICE_A_URI => SigningKey::from_bytes(&DEVICE_A_SIGNING_SEED),
-        DEVICE_B_URI => SigningKey::from_bytes(&DEVICE_B_SIGNING_SEED),
+        DEVICE_A_URA => SigningKey::from_bytes(&DEVICE_A_SIGNING_SEED),
+        DEVICE_B_URA => SigningKey::from_bytes(&DEVICE_B_SIGNING_SEED),
         other => panic!("no test signing key configured for {other}"),
     }
 }
@@ -264,8 +265,8 @@ impl Drop for TestHub {
 
 /// Spawn a real tonic InvocationServer on a tempfile UDS. Returns
 /// a `TestHub` guard whose Drop signals the server to shut down
-/// and joins the spawned task. The hub admits both DEVICE_A_URI
-/// and DEVICE_B_URI via a synthetic realm trust anchor.
+/// and joins the spawned task. The hub admits both DEVICE_A_URA
+/// and DEVICE_B_URA via a synthetic realm trust anchor.
 async fn start_in_process_hub() -> TestHub {
     use std::io::Write;
 
@@ -276,20 +277,32 @@ async fn start_in_process_hub() -> TestHub {
     // loading it via the production loader path. Both devices
     // admitted; empty anchor would reject everyone external.
     let trust_path = tempdir.path().join("realm-trust.toml");
-    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URI);
-    let device_b_public_key_b64 = public_key_b64_for(DEVICE_B_URI);
+    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URA);
+    let device_b_public_key_b64 = public_key_b64_for(DEVICE_B_URA);
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
-agent_ura = "{DEVICE_A_URI}"
+agent_ura = "{DEVICE_A_URA}"
 public_key_b64 = "{device_a_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
 
 [[trusted_agent]]
-agent_ura = "{DEVICE_B_URI}"
+agent_ura = "{DEVICE_B_URA}"
 public_key_b64 = "{device_b_public_key_b64}"
 role = "device"
+added_at_unix_ms = 0
+
+[[trusted_principal_owner]]
+principal_ura = "{DEVICE_A_URA}"
+owner_user_id = "owner-a"
+owner_ura = "easynet:///r/test-realm/user/owner-a"
+added_at_unix_ms = 0
+
+[[trusted_principal_owner]]
+principal_ura = "{DEVICE_B_URA}"
+owner_user_id = "owner-b"
+owner_ura = "easynet:///r/test-realm/user/owner-b"
 added_at_unix_ms = 0
         "#,
     );
@@ -340,13 +353,19 @@ async fn start_in_process_local_device() -> TestHub {
     let socket_path = tempdir.path().join("local-device.sock");
 
     let trust_path = tempdir.path().join("realm-trust.toml");
-    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URI);
+    let device_a_public_key_b64 = public_key_b64_for(DEVICE_A_URA);
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
-agent_ura = "{DEVICE_A_URI}"
+agent_ura = "{DEVICE_A_URA}"
 public_key_b64 = "{device_a_public_key_b64}"
 role = "device"
+added_at_unix_ms = 0
+
+[[trusted_principal_owner]]
+principal_ura = "{DEVICE_A_URA}"
+owner_user_id = "owner-a"
+owner_ura = "easynet:///r/test-realm/user/owner-a"
 added_at_unix_ms = 0
         "#,
     );
@@ -356,13 +375,13 @@ added_at_unix_ms = 0
 
     let trust_anchor = RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
     let presence = Arc::new(PresenceRegistry::new());
-    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_A_URI.to_string()));
+    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_A_URA.to_string()));
     let runtime = LocalRuntime::new();
     let authority_context =
         easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-            DEVICE_A_URI,
+            DEVICE_A_URA,
         )
-        .expect("test device URI is a valid device authority root");
+        .expect("test device URA is a valid device authority root");
     let mut catalog = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
         authority_context,
@@ -437,7 +456,7 @@ fn unary_invoke(
     let signed = signed_envelope(
         caller_ura,
         callee_ura,
-        callee_ura,
+        caller_ura,
         function_name,
         &arguments,
     );
@@ -458,18 +477,18 @@ fn unary_invoke(
 async fn publish_device_b_echo_projection(socket_path: &std::path::Path) {
     let mut client = InvocationClient::new(connect_to_hub(socket_path).await);
     let request = unary_invoke(
-        DEVICE_B_URI,
-        DEVICE_B_URI,
+        DEVICE_B_URA,
+        HUB_URA,
         ADVERTISE_ABILITIES,
         json!({
-            "owner_ura": DEVICE_B_URI,
-            "host_device_ura": DEVICE_B_URI,
+            "owner_ura": DEVICE_B_URA,
+            "host_device_ura": DEVICE_B_URA,
             "projection_revision": 1,
-            "projection_digest": "sha256:test-device-b-echo",
+            "projection_digest": "f3d5adbb154b731ad3b2f393f3aa37d26356ca60c9d60888625c6879f6ffeb93",
             "lease_expires_unix_ms": 4_102_444_800_000_i64,
             "ability_summaries": [{
                 "ability_ura": DEVICE_B_ECHO_ABILITY_URA,
-                "owner_ura": DEVICE_B_URI,
+                "owner_ura": DEVICE_B_URA,
                 "namespace": "test",
                 "local_name": "echo",
                 "descriptor_revision": "sha256:descriptor-device-b-echo",
@@ -776,14 +795,14 @@ async fn session_graceful_close_emits_stream_closed_offline() {
         let mut events = presence.subscribe_events();
 
         let channel = connect_to_hub(hub.socket_path()).await;
-        let device = open_device_session(channel, DEVICE_A_URI).await;
+        let device = open_device_session(channel, DEVICE_A_URA).await;
 
         match tokio::time::timeout(STEP_TIMEOUT, events.recv())
             .await
             .expect("online event arrives within bound")
             .expect("online event is delivered")
         {
-            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URI),
+            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URA),
             other => panic!("expected Online event, got {other:?}"),
         }
 
@@ -795,14 +814,14 @@ async fn session_graceful_close_emits_stream_closed_offline() {
             .expect("offline event is delivered")
         {
             PresenceEvent::Offline { ura, reason } => {
-                assert_eq!(ura, DEVICE_A_URI);
+                assert_eq!(ura, DEVICE_A_URA);
                 assert_eq!(reason, OfflineReason::StreamClosed);
             }
             other => panic!("expected Offline(StreamClosed), got {other:?}"),
         }
 
         assert!(
-            presence.lookup(DEVICE_A_URI).is_none(),
+            presence.lookup(DEVICE_A_URA).is_none(),
             "graceful close must remove the device from PresenceRegistry"
         );
     })
@@ -817,7 +836,7 @@ async fn session_duplicate_open_emits_displacement_transition() {
         let presence = hub.presence();
 
         let first_channel = connect_to_hub(hub.socket_path()).await;
-        let first = open_device_session(first_channel, DEVICE_A_URI).await;
+        let first = open_device_session(first_channel, DEVICE_A_URA).await;
 
         let mut warmup = presence.subscribe_events();
         match tokio::time::timeout(STEP_TIMEOUT, warmup.recv())
@@ -825,13 +844,13 @@ async fn session_duplicate_open_emits_displacement_transition() {
             .expect("initial online event arrives within bound")
             .expect("initial online event is delivered")
         {
-            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URI),
+            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URA),
             other => panic!("expected initial Online event, got {other:?}"),
         }
 
         let mut events = presence.subscribe_events();
         let second_channel = connect_to_hub(hub.socket_path()).await;
-        let second = open_device_session(second_channel, DEVICE_A_URI).await;
+        let second = open_device_session(second_channel, DEVICE_A_URA).await;
 
         match tokio::time::timeout(STEP_TIMEOUT, events.recv())
             .await
@@ -839,7 +858,7 @@ async fn session_duplicate_open_emits_displacement_transition() {
             .expect("displacement offline is delivered")
         {
             PresenceEvent::Offline { ura, reason } => {
-                assert_eq!(ura, DEVICE_A_URI);
+                assert_eq!(ura, DEVICE_A_URA);
                 assert_eq!(reason, OfflineReason::StreamClosed);
             }
             other => panic!("expected displacement Offline(StreamClosed), got {other:?}"),
@@ -850,12 +869,12 @@ async fn session_duplicate_open_emits_displacement_transition() {
             .expect("replacement online arrives within bound")
             .expect("replacement online is delivered")
         {
-            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URI),
+            PresenceEvent::Online { ura } => assert_eq!(ura, DEVICE_A_URA),
             other => panic!("expected replacement Online event, got {other:?}"),
         }
 
         assert!(
-            presence.lookup(DEVICE_A_URI).is_some(),
+            presence.lookup(DEVICE_A_URA).is_some(),
             "replacement session must stay registered after displacement"
         );
 
@@ -875,7 +894,7 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
 
         let response = tokio::time::timeout(
             STEP_TIMEOUT,
-            client.invoke_stream(subscribe_directory_request(DEVICE_A_URI)),
+            client.invoke_stream(subscribe_directory_request(DEVICE_A_URA)),
         )
         .await
         .expect("subscribe_directory opens within bound")
@@ -899,7 +918,7 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
         );
 
         let device_channel = connect_to_hub(hub.socket_path()).await;
-        let device = open_device_session(device_channel, DEVICE_B_URI).await;
+        let device = open_device_session(device_channel, DEVICE_B_URA).await;
 
         let online = tokio::time::timeout(STEP_TIMEOUT, stream.next())
             .await
@@ -922,7 +941,7 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
                 // observed `None`.
                 .get("membership_ura")
                 .and_then(|v| v.as_str()),
-            Some(DEVICE_B_URI)
+            Some(DEVICE_B_URA)
         );
 
         drop(device);
@@ -948,7 +967,7 @@ async fn subscribe_directory_stream_tracks_real_session_online_and_offline() {
                 // observed `None`.
                 .get("membership_ura")
                 .and_then(|v| v.as_str()),
-            Some(DEVICE_B_URI)
+            Some(DEVICE_B_URA)
         );
         assert_eq!(
             offline_json.get("reason").and_then(|v| v.as_str()),
@@ -988,9 +1007,9 @@ async fn local_file_transfer_bidi_download_reaches_business_terminal_over_tonic(
         .unwrap();
         let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(8);
         let signed = signed_envelope(
-            DEVICE_A_URI,
-            DEVICE_A_URI,
-            DEVICE_A_URI,
+            DEVICE_A_URA,
+            DEVICE_A_URA,
+            DEVICE_A_URA,
             easynet_cli::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
             &args,
         );
@@ -1086,16 +1105,16 @@ async fn run_round_trip() {
     let socket_path = hub.socket_path();
 
     // Step 1: open device A's `session.open`. Hub registers
-    // DEVICE_A_URI in its PresenceRegistry.
+    // DEVICE_A_URA in its PresenceRegistry.
     let channel_a = connect_to_hub(socket_path).await;
-    let _device_a = open_device_session(channel_a.clone(), DEVICE_A_URI).await;
+    let _device_a = open_device_session(channel_a.clone(), DEVICE_A_URA).await;
 
     // Step 2: open device B's `session.open` with a drain so
     // we can see the SessionDispatch::Dispatch frame the hub
     // pushes when device A invokes ability on B.
     let channel_b = connect_to_hub(socket_path).await;
     let (device_b, mut device_b_down) =
-        open_device_session_with_drain(channel_b, DEVICE_B_URI).await;
+        open_device_session_with_drain(channel_b, DEVICE_B_URA).await;
 
     publish_device_b_echo_projection(socket_path).await;
 
@@ -1158,8 +1177,8 @@ async fn run_round_trip() {
     let mut caller_client = InvocationClient::new(channel_caller);
 
     let invoke_remote_request = InvokeRemoteUp::Request {
-        subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: DEVICE_B_URI.to_string(),
+        subject_device: DEVICE_B_URA.to_string(),
+        subject_ura: DEVICE_B_URA.to_string(),
         ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: b"args-from-A".to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1169,9 +1188,9 @@ async fn run_round_trip() {
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
     let signed = signed_envelope(
-        DEVICE_A_URI,
-        DEVICE_A_URI,
-        DEVICE_A_URI,
+        DEVICE_A_URA,
+        DEVICE_A_URA,
+        DEVICE_A_URA,
         ABILITY_INVOKE_REMOTE,
         &initial_args,
     );
@@ -1260,11 +1279,11 @@ async fn run_round_trip_via_local_dispatcher() {
     let socket_path = hub.socket_path();
 
     let channel_a = connect_to_hub(socket_path).await;
-    let _device_a = open_device_session(channel_a, DEVICE_A_URI).await;
+    let _device_a = open_device_session(channel_a, DEVICE_A_URA).await;
 
     let channel_b = connect_to_hub(socket_path).await;
     let (device_b, mut device_b_down) =
-        open_device_session_with_drain(channel_b, DEVICE_B_URI).await;
+        open_device_session_with_drain(channel_b, DEVICE_B_URA).await;
     publish_device_b_echo_projection(socket_path).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -1284,8 +1303,8 @@ async fn run_round_trip_via_local_dispatcher() {
     let mut caller_client = InvocationClient::new(channel_caller);
 
     let invoke_remote_request = InvokeRemoteUp::Request {
-        subject_device: DEVICE_B_URI.to_string(),
-        subject_ura: DEVICE_B_URI.to_string(),
+        subject_device: DEVICE_B_URA.to_string(),
+        subject_ura: DEVICE_B_URA.to_string(),
         ability_ura: DEVICE_B_ECHO_ABILITY_URA.to_string(),
         args: br#"{"echo":"args-from-A"}"#.to_vec(),
         args_content_envelope: SessionContentEnvelope::plaintext_json(),
@@ -1295,9 +1314,9 @@ async fn run_round_trip_via_local_dispatcher() {
     let initial_args = serde_json::to_vec(&invoke_remote_request).expect("encode request");
 
     let signed = signed_envelope(
-        DEVICE_A_URI,
-        DEVICE_A_URI,
-        DEVICE_A_URI,
+        DEVICE_A_URA,
+        DEVICE_A_URA,
+        DEVICE_A_URA,
         ABILITY_INVOKE_REMOTE,
         &initial_args,
     );

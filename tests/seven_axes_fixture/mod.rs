@@ -25,38 +25,32 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_cli::daemon::ability::catalog::{
     build_registry_with_services_result, RegistryBuildConfig, RegistryBuildServices,
 };
-use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
+use easynet_cli::daemon::identity::self_identity::KeyringClient;
 use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
-use easynet_cli::daemon::keyring::{
-    home_relative, vault_error_to_response, KeyringRequest, KeyringResponse, MasterKeySource,
-    Vault, DEFAULT_VAULT_REL,
-};
+use easynet_cli::daemon::keyring::{home_relative, DEFAULT_VAULT_REL};
 use easynet_cli::daemon::persistence::config::{self, RuntimeKind, RuntimeState};
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 use easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde_json::{json, Value};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::{Channel, Endpoint, Server, Uri};
 
-const TEST_KEYRING_SEED_BYTE: u8 = 0x11;
 pub const TESTBOT_ECHO_DESCRIPTOR_VERSION: &str = "2.3.0";
 const FIXTURE_SYSTEM_DESCRIPTOR_VERSION: &str = "1.0.0";
 
@@ -97,55 +91,7 @@ pub struct TestDaemon {
 }
 
 struct TestKeyring {
-    shutdown: Option<oneshot::Sender<()>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-struct SevenAxesSigner {
-    signing_key: SigningKey,
-    accepted_uras: Vec<String>,
-}
-
-impl SevenAxesSigner {
-    fn for_caller(caller_ura: &str) -> Self {
-        let mut accepted_uras = vec![caller_ura.to_string()];
-        if let Ok(parsed) = easynet_cli::core::ura::parse_ura(caller_ura) {
-            accepted_uras.push(easynet_cli::core::ura::hub_ura(&parsed.realm));
-        }
-        Self {
-            signing_key: SigningKey::from_bytes(&test_keyring_seed()),
-            accepted_uras,
-        }
-    }
-
-    fn accepts(&self, self_ura: &str) -> bool {
-        self.accepted_uras
-            .iter()
-            .any(|accepted| accepted == self_ura)
-    }
-
-    fn reject_unknown(&self, self_ura: &str) -> SelfIdentityError {
-        SelfIdentityError::Rejected {
-            kind: "seven_axes_fixture".to_string(),
-            message: format!("unknown test signer URA: {self_ura}"),
-        }
-    }
-}
-
-impl SelfIdentity for SevenAxesSigner {
-    fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
-        if !self.accepts(self_ura) {
-            return Err(self.reject_unknown(self_ura));
-        }
-        Ok(self.signing_key.sign(canonical_bytes))
-    }
-
-    fn public_key(&self, self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
-        if !self.accepts(self_ura) {
-            return Err(self.reject_unknown(self_ura));
-        }
-        Ok(self.signing_key.verifying_key())
-    }
+    child: Child,
 }
 
 impl Drop for TestDaemon {
@@ -161,16 +107,12 @@ impl Drop for TestDaemon {
 
 impl Drop for TestKeyring {
     fn drop(&mut self) {
-        if let Some(tx) = self.shutdown.take() {
-            let _ = tx.send(());
-        }
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
-fn start_test_keyring(primary_self: String) -> TestKeyring {
+fn start_test_keyring(primary_self: String) -> (TestKeyring, String) {
     let socket_path = easynet_cli::daemon::keyring::default_socket_path();
     if let Some(parent) = socket_path.parent() {
         std::fs::create_dir_all(parent).expect("keyring socket parent");
@@ -181,167 +123,31 @@ fn start_test_keyring(primary_self: String) -> TestKeyring {
     if let Some(parent) = vault_path.parent() {
         std::fs::create_dir_all(parent).expect("keyring vault parent");
     }
-    let source = MasterKeySource::Explicit("seven-axes-keyring-passphrase".to_string());
-    let mut vault = Vault::open_or_init(&vault_path, &source).expect("open test keyring vault");
-    let seed_hex = test_keyring_seed_hex();
-    match vault.put(
-        &primary_self,
-        vec![easynet_cli::core::ura::hub_ura("cli")],
-        seed_hex,
-    ) {
-        Ok(()) => vault.seal().expect("seal test keyring vault"),
-        Err(easynet_cli::daemon::keyring::VaultError::AlreadyExists(_)) => {}
-        Err(err) => panic!("seed test keyring entry: {err}"),
+    let child = Command::new(env!("CARGO_BIN_EXE_easynet-keyring"))
+        .env("EASYNET_KEYRING_SOCKET_PATH", &socket_path)
+        .env("EASYNET_KEYRING_VAULT_PATH", &vault_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn test key service");
+    let client = KeyringClient::new(&socket_path);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while client.health().is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "test key service did not become ready"
+        );
+        std::thread::sleep(Duration::from_millis(20));
     }
-
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(1);
-    let thread = std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("test keyring runtime");
-        rt.block_on(async move {
-            let listener = UnixListener::bind(&socket_path).expect("bind test keyring socket");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
-                    .expect("chmod test keyring socket");
-            }
-            let _ = ready_tx.send(());
-            let vault = Arc::new(tokio::sync::Mutex::new(vault));
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => break,
-                    accepted = listener.accept() => {
-                        let (stream, _) = accepted.expect("accept test keyring client");
-                        let vault = Arc::clone(&vault);
-                        tokio::spawn(async move {
-                            let _ = handle_test_keyring_connection(stream, vault).await;
-                        });
-                    }
-                }
-            }
-        });
-    });
-    ready_rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("test keyring ready");
-    TestKeyring {
-        shutdown: Some(shutdown_tx),
-        thread: Some(thread),
-    }
-}
-
-fn test_keyring_seed() -> [u8; easynet_cli::daemon::keyring::ED25519_SEED_LEN] {
-    [TEST_KEYRING_SEED_BYTE; easynet_cli::daemon::keyring::ED25519_SEED_LEN]
-}
-
-fn test_keyring_seed_hex() -> String {
-    format!("{:02x}", TEST_KEYRING_SEED_BYTE).repeat(easynet_cli::daemon::keyring::ED25519_SEED_LEN)
-}
-
-fn test_keyring_public_key_b64() -> String {
-    let signing_key = SigningKey::from_bytes(&test_keyring_seed());
-    base64::engine::general_purpose::STANDARD.encode(signing_key.verifying_key().to_bytes())
-}
-
-async fn handle_test_keyring_connection<S>(
-    mut stream: S,
-    vault: Arc<tokio::sync::Mutex<Vault>>,
-) -> anyhow::Result<()>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    loop {
-        let mut len_buf = [0u8; 4];
-        match stream.read_exact(&mut len_buf).await {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(()),
-            Err(e) => return Err(e.into()),
-        }
-        let frame_len = u32::from_be_bytes(len_buf) as usize;
-        if frame_len > 1024 * 1024 {
-            let resp = KeyringResponse::err("frame_too_large", "request frame exceeds 1MiB");
-            write_test_keyring_response(&mut stream, &resp).await?;
-            return Ok(());
-        }
-        let mut buf = vec![0u8; frame_len];
-        stream.read_exact(&mut buf).await?;
-        let resp = match serde_json::from_slice::<KeyringRequest>(&buf) {
-            Ok(req) => dispatch_test_keyring(req, &vault).await,
-            Err(e) => KeyringResponse::err("parse", format!("bad request: {e}")),
-        };
-        write_test_keyring_response(&mut stream, &resp).await?;
-    }
-}
-
-async fn dispatch_test_keyring(
-    req: KeyringRequest,
-    vault: &Arc<tokio::sync::Mutex<Vault>>,
-) -> KeyringResponse {
-    match req {
-        KeyringRequest::Sign {
-            self_ura,
-            canonical_bytes_b64,
-        } => {
-            let bytes = match base64::engine::general_purpose::STANDARD.decode(canonical_bytes_b64)
-            {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    return KeyringResponse::err("base64", format!("canonical_bytes_b64: {e}"));
-                }
-            };
-            let guard = vault.lock().await;
-            match guard.sign(&self_ura, &bytes) {
-                Ok(sig) => KeyringResponse::Signature {
-                    signature_b64: base64::engine::general_purpose::STANDARD.encode(sig.to_bytes()),
-                },
-                Err(e) => vault_error_to_response(e),
-            }
-        }
-        KeyringRequest::DerivePubkey { self_ura } => {
-            let guard = vault.lock().await;
-            match guard.derive_pubkey(&self_ura) {
-                Ok(pk) => KeyringResponse::PublicKey {
-                    public_key_b64: base64::engine::general_purpose::STANDARD.encode(pk.to_bytes()),
-                },
-                Err(e) => vault_error_to_response(e),
-            }
-        }
-        KeyringRequest::List => {
-            let guard = vault.lock().await;
-            KeyringResponse::List {
-                entries: guard.list(),
-            }
-        }
-        KeyringRequest::Forget { primary_self } => {
-            let mut guard = vault.lock().await;
-            match guard.mutate_and_seal(|vault| {
-                vault.forget(&primary_self);
-                Ok(())
-            }) {
-                Ok(()) => KeyringResponse::Ok,
-                Err(e) => vault_error_to_response(e),
-            }
-        }
-        _ => KeyringResponse::err("unsupported", "test fixture does not implement request"),
-    }
-}
-
-async fn write_test_keyring_response<S>(
-    stream: &mut S,
-    resp: &KeyringResponse,
-) -> anyhow::Result<()>
-where
-    S: AsyncWrite + Unpin,
-{
-    let body = serde_json::to_vec(resp)?;
-    stream.write_all(&(body.len() as u32).to_be_bytes()).await?;
-    stream.write_all(&body).await?;
-    stream.flush().await?;
-    Ok(())
+    let public_key = client
+        .ensure(&primary_self)
+        .expect("ensure test runtime identity");
+    let trusted_public_key_b64 = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(public_key.to_bytes())
+    };
+    (TestKeyring { child }, trusted_public_key_b64)
 }
 
 impl SevenAxesHome {
@@ -432,6 +238,7 @@ impl SevenAxesHome {
         let loopback_caller = easynet_cli::core::ura::device_ura("cli", "local");
         let testbot_ura = easynet_cli::core::ura::agent_ura("cli", "local", "testbot");
         let zlearner_ura = easynet_cli::core::ura::agent_ura("cli", "local", "zlearner");
+        let (keyring, trusted_public_key_b64) = start_test_keyring(loopback_caller.clone());
         std::fs::write(
             state_dir.join("local-agents.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -455,7 +262,6 @@ impl SevenAxesHome {
         .expect("write local-agents.json");
 
         let trust_path = home.path().join("realm-trust.toml");
-        let trusted_public_key_b64 = test_keyring_public_key_b64();
         let mut f = std::fs::File::create(&trust_path).expect("create trust toml");
         write!(
             f,
@@ -501,8 +307,6 @@ added_at_unix_ms = 0
             join_receipt_hash: None,
         })
         .expect("write credentials for federation-backed discover scope");
-        let keyring = start_test_keyring(loopback_caller.clone());
-
         SevenAxesHome {
             home,
             _keyring: keyring,
@@ -642,7 +446,7 @@ fn invoke_daemon_ability(
     rt.block_on(async {
         let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
         let arguments = serde_json::to_vec(&args).expect("encode daemon invoke args");
-        let signer = SevenAxesSigner::for_caller(caller_ura);
+        let signer = KeyringClient::default_path();
         let envelope = ProtoEnvelope::targeted(caller_ura, callee_ura, subject_ura)
             .expect("valid seven-axes invoke envelope");
         let request = envelope

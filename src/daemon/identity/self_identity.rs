@@ -1,11 +1,10 @@
-// EasyNet CLI - daemon self identity client (RFC-001 plan v4.1.5 Phase 3B)
-// =================================================================
+// EasyNet CLI - canonical runtime identity client
+// =================================================
 //
 // File: src/daemon/identity/self_identity.rs
 //
-// Typed sign-only handle for the device's Ed25519 keypair. Every
-// EasyNet process on a host (the Rust daemon, the CLI, future
-// host-mode tooling) calls `SelfIdentity::sign(self_ura,
+// Typed sign-only handle for daemon-custodied Ed25519 identities. Every
+// runtime consumer calls `SelfIdentity::sign(self_ura,
 // canonical_bytes) -> Signature` instead of holding the seed
 // itself. Backed by the `easynet-keyring` daemon's UDS. The trait
 // is intentionally narrow: a caller can sign and read public
@@ -16,34 +15,39 @@
 // `KeyringClient` — production. Connects to the keyring daemon at
 //   ~/.easynet/keyring.sock and speaks the length-prefixed JSON
 //   wire from `crate::daemon::keyring`.
-// `InMemoryVault` — test backend. Wraps a `daemon::keyring::Vault`
-//   directly so unit tests don't need to spawn a daemon. Behaves
-//   identically except no IPC.
+// `InMemoryVault` — test-only backend. Wraps a `daemon::keyring::Vault`
+//   directly so unit tests don't need to spawn a daemon.
 //
 // Why a trait
 // -----------
 // Boot wiring varies: device-mode daemon runs alongside the
-// keyring daemon, so it uses `KeyringClient`. Headless production
-// without a keyring daemon (Phase 3F future work) will plug in a
-// file-backed fallback. `Arc<dyn SelfIdentity>` lets boot pick the
-// right impl without leaking the choice to every callsite.
+// keyring daemon, so it uses `KeyringClient`. Production has no
+// in-process vault or file-backed fallback. `Arc<dyn SelfIdentity>`
+// keeps consumers independent of the transport implementation.
 //
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
+#[cfg(test)]
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use ed25519_dalek::Verifier as _;
 use ed25519_dalek::{Signature, VerifyingKey};
 
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 
+#[cfg(test)]
+use crate::daemon::keyring::Vault;
 use crate::daemon::keyring::{
-    default_socket_path, KeyringRequest, KeyringResponse, ManagedPeer, ManagedSigningKeyProjection,
-    ManagedSigningStatus, MasterKeySource, Vault,
+    default_socket_path, managed_signer_policy_ref, KeyringRequest, KeyringResponse, ManagedPeer,
+    ManagedSigningKeyProjection, ManagedSigningStatus, KEY_SERVICE_PROTOCOL_VERSION,
+    MAX_KEY_SERVICE_AUTO_ITEMS, MAX_KEY_SERVICE_AUTO_PAGES, MAX_KEY_SERVICE_CANONICAL_BYTES,
+    MAX_KEY_SERVICE_FRAME_BYTES, MAX_MANAGED_SIGNING_PAGE_SIZE,
 };
 
 /// Errors surfaced by `SelfIdentity` callers. Most are 1:1 with
@@ -52,6 +56,8 @@ use crate::daemon::keyring::{
 /// can decide whether to retry or fall back.
 #[derive(Debug, thiserror::Error)]
 pub enum SelfIdentityError {
+    #[error("self-identity: owner URA is required")]
+    InvalidOwner,
     #[error("self-identity: keyring daemon offline at {path}: {reason}")]
     DaemonOffline { path: PathBuf, reason: String },
     #[error("self-identity: keyring transport: {0}")]
@@ -74,58 +80,207 @@ pub enum SelfIdentityError {
 /// to sign; gets back a 64-byte ed25519 signature.
 pub trait SelfIdentity: Send + Sync {
     /// Sign `canonical_bytes` with the keypair indexed by
-    /// `self_ura`. Role-overlay lookup applies on the keyring
-    /// side: a vault entry's `primary_self` and any of its
-    /// `role_overlays` resolve to the same keypair.
+    /// `self_ura`. Each owner URA has a distinct key; no role-alias lookup is
+    /// permitted inside the custody service.
     fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError>;
+
+    /// Sign against an already-resolved public projection. Runtime consumers
+    /// use this capability-bound path so projection and private-key selection
+    /// cannot diverge between boot and signing.
+    fn sign_bound(
+        &self,
+        self_ura: &str,
+        expected_public_key: &VerifyingKey,
+        canonical_bytes: &[u8],
+    ) -> Result<Signature, SelfIdentityError> {
+        let actual = self.public_key(self_ura)?;
+        if actual != *expected_public_key {
+            return Err(SelfIdentityError::Rejected {
+                kind: "policy".into(),
+                message: "runtime signing public projection changed before signing".into(),
+            });
+        }
+        self.sign(self_ura, canonical_bytes)
+    }
 
     /// Return the public key for `self_ura`. Useful at boot when
     /// the daemon needs to publish its pubkey into the realm
     /// directory or write a trust-anchor entry.
     fn public_key(&self, self_ura: &str) -> Result<VerifyingKey, SelfIdentityError>;
 
-    /// Best-effort health probe. Default is a `list` round-trip.
-    /// Backends override if they have a cheaper check.
+    /// Best-effort health probe. Backends should override when they expose a
+    /// constant-size liveness operation.
     fn ping(&self) -> Result<(), SelfIdentityError> {
         let _ = self.public_key("__ping__")?;
         Ok(())
     }
 }
 
+/// Owner-bound signing capability shared by every runtime consumer.
+///
+/// `SelfIdentity` is the daemon key-service port and can address more than one
+/// owner. Runtime components must not receive that authority directly: they
+/// receive this narrower capability, permanently bound to one owner URA.
+/// Consequently admission, dispatch, and session code can request signatures
+/// without selecting an arbitrary identity or observing private material.
+#[async_trait::async_trait]
+pub trait CanonicalSigner: Send + Sync {
+    fn owner_ura(&self) -> &str;
+
+    /// Sign canonical bytes without blocking the caller's async executor.
+    ///
+    /// Production implementations may cross a process boundary. Keeping this
+    /// operation asynchronous prevents key-service UDS latency from occupying
+    /// Tokio worker threads while preserving an owner-bound, object-safe port.
+    async fn sign_canonical(&self, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError>;
+
+    fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError>;
+}
+
+/// Canonical runtime projection of one daemon-custodied signing identity.
+///
+/// The public key is resolved once when the capability is bound. Signing
+/// remains a call through the key-service port; no seed or private-key bytes
+/// ever enter this object.
+#[derive(Clone)]
+pub struct RuntimeSigningIdentity {
+    owner_ura: Arc<str>,
+    public_key: VerifyingKey,
+    provider: Arc<dyn SelfIdentity>,
+}
+
+impl std::fmt::Debug for RuntimeSigningIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeSigningIdentity")
+            .field("owner_ura", &self.owner_ura)
+            .field("public_key", &hex::encode(self.public_key.to_bytes()))
+            .finish_non_exhaustive()
+    }
+}
+
+impl RuntimeSigningIdentity {
+    /// Resolve one owner through the canonical local key-service endpoint.
+    pub fn load_default(owner_ura: impl Into<String>) -> Result<Self, SelfIdentityError> {
+        Self::load(owner_ura, Arc::new(KeyringClient::default_path()))
+    }
+
+    /// Resolve and bind an existing daemon-owned identity.
+    pub fn load(
+        owner_ura: impl Into<String>,
+        provider: Arc<dyn SelfIdentity>,
+    ) -> Result<Self, SelfIdentityError> {
+        let owner_ura = owner_ura.into();
+        let owner_ura = owner_ura.trim();
+        if owner_ura.is_empty() {
+            return Err(SelfIdentityError::InvalidOwner);
+        }
+        let public_key = provider.public_key(owner_ura)?;
+        Ok(Self::from_public_projection(
+            owner_ura, public_key, provider,
+        ))
+    }
+
+    /// Bind a public projection returned by an atomic key-service operation
+    /// such as `ensure`, avoiding a redundant lookup round trip.
+    fn from_public_projection(
+        owner_ura: impl Into<String>,
+        public_key: VerifyingKey,
+        provider: Arc<dyn SelfIdentity>,
+    ) -> Self {
+        Self {
+            owner_ura: Arc::from(owner_ura.into()),
+            public_key,
+            provider,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CanonicalSigner for RuntimeSigningIdentity {
+    fn owner_ura(&self) -> &str {
+        &self.owner_ura
+    }
+
+    async fn sign_canonical(&self, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+        validate_canonical_signing_bytes(canonical_bytes)?;
+        let provider = Arc::clone(&self.provider);
+        let owner_ura = Arc::clone(&self.owner_ura);
+        let canonical_bytes = canonical_bytes.to_vec();
+        let public_key = self.public_key;
+        tokio::task::spawn_blocking(move || {
+            provider.sign_bound(&owner_ura, &public_key, &canonical_bytes)
+        })
+        .await
+        .map_err(|error| {
+            SelfIdentityError::Transport(format!(
+                "key-service signing worker terminated unexpectedly: {error}"
+            ))
+        })?
+    }
+
+    fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError> {
+        Ok(self.public_key)
+    }
+}
+
+/// Deterministic in-process signer for unit tests only. Production code must
+/// bind [`RuntimeSigningIdentity`] to the daemon key-service port.
+#[cfg(test)]
+pub(crate) struct TestCanonicalSigner {
+    owner_ura: String,
+    signing_key: ed25519_dalek::SigningKey,
+}
+
+#[cfg(test)]
+impl TestCanonicalSigner {
+    pub(crate) fn new(owner_ura: impl Into<String>, seed: [u8; 32]) -> Self {
+        Self {
+            owner_ura: owner_ura.into(),
+            signing_key: ed25519_dalek::SigningKey::from_bytes(&seed),
+        }
+    }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl CanonicalSigner for TestCanonicalSigner {
+    fn owner_ura(&self) -> &str {
+        &self.owner_ura
+    }
+
+    async fn sign_canonical(&self, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+        use ed25519_dalek::Signer as _;
+        Ok(self.signing_key.sign(canonical_bytes))
+    }
+
+    fn signing_public_key(&self) -> Result<VerifyingKey, SelfIdentityError> {
+        Ok(self.signing_key.verifying_key())
+    }
+}
+
 // ── KeyringClient (UDS to easynet-keyring) ─────────────────────
 
-/// UDS-backed client. Holds the socket path and a serialised
+/// UDS-backed client. Holds the socket path and a
 /// connect-per-request strategy (the daemon's accept loop reads
 /// many requests per connection, but the simple client opens a
 /// fresh stream each call to keep the surface area small —
 /// signing is not on a hot loop).
 ///
-/// The `Mutex` exists because the underlying request/response on
-/// any one connection is sequential; serialising at the client
-/// layer means callers can share a single client `Arc` from many
-/// threads without writing their own locking.
+/// Each RPC owns its connection and can therefore run independently. There is
+/// deliberately no client-wide mutex: serialising unrelated requests would
+/// create head-of-line blocking without protecting shared transport state.
 pub struct KeyringClient {
     socket_path: PathBuf,
     timeout: Duration,
-    // Lock used only to serialise socket open + framing on a
-    // single inner connection; a future enhancement could hold a
-    // pool of connections, but v1 connect-per-call is plenty for
-    // the daemon's signing volume (one envelope at a time on the
-    // signed-invoke hot path).
-    lock: Mutex<()>,
 }
 
 impl KeyringClient {
     /// Ensure a runtime identity exists inside the daemon custody boundary and
     /// return only its public projection.
-    pub fn ensure(
-        &self,
-        primary_self: &str,
-        role_overlays: Vec<String>,
-    ) -> Result<VerifyingKey, SelfIdentityError> {
+    pub fn ensure(&self, primary_self: &str) -> Result<VerifyingKey, SelfIdentityError> {
         match self.rpc(&KeyringRequest::Ensure {
             primary_self: primary_self.to_string(),
-            role_overlays,
         })? {
             KeyringResponse::PublicKey { public_key_b64 } => decode_public_key(public_key_b64),
             KeyringResponse::Error { kind, message } => {
@@ -135,14 +290,12 @@ impl KeyringClient {
         }
     }
 
-    /// Construct against an explicit socket path. Operators with
-    /// a non-default keyring layout (e.g. Phase 3E's
-    /// per-device-uuid path) build via this constructor.
+    /// Construct against an explicit socket path. Operators with a
+    /// non-default key-service layout build via this constructor.
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self {
             socket_path: socket_path.into(),
             timeout: Duration::from_secs(10),
-            lock: Mutex::new(()),
         }
     }
 
@@ -160,7 +313,9 @@ impl KeyringClient {
     }
 
     fn rpc(&self, req: &KeyringRequest) -> Result<KeyringResponse, SelfIdentityError> {
-        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let deadline = Instant::now()
+            .checked_add(self.timeout)
+            .unwrap_or_else(Instant::now);
 
         #[cfg(unix)]
         let mut stream = {
@@ -171,17 +326,10 @@ impl KeyringClient {
                 }
             })?;
             stream
-                .set_read_timeout(Some(self.timeout))
-                .map_err(|e| SelfIdentityError::Transport(format!("set_read_timeout: {e}")))?;
-            stream
-                .set_write_timeout(Some(self.timeout))
-                .map_err(|e| SelfIdentityError::Transport(format!("set_write_timeout: {e}")))?;
-            stream
         };
 
         #[cfg(windows)]
         let mut stream = {
-            let deadline = std::time::Instant::now() + self.timeout;
             loop {
                 match std::fs::OpenOptions::new()
                     .read(true)
@@ -208,28 +356,44 @@ impl KeyringClient {
 
         let body = serde_json::to_vec(req)
             .map_err(|e| SelfIdentityError::Framing(format!("encode request: {e}")))?;
+        if body.len() > MAX_KEY_SERVICE_FRAME_BYTES || body.len() > u32::MAX as usize {
+            return Err(SelfIdentityError::Framing(format!(
+                "request frame {} > max {MAX_KEY_SERVICE_FRAME_BYTES}",
+                body.len()
+            )));
+        }
         let len = (body.len() as u32).to_be_bytes();
+        #[cfg(unix)]
+        set_write_deadline(&stream, deadline, "write request length")?;
         stream
             .write_all(&len)
             .map_err(|e| SelfIdentityError::Transport(format!("write len: {e}")))?;
+        #[cfg(unix)]
+        set_write_deadline(&stream, deadline, "write request body")?;
         stream
             .write_all(&body)
             .map_err(|e| SelfIdentityError::Transport(format!("write body: {e}")))?;
+        #[cfg(unix)]
+        set_write_deadline(&stream, deadline, "flush request")?;
         stream
             .flush()
             .map_err(|e| SelfIdentityError::Transport(format!("flush: {e}")))?;
 
         let mut len_buf = [0u8; 4];
+        #[cfg(unix)]
+        set_read_deadline(&stream, deadline, "read response length")?;
         stream
             .read_exact(&mut len_buf)
             .map_err(|e| SelfIdentityError::Transport(format!("read len: {e}")))?;
         let resp_len = u32::from_be_bytes(len_buf) as usize;
-        if resp_len > 64 * 1024 {
+        if resp_len > MAX_KEY_SERVICE_FRAME_BYTES {
             return Err(SelfIdentityError::Framing(format!(
-                "response frame {resp_len} > 64 KiB"
+                "response frame {resp_len} > max {MAX_KEY_SERVICE_FRAME_BYTES}"
             )));
         }
         let mut buf = vec![0u8; resp_len];
+        #[cfg(unix)]
+        set_read_deadline(&stream, deadline, "read response body")?;
         stream
             .read_exact(&mut buf)
             .map_err(|e| SelfIdentityError::Transport(format!("read body: {e}")))?;
@@ -238,15 +402,108 @@ impl KeyringClient {
     }
 }
 
+#[cfg(unix)]
+fn remaining_request_budget(
+    deadline: Instant,
+    operation: &str,
+) -> Result<Duration, SelfIdentityError> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            SelfIdentityError::Transport(format!(
+                "key-service request deadline exceeded before {operation}"
+            ))
+        })?;
+
+    // `SO_RCVTIMEO`/`SO_SNDTIMEO` are timeval-backed on Unix. macOS rejects
+    // a non-zero `Duration` that truncates to a zero timeval with EINVAL.
+    // Round the final sub-millisecond budget up to the smallest portable
+    // socket-timeout quantum; the absolute deadline is still checked before
+    // every I/O phase.
+    Ok(remaining.max(Duration::from_millis(1)))
+}
+
+#[cfg(unix)]
+fn set_write_deadline(
+    stream: &UnixStream,
+    deadline: Instant,
+    operation: &str,
+) -> Result<(), SelfIdentityError> {
+    let remaining = remaining_request_budget(deadline, operation)?;
+    match stream.set_write_timeout(Some(remaining)) {
+        Ok(()) => Ok(()),
+        Err(error) if socket_timeout_rejected_after_peer_close(&error) => Ok(()),
+        Err(error) => Err(SelfIdentityError::Transport(format!(
+            "set write deadline ({remaining:?} remaining): {error}"
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn set_read_deadline(
+    stream: &UnixStream,
+    deadline: Instant,
+    operation: &str,
+) -> Result<(), SelfIdentityError> {
+    let remaining = remaining_request_budget(deadline, operation)?;
+    match stream.set_read_timeout(Some(remaining)) {
+        Ok(()) => Ok(()),
+        Err(error) if socket_timeout_rejected_after_peer_close(&error) => Ok(()),
+        Err(error) => Err(SelfIdentityError::Transport(format!(
+            "set read deadline ({remaining:?} remaining): {error}"
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn socket_timeout_rejected_after_peer_close(error: &std::io::Error) -> bool {
+    // Darwin returns EINVAL when SO_RCVTIMEO/SO_SNDTIMEO is applied after the
+    // peer has already closed a Unix-domain stream, even while the response is
+    // still buffered locally. The following read/write is guaranteed to
+    // complete immediately with buffered bytes or EOF/EPIPE, so ignoring this
+    // one platform-specific terminal-socket condition cannot extend the
+    // absolute request deadline.
+    cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EINVAL)
+}
+
 impl SelfIdentity for KeyringClient {
     fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
+        validate_canonical_signing_bytes(canonical_bytes)?;
+        let public_key = self.public_key(self_ura)?;
+        self.sign_bound(self_ura, &public_key, canonical_bytes)
+    }
+
+    fn sign_bound(
+        &self,
+        self_ura: &str,
+        expected_public_key: &VerifyingKey,
+        canonical_bytes: &[u8],
+    ) -> Result<Signature, SelfIdentityError> {
         use base64::Engine;
+        validate_canonical_signing_bytes(canonical_bytes)?;
+        let public_key_b64 =
+            base64::engine::general_purpose::STANDARD.encode(expected_public_key.to_bytes());
         let req = KeyringRequest::Sign {
             self_ura: self_ura.to_string(),
+            signer_policy_ref: crate::protocol::identity_contract::signer_policy_ref(
+                self_ura,
+                self_ura,
+                &public_key_b64,
+            ),
+            public_key_b64,
             canonical_bytes_b64: base64::engine::general_purpose::STANDARD.encode(canonical_bytes),
         };
         match self.rpc(&req)? {
-            KeyringResponse::Signature { signature_b64 } => decode_signature(signature_b64),
+            KeyringResponse::Signature { signature_b64 } => {
+                let signature = decode_signature(signature_b64)?;
+                expected_public_key
+                    .verify(canonical_bytes, &signature)
+                    .map_err(|error| SelfIdentityError::SignatureDecode(format!(
+                        "daemon signature does not verify against the bound runtime projection: {error}"
+                    )))?;
+                Ok(signature)
+            }
             KeyringResponse::Error { kind, message } => {
                 Err(SelfIdentityError::Rejected { kind, message })
             }
@@ -268,18 +525,25 @@ impl SelfIdentity for KeyringClient {
     }
 
     fn ping(&self) -> Result<(), SelfIdentityError> {
-        let req = KeyringRequest::List;
+        self.health()
+    }
+}
+
+impl KeyringClient {
+    /// Constant-size protocol and liveness probe.
+    pub fn health(&self) -> Result<(), SelfIdentityError> {
+        let req = KeyringRequest::Health {};
         match self.rpc(&req)? {
-            KeyringResponse::List { .. } => Ok(()),
+            KeyringResponse::Health {
+                protocol_version: KEY_SERVICE_PROTOCOL_VERSION,
+            } => Ok(()),
             KeyringResponse::Error { kind, message } => {
                 Err(SelfIdentityError::Rejected { kind, message })
             }
             other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
         }
     }
-}
 
-impl KeyringClient {
     pub fn forget(&self, primary_self: &str) -> Result<(), SelfIdentityError> {
         let req = KeyringRequest::Forget {
             primary_self: primary_self.to_string(),
@@ -294,13 +558,44 @@ impl KeyringClient {
     }
 
     pub fn list(&self) -> Result<Vec<String>, SelfIdentityError> {
-        match self.rpc(&KeyringRequest::List)? {
-            KeyringResponse::List { entries } => Ok(entries),
-            KeyringResponse::Error { kind, message } => {
-                Err(SelfIdentityError::Rejected { kind, message })
+        let mut entries = Vec::new();
+        let mut cursor = None;
+        for _page in 0..MAX_KEY_SERVICE_AUTO_PAGES {
+            match self.rpc(&KeyringRequest::RuntimeList {
+                limit: Some(MAX_MANAGED_SIGNING_PAGE_SIZE),
+                cursor: cursor.clone(),
+            })? {
+                KeyringResponse::RuntimeEntries {
+                    entries: page,
+                    next_cursor,
+                } => {
+                    if entries.len().saturating_add(page.len()) > MAX_KEY_SERVICE_AUTO_ITEMS {
+                        return Err(SelfIdentityError::Unexpected(
+                            "runtime owner inventory exceeded bounded collection limit".into(),
+                        ));
+                    }
+                    entries.extend(page);
+                    match next_cursor {
+                        Some(next) if cursor.as_deref() != Some(next.as_str()) => {
+                            cursor = Some(next)
+                        }
+                        Some(_) => {
+                            return Err(SelfIdentityError::Unexpected(
+                                "runtime owner inventory returned a repeated cursor".into(),
+                            ))
+                        }
+                        None => return Ok(entries),
+                    }
+                }
+                KeyringResponse::Error { kind, message } => {
+                    return Err(SelfIdentityError::Rejected { kind, message })
+                }
+                other => return Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
             }
-            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
         }
+        Err(SelfIdentityError::Unexpected(
+            "runtime owner inventory exceeded bounded page limit".into(),
+        ))
     }
 
     /// Create a managed signing key wholly inside the daemon service.
@@ -326,13 +621,46 @@ impl KeyringClient {
         purpose: Option<String>,
         status: Option<ManagedSigningStatus>,
     ) -> Result<Vec<ManagedSigningKeyProjection>, SelfIdentityError> {
-        match self.rpc(&KeyringRequest::InventoryList { purpose, status })? {
-            KeyringResponse::InventoryKeys { entries } => Ok(entries),
-            KeyringResponse::Error { kind, message } => {
-                Err(SelfIdentityError::Rejected { kind, message })
+        let mut entries = Vec::new();
+        let mut cursor = None;
+        for _page_index in 0..MAX_KEY_SERVICE_AUTO_PAGES {
+            match self.rpc(&KeyringRequest::InventoryList {
+                purpose: purpose.clone(),
+                status,
+                limit: Some(MAX_MANAGED_SIGNING_PAGE_SIZE),
+                cursor: cursor.clone(),
+            })? {
+                KeyringResponse::InventoryKeys {
+                    entries: page,
+                    next_cursor,
+                } => {
+                    if entries.len().saturating_add(page.len()) > MAX_KEY_SERVICE_AUTO_ITEMS {
+                        return Err(SelfIdentityError::Unexpected(
+                            "managed signing inventory exceeded bounded collection limit".into(),
+                        ));
+                    }
+                    entries.extend(page);
+                    match next_cursor {
+                        Some(next) if cursor.as_deref() != Some(next.as_str()) => {
+                            cursor = Some(next)
+                        }
+                        Some(_) => {
+                            return Err(SelfIdentityError::Unexpected(
+                                "managed signing inventory returned a repeated cursor".into(),
+                            ))
+                        }
+                        None => return Ok(entries),
+                    }
+                }
+                KeyringResponse::Error { kind, message } => {
+                    return Err(SelfIdentityError::Rejected { kind, message })
+                }
+                other => return Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
             }
-            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
         }
+        Err(SelfIdentityError::Unexpected(
+            "managed signing inventory exceeded bounded page limit".into(),
+        ))
     }
 
     pub fn inventory_public_key(
@@ -350,17 +678,70 @@ impl KeyringClient {
         }
     }
 
-    pub fn inventory_sign(
+    pub(crate) fn inventory_sign(
         &self,
         key_id: &str,
         canonical_bytes: &[u8],
     ) -> Result<Signature, SelfIdentityError> {
+        validate_canonical_signing_bytes(canonical_bytes)?;
+        let projection = self.inventory_public_key(key_id)?;
+        self.inventory_sign_bound(&projection, canonical_bytes)
+    }
+
+    pub(crate) fn inventory_sign_bound(
+        &self,
+        projection: &ManagedSigningKeyProjection,
+        canonical_bytes: &[u8],
+    ) -> Result<Signature, SelfIdentityError> {
         use base64::Engine;
+        validate_canonical_signing_bytes(canonical_bytes)?;
+        let subject_ura =
+            projection
+                .bound_subject
+                .clone()
+                .ok_or_else(|| SelfIdentityError::Rejected {
+                    kind: "policy".into(),
+                    message: "managed signing key is not bound to a subject".into(),
+                })?;
+        let signer_policy_ref =
+            projection
+                .signer_policy_ref
+                .clone()
+                .ok_or_else(|| SelfIdentityError::Rejected {
+                    kind: "policy".into(),
+                    message: "managed signing key has no signer policy reference".into(),
+                })?;
+        let expected_policy_ref = managed_signer_policy_ref(
+            &projection.purpose,
+            &subject_ura,
+            &projection.key_id,
+            &projection.public_key_b64,
+        );
+        if signer_policy_ref != expected_policy_ref {
+            return Err(SelfIdentityError::Rejected {
+                kind: "policy".into(),
+                message:
+                    "managed signing projection has a non-canonical purpose-aware policy reference"
+                        .into(),
+            });
+        }
+        let verifying_key = decode_public_key(projection.public_key_b64.clone())?;
         match self.rpc(&KeyringRequest::InventorySign {
-            key_id: key_id.to_string(),
+            key_id: projection.key_id.clone(),
+            expected_purpose: projection.purpose.clone(),
+            subject_ura,
+            signer_policy_ref,
             canonical_bytes_b64: base64::engine::general_purpose::STANDARD.encode(canonical_bytes),
         })? {
-            KeyringResponse::Signature { signature_b64 } => decode_signature(signature_b64),
+            KeyringResponse::Signature { signature_b64 } => {
+                let signature = decode_signature(signature_b64)?;
+                verifying_key
+                    .verify(canonical_bytes, &signature)
+                    .map_err(|error| SelfIdentityError::SignatureDecode(format!(
+                        "daemon signature does not verify against the managed key projection: {error}"
+                    )))?;
+                Ok(signature)
+            }
             KeyringResponse::Error { kind, message } => {
                 Err(SelfIdentityError::Rejected { kind, message })
             }
@@ -437,13 +818,44 @@ impl KeyringClient {
     }
 
     pub fn inventory_peer_list(&self) -> Result<Vec<ManagedPeer>, SelfIdentityError> {
-        match self.rpc(&KeyringRequest::InventoryPeerList)? {
-            KeyringResponse::InventoryPeers { peers } => Ok(peers),
-            KeyringResponse::Error { kind, message } => {
-                Err(SelfIdentityError::Rejected { kind, message })
+        let mut peers = Vec::new();
+        let mut cursor = None;
+        for _page_index in 0..MAX_KEY_SERVICE_AUTO_PAGES {
+            match self.rpc(&KeyringRequest::InventoryPeerList {
+                limit: Some(MAX_MANAGED_SIGNING_PAGE_SIZE),
+                cursor: cursor.clone(),
+            })? {
+                KeyringResponse::InventoryPeers {
+                    peers: page,
+                    next_cursor,
+                } => {
+                    if peers.len().saturating_add(page.len()) > MAX_KEY_SERVICE_AUTO_ITEMS {
+                        return Err(SelfIdentityError::Unexpected(
+                            "managed peer inventory exceeded bounded collection limit".into(),
+                        ));
+                    }
+                    peers.extend(page);
+                    match next_cursor {
+                        Some(next) if cursor.as_deref() != Some(next.as_str()) => {
+                            cursor = Some(next)
+                        }
+                        Some(_) => {
+                            return Err(SelfIdentityError::Unexpected(
+                                "managed peer inventory returned a repeated cursor".into(),
+                            ))
+                        }
+                        None => return Ok(peers),
+                    }
+                }
+                KeyringResponse::Error { kind, message } => {
+                    return Err(SelfIdentityError::Rejected { kind, message })
+                }
+                other => return Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
             }
-            other => Err(SelfIdentityError::Unexpected(format!("{other:?}"))),
         }
+        Err(SelfIdentityError::Unexpected(
+            "managed peer inventory exceeded bounded page limit".into(),
+        ))
     }
 
     fn inventory_ok(&self, request: KeyringRequest) -> Result<(), SelfIdentityError> {
@@ -486,48 +898,37 @@ fn decode_public_key(public_key_b64: String) -> Result<VerifyingKey, SelfIdentit
         .map_err(|e| SelfIdentityError::PublicKeyDecode(format!("from_bytes: {e}")))
 }
 
-// ── InMemoryVault (test + in-process boot path) ────────────────
+fn validate_canonical_signing_bytes(canonical_bytes: &[u8]) -> Result<(), SelfIdentityError> {
+    if canonical_bytes.is_empty() || canonical_bytes.len() > MAX_KEY_SERVICE_CANONICAL_BYTES {
+        return Err(SelfIdentityError::Rejected {
+            kind: "policy".into(),
+            message: format!(
+                "canonical signing bytes must contain 1..={MAX_KEY_SERVICE_CANONICAL_BYTES} bytes"
+            ),
+        });
+    }
+    Ok(())
+}
 
-/// `SelfIdentity` impl backed by an in-process `Vault` under a
-/// `Mutex`. Used in unit tests and in headless deploys that have
-/// no keyring daemon (the deploy injects the master key via env
-/// and the boot process opens the vault directly).
-pub struct InMemoryVault {
+// ── InMemoryVault (test-only) ──────────────────────────────────
+
+/// `SelfIdentity` impl backed by an in-process `Vault` under a `Mutex`.
+/// This type does not exist in production builds.
+#[cfg(test)]
+pub(crate) struct InMemoryVault {
     vault: Mutex<Vault>,
 }
 
+#[cfg(test)]
 impl InMemoryVault {
-    pub fn new(vault: Vault) -> Self {
+    pub(crate) fn new(vault: Vault) -> Self {
         Self {
             vault: Mutex::new(vault),
         }
     }
-
-    pub fn open(path: &Path, source: &MasterKeySource) -> Result<Self, SelfIdentityError> {
-        Vault::open(path, source)
-            .map(Self::new)
-            .map_err(|e| SelfIdentityError::Transport(format!("open vault: {e}")))
-    }
-
-    /// Direct mutator. Tests + the headless boot path that owns
-    /// the vault use this; the trait deliberately exposes only
-    /// signing.
-    pub fn put(
-        &self,
-        primary_self: &str,
-        role_overlays: Vec<String>,
-        seed_hex: String,
-    ) -> Result<(), SelfIdentityError> {
-        let mut guard = self.vault.lock().unwrap_or_else(|e| e.into_inner());
-        guard
-            .put(primary_self, role_overlays, seed_hex)
-            .map_err(|e| SelfIdentityError::Rejected {
-                kind: "vault".into(),
-                message: e.to_string(),
-            })
-    }
 }
 
+#[cfg(test)]
 impl SelfIdentity for InMemoryVault {
     fn sign(&self, self_ura: &str, canonical_bytes: &[u8]) -> Result<Signature, SelfIdentityError> {
         let guard = self.vault.lock().unwrap_or_else(|e| e.into_inner());
@@ -552,36 +953,6 @@ impl SelfIdentity for InMemoryVault {
 
 // ── Join helper ─────────────────────────────────────────────────
 //
-// Phase 3C bridge for `easynet device join`. The pairing flow receives
-// `(node_id, realm)` from the hub; join stores the deterministic
-// Ed25519 seed for that identity in the keyring under the canonical
-// device URA plus a hub-role overlay so the same keypair signs both.
-// Best-effort: if the keyring daemon is offline, log + continue.
-// v4.1.5 deterministic derivation in `boot.rs::load_daemon_identity`
-// keeps the daemon signing as a fallback so the join itself never fails
-// on keyring offline.
-
-/// Build the canonical self URAs for this device. Returns
-/// `(primary_self, role_overlays)`. v4.1.4 shape:
-///   primary  = `easynet:///r/<realm>/device/<node_id>`
-///   overlay  = `easynet:///r/<realm>/hub` (so backend-as-hub on
-///              this host signs with the same keypair)
-pub fn canonical_self_uras(realm: &str, node_id: &str) -> (String, Vec<String>) {
-    let realm = realm.trim();
-    let node_id = node_id.trim();
-    let primary = crate::core::ura::device_ura(realm, node_id);
-    let hub_overlay = crate::core::ura::hub_ura(realm);
-    (primary, vec![hub_overlay])
-}
-
-/// Probe whether a keyring daemon is reachable at the default
-/// socket path. Used by the join flow to decide whether to push
-/// the freshly-minted seed into the vault or fall back silently
-/// to deterministic derivation.
-pub fn keyring_daemon_available() -> bool {
-    KeyringClient::default_path().ping().is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,40 +968,97 @@ mod tests {
         hex::encode(s)
     }
 
-    fn make_in_memory_vault(ura: &str, overlays: Vec<String>) -> InMemoryVault {
+    fn make_in_memory_vault(ura: &str) -> InMemoryVault {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("v.enc");
         let pass = MasterKeySource::Explicit("test-passphrase-for-self-identity".into());
         let mut v = Vault::open_or_init(&path, &pass).unwrap();
-        v.put(ura, overlays, seed_hex()).unwrap();
+        v.put(ura, seed_hex()).unwrap();
         std::mem::forget(dir); // keep tempdir alive for vault path
         InMemoryVault::new(v)
     }
 
+    struct ThreadRecordingIdentity {
+        signing_key: ed25519_dalek::SigningKey,
+        sign_thread: Mutex<Option<std::thread::ThreadId>>,
+    }
+
+    impl SelfIdentity for ThreadRecordingIdentity {
+        fn sign(
+            &self,
+            _self_ura: &str,
+            canonical_bytes: &[u8],
+        ) -> Result<Signature, SelfIdentityError> {
+            use ed25519_dalek::Signer as _;
+
+            *self
+                .sign_thread
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(std::thread::current().id());
+            Ok(self.signing_key.sign(canonical_bytes))
+        }
+
+        fn public_key(&self, _self_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
+            Ok(self.signing_key.verifying_key())
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn runtime_signer_offloads_blocking_provider_from_tokio_thread() {
+        let provider = Arc::new(ThreadRecordingIdentity {
+            signing_key: ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]),
+            sign_thread: Mutex::new(None),
+        });
+        let provider_port: Arc<dyn SelfIdentity> = provider.clone();
+        let signer =
+            RuntimeSigningIdentity::load("easynet:///r/r/device/u".to_string(), provider_port)
+                .expect("bind test provider");
+        let tokio_thread = std::thread::current().id();
+
+        let signature = signer
+            .sign_canonical(b"canonical")
+            .await
+            .expect("sign through blocking provider");
+        signer
+            .signing_public_key()
+            .expect("cached public projection")
+            .verify(b"canonical", &signature)
+            .expect("signature verifies");
+        let sign_thread = provider
+            .sign_thread
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .expect("provider recorded signing thread");
+        assert_ne!(
+            sign_thread, tokio_thread,
+            "synchronous key-service providers must run on Tokio's blocking pool"
+        );
+    }
+
     #[test]
     fn in_memory_vault_signs_and_verifies() {
-        let id = make_in_memory_vault("easynet:///r/r/device/u", vec![]);
+        let id = make_in_memory_vault("easynet:///r/r/device/u");
         let pk = id.public_key("easynet:///r/r/device/u").unwrap();
         let sig = id.sign("easynet:///r/r/device/u", b"hello").unwrap();
         pk.verify(b"hello", &sig).unwrap();
     }
 
     #[test]
-    fn in_memory_role_overlay_signs_with_same_keypair() {
+    fn in_memory_runtime_owner_cannot_sign_as_hub() {
         let device = "easynet:///r/r/device/u";
         let hub = crate::core::ura::hub_ura("r");
-        let id = make_in_memory_vault(device, vec![hub.clone()]);
-        let pk_a = id.public_key(device).unwrap();
-        let pk_b = id.public_key(&hub).unwrap();
-        assert_eq!(pk_a.to_bytes(), pk_b.to_bytes(), "overlay shares keypair");
-        let sig_a = id.sign(device, b"x").unwrap();
-        let sig_b = id.sign(&hub, b"x").unwrap();
-        assert_eq!(sig_a.to_bytes(), sig_b.to_bytes());
+        let id = make_in_memory_vault(device);
+        assert!(id.public_key(device).is_ok());
+        assert!(matches!(
+            id.public_key(&hub),
+            Err(SelfIdentityError::Rejected { .. })
+        ));
     }
 
     #[test]
     fn in_memory_unknown_ura_rejected() {
-        let id = make_in_memory_vault("known", vec![]);
+        let id = make_in_memory_vault("known");
         let err = id.sign("unknown", b"x").unwrap_err();
         match err {
             SelfIdentityError::Rejected { kind, .. } => assert_eq!(kind, "vault"),
@@ -646,5 +1074,15 @@ mod tests {
             SelfIdentityError::DaemonOffline { .. } => (),
             other => panic!("wrong variant: {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deadline_configuration_accepts_a_peer_that_already_closed() {
+        let (stream, peer) = UnixStream::pair().unwrap();
+        drop(peer);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        set_read_deadline(&stream, deadline, "closed-peer response").unwrap();
+        set_write_deadline(&stream, deadline, "closed-peer request").unwrap();
     }
 }

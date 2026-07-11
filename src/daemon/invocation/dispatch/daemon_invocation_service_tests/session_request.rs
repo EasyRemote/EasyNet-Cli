@@ -24,7 +24,7 @@ fn make_hosted_publication_service() -> (tempfile::TempDir, DaemonInvocationServ
     let service = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
         .with_register_pubkey("test-realm", dir.path().join("realm-trust.toml"), cell)
         .with_session_realm("test-realm")
-        .with_hub_signing_seed([0x11; 32]);
+        .with_hub_signer(test_hub_signer("test-realm"));
     (dir, service)
 }
 

@@ -1,8 +1,6 @@
 package easynet
 
 import (
-	"bytes"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -227,90 +225,6 @@ func (p PreparedInvocation) SignWithCallerSignature(signature InvocationSignatur
 // SignatureProvider produces caller signatures over daemon/Axon signing material.
 type SignatureProvider interface {
 	Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error)
-}
-
-// Ed25519SignatureProvider signs daemon/Axon-provided canonical bytes.
-type Ed25519SignatureProvider struct {
-	privateKeySeed  []byte
-	publicKeyBase64 string
-}
-
-func NewEd25519SignatureProvider(privateKeySeed []byte, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
-	if len(privateKeySeed) != ed25519.SeedSize {
-		return Ed25519SignatureProvider{}, invalidInvocation("private_key_seed must be 32 bytes", nil)
-	}
-	seed := append([]byte(nil), privateKeySeed...)
-	return Ed25519SignatureProvider{
-		privateKeySeed:  seed,
-		publicKeyBase64: publicKeyBase64,
-	}, nil
-}
-
-func NewEd25519SignatureProviderFromPrivateKey(privateKey ed25519.PrivateKey, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
-	if len(privateKey) != ed25519.PrivateKeySize {
-		return Ed25519SignatureProvider{}, invalidInvocation("private_key must be 64 bytes", nil)
-	}
-	return NewEd25519SignatureProvider(privateKey.Seed(), publicKeyBase64)
-}
-
-func NewEd25519SignatureProviderFromSeedBase64(seedBase64 string, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
-	seed, err := decodeBase64Field(seedBase64, "private_key_seed")
-	if err != nil {
-		return Ed25519SignatureProvider{}, err
-	}
-	return NewEd25519SignatureProvider(seed, publicKeyBase64)
-}
-
-func NewEd25519SignatureProviderFromSeedHex(seedHex string, publicKeyBase64 string) (Ed25519SignatureProvider, error) {
-	if strings.TrimSpace(seedHex) == "" {
-		return Ed25519SignatureProvider{}, invalidInvocation("private_key_seed is required", nil)
-	}
-	seed, err := hex.DecodeString(seedHex)
-	if err != nil {
-		return Ed25519SignatureProvider{}, invalidInvocation("private_key_seed must be hex", err)
-	}
-	return NewEd25519SignatureProvider(seed, publicKeyBase64)
-}
-
-func (p Ed25519SignatureProvider) Sign(material SigningMaterial, handle SignerHandle) (InvocationSignature, error) {
-	if err := validateEd25519Algorithm(material.Algorithm(), "signing material"); err != nil {
-		return InvocationSignature{}, err
-	}
-	if err := validateEd25519Algorithm(handle.Algorithm, "signer handle"); err != nil {
-		return InvocationSignature{}, err
-	}
-	if len(p.privateKeySeed) != ed25519.SeedSize {
-		return InvocationSignature{}, invalidInvocation("private_key_seed must be 32 bytes", nil)
-	}
-	canonicalBytes, err := decodeCanonicalBytesBase64(material.CanonicalBytesBase64())
-	if err != nil {
-		return InvocationSignature{}, err
-	}
-	privateKey := ed25519.NewKeyFromSeed(p.privateKeySeed)
-	publicKey := privateKey.Public().(ed25519.PublicKey)
-	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey)
-	if err := validateExpectedPublicKey(publicKeyBase64, p.publicKeyBase64, "provider public key"); err != nil {
-		return InvocationSignature{}, err
-	}
-	if metadataPublicKey, ok := handle.Metadata["public_key_base64"]; ok {
-		raw, ok := metadataPublicKey.(string)
-		if !ok {
-			return InvocationSignature{}, invalidInvocation("signer handle public_key_base64 must be a string", nil)
-		}
-		if err := validateExpectedPublicKey(publicKeyBase64, raw, "signer handle public key"); err != nil {
-			return InvocationSignature{}, err
-		}
-	}
-	signature := ed25519.Sign(privateKey, canonicalBytes)
-	if len(signature) != ed25519.SignatureSize {
-		return InvocationSignature{}, invalidInvocation("ed25519 signature length is invalid", nil)
-	}
-	return InvocationSignature{
-		Algorithm:             "ed25519",
-		SignatureBase64:       base64.StdEncoding.EncodeToString(signature),
-		KeyIDHint:             handle.SignerID,
-		SignerPublicKeyBase64: publicKeyBase64,
-	}, nil
 }
 
 // StaticSignatureProvider adapts already-produced signatures.
@@ -635,34 +549,6 @@ func decodeBase64Field(value string, fieldName string) ([]byte, error) {
 		return nil, invalidInvocation(fmt.Sprintf("%s must be base64", fieldName), err)
 	}
 	return decoded, nil
-}
-
-func validateEd25519Algorithm(value string, source string) error {
-	if strings.TrimSpace(value) != "" && strings.ToLower(strings.TrimSpace(value)) != "ed25519" {
-		return invalidInvocation(fmt.Sprintf("%s algorithm must be ed25519", source), nil)
-	}
-	return nil
-}
-
-func validateExpectedPublicKey(actualBase64 string, expectedBase64 string, source string) error {
-	if expectedBase64 == "" {
-		return nil
-	}
-	actual, err := decodeBase64Field(actualBase64, "derived public key")
-	if err != nil {
-		return err
-	}
-	expected, err := decodeBase64Field(expectedBase64, source)
-	if err != nil {
-		return err
-	}
-	if len(expected) != ed25519.PublicKeySize {
-		return invalidInvocation(fmt.Sprintf("%s must be 32 bytes", source), nil)
-	}
-	if !bytes.Equal(actual, expected) {
-		return invalidInvocation(fmt.Sprintf("%s does not match private key", source), nil)
-	}
-	return nil
 }
 
 func validateSignerHandle(handle SignerHandle) error {

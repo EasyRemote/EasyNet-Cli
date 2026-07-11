@@ -110,6 +110,7 @@ use crate::daemon::axon_bridge::wire_descriptor::{
 };
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
+use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::authority_metadata::{
     self, AuthorityMetadataError, AuthoritySubjectKind, DelegationPayload, SessionAuthorityPayload,
     DELEGATION_METADATA_KEY, REASON_AUTHORITY_EXPIRED, REASON_AUTHORITY_FORMAT_INVALID,
@@ -139,7 +140,6 @@ use crate::daemon::invocation::admission::policy_gate::{
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
-use crate::daemon::invocation::bidi::session_initiator::SessionSigningSeed;
 #[cfg(test)]
 use crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_AGENT;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
@@ -214,11 +214,11 @@ pub struct AdmissionFacade {
     /// handler holds a clone too so a trust-anchor reload can
     /// flush all cached cross-realm pubkeys atomically.
     federated_key_cache: SharedFederatedKeyCache,
-    /// Hub identity seed used only for outbound cross-hub
-    /// `federation.resolve_key` calls emitted by FederatedKeyResolver.
-    /// `None` keeps local-only/test facades fail-closed instead of
-    /// fabricating a deterministic hub identity.
-    hub_signing_seed: Option<SessionSigningSeed>,
+    /// Owner-bound hub signing capability used only for outbound cross-hub
+    /// `federation.resolve_key` calls emitted by FederatedKeyResolver. `None`
+    /// represents a local-only facade; any attempted cross-hub call fails
+    /// closed in the peer signer.
+    hub_signer: Option<Arc<dyn CanonicalSigner>>,
     /// Whether the loopback bypass (Invariant 2) is honoured for
     /// this facade. The bypass is a pure URA string-match
     /// (`caller_ura == daemon_ura`), so any caller that can reach
@@ -257,8 +257,8 @@ impl std::fmt::Debug for AdmissionFacade {
             .field("federated_peers", &self.federated_peers)
             .field("self_realm", &self.self_realm)
             .field(
-                "hub_signing_seed",
-                &self.hub_signing_seed.as_ref().map(|_| "<seed>"),
+                "hub_signer",
+                &self.hub_signer.as_ref().map(|signer| signer.owner_ura()),
             )
             .field("loopback_trusted", &self.loopback_trusted)
             .field("quota_configured", &self.quota.policy().is_some())
@@ -310,7 +310,7 @@ impl AdmissionFacade {
             federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
             self_realm,
             federated_key_cache: SharedFederatedKeyCache::new(),
-            hub_signing_seed: None,
+            hub_signer: None,
             loopback_trusted: true,
             quota: SharedUsageQuotaGate::disabled(),
         }
@@ -346,8 +346,10 @@ impl AdmissionFacade {
             self.federated_peers.snapshot(),
             self.self_realm.clone(),
         )
-        .with_cache(self.federated_key_cache.clone())
-        .with_hub_signing_seed(self.hub_signing_seed.as_ref());
+        .with_cache(self.federated_key_cache.clone());
+        if let Some(signer) = self.hub_signer.as_ref() {
+            resolver = resolver.with_hub_signer(Arc::clone(signer));
+        }
         if let Some(pubkey) = presented_pubkey_b64.filter(|value| !value.is_empty()) {
             resolver = resolver.with_presented_pubkey_b64(pubkey.to_string());
         }
@@ -615,7 +617,7 @@ impl AdmissionFacade {
             federated_peers: SharedFederatedPeers::new(std::collections::BTreeMap::new()),
             self_realm,
             federated_key_cache: SharedFederatedKeyCache::new(),
-            hub_signing_seed: None,
+            hub_signer: None,
             loopback_trusted: true,
             quota: SharedUsageQuotaGate::disabled(),
         }
@@ -645,13 +647,13 @@ impl AdmissionFacade {
         self
     }
 
-    /// Attach the local hub identity seed used when admission has to
-    /// ask a peer hub for a cross-realm caller key. The key-resolver
-    /// path is part of strict admission, so the resolve-key request
-    /// itself must be a signed hub-to-hub invocation.
+    /// Attach the owner-bound hub signer used when admission has to ask a peer
+    /// hub for a cross-realm caller key. The key-resolver path is part of
+    /// strict admission, so the resolve-key request itself must be a signed
+    /// hub-to-hub invocation.
     #[must_use]
-    pub fn with_hub_signing_seed(mut self, seed: SessionSigningSeed) -> Self {
-        self.hub_signing_seed = Some(seed);
+    pub fn with_hub_signer(mut self, signer: Arc<dyn CanonicalSigner>) -> Self {
+        self.hub_signer = Some(signer);
         self
     }
 
@@ -878,8 +880,10 @@ impl AdmissionFacade {
             self.federated_peers.snapshot(),
             self.self_realm.clone(),
         )
-        .with_cache(self.federated_key_cache.clone())
-        .with_hub_signing_seed(self.hub_signing_seed.as_ref());
+        .with_cache(self.federated_key_cache.clone());
+        if let Some(signer) = self.hub_signer.as_ref() {
+            federated_resolver = federated_resolver.with_hub_signer(Arc::clone(signer));
+        }
         if envelope_caller_is_user(envelope) {
             federated_resolver = federated_resolver
                 .with_presented_pubkey_b64(envelope_presented_pubkey_b64(envelope));
@@ -2654,7 +2658,11 @@ mod tests {
             session_owner_user_id: owner_user_id.to_string(),
             creator_principal_id: caller_ura.to_string(),
             callee_ura: callee_ura.to_string(),
-            subject_ura: "easynet:///r/realm/session/sa-test-session".to_string(),
+            subject_ura: crate::core::ura::resource_dot_ura(
+                "realm",
+                &format!("user.{owner_user_id}"),
+                "session/sa-test-session",
+            ),
             audience: callee_ura.to_string(),
             scopes: vec![ability.to_string()],
             allowed_actions: vec![AccessAction::Invoke.as_str().to_string()],

@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use ed25519_dalek::SigningKey;
 
+use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::persistence::daemon_config::DaemonConfig;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
@@ -46,29 +46,39 @@ pub(super) fn load_trust_anchor_from(path: &Path) -> RealmTrustAnchor {
     }
 }
 
-pub(super) fn upsert_hub_identity_from_keyring(
+pub(super) fn upsert_hub_identity(
     realm: &str,
+    signer: &dyn CanonicalSigner,
     trust_anchor_path: &Path,
     mut anchor: RealmTrustAnchor,
 ) -> RealmTrustAnchor {
     let expected_ura = crate::core::ura::hub_ura(realm);
-    let seed = match crate::daemon::keyring::export_seed_from_default_vault(&expected_ura) {
-        Ok(seed) => seed,
+    if signer.owner_ura() != expected_ura {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = hub_identity_trust_upsert_failed,
+            expected_ura = expected_ura,
+            signer_owner_ura = signer.owner_ura(),
+            message = "refusing to publish a public key from a differently bound signer",
+        );
+        return anchor;
+    }
+    let public_key = match signer.signing_public_key() {
+        Ok(public_key) => public_key,
         Err(err) => {
             crate::op_event!(
                 component = daemon_invocation,
-                kind = backend_identity_trust_upsert_failed,
+                kind = hub_identity_trust_upsert_failed,
                 agent_ura = expected_ura,
                 error = format!("{err}"),
-                message = "Hub runtime identity is not available in the SDK keyring",
+                message = "Hub runtime identity public projection is unavailable",
             );
             return anchor;
         }
     };
-    let signing_key = SigningKey::from_bytes(&seed);
     let entry = TrustedAgent {
         agent_ura: expected_ura.clone(),
-        public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
+        public_key_b64: BASE64_STANDARD.encode(public_key.to_bytes()),
         role: TrustedAgentRole::Hub,
         added_at_unix_ms: now_unix_ms(),
         origin_realm: None,
@@ -78,7 +88,7 @@ pub(super) fn upsert_hub_identity_from_keyring(
     if let Err(err) = anchor.upsert_singleton_agent(entry) {
         crate::op_event!(
             component = daemon_invocation,
-            kind = backend_identity_trust_upsert_failed,
+            kind = hub_identity_trust_upsert_failed,
             error = format!("{err}"),
             message = "failed to merge backend identity into trust anchor",
         );
@@ -87,7 +97,7 @@ pub(super) fn upsert_hub_identity_from_keyring(
     if let Err(err) = anchor.save(trust_anchor_path) {
         crate::op_event!(
             component = daemon_invocation,
-            kind = backend_identity_trust_save_failed,
+            kind = hub_identity_trust_save_failed,
             path = format!("{}", trust_anchor_path.display()),
             error = format!("{err}"),
             message = "using backend identity in memory; disk trust anchor was not updated",
@@ -95,7 +105,7 @@ pub(super) fn upsert_hub_identity_from_keyring(
     } else {
         crate::op_event!(
             component = daemon_invocation,
-            kind = backend_identity_trust_upserted,
+            kind = hub_identity_trust_upserted,
             path = format!("{}", trust_anchor_path.display()),
             agent_ura = expected_ura,
             message = "Hub runtime identity public key is present in trust anchor",

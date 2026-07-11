@@ -1148,9 +1148,10 @@ impl UnaryDispatcher {
                 ABILITY_FEDERATION_LIST_USER_DEVICES,
                 inner_arguments.clone(),
                 local_realm,
-                self.federation.hub_signing_seed.as_ref(),
+                self.federation.hub_signer.as_deref(),
             )
-            .into_invoke_request()?;
+            .into_invoke_request()
+            .await?;
             fanout.push(async move {
                 match client.forward_invoke(&peer_hub_url, peer_request).await {
                     Ok(response) => {
@@ -1236,9 +1237,10 @@ impl UnaryDispatcher {
                 ABILITY_NAMESPACE_RESOLVE,
                 inner_arguments.clone(),
                 local_realm,
-                self.federation.hub_signing_seed.as_ref(),
+                self.federation.hub_signer.as_deref(),
             )
-            .into_invoke_request()?;
+            .into_invoke_request()
+            .await?;
             fanout.push(async move {
                 match client.forward_invoke(&peer_hub_url, peer_request).await {
                     Ok(response) => {
@@ -1403,8 +1405,9 @@ impl UnaryDispatcher {
                         federation_wrappers::FORWARD_INVOKE_TARGET_OFFLINE_REASON,
                     )
                 })?;
-                let peer_request =
-                    self.build_forward_invoke_peer_request(caller_envelope, &request)?;
+                let peer_request = self
+                    .build_forward_invoke_peer_request(caller_envelope, &request)
+                    .await?;
                 self.dispatch_forward_invoke_peer(
                     client,
                     target_hub_endpoint,
@@ -1439,7 +1442,7 @@ impl UnaryDispatcher {
         Ok(selection)
     }
 
-    fn build_forward_invoke_peer_request(
+    async fn build_forward_invoke_peer_request(
         &self,
         caller_envelope: Option<&Envelope>,
         request: &federation_wrappers::ForwardInvokeRequest,
@@ -1463,9 +1466,10 @@ impl UnaryDispatcher {
             ABILITY_FEDERATION_FORWARD_INVOKE,
             nested_arguments,
             self.identity.session_realm.as_deref(),
-            self.federation.hub_signing_seed.as_ref(),
+            self.federation.hub_signer.as_deref(),
         )
         .into_invoke_request()
+        .await
     }
 
     pub(crate) async fn dispatch_forward_invoke_peer(

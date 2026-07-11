@@ -1,14 +1,12 @@
-// EasyNet CLI — PR-N1 commit 7/N: real 2-daemon TLS integration test
-// =====================================================================
+// EasyNet CLI — signed two-daemon cross-Hub TLS integration test
+// ===================================================================
 //
 // File: tests/cross_hub_two_daemon_real_tls_e2e.rs
-// Description: Spawns two real `easynet-daemon` binaries on
-//              ephemeral TCP+TLS ports + UDS sockets, then drives a
-//              `federation.forward_invoke` from daemon A targeting a
-//              presence entry in daemon B's realm. Verifies the
-//              cross-hub dial chain end-to-end against a real binary
-//              boot — what the in-process e2e in commit 5/N could
-//              not exercise.
+// Description: Spawns two real Hub-mode `easynet-daemon` binaries on
+//              ephemeral TCP+TLS ports, provisions their public identity
+//              projections from their real key-service processes, exchanges
+//              peer trust, and drives a descriptor-bound signed invocation
+//              through Hub A to Hub B's local `meta.list_abilities` runtime.
 //
 // Why this test
 // -------------
@@ -19,32 +17,9 @@
 // fixture — it does NOT prove the binary's `start_daemon_invocation_transport`
 // actually constructs and threads the dialer end-to-end.
 //
-// This integration test is the operator-side smoke-test analog of
-// what CTO will run via the `easynet-deploy` skill in the morning:
-// two real daemons, real TCP+TLS handshake, real gRPC client. If
-// this passes, the daemon binary is genuinely production-real on
-// the cross-hub routing path.
-//
-// Limitations
-// -----------
-// - Cross-realm strict admission is not exercised here. PR-N1 ships
-//   "same-account same-realm cross-hub"; admission against a peer
-//   realm's signing key is PR-N2 territory. Daemon B's trust anchor
-//   is configured to admit daemon A as a Device-role entry (URI-only
-//   no-op admission per DEC-013).
-// - The presence-registry entry on daemon B is constructed via
-//   another inner `federation.forward_invoke` from B itself targeting
-//   itself — a small scaffolding step before the real cross-hub
-//   call. No `session.open` reverse channel is opened; we just
-//   need the registry to know about the target URI so the local-
-//   realm fast-path on daemon B can return `target_online: true`.
-//   Wait — the cleaner path is to register via the test's own
-//   admission-trusted path, but doing so requires PR-N2's signed
-//   path. For PR-N1 we accept the test asserts "cross-hub call
-//   reached daemon B's dispatcher" rather than "target_online: true"
-//   per se; daemon B reporting `target_online: false` for an
-//   unregistered target is still proof that the cross-hub chain
-//   functioned.
+// The success condition is deliberately end-to-end: Hub B must execute its
+// own introspection ability and the catalog bytes must return through Hub A.
+// Local admission denial, target-offline, or any transport error fails.
 // - `rcgen` self-signed certs are generated at test time. CN/SAN
 //   set to `localhost` + `127.0.0.1` so tonic's TLS hostname check
 //   accepts the connection.
@@ -57,6 +32,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rcgen::{generate_simple_self_signed, CertifiedKey};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
@@ -65,10 +41,25 @@ use tokio::time::{sleep, timeout};
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
 
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest};
-use easynet_cli::daemon::invocation::dispatch::federation_wrappers::{
-    ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
+use easynet_axon::pb::axon::v1::InvokeRequest;
+use easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
+use easynet_cli::daemon::identity::self_identity::KeyringClient;
+use easynet_cli::daemon::invocation::admission::decision::{
+    AccessAction, PrincipalKind, TokenClass,
 };
+use easynet_cli::daemon::invocation::admission::grant_matcher::{
+    PermissionEffect, PermissionGrant, PermissionGrantLifetime, PermissionGrantState,
+};
+use easynet_cli::daemon::invocation::dispatch::federation_wrappers::{
+    ForwardInvokeRequest, ForwardInvokeResponse, ABILITY_FEDERATION_FORWARD_INVOKE,
+};
+use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
+use easynet_cli::daemon::persistence::access_control::AccessControlStore;
+
+const TARGET_ABILITY: &str = "meta.list_abilities";
+const OWNER_A: &str = "cross-hub-owner-a";
+const OWNER_B: &str = "cross-hub-owner-b";
+const CALL_ID: &str = "cross-hub-real-tls-call";
 
 /// One daemon's filesystem layout for the test.
 ///
@@ -87,6 +78,10 @@ struct DaemonHarness {
     /// trusts. `Certificate::from_pem` accepts a self-signed
     /// cert as a "CA" for verification purposes.
     cert_pem_path: PathBuf,
+    /// Canonical Hub identity owned by this daemon's key service.
+    hub_ura: String,
+    /// Realm used for peer-routing and trust projections.
+    realm: String,
 }
 
 impl Drop for DaemonHarness {
@@ -179,27 +174,76 @@ tls_key_pem = {key:?}
     body
 }
 
-/// Build a `realm-trust.toml` body that lists the peer daemons the
-/// caller daemon is allowed to dial cross-hub. Each entry carries
-/// the schema-B `origin_realm` / `hub_endpoint` / `tls_ca_pem_path`
-/// fields so `lookup_peer_hub` admits the dial gate.
-fn realm_trust_body(peers: &[(String, String, String, PathBuf)]) -> String {
-    // (agent_ura, origin_realm, hub_endpoint, ca_path)
+#[derive(Debug)]
+struct TrustedRuntimeFixture {
+    agent_ura: String,
+    public_key_b64: String,
+    role: &'static str,
+    origin_realm: Option<String>,
+    hub_endpoint: Option<String>,
+    tls_ca_pem_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct PrincipalOwnerFixture {
+    principal_ura: String,
+    owner_user_id: String,
+    owner_ura: String,
+}
+
+/// Build the exact trust document consumed by both admission and the
+/// cross-Hub dial gate. Runtime rows always carry key-service projections;
+/// there are no sentinel keys or role aliases in this fixture.
+fn realm_trust_body(
+    runtimes: &[TrustedRuntimeFixture],
+    owners: &[PrincipalOwnerFixture],
+) -> String {
     let mut body = String::new();
-    for (i, (agent_ura, origin_realm, hub_endpoint, ca_path)) in peers.iter().enumerate() {
+    for (i, runtime) in runtimes.iter().enumerate() {
+        let origin_realm = runtime
+            .origin_realm
+            .as_ref()
+            .map_or_else(String::new, |realm| format!("origin_realm = {realm:?}\n"));
+        let hub_endpoint = runtime
+            .hub_endpoint
+            .as_ref()
+            .map_or_else(String::new, |endpoint| {
+                format!("hub_endpoint = {endpoint:?}\n")
+            });
+        let tls_ca_pem_path = runtime
+            .tls_ca_pem_path
+            .as_ref()
+            .map_or_else(String::new, |path| {
+                format!("tls_ca_pem_path = {:?}\n", path.to_string_lossy())
+            });
         body.push_str(&format!(
             r#"
 [[trusted_agent]]
 agent_ura = {agent_ura:?}
-public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-role = "hub"
+public_key_b64 = {public_key_b64:?}
+role = {role:?}
 added_at_unix_ms = {ts}
-origin_realm = {origin_realm:?}
-hub_endpoint = {hub_endpoint:?}
-tls_ca_pem_path = {ca_path:?}
+{origin_realm}{hub_endpoint}{tls_ca_pem_path}
 "#,
+            agent_ura = runtime.agent_ura,
+            public_key_b64 = runtime.public_key_b64,
+            role = runtime.role,
             ts = 1_714_492_800_000_u64 + (i as u64),
-            ca_path = ca_path.to_string_lossy(),
+        ));
+    }
+    for (i, owner) in owners.iter().enumerate() {
+        body.push_str(&format!(
+            r#"
+[[trusted_principal_owner]]
+principal_ura = {principal_ura:?}
+owner_user_id = {owner_user_id:?}
+owner_ura = {owner_ura:?}
+added_at_unix_ms = {ts}
+"#,
+            principal_ura = owner.principal_ura,
+            owner_user_id = owner.owner_user_id,
+            owner_ura = owner.owner_ura,
+            ts = 1_714_492_900_000_u64 + (i as u64),
         ));
     }
     body
@@ -213,7 +257,7 @@ async fn spawn_daemon(
     label: &'static str,
     realm: &str,
     listen_tcp_port: u16,
-    cross_hub_peers: Vec<(String, String, String)>, // (peer_agent_ura, peer_realm, peer_hub_endpoint)
+    federated_peers: Vec<(String, String)>, // (peer_realm, peer_hub_endpoint)
 ) -> DaemonHarness {
     let home = tempfile::tempdir().expect("daemon home tempdir");
     let easynet_dir = home.path().join(".easynet");
@@ -228,48 +272,18 @@ async fn spawn_daemon(
     std::fs::write(&cert_path, &cert_pem).expect("write cert pem");
     std::fs::write(&key_path, &key_pem).expect("write key pem");
 
-    // Build the federated_peers map keyed by realm.
-    let federated_peers: Vec<(String, String)> = cross_hub_peers
-        .iter()
-        .map(|(_, peer_realm, hub_endpoint)| (peer_realm.clone(), hub_endpoint.clone()))
-        .collect();
-
     let listen_tcp = format!("127.0.0.1:{listen_tcp_port}");
     let config_body =
         daemon_config_body(realm, &listen_tcp, &cert_path, &key_path, &federated_peers);
     std::fs::write(easynet_dir.join("daemon-config.toml"), config_body)
         .expect("write daemon-config.toml");
 
-    // Build the realm-trust.toml: each cross-hub peer's cert path
-    // is the peer's own cert. Test-internal callers populate this
-    // by writing the OTHER daemon's cert path here. We pre-stage
-    // the peer's cert path even though we don't yet have it; the
-    // caller will overwrite this file before connecting if the
-    // peer's cert path was unknown at spawn time.
-    //
-    // For this 2-daemon test, the caller spawns daemon B first to
-    // know its cert path, then spawns daemon A passing daemon B's
-    // cert path in. Daemon A's realm-trust.toml is therefore
-    // ready at spawn time.
+    // Boot with an empty external trust set. Hub boot writes only its own
+    // public projection; once both real key services are ready, the test
+    // replaces this document with self + peer projections and asks the daemon
+    // to reload it.
     let realm_trust_path = easynet_dir.join("realm-trust.toml");
-    let realm_trust_peers: Vec<(String, String, String, PathBuf)> = cross_hub_peers
-        .iter()
-        .map(|(agent_ura, peer_realm, hub_endpoint)| {
-            // The peer's cert path was passed in by the caller via
-            // the cross_hub_peers tuple — but the tuple shape doesn't
-            // carry it. Default to a sentinel that the caller then
-            // overwrites by writing realm-trust.toml directly. We'll
-            // refactor below.
-            (
-                agent_ura.clone(),
-                peer_realm.clone(),
-                hub_endpoint.clone(),
-                PathBuf::from("/dev/null"),
-            )
-        })
-        .collect();
-    std::fs::write(&realm_trust_path, realm_trust_body(&realm_trust_peers))
-        .expect("write realm-trust.toml");
+    std::fs::write(&realm_trust_path, realm_trust_body(&[], &[])).expect("write realm-trust.toml");
 
     let bin = env!("CARGO_BIN_EXE_easynet-daemon");
     let mut command = Command::new(bin);
@@ -286,6 +300,8 @@ async fn spawn_daemon(
         child,
         hub_endpoint: format!("https://127.0.0.1:{listen_tcp_port}"),
         cert_pem_path: cert_path,
+        hub_ura: easynet_cli::core::ura::hub_ura(realm),
+        realm: realm.to_string(),
     }
 }
 
@@ -295,10 +311,70 @@ async fn spawn_daemon(
 /// other's cert path.
 fn rewrite_realm_trust(
     home: &Path,
-    peers: &[(String, String, String, PathBuf)], // (agent_ura, realm, hub_endpoint, ca_path)
+    runtimes: &[TrustedRuntimeFixture],
+    owners: &[PrincipalOwnerFixture],
 ) -> std::io::Result<()> {
     let path = home.join(".easynet").join("realm-trust.toml");
-    std::fs::write(path, realm_trust_body(peers))
+    std::fs::write(path, realm_trust_body(runtimes, owners))
+}
+
+fn key_service_client(daemon: &DaemonHarness) -> KeyringClient {
+    KeyringClient::new(daemon.home.path().join(".easynet/keyring.sock"))
+}
+
+fn ensure_runtime_public_key_b64(daemon: &DaemonHarness, owner_ura: &str) -> String {
+    let public_key = key_service_client(daemon)
+        .ensure(owner_ura)
+        .unwrap_or_else(|err| panic!("ensure key-service identity `{owner_ura}`: {err}"));
+    BASE64_STANDARD.encode(public_key.to_bytes())
+}
+
+/// Persist Hub B's explicit owner grant for the carried child invocation.
+/// The peer carrier proves Hub A's identity; this grant separately proves
+/// that the Hub-link token may read Hub B's introspection descriptor.
+fn grant_peer_introspection_read(
+    daemon_b: &DaemonHarness,
+    peer_hub_ura: &str,
+    target_ability_ura: &str,
+) {
+    let owner_ura = easynet_cli::core::ura::user_ura(&daemon_b.realm, OWNER_B);
+    let root = daemon_b
+        .home
+        .path()
+        .join(".easynet/access-control")
+        .join(OWNER_B);
+    let mut store = AccessControlStore::open_or_create_at(root, OWNER_B)
+        .expect("open Hub B owner access-control store");
+    store
+        .create_grant(
+            PermissionGrant {
+                grant_id: "cross-hub-introspection-read".to_string(),
+                owner_user_id: OWNER_B.to_string(),
+                principal_kind: PrincipalKind::Token,
+                principal_id: peer_hub_ura.to_string(),
+                token_id: Some(peer_hub_ura.to_string()),
+                token_class: Some(TokenClass::HubLink),
+                callee_ura: Some(daemon_b.hub_ura.clone()),
+                subject_ura_pattern: Some(target_ability_ura.to_string()),
+                ability_ura_pattern: Some(target_ability_ura.to_string()),
+                actions: vec![AccessAction::Read],
+                constraints: None,
+                effect: PermissionEffect::Allow,
+                lifetime: PermissionGrantLifetime::Session,
+                state: PermissionGrantState::Active,
+                expires_at: None,
+                review_required_after: None,
+                last_reviewed_at: None,
+                last_used_at: None,
+                created_by: owner_ura.clone(),
+                created_at: "2026-07-11T00:00:00Z".to_string(),
+                updated_at: None,
+                revoked_at: None,
+                reason: Some("signed two-Hub TLS integration fixture".to_string()),
+            },
+            &owner_ura,
+        )
+        .expect("create Hub B peer introspection-read grant");
 }
 
 /// SIGHUP the daemon so it reloads its trust anchor. Used after
@@ -327,22 +403,22 @@ fn sighup_daemon(child: &Child) -> std::io::Result<()> {
 // Runs by default under `cargo test --features axon-pb`.
 #[tokio::test]
 async fn cross_hub_two_daemon_real_tls_round_trip() {
-    // ── 1. Pick ports + spawn daemon B (the peer hub) ────────
+    // ── 1. Pick ports and boot both real Hub daemons ───────
     let port_a = pick_free_port();
     let port_b = pick_free_port();
     let realm_a = "realm-a";
     let realm_b = "realm-b";
-    let agent_a_uri = easynet_cli::core::ura::hub_ura(realm_a);
-    let agent_b_uri = easynet_cli::core::ura::hub_ura(realm_b);
-    let target_b_uri = format!("easynet:///r/{realm_b}/device/target-device-b");
-    let hub_a_uri = format!("https://127.0.0.1:{port_a}");
-    let hub_b_uri = format!("https://127.0.0.1:{port_b}");
+    let hub_a_ura = easynet_cli::core::ura::hub_ura(realm_a);
+    let hub_b_ura = easynet_cli::core::ura::hub_ura(realm_b);
+    let caller_device_ura = easynet_cli::core::ura::device_ura(realm_a, "signed-client-a");
+    let hub_a_endpoint = format!("https://127.0.0.1:{port_a}");
+    let hub_b_endpoint = format!("https://127.0.0.1:{port_b}");
 
     let daemon_b = spawn_daemon(
         "daemon-B",
         realm_b,
         port_b,
-        vec![(agent_a_uri.clone(), realm_a.to_string(), hub_a_uri.clone())],
+        vec![(realm_a.to_string(), hub_a_endpoint.clone())],
     )
     .await;
 
@@ -350,7 +426,7 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
         "daemon-A",
         realm_a,
         port_a,
-        vec![(agent_b_uri.clone(), realm_b.to_string(), hub_b_uri.clone())],
+        vec![(realm_b.to_string(), hub_b_endpoint.clone())],
     )
     .await;
 
@@ -371,26 +447,80 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
         "daemon B failed to bind TCP+TLS on port {port_b}",
     );
 
-    // ── 3. Rewrite each daemon's realm-trust.toml with the
-    //      OTHER daemon's cert path, then SIGHUP to reload ────
+    // ── 3. Project real identities and publish reciprocal trust ──
+    let hub_a_public_key_b64 = ensure_runtime_public_key_b64(&daemon_a, &hub_a_ura);
+    let hub_b_public_key_b64 = ensure_runtime_public_key_b64(&daemon_b, &hub_b_ura);
+    let caller_device_public_key_b64 = ensure_runtime_public_key_b64(&daemon_a, &caller_device_ura);
+    let owner_a_ura = easynet_cli::core::ura::user_ura(realm_a, OWNER_A);
+    let owner_b_ura = easynet_cli::core::ura::user_ura(realm_b, OWNER_B);
+
     rewrite_realm_trust(
         daemon_a.home.path(),
-        &[(
-            agent_b_uri.clone(),
-            realm_b.to_string(),
-            hub_b_uri.clone(),
-            daemon_b.cert_pem_path.clone(),
-        )],
+        &[
+            TrustedRuntimeFixture {
+                agent_ura: hub_a_ura.clone(),
+                public_key_b64: hub_a_public_key_b64.clone(),
+                role: "hub",
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            TrustedRuntimeFixture {
+                agent_ura: caller_device_ura.clone(),
+                public_key_b64: caller_device_public_key_b64,
+                role: "device",
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            TrustedRuntimeFixture {
+                agent_ura: hub_b_ura.clone(),
+                public_key_b64: hub_b_public_key_b64.clone(),
+                role: "hub",
+                origin_realm: Some(realm_b.to_string()),
+                hub_endpoint: Some(hub_b_endpoint.clone()),
+                tls_ca_pem_path: Some(daemon_b.cert_pem_path.clone()),
+            },
+        ],
+        &[
+            PrincipalOwnerFixture {
+                principal_ura: hub_a_ura.clone(),
+                owner_user_id: OWNER_A.to_string(),
+                owner_ura: owner_a_ura.clone(),
+            },
+            PrincipalOwnerFixture {
+                principal_ura: caller_device_ura.clone(),
+                owner_user_id: OWNER_A.to_string(),
+                owner_ura: owner_a_ura,
+            },
+        ],
     )
     .expect("rewrite A's trust");
     rewrite_realm_trust(
         daemon_b.home.path(),
-        &[(
-            agent_a_uri.clone(),
-            realm_a.to_string(),
-            hub_a_uri.clone(),
-            daemon_a.cert_pem_path.clone(),
-        )],
+        &[
+            TrustedRuntimeFixture {
+                agent_ura: hub_b_ura.clone(),
+                public_key_b64: hub_b_public_key_b64,
+                role: "hub",
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            TrustedRuntimeFixture {
+                agent_ura: hub_a_ura.clone(),
+                public_key_b64: hub_a_public_key_b64,
+                role: "hub",
+                origin_realm: Some(realm_a.to_string()),
+                hub_endpoint: Some(hub_a_endpoint.clone()),
+                tls_ca_pem_path: Some(daemon_a.cert_pem_path.clone()),
+            },
+        ],
+        &[PrincipalOwnerFixture {
+            principal_ura: hub_b_ura.clone(),
+            owner_user_id: OWNER_B.to_string(),
+            owner_ura: owner_b_ura,
+        }],
     )
     .expect("rewrite B's trust");
 
@@ -400,8 +530,13 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
         sighup_daemon(&daemon_b.child).expect("SIGHUP B");
     }
 
-    // Give the daemon a moment to finish the SIGHUP reload. A 200ms
-    // cushion is more than enough.
+    // Peer membership does not grant child authority. Hub B's owner grants
+    // the authenticated Hub A token one exact Hub-introspection capability.
+    let target_ability_ura = easynet_cli::core::ura::owner_ability_ura(&hub_b_ura, TARGET_ABILITY)
+        .expect("Hub B introspection ability URA");
+    grant_peer_introspection_read(&daemon_b, &hub_a_ura, &target_ability_ura);
+
+    // Give the coordinated reload task one scheduling turn.
     sleep(Duration::from_millis(200)).await;
 
     // ── 4. Build a TLS gRPC client for daemon A ──────────────
@@ -418,77 +553,90 @@ async fn cross_hub_two_daemon_real_tls_round_trip() {
     let channel = endpoint.connect_lazy();
     let mut client = InvocationClient::new(channel);
 
-    // ── 5. Issue federation.forward_invoke targeting daemon B ──
-    // Build the ForwardInvokeRequest JSON by hand — the type's
-    // serde derive is `Deserialize` only (it's a wire-input shape
-    // for the daemon), so tests construct the JSON literal.
-    let request_args = format!(
-        r#"{{"target_ura":"{}","inner_envelope_b64":"AAAA"}}"#,
-        target_b_uri
-    )
-    .into_bytes();
-
-    let request = InvokeRequest {
-        envelope: Some(Envelope {
-            caller: Some(AgentIdentity {
-                ura: agent_a_uri.clone(),
-                ..AgentIdentity::default()
-            }),
-            ..Envelope::default()
-        }),
-        function_name: ABILITY_FEDERATION_FORWARD_INVOKE.to_string(),
-        arguments: request_args,
-        ..InvokeRequest::default()
+    // ── 5. Sign the complete request and require Hub B's result ──
+    let inner_envelope = serde_json::json!({
+        "ability_ura": target_ability_ura,
+        "subject_ura": target_ability_ura,
+        "args": {},
+        "call_id": CALL_ID,
+    });
+    let forward_request = ForwardInvokeRequest {
+        target_ura: hub_b_ura.clone(),
+        inner_envelope_b64: BASE64_STANDARD.encode(
+            serde_json::to_vec(&inner_envelope).expect("encode inner introspection invocation"),
+        ),
+        causal_context_bytes: Vec::new(),
+        forward_deadline_ms: 10_000,
+        origin_caller: None,
     };
+    let request_args = serde_json::to_vec(&forward_request).expect("encode forward request");
+    let forward_ability_ura =
+        easynet_cli::core::ura::owner_ability_ura(&hub_a_ura, ABILITY_FEDERATION_FORWARD_INVOKE)
+            .expect("Hub A forward ability URA");
+    let descriptor_ref = format!("{forward_ability_ura}@{DEFAULT_ABILITY_DESCRIPTOR_VERSION}");
+    let signer = key_service_client(&daemon_a);
+    let request: InvokeRequest =
+        ProtoEnvelope::targeted(&caller_device_ura, &hub_a_ura, &forward_ability_ura)
+            .expect("canonical outer forward envelope")
+            .signed_descriptor_ref_invoke_request(
+                ABILITY_FEDERATION_FORWARD_INVOKE,
+                descriptor_ref,
+                request_args,
+                &signer,
+            )
+            .expect("descriptor-bound signed outer request");
 
-    // Daemon A's admission may reject the test caller URI because
-    // it's not in daemon A's trust anchor. For PR-N1 we accept
-    // either (a) `Status::permission_denied` admission failure
-    // surfacing the gate works, OR (b) `Ok(...)` the cross-hub
-    // round-trip completed. The contract being tested here is
-    // "two real daemon binaries booted with PR-N1 boot wiring +
-    // exchanged TLS handshake" — `Status::permission_denied` is
-    // already proof daemon A processed the gRPC RPC (admission ran).
-    // A connect-level error (channel timeout, peer not trusted)
-    // would be the failure mode that means PR-N1 is broken.
-    match client.invoke(request).await {
-        Ok(resp) => {
-            let body = resp.into_inner();
-            let parsed: ForwardInvokeResponse = serde_json::from_slice(&body.result)
-                .expect("response body is ForwardInvokeResponse JSON");
-            // DEC-N4 §2.1: an `Ok(...)` outcome means delivery
-            // accepted (local-realm fast-path queued the frame on
-            // the target's reverse channel, OR cross-realm peer
-            // returned an ability response). The
-            // `correlation_call_id` round-trips the caller's
-            // `call_id` so the CLI initiator can match the eventual
-            // reverse-channel reply.
-            eprintln!(
-                "[test] cross-hub forward_invoke OK; result_bytes_len={} corr_id={}",
-                parsed.result_bytes.len(),
-                parsed.correlation_call_id,
-            );
-        }
-        Err(status) => {
-            // DEC-N4 §2.1 admits two non-transport failure modes:
-            //   - `permission_denied` from the admission gate
-            //   - `failed_precondition("target_offline")` from the
-            //     dispatcher (no presence entry / dial failure /
-            //     channel full / channel closed)
-            // Both prove the binary processed the RPC. Only
-            // transport-layer failures indicate broken boot wiring.
-            eprintln!(
-                "[test] cross-hub forward_invoke status: code={:?} message={}",
-                status.code(),
-                status.message()
-            );
-            assert!(
-                !matches!(
-                    status.code(),
-                    tonic::Code::Unavailable | tonic::Code::Cancelled
-                ),
-                "transport-layer failure indicates PR-N1 binary boot wiring is broken: {status}"
-            );
-        }
+    let body = timeout(Duration::from_secs(10), client.invoke(request))
+        .await
+        .expect("signed cross-Hub invocation must terminate")
+        .expect("signed cross-Hub invocation must succeed")
+        .into_inner();
+    let parsed: ForwardInvokeResponse =
+        serde_json::from_slice(&body.result).expect("response body is ForwardInvokeResponse JSON");
+    assert_eq!(parsed.correlation_call_id, CALL_ID);
+    let peer_catalog: serde_json::Value = serde_json::from_slice(&parsed.result_bytes)
+        .expect("Hub B meta.list_abilities result is JSON");
+    let abilities = peer_catalog
+        .get("abilities")
+        .and_then(serde_json::Value::as_array)
+        .expect("Hub B result carries its ability catalog");
+    for ability in abilities {
+        let owner_ura = ability
+            .get("owner_ura")
+            .and_then(serde_json::Value::as_str)
+            .expect("every Hub B descriptor carries owner_ura");
+        assert_ne!(
+            owner_ura, "self",
+            "schema template identity must never escape onto the wire: {ability}"
+        );
+        assert_eq!(
+            owner_ura, hub_b_ura,
+            "Hub callee must expose only Hub B authority rows: {ability}"
+        );
+        let name = ability
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .expect("every Hub B descriptor carries a public name");
+        let ability_ura = ability
+            .get("ability_ura")
+            .and_then(serde_json::Value::as_str)
+            .expect("every Hub B descriptor carries ability_ura");
+        easynet_cli::core::ura::parse_ura(ability_ura)
+            .unwrap_or_else(|error| panic!("non-canonical Ability URA `{ability_ura}`: {error}"));
+        assert_eq!(
+            easynet_cli::core::ura::owner_ability_ura(owner_ura, name).as_deref(),
+            Some(ability_ura),
+            "descriptor owner/name must reproduce its canonical Ability URA: {ability}"
+        );
     }
+    assert!(
+        abilities.iter().any(|ability| {
+            ability.get("name").and_then(serde_json::Value::as_str) == Some(TARGET_ABILITY)
+                && ability
+                    .get("ability_ura")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(target_ability_ura.as_str())
+        }),
+        "successful return must contain Hub B's canonical introspection descriptor, not local admission or delivery acceptance: {peer_catalog}"
+    );
 }

@@ -7,7 +7,6 @@
 //   keyring.create        — generate a fresh ed25519 entry
 //   keyring.list          — enumerate entries (filter by purpose/status)
 //   keyring.get_public    — fetch public key + fingerprint by key_id
-//   keyring.sign          — sign a payload with a named entry
 //   keyring.rotate        — retire active key, mint new with epoch+1
 //   keyring.revoke        — mark a key revoked (cannot sign again)
 //   keyring.expire_set    — schedule expiry timestamp on a key
@@ -246,14 +245,6 @@ pub fn handle_get_public(provider: &dyn ManagedSigningProvider, args: Value) -> 
         "status":         match entry.status { ManagedSigningStatus::Active => "active", ManagedSigningStatus::Retired => "retired", ManagedSigningStatus::Revoked => "revoked" },
         "rotation_epoch": entry.rotation_epoch,
     }))
-}
-
-pub fn handle_sign(provider: &dyn ManagedSigningProvider, args: Value) -> Result<Value> {
-    let key_id = require_str(&args, "key_id")?;
-    let payload_b64 = require_str(&args, "payload_b64")?;
-    let payload = b64_decode(payload_b64)?;
-    let sig = provider.sign(key_id, &payload)?;
-    Ok(json!({ "signature_b64": b64_encode(&sig.to_bytes()) }))
 }
 
 fn parse_status(value: &str) -> Result<ManagedSigningStatus> {
@@ -562,7 +553,9 @@ pub fn handle_peer_list(provider: &dyn ManagedSigningProvider, _args: Value) -> 
     Ok(json!({ "peers": peers }))
 }
 
-/// Register all 10 keyring abilities under `<owner>.keyring.<verb>`.
+/// Register key administration projections under `<owner>.keyring.<verb>`.
+/// Raw signing is deliberately not an Invocation ability: signing consumers
+/// receive a subject/key-bound SDK capability through the local key service.
 ///
 /// `owner` is the agent name they publish under (typically `"legacy self alias"`
 /// for the daemon's self-bundle).
@@ -585,8 +578,6 @@ pub fn register_for_owner(
         name("get_public"),
         Arc::new(move |args| handle_get_public(&h, args)),
     );
-    let h = provider.clone();
-    reg.register_rpc(name("sign"), Arc::new(move |args| handle_sign(&h, args)));
     let h = provider.clone();
     reg.register_rpc(
         name("rotate"),
@@ -749,27 +740,6 @@ mod tests {
     }
 
     #[test]
-    fn sign_then_externally_verify_via_handler() {
-        let (h, _d) = handle();
-        let created = handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
-        let key_id = created["key_id"].as_str().unwrap();
-        let pk_b64 = created["public_key"].as_str().unwrap();
-        let payload_b64 = b64_encode(b"federation envelope bytes");
-        let signed =
-            handle_sign(&h, json!({"key_id": key_id, "payload_b64": payload_b64})).unwrap();
-        let sig_b64 = signed["signature_b64"].as_str().unwrap();
-
-        let pk = b64_decode(pk_b64).unwrap();
-        let sig = b64_decode(sig_b64).unwrap();
-        let pk_arr: [u8; 32] = pk.try_into().unwrap();
-        let sig_arr: [u8; 64] = sig.try_into().unwrap();
-        use ed25519_dalek::{Verifier, VerifyingKey};
-        let vk = VerifyingKey::from_bytes(&pk_arr).unwrap();
-        let sig_obj = ed25519_dalek::Signature::from_bytes(&sig_arr);
-        assert!(vk.verify(b"federation envelope bytes", &sig_obj).is_ok());
-    }
-
-    #[test]
     fn rotate_then_revoke_round_trip() {
         let (h, _d) = handle();
         let c = handle_create(&h, json!({"purpose": "x"})).unwrap();
@@ -781,8 +751,7 @@ mod tests {
         let rev = handle_revoke(&h, json!({"key_id": k2, "reason": "compromise"})).unwrap();
         assert!(rev["tombstone_unix_ms"].as_i64().unwrap() > 0);
         // Cannot sign with revoked.
-        let payload_b64 = b64_encode(b"x");
-        assert!(handle_sign(&h, json!({"key_id": k2, "payload_b64": payload_b64}),).is_err());
+        assert!(h.sign(&k2, b"x").is_err());
     }
 
     #[test]
@@ -988,26 +957,17 @@ mod tests {
 
     #[test]
     fn federate_user_identity_token_requires_canonical_ura() {
-        // Subject set to a non-canonical URA. Reject.
+        // Reject malformed ownership at key creation, before an unusable
+        // managed signer can enter the inventory.
         let (h, _d) = handle();
-        let created = handle_create(
+        let err = handle_create(
             &h,
             json!({
                 "purpose": "agent_signing",
                 "bound_subject": "not-a-canonical-ura"
             }),
         )
-        .unwrap();
-        let err = handle_federate_user_identity_token(
-            &h,
-            json!({
-                "source_user_ura": "not-a-canonical-ura",
-                "managed_key_id": created["key_id"],
-                "target_realm": "realm-b",
-                "issued_at_unix_ms": 1_714_500_000_000_u64,
-            }),
-        )
-        .expect_err("must reject malformed device-subject");
+        .expect_err("must reject malformed managed-signing subject");
         assert!(err.to_string().contains("canonical"));
     }
 

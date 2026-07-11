@@ -11,21 +11,23 @@ use tonic::transport::Channel;
 use super::heartbeat::SessionUpHeartbeatTask;
 use super::supervisor::{DeviceSessionPhase, SessionPhaseTracker};
 use super::{
-    build_session_envelope_open_with_seed, InitialSessionAdmissionProbe, SessionCloseStats,
-    SessionError, SessionFrameDispatcher, SessionSigningSeed, SessionUpSender,
-    DEVICE_DISPATCH_CONTRACT_VERSION, REASON_BIDI_DOWN_SEQUENCE, SESSION_UP_CHANNEL_CAPACITY,
+    build_session_envelope_open, connection_state::project_connection_state,
+    InitialSessionAdmissionProbe, SessionCloseStats, SessionConnectionStateSink, SessionError,
+    SessionFrameDispatcher, SessionUpSender, DEVICE_DISPATCH_CONTRACT_VERSION,
+    REASON_BIDI_DOWN_SEQUENCE, SESSION_UP_CHANNEL_CAPACITY,
 };
+use crate::daemon::identity::self_identity::CanonicalSigner;
 
 pub(super) struct LiveSessionRun<'a, D: SessionFrameDispatcher> {
     pub(super) client: InvocationClient<Channel>,
     pub(super) hub_endpoint: String,
-    pub(super) caller_ura: String,
-    pub(super) signing_seed: Option<SessionSigningSeed>,
+    pub(super) signer: Arc<dyn CanonicalSigner>,
     pub(super) dispatcher: Arc<D>,
     pub(super) escalation_outbox:
         Option<&'a crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox>,
     pub(super) idle_timeout: Duration,
     pub(super) initial_admission: Option<InitialSessionAdmissionProbe>,
+    pub(super) connection_state_sink: Arc<dyn SessionConnectionStateSink>,
 }
 
 pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
@@ -35,18 +37,25 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
     let LiveSessionRun {
         mut client,
         hub_endpoint,
-        caller_ura,
-        signing_seed,
+        signer,
         dispatcher,
         escalation_outbox,
         idle_timeout,
         initial_admission,
+        connection_state_sink,
     } = request;
+    let caller_ura = signer.owner_ura().to_string();
 
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
     let outbound_tx = SessionUpSender::new(up_tx.clone());
 
-    let frame0 = build_session_envelope_open_with_seed(&caller_ura, signing_seed);
+    let frame0 = build_session_envelope_open(signer.as_ref())
+        .await
+        .map_err(|source| SessionError::SigningIdentity {
+            owner_ura: caller_ura.clone(),
+            operation: "session.open frame 0",
+            source,
+        })?;
     up_tx
         .send(frame0)
         .await
@@ -111,7 +120,12 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
                 }
                 expected_down_sequence = expected_down_sequence.saturating_add(1);
                 if frame.sequence == 0 {
-                    apply_session_contract(&frame, &outbound_tx, &hub_endpoint);
+                    apply_session_contract(
+                        &frame,
+                        &outbound_tx,
+                        &hub_endpoint,
+                        connection_state_sink.as_ref(),
+                    );
                 }
                 if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
                     let err_msg = format!("{err}");
@@ -138,7 +152,12 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
     })
 }
 
-fn apply_session_contract(frame: &InvokeBidiDown, outbound: &SessionUpSender, hub_endpoint: &str) {
+fn apply_session_contract(
+    frame: &InvokeBidiDown,
+    outbound: &SessionUpSender,
+    hub_endpoint: &str,
+    connection_state_sink: &dyn SessionConnectionStateSink,
+) {
     use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
     let Some(Payload::Receipt(receipt)) = frame.payload.as_ref() else {
         return;
@@ -172,58 +191,12 @@ fn apply_session_contract(frame: &InvokeBidiDown, outbound: &SessionUpSender, hu
     // records the honest "self-session opening" (J500) state, and only this
     // hub-confirmed contract earns FRONTEND_CONNECTED. Without this, `doctor`
     // would under-report a healthy session as still "opening".
-    record_connection_state(
+    project_connection_state(
+        connection_state_sink,
         crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedOnline,
         crate::daemon::boot::join_connection_state::JoinTransition::AdmitPresence,
         "session.contract_negotiated",
     );
-}
-
-/// Re-record the process-global join-connection snapshot at `state`, preserving
-/// the realm/node/hub identity fields from the latest snapshot (recorded by
-/// `cli.start`). The session initiator only knows the live transport result, not
-/// the full credential bundle, so it derives the new state from what boot already
-/// published rather than reconstructing it.
-pub(super) fn record_connection_state(
-    state: crate::daemon::boot::join_connection_state::JoinConnectionState,
-    transition: crate::daemon::boot::join_connection_state::JoinTransition,
-    source: &str,
-) -> bool {
-    let prior = crate::daemon::boot::join_connection_state::latest_snapshot();
-    let snapshot = crate::daemon::boot::join_connection_state::JoinConnectionSnapshot::from_parts(
-        state,
-        Some(transition),
-        prior.realm,
-        prior.node_id,
-        prior.hub_endpoint,
-        source.to_string(),
-    );
-    let state_code = snapshot.state_code.clone();
-    let transition_id = snapshot.transition_id.clone().unwrap_or_default();
-    match crate::daemon::boot::join_connection_state::save_snapshot(&snapshot) {
-        Ok(()) => {
-            crate::op_event!(
-                component = session,
-                kind = connection_state_projected,
-                state_code = state_code,
-                transition_id = transition_id,
-                source = source,
-            );
-            true
-        }
-        Err(err) => {
-            let message = format!("{err:#}");
-            crate::op_event!(
-                component = session,
-                kind = connection_state_projection_failed,
-                state_code = state_code,
-                transition_id = transition_id,
-                source = source,
-                error = message,
-            );
-            false
-        }
-    }
 }
 
 struct OutboxGuard {
@@ -282,7 +255,8 @@ mod tests {
             "test.start",
         ));
 
-        assert!(record_connection_state(
+        assert!(project_connection_state(
+            &super::super::PersistentSessionConnectionStateSink,
             JoinConnectionState::ConnectedOnline,
             JoinTransition::AdmitPresence,
             "session.contract_negotiated",

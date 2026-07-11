@@ -5239,11 +5239,7 @@ mod tests {
             }
         }
 
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _guard = ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = crate::cli::commands::test_support::env_lock();
         let temp = tempfile::tempdir().unwrap();
         let socket = temp.path().join("key-service.sock");
         let _restore = EnvRestore {
@@ -5283,13 +5279,22 @@ mod tests {
                     }
                     crate::daemon::keyring::KeyringRequest::InventorySign {
                         key_id,
+                        expected_purpose,
+                        subject_ura,
+                        signer_policy_ref,
                         canonical_bytes_b64,
                     } => {
                         use base64::Engine;
                         let canonical = base64::engine::general_purpose::STANDARD
                             .decode(canonical_bytes_b64)
                             .unwrap();
-                        match vault.lock().unwrap().inventory_sign(&key_id, &canonical) {
+                        match vault.lock().unwrap().inventory_sign_bound(
+                            &key_id,
+                            &expected_purpose,
+                            &subject_ura,
+                            &signer_policy_ref,
+                            &canonical,
+                        ) {
                             Ok(signature) => crate::daemon::keyring::KeyringResponse::Signature {
                                 signature_b64: base64::engine::general_purpose::STANDARD
                                     .encode(signature.to_bytes()),
@@ -5944,7 +5949,12 @@ mod tests {
                 )
             };
 
-            assert_eq!(sign_code, EASYNET_OK);
+            assert_eq!(
+                sign_code,
+                EASYNET_OK,
+                "local daemon sign error: {}",
+                read_last_error_json()
+            );
             assert_ne!(signed_id, 0);
             assert!(get_prepared(prepared_id).is_none());
             assert!(get_signed(signed_id).is_some());

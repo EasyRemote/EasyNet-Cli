@@ -48,7 +48,7 @@
 // What this commit lands
 // ----------------------
 // - The `dial_and_run_session(...)` function: takes hub endpoint,
-//   caller URA, signing key, and a frame dispatcher; opens one
+//   an owner-bound canonical signer, and a frame dispatcher; opens one
 //   bidi, runs forever (until error / shutdown).
 // - `SessionFrameDispatcher` trait: the local-side handler
 //   implementation. Trait so PR-3 commit 3/3 (integration test)
@@ -61,11 +61,10 @@
 //
 // Signature model
 // ---------------
-// When boot supplies a deterministic per-device Ed25519 seed, frame 0
-// is signed over the same canonical invocation bytes the admission gate
-// verifies. Sparse credentials that only carry `agent_ura` still
-// degrade to the unsigned PR-1/PR-2 behaviour so transition tests and
-// partially-migrated devices do not fail hard during boot.
+// Boot supplies an owner-bound canonical signer backed by the daemon key
+// service. Frame 0 and all public preludes are signed over the same canonical
+// invocation bytes the admission gate verifies; private material never enters
+// the session runtime and there is no unsigned production fallback.
 //
 // What this commit does NOT do
 // ----------------------------
@@ -93,7 +92,9 @@ use tonic::Status;
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 
+mod connection_state;
 mod envelope;
 mod frame_loop;
 mod heartbeat;
@@ -103,9 +104,13 @@ mod tasks;
 mod transport;
 mod warmup;
 
-pub use envelope::{
-    build_session_envelope_open, build_session_envelope_open_with_seed, SessionSigningSeed,
+use connection_state::project_connection_state;
+#[cfg(test)]
+use connection_state::SessionConnectionStateChange;
+pub(crate) use connection_state::{
+    PersistentSessionConnectionStateSink, SessionConnectionStateSink,
 };
+pub use envelope::build_session_envelope_open;
 use frame_loop::{run_live_session, LiveSessionRun};
 #[cfg(test)]
 use prelude::build_synthetic_pages_ability_descriptors;
@@ -415,8 +420,7 @@ pub enum SessionDispatchError {
 
 struct SessionDialAttempt<'a, D: SessionFrameDispatcher> {
     hub_endpoint: String,
-    caller_ura: String,
-    signing_seed: Option<SessionSigningSeed>,
+    signer: Arc<dyn CanonicalSigner>,
     hub_ca_pem_path: Option<&'a Path>,
     dispatcher: Arc<D>,
     escalation_outbox:
@@ -425,12 +429,12 @@ struct SessionDialAttempt<'a, D: SessionFrameDispatcher> {
     idle_timeout: Duration,
     initial_admission: Option<InitialSessionAdmissionProbe>,
     user_trust_sync: Option<&'a UserTrustSync>,
+    connection_state_sink: Arc<dyn SessionConnectionStateSink>,
 }
 
 pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
     pub(crate) hub_endpoint: String,
-    pub(crate) caller_ura: String,
-    pub(crate) signing_seed: Option<SessionSigningSeed>,
+    pub(crate) signer: Arc<dyn CanonicalSigner>,
     pub(crate) hub_ca_pem_path: Option<PathBuf>,
     pub(crate) dispatcher: Arc<D>,
     pub(crate) escalation_outbox:
@@ -439,6 +443,7 @@ pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
     pub(crate) hub_published_abilities: Arc<HubPublishedAbilityStore>,
     pub(crate) initial_admission: Option<InitialSessionAdmissionProbe>,
     pub(crate) user_trust_sync: Option<UserTrustSync>,
+    pub(crate) connection_state_sink: Arc<dyn SessionConnectionStateSink>,
     pub(crate) cancel: tokio::sync::oneshot::Receiver<()>,
 }
 
@@ -447,11 +452,10 @@ pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
 /// down-stream (returns `Ok(())`) or a transport error occurs
 /// (returns `Err(...)`).
 ///
-/// `caller_ura` is the device's canonical URA per spec §5.1
-/// (`easynet:///r/{tenant_id}/agent/{node_id}`). PR-1 staging
-/// admits a missing `caller_signature` if the URA is in the
-/// hub's realm trust anchor (or matches the hub's own URA for
-/// loopback); PR-7 closes the loop with real ed25519 signing.
+/// The signer's owner is the device's canonical URA per spec §5.1
+/// (`easynet:///r/{tenant_id}/agent/{node_id}`). The owner-bound
+/// capability signs every public prelude and frame 0 without exposing
+/// private key material or allowing this session to select another URA.
 ///
 /// `hub_ca_pem_path` pins the hub's TLS CA when set, mirroring the
 /// pattern `cross_hub_dial::resolve_peer_channel` already uses for
@@ -464,8 +468,7 @@ pub(crate) struct SessionSupervisorRunConfig<D: SessionFrameDispatcher> {
 /// `hub_endpoint` matches `hub_endpoint`.
 pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     hub_endpoint: String,
-    caller_ura: String,
-    signing_seed: Option<SessionSigningSeed>,
+    signer: Arc<dyn CanonicalSigner>,
     hub_ca_pem_path: Option<&Path>,
     dispatcher: Arc<D>,
     escalation_outbox: Option<
@@ -480,8 +483,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
     dial_and_run_session_with_idle_timeout(
         SessionDialAttempt {
             hub_endpoint,
-            caller_ura,
-            signing_seed,
+            signer,
             hub_ca_pem_path,
             dispatcher,
             escalation_outbox,
@@ -489,6 +491,7 @@ pub async fn dial_and_run_session<D: SessionFrameDispatcher>(
             idle_timeout: SESSION_IDLE_TIMEOUT,
             initial_admission: None,
             user_trust_sync: None,
+            connection_state_sink: Arc::new(PersistentSessionConnectionStateSink),
         },
         &mut phase,
     )
@@ -501,8 +504,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
 ) -> Result<SessionCloseStats, SessionError> {
     let SessionDialAttempt {
         hub_endpoint,
-        caller_ura,
-        signing_seed,
+        signer,
         hub_ca_pem_path,
         dispatcher,
         escalation_outbox,
@@ -510,7 +512,9 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         idle_timeout,
         initial_admission,
         user_trust_sync,
+        connection_state_sink,
     } = attempt;
+    let caller_ura = signer.owner_ura().to_string();
     // Idempotent under a supervisor (begin_attempt already entered
     // Dialing; same-phase transitions early-return); direct callers
     // (one-shot dial, tests) enter the machine here.
@@ -539,8 +543,7 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         client: &mut client,
         phase,
         hub_endpoint: &hub_endpoint,
-        caller_ura: &caller_ura,
-        signing_seed,
+        signer: Arc::clone(&signer),
         inputs: preludes,
         user_trust_sync,
         channels: prelude_channels,
@@ -551,12 +554,12 @@ async fn dial_and_run_session_with_idle_timeout<D: SessionFrameDispatcher>(
         LiveSessionRun {
             client,
             hub_endpoint,
-            caller_ura,
-            signing_seed,
+            signer,
             dispatcher,
             escalation_outbox,
             idle_timeout,
             initial_admission,
+            connection_state_sink,
         },
         phase,
     )
@@ -579,8 +582,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
 ) {
     let SessionSupervisorRunConfig {
         hub_endpoint,
-        caller_ura,
-        signing_seed,
+        signer,
         hub_ca_pem_path,
         dispatcher,
         escalation_outbox,
@@ -588,6 +590,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
         hub_published_abilities,
         initial_admission,
         user_trust_sync,
+        connection_state_sink,
         mut cancel,
     } = config;
 
@@ -604,8 +607,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
             result = dial_and_run_session_with_idle_timeout(
                 SessionDialAttempt {
                     hub_endpoint: hub_endpoint.clone(),
-                    caller_ura: caller_ura.clone(),
-                    signing_seed,
+                    signer: Arc::clone(&signer),
                     hub_ca_pem_path: hub_ca_pem_path.as_deref(),
                     dispatcher: Arc::clone(&dispatcher),
                     escalation_outbox: escalation_outbox.as_ref(),
@@ -616,6 +618,7 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                     idle_timeout: SESSION_IDLE_TIMEOUT,
                     initial_admission: initial_admission.clone(),
                     user_trust_sync: user_trust_sync.as_ref(),
+                    connection_state_sink: Arc::clone(&connection_state_sink),
                 },
                 &mut phase,
             ) => Some(result),
@@ -656,7 +659,8 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
                 // while session.open is wedged in a reconnect loop (the exact lie
                 // that hid the descriptor-ref rejection). frame_loop promotes back
                 // to ConnectedOnline once a reconnect re-negotiates the contract.
-                frame_loop::record_connection_state(
+                project_connection_state(
+                    connection_state_sink.as_ref(),
                     crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedSuspect,
                     crate::daemon::boot::join_connection_state::JoinTransition::OpenSelfSession,
                     "session.error_reconnecting",
@@ -709,6 +713,14 @@ pub(crate) async fn run_session_supervisor<D: SessionFrameDispatcher>(
 /// "hub is down" and "this device is not in the trust anchor".
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
+    #[error("signing identity `{owner_ura}` failed while preparing {operation}: {source}")]
+    SigningIdentity {
+        owner_ura: String,
+        operation: &'static str,
+        #[source]
+        source: SelfIdentityError,
+    },
+
     #[error("invalid hub endpoint `{endpoint}`: {source}")]
     InvalidEndpoint {
         endpoint: String,
@@ -791,6 +803,7 @@ mod tests {
         InvokeRequest, InvokeResponse, InvokeServerStreamRequest, InvokeStreamChunk,
     };
     use futures::{stream, StreamExt as _};
+    use rand::random;
     use serde_json::Value;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -807,6 +820,70 @@ mod tests {
 
     fn hub_store() -> Arc<HubPublishedAbilityStore> {
         HubPublishedAbilityStore::new()
+    }
+
+    /// Per-test state sink. Session tests exercise lifecycle semantics without
+    /// reading or writing the process-global connection-state.json path.
+    #[derive(Default)]
+    struct InMemorySessionConnectionStateSink {
+        changes: Mutex<Vec<SessionConnectionStateChange>>,
+    }
+
+    impl InMemorySessionConnectionStateSink {
+        fn changes(&self) -> Vec<SessionConnectionStateChange> {
+            self.changes
+                .lock()
+                .expect("in-memory connection-state sink")
+                .clone()
+        }
+    }
+
+    impl SessionConnectionStateSink for InMemorySessionConnectionStateSink {
+        fn record(&self, change: SessionConnectionStateChange) -> anyhow::Result<()> {
+            self.changes
+                .lock()
+                .expect("in-memory connection-state sink")
+                .push(change);
+            Ok(())
+        }
+    }
+
+    fn isolated_connection_state_sink() -> Arc<dyn SessionConnectionStateSink> {
+        Arc::new(InMemorySessionConnectionStateSink::default())
+    }
+
+    struct TestSessionSigner {
+        owner_ura: String,
+        signing_key: ed25519_dalek::SigningKey,
+    }
+
+    impl TestSessionSigner {
+        fn random(owner_ura: impl Into<String>) -> Arc<dyn CanonicalSigner> {
+            Arc::new(Self {
+                owner_ura: owner_ura.into(),
+                signing_key: ed25519_dalek::SigningKey::from_bytes(&random()),
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CanonicalSigner for TestSessionSigner {
+        fn owner_ura(&self) -> &str {
+            &self.owner_ura
+        }
+
+        async fn sign_canonical(
+            &self,
+            canonical_bytes: &[u8],
+        ) -> Result<ed25519_dalek::Signature, SelfIdentityError> {
+            use ed25519_dalek::Signer as _;
+
+            Ok(self.signing_key.sign(canonical_bytes))
+        }
+
+        fn signing_public_key(&self) -> Result<ed25519_dalek::VerifyingKey, SelfIdentityError> {
+            Ok(self.signing_key.verifying_key())
+        }
     }
 
     #[test]
@@ -1267,9 +1344,12 @@ mod tests {
         (addr, invokes, handle)
     }
 
-    #[test]
-    fn build_session_envelope_open_carries_caller_ura_and_ability_name() {
-        let frame = build_session_envelope_open("easynet:///r/realm/device/n1");
+    #[tokio::test]
+    async fn build_session_envelope_open_carries_caller_ura_and_ability_name() {
+        let signer = TestSessionSigner::random("easynet:///r/realm/device/n1");
+        let frame = build_session_envelope_open(signer.as_ref())
+            .await
+            .expect("signed frame");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("frame 0 must be EnvelopeOpen");
         };
@@ -1290,9 +1370,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn build_session_envelope_open_includes_one_stream_descriptor() {
-        let frame = build_session_envelope_open("easynet:///r/realm/device/n1");
+    #[tokio::test]
+    async fn build_session_envelope_open_includes_one_stream_descriptor() {
+        let signer = TestSessionSigner::random("easynet:///r/realm/device/n1");
+        let frame = build_session_envelope_open(signer.as_ref())
+            .await
+            .expect("signed frame");
         let UpPayload::EnvelopeOpen(eo) = frame.payload.expect("payload") else {
             panic!("payload");
         };
@@ -1301,11 +1384,12 @@ mod tests {
         assert_eq!(eo.streams[0].content_type, "application/json");
     }
 
-    #[test]
-    fn build_session_envelope_open_with_seed_adds_signature_and_nonce() {
-        let seed = [0x42_u8; 32];
-        let frame =
-            build_session_envelope_open_with_seed("easynet:///r/realm/device/n1", Some(seed));
+    #[tokio::test]
+    async fn build_session_envelope_open_adds_signature_and_nonce() {
+        let signer = TestSessionSigner::random("easynet:///r/realm/device/n1");
+        let frame = build_session_envelope_open(signer.as_ref())
+            .await
+            .expect("signed frame");
         assert_eq!(frame.sequence, 0);
         assert_eq!(frame.mac.len(), 64);
 
@@ -1525,8 +1609,7 @@ mod tests {
             Duration::from_secs(5),
             dial_and_run_session(
                 format!("http://{addr}"),
-                "easynet:///r/realm/device/n1".to_string(),
-                None,
+                TestSessionSigner::random("easynet:///r/realm/device/n1"),
                 None,
                 dispatcher,
                 None,
@@ -1672,8 +1755,7 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let result = dial_and_run_session(
             "not a valid ura".to_string(),
-            "easynet:///r/realm/device/n1".to_string(),
-            None,
+            TestSessionSigner::random("easynet:///r/realm/device/n1"),
             None,
             dispatcher,
             None,
@@ -1698,8 +1780,7 @@ mod tests {
             Duration::from_secs(5),
             dial_and_run_session(
                 "http://127.0.0.1:1".to_string(),
-                "easynet:///r/realm/device/n1".to_string(),
-                None,
+                TestSessionSigner::random("easynet:///r/realm/device/n1"),
                 None,
                 dispatcher,
                 None,
@@ -1731,8 +1812,7 @@ mod tests {
         let result = dial_and_run_session_with_idle_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
-                caller_ura: owner.to_string(),
-                signing_seed: None,
+                signer: TestSessionSigner::random(owner),
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
@@ -1740,6 +1820,7 @@ mod tests {
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
+                connection_state_sink: isolated_connection_state_sink(),
             },
             &mut SessionPhaseTracker::new(),
         )
@@ -1786,8 +1867,7 @@ mod tests {
         let result = dial_and_run_session_with_idle_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
-                caller_ura: device_ura.to_string(),
-                signing_seed: None,
+                signer: TestSessionSigner::random(device_ura),
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
@@ -1795,6 +1875,7 @@ mod tests {
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: Some(&user_trust_sync),
+                connection_state_sink: isolated_connection_state_sink(),
             },
             &mut SessionPhaseTracker::new(),
         )
@@ -1876,17 +1957,17 @@ mod tests {
             crate::daemon::ability::descriptors::Visibility::Scoped,
         )
         .expect("test descriptor")];
-        let signing_seed = [0x42; 32];
+        let signer = TestSessionSigner::random(device_ura);
         let expected_public_key_hex = hex::encode(
-            ed25519_dalek::SigningKey::from_bytes(&signing_seed)
-                .verifying_key()
+            signer
+                .signing_public_key()
+                .expect("test signer public key")
                 .to_bytes(),
         );
         let result = dial_and_run_session_with_idle_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
-                caller_ura: device_ura.to_string(),
-                signing_seed: Some(signing_seed),
+                signer,
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
@@ -1894,6 +1975,7 @@ mod tests {
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
+                connection_state_sink: isolated_connection_state_sink(),
             },
             &mut SessionPhaseTracker::new(),
         )
@@ -1966,8 +2048,7 @@ mod tests {
         let bogus = std::path::PathBuf::from("/tmp/easynet-test-no-such-ca-file-xyz.pem");
         let result = dial_and_run_session(
             "https://127.0.0.1:1".to_string(),
-            "easynet:///r/realm/device/n1".to_string(),
-            None,
+            TestSessionSigner::random("easynet:///r/realm/device/n1"),
             Some(bogus.as_path()),
             dispatcher,
             None,
@@ -1982,6 +2063,102 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_supervisors_project_only_into_their_injected_sinks() {
+        use crate::daemon::boot::join_connection_state::{
+            load_snapshot, record_snapshot, JoinConnectionSnapshot, JoinConnectionState,
+            JoinTransition,
+        };
+
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        record_snapshot(JoinConnectionSnapshot::from_parts(
+            JoinConnectionState::DisconnectedRemoved,
+            Some(JoinTransition::RemovePresence),
+            "realm",
+            "device-baseline",
+            Some("http://hub.invalid".to_string()),
+            "test.baseline",
+        ));
+
+        let sink_a = Arc::new(InMemorySessionConnectionStateSink::default());
+        let sink_b = Arc::new(InMemorySessionConnectionStateSink::default());
+        let sink_a_port: Arc<dyn SessionConnectionStateSink> = sink_a.clone();
+        let sink_b_port: Arc<dyn SessionConnectionStateSink> = sink_b.clone();
+        let endpoint_a = format!("http://{}", reserve_loopback_addr());
+        let endpoint_b = format!("http://{}", reserve_loopback_addr());
+        let (cancel_a_tx, cancel_a_rx) = tokio::sync::oneshot::channel::<()>();
+        let (cancel_b_tx, cancel_b_rx) = tokio::sync::oneshot::channel::<()>();
+        let (probe_a, admission_a_rx) = initial_session_admission_probe();
+        let (probe_b, admission_b_rx) = initial_session_admission_probe();
+
+        let supervisor_a = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: endpoint_a,
+            signer: TestSessionSigner::random("easynet:///r/realm/device/a"),
+            hub_ca_pem_path: None,
+            dispatcher: Arc::new(RecordingDispatcher::default()),
+            escalation_outbox: None,
+            ability_descriptors: Vec::new(),
+            hub_published_abilities: hub_store(),
+            initial_admission: Some(probe_a),
+            user_trust_sync: None,
+            connection_state_sink: sink_a_port,
+            cancel: cancel_a_rx,
+        }));
+        let supervisor_b = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: endpoint_b,
+            signer: TestSessionSigner::random("easynet:///r/realm/device/b"),
+            hub_ca_pem_path: None,
+            dispatcher: Arc::new(RecordingDispatcher::default()),
+            escalation_outbox: None,
+            ability_descriptors: Vec::new(),
+            hub_published_abilities: hub_store(),
+            initial_admission: Some(probe_b),
+            user_trust_sync: None,
+            connection_state_sink: sink_b_port,
+            cancel: cancel_b_rx,
+        }));
+
+        let (admission_a, admission_b) =
+            tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, async {
+                tokio::join!(admission_a_rx, admission_b_rx)
+            })
+            .await
+            .expect("both supervisors report their first failed admission");
+        assert!(admission_a
+            .expect("supervisor A admission probe remains open")
+            .is_err());
+        assert!(admission_b
+            .expect("supervisor B admission probe remains open")
+            .is_err());
+
+        let _ = cancel_a_tx.send(());
+        let _ = cancel_b_tx.send(());
+        tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, async {
+            let (result_a, result_b) = tokio::join!(supervisor_a, supervisor_b);
+            result_a.expect("supervisor A task did not panic");
+            result_b.expect("supervisor B task did not panic");
+        })
+        .await
+        .expect("both supervisors stop after cancellation");
+
+        for changes in [sink_a.changes(), sink_b.changes()] {
+            assert!(
+                !changes.is_empty(),
+                "each injected sink receives its owner event"
+            );
+            assert!(changes.iter().all(|change| {
+                change.state == JoinConnectionState::ConnectedSuspect
+                    && change.transition == JoinTransition::OpenSelfSession
+                    && change.source == "session.error_reconnecting"
+            }));
+        }
+
+        let persisted = load_snapshot().expect("baseline snapshot remains readable");
+        assert_eq!(persisted.state, "OFFLINE");
+        assert_eq!(persisted.state_code, "F530");
+        assert_eq!(persisted.source, "test.baseline");
+    }
+
     #[tokio::test]
     async fn supervisor_exits_on_cancel() {
         let dispatcher = Arc::new(RecordingDispatcher::default());
@@ -1989,8 +2166,7 @@ mod tests {
 
         let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
             hub_endpoint: "http://127.0.0.1:1".to_string(),
-            caller_ura: "easynet:///r/realm/device/n1".to_string(),
-            signing_seed: None,
+            signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
@@ -1998,6 +2174,7 @@ mod tests {
             hub_published_abilities: hub_store(),
             initial_admission: None,
             user_trust_sync: None,
+            connection_state_sink: isolated_connection_state_sink(),
             cancel: cancel_rx,
         }));
 
@@ -2023,8 +2200,7 @@ mod tests {
 
         let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
             hub_endpoint: "http://127.0.0.1:1".to_string(),
-            caller_ura: "easynet:///r/realm/device/n1".to_string(),
-            signing_seed: None,
+            signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
@@ -2032,6 +2208,7 @@ mod tests {
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
+            connection_state_sink: isolated_connection_state_sink(),
             cancel: cancel_rx,
         }));
 
@@ -2066,8 +2243,7 @@ mod tests {
 
         let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
             hub_endpoint: format!("http://{hub_addr}"),
-            caller_ura: "easynet:///r/realm/device/n1".to_string(),
-            signing_seed: None,
+            signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
@@ -2075,6 +2251,7 @@ mod tests {
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
+            connection_state_sink: isolated_connection_state_sink(),
             cancel: cancel_rx,
         }));
 
@@ -2111,8 +2288,7 @@ mod tests {
 
         let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
             hub_endpoint: format!("http://{addr}"),
-            caller_ura: "easynet:///r/realm/device/n1".to_string(),
-            signing_seed: None,
+            signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
             hub_ca_pem_path: None,
             dispatcher,
             escalation_outbox: None,
@@ -2120,6 +2296,7 @@ mod tests {
             hub_published_abilities: hub_store(),
             initial_admission: Some(probe),
             user_trust_sync: None,
+            connection_state_sink: isolated_connection_state_sink(),
             cancel: cancel_rx,
         }));
 
@@ -2143,8 +2320,7 @@ mod tests {
         let result = dial_and_run_session_with_idle_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
-                caller_ura: "easynet:///r/realm/device/n1".to_string(),
-                signing_seed: None,
+                signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
@@ -2152,6 +2328,7 @@ mod tests {
                 idle_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
+                connection_state_sink: isolated_connection_state_sink(),
             },
             &mut SessionPhaseTracker::new(),
         )
@@ -2174,8 +2351,7 @@ mod tests {
         let result = dial_and_run_session_with_idle_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
-                caller_ura: "easynet:///r/realm/device/n1".to_string(),
-                signing_seed: None,
+                signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
@@ -2183,6 +2359,7 @@ mod tests {
                 idle_timeout: Duration::from_secs(1),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
+                connection_state_sink: isolated_connection_state_sink(),
             },
             &mut SessionPhaseTracker::new(),
         )

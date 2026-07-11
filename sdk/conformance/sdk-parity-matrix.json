@@ -115,13 +115,27 @@
       "shared_cases": ["sdk/conformance/cases/invocation-canonical-material.yaml", "sdk/conformance/cases/invocation-presigned-submit.yaml", "sdk/conformance/cases/invocation-local-daemon-signing-boundary.yaml"],
       "go": {
         "status": "provider-backed",
-        "evidence": [{"kind": "go_test", "ref": "sdk/go/signing_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
+        "evidence": [{"kind": "go_test", "ref": "sdk/go/signing_test.go"}, {"kind": "go_test", "ref": "sdk/go/runtime_identity_test.go"}, {"kind": "go_test", "ref": "sdk/go/conformance_test.go"}]
       },
       "python": {
         "status": "provider-backed",
         "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_signing.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_runtime_identity.py"}, {"kind": "python_test", "ref": "sdk/python/tests/test_conformance.py"}]
       },
-      "remaining": "Go and Python expose daemon-keyring public-key, ensure, and canonical-byte signing providers over the shared local protocol. C ABI still owns local prepare/submit execution, and the remaining cutover is replacing its legacy keyring inventory implementation with that canonical service."
+      "remaining": "Go and Python expose symmetric provider-backed runtime-identity signers over one daemon key-service protocol. External product end-to-end cutover evidence remains incomplete."
+    },
+    {
+      "capability_id": "managed_signing",
+      "profile": "managed_signing",
+      "shared_cases": ["sdk/conformance/cases/managed-signing-provider-lifecycle.yaml"],
+      "go": {
+        "status": "provider-backed",
+        "evidence": [{"kind": "go_test", "ref": "sdk/go/managed_signing_test.go"}, {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/managed-signing-provider-lifecycle.yaml"}]
+      },
+      "python": {
+        "status": "provider-backed",
+        "evidence": [{"kind": "python_test", "ref": "sdk/python/tests/test_managed_signing.py"}, {"kind": "sdk_conformance_case", "ref": "sdk/conformance/cases/managed-signing-provider-lifecycle.yaml"}]
+      },
+      "remaining": "Go and Python share key-service protocol v2, purpose-bound versioned signer policy, verified signatures, bounded pagination, lifecycle, and immutable peer trust anchors; external product administration and signing cutovers remain incomplete."
     },
     {
       "capability_id": "unary_invoke",

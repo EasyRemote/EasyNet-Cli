@@ -47,7 +47,7 @@ use crate::daemon::ability::builtins::{
         voice as voice_call_ability,
     },
 };
-use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
 use crate::daemon::execution::loop_instance::LoopService;
 use crate::daemon::execution::mission::discuss::DiscussService;
 use crate::daemon::execution::permission::PermissionService;
@@ -263,7 +263,7 @@ impl<'a> RegistryBuildConfig<'a> {
             loaders: Arc::new(Vec::new()),
             pages_identity: PagesIdentity::default(),
             local_runtime: None,
-            authority_context: None,
+            authority_context: Some(AbilityAuthorityContext::from_local_environment()),
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
@@ -292,7 +292,7 @@ impl RegistryDaemonBuildConfig {
             loaders: None,
             pages_identity: PagesIdentity::default(),
             local_runtime: None,
-            authority_context: None,
+            authority_context: Some(AbilityAuthorityContext::from_local_environment()),
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
@@ -385,6 +385,27 @@ fn build_registry_with_services_result_inner(
     } = services;
 
     let authority_context = authority_context.unwrap_or_default();
+    let hosts_device_authority = authority_context.hosts_device_authority();
+    // Hub-only assembly must not consult or replay Device product state. Keep
+    // one empty registry view for provider constructors while static owner
+    // admission remains centralized in `StaticRegistration::commit`.
+    let hub_empty_agents = AgentRegistry::default();
+    let agents = if hosts_device_authority {
+        agents
+    } else {
+        &hub_empty_agents
+    };
+    let pages_identity = if hosts_device_authority {
+        pages_identity
+    } else {
+        PagesIdentity::default()
+    };
+    let plugin_registry_mode = if hosts_device_authority {
+        plugin_registry_mode
+    } else {
+        PluginRegistryMode::None
+    };
+    let local_runtime_owners = authority_context.local_runtime_owners();
     let runtime = local_runtime.unwrap_or_else(easynet_axon::invocation::LocalRuntime::new);
     let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
@@ -762,9 +783,9 @@ fn build_registry_with_services_result_inner(
     // the admission gate, not here.
     meta_ability::register(
         &mut reg,
+        local_runtime_owners,
         profiles::load_host_descriptors,
         Arc::clone(&local_registry_handle),
-        pages_identity.user.clone(),
         Arc::clone(&shared_stores.hub_published_abilities),
     );
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
@@ -793,22 +814,26 @@ fn build_registry_with_services_result_inner(
     // reuse the live connection. Parse errors at boot bubble up
     // because a malformed file is an operator typo, not a "no
     // upstreams" condition.
-    let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path();
-    let mcp_svc = match crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path) {
-        Ok(svc) => Arc::new(svc),
-        Err(e) => {
-            let path_display = format!("{}", mcps_path.display());
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = mcp,
-                kind = config_load_failed,
-                level = "warn",
-                path = path_display,
-                error = err_msg,
-                fallback = "empty_service",
-            );
-            Arc::new(crate::daemon::execution::mcp::McpClientService::new())
+    let mcp_svc = if hosts_device_authority {
+        let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path();
+        match crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path) {
+            Ok(svc) => Arc::new(svc),
+            Err(e) => {
+                let path_display = format!("{}", mcps_path.display());
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = mcp,
+                    kind = config_load_failed,
+                    level = "warn",
+                    path = path_display,
+                    error = err_msg,
+                    fallback = "empty_service",
+                );
+                Arc::new(crate::daemon::execution::mcp::McpClientService::new())
+            }
         }
+    } else {
+        Arc::new(crate::daemon::execution::mcp::McpClientService::new())
     };
     mcp_ability::register(&mut reg, mcp_svc.clone());
 
@@ -819,9 +844,11 @@ fn build_registry_with_services_result_inner(
     // `mcp.client.*`, reflective registry below, and exec —
     // shares one connection pool, one config snapshot, one `next_id`
     // sequence per upstream. No silent divergence between surfaces.
-    crate::daemon::ability::builtins::integrations::mcp::executor::set_process_client(
-        mcp_svc.clone(),
-    );
+    if hosts_device_authority {
+        crate::daemon::ability::builtins::integrations::mcp::executor::set_process_client(
+            mcp_svc.clone(),
+        );
+    }
 
     // MCP reflection policy. Direct MCP client abilities are already
     // registered above; this section only decides whether upstream
@@ -852,17 +879,21 @@ fn build_registry_with_services_result_inner(
     // exclusive-pair-of-Option threading across the Arc::new(reg)
     // boundary — every branch is a named variant carrying exactly
     // the data the apply step needs.
-    let reflection_realm = pages_identity
-        .realm
-        .clone()
-        .unwrap_or_else(|| easynet_axon::ura::REALM_EASYNET.to_string());
-    let reflection_plan = crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
-        crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
-        pages_identity.user.as_deref(),
-        &reflection_realm,
-        &mcp_svc,
-        &mut reg,
-    );
+    let reflection_plan = if hosts_device_authority {
+        let reflection_realm = pages_identity
+            .realm
+            .clone()
+            .unwrap_or_else(|| easynet_axon::ura::REALM_EASYNET.to_string());
+        crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
+            crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
+            pages_identity.user.as_deref(),
+            &reflection_realm,
+            &mcp_svc,
+            &mut reg,
+        )
+    } else {
+        crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::Skip
+    };
     // agent.list — operational view of registered LLM
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
@@ -890,6 +921,24 @@ fn build_registry_with_services_result_inner(
                 .unwrap_or(0)
         });
     }
+    let authority_exclusions = reg.static_authority_exclusion_snapshot();
+    if !authority_exclusions.is_empty() {
+        let excluded_total = authority_exclusions.values().sum::<usize>().to_string();
+        let excluded_by_owner = authority_exclusions
+            .iter()
+            .map(|(owner, count)| format!("{owner}:{count}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        crate::op_event!(
+            component = ability_catalog,
+            kind = static_authority_filter_applied,
+            authority_set = reg.authority_set_label(),
+            excluded_total = excluded_total.as_str(),
+            excluded_by_owner = excluded_by_owner.as_str(),
+            message =
+                "static catalogue excluded abilities from owner planes not hosted by this runtime",
+        );
+    }
     let arc = Arc::new(reg);
     // Populate the shared OnceLock now that the registry is wrapped.
     // Both mcp.bridge.call_tool and a2a.bridge.send_task read through
@@ -909,54 +958,56 @@ fn build_registry_with_services_result_inner(
         );
     }
 
-    if let Some(hot_registrar) = hot_agent_registrar_cell.get().cloned() {
-        for (agent_name, entry) in agents.agents.iter() {
-            let outcome = crate::support::async_bridge::run_blocking(
-                hot_registrar.register_agent(agent_name, entry),
-                crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
-            );
-            if outcome.runtime_not_ready || outcome.catalog_not_ready || outcome.failed > 0 {
-                let failed = outcome.failed.to_string();
-                let runtime_not_ready = outcome.runtime_not_ready.to_string();
-                let catalog_not_ready = outcome.catalog_not_ready.to_string();
-                crate::op_event!(
-                    component = agents_boot,
-                    kind = hosted_agent_dynamic_replay_failed,
-                    level = "warn",
-                    agent = agent_name.as_str(),
-                    failed = failed.as_str(),
-                    runtime_not_ready = runtime_not_ready.as_str(),
-                    catalog_not_ready = catalog_not_ready.as_str(),
-                    message = "hosted-agent ability replay did not fully register",
+    if hosts_device_authority {
+        if let Some(hot_registrar) = hot_agent_registrar_cell.get().cloned() {
+            for (agent_name, entry) in agents.agents.iter() {
+                let outcome = crate::support::async_bridge::run_blocking(
+                    hot_registrar.register_agent(agent_name, entry),
+                    crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
                 );
+                if outcome.runtime_not_ready || outcome.catalog_not_ready || outcome.failed > 0 {
+                    let failed = outcome.failed.to_string();
+                    let runtime_not_ready = outcome.runtime_not_ready.to_string();
+                    let catalog_not_ready = outcome.catalog_not_ready.to_string();
+                    crate::op_event!(
+                        component = agents_boot,
+                        kind = hosted_agent_dynamic_replay_failed,
+                        level = "warn",
+                        agent = agent_name.as_str(),
+                        failed = failed.as_str(),
+                        runtime_not_ready = runtime_not_ready.as_str(),
+                        catalog_not_ready = catalog_not_ready.as_str(),
+                        message = "hosted-agent ability replay did not fully register",
+                    );
+                }
             }
-        }
 
-        // Forget tombstones converge here, after the learner runtimes are
-        // replayed above: a forget that degraded on the "runtime not yet
-        // wired" path left its row in Forgetting, occupying the slot forever
-        // until an explicit retry. Re-drive those rows now that convergence is
-        // possible so the slot is freed and the descriptor can be re-acquired.
-        match teach_ability::recover_forget_transactions(Some(&hot_agent_registrar_cell)) {
-            Ok(recovered) if recovered > 0 => {
-                let recovered = recovered.to_string();
-                crate::op_event!(
-                    component = agents_boot,
-                    kind = forget_tombstone_recovery_completed,
-                    recovered = recovered.as_str(),
-                    message = "converged stuck forget tombstones after hosted-agent replay",
-                );
-            }
-            Ok(_) => {}
-            Err(err) => {
-                let err_msg = format!("{err}");
-                crate::op_event!(
-                    component = agents_boot,
-                    kind = forget_tombstone_recovery_failed,
-                    level = "warn",
-                    error = err_msg,
-                    message = "forget tombstone recovery sweep did not complete",
-                );
+            // Forget tombstones converge here, after the learner runtimes are
+            // replayed above: a forget that degraded on the "runtime not yet
+            // wired" path left its row in Forgetting, occupying the slot forever
+            // until an explicit retry. Re-drive those rows now that convergence is
+            // possible so the slot is freed and the descriptor can be re-acquired.
+            match teach_ability::recover_forget_transactions(Some(&hot_agent_registrar_cell)) {
+                Ok(recovered) if recovered > 0 => {
+                    let recovered = recovered.to_string();
+                    crate::op_event!(
+                        component = agents_boot,
+                        kind = forget_tombstone_recovery_completed,
+                        recovered = recovered.as_str(),
+                        message = "converged stuck forget tombstones after hosted-agent replay",
+                    );
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    let err_msg = format!("{err}");
+                    crate::op_event!(
+                        component = agents_boot,
+                        kind = forget_tombstone_recovery_failed,
+                        level = "warn",
+                        error = err_msg,
+                        message = "forget tombstone recovery sweep did not complete",
+                    );
+                }
             }
         }
     }
@@ -1040,20 +1091,28 @@ pub fn build_registry_for_daemon_result(
         hot_agent_registrar_cell,
         shared_stores,
     } = config;
-    recover_descriptor_import_transactions_before_daemon_registry_boot()?;
-    let agents = match crate::daemon::persistence::agent_registry::load_agents() {
-        Ok(r) => r,
-        Err(e) => {
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = agent_registry,
-                kind = load_failed,
-                level = "warn",
-                error = err_msg,
-                fallback = "empty_registry",
-            );
-            AgentRegistry::default()
+    let hosts_device_authority = authority_context
+        .as_ref()
+        .map(AbilityAuthorityContext::hosts_device_authority)
+        .unwrap_or(true);
+    let agents = if hosts_device_authority {
+        recover_descriptor_import_transactions_before_daemon_registry_boot()?;
+        match crate::daemon::persistence::agent_registry::load_agents() {
+            Ok(r) => r,
+            Err(e) => {
+                let err_msg = format!("{e}");
+                crate::op_event!(
+                    component = agent_registry,
+                    kind = load_failed,
+                    level = "warn",
+                    error = err_msg,
+                    fallback = "empty_registry",
+                );
+                AgentRegistry::default()
+            }
         }
+    } else {
+        AgentRegistry::default()
     };
     let loaders = loaders.unwrap_or_else(|| {
         Arc::new(context_loaders::default_loaders(Arc::clone(

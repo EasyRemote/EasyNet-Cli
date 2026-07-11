@@ -147,69 +147,6 @@ class SignatureProvider(Protocol):
 
 
 @dataclass(frozen=True)
-class Ed25519SignatureProvider:
-    """Signs daemon/Axon-provided canonical bytes with a local Ed25519 key seed."""
-
-    private_key_seed: bytes
-    public_key_base64: str = ""
-
-    @classmethod
-    def from_seed_base64(
-        cls, seed_base64: str, *, public_key_base64: str = ""
-    ) -> "Ed25519SignatureProvider":
-        return cls(
-            private_key_seed=_decode_base64_field(seed_base64, "private_key_seed"),
-            public_key_base64=public_key_base64,
-        )
-
-    @classmethod
-    def from_seed_hex(
-        cls, seed_hex: str, *, public_key_base64: str = ""
-    ) -> "Ed25519SignatureProvider":
-        if not isinstance(seed_hex, str) or seed_hex.strip() == "":
-            raise _invalid_prepared("private_key_seed is required")
-        try:
-            seed = bytes.fromhex(seed_hex)
-        except ValueError as exc:
-            raise _invalid_prepared("private_key_seed must be hex", exc) from exc
-        return cls(private_key_seed=seed, public_key_base64=public_key_base64)
-
-    def sign(
-        self, material: SigningMaterial, handle: SignerHandle
-    ) -> InvocationSignature:
-        _validate_ed25519_algorithm(material.algorithm, "signing material")
-        _validate_ed25519_algorithm(handle.algorithm, "signer handle")
-        _validate_ed25519_seed(self.private_key_seed)
-        canonical_bytes = _decode_base64_field(
-            material.canonical_bytes_base64, "canonical_bytes_base64"
-        )
-        private_key = _ed25519_private_key_from_seed(self.private_key_seed)
-        public_key = private_key.public_key()
-        public_key_base64 = _ed25519_public_key_base64(public_key)
-        _validate_expected_public_key(
-            public_key_base64, self.public_key_base64, "provider public key"
-        )
-        metadata_public_key = handle.metadata.get("public_key_base64")
-        if metadata_public_key is not None:
-            if not isinstance(metadata_public_key, str):
-                raise _invalid_prepared("signer handle public_key_base64 must be a string")
-            _validate_expected_public_key(
-                public_key_base64,
-                metadata_public_key,
-                "signer handle public key",
-            )
-        signature = private_key.sign(canonical_bytes)
-        if len(signature) != 64:
-            raise _invalid_prepared("ed25519 signature length is invalid")
-        return InvocationSignature(
-            algorithm="ed25519",
-            signature_base64=base64.b64encode(signature).decode("ascii"),
-            key_id_hint=handle.signer_id,
-            signer_public_key_base64=public_key_base64,
-        )
-
-
-@dataclass(frozen=True)
 class StaticSignatureProvider:
     """Adapter for already-produced signatures without exposing envelope logic."""
 
@@ -409,63 +346,6 @@ def _normalize_signature(
         key_id_hint=handle.signer_id,
         signer_public_key_base64=signature.signer_public_key_base64,
     )
-
-
-def _validate_ed25519_algorithm(value: str, source: str) -> None:
-    if value and value.lower() != "ed25519":
-        raise _invalid_prepared(f"{source} algorithm must be ed25519")
-
-
-def _validate_ed25519_seed(seed: bytes) -> None:
-    if not isinstance(seed, bytes):
-        raise _invalid_prepared("private_key_seed must be bytes")
-    if len(seed) != 32:
-        raise _invalid_prepared("private_key_seed must be 32 bytes")
-
-
-def _ed25519_private_key_from_seed(seed: bytes):
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-            Ed25519PrivateKey,
-        )
-    except ImportError as exc:
-        raise SDKError(
-            code=ErrorCode.NOT_IMPLEMENTED,
-            stage="prepare",
-            retry=RetryHint.NEVER,
-            retryable=False,
-            message="Ed25519SignatureProvider requires the cryptography package",
-            cause=exc,
-        ) from exc
-    try:
-        return Ed25519PrivateKey.from_private_bytes(seed)
-    except ValueError as exc:
-        raise _invalid_prepared("private_key_seed is not a valid Ed25519 seed", exc) from exc
-
-
-def _ed25519_public_key_base64(public_key) -> str:
-    from cryptography.hazmat.primitives import serialization
-
-    raw = public_key.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    if len(raw) != 32:
-        raise _invalid_prepared("ed25519 public key length is invalid")
-    return base64.b64encode(raw).decode("ascii")
-
-
-def _validate_expected_public_key(
-    actual_base64: str, expected_base64: str, source: str
-) -> None:
-    if expected_base64 == "":
-        return
-    expected = _decode_base64_field(expected_base64, source)
-    actual = _decode_base64_field(actual_base64, "derived public key")
-    if len(expected) != 32:
-        raise _invalid_prepared(f"{source} must be 32 bytes")
-    if expected != actual:
-        raise _invalid_prepared(f"{source} does not match private key")
 
 
 def _validate_canonical_material_hash(

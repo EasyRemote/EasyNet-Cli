@@ -177,11 +177,17 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
             impl_content_hash,
         } = self.registration;
         let authority_root = authority_scope.authority_root().to_string();
-        let ability_ura = crate::core::ura::owner_ability_ura(&authority_root, &ability)
-            .ok_or_else(
+        // Registry keys are implementation-qualified (`device.fs.read`,
+        // `alice.chat`); Ability URAs are owner-local protocol identities.
+        // Persist the canonical public projection in the descriptor record
+        // while keeping the registry key unchanged for execution lookup.
+        let public_ability_name =
+            crate::core::ura::descriptor_public_ability_name(&authority_root, &ability);
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&authority_root, &public_ability_name).ok_or_else(
                 || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
                     authority_root: authority_root.clone(),
-                    ability: ability.clone(),
+                    ability: public_ability_name.clone(),
                 },
             )?;
         let descriptor = AbilityDescriptorRecord::for_ability_ura(
@@ -825,6 +831,31 @@ mod tests {
             default_lookup.unwrap().descriptor().version().as_str(),
             "2.3.4"
         );
+    }
+
+    #[test]
+    fn register_persists_owner_local_ability_ura_without_execution_prefix() {
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let record = registry
+            .register(
+                "assistant.chat",
+                CallMode::Rpc,
+                None,
+                AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
+                RuntimeEnv::daemon_native(),
+                AbilityImplSource::NativeDaemon,
+            )
+            .unwrap();
+
+        assert_eq!(record.descriptor().name(), "assistant.chat");
+        assert_eq!(
+            record.descriptor().ability_ura(),
+            "easynet:///r/default/ability/user.assistant.chat"
+        );
+        assert!(registry
+            .get("assistant.chat")
+            .expect("single record lookup is unambiguous")
+            .is_some());
     }
 
     #[test]

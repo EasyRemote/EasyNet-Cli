@@ -6,9 +6,9 @@ use tonic::transport::Channel;
 
 use super::prelude::{invoke_prelude_unary, signed_prelude_request};
 use super::tasks::AbortOnDrop;
-use super::SessionSigningSeed;
 use super::{SessionUpSender, SESSION_UP_HEARTBEAT_INTERVAL};
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
+use crate::daemon::identity::self_identity::CanonicalSigner;
 
 pub(super) struct SessionUpHeartbeatTask {
     handle: tokio::task::JoinHandle<()>,
@@ -63,8 +63,7 @@ const MAX_HEARTBEAT_LEASE_REFRESH_OWNERS: usize = 64;
 
 pub(super) fn spawn_federation_heartbeat(
     channel: Channel,
-    caller_ura: String,
-    signing_seed: Option<SessionSigningSeed>,
+    signer: Arc<dyn CanonicalSigner>,
     hub_published_abilities: Arc<HubPublishedAbilityStore>,
 ) -> AbortOnDrop {
     AbortOnDrop(tokio::spawn(async move {
@@ -75,8 +74,7 @@ pub(super) fn spawn_federation_heartbeat(
             tokio::time::sleep(FEDERATION_HEARTBEAT_INTERVAL).await;
             match send_federation_heartbeat(
                 &mut heartbeat_client,
-                &caller_ura,
-                signing_seed,
+                signer.as_ref(),
                 &hub_published_abilities,
             )
             .await
@@ -121,10 +119,10 @@ pub(super) fn spawn_federation_heartbeat(
 /// cursor-load failure still refreshes device liveness.
 async fn send_federation_heartbeat(
     client: &mut easynet_axon::pb::axon::v1::invocation_client::InvocationClient<Channel>,
-    caller_ura: &str,
-    signing_seed: Option<SessionSigningSeed>,
+    signer: &dyn CanonicalSigner,
     hub_published_abilities: &HubPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
+    let caller_ura = signer.owner_ura();
     let mut refresh_owner_uras =
         crate::daemon::federation::read_model::owner_projection::heartbeat_refresh_owner_uras()
             .unwrap_or_default();
@@ -136,13 +134,8 @@ async fn send_federation_heartbeat(
     });
     let arguments = serde_json::to_vec(&body)
         .map_err(|e| tonic::Status::internal(format!("federation.heartbeat serialize: {e}")))?;
-    let request = signed_prelude_request(
-        caller_ura,
-        caller_ura,
-        "federation.heartbeat",
-        arguments,
-        signing_seed,
-    )?;
+    let request =
+        signed_prelude_request(signer, caller_ura, "federation.heartbeat", arguments).await?;
     let response = invoke_prelude_unary(client, request, "federation.heartbeat").await?;
     let body_bytes = response.result;
     if !body_bytes.is_empty() {

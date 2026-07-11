@@ -1,5 +1,4 @@
 import base64
-from dataclasses import replace
 import unittest
 
 try:
@@ -13,7 +12,6 @@ except ImportError:
     CRYPTOGRAPHY_AVAILABLE = False
 
 from easynet_sdk import (
-    Ed25519SignatureProvider,
     ErrorCode,
     InvocationSignature,
     PreparedInvocation,
@@ -417,15 +415,12 @@ class SigningTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     @unittest.skipUnless(CRYPTOGRAPHY_AVAILABLE, "cryptography is not installed")
-    def test_ed25519_provider_signs_daemon_canonical_bytes(self) -> None:
+    def test_external_provider_implements_generic_signing_seam(self) -> None:
         seed = bytes([0x11]) * 32
         public_key_base64 = ed25519_public_key_base64(seed)
         prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
         handle = signer_handle(public_key_base64=public_key_base64)
-        provider = Ed25519SignatureProvider(
-            private_key_seed=seed,
-            public_key_base64=public_key_base64,
-        )
+        provider = _Ed25519TestProvider(seed)
 
         signed = Signer(handle=handle, provider=provider).sign(prepared)
 
@@ -441,46 +436,6 @@ class SigningTests(unittest.TestCase):
                 prepared.signing_material.canonical_bytes_base64, validate=True
             ),
         )
-
-    @unittest.skipUnless(CRYPTOGRAPHY_AVAILABLE, "cryptography is not installed")
-    def test_ed25519_provider_rejects_handle_public_key_mismatch(self) -> None:
-        seed = bytes([0x11]) * 32
-        wrong_public_key = ed25519_public_key_base64(bytes([0x22]) * 32)
-        prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
-        handle = signer_handle(public_key_base64=wrong_public_key)
-        provider = Ed25519SignatureProvider(private_key_seed=seed)
-
-        with self.assertRaises(SDKError) as caught:
-            Signer(handle=handle, provider=provider).sign(prepared)
-
-        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
-
-    def test_ed25519_provider_rejects_malformed_seed(self) -> None:
-        prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
-        provider = Ed25519SignatureProvider.from_seed_base64(
-            base64.b64encode(b"short").decode("ascii")
-        )
-
-        with self.assertRaises(SDKError) as caught:
-            Signer(handle=signer_handle(), provider=provider).sign(prepared)
-
-        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
-
-    def test_ed25519_provider_rejects_unsupported_material_algorithm(self) -> None:
-        prepared = PreparedInvocation.from_json(PREPARED_FIXTURE)
-        prepared = replace(
-            prepared,
-            signing_material=replace(
-                prepared.signing_material,
-                algorithm="secp256k1",
-            ),
-        )
-        provider = Ed25519SignatureProvider(private_key_seed=bytes([0x11]) * 32)
-
-        with self.assertRaises(SDKError) as caught:
-            Signer(handle=signer_handle(), provider=provider).sign(prepared)
-
-        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_signer_rejects_policy_mismatch(self) -> None:
         prepared = PreparedInvocation.from_json(
@@ -584,6 +539,29 @@ def ed25519_public_key_base64(seed: bytes) -> str:
 def verify_ed25519_signature(seed: bytes, signature: bytes, message: bytes) -> None:
     assert Ed25519PrivateKey is not None
     Ed25519PrivateKey.from_private_bytes(seed).public_key().verify(signature, message)
+
+
+class _Ed25519TestProvider:
+    """Test-only consumer implementation of the generic provider seam."""
+
+    def __init__(self, seed: bytes) -> None:
+        assert Ed25519PrivateKey is not None
+        self._private_key = Ed25519PrivateKey.from_private_bytes(seed)
+
+    def sign(self, material, handle) -> InvocationSignature:
+        public_key = self._private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        signature = self._private_key.sign(
+            base64.b64decode(material.canonical_bytes_base64, validate=True)
+        )
+        return InvocationSignature(
+            algorithm="ed25519",
+            signature_base64=base64.b64encode(signature).decode("ascii"),
+            key_id_hint=handle.signer_id,
+            signer_public_key_base64=base64.b64encode(public_key).decode("ascii"),
+        )
 
 
 if __name__ == "__main__":

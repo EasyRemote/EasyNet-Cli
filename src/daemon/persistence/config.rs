@@ -62,7 +62,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,6 +79,60 @@ pub(crate) enum WritePermissions {
     /// Owner-only read/write (`0o600`). Used for credentials and any
     /// file that must never be world-readable.
     OwnerReadWrite,
+}
+
+/// Whether an atomic replacement is known to have crossed the rename commit
+/// point.
+///
+/// Callers that maintain an in-memory projection must distinguish these two
+/// states.  Before rename, rolling memory back is correct.  After rename, the
+/// replacement is already visible and rolling memory back would create two
+/// conflicting truths; the caller must retain the replacement and fail-stop
+/// until the parent directory has been re-synchronised on restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AtomicWriteCommitState {
+    NotCommitted,
+    ReplacementVisibleButDurabilityUncertain,
+}
+
+impl std::fmt::Display for AtomicWriteCommitState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotCommitted => f.write_str("not committed"),
+            Self::ReplacementVisibleButDurabilityUncertain => {
+                f.write_str("replacement visible but durability uncertain")
+            }
+        }
+    }
+}
+
+/// Failure from the shared atomic-replacement primitive, including the exact
+/// commit state at which it failed.
+#[derive(Debug, thiserror::Error)]
+#[error("atomic write {commit_state}: {source}")]
+pub(crate) struct AtomicWriteError {
+    commit_state: AtomicWriteCommitState,
+    source: anyhow::Error,
+}
+
+impl AtomicWriteError {
+    fn not_committed(source: impl Into<anyhow::Error>) -> Self {
+        Self {
+            commit_state: AtomicWriteCommitState::NotCommitted,
+            source: source.into(),
+        }
+    }
+
+    fn durability_uncertain(source: impl Into<anyhow::Error>) -> Self {
+        Self {
+            commit_state: AtomicWriteCommitState::ReplacementVisibleButDurabilityUncertain,
+            source: source.into(),
+        }
+    }
+
+    pub(crate) fn commit_state(&self) -> AtomicWriteCommitState {
+        self.commit_state
+    }
 }
 
 /// Atomic write: stage in a per-writer temp file, fsync, optionally chmod,
@@ -100,12 +154,14 @@ pub(crate) enum WritePermissions {
 ///   a power loss after `rename` can leave the filesystem pointing the
 ///   new name at unflushed (possibly empty) data.
 ///
-/// - **`chmod` before rename** closes the permissions race: if we
-///   `rename` first and `chmod` after, another process can `open` the
-///   file in the window between the two syscalls and read it with the
-///   default (world-readable on most systems) mode. Applying the mode
-///   to the temp file first means the file is *never* visible at the
-///   target path with the wrong permissions.
+/// - **Owner-only mode at `open(2)`** closes both permissions races: a
+///   sensitive temp file is created as `0600`, then its mode is reasserted
+///   before rename. Neither the staging name nor the target name is ever
+///   visible with the platform's broader default mode.
+///
+/// - **`create_new` staging** prevents a stale or attacker-planted temp path
+///   from being truncated or followed as a symlink. A collision fails closed
+///   and is cleaned up; it never mutates the target.
 ///
 /// - **Best-effort cleanup** removes the staged tmp if any step fails,
 ///   so a crash-loop doesn't gradually fill the directory with
@@ -120,7 +176,24 @@ pub(crate) fn atomic_write_with_permissions(
     path: &Path,
     data: &[u8],
     perms: WritePermissions,
-) -> anyhow::Result<()> {
+) -> Result<(), AtomicWriteError> {
+    atomic_write_with_permissions_and_sync(path, data, perms, sync_directory)
+}
+
+/// Atomic replacement with an injectable parent-directory synchroniser.
+///
+/// The injection seam is deliberately below all callers and above the commit
+/// classification so tests can prove post-rename behaviour without a second,
+/// subtly different writer implementation.
+pub(crate) fn atomic_write_with_permissions_and_sync<F>(
+    path: &Path,
+    data: &[u8],
+    perms: WritePermissions,
+    sync: F,
+) -> Result<(), AtomicWriteError>
+where
+    F: FnOnce(&Path) -> anyhow::Result<()>,
+{
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let dir = path.parent().unwrap_or(Path::new("."));
     let base = path
@@ -133,7 +206,14 @@ pub(crate) fn atomic_write_with_permissions(
     // Stage: open the temp file, write the payload, fsync, apply
     // permissions. Any failure on this path removes the temp file.
     let staged = (|| -> std::io::Result<()> {
-        let mut f = File::create(&tmp)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if matches!(perms, WritePermissions::OwnerReadWrite) {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut f = options.open(&tmp)?;
         f.write_all(data)?;
         f.sync_all()?;
         #[cfg(unix)]
@@ -147,7 +227,7 @@ pub(crate) fn atomic_write_with_permissions(
     })();
     if let Err(e) = staged {
         let _ = fs::remove_file(&tmp);
-        return Err(e.into());
+        return Err(AtomicWriteError::not_committed(e));
     }
 
     // Commit: swing the directory entry atomically onto `path`. On
@@ -155,9 +235,9 @@ pub(crate) fn atomic_write_with_permissions(
     // cleaned up so we don't leak.
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
-        return Err(e.into());
+        return Err(AtomicWriteError::not_committed(e));
     }
-    sync_directory(dir)
+    sync(dir).map_err(AtomicWriteError::durability_uncertain)
 }
 
 /// Sync a directory after a metadata mutation such as `rename` or
@@ -194,7 +274,7 @@ pub(crate) fn sync_parent_dir(path: &Path) -> anyhow::Result<()> {
 /// common case of no special permissions. Preserved so the existing
 /// ~20 call sites stay terse; new call sites that need owner-only
 /// permissions should use the explicit form.
-pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AtomicWriteError> {
     atomic_write_with_permissions(path, data, WritePermissions::Default)
 }
 
@@ -851,6 +931,27 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_classifies_post_rename_directory_sync_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("state.json");
+        fs::write(&target, b"old").unwrap();
+
+        let error = atomic_write_with_permissions_and_sync(
+            &target,
+            b"new",
+            WritePermissions::OwnerReadWrite,
+            |_| anyhow::bail!("injected parent-directory fsync failure"),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.commit_state(),
+            AtomicWriteCommitState::ReplacementVisibleButDurabilityUncertain
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"new");
     }
 
     /// On Unix, owner-only permissions must be visible to a reader the

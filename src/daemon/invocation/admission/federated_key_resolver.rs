@@ -57,8 +57,8 @@ use easynet_axon::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, 
 use ed25519_dalek::VerifyingKey;
 
 use crate::daemon::federation::client::FederationClient;
+use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::peer_envelope_signer::PeerInvokeRequest;
-use crate::daemon::invocation::bidi::session_initiator::SessionSigningSeed;
 use crate::daemon::trust::anchor::RealmTrustAnchor;
 #[cfg(test)]
 use easynet_axon::pb::axon::v1::InvokeRequest;
@@ -158,7 +158,7 @@ pub struct FederatedKeyResolver {
     /// admission call and never deliver any savings.
     cache: SharedFederatedKeyCache,
     cache_ttl: Duration,
-    hub_signing_seed: Option<SessionSigningSeed>,
+    hub_signer: Option<Arc<dyn CanonicalSigner>>,
 }
 
 impl FederatedKeyResolver {
@@ -182,7 +182,7 @@ impl FederatedKeyResolver {
             presented_pubkey_b64: None,
             cache: SharedFederatedKeyCache::new(),
             cache_ttl: DEFAULT_FEDERATED_RESOLVE_CACHE_TTL,
-            hub_signing_seed: None,
+            hub_signer: None,
         }
     }
 
@@ -219,13 +219,12 @@ impl FederatedKeyResolver {
         self
     }
 
-    /// Attach the local hub signing seed used for outbound
-    /// cross-hub `federation.resolve_key` requests. Absence remains
-    /// fail-closed in production because the shared peer signer will
-    /// require the persisted hub identity seed.
+    /// Attach the owner-bound signing capability used for outbound cross-hub
+    /// `federation.resolve_key` requests. The resolver never receives or
+    /// derives private key material.
     #[must_use]
-    pub fn with_hub_signing_seed(mut self, seed: Option<&SessionSigningSeed>) -> Self {
-        self.hub_signing_seed = seed.copied();
+    pub fn with_hub_signer(mut self, signer: Arc<dyn CanonicalSigner>) -> Self {
+        self.hub_signer = Some(signer);
         self
     }
 
@@ -429,15 +428,21 @@ impl FederatedKeyResolver {
                     .with_reason("resolve_key_subject_build")
                     .with_message(format!("peer_hub_ura:{peer_hub_ura}:ability:{ability}"))
             })?;
-        let request = PeerInvokeRequest::new(
+        let request_builder = PeerInvokeRequest::new(
             None,
             &subject_ura,
             ability,
             args_bytes,
             Some(self_realm),
-            self.hub_signing_seed.as_ref(),
-        )
-        .into_invoke_request()
+            self.hub_signer.as_deref(),
+        );
+        // `KeyResolver` is a synchronous Axon port. Enter Tokio's explicit
+        // blocking region before awaiting the async signer so key-service UDS
+        // I/O remains on `spawn_blocking`, never on an admission worker.
+        let request = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async { request_builder.into_invoke_request().await })
+        })
         .map_err(|status| {
             AxonError::new(AxonErrorKind::Internal)
                 .with_reason("resolve_key_peer_request_build")
@@ -535,9 +540,17 @@ fn caller_key_not_found(agent_ura: &str, detail: &str) -> AxonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
     use ed25519_dalek::SigningKey;
     use std::collections::BTreeMap;
+
+    fn test_hub_signer(realm: &str) -> Arc<dyn CanonicalSigner> {
+        Arc::new(TestCanonicalSigner::new(
+            crate::core::ura::hub_ura(realm),
+            [0x31; 32],
+        ))
+    }
 
     fn ed25519_pubkey_b64() -> (SigningKey, String) {
         // Deterministic test key (zero seed). Acceptable because
@@ -669,10 +682,37 @@ mod tests {
             Some(client),
             Arc::new(peers),
             Some("realm-a".to_string()),
-        );
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
 
         let key = resolver.resolve(cross_ura).expect("federated hit");
         assert_eq!(key.to_bytes().len(), 32);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cross_realm_resolution_fails_closed_without_hub_signer() {
+        let (_signing, pk_b64) = ed25519_pubkey_b64();
+        let cross_ura = "easynet:///r/realm-b/device/peer-device";
+        let mut peers = BTreeMap::new();
+        peers.insert("realm-b".to_string(), "https://hub-b:50443".to_string());
+        let client: Arc<dyn FederationClient> = Arc::new(CannedFederationClient {
+            canned_response: serde_json::to_vec(&serde_json::json!({
+                "public_key_b64": pk_b64,
+            }))
+            .unwrap(),
+        });
+        let resolver = FederatedKeyResolver::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some(client),
+            Arc::new(peers),
+            Some("realm-a".to_string()),
+        );
+
+        let error = resolver
+            .resolve(cross_ura)
+            .expect_err("cross-hub key resolution must require a hub signer");
+        assert_eq!(error.reason, "resolve_key_peer_request_build");
+        assert!(error.message.contains("configured hub signer"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -711,7 +751,8 @@ mod tests {
             Some(client),
             Arc::new(peers),
             Some("realm-a".to_string()),
-        );
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
 
         // INV-4 fail-closed: dial failure → CALLER_KEY_NOT_FOUND,
         // NOT a silent local fall-through.
@@ -741,7 +782,8 @@ mod tests {
             Some(client),
             Arc::new(peers),
             Some("realm-a".to_string()),
-        );
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
 
         let err = resolver
             .resolve(same_realm_ura)
@@ -874,7 +916,8 @@ mod tests {
             Some(client),
             Arc::new(peers),
             Some("realm-a".to_string()),
-        );
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
 
         let k1 = resolver.resolve(cross_ura).expect("dial 1");
         let k2 = resolver.resolve(cross_ura).expect("cache hit");
@@ -905,6 +948,7 @@ mod tests {
             Arc::new(peers),
             Some("realm-a".to_string()),
         )
+        .with_hub_signer(test_hub_signer("realm-a"))
         .with_cache_ttl(Duration::from_millis(50));
 
         let _ = resolver.resolve(cross_ura).expect("dial 1");
@@ -935,7 +979,8 @@ mod tests {
             Some(client),
             Arc::new(peers),
             Some("realm-a".to_string()),
-        );
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
 
         let _ = resolver.resolve(cross_ura).expect("dial 1");
         assert_eq!(resolver.cache_len(), 1);
@@ -962,7 +1007,8 @@ mod tests {
             Some(client),
             Arc::new(peers),
             Some("realm-a".to_string()),
-        );
+        )
+        .with_hub_signer(test_hub_signer("realm-a"));
 
         let _ = resolver.resolve(cross_ura).expect_err("dial fails");
         assert_eq!(
@@ -1020,6 +1066,7 @@ mod tests {
             Arc::clone(&peers),
             Some("realm-a".to_string()),
         )
+        .with_hub_signer(test_hub_signer("realm-a"))
         .with_cache(cache.clone())
         .with_presented_pubkey_b64(pk_a.clone())
         .resolve(user_ura)
@@ -1028,6 +1075,7 @@ mod tests {
         let client_dyn: Arc<dyn FederationClient> = client.clone();
         let key_b =
             FederatedKeyResolver::new(anchor, Some(client_dyn), peers, Some("realm-a".to_string()))
+                .with_hub_signer(test_hub_signer("realm-a"))
                 .with_cache(cache)
                 .with_presented_pubkey_b64(pk_b.clone())
                 .resolve(user_ura)
@@ -1076,6 +1124,7 @@ mod tests {
             Arc::new(peers),
             Some("realm-a".to_string()),
         )
+        .with_hub_signer(test_hub_signer("realm-a"))
         // We present key_b; the peer's key_a must be rejected.
         .with_presented_pubkey_b64(pk_b);
 

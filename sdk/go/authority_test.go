@@ -48,7 +48,7 @@ func TestSessionAuthorityFromMetadataProjectsTypedAuthority(t *testing.T) {
 	}
 	if authority.IssuerURA != "easynet:///r/example/agent/backend" ||
 		authority.SessionID != "session-1" ||
-		authority.SubjectURA != "easynet:///r/example/session/session-1" {
+		authority.SubjectURA != "easynet:///r/example/resource/user.alice/session/session-1" {
 		t.Fatalf("unexpected session authority projection: %#v", authority)
 	}
 	metadata, err := authority.Metadata()
@@ -71,7 +71,7 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
 		CalleeURA:                "easynet:///r/example/device/dev-a",
-		SubjectURA:               "easynet:///r/example/session/session-1",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
 		Audience:                 "easynet:///r/example/device/dev-a",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
@@ -94,8 +94,13 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 		t.Fatalf("canonical payload used non-generic authority fields: %#v", projected)
 	}
 
-	if err := authority.Sign(privateKey); err != nil {
-		t.Fatalf("Sign: %v", err)
+	if err := authority.SignWith(testCanonicalSigner{
+		publicKey: publicKey,
+		sign: func(payload []byte) ([]byte, error) {
+			return ed25519.Sign(privateKey, payload), nil
+		},
+	}); err != nil {
+		t.Fatalf("SignWith: %v", err)
 	}
 	if len(authority.Signature) == 0 {
 		t.Fatalf("Sign did not populate signature")
@@ -146,6 +151,19 @@ func TestSessionAuthorityRawSigningRoundTrip(t *testing.T) {
 	if decoded.IsExpired(time.UnixMilli(1999)) || !decoded.IsExpired(time.UnixMilli(2000)) {
 		t.Fatalf("expiry boundary drifted for decoded authority")
 	}
+}
+
+type testCanonicalSigner struct {
+	publicKey ed25519.PublicKey
+	sign      func([]byte) ([]byte, error)
+}
+
+func (sign testCanonicalSigner) SignCanonical(payload []byte) ([]byte, error) {
+	return sign.sign(payload)
+}
+
+func (sign testCanonicalSigner) SigningPublicKey() (ed25519.PublicKey, error) {
+	return append(ed25519.PublicKey(nil), sign.publicKey...), nil
 }
 
 func TestInvocationBuilderAttachesOneAuthorityMetadata(t *testing.T) {
@@ -260,7 +278,7 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
 		CalleeURA:                "easynet:///r/example/device/dev-a",
-		SubjectURA:               "easynet:///r/example/session/session-1",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
 		Audience:                 "easynet:///r/example/device/dev-a",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
@@ -307,7 +325,7 @@ func TestAuthorityClientRejectsInvalidMintBeforeTransport(t *testing.T) {
 		SessionOwnerUserID:       "alice",
 		CreatorPrincipalID:       "easynet:///r/example/agent/backend",
 		CalleeURA:                "easynet:///r/example/device/dev-a",
-		SubjectURA:               "easynet:///r/example/session/session-1",
+		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
 		Audience:                 "easynet:///r/example/device/dev-a",
 		Scopes:                   []string{"device.observe.*"},
 		AllowedActions:           []string{"read"},
@@ -384,7 +402,7 @@ func sessionAuthorityPayloadFixture() map[string]any {
 		"session_owner_user_id":      "alice",
 		"creator_principal_id":       "easynet:///r/example/agent/backend",
 		"callee_ura":                 "easynet:///r/example/device/dev-a",
-		"subject_ura":                "easynet:///r/example/session/session-1",
+		"subject_ura":                "easynet:///r/example/resource/user.alice/session/session-1",
 		"audience":                   "easynet:///r/example/device/dev-a",
 		"scopes":                     []string{"device.observe.*"},
 		"allowed_actions":            []string{"read"},

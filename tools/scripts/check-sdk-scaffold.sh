@@ -9,6 +9,16 @@ fail() {
   failures+=("$1")
 }
 
+abort_if_failed() {
+  if [[ "${#failures[@]}" -eq 0 ]]; then
+    return
+  fi
+
+  printf 'check-sdk-scaffold failed:\n' >&2
+  printf ' - %s\n' "${failures[@]}" >&2
+  exit 1
+}
+
 require_file() {
   local path="$1"
   [[ -f "$ROOT/$path" ]] || fail "missing file: $path"
@@ -181,7 +191,9 @@ fi
 
 for path in \
   PROJECT_STRUCTURE.md \
+  include/easynet_cli.h \
   src/bin/sdk-conformance-runner.rs \
+  src/ffi/features.rs \
   sdk/README.md \
   sdk/SDK_INTERFACE_SPEC.md \
   sdk/SDK_PARITY.md \
@@ -832,6 +844,7 @@ case_files=(
   invocation-prepared-not-submittable.yaml
   invocation-presigned-submit.yaml
   invocation-local-daemon-signing-boundary.yaml
+  managed-signing-provider-lifecycle.yaml
   authority-mutual-exclusion.yaml
   invocation-descriptor-ref-helper-delegation.yaml
   error-typed-json.yaml
@@ -891,6 +904,8 @@ require_file sdk/conformance/spec-section27-coverage.json
 validate_json_file sdk/conformance/spec-section27-coverage.json
 require_file tools/scripts/check-sdk-section27-coverage.sh
 require_literal tools/scripts/check-sdk-cutover-readiness.sh "SDK section 27 coverage"
+
+abort_if_failed
 
 bash "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" --self-test >/dev/null
 bash "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" --self-test >/dev/null
@@ -1333,6 +1348,8 @@ require_literal sdk/README.md "Node/Java/Swift seam action-adapter reports"
 require_literal sdk/SDK_PARITY.md "Package metadata is machine-checked"
 require_literal sdk/SDK_PARITY.md "P0 consumer cutover readiness is"
 require_literal sdk/CONFORMANCE_SUITE.md "sdk-conformance-runner"
+abort_if_failed
+
 bash "$ROOT/tools/scripts/check-node-sdk-seam.sh" >/dev/null
 bash "$ROOT/tools/scripts/check-java-sdk-seam.sh" >/dev/null
 bash "$ROOT/tools/scripts/check-swift-sdk-seam.sh" >/dev/null

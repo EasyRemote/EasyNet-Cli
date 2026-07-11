@@ -51,6 +51,7 @@ pub(crate) fn save(file: &OwnerProjectionCursorFile) -> anyhow::Result<()> {
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_vec_pretty(file)?;
     atomic_write_with_permissions(&path(), &json, WritePermissions::OwnerReadWrite)
+        .map_err(Into::into)
 }
 
 impl OwnerProjectionCursorFile {

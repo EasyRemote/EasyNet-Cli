@@ -50,7 +50,10 @@ class AuthorityTests(unittest.TestCase):
 
         self.assertEqual(authority.issuer_ura, "easynet:///r/example/agent/backend")
         self.assertEqual(authority.session_id, "session-1")
-        self.assertEqual(authority.subject_ura, "easynet:///r/example/session/session-1")
+        self.assertEqual(
+            authority.subject_ura,
+            "easynet:///r/example/resource/user.alice/session/session-1",
+        )
         self.assertEqual(authority.signature, b"session-signature")
         metadata = authority.metadata()
         self.assertEqual(metadata.key, SESSION_AUTHORITY_METADATA_KEY)
@@ -170,7 +173,7 @@ class AuthorityTests(unittest.TestCase):
                 session_owner_user_id="alice",
                 creator_principal_id="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/session/session-1",
+                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
                 allowed_actions=("read",),
@@ -211,7 +214,7 @@ class AuthorityTests(unittest.TestCase):
                     session_owner_user_id="alice",
                     creator_principal_id="easynet:///r/example/agent/backend",
                     callee_ura="easynet:///r/example/device/dev-a",
-                    subject_ura="easynet:///r/example/session/session-1",
+                    subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                     audience="easynet:///r/example/device/dev-a",
                     scopes=("device.observe.*",),
                     allowed_actions=("read",),
@@ -266,7 +269,7 @@ class AuthorityTests(unittest.TestCase):
                 session_owner_user_id="alice",
                 creator_principal_id="easynet:///r/example/agent/backend",
                 callee_ura="easynet:///r/example/device/dev-a",
-                subject_ura="easynet:///r/example/session/session-1",
+                subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
                 scopes=("device.observe.*",),
                 allowed_actions=("read",),
@@ -323,7 +326,7 @@ def _session_authority_payload() -> dict[str, object]:
         "session_owner_user_id": "alice",
         "creator_principal_id": "easynet:///r/example/agent/backend",
         "callee_ura": "easynet:///r/example/device/dev-a",
-        "subject_ura": "easynet:///r/example/session/session-1",
+        "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
         "audience": "easynet:///r/example/device/dev-a",
         "scopes": ["device.observe.*"],
         "allowed_actions": ["read"],

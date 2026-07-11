@@ -675,7 +675,7 @@ pub trait ManagedSigningKeyService: Send + Sync {
 
     fn sign(
         &self,
-        key_id: &str,
+        projection: &crate::daemon::keyring::ManagedSigningKeyProjection,
         canonical_bytes: &[u8],
     ) -> std::result::Result<
         ed25519_dalek::Signature,
@@ -697,13 +697,13 @@ impl ManagedSigningKeyService for crate::daemon::identity::self_identity::Keyrin
 
     fn sign(
         &self,
-        key_id: &str,
+        projection: &crate::daemon::keyring::ManagedSigningKeyProjection,
         canonical_bytes: &[u8],
     ) -> std::result::Result<
         ed25519_dalek::Signature,
         crate::daemon::identity::self_identity::SelfIdentityError,
     > {
-        self.inventory_sign(key_id, canonical_bytes)
+        self.inventory_sign_bound(projection, canonical_bytes)
     }
 }
 
@@ -767,7 +767,7 @@ impl LocalDaemonInvocationSigner for KeyServiceLocalDaemonInvocationSigner {
         }
         let signature = self
             .key_service
-            .sign(key_id, prepared.signing_material().canonical_bytes())
+            .sign(&entry, prepared.signing_material().canonical_bytes())
             .map_err(|err| {
                 DaemonError::InvalidInvocation(format!("local daemon signing failed: {err}"))
             })?;
@@ -1095,16 +1095,34 @@ mod tests {
 
         fn sign(
             &self,
-            key_id: &str,
+            projection: &crate::daemon::keyring::ManagedSigningKeyProjection,
             canonical_bytes: &[u8],
         ) -> std::result::Result<
             ed25519_dalek::Signature,
             crate::daemon::identity::self_identity::SelfIdentityError,
         > {
+            let subject_ura = projection.bound_subject.as_deref().ok_or_else(|| {
+                crate::daemon::identity::self_identity::SelfIdentityError::Rejected {
+                    kind: "test_vault".into(),
+                    message: "projection is not subject-bound".into(),
+                }
+            })?;
+            let policy_ref = projection.signer_policy_ref.as_deref().ok_or_else(|| {
+                crate::daemon::identity::self_identity::SelfIdentityError::Rejected {
+                    kind: "test_vault".into(),
+                    message: "projection has no policy reference".into(),
+                }
+            })?;
             self.vault
                 .lock()
                 .unwrap()
-                .inventory_sign(key_id, canonical_bytes)
+                .inventory_sign_bound(
+                    &projection.key_id,
+                    &projection.purpose,
+                    subject_ura,
+                    policy_ref,
+                    canonical_bytes,
+                )
                 .map_err(|err| {
                     crate::daemon::identity::self_identity::SelfIdentityError::Rejected {
                         kind: "test_vault".into(),

@@ -233,13 +233,27 @@ impl EnvelopeContext {
         ability: impl Into<String>,
         subject: impl Into<String>,
     ) -> Self {
+        Self::for_test_targeted_ability(caller, "easynet:///r/test/device/local", ability, subject)
+    }
+
+    /// Build a deterministic complete context with an explicit callee.
+    /// Authority-sensitive handlers use this fixture so Device/Hub tests do
+    /// not silently inherit the historical test Device target.
+    #[cfg(test)]
+    pub fn for_test_targeted_ability(
+        caller: impl Into<String>,
+        callee: impl Into<String>,
+        ability: impl Into<String>,
+        subject: impl Into<String>,
+    ) -> Self {
         let caller = caller.into();
+        let callee = callee.into();
         let ability = ability.into();
         let subject = subject.into();
         Self::new(EnvelopeContextParts {
             invocation_id: "test-invocation".to_string(),
             caller,
-            callee: "easynet:///r/test/device/local".to_string(),
+            callee,
             ability,
             subject,
             invocation_nonce: vec![0xA5; 16],
@@ -1190,24 +1204,20 @@ pub enum OwnerKind {
 }
 
 impl OwnerKind {
+    fn authority_projection(&self) -> String {
+        match self {
+            OwnerKind::Device => "device".to_string(),
+            OwnerKind::Hub => "hub".to_string(),
+            OwnerKind::Agent(agent_id) => format!("agent:{agent_id}"),
+            OwnerKind::User(user_id) => format!("user:{user_id}"),
+        }
+    }
+
     fn authority_scope(
         &self,
         context: &AbilityAuthorityContext,
     ) -> Result<AuthorityScope, AbilityControlPlaneError> {
-        match self {
-            OwnerKind::Device => {
-                AuthorityScope::new("device", context.device_authority_root.clone())
-            }
-            OwnerKind::Hub => AuthorityScope::new("hub", context.hub_authority_root.clone()),
-            OwnerKind::Agent(agent_id) => AuthorityScope::new(
-                format!("agent:{agent_id}"),
-                context.agent_authority_root(agent_id),
-            ),
-            OwnerKind::User(user_id) => AuthorityScope::new(
-                format!("user:{user_id}"),
-                context.user_authority_root(user_id),
-            ),
-        }
+        context.authority_scope_for(self)
     }
 }
 
@@ -1233,24 +1243,144 @@ fn owner_kind_from_projection(owner_projection: &str) -> Option<OwnerKind> {
     }
 }
 
-/// Process-local authority roots used when projecting owner kinds into
-/// descriptor authority records and Axon `LocalRuntime` ability keys.
-///
-/// Production registries build this from the local daemon environment.
-/// Embedded/test daemons can inject the concrete device URA they serve so
-/// registration, control-plane lookup, and carrier-v1 dispatch all resolve
-/// the same owner identity instead of drifting through global config.
 #[derive(Debug, Clone)]
-pub struct AbilityAuthorityContext {
-    device_authority_root: String,
-    hub_authority_root: String,
-    source: AbilityAuthoritySource,
+struct CanonicalDeviceAuthority {
+    ura: String,
+    realm: String,
+    device_id: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AbilityAuthoritySource {
+impl CanonicalDeviceAuthority {
+    fn parse(ura: String) -> Result<Self, AbilityControlPlaneError> {
+        let parsed = crate::core::ura::parse_ura(&ura).map_err(|error| {
+            AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
+                authority_root: ura.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Device {
+            return Err(AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
+                authority_root: ura,
+                reason: format!("expected /device/ URA, got {:?}", parsed.kind),
+            });
+        }
+        let device_id = parsed
+            .device_id()
+            .ok_or_else(|| AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
+                authority_root: ura.clone(),
+                reason: "device URA is missing device id".to_string(),
+            })?
+            .to_string();
+        Ok(Self {
+            ura,
+            realm: parsed.realm,
+            device_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalHubAuthority {
+    ura: String,
+}
+
+impl CanonicalHubAuthority {
+    fn parse(ura: String) -> Result<Self, AbilityControlPlaneError> {
+        let parsed = crate::core::ura::parse_ura(&ura).map_err(|error| {
+            AbilityControlPlaneError::InvalidHubAuthorityRoot {
+                authority_root: ura.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Hub {
+            return Err(AbilityControlPlaneError::InvalidHubAuthorityRoot {
+                authority_root: ura,
+                reason: format!("expected /hub URA, got {:?}", parsed.kind),
+            });
+        }
+        Ok(Self { ura })
+    }
+
+    fn for_realm(realm: &str) -> Self {
+        Self {
+            ura: crate::core::ura::hub_ura(realm),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum DeviceSubordinateAuthoritySource {
     LocalEnvironment,
-    FixedDevice,
+    DeviceScoped,
+    /// Canonical Agent authority roots resolved by daemon boot from the
+    /// hosted-agent lifecycle registry. Keeping this set inside the authority
+    /// context makes dynamic registration independent of ambient HOME reads
+    /// while still rejecting a same-realm Agent owned by another user.
+    ExplicitHostedAgentRoots(BTreeMap<String, String>),
+}
+
+/// Explicit process-local authority state.
+///
+/// An authority root is present only when this runtime actually hosts that
+/// owner plane. In particular, Hub mode has no Device root: callers cannot
+/// accidentally materialize Device/Agent/User rows under a fabricated owner.
+#[derive(Debug, Clone)]
+enum AbilityAuthoritySet {
+    Device {
+        device: CanonicalDeviceAuthority,
+        subordinate_source: DeviceSubordinateAuthoritySource,
+    },
+    Hub {
+        hub: CanonicalHubAuthority,
+    },
+    Both {
+        device: CanonicalDeviceAuthority,
+        hub: CanonicalHubAuthority,
+        subordinate_source: DeviceSubordinateAuthoritySource,
+    },
+}
+
+impl AbilityAuthoritySet {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Device { .. } => "device",
+            Self::Hub { .. } => "hub",
+            Self::Both { .. } => "device+hub",
+        }
+    }
+
+    fn device(&self) -> Option<(&CanonicalDeviceAuthority, &DeviceSubordinateAuthoritySource)> {
+        match self {
+            Self::Device {
+                device,
+                subordinate_source,
+            }
+            | Self::Both {
+                device,
+                subordinate_source,
+                ..
+            } => Some((device, subordinate_source)),
+            Self::Hub { .. } => None,
+        }
+    }
+
+    fn hub(&self) -> Option<&CanonicalHubAuthority> {
+        match self {
+            Self::Hub { hub } | Self::Both { hub, .. } => Some(hub),
+            Self::Device { .. } => None,
+        }
+    }
+}
+
+/// Process-local authorities used when projecting owner kinds into descriptor
+/// records and Axon `LocalRuntime` ability keys.
+///
+/// The set is an explicit Device/Hub/Both state rather than two always-present
+/// strings. Registration can therefore enforce the daemon's hosted owner
+/// planes before any control-plane or runtime row is written.
+#[derive(Debug, Clone)]
+pub struct AbilityAuthorityContext {
+    authorities: AbilityAuthoritySet,
 }
 
 impl Default for AbilityAuthorityContext {
@@ -1261,39 +1391,235 @@ impl Default for AbilityAuthorityContext {
 
 impl AbilityAuthorityContext {
     pub fn from_local_environment() -> Self {
+        let device = CanonicalDeviceAuthority::parse(local_device_authority_root())
+            .expect("local Device authority helper must return a canonical Device URA");
         Self {
-            device_authority_root: local_device_authority_root(),
-            hub_authority_root: local_hub_authority_root(),
-            source: AbilityAuthoritySource::LocalEnvironment,
+            authorities: AbilityAuthoritySet::Device {
+                device,
+                subordinate_source: DeviceSubordinateAuthoritySource::LocalEnvironment,
+            },
+        }
+    }
+
+    fn for_local_combined_environment() -> Self {
+        let device = CanonicalDeviceAuthority::parse(local_device_authority_root())
+            .expect("local Device authority helper must return a canonical Device URA");
+        let hub = CanonicalHubAuthority::for_realm(&device.realm);
+        Self {
+            authorities: AbilityAuthoritySet::Both {
+                device,
+                hub,
+                subordinate_source: DeviceSubordinateAuthoritySource::LocalEnvironment,
+            },
         }
     }
 
     pub fn for_device_authority_root(
         device_authority_root: impl Into<String>,
     ) -> Result<Self, AbilityControlPlaneError> {
-        let device_authority_root = device_authority_root.into();
-        let parsed = crate::core::ura::parse_ura(&device_authority_root).map_err(|error| {
-            AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
-                authority_root: device_authority_root.clone(),
-                reason: error.to_string(),
-            }
-        })?;
-        if parsed.kind != crate::core::ura::URAKind::Device {
-            return Err(AbilityControlPlaneError::InvalidDeviceAuthorityRoot {
-                authority_root: device_authority_root,
-                reason: format!("expected /device/ URA, got {:?}", parsed.kind),
-            });
-        }
+        let device = CanonicalDeviceAuthority::parse(device_authority_root.into())?;
         Ok(Self {
-            device_authority_root,
-            hub_authority_root: crate::core::ura::hub_ura(&parsed.realm),
-            source: AbilityAuthoritySource::FixedDevice,
+            authorities: AbilityAuthoritySet::Device {
+                device,
+                subordinate_source: DeviceSubordinateAuthoritySource::DeviceScoped,
+            },
         })
     }
 
+    /// Bind a Device runtime to a fixed device authority plus the Agent URAs
+    /// it actually hosts. Daemon boot constructs this once from lifecycle
+    /// state; later dynamic registrations cannot widen it with an arbitrary
+    /// same-realm Agent root.
+    pub fn for_device_authority_root_with_hosted_agents(
+        device_authority_root: impl Into<String>,
+        hosted_agent_uras: impl IntoIterator<Item = String>,
+    ) -> Result<Self, AbilityControlPlaneError> {
+        let device = CanonicalDeviceAuthority::parse(device_authority_root.into())?;
+        let hosted_agent_roots = hosted_agent_roots_for_device(&device, hosted_agent_uras)?;
+        Ok(Self {
+            authorities: AbilityAuthoritySet::Device {
+                device,
+                subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
+                    hosted_agent_roots,
+                ),
+            },
+        })
+    }
+
+    /// Bind a combined Device+Hub registry. The two authority roots remain
+    /// distinct even though one process hosts both runtime roles.
+    pub fn for_combined_authority_roots(
+        device_authority_root: impl Into<String>,
+    ) -> Result<Self, AbilityControlPlaneError> {
+        let device = CanonicalDeviceAuthority::parse(device_authority_root.into())?;
+        let hub = CanonicalHubAuthority::for_realm(&device.realm);
+        Ok(Self {
+            authorities: AbilityAuthoritySet::Both {
+                device,
+                hub,
+                subordinate_source: DeviceSubordinateAuthoritySource::DeviceScoped,
+            },
+        })
+    }
+
+    /// Bind a combined Device+Hub runtime with the explicit hosted-Agent
+    /// authority inventory captured at boot.
+    pub fn for_combined_authority_roots_with_hosted_agents(
+        device_authority_root: impl Into<String>,
+        hosted_agent_uras: impl IntoIterator<Item = String>,
+    ) -> Result<Self, AbilityControlPlaneError> {
+        let device = CanonicalDeviceAuthority::parse(device_authority_root.into())?;
+        let hub = CanonicalHubAuthority::for_realm(&device.realm);
+        let hosted_agent_roots = hosted_agent_roots_for_device(&device, hosted_agent_uras)?;
+        Ok(Self {
+            authorities: AbilityAuthoritySet::Both {
+                device,
+                hub,
+                subordinate_source: DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(
+                    hosted_agent_roots,
+                ),
+            },
+        })
+    }
+
+    /// Bind a Hub-only registry to the configured realm authority. This state
+    /// intentionally has no Device authority and never consults Device
+    /// credentials.
+    pub fn for_hub_authority_root(
+        hub_authority_root: impl Into<String>,
+    ) -> Result<Self, AbilityControlPlaneError> {
+        let hub = CanonicalHubAuthority::parse(hub_authority_root.into())?;
+        Ok(Self {
+            authorities: AbilityAuthoritySet::Hub { hub },
+        })
+    }
+
+    pub(crate) fn local_runtime_owners(&self) -> Vec<OwnerKind> {
+        match &self.authorities {
+            AbilityAuthoritySet::Device { .. } => vec![OwnerKind::Device],
+            AbilityAuthoritySet::Hub { .. } => vec![OwnerKind::Hub],
+            AbilityAuthoritySet::Both { .. } => vec![OwnerKind::Device, OwnerKind::Hub],
+        }
+    }
+
+    pub(crate) fn hosts_device_authority(&self) -> bool {
+        self.authorities.device().is_some()
+    }
+
+    fn supports_owner(&self, owner: &OwnerKind) -> bool {
+        match owner {
+            OwnerKind::Hub => self.authorities.hub().is_some(),
+            OwnerKind::Device | OwnerKind::Agent(_) | OwnerKind::User(_) => {
+                self.authorities.device().is_some()
+            }
+        }
+    }
+
+    fn ensure_owner_supported(&self, owner: &OwnerKind) -> Result<(), AbilityControlPlaneError> {
+        if self.supports_owner(owner) {
+            return Ok(());
+        }
+        Err(AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
+            owner_projection: owner.authority_projection(),
+            authority_set: self.authorities.label(),
+        })
+    }
+
+    fn ensure_explicit_scope_supported(
+        &self,
+        owner: &OwnerKind,
+        authority_scope: &AuthorityScope,
+    ) -> Result<(), AbilityControlPlaneError> {
+        self.ensure_owner_supported(owner)?;
+        let expected_projection = owner.authority_projection();
+        if authority_scope.owner_projection() != expected_projection {
+            return Err(
+                AbilityControlPlaneError::AuthorityScopeOwnerProjectionMismatch {
+                    expected_projection,
+                    actual_projection: authority_scope.owner_projection().to_string(),
+                },
+            );
+        }
+        if !self.authority_root_is_hosted_for_owner(owner, authority_scope.authority_root()) {
+            return Err(AbilityControlPlaneError::AuthorityScopeRootNotHosted {
+                owner_projection: expected_projection,
+                authority_root: authority_scope.authority_root().to_string(),
+                authority_set: self.authorities.label(),
+            });
+        }
+        Ok(())
+    }
+
+    fn authority_root_is_hosted_for_owner(&self, owner: &OwnerKind, authority_root: &str) -> bool {
+        match owner {
+            OwnerKind::Device => self
+                .authorities
+                .device()
+                .is_some_and(|(device, _)| device.ura == authority_root),
+            OwnerKind::Hub => self
+                .authorities
+                .hub()
+                .is_some_and(|hub| hub.ura == authority_root),
+            OwnerKind::Agent(agent_id) => {
+                self.authorities.device().is_some()
+                    && authority_root == self.agent_authority_root(agent_id)
+            }
+            OwnerKind::User(user_id) => self.authorities.device().is_some_and(|(device, _)| {
+                authority_root == crate::core::ura::agent_ura(&device.realm, user_id, "account")
+            }),
+        }
+    }
+
+    fn authority_scope_for(
+        &self,
+        owner: &OwnerKind,
+    ) -> Result<AuthorityScope, AbilityControlPlaneError> {
+        self.ensure_owner_supported(owner)?;
+        let projection = owner.authority_projection();
+        let authority_root = match owner {
+            OwnerKind::Device => self
+                .authorities
+                .device()
+                .expect("supported Device owner requires Device authority")
+                .0
+                .ura
+                .clone(),
+            OwnerKind::Hub => self
+                .authorities
+                .hub()
+                .expect("supported Hub owner requires Hub authority")
+                .ura
+                .clone(),
+            OwnerKind::Agent(agent_id) => self.agent_authority_root(agent_id),
+            OwnerKind::User(user_id) => self.user_authority_root(user_id),
+        };
+        AuthorityScope::new(projection, authority_root)
+    }
+
     fn agent_authority_root(&self, agent_id: &str) -> String {
-        if self.source == AbilityAuthoritySource::FixedDevice {
-            return self.device_scoped_agent_authority_root(agent_id);
+        let (device, source) = self
+            .authorities
+            .device()
+            .expect("Agent owner support requires Device authority");
+        match source {
+            DeviceSubordinateAuthoritySource::DeviceScoped => {
+                return crate::core::ura::device_agent_ura(
+                    &device.realm,
+                    &device.device_id,
+                    agent_id,
+                );
+            }
+            DeviceSubordinateAuthoritySource::ExplicitHostedAgentRoots(roots) => {
+                if let Some(hosted) = roots.get(agent_id) {
+                    return hosted.clone();
+                }
+                return crate::core::ura::device_agent_ura(
+                    &device.realm,
+                    &device.device_id,
+                    agent_id,
+                );
+            }
+            DeviceSubordinateAuthoritySource::LocalEnvironment => {}
         }
         if let Ok(local_agents) = crate::daemon::persistence::local_agents::load() {
             if let Ok(Some(entry)) =
@@ -1306,69 +1632,64 @@ impl AbilityAuthorityContext {
             }
         }
         match crate::daemon::persistence::config::load_credentials() {
-            Ok(creds) => match creds.user_id() {
+            Ok(creds) if creds.realm_str() == device.realm => match creds.user_id() {
                 Ok(user_id) => crate::core::ura::agent_ura(&creds.realm, user_id, agent_id),
                 Err(_) => {
                     crate::core::ura::device_agent_ura(&creds.realm, &creds.node_id, agent_id)
                 }
             },
-            Err(_) => self.device_scoped_agent_authority_root(agent_id),
+            Ok(_) | Err(_) => {
+                crate::core::ura::device_agent_ura(&device.realm, &device.device_id, agent_id)
+            }
         }
     }
 
     fn user_authority_root(&self, user_id: &str) -> String {
-        if self.source == AbilityAuthoritySource::FixedDevice {
-            return self.device_scoped_user_authority_root(user_id);
+        let (device, _) = self
+            .authorities
+            .device()
+            .expect("User owner support requires Device authority");
+        crate::core::ura::agent_ura(&device.realm, user_id, "account")
+    }
+}
+
+fn hosted_agent_roots_for_device(
+    device: &CanonicalDeviceAuthority,
+    hosted_agent_uras: impl IntoIterator<Item = String>,
+) -> Result<BTreeMap<String, String>, AbilityControlPlaneError> {
+    let mut roots = BTreeMap::new();
+    for authority_root in hosted_agent_uras {
+        let parsed = crate::core::ura::parse_ura(&authority_root).map_err(|_| {
+            AbilityControlPlaneError::InvalidAuthorityRoot {
+                authority_root: authority_root.clone(),
+            }
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Agent || parsed.realm != device.realm {
+            return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
         }
-        let realm = crate::daemon::persistence::config::load_credentials()
-            .ok()
-            .map(|creds| creds.realm)
-            .or_else(|| {
-                crate::core::ura::parse_ura(&self.device_authority_root)
-                    .ok()
-                    .map(|ura| ura.realm)
-            })
-            .unwrap_or_else(|| {
-                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string()
-            });
-        crate::core::ura::agent_ura(&realm, user_id, "account")
+        if let Some((device_id, _)) = parsed.device_agent_ids() {
+            if device_id != device.device_id {
+                return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
+            }
+        }
+        let agent_id = parsed
+            .agent_ids()
+            .or_else(|| parsed.device_agent_ids())
+            .map(|(_, agent_id)| agent_id.to_string())
+            .ok_or_else(|| AbilityControlPlaneError::InvalidAuthorityRoot {
+                authority_root: authority_root.clone(),
+            })?;
+        if let Some(previous) = roots.insert(agent_id.clone(), authority_root.clone()) {
+            if previous != authority_root {
+                return Err(AbilityControlPlaneError::InvalidAuthorityRoot { authority_root });
+            }
+        }
     }
-
-    fn device_scoped_agent_authority_root(&self, agent_id: &str) -> String {
-        let parsed = crate::core::ura::parse_ura(&self.device_authority_root).ok();
-        let realm = parsed
-            .as_ref()
-            .map(|ura| ura.realm.as_str())
-            .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM);
-        let device_id = parsed
-            .as_ref()
-            .and_then(|ura| ura.device_id())
-            .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID);
-        crate::core::ura::device_agent_ura(realm, device_id, agent_id)
-    }
-
-    fn device_scoped_user_authority_root(&self, user_id: &str) -> String {
-        let parsed = crate::core::ura::parse_ura(&self.device_authority_root).ok();
-        let realm = parsed
-            .as_ref()
-            .map(|ura| ura.realm.as_str())
-            .unwrap_or(crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM);
-        crate::core::ura::agent_ura(realm, user_id, "account")
-    }
+    Ok(roots)
 }
 
 fn local_device_authority_root() -> String {
     crate::daemon::identity::local_invocation::local_device_ura()
-}
-
-fn local_hub_authority_root() -> String {
-    let realm = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .map(|creds| creds.realm)
-        .unwrap_or_else(|| {
-            crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string()
-        });
-    crate::core::ura::hub_ura(&realm)
 }
 
 fn local_runtime_ability_key_for_authority(
@@ -1449,6 +1770,68 @@ pub struct AbilityCatalogSnapshotRow {
     pub name: String,
     pub owner: Option<OwnerKind>,
     pub manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
+}
+
+/// One descriptor projection row per canonical runtime authority and public
+/// ability name.
+///
+/// Unlike [`AbilityCatalogSnapshotRow`], this read model never collapses the
+/// same implementation registered under Device and Hub authority. Discovery
+/// surfaces consume these rows when owner identity is wire-visible: the
+/// authority root and descriptor URA come from the committed control-plane
+/// record, not from credentials, process mode, or a `self` placeholder.
+#[derive(Debug, Clone)]
+pub struct AuthorityAbilityCatalogSnapshotRow {
+    pub name: String,
+    pub owner: OwnerKind,
+    pub owner_ura: String,
+    pub ability_ura: String,
+    pub manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AuthorityAbilityCatalogSnapshotKey {
+    authority_root: String,
+    owner_projection: String,
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct AuthorityAbilityCatalogSnapshotBuilder {
+    ability_ura: String,
+    manifest: Option<Arc<crate::core::ability::spec::AbilityManifest>>,
+    ambiguous_manifest: bool,
+}
+
+impl AuthorityAbilityCatalogSnapshotBuilder {
+    fn new(ability_ura: String) -> Self {
+        Self {
+            ability_ura,
+            manifest: None,
+            ambiguous_manifest: false,
+        }
+    }
+
+    fn observe_ability_ura(&self, ability_ura: &str) {
+        assert_eq!(
+            self.ability_ura, ability_ura,
+            "one authority-owned ability must have one canonical ability URA across call modes"
+        );
+    }
+
+    fn observe_manifest(&mut self, next: Option<Arc<crate::core::ability::spec::AbilityManifest>>) {
+        let Some(next) = next else {
+            return;
+        };
+        match self.manifest.as_ref() {
+            None if !self.ambiguous_manifest => self.manifest = Some(next),
+            Some(current) if current.descriptor_version() == next.descriptor_version() => {}
+            Some(_) | None => {
+                self.manifest = None;
+                self.ambiguous_manifest = true;
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1550,6 +1933,10 @@ pub struct AxonAbilityCatalog {
     /// embedded daemon's runtime surface is bound to the device identity it
     /// actually serves.
     authority_context: AbilityAuthorityContext,
+    /// Boot-time registrations excluded by the explicit authority set,
+    /// aggregated by owner projection. Daemon assembly reports one bounded
+    /// summary instead of emitting one event per non-hosted ability.
+    static_authority_exclusions: BTreeMap<String, usize>,
     /// Descriptor/authority/implementation binding records keyed by the
     /// typed control-plane key. This is the canonical owner / authority /
     /// manifest / call-mode truth (SPEC §9.1.A); the handler maps above are
@@ -1789,6 +2176,21 @@ impl ExecutionIndex {
         handlers
     }
 
+    fn static_rows_for_ability(
+        &self,
+        ability: &str,
+    ) -> Vec<(ControlPlaneAbilityKey, RuntimeHandlerSet)> {
+        self.entries
+            .iter()
+            .filter(|(key, entry)| {
+                key.ability() == ability
+                    && entry.origin == ExecutionOrigin::Static
+                    && !entry.handlers.is_empty()
+            })
+            .map(|(key, entry)| (key.clone(), entry.handlers.clone()))
+            .collect()
+    }
+
     fn has_rpc(&self, ability: &str) -> bool {
         let handlers = self.handlers_for_ability(ability);
         handlers.rpc.is_some() || handlers.rpc_with_env.is_some()
@@ -1986,6 +2388,12 @@ enum StaticRegistrationHandler {
     BidiWithEnvelope(LocalBidiHandlerWithEnvelope),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StaticRegistrationOutcome {
+    Registered,
+    ExcludedByAuthoritySet { owner_projection: String },
+}
+
 impl StaticRegistrationHandler {
     fn call_mode(&self) -> DescriptorCallMode {
         match self {
@@ -2047,7 +2455,7 @@ impl StaticRegistration {
         self
     }
 
-    fn commit(self, catalog: &mut AxonAbilityCatalog) -> anyhow::Result<()> {
+    fn commit(self, catalog: &mut AxonAbilityCatalog) -> anyhow::Result<StaticRegistrationOutcome> {
         let Self {
             ability,
             owner,
@@ -2056,10 +2464,29 @@ impl StaticRegistration {
             implementation,
             handler,
         } = self;
+        if catalog
+            .authority_context
+            .ensure_owner_supported(&owner)
+            .is_err()
+        {
+            return Ok(StaticRegistrationOutcome::ExcludedByAuthoritySet {
+                owner_projection: owner.authority_projection(),
+            });
+        }
         let call_mode = handler.call_mode();
         let target_slot = handler.slot();
         let authority_scope = match authority_scope {
-            Some(authority_scope) => authority_scope,
+            Some(authority_scope) => {
+                catalog
+                    .authority_context
+                    .ensure_explicit_scope_supported(&owner, &authority_scope)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "static ability {ability:?} explicit authority scope rejected: {error}"
+                        )
+                    })?;
+                authority_scope
+            }
             None => catalog.resolve_authority_scope_for_owner(&ability, &owner)?,
         };
         let execution_key = ControlPlaneAbilityKey::new(authority_scope.authority_root(), &ability);
@@ -2077,7 +2504,7 @@ impl StaticRegistration {
             .expect("execution_index RwLock poisoned")
             .install_static(execution_key, handler);
         catalog.sync_static_runtime_ability_or_panic(&ability);
-        Ok(())
+        Ok(StaticRegistrationOutcome::Registered)
     }
 }
 
@@ -2259,6 +2686,14 @@ impl DynamicRegistration {
     fn commit(self, catalog: &AxonAbilityCatalog) -> anyhow::Result<()> {
         let ability = self.ability().to_string();
         let call_mode = self.call_mode();
+        catalog
+            .authority_context
+            .ensure_owner_supported(&self.owner)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "dynamic ability {ability:?} owner authority is not hosted by this runtime: {error}"
+                )
+            })?;
         let _dynamic_txn_guard = catalog
             .dynamic_txn
             .lock()
@@ -2267,7 +2702,17 @@ impl DynamicRegistration {
             anyhow::bail!("dynamic ability {ability:?} shadows a static ability");
         }
         let authority_scope = match self.authority_scope.clone() {
-            Some(authority_scope) => authority_scope,
+            Some(authority_scope) => {
+                catalog
+                    .authority_context
+                    .ensure_explicit_scope_supported(&self.owner, &authority_scope)
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "dynamic ability {ability:?} explicit authority scope rejected: {error}"
+                        )
+                    })?;
+                authority_scope
+            }
             None => catalog.resolve_authority_scope_for_owner(&ability, &self.owner)?,
         };
         let predicted_execution_key =
@@ -2630,7 +3075,11 @@ impl AxonAbilityCatalog {
     pub fn new_with_runtime(runtime: Arc<LocalRuntime>) -> Self {
         Self::new_with_runtime_and_authority_context(
             runtime,
-            AbilityAuthorityContext::from_local_environment(),
+            // Public catalogue constructors historically admitted both Device
+            // and Hub registrations. Preserve that API behavior with an
+            // explicit real Both set; product boot uses RegistryBuildConfig's
+            // Device default or injects its daemon mode context.
+            AbilityAuthorityContext::for_local_combined_environment(),
         )
     }
 
@@ -2640,8 +3089,12 @@ impl AxonAbilityCatalog {
     ) -> Self {
         Self {
             runtime: Some(runtime),
+            execution_index: std::sync::RwLock::new(ExecutionIndex::default()),
             authority_context,
-            ..Self::default()
+            static_authority_exclusions: BTreeMap::new(),
+            control_plane: std::sync::RwLock::new(AbilityControlPlaneRegistry::default()),
+            control_plane_manifests: std::sync::RwLock::new(BTreeMap::new()),
+            dynamic_txn: std::sync::Mutex::new(()),
         }
     }
 
@@ -2649,6 +3102,14 @@ impl AxonAbilityCatalog {
     /// constructed for daemon boot.
     pub fn runtime(&self) -> Option<Arc<LocalRuntime>> {
         self.runtime.as_ref().map(Arc::clone)
+    }
+
+    pub(crate) fn authority_set_label(&self) -> &'static str {
+        self.authority_context.authorities.label()
+    }
+
+    pub(crate) fn static_authority_exclusion_snapshot(&self) -> BTreeMap<String, usize> {
+        self.static_authority_exclusions.clone()
     }
 
     fn register_control_plane(
@@ -2748,7 +3209,16 @@ impl AxonAbilityCatalog {
     }
 
     fn register_static(&mut self, registration: StaticRegistration) -> anyhow::Result<()> {
-        registration.commit(self)
+        match registration.commit(self)? {
+            StaticRegistrationOutcome::Registered => {}
+            StaticRegistrationOutcome::ExcludedByAuthoritySet { owner_projection } => {
+                *self
+                    .static_authority_exclusions
+                    .entry(owner_projection)
+                    .or_default() += 1;
+            }
+        }
+        Ok(())
     }
 
     fn register_static_or_panic(&mut self, registration: StaticRegistration) {
@@ -3331,9 +3801,10 @@ impl AxonAbilityCatalog {
     }
 
     fn sync_static_runtime_ability_or_panic(&self, name: &str) {
-        self.sync_runtime_ability(name).unwrap_or_else(|error| {
-            panic!("static ability {name:?} failed to sync into LocalRuntime: {error}")
-        });
+        self.sync_static_runtime_abilities(name)
+            .unwrap_or_else(|error| {
+                panic!("static ability {name:?} failed to sync into LocalRuntime: {error}")
+            });
     }
 
     /// True when `ability` is present in the boot-time static catalogue.
@@ -3377,7 +3848,7 @@ impl AxonAbilityCatalog {
             ability = ability,
             message = "dynamic ability registration attempted to shadow a boot-time ability",
         );
-        if let Err(error) = self.sync_runtime_ability(ability) {
+        if let Err(error) = self.sync_static_runtime_abilities(ability) {
             let error_message = error.to_string();
             crate::op_event!(
                 component = ability_dispatch,
@@ -3388,6 +3859,30 @@ impl AxonAbilityCatalog {
             );
         }
         true
+    }
+
+    fn sync_static_runtime_abilities(&self, name: &str) -> anyhow::Result<()> {
+        let rows = self
+            .execution_index
+            .read()
+            .expect("execution_index RwLock poisoned")
+            .static_rows_for_ability(name);
+        if rows.is_empty() {
+            return self.unregister_runtime_ability(name);
+        }
+        for (control_plane_key, handlers) in rows {
+            let modes = handlers.modes();
+            if modes.is_empty() {
+                continue;
+            }
+            let options = self.runtime_options_for(&control_plane_key, modes)?;
+            self.replace_runtime_ability(
+                &control_plane_key,
+                runtime_handler_set_to_ability_fn(name.to_string(), handlers),
+                options,
+            )?;
+        }
+        Ok(())
     }
 
     fn sync_runtime_ability_from_handlers(
@@ -3781,14 +4276,15 @@ impl AxonAbilityCatalog {
         handler: LocalRpcHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
-        StaticRegistration::new(
-            ability,
-            owner,
-            StaticRegistrationHandler::RpcWithEnvelope(handler),
+        self.register_static(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::RpcWithEnvelope(handler),
+            )
+            .with_manifest(manifest)
+            .with_implementation(implementation),
         )
-        .with_manifest(manifest)
-        .with_implementation(implementation)
-        .commit(self)
     }
 
     /// Register an envelope-aware RPC handler. Used by abilities
@@ -3854,14 +4350,15 @@ impl AxonAbilityCatalog {
         handler: LocalStreamHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
-        StaticRegistration::new(
-            ability,
-            owner,
-            StaticRegistrationHandler::StreamWithEnvelope(handler),
+        self.register_static(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::StreamWithEnvelope(handler),
+            )
+            .with_manifest(manifest)
+            .with_implementation(implementation),
         )
-        .with_manifest(manifest)
-        .with_implementation(implementation)
-        .commit(self)
     }
 
     /// Envelope-aware stream variant. See `register_rpc_with_envelope`
@@ -3917,14 +4414,15 @@ impl AxonAbilityCatalog {
         handler: LocalBidiHandlerWithEnvelope,
         implementation: ControlPlaneImplementation,
     ) -> anyhow::Result<()> {
-        StaticRegistration::new(
-            ability,
-            owner,
-            StaticRegistrationHandler::BidiWithEnvelope(handler),
+        self.register_static(
+            StaticRegistration::new(
+                ability,
+                owner,
+                StaticRegistrationHandler::BidiWithEnvelope(handler),
+            )
+            .with_manifest(manifest)
+            .with_implementation(implementation),
         )
-        .with_manifest(manifest)
-        .with_implementation(implementation)
-        .commit(self)
     }
 
     /// Envelope-aware bidi variant. See `register_rpc_with_envelope`
@@ -4446,6 +4944,41 @@ impl AxonAbilityCatalog {
     /// those APIs preserve precise single-record lookup semantics for dispatch
     /// and tests, while catalogue projection needs one bounded scan.
     pub fn ability_catalog_snapshot(&self) -> Vec<AbilityCatalogSnapshotRow> {
+        let mut rows: BTreeMap<String, AbilityCatalogSnapshotBuilder> = BTreeMap::new();
+
+        for authority_row in self.authority_ability_catalog_snapshot() {
+            let AuthorityAbilityCatalogSnapshotRow {
+                name,
+                owner,
+                manifest,
+                ..
+            } = authority_row;
+            rows.entry(name.clone())
+                .and_modify(|row| {
+                    row.observe_owner(Some(owner.clone()));
+                    row.observe_manifest(manifest.clone());
+                })
+                .or_insert_with(|| {
+                    let mut row = AbilityCatalogSnapshotBuilder::new(Some(owner));
+                    row.observe_manifest(manifest);
+                    row
+                });
+        }
+
+        rows.into_iter()
+            .map(|(name, row)| row.into_row(name))
+            .collect()
+    }
+
+    /// Complete catalogue read model keyed by canonical runtime authority and
+    /// public ability name.
+    ///
+    /// Descriptor renderers must use this surface whenever `owner_ura` or
+    /// `ability_ura` leaves the process. It preserves Device/Hub dual
+    /// registration and reads both identities from the committed control-plane
+    /// records, so discovery cannot reconstruct owner truth from ambient
+    /// credentials or process-global mode.
+    pub fn authority_ability_catalog_snapshot(&self) -> Vec<AuthorityAbilityCatalogSnapshotRow> {
         let control_plane = self
             .control_plane
             .read()
@@ -4454,25 +4987,55 @@ impl AxonAbilityCatalog {
             .control_plane_manifests
             .read()
             .expect("control_plane_manifests RwLock poisoned");
-        let mut rows: BTreeMap<String, AbilityCatalogSnapshotBuilder> = BTreeMap::new();
+        let mut rows: BTreeMap<
+            AuthorityAbilityCatalogSnapshotKey,
+            AuthorityAbilityCatalogSnapshotBuilder,
+        > = BTreeMap::new();
 
         for (key, record) in control_plane.records() {
-            let owner = owner_kind_from_projection(record.authority().scope().owner_projection());
+            let scope = record.authority().scope();
+            let authority_root = scope.authority_root().to_string();
+            let owner_projection = scope.owner_projection().to_string();
+            let row_key = AuthorityAbilityCatalogSnapshotKey {
+                authority_root,
+                owner_projection,
+                name: key.ability().to_string(),
+            };
+            let ability_ura = record.descriptor().ability_ura().to_string();
             let manifest = manifests.get(&key).map(Arc::clone);
-            rows.entry(key.ability().to_string())
+            rows.entry(row_key)
                 .and_modify(|row| {
-                    row.observe_owner(owner.clone());
+                    row.observe_ability_ura(&ability_ura);
                     row.observe_manifest(manifest.clone());
                 })
                 .or_insert_with(|| {
-                    let mut row = AbilityCatalogSnapshotBuilder::new(owner);
+                    let mut row = AuthorityAbilityCatalogSnapshotBuilder::new(ability_ura);
                     row.observe_manifest(manifest);
                     row
                 });
         }
 
         rows.into_iter()
-            .map(|(name, row)| row.into_row(name))
+            .map(|(key, row)| {
+                let owner =
+                    owner_kind_from_projection(&key.owner_projection).unwrap_or_else(|| {
+                        panic!(
+                            "control-plane authority {:?} stored unknown owner projection {:?}",
+                            key.authority_root, key.owner_projection
+                        )
+                    });
+                AuthorityAbilityCatalogSnapshotRow {
+                    name: key.name,
+                    owner,
+                    owner_ura: key.authority_root,
+                    ability_ura: row.ability_ura,
+                    manifest: if row.ambiguous_manifest {
+                        None
+                    } else {
+                        row.manifest
+                    },
+                }
+            })
             .collect()
     }
 
@@ -5009,6 +5572,16 @@ mod tests {
         Arc::new(AxonAbilityCatalog::new())
     }
 
+    fn combined_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            AbilityAuthorityContext::for_combined_authority_roots(
+                "easynet:///r/localhost/device/test-device",
+            )
+            .expect("combined test authority context"),
+        )
+    }
+
     fn ping_target_local() -> InvocationTarget {
         InvocationTarget {
             scope: TargetScope::Local,
@@ -5033,6 +5606,396 @@ mod tests {
         assert!(
             err.to_string().contains("device URA"),
             "error should explain the authority root shape: {err}"
+        );
+    }
+
+    #[test]
+    fn fixed_hub_authority_context_uses_configured_realm_without_device_credentials() {
+        let hub_ura = crate::core::ura::hub_ura("realm-b");
+        let context = AbilityAuthorityContext::for_hub_authority_root(hub_ura.clone())
+            .expect("canonical Hub authority context");
+
+        let hub_scope = OwnerKind::Hub
+            .authority_scope(&context)
+            .expect("Hub owner scope");
+        assert_eq!(hub_scope.authority_root(), hub_ura);
+        assert_eq!(context.local_runtime_owners(), vec![OwnerKind::Hub]);
+
+        let err =
+            AbilityAuthorityContext::for_hub_authority_root("easynet:///r/realm-b/device/dev-b")
+                .expect_err("Device URA must not be accepted as Hub authority");
+        assert!(matches!(
+            err,
+            AbilityControlPlaneError::InvalidHubAuthorityRoot { .. }
+        ));
+
+        for unsupported in [
+            OwnerKind::Device,
+            OwnerKind::Agent("worker".to_string()),
+            OwnerKind::User("alice".to_string()),
+        ] {
+            let error = unsupported
+                .authority_scope(&context)
+                .expect_err("Hub authority set must reject Device-plane owners");
+            assert!(matches!(
+                error,
+                AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
+                    authority_set: "hub",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn fixed_device_context_keeps_device_sponsored_agent_policy_and_rejects_hub() {
+        let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
+        let context = AbilityAuthorityContext::for_device_authority_root(&device_ura)
+            .expect("fixed Device authority context");
+
+        let agent_scope = OwnerKind::Agent("worker".to_string())
+            .authority_scope(&context)
+            .expect("Device-hosted Agent authority");
+        assert_eq!(
+            agent_scope.authority_root(),
+            crate::core::ura::device_agent_ura("realm-b", "dev-b", "worker")
+        );
+        let hub_error = OwnerKind::Hub
+            .authority_scope(&context)
+            .expect_err("Device authority set must reject Hub owners");
+        assert!(matches!(
+            hub_error,
+            AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
+                authority_set: "device",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn static_registration_excludes_non_hosted_owner_before_control_plane_and_runtime() {
+        let hub_ura = crate::core::ura::hub_ura("hub-only");
+        let runtime = LocalRuntime::new();
+        let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            Arc::clone(&runtime),
+            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
+                .expect("Hub authority context"),
+        );
+
+        catalog.register_rpc_with_owner("device.only", OwnerKind::Device, ok_handler());
+        catalog.register_rpc_with_owner("meta.hub_only", OwnerKind::Hub, ok_handler());
+
+        let rows = catalog.authority_ability_catalog_snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].owner, OwnerKind::Hub);
+        assert_eq!(rows[0].owner_ura, hub_ura);
+        assert_eq!(
+            catalog.static_authority_exclusion_snapshot(),
+            BTreeMap::from([("device".to_string(), 1)])
+        );
+
+        let hub_runtime_key = local_runtime_ability_key_for_authority(&hub_ura, "meta.hub_only")
+            .expect("Hub runtime key");
+        assert!(block_on_runtime_sync(runtime.ability_options(&hub_runtime_key)).is_some());
+        let synthetic_device_key = local_runtime_ability_key_for_authority(
+            &crate::core::ura::device_ura("hub-only", "local"),
+            "device.only",
+        )
+        .expect("hypothetical Device runtime key");
+        assert!(block_on_runtime_sync(runtime.ability_options(&synthetic_device_key)).is_none());
+    }
+
+    #[test]
+    fn device_registration_excludes_hub_owner_before_control_plane_and_runtime() {
+        let device_ura = crate::core::ura::device_ura("device-only", "dev-1");
+        let hub_ura = crate::core::ura::hub_ura("device-only");
+        let runtime = LocalRuntime::new();
+        let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            Arc::clone(&runtime),
+            AbilityAuthorityContext::for_device_authority_root(&device_ura)
+                .expect("Device authority context"),
+        );
+
+        catalog.register_rpc_with_owner("device.only", OwnerKind::Device, ok_handler());
+        catalog.register_rpc_with_owner("meta.hub_only", OwnerKind::Hub, ok_handler());
+
+        let rows = catalog.authority_ability_catalog_snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].owner, OwnerKind::Device);
+        assert_eq!(rows[0].owner_ura, device_ura);
+        assert_eq!(
+            catalog.static_authority_exclusion_snapshot(),
+            BTreeMap::from([("hub".to_string(), 1)])
+        );
+
+        let device_runtime_key =
+            local_runtime_ability_key_for_authority(&device_ura, "device.only")
+                .expect("Device runtime key");
+        assert!(block_on_runtime_sync(runtime.ability_options(&device_runtime_key)).is_some());
+        let hub_runtime_key = local_runtime_ability_key_for_authority(&hub_ura, "meta.hub_only")
+            .expect("hypothetical Hub runtime key");
+        assert!(block_on_runtime_sync(runtime.ability_options(&hub_runtime_key)).is_none());
+    }
+
+    #[test]
+    fn dynamic_registration_rejects_non_hosted_owner_without_partial_rows() {
+        let hub_ura = crate::core::ura::hub_ura("hub-only");
+        let runtime = LocalRuntime::new();
+        let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            Arc::clone(&runtime),
+            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
+                .expect("Hub authority context"),
+        );
+
+        let error = catalog
+            .hot_register_rpc("device.dynamic", OwnerKind::Device, ok_handler())
+            .expect_err("Hub authority set must reject dynamic Device owner");
+        assert!(error.to_string().contains("authority set \"hub\""));
+        assert!(catalog.authority_ability_catalog_snapshot().is_empty());
+        assert!(!catalog.has_dynamic("device.dynamic"));
+
+        let runtime_key = local_runtime_ability_key_for_authority(
+            &crate::core::ura::device_ura("hub-only", "local"),
+            "device.dynamic",
+        )
+        .expect("hypothetical Device runtime key");
+        assert!(block_on_runtime_sync(runtime.ability_options(&runtime_key)).is_none());
+
+        let device_ura = crate::core::ura::device_ura("device-only", "dev-1");
+        let device_catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            AbilityAuthorityContext::for_device_authority_root(device_ura)
+                .expect("Device authority context"),
+        );
+        let error = device_catalog
+            .hot_register_rpc("hub.dynamic", OwnerKind::Hub, ok_handler())
+            .expect_err("Device authority set must reject dynamic Hub owner");
+        assert!(error.to_string().contains("authority set \"device\""));
+        assert!(device_catalog
+            .authority_ability_catalog_snapshot()
+            .is_empty());
+        assert!(!device_catalog.has_dynamic("hub.dynamic"));
+    }
+
+    #[test]
+    fn combined_authority_context_exposes_distinct_device_and_hub_owners() {
+        let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
+        let context = AbilityAuthorityContext::for_combined_authority_roots(device_ura.clone())
+            .expect("combined authority context");
+
+        assert_eq!(
+            context.local_runtime_owners(),
+            vec![OwnerKind::Device, OwnerKind::Hub]
+        );
+        assert_eq!(
+            OwnerKind::Device
+                .authority_scope(&context)
+                .expect("Device scope")
+                .authority_root(),
+            device_ura
+        );
+        assert_eq!(
+            OwnerKind::Hub
+                .authority_scope(&context)
+                .expect("Hub scope")
+                .authority_root(),
+            crate::core::ura::hub_ura("realm-b")
+        );
+    }
+
+    #[test]
+    fn public_catalog_constructor_preserves_device_and_hub_registration() {
+        let mut catalog = AxonAbilityCatalog::new();
+        catalog.register_rpc_with_owner("device.constructor", OwnerKind::Device, ok_handler());
+        catalog.register_rpc_with_owner("meta.constructor", OwnerKind::Hub, ok_handler());
+
+        let rows = catalog.authority_ability_catalog_snapshot();
+        assert!(rows.iter().any(|row| row.owner == OwnerKind::Device));
+        assert!(rows.iter().any(|row| row.owner == OwnerKind::Hub));
+        assert!(catalog.static_authority_exclusion_snapshot().is_empty());
+    }
+
+    #[test]
+    fn static_explicit_scope_rejects_owner_projection_mismatch() {
+        let device_ura = crate::core::ura::device_ura("scope-test", "dev-1");
+        let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
+                .expect("combined authority context"),
+        );
+        let device_scope = AuthorityScope::new("device", &device_ura).expect("Device scope");
+
+        let error = catalog
+            .register_static(
+                StaticRegistration::new(
+                    "meta.scope_mismatch",
+                    OwnerKind::Hub,
+                    StaticRegistrationHandler::Rpc(ok_handler()),
+                )
+                .with_authority_scope(device_scope),
+            )
+            .expect_err("Hub owner with Device projection must fail closed");
+        assert!(error
+            .to_string()
+            .contains("does not match registration owner"));
+        assert!(catalog.authority_ability_catalog_snapshot().is_empty());
+    }
+
+    #[test]
+    fn dynamic_explicit_scope_rejects_correct_owner_with_foreign_root() {
+        let hub_ura = crate::core::ura::hub_ura("scope-test");
+        let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
+                .expect("Hub authority context"),
+        );
+        let foreign_scope = AuthorityScope::new("hub", crate::core::ura::hub_ura("foreign"))
+            .expect("foreign Hub scope is structurally valid");
+
+        let error = DynamicRegistration::rpc("meta.foreign_scope", OwnerKind::Hub, ok_handler())
+            .with_authority_scope(foreign_scope)
+            .commit(&catalog)
+            .expect_err("foreign Hub authority root must fail closed");
+        assert!(error.to_string().contains("is not hosted by authority set"));
+        assert!(catalog.authority_ability_catalog_snapshot().is_empty());
+        assert!(!catalog.has_dynamic("meta.foreign_scope"));
+    }
+
+    #[test]
+    fn agent_scope_rejects_same_realm_and_agent_id_owned_by_another_user() {
+        let hosted_agent_ura = crate::core::ura::agent_ura("scope-test", "user-a", "worker");
+        let context = AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura("scope-test", "dev-1"),
+            vec![hosted_agent_ura.clone()],
+        )
+        .expect("fixed hosted Agent authority context");
+        let owner = OwnerKind::Agent("worker".to_string());
+        let exact_scope =
+            AuthorityScope::new("agent:worker", &hosted_agent_ura).expect("hosted Agent scope");
+        context
+            .ensure_explicit_scope_supported(&owner, &exact_scope)
+            .expect("exact hosted Agent root must be accepted");
+
+        let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            context,
+        );
+        let foreign_user_scope = AuthorityScope::new(
+            "agent:worker",
+            crate::core::ura::agent_ura("scope-test", "user-b", "worker"),
+        )
+        .expect("foreign user Agent scope is structurally valid");
+        let error = DynamicRegistration::rpc("worker.chat", owner, ok_handler())
+            .with_authority_scope(foreign_user_scope)
+            .commit(&catalog)
+            .expect_err("same realm/agent id under another user must fail closed");
+        assert!(error.to_string().contains("is not hosted by authority set"));
+        assert!(catalog.authority_ability_catalog_snapshot().is_empty());
+    }
+
+    #[test]
+    fn hosted_authority_inventory_rejects_foreign_device_sponsored_agent() {
+        let error = AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura("scope-test", "dev-a"),
+            vec![crate::core::ura::device_agent_ura(
+                "scope-test",
+                "dev-b",
+                "terminal",
+            )],
+        )
+        .expect_err("a device may not claim another device's System Agent root");
+        assert!(matches!(
+            error,
+            AbilityControlPlaneError::InvalidAuthorityRoot { .. }
+        ));
+    }
+
+    #[test]
+    fn combined_authority_set_accepts_exact_explicit_device_and_hub_scopes() {
+        let device_ura = crate::core::ura::device_ura("scope-test", "dev-1");
+        let hub_ura = crate::core::ura::hub_ura("scope-test");
+        let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
+                .expect("combined authority context"),
+        );
+
+        for (owner, projection, authority_root) in [
+            (OwnerKind::Device, "device", device_ura.as_str()),
+            (OwnerKind::Hub, "hub", hub_ura.as_str()),
+        ] {
+            catalog
+                .register_static(
+                    StaticRegistration::new(
+                        "meta.exact_scope",
+                        owner,
+                        StaticRegistrationHandler::Rpc(ok_handler()),
+                    )
+                    .with_authority_scope(
+                        AuthorityScope::new(projection, authority_root).expect("exact scope"),
+                    ),
+                )
+                .expect("Both must admit each exact hosted authority scope");
+        }
+
+        let rows = catalog.authority_ability_catalog_snapshot();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| row.owner_ura == device_ura));
+        assert!(rows.iter().any(|row| row.owner_ura == hub_ura));
+    }
+
+    #[test]
+    fn authority_catalog_snapshot_preserves_combined_runtime_rows() {
+        let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
+        let hub_ura = crate::core::ura::hub_ura("realm-b");
+        let context = AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
+            .expect("combined authority context");
+        let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            LocalRuntime::new(),
+            context,
+        );
+        catalog.register_rpc_with_owner(
+            "meta.describe",
+            OwnerKind::Device,
+            Arc::new(|_args| Ok(json!({}))),
+        );
+        catalog.register_rpc_with_owner(
+            "meta.describe",
+            OwnerKind::Hub,
+            Arc::new(|_args| Ok(json!({}))),
+        );
+
+        let rows = catalog.authority_ability_catalog_snapshot();
+        assert_eq!(rows.len(), 2, "combined authority rows must not collapse");
+        assert!(rows.iter().any(|row| {
+            row.owner == OwnerKind::Device
+                && row.owner_ura == device_ura
+                && row.ability_ura
+                    == crate::core::ura::device_ability_ura("realm-b", "dev-b", "meta.describe")
+        }));
+        assert!(rows.iter().any(|row| {
+            row.owner == OwnerKind::Hub
+                && row.owner_ura == hub_ura
+                && row.ability_ura == crate::core::ura::hub_ability_ura("realm-b", "meta.describe")
+        }));
+
+        let runtime = catalog.runtime().expect("combined LocalRuntime");
+        for authority_root in [&device_ura, &hub_ura] {
+            let runtime_key =
+                local_runtime_ability_key_for_authority(authority_root, "meta.describe")
+                    .expect("authority-scoped runtime key");
+            assert!(
+                block_on_runtime_sync(runtime.ability_options(&runtime_key)).is_some(),
+                "combined runtime must retain meta.describe for {authority_root}"
+            );
+        }
+
+        let aggregate = catalog.ability_catalog_snapshot();
+        assert_eq!(aggregate.len(), 1);
+        assert_eq!(aggregate[0].name, "meta.describe");
+        assert_eq!(
+            aggregate[0].owner, None,
+            "legacy name aggregate must expose ambiguity instead of choosing one authority"
         );
     }
 
@@ -5638,7 +6601,7 @@ mod tests {
     /// took the MCP URA path (which rejected it to `None`).
     #[test]
     fn control_plane_owner_reconstructs_registered_owner_kind() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
         reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
         reg.register_rpc_with_owner("hub.openai.list_models", OwnerKind::Hub, ok_handler());
         reg.register_rpc_with_owner(
@@ -6010,7 +6973,7 @@ mod tests {
         // with the exact OwnerKind variant the call site declared.
         // No name-string sniffing — the registry is the source of
         // truth for owner kind. M0 of the system-namespace migration.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
         reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
         reg.register_rpc_with_owner("hub.openai.chat_completions", OwnerKind::Hub, ok_handler());
         reg.register_rpc_with_owner(
@@ -6068,7 +7031,7 @@ mod tests {
         // Without this we'd ship sniffing fallbacks for the half-
         // covered variants — the same flat-namespace bug class
         // that the migration is closing.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
 
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
@@ -6167,7 +7130,7 @@ mod tests {
         // The owner table must carry an entry for the canonical
         // name. A future synth path that reads `lookup_owner` and
         // gets `None` would produce orphaned descriptors.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
         reg.register_rpc_with_owner(
             "hub.openai.chat_completions",
             OwnerKind::Hub,

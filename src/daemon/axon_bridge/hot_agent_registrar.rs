@@ -902,15 +902,13 @@ mod tests {
         runtime: Arc<LocalRuntime>,
     ) -> Arc<AxonAbilityCatalog> {
         registrar.set_runtime(Arc::clone(&runtime));
-        // Production daemon boot pins the catalog to its concrete Device URA.
-        // Hosted Agent registration must still use the Agent URA persisted by
-        // its lifecycle, never derive a device-scoped Agent identity from this
-        // fixed context.
+        // This test helper mirrors the legacy embedding seam. Production boot
+        // snapshots hosted Agent URAs into its explicit authority context;
+        // these focused registrar tests seed lifecycle state immediately
+        // before registration, so the local-environment resolver is the
+        // equivalent test fixture.
         let authority_context =
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                crate::core::ura::device_ura("localhost", "dev"),
-            )
-            .expect("test device authority");
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::from_local_environment();
         let catalog = Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
             runtime,
             authority_context,

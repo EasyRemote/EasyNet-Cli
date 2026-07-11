@@ -2,7 +2,7 @@
   "delegation_metadata_key": "x-easynet-delegation",
   "session_authority_metadata_key": "x-easynet-session-authority",
   "delegation_metadata_value": "eyJwYXlsb2FkIjp7Imlzc3Vlcl91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS91c2VyL2FsaWNlIiwic3ViamVjdF91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS91c2VyL2FsaWNlIiwiY2FsbGVyX3VyYSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2FnZW50L2JhY2tlbmQiLCJhdWRpZW5jZSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInNjb3BlcyI6WyJkZXZpY2Uub2JzZXJ2ZS4qIl0sImlzc3VlZF9hdF9tcyI6MTAwMCwiZXhwaXJlc19hdF9tcyI6MjAwMH0sInNpZ25hdHVyZSI6IlpHVnNaV2RoZEdsdmJpMXphV2R1WVhSMWNtVT0ifQ==",
-  "session_authority_metadata_value": "eyJwYXlsb2FkIjp7Imlzc3Vlcl91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9hZ2VudC9iYWNrZW5kIiwic2Vzc2lvbl9pZCI6InNlc3Npb24tMSIsInNlc3Npb25fb3duZXJfdXNlcl9pZCI6ImFsaWNlIiwiY3JlYXRvcl9wcmluY2lwYWxfaWQiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9hZ2VudC9iYWNrZW5kIiwiY2FsbGVlX3VyYSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInN1YmplY3RfdXJhIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvc2Vzc2lvbi9zZXNzaW9uLTEiLCJhdWRpZW5jZSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInNjb3BlcyI6WyJkZXZpY2Uub2JzZXJ2ZS4qIl0sImFsbG93ZWRfYWN0aW9ucyI6WyJyZWFkIl0sImFsbG93ZWRfZm9sbG93dXBfYWJpbGl0aWVzIjpbImRldmljZS5vYnNlcnZlLmhlYWx0aCJdLCJpc3N1ZWRfYXRfbXMiOjEwMDAsImV4cGlyZXNfYXRfbXMiOjIwMDB9LCJzaWduYXR1cmUiOiJjMlZ6YzJsdmJpMXphV2R1WVhSMWNtVT0ifQ==",
+  "session_authority_metadata_value": "eyJwYXlsb2FkIjp7Imlzc3Vlcl91cmEiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9hZ2VudC9iYWNrZW5kIiwic2Vzc2lvbl9pZCI6InNlc3Npb24tMSIsInNlc3Npb25fb3duZXJfdXNlcl9pZCI6ImFsaWNlIiwiY3JlYXRvcl9wcmluY2lwYWxfaWQiOiJlYXN5bmV0Oi8vL3IvZXhhbXBsZS9hZ2VudC9iYWNrZW5kIiwiY2FsbGVlX3VyYSI6ImVhc3luZXQ6Ly8vci9leGFtcGxlL2RldmljZS9kZXYtYSIsInN1YmplY3RfdXJhIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvcmVzb3VyY2UvdXNlci5hbGljZS9zZXNzaW9uL3Nlc3Npb24tMSIsImF1ZGllbmNlIjoiZWFzeW5ldDovLy9yL2V4YW1wbGUvZGV2aWNlL2Rldi1hIiwic2NvcGVzIjpbImRldmljZS5vYnNlcnZlLioiXSwiYWxsb3dlZF9hY3Rpb25zIjpbInJlYWQiXSwiYWxsb3dlZF9mb2xsb3d1cF9hYmlsaXRpZXMiOlsiZGV2aWNlLm9ic2VydmUuaGVhbHRoIl0sImlzc3VlZF9hdF9tcyI6MTAwMCwiZXhwaXJlc19hdF9tcyI6MjAwMH0sInNpZ25hdHVyZSI6ImMyVnpjMmx2YmkxemFXZHVZWFIxY21VPSJ9",
   "expected_delegation": {
     "issuer_ura": "easynet:///r/example/user/alice",
     "subject_ura": "easynet:///r/example/user/alice",
@@ -19,7 +19,7 @@
     "session_owner_user_id": "alice",
     "creator_principal_id": "easynet:///r/example/agent/backend",
     "callee_ura": "easynet:///r/example/device/dev-a",
-    "subject_ura": "easynet:///r/example/session/session-1",
+    "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
     "audience": "easynet:///r/example/device/dev-a",
     "scopes": ["device.observe.*"],
     "allowed_actions": ["read"],

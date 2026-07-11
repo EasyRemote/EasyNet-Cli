@@ -364,6 +364,18 @@
       "message": null
     },
     {
+      "case_id": "managed_signing/provider_lifecycle",
+      "profile": "managed_signing",
+      "status": "passed",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/managed_signing_test.go"
+        }
+      ],
+      "message": "Go validates explicit daemon endpoint binding, key-service protocol v2, purpose-bound versioned policy, strict public projections, lifecycle postconditions, immutable peer trust anchors, and verified key-bound signer behavior."
+    },
+    {
       "case_id": "invocation/prepared_not_submittable",
       "profile": "runtime_core",
       "status": "passed",

@@ -68,8 +68,9 @@ use tonic::transport::{Channel, Endpoint, Server, Uri};
 use tonic::Request;
 
 const REALM: &str = "test-realm";
-const DEVICE_URI: &str = "easynet:///r/test-realm/device/device-a";
-const REMOTE_DEVICE_URI: &str = "easynet:///r/test-realm/device/device-b";
+const DEVICE_URA: &str = "easynet:///r/test-realm/device/device-a";
+const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/device-b";
+const HUB_URA: &str = "easynet:///r/test-realm/hub";
 const ABILITY_PUBLIC_NAME: &str = "test.echo";
 const UNBOUND_ABILITY_PUBLIC_NAME: &str = "test.missing";
 const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-a.test.echo";
@@ -131,8 +132,8 @@ impl Drop for TestDaemon {
     }
 }
 
-/// Boot a daemon whose own identity is `DEVICE_URI`, with the echo
-/// ability registered in a real `LocalRuntime`. Presence is left
+/// Boot a hub-mode daemon with the device echo ability registered in a real
+/// `LocalRuntime`. Presence is left
 /// empty so individual tests choose whether the owner is online.
 async fn start_daemon() -> TestDaemon {
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -143,15 +144,27 @@ async fn start_daemon() -> TestDaemon {
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
-agent_ura = "{DEVICE_URI}"
+agent_ura = "{DEVICE_URA}"
 public_key_b64 = "{device_public_key_b64}"
 role = "device"
 added_at_unix_ms = 0
 
 [[trusted_agent]]
-agent_ura = "{REMOTE_DEVICE_URI}"
+agent_ura = "{REMOTE_DEVICE_URA}"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "device"
+added_at_unix_ms = 0
+
+[[trusted_principal_owner]]
+principal_ura = "{DEVICE_URA}"
+owner_user_id = "owner-a"
+owner_ura = "easynet:///r/test-realm/user/owner-a"
+added_at_unix_ms = 0
+
+[[trusted_principal_owner]]
+principal_ura = "{REMOTE_DEVICE_URA}"
+owner_user_id = "owner-b"
+owner_ura = "easynet:///r/test-realm/user/owner-b"
 added_at_unix_ms = 0
 "#,
     );
@@ -162,11 +175,11 @@ added_at_unix_ms = 0
 
     let trust_anchor = RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
     let presence = Arc::new(PresenceRegistry::new());
-    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(DEVICE_URI.to_string()));
+    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(HUB_URA.to_string()));
 
     let runtime = LocalRuntime::new();
     let authority_context =
-        AbilityAuthorityContext::for_device_authority_root(DEVICE_URI).expect("device authority");
+        AbilityAuthorityContext::for_device_authority_root(DEVICE_URA).expect("device authority");
     let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
         Arc::clone(&runtime),
         authority_context,
@@ -216,18 +229,27 @@ async fn connect(socket_path: &std::path::Path) -> Channel {
         .expect("connect to daemon")
 }
 
-/// Mark `DEVICE_URI` online in the presence registry. The dispatch
+/// Mark `DEVICE_URA` online in the presence registry. The dispatch
 /// sender is never read on these paths (resolve only consults the
 /// registry for liveness), so a throwaway channel is sufficient.
 fn mark_owner_online(presence: &PresenceRegistry) {
     let (tx, _rx) = mpsc::channel(1);
-    presence.insert(DEVICE_URI.to_string(), tx);
+    presence.insert(DEVICE_URA.to_string(), tx);
 }
 
 /// Build a unary `Invoke` of `function_name` against `callee_ura`,
 /// with `args` as the JSON argument payload.
 fn invoke(
     callee_ura: &str,
+    function_name: &str,
+    args: serde_json::Value,
+) -> Request<InvokeRequest> {
+    invoke_with_subject(callee_ura, DEVICE_URA, function_name, args)
+}
+
+fn invoke_with_subject(
+    callee_ura: &str,
+    subject_ura: &str,
     function_name: &str,
     args: serde_json::Value,
 ) -> Request<InvokeRequest> {
@@ -240,7 +262,7 @@ fn invoke(
         easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
     );
     Request::new(
-        ProtoEnvelope::targeted(DEVICE_URI, callee_ura, callee_ura)
+        ProtoEnvelope::targeted(DEVICE_URA, callee_ura, subject_ura)
             .expect("valid invoke envelope")
             .signed_descriptor_ref_invoke_request(function_name, descriptor_ref, arguments, &signer)
             .expect("valid signed invoke request"),
@@ -250,18 +272,19 @@ fn invoke(
 /// Publish the echo ability's owner projection through the real
 /// `federation.advertise_abilities` wire path.
 async fn publish_echo_projection(client: &mut InvocationClient<Channel>) {
-    let request = invoke(
-        DEVICE_URI,
+    let request = invoke_with_subject(
+        HUB_URA,
+        DEVICE_URA,
         ADVERTISE_ABILITIES,
         json!({
-            "owner_ura": DEVICE_URI,
-            "host_device_ura": DEVICE_URI,
+            "owner_ura": DEVICE_URA,
+            "host_device_ura": DEVICE_URA,
             "projection_revision": 1,
-            "projection_digest": "sha256:test",
+            "projection_digest": "6cd33251c2fc58e97bc12fc09e1cc0ec59d0df6b807875b81778371ad70895fe",
             "lease_expires_unix_ms": 4_102_444_800_000_i64,
             "ability_summaries": [{
                 "ability_ura": ABILITY_URA,
-                "owner_ura": DEVICE_URI,
+                "owner_ura": DEVICE_URA,
                 "namespace": "test",
                 "local_name": "echo",
                 "descriptor_revision": "sha256:descriptor",
@@ -296,7 +319,7 @@ async fn publish_echo_projection(client: &mut InvocationClient<Channel>) {
 }
 
 #[tokio::test]
-async fn invoke_resolves_then_dispatches_published_device_ability() {
+async fn invoke_resolves_published_device_ability_to_session_dispatch() {
     let daemon = start_daemon().await;
     mark_owner_online(&daemon.presence);
     let mut client = InvocationClient::new(connect(&daemon.socket_path).await);
@@ -304,20 +327,21 @@ async fn invoke_resolves_then_dispatches_published_device_ability() {
     publish_echo_projection(&mut client).await;
 
     let payload = json!({ "marker": "resolve-before-invoke" });
-    let resp = tokio::time::timeout(
+    let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(DEVICE_URI, ABILITY_PUBLIC_NAME, payload.clone())),
+        client.invoke(invoke(DEVICE_URA, ABILITY_PUBLIC_NAME, payload.clone())),
     )
     .await
     .expect("invoke did not time out")
-    .expect("resolver-selected dispatch returns Ok")
-    .into_inner();
-
-    let echoed: serde_json::Value =
-        serde_json::from_slice(&resp.result).expect("echo result is JSON");
+    .expect_err("hub-mode route must select the device session dispatcher");
     assert_eq!(
-        echoed, payload,
-        "the published device ability must run and echo its payload"
+        status.code(),
+        tonic::Code::FailedPrecondition,
+        "a resolved remote route without a pending dispatcher must fail at dispatch, not resolution"
+    );
+    assert!(
+        status.message().contains("PendingDispatchMap"),
+        "published route must reach the remote session dispatcher: {status}"
     );
 }
 
@@ -331,7 +355,7 @@ async fn invoke_surfaces_typed_nodata_when_owner_online_but_ability_unpublished(
     // LocalRuntime: resolve must return NODATA.
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(DEVICE_URI, UNBOUND_ABILITY_PUBLIC_NAME, json!({}))),
+        client.invoke(invoke(DEVICE_URA, UNBOUND_ABILITY_PUBLIC_NAME, json!({}))),
     )
     .await
     .expect("invoke did not time out")
@@ -353,7 +377,7 @@ async fn invoke_surfaces_typed_nxdomain_when_owner_offline() {
 
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(REMOTE_DEVICE_URI, ABILITY_PUBLIC_NAME, json!({}))),
+        client.invoke(invoke(REMOTE_DEVICE_URA, ABILITY_PUBLIC_NAME, json!({}))),
     )
     .await
     .expect("invoke did not time out")

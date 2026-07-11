@@ -2,10 +2,10 @@
 
 use super::*;
 use crate::daemon::ability::catalog::{
-    build_registry, build_registry_with_services, build_system_registry, published_abilities,
-    published_ability_names, published_system_abilities,
-    recover_descriptor_import_transactions_before_daemon_registry_boot, RegistryBuildConfig,
-    RegistryBuildServices,
+    build_registry, build_registry_for_daemon_result, build_registry_with_services,
+    build_system_registry, published_abilities, published_ability_names,
+    published_system_abilities, recover_descriptor_import_transactions_before_daemon_registry_boot,
+    RegistryBuildConfig, RegistryBuildServices, RegistryDaemonBuildConfig,
 };
 use crate::daemon::persistence::agent_registry::AgentRegistry;
 use std::sync::Arc;
@@ -604,6 +604,157 @@ fn build_registry_satisfies_device_baseline_contract() {
 }
 
 #[test]
+fn default_registry_build_uses_device_authority_profile_without_hub_rows() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let registry = build_registry();
+    let rows = registry.authority_ability_catalog_snapshot();
+
+    assert!(
+        !rows.is_empty(),
+        "default Device registry must not be empty"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.owner != crate::daemon::ability::dispatch::OwnerKind::Hub),
+        "default RegistryBuildConfig leaked Hub authority rows: {rows:?}"
+    );
+}
+
+#[test]
+fn combined_registry_binds_local_introspection_to_distinct_device_and_hub_roots() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
+    let hub_ura = crate::core::ura::hub_ura("realm-b");
+    let mut config = registry_config_for_agents(&agents);
+    config.authority_context = Some(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura.clone(),
+        )
+        .expect("combined authority context"),
+    );
+    let registry = build_registry_with_services_result(config).catalog;
+
+    assert!(
+        registry.static_authority_exclusion_snapshot().is_empty(),
+        "combined authority set must admit every built-in owner plane"
+    );
+
+    for owner_ura in [device_ura, hub_ura] {
+        let record = registry
+            .control_plane_record_for_authority_mode(
+                &owner_ura,
+                "meta.list_abilities",
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("authority-scoped lookup")
+            .unwrap_or_else(|| panic!("meta.list_abilities missing for {owner_ura}"));
+        assert_eq!(record.authority().scope().authority_root(), owner_ura);
+    }
+}
+
+#[test]
+fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let hub_ura = crate::core::ura::hub_ura("hub-only");
+    let runtime = easynet_axon::invocation::LocalRuntime::new();
+    let mut config = registry_config_for_agents(&agents);
+    config.local_runtime = Some(Arc::clone(&runtime));
+    config.authority_context = Some(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
+            .expect("Hub authority context"),
+    );
+    let registry = build_registry_with_services_result(config).catalog;
+
+    let rows = registry.authority_ability_catalog_snapshot();
+    assert!(
+        !rows.is_empty(),
+        "Hub registry must retain its Hub abilities"
+    );
+    assert!(
+        rows.iter().all(
+            |row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
+                && row.owner_ura == hub_ura
+        ),
+        "Hub registry leaked a non-Hub authority row: {rows:?}"
+    );
+    let exclusions = registry.static_authority_exclusion_snapshot();
+    assert!(
+        exclusions.get("device").copied().unwrap_or_default() > 0,
+        "shared assembly must report its centrally-filtered Device registrations: {exclusions:?}"
+    );
+    let conformance = crate::daemon::ability::conformance::RegistryConformance::new(&registry)
+        .check(
+            "hub",
+            crate::daemon::ability::conformance::HubBaseline::required_abilities(),
+        );
+    assert!(
+        conformance.is_conformant(),
+        "Hub owner filtering broke the local Hub baseline: {}",
+        conformance.panic_message()
+    );
+
+    let hub_meta = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &hub_ura,
+        "meta.list_abilities",
+    )
+    .expect("Hub meta runtime key");
+    assert!(
+        crate::support::async_bridge::run_blocking(
+            runtime.ability_options(&hub_meta),
+            crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+        )
+        .is_some(),
+        "Hub LocalRuntime must retain Hub meta.list_abilities"
+    );
+
+    let former_synthetic_device = crate::core::ura::device_ura("hub-only", "local");
+    let device_observe = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &former_synthetic_device,
+        "observe.health",
+    )
+    .expect("hypothetical Device runtime key");
+    assert!(
+        crate::support::async_bridge::run_blocking(
+            runtime.ability_options(&device_observe),
+            crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+        )
+        .is_none(),
+        "Hub LocalRuntime must not contain rows under the former synthetic Device root"
+    );
+}
+
+#[test]
+fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let state_dir = crate::daemon::persistence::config::state_dir();
+    std::fs::create_dir_all(&state_dir).expect("create isolated state directory");
+    std::fs::write(state_dir.join("agents.json"), b"not-json")
+        .expect("write invalid Device agent registry sentinel");
+    std::fs::write(
+        crate::daemon::persistence::teach_grants::path(),
+        b"not-json",
+    )
+    .expect("write invalid Device teach-transaction sentinel");
+
+    let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
+    config.authority_context = Some(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+            crate::core::ura::hub_ura("hub-only"),
+        )
+        .expect("Hub authority context"),
+    );
+    let built = build_registry_for_daemon_result(config)
+        .expect("Hub daemon builder must not parse Device agent transaction state");
+    assert!(built
+        .catalog
+        .authority_ability_catalog_snapshot()
+        .iter()
+        .all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub));
+}
+
+#[test]
 fn published_abilities_includes_skill_list_with_real_metadata() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     // Load-bearing for the EasyNet frontend's Skills page: the
@@ -849,12 +1000,12 @@ fn build_registry_always_registers_key_service_abilities() {
     let reg = build_registry_with_services(registry_config_for_agents(&agents));
     let names = reg.list_abilities();
 
-    // All 10 abilities must be present under device.keyring.*.
+    // Administrative projections are present under device.keyring.*. Raw
+    // signing is SDK-only and must never be exposed as an Invocation ability.
     for verb in [
         "create",
         "list",
         "get_public",
-        "sign",
         "rotate",
         "revoke",
         "expire_set",
@@ -868,6 +1019,10 @@ fn build_registry_always_registers_key_service_abilities() {
             "{want} must be registered; got {names:?}"
         );
     }
+    assert!(
+        !names.iter().any(|name| name == "device.keyring.sign"),
+        "raw signing must remain inside the local key-service capability boundary"
+    );
 }
 
 /// RFC-005 lint: public catalogue names are owner-local names.

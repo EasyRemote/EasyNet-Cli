@@ -42,7 +42,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, Context, Result};
@@ -177,26 +177,14 @@ impl FederatedBindingsStore {
         if !self.path.as_os_str().is_empty() {
             let bytes =
                 serde_json::to_vec_pretty(&*guard).context("serialise federated bindings")?;
-            atomic_write(self.path.as_path(), &bytes)?;
+            if let Some(parent) = self.path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("create parent dir for {}", self.path.display()))?;
+            }
+            crate::daemon::persistence::config::atomic_write(self.path.as_path(), &bytes)?;
         }
         Ok(())
     }
-}
-
-/// Atomic write via temp file + rename. Mirrors the pattern
-/// `realm_trust_anchor::save` uses; keeping the helper local so
-/// the keyring crate doesn't depend on a wider util.
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("federated bindings path {} has no parent", path.display()))?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("create parent dir for {}", path.display()))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).with_context(|| format!("write tmp file {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} to {}", tmp.display(), path.display()))?;
-    Ok(())
 }
 
 #[cfg(test)]

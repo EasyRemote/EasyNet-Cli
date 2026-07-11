@@ -338,9 +338,18 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
     crate::core::ura::parse_ura(&inner_subject_ura).map_err(|err| {
         anyhow!("invalid explicit forward subject URA `{inner_subject_ura}`: {err}")
     })?;
-    let origin_caller = caller_ura.and_then(|caller| {
-        device_origin_claim(caller, target, &inner_subject_ura, &args_bytes_for_claim)
-    });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime for federation invoke")?;
+    let origin_caller = runtime.block_on(async {
+        match caller_ura {
+            Some(caller) => {
+                device_origin_claim(caller, target, &inner_subject_ura, &args_bytes_for_claim).await
+            }
+            None => Ok(None),
+        }
+    })?;
     let inner_payload = json!({
         "ability_ura": target.as_str(),
         "subject_ura": inner_subject_ura,
@@ -429,11 +438,6 @@ pub(crate) fn invoke_via_federation_forward_target_with_timeout(
         forward_subject_ura,
     )?
     .invoke_request("federation.forward_invoke", forward_args_bytes)?;
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("build tokio runtime for federation invoke")?;
 
     runtime.block_on(async move {
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
@@ -722,31 +726,57 @@ fn decode_forward_result_bytes(result_bytes: &[u8]) -> anyhow::Result<Value> {
 /// Returns `None` when the caller is not a device URA. Plain Ability URA
 /// callers use the runtime's canonical default descriptor version; explicit
 /// descriptor refs preserve their supplied version.
-fn device_origin_claim(
+async fn device_origin_claim(
     caller_ura: &str,
     target: &RemoteAbilityInvocationTarget,
     subject_ura: &str,
     args_bytes: &[u8],
-) -> Option<easynet_axon::OriginCallerClaim> {
+) -> anyhow::Result<Option<easynet_axon::OriginCallerClaim>> {
+    if parse_ura(caller_ura)
+        .map(|parsed| parsed.kind != URAKind::Device)
+        .unwrap_or(true)
+    {
+        return Ok(None);
+    }
+    let signer_owner = caller_ura.to_string();
+    let signer = tokio::task::spawn_blocking(move || {
+        crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(signer_owner)
+    })
+    .await
+    .map_err(|error| anyhow!("origin-caller signer worker failed: {error}"))?
+    .map_err(|error| anyhow!("resolve origin-caller signer `{caller_ura}`: {error}"))?;
+    device_origin_claim_with_signer(&signer, caller_ura, target, subject_ura, args_bytes).await
+}
+
+async fn device_origin_claim_with_signer(
+    signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+    caller_ura: &str,
+    target: &RemoteAbilityInvocationTarget,
+    subject_ura: &str,
+    args_bytes: &[u8],
+) -> anyhow::Result<Option<easynet_axon::OriginCallerClaim>> {
     use base64::engine::general_purpose::STANDARD as B64;
     use base64::Engine as _;
     use easynet_axon::invocation::{
-        sign_descriptor_bound_invocation, AgentIdentity, CausalContext, DescriptorBoundEnvelope,
+        AgentIdentity, CallerSignature, CausalContext, DescriptorBoundEnvelope,
         DescriptorBoundEnvelopeParts, EntityRef, SubjectIdentity, UraProfile,
     };
 
-    let parsed = parse_ura(caller_ura).ok()?;
+    let parsed = match parse_ura(caller_ura) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
     if parsed.kind != URAKind::Device {
-        return None;
+        return Ok(None);
     }
-    let device_id = parsed.device_id()?.to_string();
+    if signer.owner_ura() != caller_ura {
+        anyhow::bail!(
+            "origin-caller signer owner mismatch: expected `{caller_ura}`, got `{}`",
+            signer.owner_ura()
+        );
+    }
     let callee_ura = target.callee_ura.to_string();
     let public_ability = target.public_ability.to_string();
-
-    let subject_id = easynet_axon::invocation::private_agent_subject_id(&device_id);
-    let (seed, signer_pubkey_b64) =
-        crate::daemon::federation::publish::derive_subject_keypair(&parsed.realm, &subject_id);
-    let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
 
     let nonce = easynet_axon::invocation::fresh_nonce();
     let descriptor_version = target
@@ -757,10 +787,9 @@ fn device_origin_claim(
         &callee_ura,
         &public_ability,
         descriptor_version,
-    )
-    .ok()?;
+    )?;
 
-    EntityRef::try_from_subject_identity(&subject).ok()?;
+    EntityRef::try_from_subject_identity(&subject)?;
     let descriptor_bound = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller: AgentIdentity::new(caller_ura.to_string(), UraProfile::EasynetStrictV2),
         callee: AgentIdentity::new(callee_ura.clone(), UraProfile::EasynetStrictV2),
@@ -769,18 +798,28 @@ fn device_origin_claim(
         invocation_nonce: nonce,
         causal_context: CausalContext::None,
         args_bytes,
-    })
-    .ok()?;
-    let signature = sign_descriptor_bound_invocation(&signing, &descriptor_bound, "device-origin");
+    })?;
+    let signature = signer
+        .sign_canonical(&descriptor_bound.canonical_bytes())
+        .await
+        .map_err(|error| anyhow!("sign origin-caller claim: {error}"))?;
+    let public_key = signer
+        .signing_public_key()
+        .map_err(|error| anyhow!("project origin-caller public key: {error}"))?;
+    let signature = CallerSignature {
+        algorithm: "ed25519".to_string(),
+        signature: signature.to_bytes().to_vec(),
+        key_id_hint: "device-origin".to_string(),
+    };
 
-    Some(easynet_axon::OriginCallerClaim {
+    Ok(Some(easynet_axon::OriginCallerClaim {
         caller_ura: caller_ura.to_string(),
         ability: public_ability,
         descriptor_version: descriptor_version.to_string(),
         signature_b64: B64.encode(signature.signature),
-        signer_pubkey_b64,
+        signer_pubkey_b64: B64.encode(public_key.to_bytes()),
         nonce_b64: B64.encode(nonce),
-    })
+    }))
 }
 
 fn validate_forward_execution_target(
@@ -1048,14 +1087,19 @@ fn generate_call_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::identity::self_identity::TestCanonicalSigner;
+
+    fn test_signer(owner_ura: &str) -> TestCanonicalSigner {
+        TestCanonicalSigner::new(owner_ura, [0x71; 32])
+    }
 
     /// The whole fidelity contract in one place: the claim the
     /// submitting device signs must verify against the canonical bytes
     /// the EXECUTING device rebuilds from the hub's dispatch frame
     /// (callee = route owner, subject = explicit inner subject, ability =
     /// public name, args = hub-re-serialised bytes).
-    #[test]
-    fn device_origin_claim_round_trips_executing_device_rebuild() {
+    #[tokio::test]
+    async fn device_origin_claim_round_trips_executing_device_rebuild() {
         use ed25519_dalek::{Verifier as _, VerifyingKey};
 
         let caller = "easynet:///r/easynet.run/device/node-a";
@@ -1072,8 +1116,12 @@ mod tests {
 
         let route_callee = "easynet:///r/easynet.run/agent/alice.bfilter";
         let subject_ura = "easynet:///r/easynet.run/resource/dataset.rows-1";
-        let claim = device_origin_claim(caller, &target, subject_ura, &args_bytes)
-            .expect("device caller produces a claim");
+        let signer = test_signer(caller);
+        let claim =
+            device_origin_claim_with_signer(&signer, caller, &target, subject_ura, &args_bytes)
+                .await
+                .expect("origin claim signing succeeds")
+                .expect("device caller produces a claim");
         assert_eq!(claim.caller_ura, caller);
         assert_eq!(claim.ability, "code_filter");
         assert_eq!(claim.descriptor_version, "2.4.0");
@@ -1126,35 +1174,45 @@ mod tests {
 
     /// Non-device callers (users, agents) produce no device claim —
     /// fidelity is additive, never fabricated.
-    #[test]
-    fn device_origin_claim_requires_device_caller() {
+    #[tokio::test]
+    async fn device_origin_claim_requires_device_caller() {
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/easynet.run/device/node-b",
             "easynet:///r/easynet.run/ability/alice.bfilter.code_filter@2.4.0",
         )
         .expect("remote ability target");
-        assert!(device_origin_claim(
-            "easynet:///r/easynet.run/user/alice",
+        let caller = "easynet:///r/easynet.run/user/alice";
+        let signer = test_signer(caller);
+        assert!(device_origin_claim_with_signer(
+            &signer,
+            caller,
             &target,
             target.default_subject_ura(),
             b"{}",
         )
+        .await
+        .expect("non-device caller is a valid no-claim state")
         .is_none());
     }
 
-    #[test]
-    fn device_origin_claim_uses_default_descriptor_version_for_plain_ability_ura() {
+    #[tokio::test]
+    async fn device_origin_claim_uses_default_descriptor_version_for_plain_ability_ura() {
         let target = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/easynet.run/device/node-b",
             "easynet:///r/easynet.run/ability/alice.bfilter.code_filter",
         )
         .expect("remote ability target");
-        let claim = device_origin_claim(
-            "easynet:///r/easynet.run/device/node-a",
+        let caller = "easynet:///r/easynet.run/device/node-a";
+        let signer = test_signer(caller);
+        let claim = device_origin_claim_with_signer(
+            &signer,
+            caller,
             &target,
             target.default_subject_ura(),
             b"{}",
         )
+        .await
+        .expect("origin claim signing succeeds")
         .expect("plain Ability URA uses the canonical default descriptor version");
         assert_eq!(
             claim.descriptor_version,

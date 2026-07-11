@@ -73,6 +73,44 @@ pub enum AbilityControlPlaneError {
         authority_root: String,
         reason: String,
     },
+    /// A hub-scoped authority context was constructed with a non-Hub URA or
+    /// a value that could not be parsed as a canonical URA.
+    #[error("hub authority root must be a canonical Hub URA: {authority_root:?}: {reason}")]
+    InvalidHubAuthorityRoot {
+        authority_root: String,
+        reason: String,
+    },
+    /// A registration requested an owner plane that the process-local
+    /// authority set does not host. Device contexts admit Device, Agent, and
+    /// User owners; Hub contexts admit Hub owners; combined contexts admit
+    /// both planes.
+    #[error(
+        "authority set {authority_set:?} does not support owner projection {owner_projection:?}"
+    )]
+    UnsupportedOwnerForAuthoritySet {
+        owner_projection: String,
+        authority_set: &'static str,
+    },
+    /// An explicit authority scope claimed a different owner projection than
+    /// the registration's typed `OwnerKind`.
+    #[error(
+        "authority scope owner projection {actual_projection:?} does not match registration owner {expected_projection:?}"
+    )]
+    AuthorityScopeOwnerProjectionMismatch {
+        expected_projection: String,
+        actual_projection: String,
+    },
+    /// An explicit authority scope used a root outside the process-local
+    /// authority set (including a foreign realm/device or mismatched Agent
+    /// identity).
+    #[error(
+        "authority root {authority_root:?} for owner {owner_projection:?} is not hosted by authority set {authority_set:?}"
+    )]
+    AuthorityScopeRootNotHosted {
+        owner_projection: String,
+        authority_root: String,
+        authority_set: &'static str,
+    },
     /// Authority binding was created without an ability name.
     #[error("authority ability must be non-empty")]
     EmptyAuthorityAbility,

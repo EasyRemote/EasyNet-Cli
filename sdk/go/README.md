@@ -5,6 +5,17 @@ lifecycle, Runtime Core, Directory + Identity, Receipt, Events, Admin +
 Gateway, Surface, Compatibility, and selected wrapper profiles without
 importing Axon packages or generated Axon protobufs in public APIs.
 
+## Signing custody
+
+`SignatureProvider` is the generic seam for signatures produced by an
+external signer selected by the consumer. The Go SDK never accepts or stores a
+private key or seed. Keys managed by the local EasyNet runtime are available
+only through the daemon-backed `RuntimeSigningIdentity` and `ManagedSigner`
+surfaces; `StaticSignatureProvider` adapts a signature that was already
+produced outside the SDK. These provider surfaces require an explicit daemon
+endpoint; the SDK neither discovers product directories nor reads product
+environment variables to infer one.
+
 Current status: Runtime Core discovery/daemon-lifecycle/connection/health/
 errors/connect-local lifecycle composition/invocation-draft/unary/stream/bidi/handle/prepare-submit plus
 Directory + Identity, Receipt, Publication, Host Binding, Mission,
@@ -23,8 +34,8 @@ Publication, Mission, Admin + Gateway, Events, Surface, Compatibility, and
 Wrapper clients, schema-backed SDK error projection
 with stable error classes and profile source-ref accessors, complete Invocation
 draft construction, prepared/signed Invocation DTOs, unary
-InvocationResult projection, local Ed25519 signer provider over daemon/Axon
-canonical signing material, typed authority metadata projections with
+InvocationResult projection, a generic external-signer provider seam plus
+daemon-backed runtime and managed signers, typed authority metadata projections with
 mutually-exclusive InvocationBuilder attachment guardrails, StreamHandle state observation with schema-shaped
 terminal event projection, BidiSession frame ordering, half-close, cancel,
 terminal-frame projection, and terminal-close observation, InvocationHandle

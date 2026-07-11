@@ -1214,6 +1214,7 @@ impl TeachGrantStore {
             json.as_bytes(),
             WritePermissions::OwnerReadWrite,
         )
+        .map_err(Into::into)
     }
 
     fn lock(&self) -> anyhow::Result<TeachGrantStoreLock> {

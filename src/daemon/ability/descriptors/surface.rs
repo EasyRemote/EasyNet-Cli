@@ -673,7 +673,7 @@ impl AbilityDescriptor {
     /// registry entries may arrive as `<agent-id>.<verb>` internally;
     /// this method is the only place that projection is applied.
     pub fn public_name(&self) -> String {
-        crate::core::ura::owner_local_ability_name(&self.owner_ura, &self.name)
+        crate::core::ura::descriptor_public_ability_name(&self.owner_ura, &self.name)
     }
 
     /// Canonical ability URA for this descriptor. Always recomputed

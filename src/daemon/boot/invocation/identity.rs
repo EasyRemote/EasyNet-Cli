@@ -1,26 +1,53 @@
-use crate::daemon::federation::publish::derive_subject_keypair;
-use crate::daemon::invocation::bidi::session_initiator::SessionSigningSeed;
+use std::sync::Arc;
+
+use anyhow::Context as _;
+
+use crate::daemon::identity::self_identity::{CanonicalSigner, RuntimeSigningIdentity};
+use crate::daemon::persistence::daemon_config::DaemonMode;
 
 use super::paths::expand_home;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct DaemonIdentity {
     pub caller_ura: String,
-    pub signing_seed: Option<SessionSigningSeed>,
+    pub signer: Arc<dyn CanonicalSigner>,
+}
+
+impl std::fmt::Debug for DaemonIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DaemonIdentity")
+            .field("caller_ura", &self.caller_ura)
+            .field("signer_owner_ura", &self.signer.owner_ura())
+            .finish()
+    }
+}
+
+impl DaemonIdentity {
+    pub(super) fn bind(
+        caller_ura: String,
+        signer: Arc<dyn CanonicalSigner>,
+    ) -> anyhow::Result<Self> {
+        if signer.owner_ura() != caller_ura {
+            anyhow::bail!(
+                "daemon identity signer owner mismatch: expected `{caller_ura}`, got `{}`",
+                signer.owner_ura()
+            );
+        }
+        Ok(Self { caller_ura, signer })
+    }
 }
 
 /// Narrow read-projection of `~/.easynet/credentials.json` carrying
-/// only the three fields the daemon needs to derive its caller URA +
-/// signing seed.
+/// only the three fields the daemon needs to resolve its Device owner URA.
 ///
 /// MUST NOT use `#[serde(deny_unknown_fields)]`. The writer
 /// (`persistence::config::Credentials`) owns the file and its field
 /// set grows over time — `credential_token`, `hub_endpoint`,
 /// `hub_api_base`, `username`, `hub_pubkey_b64`, `hub_tls_ca_pem_b64`
 /// were all added after this projection. A strict reader would reject
-/// the whole file the moment any such field appears, silently
-/// collapsing `load_daemon_identity()` to `None` (the `.ok()?` at the
-/// call site). That drops the daemon's device identity, so the
+/// the whole file the moment any such field appears. That drops the
+/// daemon's device identity, so the
 /// device-mode `session.open` supervisor never starts, the hub
 /// never sees the device's presence, and the backend renders it
 /// REMOVED. This is a projection, not a schema gate: tolerate unknown
@@ -65,68 +92,49 @@ impl<'de> serde::Deserialize<'de> for RejectedTenantId {
     }
 }
 
-/// Resolve the daemon's caller URA plus the optional deterministic
-/// signing seed from `~/.easynet/credentials.json`.
-///
-/// Contract:
-/// - credentials must carry `(realm, node_id)`.
-/// - `tenant_id` is a retired field and is rejected by serde.
-/// - `agent_ura`, when present, is only a consistency checksum; it is
-///   never a fallback identity.
-/// - once we have the canonical `(realm, node_id)` pair, derive the same
-///   deterministic Ed25519 seed the SDK uses for
-///   `easynet:prv:reg:agent.<node>`.
-pub(super) fn load_daemon_identity() -> Option<DaemonIdentity> {
+/// Resolve the daemon's caller URA and bind it to the canonical local key
+/// service. A missing credentials file is the only `None` state. Present but
+/// invalid credentials or an unavailable signing identity fail boot instead
+/// of silently producing an unsigned runtime.
+pub(super) fn load_daemon_identity() -> anyhow::Result<Option<DaemonIdentity>> {
     let path = expand_home("~/.easynet/credentials.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let stored: StoredDeviceIdentity = serde_json::from_str(&raw).ok()?;
-    daemon_identity_from_stored(&stored)
-}
-
-pub(super) fn daemon_identity_from_stored(stored: &StoredDeviceIdentity) -> Option<DaemonIdentity> {
-    let caller_ura = canonical_caller_ura_from_stored_identity(stored)?;
-
-    let realm = stored
-        .realm
-        .as_deref()
-        .map(str::trim)
-        .filter(|realm| !realm.is_empty())
-        .map(str::to_string);
-    let node_id = stored
-        .node_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|node| !node.is_empty())
-        .map(str::to_string)
-        .or_else(|| device_id_from_caller_ura(&caller_ura));
-
-    // Phase 3D: prefer the keyring vault's seed when the operator
-    // has opted in via EASYNET_KEYRING_PASSPHRASE. The vault's
-    // primary_self for this device is `caller_ura`; the role
-    // overlay also matches HubURA(realm) on the same host, so
-    // backend (Go side, Phase 3D's Go reader) and daemon (Rust
-    // side here) end up signing with the **same** Ed25519 seed.
-    //
-    // Misses (env unset, vault file missing, this URA not in
-    // vault) silently fall through to the v4.1.4 deterministic
-    // derive — operators who have not yet rolled their daemons
-    // onto the keyring stay unaffected.
-    let signing_seed = if let Some(seed) = try_load_daemon_seed_from_keyring(&caller_ura) {
-        Some(seed)
-    } else {
-        match (realm.as_deref(), node_id.as_deref()) {
-            (Some(realm), Some(node_id)) => {
-                let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
-                Some(derive_subject_keypair(realm, &subject_id).0)
-            }
-            _ => None,
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read daemon credentials {}", path.display()));
         }
     };
+    let stored: StoredDeviceIdentity = serde_json::from_str(&raw)
+        .with_context(|| format!("parse daemon credentials {}", path.display()))?;
+    let caller_ura = canonical_caller_ura_from_stored_identity(&stored).ok_or_else(|| {
+        anyhow::anyhow!(
+            "daemon credentials {} do not contain a consistent realm/node identity",
+            path.display()
+        )
+    })?;
+    let signer = load_runtime_signer(&caller_ura)?;
+    Ok(Some(DaemonIdentity::bind(caller_ura, signer)?))
+}
 
-    Some(DaemonIdentity {
-        caller_ura,
-        signing_seed,
-    })
+/// Resolve Device credentials only for modes that actually own a Device
+/// runtime. Hub-only boot has no dependency on credentials.json and must not
+/// fail because a stale device pairing file exists on the same host.
+pub(super) fn load_daemon_identity_for_mode(
+    mode: DaemonMode,
+) -> anyhow::Result<Option<DaemonIdentity>> {
+    match mode {
+        DaemonMode::Hub => Ok(None),
+        DaemonMode::Device | DaemonMode::Both => load_daemon_identity(),
+    }
+}
+
+pub(super) fn load_runtime_signer(owner_ura: &str) -> anyhow::Result<Arc<dyn CanonicalSigner>> {
+    Ok(Arc::new(
+        RuntimeSigningIdentity::load_default(owner_ura.to_string())
+            .map_err(|error| anyhow::anyhow!("bind runtime signer for `{owner_ura}`: {error}"))?,
+    ))
 }
 
 /// Best-effort runtime-side self-identity bootstrap for daemon boots
@@ -212,68 +220,6 @@ pub(super) fn maybe_bootstrap_runtime_self_identity(identity: &DaemonIdentity) {
     }
 }
 
-fn try_load_daemon_seed_from_keyring(self_ura: &str) -> Option<[u8; 32]> {
-    use crate::daemon::keyring::{MasterKeySource, Vault, VaultError};
-
-    std::env::var("EASYNET_KEYRING_PASSPHRASE")
-        .ok()
-        .filter(|v| !v.is_empty())?;
-    let path = if let Ok(p) = std::env::var("EASYNET_KEYRING_VAULT_PATH") {
-        std::path::PathBuf::from(p)
-    } else {
-        expand_home(&format!("~/{}", crate::daemon::keyring::DEFAULT_VAULT_REL))
-    };
-    if !path.exists() {
-        return None;
-    }
-    let source = match MasterKeySource::from_env() {
-        Ok(s) => s,
-        Err(err) => {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_master_key_source_failed,
-                error = err_msg,
-            );
-            return None;
-        }
-    };
-    let vault = match Vault::open(&path, &source) {
-        Ok(v) => v,
-        Err(VaultError::NotFound(_)) => return None,
-        Err(err) => {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_open_failed,
-                error = err_msg,
-            );
-            return None;
-        }
-    };
-    match vault.export_seed(self_ura) {
-        Ok(seed) => {
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_daemon_seed_resolved,
-                self_ura = self_ura,
-            );
-            Some(seed)
-        }
-        Err(VaultError::NotFound(_)) => None,
-        Err(err) => {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = keyring_export_seed_failed,
-                self_ura = self_ura,
-                error = err_msg,
-            );
-            None
-        }
-    }
-}
-
 pub(super) fn canonical_caller_ura_from_stored_identity(
     stored: &StoredDeviceIdentity,
 ) -> Option<String> {
@@ -315,10 +261,9 @@ pub(super) fn canonical_caller_ura_from_stored_identity(
 //
 // Legacy `r/{prv,org}/reg/agent.<id>?tenant_id=<t>` (URA v1) and
 // `agent/<bare-id>` (URA v2 transitional) shapes are rejected —
-// pre-v4.1.5 credential files cannot bootstrap signing seeds; users
-// must `easynet device join` again to mint a v4.1.5 credential.
-// Returning `None` triggers the parent code's "skip signing seed"
-// branch (CLI starts unsigned, harmless in dev).
+// pre-v4.1.5 credential files cannot bind a canonical runtime owner; users
+// must `easynet device join` again to mint a v4.1.5 credential. Boot fails
+// closed when a Device-mode daemon has no valid canonical owner.
 fn realm_from_agent_ura(ura: &str) -> Option<String> {
     let parsed = crate::core::ura::parse_ura(ura).ok()?;
     if parsed.realm.is_empty() {

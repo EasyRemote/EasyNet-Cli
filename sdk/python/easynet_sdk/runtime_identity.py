@@ -9,27 +9,38 @@ bytes.
 from __future__ import annotations
 
 import base64
-import json
-import os
-import socket
-import struct
+import hashlib
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Mapping
+from typing import Callable, TypeVar
 
-from .errors import ErrorCode, RetryHint, SDKError
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+from ._key_service import (
+    KeyServiceClient,
+    MAX_KEY_SERVICE_CANONICAL_BYTES,
+    decode_base64_field,
+    decode_base64_value,
+    invalid_key_service_input,
+    invalid_key_service_payload,
+    require_response_shape,
+)
+from .errors import SDKError
 from .identity import SignerHandle
 from .invocation import InvocationSignature
 from .signing import SignatureProvider, SigningMaterial
 
-_MAX_FRAME_BYTES = 64 * 1024
+_T = TypeVar("_T")
 
 
 def default_runtime_keyring_socket_path() -> str:
-    configured = os.environ.get("EASYNET_KEYRING_SOCKET_PATH", "").strip()
-    if configured:
-        return configured
-    return str(Path.home() / ".easynet" / "keyring.sock")
+    """Retained API that rejects product endpoint discovery.
+
+    A generic runtime SDK cannot infer a product daemon endpoint. Consumers
+    must obtain it from their own daemon lifecycle and pass it explicitly.
+    """
+
+    raise _invalid("daemon key-service endpoint must be supplied by the product runtime")
 
 
 @dataclass(frozen=True)
@@ -42,66 +53,90 @@ class RuntimeSigningIdentity:
     timeout_seconds: float = 10.0
 
     def sign_canonical(self, canonical_bytes: bytes) -> bytes:
-        if not canonical_bytes:
+        if not isinstance(canonical_bytes, bytes) or not canonical_bytes:
             raise _invalid("canonical bytes are required for runtime signing")
-        response = _call_keyring(
-            self.socket_path,
-            self.timeout_seconds,
-            {
-                "method": "sign",
-                "self_ura": self.owner_ura,
-                "canonical_bytes_b64": base64.b64encode(canonical_bytes).decode("ascii"),
-            },
-        )
-        signature = _decode_b64(response, "signature_b64", expected_len=64)
-        return signature
+        if len(canonical_bytes) > MAX_KEY_SERVICE_CANONICAL_BYTES:
+            raise _invalid("canonical bytes exceed the 64 MiB signing limit")
+
+        def operation() -> bytes:
+            public_key_b64 = base64.b64encode(self.public_key).decode("ascii")
+            response = KeyServiceClient(self.socket_path, self.timeout_seconds).call(
+                {
+                    "method": "sign",
+                    "self_ura": self.owner_ura,
+                    "public_key_b64": public_key_b64,
+                    "signer_policy_ref": _runtime_signer_policy_ref(
+                        self.owner_ura, public_key_b64
+                    ),
+                    "canonical_bytes_b64": base64.b64encode(canonical_bytes).decode(
+                        "ascii"
+                    ),
+                },
+            )
+            require_response_shape(response, "signature", required=("signature_b64",))
+            signature = decode_base64_field(
+                response, "signature_b64", expected_len=64
+            )
+            try:
+                Ed25519PublicKey.from_public_bytes(self.public_key).verify(
+                    signature, canonical_bytes
+                )
+            except (ValueError, InvalidSignature) as error:
+                raise invalid_key_service_payload(
+                    "daemon key service returned a signature that does not verify "
+                    "against the bound runtime identity",
+                    error,
+                ) from error
+            return signature
+
+        return _runtime_identity_operation(operation)
 
 
 def load_runtime_signing_identity(
     owner_ura: str, *, socket_path: str = "", timeout_seconds: float = 10.0
 ) -> RuntimeSigningIdentity:
-    owner_ura = owner_ura.strip()
-    if not owner_ura:
-        raise _invalid("runtime signing identity owner URA is required")
-    socket_path = socket_path or default_runtime_keyring_socket_path()
-    response = _call_keyring(
-        socket_path,
-        timeout_seconds,
-        {"method": "derive_pubkey", "self_ura": owner_ura},
-    )
+    owner_ura = _owner_ura(owner_ura)
+    client = KeyServiceClient(socket_path, timeout_seconds)
+
+    def operation() -> bytes:
+        response = client.call({"method": "derive_pubkey", "self_ura": owner_ura})
+        require_response_shape(response, "public_key", required=("public_key_b64",))
+        return decode_base64_field(response, "public_key_b64", expected_len=32)
+
+    public_key = _runtime_identity_operation(operation)
     return RuntimeSigningIdentity(
         owner_ura=owner_ura,
-        public_key=_decode_b64(response, "public_key_b64", expected_len=32),
-        socket_path=socket_path,
-        timeout_seconds=timeout_seconds,
+        public_key=public_key,
+        socket_path=client.socket_path,
+        timeout_seconds=client.timeout_seconds,
     )
 
 
 def ensure_runtime_signing_identity(
     owner_ura: str,
     *,
-    role_overlays: tuple[str, ...] = (),
     socket_path: str = "",
     timeout_seconds: float = 10.0,
 ) -> RuntimeSigningIdentity:
-    owner_ura = owner_ura.strip()
-    if not owner_ura:
-        raise _invalid("runtime signing identity owner URA is required")
-    socket_path = socket_path or default_runtime_keyring_socket_path()
-    response = _call_keyring(
-        socket_path,
-        timeout_seconds,
-        {
-            "method": "ensure",
-            "primary_self": owner_ura,
-            "role_overlays": [item.strip() for item in role_overlays if item.strip() and item.strip() != owner_ura],
-        },
-    )
+    owner_ura = _owner_ura(owner_ura)
+    client = KeyServiceClient(socket_path, timeout_seconds)
+
+    def operation() -> bytes:
+        response = client.call(
+            {
+                "method": "ensure",
+                "primary_self": owner_ura,
+            },
+        )
+        require_response_shape(response, "public_key", required=("public_key_b64",))
+        return decode_base64_field(response, "public_key_b64", expected_len=32)
+
+    public_key = _runtime_identity_operation(operation)
     return RuntimeSigningIdentity(
         owner_ura=owner_ura,
-        public_key=_decode_b64(response, "public_key_b64", expected_len=32),
-        socket_path=socket_path,
-        timeout_seconds=timeout_seconds,
+        public_key=public_key,
+        socket_path=client.socket_path,
+        timeout_seconds=client.timeout_seconds,
     )
 
 
@@ -111,91 +146,76 @@ class DaemonKeyringSignatureProvider(SignatureProvider):
 
     identity: RuntimeSigningIdentity
 
-    def sign(self, material: SigningMaterial, handle: SignerHandle) -> InvocationSignature:
+    def sign(
+        self, material: SigningMaterial, handle: SignerHandle
+    ) -> InvocationSignature:
         if material.algorithm != "ed25519" or handle.algorithm != "ed25519":
             raise _invalid("daemon keyring signing requires ed25519")
         if handle.owner_ura != self.identity.owner_ura:
             raise _invalid("signer handle owner URA does not match runtime identity")
-        canonical = _decode_b64_value(material.canonical_bytes_base64, "canonical_bytes_base64")
+        canonical = _runtime_identity_operation(
+            lambda: decode_base64_value(
+                material.canonical_bytes_base64, "canonical_bytes_base64"
+            )
+        )
         signature = self.identity.sign_canonical(canonical)
         return InvocationSignature(
             algorithm="ed25519",
             signature_base64=base64.b64encode(signature).decode("ascii"),
             key_id_hint=handle.signer_id,
-            signer_public_key_base64=base64.b64encode(self.identity.public_key).decode("ascii"),
+            signer_public_key_base64=base64.b64encode(self.identity.public_key).decode(
+                "ascii"
+            ),
         )
-
-
-def _call_keyring(path: str, timeout: float, request: Mapping[str, Any]) -> Mapping[str, Any]:
-    encoded = json.dumps(request, separators=(",", ":")).encode("utf-8")
-    if len(encoded) > _MAX_FRAME_BYTES:
-        raise _invalid("daemon keyring request exceeds frame limit")
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(timeout)
-            connection.connect(path)
-            connection.sendall(struct.pack(">I", len(encoded)) + encoded)
-            length = struct.unpack(">I", _read_exact(connection, 4))[0]
-            if length > _MAX_FRAME_BYTES:
-                raise _invalid("daemon keyring response exceeds frame limit")
-            response = json.loads(_read_exact(connection, length).decode("utf-8"))
-    except SDKError:
-        raise
-    except OSError as exc:
-        raise SDKError(
-            code=ErrorCode.DAEMON_OFFLINE,
-            stage="runtime_identity",
-            retry=RetryHint.SAFE,
-            message=f"runtime keyring unavailable at {path}: {exc}",
-            retryable=True,
-            cause=exc,
-        ) from exc
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise _invalid(f"decode daemon keyring response: {exc}", exc) from exc
-    if not isinstance(response, dict):
-        raise _invalid("daemon keyring response must be an object")
-    if response.get("result") == "error":
-        code = ErrorCode.NOT_FOUND if response.get("kind") == "not_found" else ErrorCode.PERMISSION_DENIED
-        raise SDKError(
-            code=code,
-            stage="runtime_identity",
-            retry=RetryHint.NEVER,
-            message=str(response.get("message", "daemon keyring rejected request")),
-        )
-    return response
-
-
-def _read_exact(connection: socket.socket, count: int) -> bytes:
-    data = bytearray()
-    while len(data) < count:
-        chunk = connection.recv(count - len(data))
-        if not chunk:
-            raise OSError("unexpected EOF from daemon keyring")
-        data.extend(chunk)
-    return bytes(data)
-
-
-def _decode_b64(response: Mapping[str, Any], field: str, *, expected_len: int) -> bytes:
-    return _decode_b64_value(response.get(field), field, expected_len=expected_len)
-
-
-def _decode_b64_value(value: Any, field: str, *, expected_len: int | None = None) -> bytes:
-    if not isinstance(value, str) or not value:
-        raise _invalid(f"daemon keyring response field {field} is required")
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except Exception as exc:
-        raise _invalid(f"{field} must be base64", exc) from exc
-    if expected_len is not None and len(decoded) != expected_len:
-        raise _invalid(f"{field} must be {expected_len} bytes")
-    return decoded
 
 
 def _invalid(message: str, cause: Exception | None = None) -> SDKError:
+    shared = invalid_key_service_input(message, cause)
     return SDKError(
-        code=ErrorCode.INVALID_ARGUMENT,
+        code=shared.code,
         stage="runtime_identity",
-        retry=RetryHint.NEVER,
-        message=message,
-        cause=cause,
+        retry=shared.retry,
+        retryable=shared.retryable,
+        message=shared.message,
+        details=shared.details,
+        cause=shared.cause,
+    )
+
+
+def _owner_ura(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _invalid("runtime signing identity owner URA is required")
+    return value.strip()
+
+
+def _runtime_signer_policy_ref(owner_ura: str, public_key_b64: str) -> str:
+    digest = hashlib.sha256(
+        owner_ura.encode("utf-8")
+        + b"\0"
+        + owner_ura.encode("utf-8")
+        + b"\0"
+        + public_key_b64.encode("ascii")
+    ).hexdigest()[:32]
+    return f"daemon-key-inventory:sha256:{digest}"
+
+
+def _runtime_identity_operation(operation: Callable[[], _T]) -> _T:
+    try:
+        return operation()
+    except SDKError as error:
+        raise _runtime_identity_error(error) from error
+
+
+def _runtime_identity_error(error: SDKError) -> SDKError:
+    return SDKError(
+        code=error.code,
+        stage="runtime_identity",
+        retry=error.retry,
+        retryable=error.retryable,
+        message=error.message,
+        source=error.source,
+        invocation_id=error.invocation_id,
+        receipt_ura=error.receipt_ura,
+        details=error.details,
+        cause=error,
     )

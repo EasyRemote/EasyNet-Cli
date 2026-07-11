@@ -1609,6 +1609,21 @@ mod tests {
     use crate::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
     use std::collections::HashMap;
 
+    fn registry_for_mcp_owner(owner_ura: &str) -> AxonAbilityCatalog {
+        let owner = crate::core::ura::parse_ura(owner_ura).expect("canonical MCP owner URA");
+        let device_ura = crate::core::ura::device_ura(&owner.realm, "mcp-test-device");
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+                device_ura,
+                vec![owner_ura.to_string()],
+            )
+            .expect("MCP test authority context");
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            easynet_axon::invocation::LocalRuntime::new(),
+            authority_context,
+        )
+    }
+
     #[test]
     fn descriptor_owner_kind_dual_shape() {
         // User-owned agent maps to OwnerKind::Agent.
@@ -1697,10 +1712,10 @@ while True:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reflects_two_tools_with_clean_descriptors() {
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = AxonAbilityCatalog::new();
         // mcp-profile agent URA — same shape as the daemon would
         // construct: easynet:///r/<realm>/agent/<user>.mcp
         let owner = "easynet:///r/test-realm/agent/test-user.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
 
         let result = reflect_all(&svc, &mut reg, owner).await;
 
@@ -1816,8 +1831,9 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg = AxonAbilityCatalog::new();
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
+        let owner = "easynet:///r/r/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let result = reflect_all(&svc, &mut reg, owner).await;
 
         assert!(
             result.failed.is_empty(),
@@ -1836,10 +1852,11 @@ while True:
         // Pre-register a handler under the name the upstream tool
         // would claim, then verify reflection refuses to overwrite.
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = AxonAbilityCatalog::new();
+        let owner = "easynet:///r/r/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
         reg.register_rpc("echo_one", Arc::new(|_: Value| Ok(json!("local"))));
 
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
+        let result = reflect_all(&svc, &mut reg, owner).await;
 
         // echo_two registers; echo_one fails with a clear message
         // pointing the operator at the config knob.
@@ -2010,7 +2027,7 @@ while True:
         // a future refactor that moved the index off the variant would
         // break the hot-reload sink attachment.
         let (_dir, svc) = make_echo_client("echo");
-        let reg = AxonAbilityCatalog::new();
+        let reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
 
         // `PostArcReflection::plan` calls `run_eager_blocking`, which
         // uses `block_in_place` when an ambient runtime is available.
@@ -2061,8 +2078,8 @@ while True:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn lazy_supervisor_registers_reflected_tools_in_dynamic_overlay() {
         let (_dir, svc) = make_echo_client("echo");
-        let reg = Arc::new(AxonAbilityCatalog::new());
         let owner = "easynet:///r/test-realm/agent/test-user.mcp";
+        let reg = Arc::new(registry_for_mcp_owner(owner));
         let supervisor = McpReflectionSupervisor::new(Arc::clone(&svc), Arc::clone(&reg), owner);
 
         let result = supervisor.run_once().await;
@@ -2162,8 +2179,9 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg = AxonAbilityCatalog::new();
-        let initial = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
+        let owner = "easynet:///r/test/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let initial = reflect_all(&svc, &mut reg, owner).await;
         assert!(initial.failed.is_empty(), "{:?}", initial.failed);
         let prev_names: Vec<String> = initial
             .registered
@@ -2191,11 +2209,11 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg2 = AxonAbilityCatalog::new();
+        let mut reg2 = registry_for_mcp_owner(owner);
         // Pre-seed reg2 with the "before" catalogue + a fake
         // descriptor source — refresh_server should keep `b`,
         // remove `a`, add `c`.
-        let pre = reflect_all(&svc2, &mut reg2, "easynet:///r/test/agent/u.mcp").await;
+        let pre = reflect_all(&svc2, &mut reg2, owner).await;
         // svc2's script advertises [b, c]; but we want to start
         // from the [a, b] state. Manually register `a` so the
         // diff has something to remove.
@@ -2313,8 +2331,9 @@ while True:
                 }],
             },
         );
-        let mut reg = AxonAbilityCatalog::new();
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
+        let owner = "easynet:///r/test/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let result = reflect_all(&svc, &mut reg, owner).await;
         assert!(result.failed.is_empty(), "{:?}", result.failed);
         assert!(reg.has_stream("slow_op"));
 

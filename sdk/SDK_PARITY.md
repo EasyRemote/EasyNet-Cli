@@ -179,7 +179,7 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   attachment guardrails, provider-backed `AuthorityClient` minting facades and optional
   `easynet_cabi,cgo` `CABIAuthorityTransport` over C ABI authority signing-material/
   materialization core,
-  local Ed25519 signer provider over daemon/Axon canonical signing material, unary InvocationResult
+  generic external-signer provider seam plus daemon-backed runtime and managed signers, unary InvocationResult
   projection, StreamHandle state observation with schema-shaped terminal event
   projection, BidiSession frame ordering/
   half-close/cancel/terminal-close observation, InvocationHandle
@@ -335,8 +335,8 @@ that artifact and must use the same four states only: `unsupported`, `seam`,
   transports, and C ABI-backed resolve/list read-model execution through
   Runtime Core invoke, plus C ABI-backed signing-key register/list/revoke
   execution through daemon identity abilities and signer-handle projection from
-  daemon key inventory plus a Python `Ed25519SignatureProvider` for local
-  signatures over daemon/Axon-provided canonical signing material; Python now
+  daemon key inventory plus a generic external-signer provider seam and
+  daemon-backed runtime and managed signers; Python now
   also exposes directory buffered-event/drop projection state-machine helpers,
   and the EasyRemote repository boundary gate now passes.
 - Python Receipt facade exposes `ReceiptClient` fetch/project/verify/causal-ref

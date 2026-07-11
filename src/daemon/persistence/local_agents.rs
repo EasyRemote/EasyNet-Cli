@@ -115,6 +115,7 @@ pub fn save(file: &LocalAgentsFile) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("create_dir_all {}: {e}", dir.display()))?;
     let json = serde_json::to_string_pretty(file)?;
     atomic_write_with_permissions(&path(), json.as_bytes(), WritePermissions::OwnerReadWrite)
+        .map_err(Into::into)
 }
 
 /// Look up a hosted Agent's URA by `(profile, name)`. Returns the

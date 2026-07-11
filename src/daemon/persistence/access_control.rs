@@ -1456,6 +1456,7 @@ fn append_jsonl(path: &Path, record: &JournalRecord) -> anyhow::Result<()> {
 fn write_manifest(path: &Path, manifest: &AccessControlStoreManifest) -> anyhow::Result<()> {
     let toml = toml::to_string_pretty(manifest)?;
     atomic_write_with_permissions(path, toml.as_bytes(), WritePermissions::OwnerReadWrite)
+        .map_err(Into::into)
 }
 
 fn file_for_kind(kind: RecordKind) -> &'static str {

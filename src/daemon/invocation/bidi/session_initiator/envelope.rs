@@ -3,34 +3,23 @@ use easynet_axon::pb::axon::v1::{
     AgentIdentity, CallerSignature, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
     StreamDescriptor, SubjectIdentity,
 };
-use ed25519_dalek::{Signer as _, SigningKey};
 use rand::RngCore as _;
 
 use super::{
     claimant_boot_nonce, ABILITY_SESSION_OPEN, DEVICE_DISPATCH_CONTRACT_VERSION, SESSION_STREAM_ID,
 };
+use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError};
 use crate::daemon::invocation::DEFAULT_URA_PROFILE;
-
-/// Optional deterministic Ed25519 seed used to sign frame 0.
-pub type SessionSigningSeed = [u8; 32];
 
 /// Build the EnvelopeOpen frame 0 a device sends to open
 /// `session.open`. Public so PR-2 commit 1/N's hub-side
 /// acceptor tests can construct a matching expected frame, and
 /// so the integration test in PR-3 commit 3/3 can drive a mock
 /// device through the same shape.
-#[must_use]
-pub fn build_session_envelope_open(caller_ura: &str) -> InvokeBidiUp {
-    build_session_envelope_open_with_seed(caller_ura, None)
-}
-
-/// Build the frame-0 `EnvelopeOpen`, optionally signing it when a
-/// deterministic device seed is available.
-#[must_use]
-pub fn build_session_envelope_open_with_seed(
-    caller_ura: &str,
-    signing_seed: Option<SessionSigningSeed>,
-) -> InvokeBidiUp {
+pub async fn build_session_envelope_open(
+    signer: &dyn CanonicalSigner,
+) -> Result<InvokeBidiUp, SelfIdentityError> {
+    let caller_ura = signer.owner_ura();
     let initial_args = Vec::new();
 
     let mut envelope = Envelope {
@@ -64,46 +53,41 @@ pub fn build_session_envelope_open_with_seed(
     // (the previous `sign_envelope_with_seed` path) would satisfy the metadata
     // presence check but fail signature verification — the sign target MUST be
     // the descriptor-bound canonical bytes.
+    let descriptor_ref =
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            caller_ura,
+            ABILITY_SESSION_OPEN,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        )
+        .expect("session.open descriptor ref is well-formed for the device's own URA");
+    let mut nonce = [0_u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut nonce);
+    envelope.invocation_nonce = nonce.to_vec();
+    let descriptor_bound =
+        crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
+            envelope.clone(),
+            descriptor_ref.clone(),
+            &initial_args,
+            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
+        )
+        .expect("session.open descriptor-bound envelope is complete");
+    let signature = signer
+        .sign_canonical(&descriptor_bound.envelope.canonical_bytes())
+        .await?;
+    envelope.caller_signature = Some(CallerSignature {
+        algorithm: "ed25519".to_string(),
+        signature: signature.to_bytes().to_vec(),
+        key_id_hint: caller_ura.to_string(),
+    });
     let mut session_metadata = std::collections::HashMap::new();
-    let mac = if let Some(seed) = signing_seed {
-        let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-                caller_ura,
-                ABILITY_SESSION_OPEN,
-                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            )
-            .expect("session.open descriptor ref is well-formed for the device's own URA");
-        if envelope.invocation_nonce.len() != 16 {
-            let mut nonce = [0_u8; 16];
-            rand::rngs::OsRng.fill_bytes(&mut nonce);
-            envelope.invocation_nonce = nonce.to_vec();
-        }
-        let descriptor_bound =
-            crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
-                envelope.clone(),
-                descriptor_ref.clone(),
-                &initial_args,
-                crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
-            )
-            .expect("session.open descriptor-bound envelope is complete");
-        let signing_key = SigningKey::from_bytes(&seed);
-        let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
-        envelope.caller_signature = Some(CallerSignature {
-            algorithm: "ed25519".to_string(),
-            signature: signature.to_bytes().to_vec(),
-            key_id_hint: caller_ura.to_string(),
-        });
-        session_metadata.insert(
-            crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
-                .to_string(),
-            descriptor_ref,
-        );
-        signature.to_bytes().to_vec()
-    } else {
-        Vec::new()
-    };
+    session_metadata.insert(
+        crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            .to_string(),
+        descriptor_ref,
+    );
+    let mac = signature.to_bytes().to_vec();
 
-    InvokeBidiUp {
+    Ok(InvokeBidiUp {
         sequence: 0,
         mac,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
@@ -129,5 +113,5 @@ pub fn build_session_envelope_open_with_seed(
             metadata: session_metadata,
             ..EnvelopeOpen::default()
         })),
-    }
+    })
 }

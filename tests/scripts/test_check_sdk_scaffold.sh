@@ -11,17 +11,74 @@ fail() {
 
 make_sandbox() {
   local dir="$1"
-  mkdir -p "$dir"
-  cp -R "$ROOT/sdk" "$dir/sdk"
-  mkdir -p "$dir/src/bin"
+  mkdir -p \
+    "$dir/sdk/java" \
+    "$dir/sdk/python" \
+    "$dir/sdk/swift"
+  cp "$ROOT"/sdk/*.md "$dir/sdk/"
+  cp -R \
+    "$ROOT/sdk/conformance" \
+    "$ROOT/sdk/go" \
+    "$ROOT/sdk/node" \
+    "$ROOT/sdk/schemas" \
+    "$dir/sdk/"
+  cp \
+    "$ROOT/sdk/java/.gitignore" \
+    "$ROOT/sdk/java/pom.xml" \
+    "$ROOT/sdk/java/README.md" \
+    "$dir/sdk/java/"
+  cp -R "$ROOT/sdk/java/src" "$dir/sdk/java/src"
+  cp \
+    "$ROOT/sdk/python/pyproject.toml" \
+    "$ROOT/sdk/python/README.md" \
+    "$dir/sdk/python/"
+  cp -R \
+    "$ROOT/sdk/python/easynet_sdk" \
+    "$ROOT/sdk/python/tests" \
+    "$dir/sdk/python/"
+  cp \
+    "$ROOT/sdk/swift/.gitignore" \
+    "$ROOT/sdk/swift/Package.swift" \
+    "$ROOT/sdk/swift/README.md" \
+    "$dir/sdk/swift/"
+  cp -R \
+    "$ROOT/sdk/swift/Sources" \
+    "$ROOT/sdk/swift/Tests" \
+    "$dir/sdk/swift/"
+  find "$dir/sdk" -type d -name __pycache__ -prune -exec rm -rf {} +
+  mkdir -p \
+    "$dir/include" \
+    "$dir/src/bin" \
+    "$dir/src/ffi" \
+    "$dir/target" \
+    "$dir/tools/scripts"
+  cp "$ROOT/include/easynet_cli.h" "$dir/include/easynet_cli.h"
   cp "$ROOT/src/bin/sdk-conformance-runner.rs" "$dir/src/bin/sdk-conformance-runner.rs"
-  mkdir -p "$dir/tools/scripts"
-  cp "$ROOT/tools/scripts/check-sdk-scaffold.sh" "$dir/tools/scripts/check-sdk-scaffold.sh"
-  cp "$ROOT/tools/scripts/check-backend-sdk-only-boundary.sh" "$dir/tools/scripts/check-backend-sdk-only-boundary.sh"
-  cp "$ROOT/tools/scripts/check-backend-route-family-coverage.sh" "$dir/tools/scripts/check-backend-route-family-coverage.sh"
-  cp "$ROOT/tools/scripts/check-easyremote-sdk-boundary.sh" "$dir/tools/scripts/check-easyremote-sdk-boundary.sh"
-  cp "$ROOT/tools/scripts/check-sdk-cutover-readiness.sh" "$dir/tools/scripts/check-sdk-cutover-readiness.sh"
-  cp "$ROOT/tools/scripts/check-sdk-parity-matrix.sh" "$dir/tools/scripts/check-sdk-parity-matrix.sh"
+  cp "$ROOT/src/ffi/features.rs" "$dir/src/ffi/features.rs"
+  local checker
+  for checker in \
+    check-backend-route-family-coverage.sh \
+    check-backend-sdk-only-boundary.sh \
+    check-daemon-latest-input-boundary.sh \
+    check-easyremote-sdk-boundary.sh \
+    check-java-sdk-seam.sh \
+    check-node-sdk-seam.sh \
+    check-sdk-completion-audit.sh \
+    check-sdk-conformance-reports.sh \
+    check-sdk-cutover-readiness.sh \
+    check-sdk-package-metadata.sh \
+    check-sdk-parity-matrix.sh \
+    check-sdk-product-smokes.sh \
+    check-sdk-receipt-ura-boundary.sh \
+    check-sdk-scaffold.sh \
+    check-sdk-section27-coverage.sh \
+    check-sdk-ura-naming.sh \
+    check-swift-sdk-seam.sh \
+    go-sdk-live-smoke.sh \
+    python-sdk-live-smoke.sh
+  do
+    cp "$ROOT/tools/scripts/$checker" "$dir/tools/scripts/$checker"
+  done
   cp "$ROOT/PROJECT_STRUCTURE.md" "$dir/PROJECT_STRUCTURE.md"
 }
 
@@ -36,23 +93,33 @@ expect_fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB" /tmp/sdk-scaffold-test.out' EXIT
 
-make_sandbox "$SB/pass"
-bash "$CHECK" "$SB/pass" >/dev/null
+FIXTURE="$SB/repo"
+make_sandbox "$FIXTURE"
+bash "$CHECK" "$FIXTURE" >/dev/null
 
-make_sandbox "$SB/missing-schema"
-rm "$SB/missing-schema/sdk/schemas/invocation.schema.json"
-expect_fail "$SB/missing-schema"
+rm "$FIXTURE/sdk/schemas/invocation.schema.json"
+expect_fail "$FIXTURE"
+cp \
+  "$ROOT/sdk/schemas/invocation.schema.json" \
+  "$FIXTURE/sdk/schemas/invocation.schema.json"
 
-make_sandbox "$SB/invalid-json"
-printf '{not-json}\n' >"$SB/invalid-json/sdk/conformance/fixtures/runtime.error.v4.json"
-expect_fail "$SB/invalid-json"
+printf '{not-json}\n' >"$FIXTURE/sdk/conformance/fixtures/runtime.error.v4.json"
+expect_fail "$FIXTURE"
+cp \
+  "$ROOT/sdk/conformance/fixtures/runtime.error.v4.json" \
+  "$FIXTURE/sdk/conformance/fixtures/runtime.error.v4.json"
 
-make_sandbox "$SB/broken-case"
-perl -0pi -e 's/\nexpect:\n/\n/' "$SB/broken-case/sdk/conformance/cases/invocation-complete-tuple.yaml"
-expect_fail "$SB/broken-case"
+perl -0pi -e 's/\nexpect:\n/\n/' "$FIXTURE/sdk/conformance/cases/invocation-complete-tuple.yaml"
+expect_fail "$FIXTURE"
+cp \
+  "$ROOT/sdk/conformance/cases/invocation-complete-tuple.yaml" \
+  "$FIXTURE/sdk/conformance/cases/invocation-complete-tuple.yaml"
 
-make_sandbox "$SB/missing-doc"
-rm "$SB/missing-doc/sdk/SDK_INTERFACE_SPEC.md"
-expect_fail "$SB/missing-doc"
+rm "$FIXTURE/sdk/SDK_INTERFACE_SPEC.md"
+expect_fail "$FIXTURE"
+cp "$ROOT/sdk/SDK_INTERFACE_SPEC.md" "$FIXTURE/sdk/SDK_INTERFACE_SPEC.md"
+
+rm "$FIXTURE/include/easynet_cli.h"
+expect_fail "$FIXTURE"
 
 printf 'test_check_sdk_scaffold ok\n'

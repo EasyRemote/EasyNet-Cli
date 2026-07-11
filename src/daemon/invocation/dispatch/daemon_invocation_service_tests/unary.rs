@@ -191,7 +191,7 @@ async fn invoke_dispatches_federation_advertise_agent() {
     )
     .with_register_pubkey("realm", trust_path, cell)
     .with_session_realm("realm")
-    .with_hub_signing_seed([0x11; 32]);
+    .with_hub_signer(test_hub_signer("realm"));
     let agent_ura = "easynet:///r/realm/agent/dev.anthropic";
     let arguments = br#"{"agent_ura":"easynet:///r/realm/agent/dev.anthropic","signing_authority":{"kind":"hosted_by","host_ura":"easynet:///r/realm/device/test-daemon"},"host_node_id":"test-daemon"}"#;
     let callee_ura = crate::core::ura::hub_ura("realm");
@@ -1664,7 +1664,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamp
     };
     let recorder = Arc::new(RecordingFederationClient::new(canned));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
-        .with_hub_signing_seed([0x11; 32])
+        .with_hub_signer(test_hub_signer("local-realm"))
         .with_session_realm("local-realm")
         .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
@@ -1733,13 +1733,17 @@ async fn federation_proxy_caller_gate_accepts_local_hub_identity_with_hub_role()
 #[tokio::test]
 async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_caller() {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-    use ed25519_dalek::SigningKey;
 
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
 
-    let caller_signing_key = SigningKey::from_bytes(&[0x22; 32]);
     let caller_ura = crate::core::ura::hub_ura("peer-realm");
-    let caller_pubkey_b64 = BASE64_STANDARD.encode(caller_signing_key.verifying_key().to_bytes());
+    let hub_signer = test_hub_signer_with_seed("peer-realm", [0x22; 32]);
+    let caller_pubkey_b64 = BASE64_STANDARD.encode(
+        hub_signer
+            .signing_public_key()
+            .expect("peer hub signer public key")
+            .to_bytes(),
+    );
     let anchor = Arc::new(
         RealmTrustAnchor::from_entries(vec![TrustedAgent {
             agent_ura: caller_ura.clone(),
@@ -1791,9 +1795,10 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
         ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES,
         &descriptor_ref,
         args,
-        Some("local-realm"),
-        Some(&[0x22; 32]),
+        Some("peer-realm"),
+        Some(hub_signer.as_ref()),
     )
+    .await
     .expect("sign test envelope");
 
     let mut request = InvokeRequest {
@@ -1810,13 +1815,14 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
     request.metadata.insert(
         "x-easynet-delegation".to_string(),
         signed_delegation_metadata_for_test(
-            &caller_signing_key,
+            hub_signer.as_ref(),
             &caller_ura,
             &descriptor_subject_ura,
             &caller_ura,
             &crate::core::ura::hub_ura("local-realm"),
             &[ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES],
-        ),
+        )
+        .await,
     );
 
     let err = svc
@@ -1894,7 +1900,7 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
     };
     let recorder = Arc::new(RecordingFederationClient::new(canned));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
-        .with_hub_signing_seed([0x11; 32])
+        .with_hub_signer(test_hub_signer("local-realm"))
         .with_session_realm("local-realm")
         .with_federation_client(recorder.clone() as Arc<dyn FederationClient>);
 
@@ -2018,7 +2024,7 @@ async fn invoke_dispatches_federation_resolve_key_uses_federated_resolver_on_loc
         Some(TEST_DAEMON_URA.to_string()),
     )
     .with_federation(recorder.clone() as Arc<dyn FederationClient>, peers)
-    .with_hub_signing_seed([0x11; 32]);
+    .with_hub_signer(test_hub_signer("test-realm"));
     let svc = DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission);
 
     let resp = svc

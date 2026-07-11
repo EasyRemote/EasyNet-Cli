@@ -928,8 +928,8 @@ mod tests {
             "principal_id": "token-principal-1",
             "token_id": "token-1",
             "callee_ura": "easynet:///r/example/device/dev-a",
-            "ability_ura_pattern": "easynet:///r/example/ability/device.terminal.attach",
-            "subject_ura_pattern": "easynet:///r/example/resource/session-target",
+            "ability_ura_pattern": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+            "subject_ura_pattern": "easynet:///r/example/resource/user.alice/session/session-target",
             "action": "stream",
             "effect": "allow",
             "state": "active"
@@ -969,8 +969,8 @@ mod tests {
             "token_id": "token-1",
             "status": "pending",
             "callee_ura": "easynet:///r/example/device/dev-a",
-            "ability_ura": "easynet:///r/example/ability/device.terminal.attach",
-            "subject_ura": "easynet:///r/example/resource/session-target",
+            "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+            "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
             "created_at_or_after": "2026-07-09T00:00:00Z",
             "created_at_or_before": "2026-07-09T00:05:00Z"
         }))
@@ -997,6 +997,16 @@ mod tests {
     }
 
     fn grant_payload(grant_id: &str, ability: &str, subject: &str) -> Value {
+        let ability_ura = crate::core::ura::device_ability_ura(
+            "example",
+            "dev-a",
+            ability.strip_prefix("device.").unwrap_or(ability),
+        );
+        let subject_ura = crate::core::ura::resource_dot_ura(
+            "example",
+            "user.alice",
+            &format!("session/{subject}"),
+        );
         json!({
             "grant_id": grant_id,
             "owner_user_id": "alice",
@@ -1005,8 +1015,8 @@ mod tests {
             "token_id": "token-1",
             "token_class": "hub_link",
             "callee_ura": "easynet:///r/example/device/dev-a",
-            "subject_ura_pattern": format!("easynet:///r/example/resource/{subject}"),
-            "ability_ura_pattern": format!("easynet:///r/example/ability/{ability}"),
+            "subject_ura_pattern": subject_ura,
+            "ability_ura_pattern": ability_ura,
             "actions": ["stream"],
             "effect": "allow",
             "lifetime": "session",
@@ -1017,6 +1027,16 @@ mod tests {
     }
 
     fn request_payload(request_id: &str, ability: &str, subject: &str, created_at: &str) -> Value {
+        let ability_ura = crate::core::ura::device_ability_ura(
+            "example",
+            "dev-a",
+            ability.strip_prefix("device.").unwrap_or(ability),
+        );
+        let subject_ura = crate::core::ura::resource_dot_ura(
+            "example",
+            "user.alice",
+            &format!("session/{subject}"),
+        );
         json!({
             "request_id": request_id,
             "owner_user_id": "alice",
@@ -1026,8 +1046,8 @@ mod tests {
             "token_id": "token-1",
             "token_class": "hub_link",
             "callee_ura": "easynet:///r/example/device/dev-a",
-            "subject_ura": format!("easynet:///r/example/resource/{subject}"),
-            "ability_ura": format!("easynet:///r/example/ability/{ability}"),
+            "subject_ura": subject_ura,
+            "ability_ura": ability_ura,
             "action": "stream",
             "canonical_hash": format!("sha256:{request_id}"),
             "requested_lifetimes": ["once", "session"],

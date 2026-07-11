@@ -66,7 +66,7 @@ pub struct FederationConfig {
 pub struct TrustWriteContext {
     pub register_pubkey: Option<Arc<RegisterPubkeyService>>,
     pub session_realm: Option<String>,
-    pub hub_signing_seed: Option<[u8; 32]>,
+    pub hub_signer: Option<Arc<dyn CanonicalSigner>>,
 }
 
 pub struct LedgerWiring {

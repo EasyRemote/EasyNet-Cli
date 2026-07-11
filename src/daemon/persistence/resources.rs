@@ -260,6 +260,7 @@ pub fn save(file: &ResourcesFile) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("create_dir_all {}: {e}", dir.display()))?;
     let json = serde_json::to_string_pretty(file)?;
     atomic_write_with_permissions(&path(), json.as_bytes(), WritePermissions::OwnerReadWrite)
+        .map_err(Into::into)
 }
 
 /// Build the legacy resource URA for a given realm + id.

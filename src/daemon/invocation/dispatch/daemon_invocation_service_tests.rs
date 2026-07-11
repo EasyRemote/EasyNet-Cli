@@ -18,6 +18,7 @@
 
 use super::*;
 use crate::daemon::ability::HOSTED_AGENT_DELEGATION_METADATA_KEY;
+use crate::daemon::identity::self_identity::{CanonicalSigner, TestCanonicalSigner};
 use crate::daemon::invocation::admission::peer_envelope_signer::sign_peer_request_envelope;
 use crate::daemon::invocation::admission::quota_meter::quota_meters_function;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
@@ -78,13 +79,24 @@ use easynet_axon::pb::axon::v1::{
 const TEST_DAEMON_URA: &str = "easynet:///r/test-realm/device/test-daemon";
 const TEST_DEVICE_SIGNING_SEED: [u8; 32] = [0x33; 32];
 
+fn test_hub_signer(realm: &str) -> Arc<dyn CanonicalSigner> {
+    test_hub_signer_with_seed(realm, [0x11; 32])
+}
+
+fn test_hub_signer_with_seed(realm: &str, seed: [u8; 32]) -> Arc<dyn CanonicalSigner> {
+    Arc::new(TestCanonicalSigner::new(
+        crate::core::ura::hub_ura(realm),
+        seed,
+    ))
+}
+
 fn make_service() -> DaemonInvocationService {
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
         Some(TEST_DAEMON_URA.to_string()),
     );
     DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
-        .with_hub_signing_seed([0x11; 32])
+        .with_hub_signer(test_hub_signer("test-realm"))
 }
 
 fn publish_test_route(svc: &DaemonInvocationService, owner_ura: &str, public_name: &str) {
@@ -156,8 +168,8 @@ fn session_request_ability_ura(realm: &str, ability: &str) -> String {
     crate::core::ura::hub_ability_ura(realm, ability)
 }
 
-fn signed_delegation_metadata_for_test(
-    signer: &ed25519_dalek::SigningKey,
+async fn signed_delegation_metadata_for_test(
+    signer: &dyn CanonicalSigner,
     issuer_ura: &str,
     subject_ura: &str,
     caller_ura: &str,
@@ -165,7 +177,6 @@ fn signed_delegation_metadata_for_test(
     scopes: &[&str],
 ) -> String {
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-    use ed25519_dalek::Signer as _;
     use serde::Serialize;
 
     #[derive(Serialize)]
@@ -190,7 +201,10 @@ fn signed_delegation_metadata_for_test(
     };
     let payload_value = serde_json::to_value(&payload).expect("delegation payload");
     let payload_bytes = crate::daemon::ability::canonical_json_bytes(&payload_value);
-    let signature = signer.sign(&payload_bytes);
+    let signature = signer
+        .sign_canonical(&payload_bytes)
+        .await
+        .expect("test canonical signer");
     let raw = serde_json::json!({
         "payload": payload_value,
         "signature": BASE64_STANDARD.encode(signature.to_bytes()),
@@ -220,7 +234,7 @@ fn make_quota_service_for_device_caller(caller_ura: &str, cap: i32) -> DaemonInv
     let admission = AdmissionFacade::new(Arc::new(anchor), Some(TEST_DAEMON_URA.to_string()))
         .with_quota_gate(SharedUsageQuotaGate::from_policy(Some(quota)));
     DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), admission)
-        .with_hub_signing_seed([0x11; 32])
+        .with_hub_signer(test_hub_signer("test-realm"))
 }
 
 async fn runtime_with_json_echo(

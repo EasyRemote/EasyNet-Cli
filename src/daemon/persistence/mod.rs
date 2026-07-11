@@ -68,3 +68,17 @@ pub(crate) mod owner_projections;
 pub mod resources;
 pub(crate) mod teach_grants;
 pub(crate) mod tenant_paths;
+
+/// Return the canonical Agent authority roots this daemon is currently
+/// configured to host. The daemon snapshots this lifecycle fact while it
+/// builds its authority context; callers do not receive the broader
+/// local-agents persistence shape.
+pub fn hosted_agent_authority_roots() -> anyhow::Result<Vec<String>> {
+    local_agents::load().map(|local| {
+        local
+            .hosted_agents
+            .into_iter()
+            .map(|entry| entry.agent_ura)
+            .collect()
+    })
+}

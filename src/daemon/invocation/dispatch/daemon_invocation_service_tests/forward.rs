@@ -1069,20 +1069,25 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     const PEER_HUB_ENDPOINT: &str = "https://daemon-b.example:50443";
     const DAEMON_A_SIGNING_SEED: [u8; 32] = [0xA1; 32];
 
-    let daemon_a_signing_key = ed25519_dalek::SigningKey::from_bytes(&DAEMON_A_SIGNING_SEED);
+    let daemon_a_signer = test_hub_signer_with_seed(REALM_A, DAEMON_A_SIGNING_SEED);
     let daemon_a_pubkey_b64 = {
         use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-        BASE64_STANDARD.encode(daemon_a_signing_key.verifying_key().to_bytes())
+        BASE64_STANDARD.encode(
+            daemon_a_signer
+                .signing_public_key()
+                .expect("daemon A signer public key")
+                .to_bytes(),
+        )
     };
 
     // Daemon B's trust anchor contains daemon A's public key. The
-    // in-process federation client below signs the rebuilt peer
-    // request with the matching private key, so daemon B exercises
-    // the same strict Device-caller admission path as production callers.
+    // source daemon signs the rebuilt peer request through the matching
+    // owner-bound Hub capability, so daemon B exercises the same strict
+    // Hub-caller admission path as production federation.
     let daemon_a_in_b_trust = vec![crate::daemon::trust::anchor::TrustedAgent {
-        agent_ura: DAEMON_A_URA.to_string(),
+        agent_ura: crate::core::ura::hub_ura(REALM_A),
         public_key_b64: daemon_a_pubkey_b64,
-        role: crate::daemon::trust::anchor::TrustedAgentRole::Device,
+        role: crate::daemon::trust::anchor::TrustedAgentRole::Hub,
         added_at_unix_ms: 1_714_492_800_000,
         origin_realm: None,
         hub_endpoint: None,
@@ -1155,27 +1160,22 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     });
 
     // Daemon A: empty presence registry; cross-realm target
-    // routes via the InProcessPeerClient → daemon B. The fixture
-    // signs the peer request after daemon A has rebuilt the target
-    // ability and argument bytes, matching the strict admission
-    // bytes daemon B verifies.
+    // routes via the in-process client → daemon B. Daemon A signs the peer
+    // request after rebuilding the target ability and argument bytes; the
+    // transport forwards those exact strict-admission bytes unchanged.
     let daemon_a_admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
         Some(DAEMON_A_URA.to_string()),
     );
-    let federation_client: Arc<dyn FederationClient> = Arc::new(ForwardingPeerClient {
-        peer: daemon_b,
-        caller_ura: DAEMON_A_URA.to_string(),
-        callee_ura: crate::core::ura::hub_ura(REALM_B),
-        subject_ura: DAEMON_B_URA.to_string(),
-        signing_seed: DAEMON_A_SIGNING_SEED,
-    });
+    let federation_client: Arc<dyn FederationClient> =
+        Arc::new(ForwardingPeerClient { peer: daemon_b });
     let mut peers = BTreeMap::new();
     peers.insert(REALM_B.to_string(), PEER_HUB_ENDPOINT.to_string());
 
     let daemon_a =
         DaemonInvocationService::new(Arc::new(PresenceRegistry::new()), daemon_a_admission)
             .with_session_realm(REALM_A)
+            .with_hub_signer(daemon_a_signer)
             .with_federation_client(federation_client)
             .with_federated_peers(peers);
 
@@ -1228,15 +1228,10 @@ async fn cross_hub_forward_invoke_e2e_in_process() {
     );
 }
 
-/// Like `InProcessPeerClient` but signs a fresh envelope over the
-/// rebuilt peer request so daemon B verifies the same ability and
-/// argument bytes it will dispatch.
+/// In-process transport preserving the already signed peer request exactly as
+/// a real federation transport would.
 struct ForwardingPeerClient {
     peer: Arc<DaemonInvocationService>,
-    caller_ura: String,
-    callee_ura: String,
-    subject_ura: String,
-    signing_seed: [u8; 32],
 }
 
 #[async_trait::async_trait]
@@ -1244,17 +1239,8 @@ impl FederationClient for ForwardingPeerClient {
     async fn forward_invoke(
         &self,
         _target_hub_endpoint: &crate::daemon::federation::client::HubEndpoint,
-        mut request: InvokeRequest,
+        request: InvokeRequest,
     ) -> Result<InvokeResponse, crate::daemon::federation::client::FederationClientError> {
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&self.signing_seed);
-        request.envelope = Some(signed_test_envelope(
-            &self.caller_ura,
-            &self.callee_ura,
-            &self.subject_ura,
-            &request.function_name,
-            &request.arguments,
-            &signing_key,
-        ));
         let response = self
             .peer
             .invoke(Request::new(request))

@@ -283,7 +283,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     ));
     let mut daemon_handle = match crate::daemon::DaemonStartConfig::device(&creds.node_id)
         .map(|cfg| cfg.with_realm(creds.realm_str()))
-        .map(with_keyring_passphrase_env)
         .map(with_bridge_lib_env)
         .and_then(|cfg| cfg.start())
     {
@@ -411,32 +410,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
 }
 
-/// Inject `EASYNET_KEYRING_PASSPHRASE` into the daemon's environment
-/// when a passphrase is available (operator env or the file `easynet
-/// join` provisioned). This is what lets the booting daemon decrypt
-/// the keyring vault — `boot.rs::load_daemon_identity` reads the
-/// passphrase from its own environment via `MasterKeySource::from_env`.
-///
-/// No passphrase available → return the config untouched; the daemon
-/// falls through to the deterministic-derive path exactly as before.
-/// We never *mint* a passphrase here — only `join` provisions one, so
-/// that a bare `runtime start` on an unkeyed host stays unkeyed.
-fn with_keyring_passphrase_env(
-    cfg: crate::daemon::DaemonStartConfig,
-) -> crate::daemon::DaemonStartConfig {
-    if std::env::var("EASYNET_KEYRING_PASSPHRASE").is_ok_and(|v| !v.is_empty()) {
-        // Already in this process's environment; the daemon inherits
-        // it through the normal env propagation, so do not duplicate.
-        return cfg;
-    }
-    match std::fs::read_to_string(crate::daemon::keyring::default_passphrase_path()) {
-        Ok(pass) if !pass.trim().is_empty() => {
-            cfg.with_env("EASYNET_KEYRING_PASSPHRASE", pass.trim())
-        }
-        _ => cfg,
-    }
-}
-
 /// Inject `EASYNET_DENDRITE_BRIDGE_LIB` into the daemon's environment.
 ///
 /// `easynet device join` stages the native bridge lib into
@@ -525,9 +498,9 @@ pub(crate) fn republish_via_federation_best_effort(
     // identity; the runtime rejects them with
     // AXON_EASYNET_SUBJECT_KEY_UNREGISTERED until that key is
     // recorded in `state.identity.node_keys` for this node. Calling
-    // bootstrap_self_identity here populates that table once per
-    // runtime lifetime; it is a no-op on subsequent calls (the
-    // first-writer-wins guard returns replaced_prior=true).
+    // bootstrap_self_identity here publishes this Device owner's public
+    // projection once per runtime lifetime; it is a no-op on subsequent
+    // calls. Hub identity is registered by the Hub runtime that owns it.
     if !plan.realm.is_empty() {
         let identity_outcome =
             crate::daemon::federation::publish::bootstrap_self_identity_via_runtime(

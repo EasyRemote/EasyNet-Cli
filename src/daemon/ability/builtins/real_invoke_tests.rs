@@ -203,7 +203,11 @@ fn terminal_followup_target(
         "session_owner_user_id": "real-invoke-test-user",
         "creator_principal_id": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
         "callee_ura": callee,
-        "subject_ura": format!("easynet:///r/default/session/{session_id}"),
+        "subject_ura": crate::core::ura::resource_dot_ura(
+            "default",
+            "user.real-invoke-test-user",
+            &format!("session/{session_id}"),
+        ),
         "audience": callee,
         "scopes": [name],
         "allowed_actions": [action],
