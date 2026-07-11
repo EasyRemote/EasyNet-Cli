@@ -58,6 +58,16 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
             "public_key_b64": pubkey(25)
         })),
     );
+    let joined_admin_device = easynet_cli::core::ura::device_ura("cli", "joined-admin-phone");
+    let join_receipt = home.invoke_federation_join_with_principal_proof(
+        &joined_admin_device,
+        &pubkey_hex(26),
+        ADMIN,
+        "active_key",
+        &admin_binding_id,
+    );
+    assert_eq!(join_receipt["membership_ura"], joined_admin_device);
+    assert_eq!(join_receipt["realm"], "cli");
 
     let enrollment = home.invoke_system_ability(
         PRINCIPAL_ISSUE_ENROLLMENT,
@@ -198,6 +208,11 @@ fn principal_lifecycle_runs_through_real_daemon_and_survives_restart() {
     assert!(persisted_trust
         .lookup_user_by_pubkey(BOB, &pubkey(24))
         .is_some());
+    let joined_owner = persisted_trust
+        .lookup_principal_owner(&joined_admin_device)
+        .expect("joined device has persisted principal owner binding");
+    assert_eq!(joined_owner.owner_ura, ADMIN);
+    assert_eq!(joined_owner.owner_user_id, "admin");
 }
 
 fn request(request: Value) -> Value {
@@ -228,6 +243,11 @@ fn command(
 fn pubkey(seed: u8) -> String {
     let signing = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
     B64.encode(signing.verifying_key().to_bytes())
+}
+
+fn pubkey_hex(seed: u8) -> String {
+    let signing = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+    hex::encode(signing.verifying_key().to_bytes())
 }
 
 fn binding_id_at(snapshot: &Value, index: usize) -> String {

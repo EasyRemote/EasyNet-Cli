@@ -424,6 +424,29 @@ added_at_unix_ms = 0
         value
     }
 
+    /// Invoke `federation.join` through the real daemon gRPC surface with the
+    /// protocol's provisional genesis envelope. This intentionally bypasses the
+    /// signed descriptor-ref helper because the join caller is not a member yet.
+    #[allow(dead_code)]
+    pub fn invoke_federation_join_with_principal_proof(
+        &self,
+        membership_ura: &str,
+        public_key_hex: &str,
+        principal_ura: &str,
+        proof_kind: &str,
+        proof_ref: &str,
+    ) -> Value {
+        invoke_federation_join_with_principal_proof(
+            &self.socket_path,
+            &self.hub_ura,
+            membership_ura,
+            public_key_hex,
+            principal_ura,
+            proof_kind,
+            proof_ref,
+        )
+    }
+
     /// Boot the real daemon surface against this HOME: full system
     /// catalogue (agents read from disk through the production
     /// loader) materialised into a `LocalRuntime`, served by
@@ -544,6 +567,60 @@ fn receipt_proof_facts_value(receipt: &easynet_axon::pb::axon::v1::InvocationRec
         "ability_binding": receipt.ability_binding.as_str(),
         "has_authority_proof": receipt.authority_proof.is_some(),
         "has_callee_signature": receipt.callee_signature.is_some(),
+    })
+}
+
+fn invoke_federation_join_with_principal_proof(
+    socket_path: &Path,
+    hub_ura: &str,
+    membership_ura: &str,
+    public_key_hex: &str,
+    principal_ura: &str,
+    proof_kind: &str,
+    proof_ref: &str,
+) -> Value {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    rt.block_on(async {
+        let mut client = InvocationClient::new(connect_to_daemon(socket_path).await);
+        let public_key = hex::decode(public_key_hex).expect("join public key hex decodes");
+        let provisional_caller =
+            easynet_cli::core::ura::provisional::provisional_ura_for_pubkey(&public_key);
+        let realm = easynet_cli::core::ura::parse_ura(hub_ura)
+            .expect("fixture hub URA parses")
+            .realm;
+        let arguments = serde_json::to_vec(&json!({
+            "membership_ura": membership_ura,
+            "realm": realm,
+            "public_key_hex": public_key_hex,
+            "principal_enrollment": {
+                "principal_ura": principal_ura,
+                "proof": {
+                    "kind": proof_kind,
+                    "reference": proof_ref
+                }
+            }
+        }))
+        .expect("encode federation.join args");
+        let request =
+            ProtoEnvelope::federation_join_genesis(provisional_caller, hub_ura, membership_ura)
+                .expect("valid federation.join genesis envelope")
+                .invoke_request(
+                    easynet_cli::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
+                    arguments,
+                )
+                .expect("valid federation.join invoke request");
+        let response = tokio::time::timeout(
+            Duration::from_secs(10),
+            client.invoke(tonic::Request::new(request)),
+        )
+        .await
+        .expect("federation.join must not hang")
+        .expect("federation.join must succeed")
+        .into_inner();
+        serde_json::from_slice(&response.result).expect("decode federation.join result")
     })
 }
 

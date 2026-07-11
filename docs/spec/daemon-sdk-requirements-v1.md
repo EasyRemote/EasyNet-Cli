@@ -527,10 +527,11 @@ persisted PrincipalLifecycle and trust-anchor public-key state without Backend,
 HTTP account state or a second auth store. The `federation.join` contract now
 has a product-neutral optional PrincipalLifecycle proof seam, and the Hub daemon
 validates that proof before atomically binding the joined Device URA to the User
-Principal in RuntimeTrust. It is still not standalone-Hub cutover-ready until
-the CLI/SDK first-user enrollment flow, full URA-only `federation.join`
-end-to-end gate, user lifecycle UX and the standalone/backend-present E2E gates
-pass.
+Principal in RuntimeTrust; a real daemon UDS E2E now proves that binding
+persists through the same Backend-free PrincipalLifecycle test fixture. It is
+still not standalone-Hub cutover-ready until the CLI/SDK first-user enrollment
+flow, full cross-device/TLS URA-only `federation.join` end-to-end gate, user
+lifecycle UX and the standalone/backend-present E2E gates pass.
 Directory
 is still a seam; receipt/history now has a symmetric bounded seam but no
 stable cursor or downstream cutover; runtime events and runtime administration
@@ -617,7 +618,8 @@ The current remaining work is:
 - migrate EasyRemote to canonical typed Python SDK configuration, identity,
   Directory, receipt and event capabilities;
 - lift the real daemon gRPC PrincipalLifecycle evidence into a CLI/SDK Hub flow
-  with first-user bootstrap, additional-key authorization, key
+  beyond the product-neutral first-principal bootstrap facade, including
+  additional-key authorization, key
   rotation/revocation, recovery, suspension/reactivation/deletion and grants;
 - prove URA-only `federation.join` plus Principal enrollment without Backend
   HTTP;

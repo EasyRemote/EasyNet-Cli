@@ -418,7 +418,7 @@ multi-user lifecycle without EasyNet Backend is not.
 | Key create, query, rotate, revoke and expiry | implemented |
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
-| Create the first user without Backend | provider enforces explicit bootstrap and bind-first-key proof continuity; CLI/E2E workflow incomplete |
+| Create the first user without Backend | provider enforces explicit bootstrap and bind-first-key proof continuity; CLI first-principal bootstrap facade exists; standalone-Hub E2E workflow incomplete |
 | User login, authentication and recovery without Backend | recovery policy proof is provider-enforced; login/recovery CLI flow and E2E incomplete |
 | A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state with active-key, grant and recovery proof enforcement; CLI flow and E2E incomplete |
 | Multi-user administration and permission governance without Backend | partial capabilities; no standalone-Hub closure |
@@ -561,9 +561,17 @@ persisted PrincipalLifecycle plus trust-anchor public-key state without
 Backend, HTTP account state or a second auth store. The `federation.join`
 contract now has a product-neutral optional PrincipalLifecycle proof seam, and
 the Hub daemon validates that proof before atomically binding the joined Device
-URA to the User Principal in RuntimeTrust. The CLI/SDK first-user enrollment
-flow, full URA-only `federation.join` end-to-end gate, user lifecycle UX and
-the two standalone/backend-present end-to-end gates remain required.
+URA to the User Principal in RuntimeTrust; a real daemon UDS E2E now proves that
+binding persists through the same Backend-free PrincipalLifecycle test fixture.
+The CLI/SDK first-user enrollment flow, full cross-device/TLS URA-only
+`federation.join` end-to-end gate, user lifecycle UX and the two
+standalone/backend-present end-to-end gates remain required. The CLI
+`principal bootstrap` facade now composes `principal.lifecycle.create` and
+`principal.lifecycle.bind_first_key` with one bootstrap proof reference,
+separate idempotency keys, fixed bind expected-version `1`, and daemon
+key-service public-key projection only. This closes the first-principal CLI
+entrypoint but does not close additional-device enrollment, recovery UX,
+standalone-Hub E2E or Backend-present E2E.
 
 ---
 

@@ -43,6 +43,8 @@ pub struct PrincipalArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PrincipalAction {
+    /// Create the first Principal and bind its first daemon-managed key.
+    Bootstrap(BootstrapArgs),
     /// Create a pending Principal URA through the daemon lifecycle aggregate.
     Create(CreateArgs),
     /// Issue a one-time enrollment capability for another Principal URA.
@@ -94,6 +96,29 @@ impl ProofKindArg {
             Self::Recovery => "recovery",
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct BootstrapArgs {
+    #[arg(long)]
+    pub principal_ura: String,
+    /// Optional one-time bootstrap proof reference shared by create and bind.
+    #[arg(long)]
+    pub proof_ref: Option<String>,
+    #[arg(long)]
+    pub actor_ura: Option<String>,
+    #[arg(long)]
+    pub create_idempotency_key: Option<String>,
+    #[arg(long)]
+    pub bind_idempotency_key: Option<String>,
+    #[arg(long)]
+    pub key_id: Option<String>,
+    #[arg(long)]
+    pub expires_unix_ms: Option<i64>,
+    #[arg(long)]
+    pub show_pubkey: bool,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -384,6 +409,7 @@ pub struct GetArgs {
 
 pub fn run(args: PrincipalArgs) -> anyhow::Result<()> {
     match args.action {
+        PrincipalAction::Bootstrap(args) => run_bootstrap(args),
         PrincipalAction::Create(args) => run_create(args),
         PrincipalAction::IssueEnrollment(args) => run_issue_enrollment(args),
         PrincipalAction::RevokeEnrollment(args) => run_revoke_enrollment(args),
@@ -408,6 +434,38 @@ pub fn run(args: PrincipalArgs) -> anyhow::Result<()> {
         PrincipalAction::RevokeGrant(args) => run_revoke_grant(args),
         PrincipalAction::Get(args) => run_get(args),
     }
+}
+
+fn run_bootstrap(args: BootstrapArgs) -> anyhow::Result<()> {
+    let key = ensure_principal_signing_key(&KeyringClient::default_path(), &args.principal_ura)?;
+    let create_idempotency_key =
+        command_id_with_prefix(args.create_idempotency_key, "principal-bootstrap-create");
+    let proof_ref = bootstrap_proof_ref(args.proof_ref, &create_idempotency_key);
+    let bind_idempotency_key =
+        command_id_with_prefix(args.bind_idempotency_key, "principal-bootstrap-bind");
+    let (create_request, bind_request) = principal_bootstrap_requests(
+        &args.principal_ura,
+        args.actor_ura.as_deref(),
+        &proof_ref,
+        &create_idempotency_key,
+        &bind_idempotency_key,
+        args.key_id.as_deref().unwrap_or(key.key_id.as_str()),
+        &key.public_key_b64,
+        args.expires_unix_ms,
+    );
+
+    invoke_principal_ability("principal.lifecycle.create", create_request)?;
+    let response = invoke_principal_ability("principal.lifecycle.bind_first_key", bind_request)?;
+    render_snapshot(
+        "Bootstrapped principal",
+        response,
+        args.json,
+        if args.show_pubkey {
+            Some(format!("public_key_b64={}", key.public_key_b64))
+        } else {
+            None
+        },
+    )
 }
 
 fn run_create(args: CreateArgs) -> anyhow::Result<()> {
@@ -747,6 +805,44 @@ fn principal_create_request(principal_ura: &str, command: Value) -> Value {
     })
 }
 
+fn principal_bootstrap_requests(
+    principal_ura: &str,
+    actor_ura: Option<&str>,
+    proof_ref: &str,
+    create_idempotency_key: &str,
+    bind_idempotency_key: &str,
+    key_id: &str,
+    public_key_b64: &str,
+    expires_unix_ms: Option<i64>,
+) -> (Value, Value) {
+    let create_request = principal_create_request(
+        principal_ura,
+        principal_command(
+            actor_ura,
+            principal_ura,
+            create_idempotency_key,
+            None,
+            ProofKindArg::Bootstrap,
+            proof_ref,
+        ),
+    );
+    let bind_request = principal_bind_key_request(
+        principal_ura,
+        public_key_b64,
+        key_id,
+        principal_command(
+            actor_ura,
+            principal_ura,
+            bind_idempotency_key,
+            Some(1),
+            ProofKindArg::Bootstrap,
+            proof_ref,
+        ),
+        expires_unix_ms,
+    );
+    (create_request, bind_request)
+}
+
 fn principal_issue_enrollment_request(
     issuer_ura: &str,
     subject_principal_ura: &str,
@@ -947,14 +1043,25 @@ fn principal_bind_key_payload(
 }
 
 fn command_id(explicit: Option<String>) -> String {
+    command_id_with_prefix(explicit, "principal")
+}
+
+fn command_id_with_prefix(explicit: Option<String>, prefix: &str) -> String {
     explicit
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("principal-{}", Uuid::new_v4().simple()))
+        .unwrap_or_else(|| format!("{prefix}-{}", Uuid::new_v4().simple()))
 }
 
 fn default_proof_ref(idempotency_key: &str) -> String {
     format!("proof:{idempotency_key}")
+}
+
+fn bootstrap_proof_ref(explicit: Option<String>, create_idempotency_key: &str) -> String {
+    explicit
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_proof_ref(create_idempotency_key))
 }
 
 #[derive(Debug, Clone)]
@@ -1154,6 +1261,101 @@ mod tests {
             "proof-1"
         );
         assert_eq!(request["request"]["command"]["expected_version"], 1);
+    }
+
+    #[test]
+    fn bootstrap_requests_share_proof_and_lock_bind_version() {
+        let (create_request, bind_request) = principal_bootstrap_requests(
+            " easynet:///r/realm/user/alice ",
+            Some(" easynet:///r/realm/user/admin "),
+            " bootstrap-proof-1 ",
+            "create-idem",
+            "bind-idem",
+            "key-1",
+            "PUB",
+            Some(12345),
+        );
+
+        assert_eq!(
+            create_request["request"]["principal_ura"],
+            "easynet:///r/realm/user/alice"
+        );
+        assert_eq!(
+            create_request["request"]["command"]["actor_ura"],
+            "easynet:///r/realm/user/admin"
+        );
+        assert_eq!(
+            create_request["request"]["command"]["idempotency_key"],
+            "create-idem"
+        );
+        assert_eq!(
+            create_request["request"]["command"]["proof"]["kind"],
+            "bootstrap"
+        );
+        assert_eq!(
+            create_request["request"]["command"]["proof"]["reference"],
+            "bootstrap-proof-1"
+        );
+        assert!(create_request["request"]["command"]
+            .get("expected_version")
+            .is_none());
+
+        assert_eq!(
+            bind_request["request"]["principal_ura"],
+            "easynet:///r/realm/user/alice"
+        );
+        assert_eq!(bind_request["request"]["public_key_b64"], "PUB");
+        assert_eq!(bind_request["request"]["key_id"], "key-1");
+        assert_eq!(bind_request["request"]["expires_unix_ms"], 12345);
+        assert_eq!(
+            bind_request["request"]["command"]["idempotency_key"],
+            "bind-idem"
+        );
+        assert_eq!(
+            bind_request["request"]["command"]["proof"]["reference"],
+            "bootstrap-proof-1"
+        );
+        assert_eq!(bind_request["request"]["command"]["expected_version"], 1);
+    }
+
+    #[test]
+    fn bootstrap_request_has_no_product_account_or_private_key_fields() {
+        let (create_request, bind_request) = principal_bootstrap_requests(
+            "easynet:///r/realm/user/alice",
+            None,
+            "bootstrap-proof-1",
+            "create-idem",
+            "bind-idem",
+            "key-1",
+            "PUB",
+            None,
+        );
+
+        assert!(create_request["request"].get("username").is_none());
+        assert!(create_request["request"].get("user_id").is_none());
+        assert!(create_request["request"].get("account_id").is_none());
+        assert!(create_request["request"].get("session").is_none());
+        assert!(bind_request["request"].get("username").is_none());
+        assert!(bind_request["request"].get("user_id").is_none());
+        assert!(bind_request["request"].get("account_id").is_none());
+        assert!(bind_request["request"].get("session").is_none());
+        assert!(bind_request["request"].get("private_key").is_none());
+        assert!(bind_request["request"].get("seed").is_none());
+    }
+
+    #[test]
+    fn bootstrap_default_proof_is_recoverable_from_create_idempotency_key() {
+        assert_eq!(
+            bootstrap_proof_ref(None, "principal-bootstrap-create-1"),
+            "proof:principal-bootstrap-create-1"
+        );
+        assert_eq!(
+            bootstrap_proof_ref(
+                Some(" explicit-proof ".into()),
+                "principal-bootstrap-create-1"
+            ),
+            "explicit-proof"
+        );
     }
 
     #[test]
