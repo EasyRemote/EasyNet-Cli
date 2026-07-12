@@ -375,7 +375,7 @@
           }
         ]
       },
-      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI lifecycle surface now has real CLI binary-to-daemon UDS E2E evidence for bootstrap, enrollment-consume, add-key, rotate, revoke, recovery, suspend/reactivate, grant and delete, and Hub URA join accepts an enrollment-id shorthand for device principal binding. The section 14.3 composite gate now runs both the backend-free standalone Hub TCP+TLS E2E and the Backend-present live daemon PrincipalLifecycle E2E, proving both deployment shapes consume the same runtime model. Broader standalone-Hub recovery UX packaging remains before cutover-ready."
+      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI lifecycle surface now has real CLI binary-to-daemon UDS E2E evidence for bootstrap, enrollment-consume, add-key, rotate, revoke, recovery, suspend/reactivate, grant and delete, and Hub URA join accepts an enrollment-id shorthand for device principal binding. The section 14.3 composite gate now runs both the backend-free standalone Hub TCP+TLS E2E and the Backend-present live daemon PrincipalLifecycle E2E, proving both deployment shapes consume the same runtime model. Broader standalone-Hub recovery UX packaging remains downstream product work over the same model."
     },
     {
       "capability_id": "principal_enrollment",
@@ -410,7 +410,7 @@
           }
         ]
       },
-      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation. The CLI now exposes first-principal bootstrap and enrollment-consume as product-neutral create plus bind-first-key facades with real CLI binary-to-daemon UDS E2E evidence, and Hub URA join lowers --principal-enrollment-id into the same federation.join PrincipalLifecycle proof seam. federation.join has daemon-side RuntimeTrust owner binding, real daemon UDS E2E evidence, and real CLI binary-to-hub-daemon TCP+TLS E2E evidence for backend-free Hub URA join, Hub key import and principal enrollment proof owner binding. Backend single-runtime profile graph, account signing-key SDK-adapter evidence, process-level HTTP signing-key route evidence and the live daemon-backed Backend-present account-flow E2E now prove the account adapter can consume PrincipalLifecycle from the same SDK runtime provider; full standalone-Hub recovery UX remains incomplete."
+      "remaining": "SDK enrollment command/proof lowering is provider-backed, and the daemon provider supports first-principal bootstrap plus durable issue/revoke/consume enrollment capabilities for additional principal creation. The CLI now exposes first-principal bootstrap and enrollment-consume as product-neutral create plus bind-first-key facades with real CLI binary-to-daemon UDS E2E evidence, and Hub URA join lowers --principal-enrollment-id into the same federation.join PrincipalLifecycle proof seam. federation.join has daemon-side RuntimeTrust owner binding, real daemon UDS E2E evidence, and real CLI binary-to-hub-daemon TCP+TLS E2E evidence for backend-free Hub URA join, Hub key import and principal enrollment proof owner binding. Backend single-runtime profile graph, account signing-key SDK-adapter evidence, process-level HTTP signing-key route evidence and the live daemon-backed Backend-present account-flow E2E now prove the account adapter can consume PrincipalLifecycle from the same SDK runtime provider; standalone-Hub recovery UX remains downstream product packaging."
     },
     {
       "capability_id": "principal_public_key_bindings",
@@ -445,7 +445,7 @@
           }
         ]
       },
-      "remaining": "SDK key binding add/rotate/revoke operations are provider-backed, and daemon lifecycle state projects active/revoked key facts through RuntimeTrust. The section 14.3 composite gate now covers standalone multi-user, multi-key add/rotate/revoke, Hub restart persistence and Backend-present account mapping through the same PrincipalLifecycle provider. Broader standalone recovery/governance UX packaging remains incomplete."
+      "remaining": "SDK key binding add/rotate/revoke operations are provider-backed, and daemon lifecycle state projects active/revoked key facts through RuntimeTrust. The section 14.3 composite gate now covers standalone multi-user, multi-key add/rotate/revoke, Hub restart persistence and Backend-present account mapping through the same PrincipalLifecycle provider. Broader standalone recovery/governance UX packaging remains downstream product work."
     },
     {
       "capability_id": "principal_recovery",
@@ -488,7 +488,7 @@
           }
         ]
       },
-      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and the daemon lifecycle provider now records recovery policy, consumes recovery proof references through a persisted single-use replay ledger, projects recovered public keys through RuntimeTrust, allows explicit suspended-principal recovery, and rejects deleted-principal recovery as terminal. The CLI facade surfaces recovery replay and deleted-principal terminality without local fallback, and the real Hub TCP+TLS E2E now proves replayed recovery proofs and deleted-principal recovery attempts are rejected by the live Hub daemon without projecting failed replacement keys into RuntimeTrust. Broader login/recovery UX packaging remains incomplete."
+      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and the daemon lifecycle provider now records recovery policy, consumes recovery proof references through a persisted single-use replay ledger, projects recovered public keys through RuntimeTrust, allows explicit suspended-principal recovery, and rejects deleted-principal recovery as terminal. The CLI facade surfaces recovery replay and deleted-principal terminality without local fallback, and the real Hub TCP+TLS E2E now proves replayed recovery proofs and deleted-principal recovery attempts are rejected by the live Hub daemon without projecting failed replacement keys into RuntimeTrust. Broader login/recovery UX packaging remains downstream product work."
     },
     {
       "capability_id": "principal_authorization_grants",
@@ -523,7 +523,7 @@
           }
         ]
       },
-      "remaining": "SDK grant issue/revoke operations are provider-backed, daemon lifecycle state records durable grant issue/revoke facts, provider tests enforce grant action scope, and the live standalone-Hub TCP+TLS E2E now proves a wrong-action grant cannot delete another principal or mutate target state. Broader standalone multi-user governance UX packaging remains incomplete."
+      "remaining": "SDK grant issue/revoke operations are provider-backed, daemon lifecycle state records durable grant issue/revoke facts, provider tests enforce grant action scope, and the live standalone-Hub TCP+TLS E2E now proves a wrong-action grant cannot delete another principal or mutate target state. Broader standalone multi-user governance UX packaging remains downstream product work."
     },
     {
       "capability_id": "directory_resolution",

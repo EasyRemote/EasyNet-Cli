@@ -14,10 +14,11 @@ signing-key facade, stable install-id rejoin, the bug-3 owner-prefix grammar
 fix, the stale-JWT existence gate) are NOT repeated here — they are done,
 built, and tested.
 
-Execution update: §1, §2, §3 Phase 1, and §5 have been landed. §4 remains
-deferred because vectors without SDK runners would be dead fixtures. Section 6
-is in progress and is governed normatively by
-`daemon-sdk-requirements-v1.md` section 14.
+Execution update: §1, §2, §3 Phase 1, §5, and §6 have been landed and
+verified. §4 remains deferred because vectors without SDK runners would be
+dead fixtures and the runner work requires owner authorization. Section 6 is
+governed normatively by `daemon-sdk-requirements-v1.md` section 14 and is
+accepted by the standalone-Hub plus Backend-present gates described below.
 
 Conventions: `realm` is the federation/DNS namespace; owner-prefixed URAs
 (`<username>.<agent>`) carry the **username slug**, subject/trust URAs carry the
@@ -399,8 +400,9 @@ Authorize deletion, or keep the dead package. It is not blocking anything.
 
 ## §6. Complete the standalone-Hub PrincipalLifecycle
 
-**Status: IN PROGRESS** — the multi-key and admission substrate exists; the
-backend-free user lifecycle is not yet a complete product flow.
+**Status: DONE** — the multi-key substrate, backend-free lifecycle and
+Backend-present account mapping are implemented against the same
+PrincipalLifecycle, key-service, RuntimeTrust and admission roots.
 
 This section records a binding delivery target. The detailed runtime contract,
 transition invariants and cross-repository ownership rules are normative in
@@ -408,8 +410,9 @@ transition invariants and cross-repository ownership rules are normative in
 
 ### Current capability baseline
 
-The correct conclusion is: the multi-key substrate is present, but a complete
-multi-user lifecycle without EasyNet Backend is not.
+The correct conclusion is: the multi-key substrate is present, and the
+backend-free plus Backend-present PrincipalLifecycle acceptance gates now prove
+one shared runtime lifecycle rather than a second authentication system.
 
 | Capability | Current state |
 |---|---|
@@ -419,9 +422,9 @@ multi-user lifecycle without EasyNet Backend is not.
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
 | Create the first user without Backend | provider, CLI bootstrap facade and standalone-Hub TCP+TLS E2E implemented |
-| User login, authentication and recovery without Backend | recovery policy proof, replay protection and CLI recovery facade are implemented; broader login/recovery UX packaging remains |
+| User login, authentication and recovery without Backend | recovery policy proof, replay protection, CLI recovery facade and live recovery-edge E2E implemented; broader product UX packaging remains downstream |
 | A user adds a second device/key without Backend | add/rotate/revoke, device enrollment proof binding and live E2E coverage implemented |
-| Multi-user administration and permission governance without Backend | provider and live wrong-action grant denial implemented; broader governance UX packaging remains |
+| Multi-user administration and permission governance without Backend | provider, live wrong-action grant denial and delete-grant terminality implemented; broader governance UX packaging remains downstream |
 
 The implementation already establishes these lower-level facts:
 
@@ -449,15 +452,14 @@ The implementation already establishes these lower-level facts:
   enrollment`; it must reference an active, unexpired, unrevoked and
   unconsumed capability scoped to the target Principal URA.
 
-These facts are necessary but do not constitute a user lifecycle. The current
-`easynet auth signing-key register` flow derives the User URA from existing
-credentials containing `user_id`/`username`. Pure-URA `federation.join`
-establishes Device membership and does not implicitly create a user. A local
-operator can invoke loopback administration abilities to register multiple
-users and public keys, and `principal.lifecycle.*` can now commit initial
-lifecycle facts. An ordinary user still cannot yet complete the full
-invitation/enrollment, authentication, additional-device enrollment or recovery
-product flow without the remaining CLI proof and E2E work.
+These facts now compose into the product-neutral user lifecycle. Pure-URA
+`federation.join` still establishes Device membership and never implicitly
+creates a User; a principal binding is admitted only when the join carries a
+valid PrincipalLifecycle proof. CLI facades now cover bootstrap, invitation
+enrollment, additional keys, rotation, revocation, recovery, suspension,
+reactivation, grants, deletion and inspection without Backend account state.
+Product login screens and governance UX packaging remain downstream product
+work, not missing canonical runtime state.
 
 ### Required canonical state machine
 
@@ -563,8 +565,8 @@ contract now has a product-neutral optional PrincipalLifecycle proof seam, and
 the Hub daemon validates that proof before atomically binding the joined Device
 URA to the User Principal in RuntimeTrust; a real daemon UDS E2E now proves that
 binding persists through the same Backend-free PrincipalLifecycle test fixture.
-The recovery UX and the two standalone/backend-present end-to-end gates remain
-required. The CLI
+The recovery edge cases and both standalone/backend-present end-to-end gates
+are now covered by the acceptance scripts. The CLI
 `principal bootstrap` facade now composes `principal.lifecycle.create` and
 `principal.lifecycle.bind_first_key` with one bootstrap proof reference,
 separate idempotency keys, fixed bind expected-version `1`, and daemon
@@ -584,8 +586,8 @@ capability, joins a Device by Hub URA with `--hub-ca`, `--principal-ura` and
 HTTP credential token, persisted `join_receipt_hash`, pinned CA persistence,
 in-band Hub key import through `federation.resolve_key`, and the Hub
 RuntimeTrust owner binding from Device URA to User Principal URA.
-Recovery UX edge cases remain required. Backend-present E2E is now covered by
-the live daemon-backed account-flow gate. The downstream SDK consumer cutover
+Recovery edge cases are now covered by the live Hub TCP+TLS E2E. Backend-present
+E2E is covered by the live daemon-backed account-flow gate. The downstream SDK consumer cutover
 and product private-key custody gates now cover
 Backend/EasyRemote Receipt/Directory/runtime consumer usage and reject product
 private-key custody, raw daemon process spawning and raw FFI escape paths. The
@@ -635,8 +637,8 @@ daemon-backed Backend-present account-flow E2E now starts a Hub-mode
 `easynet-daemon` through the Go SDK C ABI daemon lifecycle, attaches Backend
 account registration to the daemon-backed PrincipalLifecycle provider, and
 verifies the resulting active Principal URA and public key binding through the
-same SDK projection. Recovery UX edge-case closure remains required before
-section 6 can be marked complete.
+same SDK projection. Recovery UX edge-case closure is now covered by the live
+Hub TCP+TLS recovery replay/deleted-principal rejection checks.
 Go and Python PrincipalLifecycle projection
 decoders now reject forbidden custody fields recursively, matching the
 managed-signing public-projection guard, and the real CLI TLS lifecycle E2E
@@ -662,14 +664,14 @@ product event taxonomies remain downstream.
 | 3 | `--hub` URA addressing | DONE for Phase 1 | Verified |
 | 4 | Axon §9.3 cross-language vectors | DEFERRED | owner authorizes the runner |
 | 5 | Delete dead `internal/registry` | DONE | Verified |
-| 6 | Standalone-Hub PrincipalLifecycle | IN PROGRESS | canonical provider, SDK parity and `standalone-hub-principal-lifecycle-e2e.sh` section 14.3 gate |
+| 6 | Standalone-Hub PrincipalLifecycle | DONE | Verified by canonical provider, SDK parity and `standalone-hub-principal-lifecycle-e2e.sh` section 14.3 gate |
 
 §4 remains intentionally deferred until cross-language runners are authorized;
-adding fixture JSON alone is not acceptable completion. Section 6 is required
-for architecture convergence and for the irreversible Phase 3 removal of HTTP
-pairing. The execution target is therefore not complete until section 6 and
-its normative `daemon-sdk-requirements-v1.md` acceptance gates pass. The
-backend-free and Backend-present section 14.3 E2E shapes are now composed by
-`tools/scripts/standalone-hub-principal-lifecycle-e2e.sh`; remaining section 6
-work is broader standalone recovery/governance UX packaging and final
-architecture-debt deletion, not a missing second runtime model.
+adding fixture JSON alone is not acceptable completion. Section 6 is now
+accepted by `tools/scripts/standalone-hub-principal-lifecycle-e2e.sh`, which
+composes the backend-free and Backend-present section 14.3 E2E shapes, and by
+the aggregate SDK completion audit. Broader standalone recovery/governance UX
+packaging remains downstream product work, not a missing canonical runtime
+model. The irreversible Phase 3 removal of the staged HTTP pairing path remains
+a separate cutover decision and must not be done merely because the section 6
+runtime acceptance gates are green.

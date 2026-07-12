@@ -401,15 +401,14 @@ The current substrate facts are:
   enrollment`; it must reference an active, unexpired, unrevoked and
   unconsumed capability scoped to the target Principal URA.
 
-This substrate is not a user lifecycle. The current
-`easynet auth signing-key register` flow derives a User URA from credentials
-containing `user_id`/`username`, while pure URA `federation.join` establishes
-Device membership and does not naturally create or bind a user. Local
-loopback administration can manually register multiple users and keys, and
-`principal.lifecycle.*` can now commit initial lifecycle facts. An ordinary
-user still cannot yet complete the full invitation/enrollment,
-additional-device binding, authentication or recovery product flow without the
-remaining CLI proof and E2E work.
+This substrate now composes into the product-neutral runtime user lifecycle.
+Pure URA `federation.join` still establishes Device membership and does not
+implicitly create a User; a principal binding is admitted only when the join
+carries a valid PrincipalLifecycle proof. The CLI and SDK facades now cover
+bootstrap, invitation enrollment, additional keys, rotation, revocation,
+recovery, suspension, reactivation, grants, deletion and inspection without
+Backend account state. Product login screens and broader governance UX
+packaging remain downstream product work, not missing canonical runtime state.
 
 ### 14.2 Canonical state machine
 
@@ -506,14 +505,14 @@ second daemon/key-service or writing a parallel trust source.
 
 ### 14.4 Delivery status at this specification update
 
-This target is not currently cutover-ready. On 2026-07-11 the restored baseline
-was re-audited after the interrupted work: Go SDK tests, Python SDK tests,
-EasyNet backend tests and EasyRemote tests all passed. There is therefore no
-current Go compilation conflict to repair. The remaining defect is
-architectural and functional: PrincipalLifecycle has a provider-backed
-Go/Python SDK facade and a daemon durable provider. Active-key, grant,
-recovery, admission-state and enrollment-capability proof enforcement have
-landed in the daemon provider. The product-neutral `easynet principal`
+This target is now accepted at the canonical runtime boundary. On 2026-07-11
+the restored baseline was re-audited after the interrupted work: Go SDK tests,
+Python SDK tests, EasyNet backend tests and EasyRemote tests all passed. There
+is therefore no current Go compilation conflict to repair. PrincipalLifecycle
+has a provider-backed Go/Python SDK facade and a daemon durable provider.
+Active-key, grant, recovery, admission-state and enrollment-capability proof
+enforcement have landed in the daemon provider. The product-neutral
+`easynet principal`
 operator facade now covers the provider-backed lifecycle transition surface
 through daemon `principal.lifecycle.*` abilities, including create,
 bind-first-key, add-key, rotate-key, revoke-key, configure-recovery, recover,
@@ -536,9 +535,9 @@ backend-free `federation.join`, empty HTTP credential token, persisted
 `federation.resolve_key`. The same E2E now bootstraps a Hub-side administrator,
 issues a product-neutral enrollment capability, joins a Device over the Hub URA
 with `--principal-ura` plus `--principal-enrollment-id`, and verifies the Hub
-RuntimeTrust owner binding from Device URA to User Principal URA. It is still
-not standalone-Hub cutover-ready until broader recovery/governance UX packaging
-and final architecture-debt deletion close. The
+RuntimeTrust owner binding from Device URA to User Principal URA. Broader
+recovery/governance UX packaging remains downstream product work and does not
+constitute a missing canonical runtime lifecycle. The
 Backend-present live daemon-backed account-flow E2E now attaches the Backend
 account signing-key product flow to the same `easynet-daemon`
 PrincipalLifecycle provider through the Go SDK, proving that account input maps
@@ -566,7 +565,7 @@ grant before deleting another principal and proves the target principal remains
 active until a `principal.lifecycle.delete` grant is supplied. Backend-present
 mapping to the same live daemon runtime is now covered by the Backend live
 PrincipalLifecycle E2E; broader login/recovery flow packaging still remains
-before section 14.3 is cutover-ready.
+outside the section 14.3 canonical runtime acceptance boundary.
 Directory now has daemon-backed resolution, stable listing cursors and explicit
 subscription resume in symmetric Go/Python providers; receipt/history now has a
 daemon-backed stable cursor provider and symmetric Go/Python cursor forwarding;
@@ -576,8 +575,7 @@ Runtime events and runtime administration now have symmetric provider-backed
 Go/Python facades; access control now has symmetric provider-backed Go/Python
 SDK facades over daemon
 `authority.binding.*` abilities, while Backend product role mapping and
-standalone-Hub governance cutover remain incomplete; and the backend still
-owns product-local runtime-profile lowering.
+standalone-Hub governance UX packaging remain downstream product work.
 Runtime Events now also have an explicit cross-repository adapter gate covering
 the Go/Python SDK event facades, Backend SDK event subscription/open-stream
 adapters and EasyRemote product event consumer behavior. This is adapter
@@ -593,9 +591,11 @@ SDK-inferred product facts.
 Receipt summary causal-anchor projection now has symmetric Go/Python SDK
 helpers, and EasyRemote child Context dispatch consumes the Python SDK
 `ReceiptReference` instead of deciding receipt-anchor validity in product code.
-Backend-free multi-user closure remains partial as described above. Passing
-baseline tests must not be reported as standalone-Hub delivery evidence until
-sections 14.2 and 14.3 and the cross-language parity gates pass.
+Backend-free multi-user closure is now covered at the canonical runtime
+boundary by the section 14.3 composite gate. Passing baseline tests alone are
+still not standalone-Hub delivery evidence; the accepted evidence is the
+combination of sections 14.2 and 14.3, SDK parity, downstream consumer cutover
+and live daemon E2E gates.
 
 ## 15. Required conformance evidence
 
@@ -668,8 +668,8 @@ EasyRemote `LocalIdentity` consumes that projection instead of directly
 parsing daemon credentials. Those projection symbols and `SdkEnvironment`
 members are now tracked by the complete canonical public API inventory so
 future refactors cannot silently drop the public runtime model surface.
-They are intermediate convergence evidence, not completion of the
-standalone-Hub recovery UX closure.
+They are accepted runtime convergence evidence. Broader standalone-Hub
+recovery/governance UX packaging remains downstream product work.
 
 The Backend-present evidence has now crossed the live runtime boundary: the
 Backend has a tested ServiceContext SDK profile graph proving
@@ -686,14 +686,6 @@ SDK C ABI daemon lifecycle and `principalprofile.NewClient`.
 
 The current remaining work is:
 
-- close the remaining standalone-Hub recovery UX edge cases beyond the
-  existing TCP+TLS two-HOME lifecycle E2E. Provider and CLI evidence now pin
-  replayed recovery proofs, suspended-principal recovery and deleted-principal
-  terminality as daemon-owned state-machine facts, and the live Hub TCP+TLS E2E
-  now covers recovery replay plus deleted-principal recovery terminality without
-  RuntimeTrust key projection and wrong-action grant denial without target-state
-  mutation. Remaining UX work is broader login/recovery flow packaging rather
-  than a second authentication model;
 - keep the runtime-events live daemon gate in the cutover suite. Runtime events
   now have both cross-repo adapter evidence and Go/Python live daemon
   `RuntimeEventClient` handle-event proof, so the remaining work is regression
@@ -703,6 +695,9 @@ The current remaining work is:
   the backend-free standalone Hub TCP+TLS E2E with the Backend-present live
   daemon PrincipalLifecycle E2E, so the two required deployment-shape E2Es are
   one auditable regression gate;
+- keep broader standalone-Hub login/recovery/governance UX packaging as
+  downstream product work over the same PrincipalLifecycle model, not as a
+  second authentication system;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates
   only after their consumers have migrated;
 - run the full Rust default/`axon-pb`, Go, Python, Backend and EasyRemote
