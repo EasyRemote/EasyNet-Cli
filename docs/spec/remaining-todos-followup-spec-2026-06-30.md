@@ -14,9 +14,9 @@ signing-key facade, stable install-id rejoin, the bug-3 owner-prefix grammar
 fix, the stale-JWT existence gate) are NOT repeated here — they are done,
 built, and tested.
 
-Execution update: §1, §2, §3 Phase 1, §5, and §6 have been landed and
-verified. §4 remains deferred because vectors without SDK runners would be
-dead fixtures and the runner work requires owner authorization. Section 6 is
+Execution update: §1, §2, §3 Phase 1, §4, §5, and §6 have been landed and
+verified. §4 now has executable cross-language SDK runners, so the protocol-pack
+vectors are not dead fixtures. Section 6 is
 governed normatively by `daemon-sdk-requirements-v1.md` section 14 and is
 accepted by the standalone-Hub plus Backend-present gates described below.
 
@@ -290,7 +290,8 @@ which is why Phase 1 keeps both paths.
 
 ## §4. Axon §9.3 — cross-language conformance test vectors
 
-**Status: DEFERRED** (owner sign-off required; not a code bug).
+**Status: DONE** — owner authorized the runner work and the shared vectors are
+now consumed by Go / Rust / Node / Python SDK test targets.
 
 ### Background
 
@@ -302,46 +303,46 @@ AbilityProjectionSummary / ResolveAnswer in `core/proto/axon/v1/`; the
 namespace/join/directory/resolve_key wire shapes, so Go / Rust / TS / Python
 SDKs can prove byte-identical canonicalization against a shared fixture set.
 
-### Current state
+### Implemented state
 
-- `EasyNet-Axon/packaging/protocol-pack/conformance-vectors/` contains only
-  `easynet-uri-v1.json` and `envelope-signing-v1.json`.
-- **No runner consumes these vectors.** A grep for the vector files across the
-  Go/Rust/TS SDK test suites returns zero hits. Adding more JSON files alone
-  produces dead fixtures.
+- `EasyNet-Axon/packaging/protocol-pack/conformance-vectors/federation-directory-v1.json`
+  is consumed by Go, Rust, Python and Node. Node currently validates this as an
+  explicit seam-level projection because the Node SDK does not yet expose a
+  typed directory model.
+- `EasyNet-Axon/packaging/protocol-pack/conformance-vectors/federation-wire-v1.json`
+  covers `federation.resolve`, `federation.join`, `resolve_key.request` and
+  `resolve_key.response`.
+- Go, Rust, Python and Node all load the same `federation-wire-v1.json` fixture.
+  The federation resolve/join cases call product-neutral SDK payload builders
+  rather than copying payload lowering into tests.
+- `scripts/checks/protocol_pack_conformance_consumers.sh` prevents the
+  federation protocol-pack vectors from becoming dead fixtures.
 
-### Why deferred (the honest blocker)
+### Architectural decision
 
-The valuable artifact is not the vectors — it is a **cross-language runner** that
-loads them and asserts each SDK's canonicalization matches. Building Go + Rust +
-TS (+ Python) harnesses that consume a shared vector set is an independent,
-RFC-scale effort touching multiple SDK test trees. Shipping vectors without a
-runner is busywork that reads as "covered" while covering nothing.
+The valuable artifact is not fixture JSON by itself; it is the executable
+cross-language runner. The implementation therefore added the missing SDK
+runners and a consumer guard in the same change as the new federation wire
+fixture.
 
-### The change (only if owner authorizes the runner too)
+One real drift was found and fixed during implementation: Rust
+`ResolveKeyRequest` serialized absent optional `presented_pubkey_*` fields as
+`null`. The model now skips absent optional key fields, converging to the shared
+canonical wire projection instead of changing the vector to match a divergent
+implementation.
 
-1. Define the vector schema for each shape (namespace.resolve query/answer,
-   federation.join args/receipt, directory entry, resolve_key request/response)
-   — input + expected canonical bytes + expected error, mirroring the existing
-   `easynet-uri-v1.json` shape (`{version, description, vectors:[{id, input,
-   canonical, expect_error}]}`).
-2. Author the fixtures under `conformance-vectors/<shape>/`.
-3. Add a runner per SDK that loads the fixtures and asserts
-   canonicalization/parse equality — Rust (`sdk/rust`), Go
-   (`sdk/go/easynet/invocation`), TS, Python — each as a normal test target.
-4. Wire the runners into each SDK's CI so a wire-spec drift in any language
-   fails a test.
+The new SDK helpers are generic federation wire payload builders. They do not
+start a daemon, manage product profiles, or introduce EasyNet/EasyRemote
+product lifecycle into Axon.
 
-### Acceptance
+### Verification
 
-- Each SDK has a test that loads the shared vectors and passes; a deliberate
-  canonicalization change in one SDK fails its runner.
-- No dead fixtures: every vector file is consumed by at least one runner.
-
-### Decision needed
-
-Authorize the cross-language runner work (then implement the full §4), or leave
-§9.3 confirmed-but-vectorless. Do not ship vectors without runners.
+- `bash scripts/checks/protocol_pack_conformance_consumers.sh`
+- `go test ./easynet -run 'ProtocolPack|FederationDirectory'`
+- `uv run python -m pytest tests/test_protocol_pack_vectors.py tests/test_federation_directory.py`
+- `cargo test --test protocol_pack_vectors --test federation_directory_vectors`
+- bundled Node/tsc equivalent of `protocol-pack:vectors`:
+  `node ./scripts/clean-generated.mjs && tsc -p tsconfig.json && node ./scripts/run-protocol-pack-vectors.mjs`
 
 ---
 
@@ -359,12 +360,13 @@ The §9.4.2 audit found `internal/registry` (`ability_registry.go`:
 ability registry. It is spec-compliant *if used* (a product read-model, not an
 authoritative resolver), but nothing uses it.
 
-### Current state
+### Current verified state
 
-- `backend/internal/registry/ability_registry.go` + `ability_registry_test.go`
-  still present.
-- No production caller. The methods reference `ent.Ability`
-  (the ent schema for an `abilities` table).
+- `backend/internal/registry/ability_registry.go` and
+  `ability_registry_test.go` are gone.
+- `ent/schema/ability.go`, the dependent `AbilityVersion` schema and generated
+  `ent/ability` package are gone.
+- No dangling production caller remains.
 
 ### Execution note
 
@@ -373,17 +375,14 @@ dependent `AbilityVersion` schema were also unconsumed outside their own ent
 island, so the schema and generated packages were removed together and ent was
 regenerated.
 
-### The change (if owner authorizes)
+### The completed change
 
-1. Confirm zero remaining consumers (re-run the grep at delete time — the tree
-   is shared and may have changed).
-2. Delete `internal/registry/ability_registry.go` +
+1. Confirmed zero remaining consumers.
+2. Deleted `internal/registry/ability_registry.go` and
    `ability_registry_test.go`.
-3. Determine `ent.Ability` schema fate: if `internal/registry` was its only
-   consumer, remove `ent/schema/ability.go` and re-run `ent generate`; if other
-   code reads the `abilities` table, leave the schema and only delete the dead
-   wrapper.
-4. `go build ./... && go vet ./... && go test ./...` green.
+3. Removed the unconsumed `ent.Ability` / `AbilityVersion` schema island and
+   regenerated ent.
+4. Verified backend build/test gates through the aggregate SDK completion audit.
 
 ### Acceptance
 
@@ -391,10 +390,6 @@ regenerated.
   green.
 - `ent.Ability` schema either removed (with regen) or justified as
   still-consumed.
-
-### Decision needed
-
-Authorize deletion, or keep the dead package. It is not blocking anything.
 
 ---
 
@@ -463,8 +458,8 @@ work, not missing canonical runtime state.
 
 ### Required canonical state machine
 
-The missing capability is one product-neutral lifecycle shared by standalone
-and Backend-present deployments:
+The implemented capability is one product-neutral lifecycle shared by
+standalone and Backend-present deployments:
 
 ```text
 CreateUser
@@ -662,13 +657,11 @@ product event taxonomies remain downstream.
 | 1 | Conformance boot-time gate (§9.1-7) | DONE | Verified |
 | 2 | DaemonInvocation route const (§7.3-5) | DONE | Verified |
 | 3 | `--hub` URA addressing | DONE for Phase 1 | Verified |
-| 4 | Axon §9.3 cross-language vectors | DEFERRED | owner authorizes the runner |
+| 4 | Axon §9.3 cross-language vectors | DONE | Verified |
 | 5 | Delete dead `internal/registry` | DONE | Verified |
 | 6 | Standalone-Hub PrincipalLifecycle | DONE | Verified by canonical provider, SDK parity and `standalone-hub-principal-lifecycle-e2e.sh` section 14.3 gate |
 
-§4 remains intentionally deferred until cross-language runners are authorized;
-adding fixture JSON alone is not acceptable completion. Section 6 is now
-accepted by `tools/scripts/standalone-hub-principal-lifecycle-e2e.sh`, which
+Section 6 is accepted by `tools/scripts/standalone-hub-principal-lifecycle-e2e.sh`, which
 composes the backend-free and Backend-present section 14.3 E2E shapes, and by
 the aggregate SDK completion audit. Broader standalone recovery/governance UX
 packaging remains downstream product work, not a missing canonical runtime
