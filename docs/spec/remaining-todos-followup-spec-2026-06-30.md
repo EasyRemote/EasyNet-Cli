@@ -584,8 +584,9 @@ capability, joins a Device by Hub URA with `--hub-ca`, `--principal-ura` and
 HTTP credential token, persisted `join_receipt_hash`, pinned CA persistence,
 in-band Hub key import through `federation.resolve_key`, and the Hub
 RuntimeTrust owner binding from Device URA to User Principal URA.
-Recovery UX edge cases and Backend-present E2E remain required. The downstream
-SDK consumer cutover and product private-key custody gates now cover
+Recovery UX edge cases remain required. Backend-present E2E is now covered by
+the live daemon-backed account-flow gate. The downstream SDK consumer cutover
+and product private-key custody gates now cover
 Backend/EasyRemote Receipt/Directory/runtime consumer usage and reject product
 private-key custody, raw daemon process spawning and raw FFI escape paths. The
 Go and Python SDKs now expose a product-neutral runtime environment projection
@@ -613,19 +614,23 @@ the rotated sibling remains active, configures recovery, recovers, suspends and
 reactivates Alice, deletes Bob through an admin grant, restarts the Hub daemon,
 and verifies persisted PrincipalLifecycle state, grant state, RuntimeTrust
 revocation projection and Device→Principal owner binding. Backend-present
-mapping has advanced: the Backend ServiceContext now has a tested single SDK
-profile graph proving PrincipalLifecycle, Receipt, Directory, Events, Admin and
-AccessControl clients derive from the same Go SDK native runtime provider rather
-than a second daemon/key-service/trust-store construction. Backend account
-signing-key logic is also tested through the real Go SDK PrincipalLifecycle
-adapter, proving product account input lowers as `principal.lifecycle.get`,
-`principal.lifecycle.create` and `principal.lifecycle.bind_first_key` without
-legacy identity mutation. The process-level Backend HTTP E2E now drives
-`POST /api/v1/user/me/signing-keys` before signed invocation admission, and the
-test principal runtime sits below `principalprofile.NewClient` rather than
-beside it, proving the browser-facing product route consumes the same SDK
-PrincipalLifecycle projection. A live daemon-backed Backend-present
-account-flow E2E and recovery UX edge-case closure remain required before
+mapping has now crossed the live runtime boundary: the Backend ServiceContext
+has a tested single SDK profile graph proving PrincipalLifecycle, Receipt,
+Directory, Events, Admin and AccessControl clients derive from the same Go SDK
+native runtime provider rather than a second daemon/key-service/trust-store
+construction. Backend account signing-key logic is tested through the real Go
+SDK PrincipalLifecycle adapter, proving product account input lowers as
+`principal.lifecycle.get`, `principal.lifecycle.create` and
+`principal.lifecycle.bind_first_key` without legacy identity mutation. The
+process-level Backend HTTP E2E drives `POST /api/v1/user/me/signing-keys`
+before signed invocation admission, and the test principal runtime sits below
+`principalprofile.NewClient` rather than beside it, proving the browser-facing
+product route consumes the same SDK PrincipalLifecycle projection. A live
+daemon-backed Backend-present account-flow E2E now starts a Hub-mode
+`easynet-daemon` through the Go SDK C ABI daemon lifecycle, attaches Backend
+account registration to the daemon-backed PrincipalLifecycle provider, and
+verifies the resulting active Principal URA and public key binding through the
+same SDK projection. Recovery UX edge-case closure remains required before
 section 6 can be marked complete.
 Go and Python PrincipalLifecycle projection
 decoders now reject forbidden custody fields recursively, matching the

@@ -67,6 +67,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "product smoke self-test" bash "$SELF_DIR/check-sdk-product-smokes.sh" --self-test
   run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
   run_gate "Go SDK live smoke self-test" bash "$SELF_DIR/go-sdk-live-smoke.sh" --self-test
+  run_gate "Backend live PrincipalLifecycle E2E self-test" bash "$SELF_DIR/backend-live-principal-e2e.sh" --self-test
 
   easyremote_good="$tmp/EasyRemoteGood"
   backend_bad="$tmp/EasyNetBad"
@@ -108,6 +109,7 @@ run_gate "product key-custody boundary" bash "$SELF_DIR/check-product-key-custod
 run_gate "product smokes" bash "$SELF_DIR/check-sdk-product-smokes.sh" || status=1
 run_gate "Python SDK live smoke" bash "$SELF_DIR/python-sdk-live-smoke.sh" || status=1
 run_gate "Go SDK live smoke" bash "$SELF_DIR/go-sdk-live-smoke.sh" || status=1
+run_gate "Backend live PrincipalLifecycle E2E" bash "$SELF_DIR/backend-live-principal-e2e.sh" || status=1
 
 if [[ "$status" -eq 0 ]]; then
   echo "SDK cutover readiness ok"
