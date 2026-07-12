@@ -355,6 +355,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/principal_test.go"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
@@ -364,10 +368,14 @@
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_principal.py"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
-      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI lifecycle surface now has real CLI binary-to-daemon UDS E2E evidence for bootstrap, enrollment-consume, add-key, rotate, revoke, recovery, suspend/reactivate, grant and delete, and Hub URA join accepts an enrollment-id shorthand for device principal binding. Backend now has a tested single SDK profile graph proving PrincipalLifecycle, receipt, directory, events, admin and access-control clients derive from one Go SDK native runtime provider, Backend account signing-key logic is tested through the real Go SDK PrincipalLifecycle adapter for get/create/bind-first-key lowering, the Backend process-level HTTP E2E registers browser signing keys through /api/v1/user/me/signing-keys before signed invocation admission reads the same lifecycle projection, and the Backend live daemon-backed account-flow E2E proves the same product flow against a Hub-mode easynet-daemon through the Go SDK C ABI daemon lifecycle. Standalone-Hub recovery UX remains before cutover-ready."
+      "remaining": "SDK lifecycle commands and runtime provider are provider-backed, and the daemon now has a durable principal.lifecycle.* provider with active-key, grant, recovery, admission-state and enrollment-capability proof enforcement. The CLI lifecycle surface now has real CLI binary-to-daemon UDS E2E evidence for bootstrap, enrollment-consume, add-key, rotate, revoke, recovery, suspend/reactivate, grant and delete, and Hub URA join accepts an enrollment-id shorthand for device principal binding. The section 14.3 composite gate now runs both the backend-free standalone Hub TCP+TLS E2E and the Backend-present live daemon PrincipalLifecycle E2E, proving both deployment shapes consume the same runtime model. Broader standalone-Hub recovery UX packaging remains before cutover-ready."
     },
     {
       "capability_id": "principal_enrollment",
@@ -382,6 +390,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/principal_test.go"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
@@ -391,6 +403,10 @@
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_principal.py"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
@@ -409,6 +425,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/principal_test.go"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
@@ -418,10 +438,14 @@
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_principal.py"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
-      "remaining": "SDK key binding add/rotate/revoke operations are provider-backed, and daemon lifecycle state now projects active/revoked key facts through RuntimeTrust; Hub restart and standalone multi-user E2E remain incomplete."
+      "remaining": "SDK key binding add/rotate/revoke operations are provider-backed, and daemon lifecycle state projects active/revoked key facts through RuntimeTrust. The section 14.3 composite gate now covers standalone multi-user, multi-key add/rotate/revoke, Hub restart persistence and Backend-present account mapping through the same PrincipalLifecycle provider. Broader standalone recovery/governance UX packaging remains incomplete."
     },
     {
       "capability_id": "principal_recovery",
@@ -440,6 +464,10 @@
           {
             "kind": "static_gate",
             "ref": "tools/scripts/standalone-hub-recovery-e2e.sh"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
@@ -453,6 +481,10 @@
           {
             "kind": "static_gate",
             "ref": "tools/scripts/standalone-hub-recovery-e2e.sh"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
@@ -471,6 +503,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/principal_test.go"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
@@ -480,10 +516,14 @@
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_principal.py"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/standalone-hub-principal-lifecycle-e2e.sh"
           }
         ]
       },
-      "remaining": "SDK grant issue/revoke operations are provider-backed, and daemon lifecycle state now records durable grant issue/revoke facts; grant admission enforcement and standalone multi-user governance closure remain incomplete."
+      "remaining": "SDK grant issue/revoke operations are provider-backed, daemon lifecycle state records durable grant issue/revoke facts, provider tests enforce grant action scope, and the live standalone-Hub TCP+TLS E2E now proves a wrong-action grant cannot delete another principal or mutate target state. Broader standalone multi-user governance UX packaging remains incomplete."
     },
     {
       "capability_id": "directory_resolution",

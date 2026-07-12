@@ -11,6 +11,8 @@ if [[ "${1:-}" == "--self-test" ]]; then
   test -f "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"
   grep -q "tls-alice-recover-replay" "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"
   grep -q "tls-bob-recover-deleted" "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"
+  grep -q "tls-admin-wrong-delete-grant" "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"
+  grep -q "tls-bob-delete-wrong-grant" "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"
   grep -q "CARGO_BIN_EXE_easynet-keyring" "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"
   grep -q "replayed recovery key must not be projected into RuntimeTrust" "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"
   grep -q "deleted-principal recovery key must not be projected into RuntimeTrust" "$REPO_ROOT/tests/hub_ura_tls_join_cli_e2e.rs"

@@ -453,6 +453,65 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
         &hub,
     );
 
+    let wrong_delete_grant = easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "issue-grant",
+            "--principal-ura",
+            ADMIN_URA,
+            "--action",
+            "principal.lifecycle.add_key",
+            "--proof-ref",
+            &admin_binding_id,
+            "--idempotency-key",
+            "tls-admin-wrong-delete-grant",
+            "--expected-version",
+            "6",
+            "--json",
+        ],
+        &hub,
+    );
+    let wrong_delete_grant_id = wrong_delete_grant["principal"]["grants"][0]["grant_id"]
+        .as_str()
+        .expect("wrong-action grant id")
+        .to_string();
+
+    let wrong_grant_delete_error = easynet_failure(
+        hub_home.path(),
+        [
+            "principal",
+            "delete",
+            "--principal-ura",
+            BOB_URA,
+            "--actor-ura",
+            ADMIN_URA,
+            "--proof-kind",
+            "grant",
+            "--proof-ref",
+            &wrong_delete_grant_id,
+            "--idempotency-key",
+            "tls-bob-delete-wrong-grant",
+            "--expected-version",
+            "4",
+            "--json",
+        ],
+        &hub,
+    );
+    assert!(
+        wrong_grant_delete_error.contains("grant proof reference"),
+        "Hub TCP+TLS grant scope denial must surface daemon authorization failure, got: {wrong_grant_delete_error}"
+    );
+    let bob_after_wrong_grant_delete = easynet_json(
+        hub_home.path(),
+        ["principal", "get", "--principal-ura", BOB_URA, "--json"],
+        &hub,
+    );
+    assert_eq!(
+        bob_after_wrong_grant_delete["principal"]["state"], "active",
+        "wrong-action grant must not mutate Bob before the valid delete grant"
+    );
+
     let delete_grant = easynet_json(
         hub_home.path(),
         [
@@ -467,15 +526,12 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
             "--idempotency-key",
             "tls-admin-delete-grant",
             "--expected-version",
-            "6",
+            "7",
             "--json",
         ],
         &hub,
     );
-    let delete_grant_id = delete_grant["principal"]["grants"][0]["grant_id"]
-        .as_str()
-        .expect("delete grant id")
-        .to_string();
+    let delete_grant_id = grant_id_for_action(&delete_grant, PRINCIPAL_DELETE);
 
     let bob_deleted = easynet_json(
         hub_home.path(),
@@ -760,6 +816,23 @@ fn newest_enrollment_id(snapshot: &Value) -> String {
         .get("enrollment_id")
         .and_then(Value::as_str)
         .expect("enrollment id")
+        .to_string()
+}
+
+fn grant_id_for_action(snapshot: &Value, action: &str) -> String {
+    snapshot["principal"]["grants"]
+        .as_array()
+        .expect("grants")
+        .iter()
+        .find(|grant| {
+            grant["actions"]
+                .as_array()
+                .expect("grant actions")
+                .iter()
+                .any(|item| item.as_str() == Some(action))
+        })
+        .and_then(|grant| grant["grant_id"].as_str())
+        .expect("grant id for action")
         .to_string()
 }
 

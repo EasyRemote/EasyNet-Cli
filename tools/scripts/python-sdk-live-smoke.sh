@@ -17,6 +17,9 @@ if [[ "${1:-}" == "--self-test" ]]; then
   grep -q "generic C ABI v5" "$0"
   grep -q "typed terminal failure decoded" "$0"
   grep -q "RuntimeEventClient read live daemon handle events" "$0"
+  grep -q "select_python_bin" "$0"
+  grep -q "using Python interpreter" "$0"
+  grep -q "install uv/python3" "$0"
   grep -q "EXPECTED_ABI_VERSION = 5" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
   grep -q "class DaemonControl" "$REPO_ROOT/sdk/python/easynet_sdk/daemon.py"
   grep -q "class RuntimeClient" "$REPO_ROOT/sdk/python/easynet_sdk/runtime.py"
@@ -24,14 +27,42 @@ if [[ "${1:-}" == "--self-test" ]]; then
   exit 0
 fi
 
-if [[ -z "${PYTHON_BIN:-}" ]]; then
-  command -v uv >/dev/null 2>&1 || {
-    echo "[python-sdk-live-smoke] uv is required to materialize the SDK test environment" >&2
+select_python_bin() {
+  if [[ -n "${PYTHON_BIN:-}" ]]; then
+    [[ -x "$PYTHON_BIN" ]] || {
+      echo "[python-sdk-live-smoke] PYTHON_BIN is not executable: $PYTHON_BIN" >&2
+      exit 2
+    }
+    return
+  fi
+
+  local sdk_venv_python="$REPO_ROOT/sdk/python/.venv/bin/python"
+  if [[ -x "$sdk_venv_python" ]]; then
+    PYTHON_BIN="$sdk_venv_python"
+    return
+  fi
+
+  if command -v uv >/dev/null 2>&1; then
+    (cd "$REPO_ROOT/sdk/python" && uv sync --quiet)
+    if [[ -x "$sdk_venv_python" ]]; then
+      PYTHON_BIN="$sdk_venv_python"
+      return
+    fi
+    echo "[python-sdk-live-smoke] uv sync did not create an executable interpreter at $sdk_venv_python" >&2
     exit 2
-  }
-  (cd "$REPO_ROOT/sdk/python" && uv sync --quiet)
-  PYTHON_BIN="$REPO_ROOT/sdk/python/.venv/bin/python"
-fi
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+    return
+  fi
+
+  echo "[python-sdk-live-smoke] no Python interpreter found; set PYTHON_BIN or install uv/python3" >&2
+  exit 2
+}
+
+select_python_bin
+echo "[python-sdk-live-smoke] using Python interpreter: $PYTHON_BIN"
 DAEMON_BIN="$REPO_ROOT/target/debug/easynet-daemon"
 
 case "$(uname -s)" in

@@ -418,10 +418,10 @@ multi-user lifecycle without EasyNet Backend is not.
 | Key create, query, rotate, revoke and expiry | implemented |
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
-| Create the first user without Backend | provider enforces explicit bootstrap and bind-first-key proof continuity; CLI first-principal bootstrap facade exists; standalone-Hub E2E workflow incomplete |
-| User login, authentication and recovery without Backend | recovery policy proof is provider-enforced; login/recovery CLI flow and E2E incomplete |
-| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state with active-key, grant and recovery proof enforcement; CLI active-key flow exists; device enrollment UX and E2E incomplete |
-| Multi-user administration and permission governance without Backend | partial capabilities; no standalone-Hub closure |
+| Create the first user without Backend | provider, CLI bootstrap facade and standalone-Hub TCP+TLS E2E implemented |
+| User login, authentication and recovery without Backend | recovery policy proof, replay protection and CLI recovery facade are implemented; broader login/recovery UX packaging remains |
+| A user adds a second device/key without Backend | add/rotate/revoke, device enrollment proof binding and live E2E coverage implemented |
+| Multi-user administration and permission governance without Backend | provider and live wrong-action grant denial implemented; broader governance UX packaging remains |
 
 The implementation already establishes these lower-level facts:
 
@@ -616,7 +616,9 @@ and verifies persisted PrincipalLifecycle state, grant state, RuntimeTrust
 revocation projection and Device→Principal owner binding. The same live Hub
 TCP+TLS E2E now rejects replayed recovery proofs and deleted-principal recovery
 attempts, then verifies those failed replacement keys are not projected into
-RuntimeTrust. Backend-present
+RuntimeTrust. It also rejects a wrong-action administrator grant before
+deleting Bob and verifies Bob remains active until a grant for
+`principal.lifecycle.delete` is supplied. Backend-present
 mapping has now crossed the live runtime boundary: the Backend ServiceContext
 has a tested single SDK profile graph proving PrincipalLifecycle, Receipt,
 Directory, Events, Admin and AccessControl clients derive from the same Go SDK
@@ -660,10 +662,14 @@ product event taxonomies remain downstream.
 | 3 | `--hub` URA addressing | DONE for Phase 1 | Verified |
 | 4 | Axon §9.3 cross-language vectors | DEFERRED | owner authorizes the runner |
 | 5 | Delete dead `internal/registry` | DONE | Verified |
-| 6 | Standalone-Hub PrincipalLifecycle | IN PROGRESS | canonical provider, SDK parity and standalone/backend-present E2E gates |
+| 6 | Standalone-Hub PrincipalLifecycle | IN PROGRESS | canonical provider, SDK parity and `standalone-hub-principal-lifecycle-e2e.sh` section 14.3 gate |
 
 §4 remains intentionally deferred until cross-language runners are authorized;
 adding fixture JSON alone is not acceptable completion. Section 6 is required
 for architecture convergence and for the irreversible Phase 3 removal of HTTP
 pairing. The execution target is therefore not complete until section 6 and
-its normative `daemon-sdk-requirements-v1.md` acceptance gates pass.
+its normative `daemon-sdk-requirements-v1.md` acceptance gates pass. The
+backend-free and Backend-present section 14.3 E2E shapes are now composed by
+`tools/scripts/standalone-hub-principal-lifecycle-e2e.sh`; remaining section 6
+work is broader standalone recovery/governance UX packaging and final
+architecture-debt deletion, not a missing second runtime model.

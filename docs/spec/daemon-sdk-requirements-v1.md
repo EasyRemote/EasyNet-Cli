@@ -369,10 +369,10 @@ lifecycle.
 | Key create, list, public projection, rotate, revoke and expiry | implemented |
 | Private keys are held only by the daemon key-service | implemented |
 | Multi-user signature verification and admission | implemented |
-| Create the first user without Backend | provider enforces explicit bootstrap and bind-first-key proof continuity; CLI/E2E workflow incomplete |
-| Login, authentication and recovery without Backend | recovery policy proof is provider-enforced; login/recovery CLI flow and E2E incomplete |
-| A user adds a second device/key without Backend | daemon provider supports key add/rotate/revoke state with active-key, grant and recovery proof enforcement; CLI flow and E2E incomplete |
-| Multi-user administration and permission governance without Backend | partial capabilities; no standalone Hub closure |
+| Create the first user without Backend | provider, CLI bootstrap facade and standalone-Hub TCP+TLS E2E implemented |
+| Login, authentication and recovery without Backend | recovery policy proof, replay protection and CLI recovery facade are implemented; broader login/recovery UX packaging remains |
+| A user adds a second device/key without Backend | add/rotate/revoke, device enrollment proof binding and live E2E coverage implemented |
+| Multi-user administration and permission governance without Backend | provider and live wrong-action grant denial implemented; broader governance UX packaging remains |
 
 The current substrate facts are:
 
@@ -537,7 +537,8 @@ backend-free `federation.join`, empty HTTP credential token, persisted
 issues a product-neutral enrollment capability, joins a Device over the Hub URA
 with `--principal-ura` plus `--principal-enrollment-id`, and verifies the Hub
 RuntimeTrust owner binding from Device URA to User Principal URA. It is still
-not standalone-Hub cutover-ready until recovery UX edge cases close. The
+not standalone-Hub cutover-ready until broader recovery/governance UX packaging
+and final architecture-debt deletion close. The
 Backend-present live daemon-backed account-flow E2E now attaches the Backend
 account signing-key product flow to the same `easynet-daemon`
 PrincipalLifecycle provider through the Go SDK, proving that account input maps
@@ -560,9 +561,12 @@ guard, and the real CLI TLS lifecycle E2E scans PrincipalLifecycle JSON output
 for private-key custody fields. The same real CLI TLS lifecycle E2E now also
 proves that replayed recovery proofs and deleted-principal recovery attempts are
 rejected by the live Hub daemon and do not project replacement keys into
-RuntimeTrust. Backend-present mapping to the same live daemon runtime is now
-covered by the Backend live PrincipalLifecycle E2E; broader login/recovery flow
-packaging still remains before section 14.3 is cutover-ready.
+RuntimeTrust. The same live Hub E2E now rejects a wrong-action administrator
+grant before deleting another principal and proves the target principal remains
+active until a `principal.lifecycle.delete` grant is supplied. Backend-present
+mapping to the same live daemon runtime is now covered by the Backend live
+PrincipalLifecycle E2E; broader login/recovery flow packaging still remains
+before section 14.3 is cutover-ready.
 Directory now has daemon-backed resolution, stable listing cursors and explicit
 subscription resume in symmetric Go/Python providers; receipt/history now has a
 daemon-backed stable cursor provider and symmetric Go/Python cursor forwarding;
@@ -687,19 +691,22 @@ The current remaining work is:
   replayed recovery proofs, suspended-principal recovery and deleted-principal
   terminality as daemon-owned state-machine facts, and the live Hub TCP+TLS E2E
   now covers recovery replay plus deleted-principal recovery terminality without
-  RuntimeTrust key projection. Remaining UX work is broader login/recovery flow
-  packaging rather than a second authentication model;
+  RuntimeTrust key projection and wrong-action grant denial without target-state
+  mutation. Remaining UX work is broader login/recovery flow packaging rather
+  than a second authentication model;
 - keep the runtime-events live daemon gate in the cutover suite. Runtime events
   now have both cross-repo adapter evidence and Go/Python live daemon
   `RuntimeEventClient` handle-event proof, so the remaining work is regression
   preservation rather than the missing cutover proof;
-- close the remaining standalone-Hub acceptance evidence that is not covered by
-  the real TCP+TLS lifecycle E2E and SDK/CLI projection audit yet;
+- keep the section 14.3 PrincipalLifecycle acceptance gate in the cutover
+  suite. `tools/scripts/standalone-hub-principal-lifecycle-e2e.sh` now composes
+  the backend-free standalone Hub TCP+TLS E2E with the Backend-present live
+  daemon PrincipalLifecycle E2E, so the two required deployment-shape E2Es are
+  one auditable regression gate;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates
   only after their consumers have migrated;
 - run the full Rust default/`axon-pb`, Go, Python, Backend and EasyRemote
-  regression suites; and
-- run the two standalone/backend-present E2E scenarios from section 14.3.
+  regression suites.
 
 ## 18. Source of truth
 
