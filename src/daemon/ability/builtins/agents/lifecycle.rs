@@ -132,7 +132,7 @@ enum AgentLifecycleError {
     Registrar {
         operation: &'static str,
         #[source]
-        source: HotAgentRegistrarError,
+        source: Box<HotAgentRegistrarError>,
     },
     #[error("{operation} failed in lifecycle state {state}: {cause}; rollback={rollback}")]
     Mutation {
@@ -325,7 +325,10 @@ fn require_hot_registrar(
         .ok_or(AgentLifecycleError::RegistrarUnavailable { operation })?;
     registrar
         .require_ready()
-        .map_err(|source| AgentLifecycleError::Registrar { operation, source })?;
+        .map_err(|source| AgentLifecycleError::Registrar {
+            operation,
+            source: Box::new(source),
+        })?;
     Ok(registrar)
 }
 
@@ -902,7 +905,7 @@ fn stop_agent_handler(
     })
     .map_err(|source| AgentLifecycleError::Registrar {
         operation: "agent.stop",
-        source,
+        source: Box::new(source),
     })?;
     let runtime_removed = removal.outcome().removed;
 
@@ -1147,7 +1150,7 @@ fn refresh_agents_handler(
     })
     .map_err(|source| AgentLifecycleError::Registrar {
         operation: "agent.refresh",
-        source,
+        source: Box::new(source),
     })?;
 
     let runtime_registered = agent_results

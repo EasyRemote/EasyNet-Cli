@@ -479,6 +479,19 @@ fn expected_device_public_ability(registry_key: &str) -> &str {
 
 fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
     let started = Instant::now();
+    #[cfg(not(feature = "axon-pb"))]
+    {
+        let _ = agent_ura;
+        return ProbeOutcome {
+            online: false,
+            state: "UNKNOWN",
+            probe_status: "transport_unavailable",
+            probe_error: Some("remote device probe requires the axon-pb feature".to_string()),
+            latency_ms: Some(started.elapsed().as_millis() as u64),
+        };
+    }
+
+    #[cfg(feature = "axon-pb")]
     let result = (|| {
         let target = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
             agent_ura,
@@ -493,6 +506,7 @@ fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
             None,
         )
     })();
+    #[cfg(feature = "axon-pb")]
     match result {
         Ok(_) => ProbeOutcome {
             online: true,

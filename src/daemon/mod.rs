@@ -38,7 +38,6 @@ pub mod control;
 pub mod execution;
 pub mod federation;
 pub mod identity;
-#[cfg(feature = "axon-pb")]
 pub mod invocation;
 pub mod keyring;
 pub mod persistence;

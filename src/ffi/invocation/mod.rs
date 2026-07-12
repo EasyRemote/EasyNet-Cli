@@ -347,6 +347,12 @@ pub unsafe extern "C" fn easynet_invocation_builder_new(
 
 macro_rules! builder_string_setter {
     ($fn_name:ident, $arg_name:literal, $field:expr) => {
+        /// Set one string field on an Invocation builder.
+        ///
+        /// # Safety
+        /// `value` must be a non-null pointer to a valid UTF-8 C string for
+        /// the selected field. `builder_id` must identify a live builder
+        /// created by `easynet_invocation_builder_new`.
         #[no_mangle]
         pub unsafe extern "C" fn $fn_name(
             builder_id: InvocationBuilderId,
@@ -1128,6 +1134,10 @@ pub unsafe extern "C" fn easynet_invocation_stream_cancel(
 /// Unknown ids are treated as already closed and return `EASYNET_OK`.
 /// This is a local resource close; daemon terminal frames are still
 /// delivered through the callback path when available before close.
+///
+/// # Safety
+/// `handle` and `stream_id` must have been returned by this C ABI. Passing an
+/// unknown stream id is treated as an idempotent close.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_invocation_stream_close(
     handle: EasynetHandle,
@@ -1296,6 +1306,11 @@ pub unsafe extern "C" fn easynet_invocation_bidi_send(
 /// The session remains registered so the binding can continue to
 /// receive down-direction frames and then call `easynet_invocation_bidi_close`
 /// or `easynet_invocation_bidi_cancel`.
+///
+/// # Safety
+/// `handle` and `bidi_id` must have been returned by this C ABI. The function
+/// only closes the local send side; callers must still close or cancel the
+/// session handle when receive processing is complete.
 #[no_mangle]
 pub unsafe extern "C" fn easynet_invocation_bidi_close_send(
     handle: EasynetHandle,
@@ -1637,6 +1652,24 @@ fn builder_output_invocation_json(
     unsafe { *out_invocation_json = ptr };
     clear_last_error();
     EASYNET_OK
+}
+
+#[cfg(not(feature = "axon-pb"))]
+fn builder_output_invocation_json(
+    builder_id: InvocationBuilderId,
+    out_invocation_json: *mut *mut c_char,
+    _consume_on_success: bool,
+    function: &str,
+) -> i32 {
+    if out_invocation_json.is_null() {
+        return record_invocation_error(
+            ERR_NULL_POINTER,
+            format!("{function}: out_invocation_json pointer is null"),
+        );
+    }
+    unsafe { *out_invocation_json = std::ptr::null_mut() };
+    let _ = builder_id;
+    record_invocation_feature_disabled(function)
 }
 
 #[cfg(feature = "axon-pb")]

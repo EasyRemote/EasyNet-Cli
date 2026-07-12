@@ -1061,18 +1061,17 @@ pub fn handle_revoke(
     }
 }
 
-/// Reason text emitted on `Status::failed_precondition` when the
-/// target presence-registry lookup misses on the local-realm
-/// fast-path. Wire-stable per DEC-N4 §2.1.
+// Reason text emitted on `Status::failed_precondition` when the
+// target presence-registry lookup misses on the local-realm fast-path.
+// Wire-stable per DEC-N4 §2.1.
 
-/// Reason text emitted when the target device's dispatch channel is
-/// full. A full channel means the device is SLOW (its session drain
-/// is behind), not DEAD: the device stays in the presence registry
-/// and only the triggering call fails, retryable. Evicting on full
-/// — the pre-2026-06-13 policy — turned a load spike into a false
-/// offline plus a failure avalanche for every pending call
-/// (measured: one >256-frame burst killed 73% of 2048 in-flight
-/// invocations).
+// Reason text emitted when the target device's dispatch channel is full. A
+// full channel means the device is SLOW (its session drain is behind), not
+// DEAD: the device stays in the presence registry and only the triggering call
+// fails, retryable. Evicting on full — the pre-2026-06-13 policy — turned a
+// load spike into a false offline plus a failure avalanche for every pending
+// call (measured: one >256-frame burst killed 73% of 2048 in-flight
+// invocations).
 
 // ─── federation.subscribe_directory ────────────────────────────────
 //

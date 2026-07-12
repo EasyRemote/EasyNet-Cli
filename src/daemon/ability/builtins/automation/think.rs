@@ -1947,7 +1947,15 @@ This skill does X.\n";
     fn registry_with_stub_chat(agent: &str, replies: Vec<&'static str>) -> Arc<AxonAbilityCatalog> {
         let counter: Arc<StdMutex<usize>> = Arc::new(StdMutex::new(0));
         let replies: Arc<Vec<String>> = Arc::new(replies.into_iter().map(String::from).collect());
-        let mut reg = AxonAbilityCatalog::new();
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                "easynet:///r/localhost/device/think-test",
+            )
+            .expect("test device authority root is canonical");
+        let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            easynet_axon::invocation::LocalRuntime::new(),
+            authority_context,
+        );
         let counter_c = Arc::clone(&counter);
         let replies_c = Arc::clone(&replies);
         reg.register_rpc_with_owner(

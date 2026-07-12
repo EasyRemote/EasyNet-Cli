@@ -563,7 +563,7 @@ fn status_from_parts(
             .as_ref()
             .and_then(|value| value.get("code"))
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|code| action_error_code_is_projected(code)),
+            .is_some_and(action_error_code_is_projected),
     );
     DesktopCompanionStatus {
         package_id: plan.package_id.clone(),

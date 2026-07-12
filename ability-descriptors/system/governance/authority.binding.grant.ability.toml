@@ -12,3 +12,9 @@ type = "string"
 
 [input_schema.properties.grant]
 type = "object"
+
+[input_schema.properties.owner_ura]
+type = "string"
+
+[input_schema.properties.principal_ura]
+type = "string"

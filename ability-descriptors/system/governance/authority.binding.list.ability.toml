@@ -4,7 +4,7 @@ description = "List RFC-014 PermissionGrant records by owner and filters."
 
 [input_schema]
 type = "object"
-required = ["owner_user_id"]
+required = []
 additionalProperties = false
 
 [input_schema.properties.ability_ura_pattern]
@@ -19,10 +19,19 @@ type = "string"
 [input_schema.properties.effect]
 type = "string"
 
+[input_schema.properties.owner_ura]
+type = "string"
+
 [input_schema.properties.owner_user_id]
 type = "string"
 
 [input_schema.properties.principal_id]
+type = "string"
+
+[input_schema.properties.principal_kind]
+type = "string"
+
+[input_schema.properties.principal_ura]
 type = "string"
 
 [input_schema.properties.state]

@@ -147,11 +147,19 @@ async fn local_system_request(
     payload: Vec<u8>,
 ) -> Result<DescriptorBoundInvocationRequest, String> {
     let envelope = local_descriptor_bound_envelope(runtime, mode, target, &payload).await?;
+    #[cfg(feature = "axon-pb")]
+    let options = LocalRuntimeRequestOptions::default()
+        .with_request_metadata(target.request_metadata.clone());
+    #[cfg(not(feature = "axon-pb"))]
+    let options = {
+        let _ = &target.request_metadata;
+        LocalRuntimeRequestOptions::default()
+    };
+
     LocalRuntimeRequestFactory::request_for(
         mode,
         LocalRuntimeIngress::LocalSystem { envelope, payload },
-        LocalRuntimeRequestOptions::default()
-            .with_request_metadata(target.request_metadata.clone()),
+        options,
     )
     .map_err(|err| format!("{err}"))
 }

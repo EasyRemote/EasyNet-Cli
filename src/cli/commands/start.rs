@@ -565,6 +565,7 @@ pub(crate) fn republish_via_federation_best_effort(
     // NoBinding — even though the daemon is right there listening on
     // its dispatch UDS. Best-effort: a register failure leaves the
     // dispatch path degraded but keeps boot moving.
+    #[cfg(feature = "axon-pb")]
     if !plan.realm.is_empty() && !plan.host_device_ura.is_empty() {
         let dispatch_endpoint = crate::daemon::control::runtime_dispatch::dispatch_endpoint_ura();
         let reg_outcomes = crate::daemon::federation::publish::register_local_tools_via_runtime(

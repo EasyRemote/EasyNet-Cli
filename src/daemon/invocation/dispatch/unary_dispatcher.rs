@@ -177,9 +177,10 @@ fn admitted_join_principal_owner(
         ))
     })?;
     if parsed_principal.kind != crate::core::ura::URAKind::User {
-        return Err(Status::invalid_argument(format!(
+        return Err(Status::invalid_argument(
             "federation.join: principal_enrollment.principal_ura must identify a User URA"
-        )));
+                .to_string(),
+        ));
     }
     if parsed_principal.realm != request.realm.trim() {
         return Err(Status::permission_denied(format!(
@@ -359,7 +360,7 @@ impl UnaryDispatcher {
                 crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
             ))?;
         let response = federation_wrappers::handle_advertise_agent(
-            &request,
+            request,
             Some(self.directory.advertised_agents.as_ref()),
         );
         wrap_json_response(&response)
@@ -422,7 +423,7 @@ impl UnaryDispatcher {
         request: &federation_wrappers::AdvertiseAbilitiesRequest,
     ) -> Result<Response<InvokeResponse>, Status> {
         let response = federation_wrappers::handle_advertise_abilities(
-            &request,
+            request,
             Some(self.directory.ability_catalog.as_ref()),
         );
         wrap_json_response(&response)

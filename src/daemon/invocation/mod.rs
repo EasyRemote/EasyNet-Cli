@@ -70,20 +70,31 @@
 #![allow(clippy::result_large_err)]
 
 pub mod admission;
+#[cfg(feature = "axon-pb")]
 pub mod bidi;
 pub mod dispatch;
 pub mod receipts;
 pub mod routing;
+#[cfg(feature = "axon-pb")]
 pub mod streams;
 
+#[cfg(feature = "axon-pb")]
 pub use crate::daemon::boot::invocation::{start_daemon_invocation_transport, SessionShutdown};
+#[cfg(feature = "axon-pb")]
 pub use admission::admission_facade::AdmissionFacade;
+#[cfg(feature = "axon-pb")]
 pub use admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+#[cfg(feature = "axon-pb")]
 pub use admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+#[cfg(feature = "axon-pb")]
 pub use admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+#[cfg(feature = "axon-pb")]
 pub use bidi::session_wire::SessionDispatch;
+#[cfg(feature = "axon-pb")]
 pub use dispatch::daemon_invocation_service::DaemonInvocationService;
+#[cfg(feature = "axon-pb")]
 pub use dispatch::invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
+#[cfg(feature = "axon-pb")]
 pub use dispatch::{
     CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationDraft,
     InvocationTuple, KeyServiceLocalDaemonInvocationSigner, LocalDaemonInvocationSigner,

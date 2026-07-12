@@ -4,13 +4,16 @@ description = "Revoke an RFC-014 PermissionGrant monotonically."
 
 [input_schema]
 type = "object"
-required = ["grant_id", "owner_user_id"]
+required = ["grant_id"]
 additionalProperties = false
 
 [input_schema.properties.actor_ura]
 type = "string"
 
 [input_schema.properties.grant_id]
+type = "string"
+
+[input_schema.properties.owner_ura]
 type = "string"
 
 [input_schema.properties.owner_user_id]

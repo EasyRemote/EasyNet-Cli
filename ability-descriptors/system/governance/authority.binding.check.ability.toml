@@ -4,7 +4,7 @@ description = "Run RFC-014 PolicyEngine.check in read-only mode."
 
 [input_schema]
 type = "object"
-required = ["owner_user_id", "caller_ura", "principal_kind", "principal_id", "callee_ura", "subject_ura", "ability_ura", "action"]
+required = ["caller_ura", "principal_kind", "principal_id", "callee_ura", "subject_ura", "ability_ura", "action"]
 additionalProperties = false
 
 [input_schema.properties.ability_ura]
@@ -44,6 +44,9 @@ type = "string"
 type = "string"
 
 [input_schema.properties.principal_kind]
+type = "string"
+
+[input_schema.properties.principal_ura]
 type = "string"
 
 [input_schema.properties.rejector_ura]

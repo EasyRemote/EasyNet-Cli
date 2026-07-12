@@ -57,7 +57,9 @@ pub mod frames;
 /// Distinct from `server.rs` (length-delimited JSON IPC for CLI
 /// subcommands + local stdio MCP) — the runtime side speaks
 /// newline-delimited single-line JSON instead.
+#[cfg(feature = "axon-pb")]
 pub mod runtime_dispatch;
+#[cfg(feature = "axon-pb")]
 pub mod runtime_dispatch_adapter;
 pub mod server;
 pub mod transport;

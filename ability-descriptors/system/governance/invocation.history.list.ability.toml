@@ -9,6 +9,12 @@ additionalProperties = false
 [input_schema.properties.compact]
 type = "boolean"
 
+[input_schema.properties.cursor]
+type = "string"
+description = "Opaque receipt history cursor returned by the previous invocation.history.list page."
+minLength = 1
+maxLength = 4096
+
 [input_schema.properties.exclude_ability_uras]
 type = "array"
 items = { minLength = 1, type = "string" }

@@ -16,5 +16,11 @@ type = "object"
 [input_schema.properties.created_grant]
 type = "object"
 
+[input_schema.properties.owner_ura]
+type = "string"
+
+[input_schema.properties.principal_ura]
+type = "string"
+
 [input_schema.properties.request]
 type = "object"
