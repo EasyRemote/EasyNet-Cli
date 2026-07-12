@@ -13,7 +13,8 @@ use easynet_axon::pb::axon::v1::Envelope;
 use crate::core::ura::{parse_ura, AbilityOwner, URAKind};
 use crate::daemon::ability::catalog::catalog_metadata;
 use crate::daemon::invocation::admission::decision::{
-    AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PrincipalKind, TokenClass,
+    AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PolicyDecisionReason,
+    PrincipalKind, TokenClass,
 };
 use crate::daemon::invocation::admission::owner_resolution::{
     local_device_owner_fact, OwnerFact, OwnerResolutionInput, OwnerResolver,
@@ -51,6 +52,34 @@ impl AdmissionPolicyGate {
             context.trust_anchor,
         );
         let principal = principal_for(context.trusted_role, &caller_ura, context.trust_anchor);
+        if remote_owner_forward_allowed(
+            &caller_ura,
+            &callee_ura,
+            context.daemon_ura,
+            context.trust_anchor,
+        ) {
+            return Ok(PolicyDecision {
+                decision: PolicyDecisionOutcome::Allow,
+                reason: PolicyDecisionReason::FederationForwardAllow,
+                owner_user_id: owner.owner_user_id,
+                owner_source: owner.owner_source,
+                caller_ura,
+                principal_kind: principal.kind,
+                principal_id: principal.id,
+                token_id: principal.token_id,
+                callee_ura,
+                subject_ura,
+                ability_ura,
+                action: context.action,
+                rejector_ura: context.rejector_ura,
+                policy_rule_id: None,
+                grant_id: None,
+                prompt_request_id: None,
+                canonical_hash: context.canonical_hash,
+                signature_key_id: context.signature_key_id,
+                authority_proof_id: context.verified_authority_id,
+            });
+        }
         let grants = match owner.owner_user_id.as_deref() {
             Some(owner_user_id) => AccessControlStore::open_or_create(owner_user_id)
                 .map(|store| store.grants())
@@ -275,6 +304,36 @@ fn user_id_from_ura(ura: &str) -> Option<String> {
         .flatten()
 }
 
+fn remote_owner_forward_allowed(
+    caller_ura: &str,
+    callee_ura: &str,
+    daemon_ura: Option<&str>,
+    trust_anchor: &RealmTrustAnchor,
+) -> bool {
+    let Some(daemon_ura) = daemon_ura else {
+        return false;
+    };
+    let Ok(local) = parse_ura(daemon_ura) else {
+        return false;
+    };
+    if local.kind != URAKind::Hub {
+        return false;
+    }
+    let Ok(caller) = parse_ura(caller_ura) else {
+        return false;
+    };
+    if caller.realm != local.realm {
+        return false;
+    }
+    let Ok(callee) = parse_ura(callee_ura) else {
+        return false;
+    };
+    if callee.realm == local.realm {
+        return false;
+    }
+    trust_anchor.has_federation_peer_for_realm(&callee.realm)
+}
+
 pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String, Status> {
     crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability).map_err(
         |err| {
@@ -319,8 +378,9 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::invocation::admission::decision::PolicyDecisionReason;
     use crate::daemon::persistence::config::{save_credentials, Credentials};
-    use crate::daemon::trust::anchor::TrustedPrincipalOwner;
+    use crate::daemon::trust::anchor::{TrustedAgent, TrustedPrincipalOwner};
     use easynet_axon::pb::axon::v1::{AgentIdentity, SubjectIdentity};
+    use std::path::PathBuf;
 
     fn identity(ura: &str) -> AgentIdentity {
         AgentIdentity {
@@ -363,6 +423,23 @@ mod tests {
             Vec::new(),
         )
         .expect("owner anchor")
+    }
+
+    fn anchor_with_peer_realm() -> RealmTrustAnchor {
+        RealmTrustAnchor::from_parts_with_principal_owners(
+            vec![TrustedAgent {
+                agent_ura: "easynet:///r/peer/hub".to_string(),
+                public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                role: TrustedAgentRole::Hub,
+                added_at_unix_ms: 1,
+                origin_realm: Some("peer".to_string()),
+                hub_endpoint: Some("https://peer-hub.example:50443".to_string()),
+                tls_ca_pem_path: Some(PathBuf::from("/tmp/peer-ca.pem")),
+            }],
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect("peer anchor")
     }
 
     #[test]
@@ -504,6 +581,79 @@ mod tests {
         assert!(
             err.message().contains("\"reason\":\"TOKEN_SCOPE_DENIED\""),
             "expected token scope denial, got: {}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn local_hub_allows_forwarding_to_trusted_remote_owner_realm() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let envelope = Envelope {
+            caller: Some(identity("easynet:///r/local/device/caller")),
+            callee: Some(identity("easynet:///r/peer/device/callee")),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/peer/resource/user.bob/invoke/shell.run".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "shell.run",
+            action: AccessAction::Invoke,
+            trusted_role: TrustedAgentRole::Device,
+            daemon_ura: Some("easynet:///r/local/hub"),
+            trust_anchor: &anchor_with_peer_realm(),
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some("easynet:///r/local/hub".to_string()),
+        })
+        .expect("local hub may forward to an operator-pinned peer realm");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(
+            decision.reason,
+            PolicyDecisionReason::FederationForwardAllow
+        );
+        assert_eq!(decision.owner_user_id.as_deref(), Some("bob"));
+        assert_eq!(
+            decision.rejector_ura.as_deref(),
+            Some("easynet:///r/local/hub")
+        );
+    }
+
+    #[test]
+    fn local_hub_does_not_forward_to_untrusted_remote_owner_realm() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let envelope = Envelope {
+            caller: Some(identity("easynet:///r/local/device/caller")),
+            callee: Some(identity("easynet:///r/peer/device/callee")),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/peer/resource/user.bob/invoke/shell.run".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+        let err = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "shell.run",
+            action: AccessAction::Invoke,
+            trusted_role: TrustedAgentRole::Device,
+            daemon_ura: Some("easynet:///r/local/hub"),
+            trust_anchor: &empty_anchor(),
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: None,
+            verified_authority_id: None,
+            rejector_ura: Some("easynet:///r/local/hub".to_string()),
+        })
+        .expect_err("untrusted remote realm cannot use the forward allow state");
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message()
+                .contains("\"reason\":\"NON_INTERACTIVE_DENY\""),
+            "expected ordinary policy denial without peer trust, got: {}",
             err.message()
         );
     }

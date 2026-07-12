@@ -713,6 +713,28 @@ impl RealmTrustAnchor {
         })
     }
 
+    /// Whether this anchor contains an operator-pinned federation peer
+    /// serving `origin_realm`.
+    ///
+    /// This is the admission-side counterpart to [`lookup_peer_hub`]: the
+    /// dialer resolves by concrete endpoint after routing, while the policy
+    /// gate only needs to know whether a remote realm is an explicit peer
+    /// before it treats the local daemon as a forwarder rather than the
+    /// remote resource owner.
+    #[must_use]
+    pub fn has_federation_peer_for_realm(&self, origin_realm: &str) -> bool {
+        let origin_realm = origin_realm.trim();
+        !origin_realm.is_empty()
+            && self.by_ura.values().any(|a| {
+                a.role == TrustedAgentRole::Hub
+                    && a.origin_realm.as_deref() == Some(origin_realm)
+                    && a.hub_endpoint
+                        .as_deref()
+                        .is_some_and(|endpoint| !endpoint.trim().is_empty())
+                    && a.tls_ca_pem_path.is_some()
+            })
+    }
+
     /// Number of trusted agents in the anchor. Used by the daemon
     /// boot log and by PR-10 canary checklist verification. Counts
     /// every entry, including each user-pubkey row separately

@@ -204,7 +204,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream next: %v", err)
 	}
-	if streamEvent.Kind() != "chunk" {
+	if streamEvent.Kind() != "data" {
 		t.Fatalf("stream event kind = %q", streamEvent.Kind())
 	}
 	if _, err := stream.Cancel(ctx, "go-sdk-live-smoke"); err != nil {

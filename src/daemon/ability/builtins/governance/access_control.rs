@@ -59,6 +59,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 }
 
 pub fn register_with_ledger(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
+    let runtime_governance_owners = [OwnerKind::Device, OwnerKind::Hub];
     for ability in [
         AUTHORITY_BINDING_GRANT,
         AUTHORITY_BINDING_REVOKE,
@@ -78,25 +79,30 @@ pub fn register_with_ledger(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<Inv
             POLICY_REQUEST_LIST => request_list_handler,
             _ => unreachable!("static RFC-014 ability list"),
         };
-        reg.register_rpc_with_spec(
-            ability,
-            OwnerKind::Device,
-            registry_manifest(ability, description_for(ability), input_schema_for(ability)),
-            std::sync::Arc::new(handler),
-        );
+        for owner in runtime_governance_owners.iter().cloned() {
+            reg.register_rpc_with_spec(
+                ability,
+                owner,
+                registry_manifest(ability, description_for(ability), input_schema_for(ability)),
+                std::sync::Arc::new(handler),
+            );
+        }
     }
 
     let reader = Arc::new(AdmissionExplainReader { ledger });
-    reg.register_rpc_with_spec(
-        ADMISSION_EXPLAIN,
-        OwnerKind::Device,
-        registry_manifest(
+    for owner in runtime_governance_owners.iter().cloned() {
+        let reader = Arc::clone(&reader);
+        reg.register_rpc_with_spec(
             ADMISSION_EXPLAIN,
-            description_for(ADMISSION_EXPLAIN),
-            input_schema_for(ADMISSION_EXPLAIN),
-        ),
-        Arc::new(move |args| reader.explain(args)),
-    );
+            owner,
+            registry_manifest(
+                ADMISSION_EXPLAIN,
+                description_for(ADMISSION_EXPLAIN),
+                input_schema_for(ADMISSION_EXPLAIN),
+            ),
+            Arc::new(move |args| reader.explain(args)),
+        );
+    }
 }
 
 fn grant_handler(args: Value) -> anyhow::Result<Value> {

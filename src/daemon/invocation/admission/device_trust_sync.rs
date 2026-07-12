@@ -286,13 +286,11 @@ impl DeviceTrustSync {
     ) -> Option<SyncableCaller> {
         let parsed = crate::core::ura::parse_ura(caller_ura).ok()?;
         match parsed.kind {
-            crate::core::ura::URAKind::Device if parsed.realm == self.daemon_realm => {
-                Some(SyncableCaller::Device {
-                    presented_pubkey_b64: presented_pubkey_b64
-                        .filter(|pk| !pk.is_empty())
-                        .map(str::to_string),
-                })
-            }
+            crate::core::ura::URAKind::Device => Some(SyncableCaller::Device {
+                presented_pubkey_b64: presented_pubkey_b64
+                    .filter(|pk| !pk.is_empty())
+                    .map(str::to_string),
+            }),
             crate::core::ura::URAKind::User if parsed.realm == self.daemon_realm => {
                 Some(SyncableCaller::User {
                     presented_pubkey_b64: presented_pubkey_b64
@@ -453,6 +451,26 @@ mod tests {
         // returns true immediately).
         assert!(sync.ensure_caller_key(ura).await);
         let _ = test_key_b64();
+    }
+
+    #[tokio::test]
+    async fn cross_realm_device_miss_resolves_imports_and_admits() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            Ok(vec![B64.encode(
+                SigningKey::from_bytes(&[0x43; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )])
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let sync = sync_with(resolver, &dir);
+        let ura = "easynet:///r/peer-realm/device/node-a";
+
+        assert!(
+            sync.ensure_caller_key(ura).await,
+            "federated device caller keys are hub-attested and locally warmed"
+        );
+        assert!(sync.cell.snapshot().lookup(ura).is_some());
     }
 
     #[tokio::test]

@@ -690,6 +690,13 @@ impl AdmissionFacade {
             Some(entry) => entry,
             None => {
                 if self.is_federated_caller(caller_ura) {
+                    let trusted_role = federated_caller_role(caller_ura).ok_or_else(|| {
+                        self.signature_denied_status(
+                            envelope,
+                            ability,
+                            permission_denied_unknown_caller(caller_ura),
+                        )
+                    })?;
                     reject_public_hosted_agent_delegation_metadata(metadata)?;
                     self.run_strict_signature_gate(
                         envelope,
@@ -697,7 +704,7 @@ impl AdmissionFacade {
                         args,
                         metadata,
                         snapshot,
-                        TrustedAgentRole::Hub,
+                        trusted_role,
                         action,
                     )?;
                     return Ok(());
@@ -1428,6 +1435,16 @@ fn ability_ura_for_diagnostic(envelope: &Envelope, ability: &str) -> String {
 /// accepted and retired aliases stay rejected.
 fn parse_realm_from_ura(ura: &str) -> Option<String> {
     crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura(ura)
+}
+
+fn federated_caller_role(caller_ura: &str) -> Option<TrustedAgentRole> {
+    let parsed = parse_ura(caller_ura).ok()?;
+    match parsed.kind {
+        URAKind::Device => Some(TrustedAgentRole::Device),
+        URAKind::User => Some(TrustedAgentRole::User),
+        URAKind::Hub => Some(TrustedAgentRole::Hub),
+        _ => None,
+    }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -3935,6 +3952,26 @@ mod tests {
         assert!(facade.is_federated_caller(&hub_ura("peer-realm")));
         assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"));
         assert!(!facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));
+    }
+
+    #[test]
+    fn federated_caller_role_preserves_canonical_principal_kind() {
+        assert_eq!(
+            federated_caller_role("easynet:///r/peer-realm/device/device-123"),
+            Some(TrustedAgentRole::Device)
+        );
+        assert_eq!(
+            federated_caller_role("easynet:///r/peer-realm/user/alice"),
+            Some(TrustedAgentRole::User)
+        );
+        assert_eq!(
+            federated_caller_role("easynet:///r/peer-realm/hub"),
+            Some(TrustedAgentRole::Hub)
+        );
+        assert_eq!(
+            federated_caller_role("easynet:///r/peer-realm/resource/user.alice/x"),
+            None
+        );
     }
 
     #[test]

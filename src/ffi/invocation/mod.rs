@@ -4990,14 +4990,17 @@ fn bidi_down_frame_json(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> se
             })
         }
         Some(Payload::Control(control)) => {
-            let terminal = bidi_control_is_eof(&control);
             serde_json::json!({
                 "ok": true,
                 "event": "control",
                 "sequence": frame.sequence,
                 "mac_base64": mac_base64,
                 "control": bidi_control_json(control),
-                "terminal": terminal,
+                // A down-direction EOF is a remote half-close signal, not the
+                // canonical invocation terminal state. The terminal state is
+                // carried by the cleanup-complete receipt so SDK consumers can
+                // keep draining until the authoritative outcome arrives.
+                "terminal": false,
             })
         }
         // Carrier-v1 frames (DEC-F004): the FFI JSON projection learns
@@ -5029,7 +5032,6 @@ fn bidi_down_frame_is_terminal(frame: &easynet_axon::pb::axon::v1::InvokeBidiDow
     use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
     match frame.payload.as_ref() {
         Some(Payload::Receipt(receipt)) => receipt.cleanup_complete,
-        Some(Payload::Control(control)) => bidi_control_is_eof(control),
         _ => false,
     }
 }
@@ -5074,15 +5076,18 @@ fn bidi_control_json(control: easynet_axon::pb::axon::v1::BidiControl) -> serde_
 fn receipt_summary_json(
     receipt: &easynet_axon::pb::axon::v1::InvocationReceipt,
 ) -> serde_json::Value {
+    use base64::Engine;
+    let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&receipt.payload);
     serde_json::json!({
         "index": receipt.index,
         "invocation_id": receipt.invocation_id,
         "receipt_type": receipt.receipt_type,
-        "state": receipt.state,
+        "state": axon_state_name_from_i32(receipt.state),
         "timestamp_unix_ms": receipt.timestamp_unix_ms,
         "prev_receipt_hash_hex": hex::encode(&receipt.prev_receipt_hash),
         "self_hash_hex": hex::encode(&receipt.self_hash),
         "payload_content_type": receipt.payload_content_type,
+        "payload_base64": payload_base64,
         "cleanup_complete": receipt.cleanup_complete,
         "reason": receipt.reason,
         "child_invocation_id": receipt.child_invocation_id,
@@ -6948,5 +6953,28 @@ mod tests {
         assert_eq!(value["stream_id"], 1);
         assert_eq!(value["data_base64"], "aGVsbG8=");
         assert_eq!(value["pts"], 11);
+    }
+
+    #[test]
+    fn bidi_down_control_eof_is_remote_half_close_not_terminal() {
+        let frame = easynet_axon::pb::axon::v1::InvokeBidiDown {
+            sequence: 4,
+            payload: Some(
+                easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                    easynet_axon::pb::axon::v1::BidiControl {
+                        control: Some(easynet_axon::pb::axon::v1::bidi_control::Control::Eof(true)),
+                    },
+                ),
+            ),
+            ..easynet_axon::pb::axon::v1::InvokeBidiDown::default()
+        };
+        assert!(!bidi_down_frame_is_terminal(&frame));
+
+        let value = bidi_down_frame_json(frame);
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["event"], "control");
+        assert_eq!(value["sequence"], 4);
+        assert_eq!(value["control"]["eof"], true);
+        assert_eq!(value["terminal"], false);
     }
 }

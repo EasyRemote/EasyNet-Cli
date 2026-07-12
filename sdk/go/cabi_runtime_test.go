@@ -76,6 +76,90 @@ func TestCABIBidiFrameJSONProjectsSDKFramesToFFIWire(t *testing.T) {
 	}
 }
 
+func TestProjectCABIOrderedEventLiftsBidiReceiptIntoCanonicalFramePayload(t *testing.T) {
+	var next uint64
+	raw := []byte(`{
+		"ok": true,
+		"event": "receipt",
+		"sequence": 17,
+		"terminal": true,
+		"receipt": {
+			"state": "Completed",
+			"reason": "",
+			"payload_base64": "eyJzaGEyNTYiOiJhYmMxMjMifQ==",
+			"payload_content_type": "application/json",
+			"cleanup_complete": true
+		}
+	}`)
+
+	projected, err := projectCABIOrderedEvent(raw, func(observed *uint64) uint64 {
+		if observed == nil {
+			next++
+			return next
+		}
+		next = *observed
+		return *observed
+	}, true)
+	if err != nil {
+		t.Fatalf("projectCABIOrderedEvent: %v", err)
+	}
+	frame, err := NewBidiFrameFromJSON(projected)
+	if err != nil {
+		t.Fatalf("NewBidiFrameFromJSON: %v; raw=%s", err, projected)
+	}
+	if frame.Kind() != "receipt" || !frame.Terminal() || frame.Sequence() != 17 {
+		t.Fatalf("unexpected canonical receipt frame: kind=%s terminal=%v seq=%d", frame.Kind(), frame.Terminal(), frame.Sequence())
+	}
+	if frame.PayloadContentType() != "application/json" {
+		t.Fatalf("payload content type = %q", frame.PayloadContentType())
+	}
+	payload, err := base64.StdEncoding.DecodeString(frame.PayloadBase64())
+	if err != nil {
+		t.Fatalf("decode payload_base64: %v", err)
+	}
+	if string(payload) != `{"sha256":"abc123"}` {
+		t.Fatalf("payload = %s", payload)
+	}
+	var meta struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(frame.PayloadJSON(), &meta); err != nil {
+		t.Fatalf("decode payload_json: %v; raw=%s", err, frame.PayloadJSON())
+	}
+	if meta.State != "Completed" {
+		t.Fatalf("state = %q", meta.State)
+	}
+}
+
+func TestProjectCABIOrderedEventCanonicalizesBidiBinaryChunkAsDataFrame(t *testing.T) {
+	var next uint64
+	projected, err := projectCABIOrderedEvent([]byte(`{
+		"ok": true,
+		"event": "binary_chunk",
+		"sequence": 5,
+		"stream_id": 1,
+		"data_base64": "aGVsbG8=",
+		"terminal": false
+	}`), func(observed *uint64) uint64 {
+		if observed == nil {
+			next++
+			return next
+		}
+		next = *observed
+		return *observed
+	}, true)
+	if err != nil {
+		t.Fatalf("projectCABIOrderedEvent: %v", err)
+	}
+	frame, err := NewBidiFrameFromJSON(projected)
+	if err != nil {
+		t.Fatalf("NewBidiFrameFromJSON: %v; raw=%s", err, projected)
+	}
+	if frame.Kind() != "data" || frame.StreamID() != 1 || frame.PayloadBase64() != "aGVsbG8=" {
+		t.Fatalf("unexpected data frame: kind=%s stream=%d payload=%q raw=%s", frame.Kind(), frame.StreamID(), frame.PayloadBase64(), projected)
+	}
+}
+
 func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
 	raw, err := daemonStartConfigForCABI([]byte(`{
 		"mode":"device",

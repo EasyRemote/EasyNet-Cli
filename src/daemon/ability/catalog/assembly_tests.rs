@@ -798,6 +798,14 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
         .authority_ability_catalog_snapshot()
         .iter()
         .all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub));
+    assert!(built
+        .catalog
+        .authority_ability_catalog_snapshot()
+        .iter()
+        .any(
+            |row| row.name == crate::daemon::ability::names::governance::AUTHORITY_BINDING_GRANT
+                && row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
+        ));
 }
 
 #[test]

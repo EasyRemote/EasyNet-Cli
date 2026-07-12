@@ -1267,6 +1267,27 @@ func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, 
 			event["payload_base64"] = data
 		}
 	}
+	if _, hasKind := event["kind"]; !hasKind {
+		switch event["event"] {
+		case "binary_chunk", "chunk":
+			event["kind"] = "data"
+		}
+	}
+	if receipt, ok := event["receipt"].(map[string]any); ok {
+		if _, hasPayloadJSON := event["payload_json"]; !hasPayloadJSON {
+			event["payload_json"] = receipt
+		}
+		if _, hasPayloadBase64 := event["payload_base64"]; !hasPayloadBase64 {
+			if payloadBase64, ok := receipt["payload_base64"]; ok {
+				event["payload_base64"] = payloadBase64
+			}
+		}
+		if _, hasPayloadContentType := event["payload_content_type"]; !hasPayloadContentType {
+			if contentType, ok := receipt["payload_content_type"]; ok {
+				event["payload_content_type"] = contentType
+			}
+		}
+	}
 	if state, ok := cabiJSONInteger(event["state"]); ok {
 		event["state"] = cabiInvocationStateName(state)
 	}
