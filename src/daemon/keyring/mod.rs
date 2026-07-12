@@ -163,8 +163,7 @@ struct KeyringFile {
 }
 
 impl KeyringFile {
-    /// v2 is intentionally a hard cutover. v1 did not require the managed
-    /// inventory plaintext field and is rejected rather than dual-read.
+    /// The canonical persisted representation.
     pub const CURRENT_VERSION: u32 = 2;
 }
 
@@ -467,7 +466,7 @@ impl Vault {
             return Err(VaultError::Corrupt(format!(
                 "unsupported keyring version {} (expected {})",
                 file.version,
-                KeyringFile::CURRENT_VERSION
+                KeyringFile::CURRENT_VERSION,
             )));
         }
 
@@ -487,10 +486,11 @@ impl Vault {
         let plaintext_bytes = decrypt(&master_key, &nonce, &ciphertext)?;
         let plaintext: VaultPlaintext = serde_json::from_slice(&plaintext_bytes)
             .map_err(|e| VaultError::Corrupt(format!("decrypt-then-parse: {e}")))?;
+        let plaintext_entries = plaintext.entries;
+        let mut managed_signing = plaintext.managed_signing;
 
-        let expected_entry_count = plaintext.entries.len();
-        let entries = plaintext
-            .entries
+        let expected_entry_count = plaintext_entries.len();
+        let entries = plaintext_entries
             .into_iter()
             .map(|e| (e.primary_self.clone(), e))
             .collect::<BTreeMap<_, _>>();
@@ -500,7 +500,6 @@ impl Vault {
             ));
         }
 
-        let mut managed_signing = plaintext.managed_signing;
         managed_signing.normalize()?;
 
         // A previous process may have observed rename success followed by a
@@ -510,14 +509,16 @@ impl Vault {
         crate::daemon::persistence::config::sync_parent_dir(path)
             .map_err(|error| io::Error::other(error.to_string()))?;
 
-        Ok(Self {
+        let vault = Self {
             path: path.to_path_buf(),
             master_key,
             salt,
             entries,
             managed_signing,
             fail_stopped: None,
-        })
+        };
+
+        Ok(vault)
     }
 
     /// Mint a fresh empty vault under a new random salt.
@@ -2253,7 +2254,7 @@ mod tests {
     }
 
     #[test]
-    fn vault_v2_rejects_v1_and_noncanonical_plaintext_shapes() {
+    fn vault_open_rejects_legacy_v1_and_noncanonical_plaintext_shapes() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
         let source = explicit_pass();
@@ -2273,13 +2274,17 @@ mod tests {
         };
 
         write_encrypted_shape(
-            br#"{"entries":[],"managed_signing":{"keys":[],"peers":[]}}"#,
+            br#"{"entries":[{"primary_self":"easynet:///r/example/device/host","role_overlays":["easynet:///r/example/device/host","easynet:///r/example/hub"],"seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
             1,
         );
-        assert!(matches!(
-            Vault::open(&path, &source),
-            Err(VaultError::Corrupt(message)) if message.contains("unsupported keyring version 1")
-        ));
+        let error = Vault::open(&path, &source).expect_err("legacy v1 vaults are not supported");
+        assert!(matches!(error, VaultError::Corrupt(_)));
+        let persisted_file: KeyringFile =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            persisted_file.version, 1,
+            "rejected legacy files must not be rewritten"
+        );
 
         write_encrypted_shape(br#"{"entries":[]}"#, KeyringFile::CURRENT_VERSION);
         assert!(matches!(

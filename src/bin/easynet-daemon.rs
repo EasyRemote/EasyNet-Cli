@@ -214,6 +214,13 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
+    // The key service is a detached custody process so that it cannot be
+    // inherited accidentally by arbitrary child commands. Its lifecycle is
+    // nevertheless owned by this daemon: every normal shutdown and every
+    // boot failure must reclaim only the child this daemon started. The guard
+    // preserves that terminal transition across all early-return boot paths.
+    let _key_service_shutdown = KeyServiceShutdownGuard;
+
     // v1: a Kernel wrapping a NoopGateway is sufficient for the
     // loop scheduler and permission/session services. The daemon installs the
     // SubscriberBroker permission variant so a Client UI
@@ -624,6 +631,16 @@ async fn main() -> anyhow::Result<()> {
     drop(session_shutdown);
     cleanup_control_discovery();
     Ok(())
+}
+
+struct KeyServiceShutdownGuard;
+
+impl Drop for KeyServiceShutdownGuard {
+    fn drop(&mut self) {
+        if let Err(error) = easynet_cli::daemon::keyring::lifecycle::shutdown_key_service() {
+            eprintln!("[daemon] key-service shutdown failed: {error:#}");
+        }
+    }
 }
 
 fn resolve_pages_start_port() -> anyhow::Result<u16> {

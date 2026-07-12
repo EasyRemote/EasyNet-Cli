@@ -21,6 +21,7 @@ const PROBE_INTERVAL: Duration = Duration::from_millis(100);
 const STARTUP_LEASE_STALE_AFTER: Duration = Duration::from_secs(30);
 const SUPERVISOR_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 const SUPERVISOR_MAX_BACKOFF: Duration = Duration::from_secs(5);
+const KEY_SERVICE_OWNER_PID_ENV: &str = "EASYNET_KEYRING_OWNER_PID";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyServiceStartup {
@@ -57,6 +58,19 @@ pub fn key_service_lifecycle_state() -> Option<KeyServiceLifecycleState> {
         .and_then(KeyServiceManager::snapshot)
 }
 
+/// Stop the key service only when this daemon process started it.
+///
+/// An attached key service belongs to another live runtime and is deliberately
+/// left alone. This is the terminal lifecycle transition for daemon shutdown
+/// and boot failure: without it, the detached custody child outlives its
+/// daemon and later starts can accumulate orphan processes.
+pub fn shutdown_key_service() -> anyhow::Result<()> {
+    match KEY_SERVICE_MANAGER.get() {
+        Some(manager) => manager.shutdown(),
+        None => Ok(()),
+    }
+}
+
 struct KeyServiceManager {
     lifecycle: KeyServiceLifecycle,
     state: Mutex<KeyServiceManagerState>,
@@ -84,6 +98,7 @@ struct KeyServiceManagerState {
     phase: KeyServiceManagerPhase,
     child: Option<Child>,
     supervisor: Option<std::thread::JoinHandle<()>>,
+    shutdown_requested: bool,
 }
 
 impl Default for KeyServiceManagerState {
@@ -92,6 +107,7 @@ impl Default for KeyServiceManagerState {
             phase: KeyServiceManagerPhase::Dormant,
             child: None,
             supervisor: None,
+            shutdown_requested: false,
         }
     }
 }
@@ -211,6 +227,30 @@ impl KeyServiceManager {
         self.lock_state().snapshot()
     }
 
+    fn shutdown(&self) -> anyhow::Result<()> {
+        let supervisor = {
+            let mut state = self.lock_state();
+            state.shutdown_requested = true;
+            state.supervisor.take()
+        };
+
+        if let Some(supervisor) = supervisor {
+            supervisor
+                .join()
+                .map_err(|_| anyhow::anyhow!("join daemon key service supervisor"))?;
+        }
+
+        let mut state = self.lock_state();
+        let result = state.terminate_owned_child();
+        state.phase = match &result {
+            Ok(()) => KeyServiceManagerPhase::Dormant,
+            Err(error) => KeyServiceManagerPhase::Failed {
+                message: error.to_string(),
+            },
+        };
+        result
+    }
+
     fn lock_state(&self) -> MutexGuard<'_, KeyServiceManagerState> {
         self.state
             .lock()
@@ -236,6 +276,10 @@ impl KeyServiceManager {
         state: &mut KeyServiceManagerState,
         attempt: u32,
     ) -> anyhow::Result<KeyServiceStartup> {
+        anyhow::ensure!(
+            !state.shutdown_requested,
+            "daemon key service lifecycle is shutting down"
+        );
         state.reap_exited_child()?;
 
         if state.child.is_some() {
@@ -297,6 +341,9 @@ impl KeyServiceManager {
 
             let result = {
                 let mut state = self.lock_state();
+                if state.shutdown_requested {
+                    return;
+                }
                 self.transition_to_running(&mut state, restart_attempt)
             };
 
@@ -416,6 +463,11 @@ impl KeyServiceLifecycle {
             .with_context(|| format!("open daemon key service log {}", self.log_path.display()))?;
 
         let mut command = Command::new(&self.binary_path);
+        // The child is session-detached so arbitrary daemon descendants never
+        // inherit it. It still has one lifecycle owner: this daemon process.
+        // The keyring watches that parent and exits if a crash bypasses the
+        // daemon's orderly shutdown guard.
+        command.env(KEY_SERVICE_OWNER_PID_ENV, std::process::id().to_string());
         command.stdin(Stdio::null());
         if let Ok(stdout) = log.try_clone() {
             command.stdout(Stdio::from(stdout));
@@ -638,6 +690,44 @@ mod tests {
             state.child.is_none(),
             "ownership may be released only after the child is reaped"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_shutdown_reaps_only_its_owned_key_service_and_disables_restart() {
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+        use std::sync::Mutex;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let child = Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn owned test child");
+        let manager = KeyServiceManager {
+            lifecycle: KeyServiceLifecycle {
+                socket_path: directory.path().join("key-service.sock"),
+                binary_path: PathBuf::from("unused"),
+                log_path: directory.path().join("key-service.log"),
+                lease_path: directory.path().join("key-service.start.lock"),
+                ready_timeout: Duration::from_secs(1),
+            },
+            state: Mutex::new(KeyServiceManagerState {
+                phase: KeyServiceManagerPhase::Running,
+                child: Some(child),
+                ..KeyServiceManagerState::default()
+            }),
+        };
+
+        manager.shutdown().expect("daemon-owned child stops");
+
+        let state = manager.lock_state();
+        assert!(state.shutdown_requested);
+        assert!(state.child.is_none());
+        assert_eq!(state.snapshot(), None);
     }
 
     #[cfg(unix)]

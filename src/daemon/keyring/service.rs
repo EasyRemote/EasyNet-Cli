@@ -33,6 +33,10 @@ const MAX_CONCURRENT_KEY_SERVICE_CONNECTIONS: usize = 4;
 const MAX_REQUESTS_PER_KEY_SERVICE_CONNECTION: usize = 256;
 const KEY_SERVICE_FRAME_DEADLINE: Duration = Duration::from_secs(30);
 const KEY_SERVICE_TERMINAL_CLOSE_GRACE: Duration = Duration::from_millis(100);
+#[cfg(unix)]
+const KEY_SERVICE_OWNER_PID_ENV: &str = "EASYNET_KEYRING_OWNER_PID";
+#[cfg(unix)]
+const OWNER_LIVENESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug)]
 struct ConnectionPolicy {
@@ -469,10 +473,19 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
     install_signal_cleanup(socket_path.clone());
     let connection_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_KEY_SERVICE_CONNECTIONS));
     let mut fail_stop_rx = runtime.fail_stop_receiver();
+    #[cfg(unix)]
+    let mut owner_liveness = tokio::time::interval(OWNER_LIVENESS_POLL_INTERVAL);
 
     #[cfg(unix)]
     loop {
         tokio::select! {
+            _ = owner_liveness.tick() => {
+                if daemon_owner_exited() {
+                    let _ = std::fs::remove_file(&socket_path);
+                    eprintln!("[easynet-keyring] daemon owner exited, shutting down");
+                    return Ok(());
+                }
+            }
             changed = fail_stop_rx.changed() => {
                 let reason = match changed {
                     Ok(()) => fail_stop_rx
@@ -546,6 +559,29 @@ pub async fn run_default_key_service() -> Result<(), Box<dyn std::error::Error>>
             }
         }
     }
+}
+
+/// A service launched by daemon lifecycle must not survive a daemon crash.
+/// Standalone test/service invocations omit the owner PID and retain their
+/// existing explicit signal lifecycle.
+#[cfg(unix)]
+fn daemon_owner_exited() -> bool {
+    let owner_pid = std::env::var_os(KEY_SERVICE_OWNER_PID_ENV)
+        .and_then(|raw| raw.into_string().ok())
+        .and_then(|raw| raw.parse::<libc::pid_t>().ok())
+        .filter(|pid| *pid > 1);
+
+    // A child is reparented to launchd/init after its daemon exits. Comparing
+    // the direct parent avoids any PID-reuse ambiguity from kill(pid, 0).
+    daemon_owner_exited_for_parent(owner_pid, unsafe { libc::getppid() })
+}
+
+#[cfg(unix)]
+fn daemon_owner_exited_for_parent(
+    owner_pid: Option<libc::pid_t>,
+    observed_parent_pid: libc::pid_t,
+) -> bool {
+    owner_pid.is_some_and(|owner_pid| owner_pid != observed_parent_pid)
 }
 
 /// Run a bounded real key-service instance for cross-module tests.
@@ -762,6 +798,14 @@ mod tests {
     fn test_runtime(home: &tempfile::TempDir) -> KeyServiceRuntime {
         KeyServiceRuntime::open(home.path().join("key-service.enc"), "test-passphrase")
             .expect("test key-service runtime")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_liveness_exits_only_after_daemon_reparenting() {
+        assert!(!daemon_owner_exited_for_parent(Some(42), 42));
+        assert!(daemon_owner_exited_for_parent(Some(42), 1));
+        assert!(!daemon_owner_exited_for_parent(None, 1));
     }
 
     fn framed(request: &KeyringRequest) -> Vec<u8> {
