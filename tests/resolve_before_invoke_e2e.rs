@@ -54,7 +54,7 @@ use easynet_cli::daemon::ability::dispatch::{
 };
 use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
 use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
-use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
+use easynet_cli::daemon::invocation::bidi::state::presence::{PresenceRegistry, SessionContract};
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
 use easynet_cli::daemon::trust::anchor::RealmTrustAnchor;
@@ -234,7 +234,14 @@ async fn connect(socket_path: &std::path::Path) -> Channel {
 /// registry for liveness), so a throwaway channel is sufficient.
 fn mark_owner_online(presence: &PresenceRegistry) {
     let (tx, _rx) = mpsc::channel(1);
-    presence.insert(DEVICE_URA.to_string(), tx);
+    presence.insert_negotiated(
+        DEVICE_URA.to_string(),
+        tx,
+        SessionContract {
+            version: 1,
+            claimant_boot_nonce: vec![0xA1; 16],
+        },
+    );
 }
 
 /// Build a unary `Invoke` of `function_name` against `callee_ura`,
@@ -280,7 +287,7 @@ async fn publish_echo_projection(client: &mut InvocationClient<Channel>) {
             "owner_ura": DEVICE_URA,
             "host_device_ura": DEVICE_URA,
             "projection_revision": 1,
-            "projection_digest": "6cd33251c2fc58e97bc12fc09e1cc0ec59d0df6b807875b81778371ad70895fe",
+            "projection_digest": "82026a0c2901554956ced1b02481f747576fdf28b01c1e296f833921529e5435",
             "lease_expires_unix_ms": 4_102_444_800_000_i64,
             "ability_summaries": [{
                 "ability_ura": ABILITY_URA,
@@ -294,7 +301,10 @@ async fn publish_echo_projection(client: &mut InvocationClient<Channel>) {
                 "callable_summary": {
                     "public_name": ABILITY_PUBLIC_NAME,
                     "description": "echo back the request payload",
-                    "ability_class": "unary",
+                    "call_mode": "rpc",
+                    "receipt_semantics": {
+                        "kind": "operational"
+                    },
                     "input_fields": [],
                     "flags": {
                         "read_only": true,

@@ -132,6 +132,44 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 	}
 }
 
+func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	signer, err := NewSigner(signerHandle(""), provider)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	draft, err := NewInvocationBuilder().
+		WithCallerURA("easynet:///r/example/user/bob").
+		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithSubjectURA("easynet:///r/example/user/bob").
+		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
+		WithCausalContext(map[string]any{"form": "none"}).
+		WithJSONArgs(map[string]any{}).
+		WithContentType("application/json").
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	transport, err := NewRuntimeSigningTransport(RuntimeTransportFunc{
+		InvokeFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatalf("Invoke must not be delegated for a mismatched unsigned caller")
+			return nil, nil
+		},
+	}, signer)
+	if err != nil {
+		t.Fatalf("NewRuntimeSigningTransport: %v", err)
+	}
+
+	_, err = NewRuntimeClientMust(t, transport).Invoke(context.Background(), draft)
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Invoke error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if provider.material.CanonicalBytesBase64() != "" {
+		t.Fatal("provider was called for a mismatched caller")
+	}
+}
+
 func TestRuntimeSigningTransportSignsStreamAndBidiDrafts(t *testing.T) {
 	provider := &memorySignatureProvider{}
 	signer, err := NewSigner(signerHandle(""), provider)

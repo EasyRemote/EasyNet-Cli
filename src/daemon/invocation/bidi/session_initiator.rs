@@ -895,7 +895,7 @@ mod tests {
         // `…/ability/<user>.pages.project_list`. The advertised descriptor
         // must project to both, or pages.* stays NODATA.
         let owner = "easynet:///r/acme/agent/alice.pages";
-        let descriptors = build_synthetic_pages_ability_descriptors(owner);
+        let descriptors = build_synthetic_pages_ability_descriptors(owner, Some("dev-1"));
         let by_public: std::collections::BTreeMap<_, _> = descriptors
             .iter()
             .map(|d| (d.public_name(), d.canonical_ability_ura()))
@@ -931,6 +931,11 @@ mod tests {
             .iter()
             .find(|d| d.public_name() == "pages.health")
             .expect("pages.health descriptor present");
+        assert_eq!(
+            health.metadata.get("host_node_id").map(String::as_str),
+            Some("dev-1"),
+            "synthetic pages descriptors must remain bound to the host device"
+        );
         assert!(
             health.schema_summary.input["properties"]
                 .get("surface_ref")

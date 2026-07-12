@@ -72,6 +72,8 @@
 pub mod admission;
 #[cfg(feature = "axon-pb")]
 pub mod bidi;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod caller_signature;
 pub mod dispatch;
 pub mod receipts;
 pub mod routing;

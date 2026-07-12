@@ -996,6 +996,28 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
 }
 
 #[test]
+fn daemon_local_discover_is_routable_but_not_publishable() {
+    assert!(
+        !is_publishable_catalog_name("agent.discover"),
+        "agent.discover is a local aggregate-discovery front door and must not be federated"
+    );
+    assert!(
+        is_local_runtime_routable_catalog_name("agent.discover"),
+        "agent.discover must stay invokable through the local daemon Invocation surface"
+    );
+    for ability in ["plugin.companion_status", "plugin.companion_reconcile"] {
+        assert!(
+            !is_publishable_catalog_name(ability),
+            "{ability} must not be published as a federated ability"
+        );
+        assert!(
+            !is_local_runtime_routable_catalog_name(ability),
+            "{ability} must remain outside public Invocation routing"
+        );
+    }
+}
+
+#[test]
 fn description_for_and_input_schema_for_cover_every_published_name() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     // Adding a new ability to build_registry without also adding

@@ -664,6 +664,7 @@ struct HubDaemon {
     child: Child,
     stdout_log: PathBuf,
     stderr_log: PathBuf,
+    keyring_log: PathBuf,
 }
 
 impl HubDaemon {
@@ -672,6 +673,7 @@ impl HubDaemon {
         std::fs::create_dir_all(&log_dir).expect("create hub log dir");
         let stdout_log = log_dir.join("hub-daemon.stdout.log");
         let stderr_log = log_dir.join("hub-daemon.stderr.log");
+        let keyring_log = home.join(".easynet/logs/easynet-keyring.log");
         let child = Command::new(env!("CARGO_BIN_EXE_easynet-daemon"))
             .env("HOME", home)
             .env("EASYNET_BOOTSTRAP_MEDIA_RESOURCES", "0")
@@ -691,6 +693,7 @@ impl HubDaemon {
             child,
             stdout_log,
             stderr_log,
+            keyring_log,
         };
         daemon.wait_for_tcp_listener(port);
         daemon
@@ -705,16 +708,18 @@ impl HubDaemon {
             }
             if let Some(status) = self.child.try_wait().expect("poll hub daemon") {
                 panic!(
-                    "hub daemon exited before TCP listener became ready: {status}\nstdout:\n{}\nstderr:\n{}",
+                    "hub daemon exited before TCP listener became ready: {status}\nstdout:\n{}\nstderr:\n{}\nkey-service:\n{}",
                     read_to_string(&self.stdout_log),
                     read_to_string(&self.stderr_log),
+                    read_to_string(&self.keyring_log),
                 );
             }
             assert!(
                 Instant::now() < deadline,
-                "hub daemon TCP listener did not become ready at {addr}\nstdout:\n{}\nstderr:\n{}",
+                "hub daemon TCP listener did not become ready at {addr}\nstdout:\n{}\nstderr:\n{}\nkey-service:\n{}",
                 read_to_string(&self.stdout_log),
                 read_to_string(&self.stderr_log),
+                read_to_string(&self.keyring_log),
             );
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -723,9 +728,10 @@ impl HubDaemon {
     fn assert_still_running(&mut self) {
         assert!(
             self.child.try_wait().expect("poll hub daemon").is_none(),
-            "hub daemon exited unexpectedly\nstdout:\n{}\nstderr:\n{}",
+            "hub daemon exited unexpectedly\nstdout:\n{}\nstderr:\n{}\nkey-service:\n{}",
             read_to_string(&self.stdout_log),
             read_to_string(&self.stderr_log),
+            read_to_string(&self.keyring_log),
         );
     }
 }

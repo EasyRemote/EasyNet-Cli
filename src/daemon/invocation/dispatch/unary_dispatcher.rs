@@ -422,11 +422,38 @@ impl UnaryDispatcher {
         &self,
         request: &federation_wrappers::AdvertiseAbilitiesRequest,
     ) -> Result<Response<InvokeResponse>, Status> {
+        self.sync_hosted_agent_directory_from_projection(request);
         let response = federation_wrappers::handle_advertise_abilities(
             request,
             Some(self.directory.ability_catalog.as_ref()),
         );
         wrap_json_response(&response)
+    }
+
+    fn sync_hosted_agent_directory_from_projection(
+        &self,
+        request: &federation_wrappers::AdvertiseAbilitiesRequest,
+    ) {
+        let Ok(owner) = crate::core::ura::parse_ura(&request.owner_ura) else {
+            return;
+        };
+        if owner.kind != crate::core::ura::URAKind::Agent {
+            return;
+        }
+        let host_node_id = crate::core::ura::parse_ura(&request.host_device_ura)
+            .ok()
+            .filter(|parsed| parsed.kind == crate::core::ura::URAKind::Device)
+            .and_then(|parsed| parsed.device_id().map(str::to_string));
+        self.directory.advertised_agents.upsert(
+            crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentRecord {
+                agent_ura: request.owner_ura.clone(),
+                public_key_hex: String::new(),
+                host_node_id,
+                signing_authority: crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentSigningAuthority::HostedBy {
+                    host_ura: request.host_device_ura.clone(),
+                },
+            },
+        );
     }
 
     pub(crate) fn dispatch_federation_heartbeat(

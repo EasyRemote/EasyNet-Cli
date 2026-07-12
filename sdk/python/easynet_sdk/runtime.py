@@ -55,6 +55,7 @@ class PrepareOptions:
             value["expires_in_ms"] = self.expires_in_ms
         if self.signer_id:
             value["signer_id"] = self.signer_id
+
         if self.policy_ref:
             value["policy_ref"] = self.policy_ref
         if self.local_daemon_signing:
@@ -455,6 +456,28 @@ class RuntimeClient:
             raise _transport_error("prepare transport failed", exc) from exc
         prepared = PreparedInvocation.from_json(raw)._bind_runtime(self)
         return prepared, prepared.signing_material
+
+    def prepare_signing_material(
+        self,
+        draft: InvocationDraft,
+        options: PrepareOptions = PrepareOptions(),
+    ) -> SigningMaterial:
+        """Return canonical signing material without retaining a native handle."""
+        transport = self._require_open()
+        options_json = options.to_json_dict()
+        options_json["material_only"] = True
+        try:
+            raw = transport.prepare(
+                draft.to_json().encode("utf-8"),
+                json.dumps(options_json, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+            )
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("prepare signing material transport failed", exc) from exc
+        # The daemon-owned prepared identifier is opaque here. The transport
+        # contract guarantees that no native prepared handle was retained.
+        return PreparedInvocation.from_json(raw).signing_material
 
     def prepare_builder(
         self,

@@ -48,6 +48,7 @@ def test_runtime_directory_resolves_through_canonical_ability() -> None:
             call=_call(),
             query_ura="easynet:///r/example/user/alice",
             kind=DirectoryResolveKind.CANONICAL_IDENTITY,
+            include_abilities=False,
         )
     )
     assert resolution.answer_kind == "positive"
@@ -56,6 +57,7 @@ def test_runtime_directory_resolves_through_canonical_ability() -> None:
     assert transport.seen["args"] == {
         "query_name": "easynet:///r/example/user/alice",
         "qtype": "RESOLVE_TYPE_CANONICAL_IDENTITY",
+        "include_abilities": False,
     }
 
 
@@ -79,6 +81,7 @@ def test_runtime_directory_list_forwards_and_validates_cursor() -> None:
             ura_prefix="easynet:///r/example/user/alice",
             limit=1,
             cursor=" directory:v1:cursor-1 ",
+            include_abilities=False,
         )
     )
     assert len(page.records) == 1
@@ -88,6 +91,7 @@ def test_runtime_directory_list_forwards_and_validates_cursor() -> None:
         "query_name": "easynet:///r/example/user/alice",
         "limit": 1,
         "cursor": "directory:v1:cursor-1",
+        "include_abilities": False,
     }
 
     transport.output_json = {

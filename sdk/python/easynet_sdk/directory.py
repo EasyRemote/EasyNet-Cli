@@ -60,6 +60,7 @@ class DirectoryResolveRequest:
     realm_hint: str = ""
     ability_name: str = ""
     kind: DirectoryResolveKind = DirectoryResolveKind.ROUTE
+    include_abilities: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class DirectoryListRequest:
     ura_prefix: str
     limit: int = 0
     cursor: str = ""
+    include_abilities: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,8 @@ class RuntimeDirectoryProvider:
             arguments["realm_hint"] = realm_hint
         if request.ability_name.strip():
             arguments["ability_name"] = request.ability_name.strip()
+        if request.include_abilities is not None:
+            arguments["include_abilities"] = request.include_abilities
         output = self._ability.invoke(request.call, "namespace.resolve", arguments)
         return _project_resolution(output)
 
@@ -193,6 +197,8 @@ class RuntimeDirectoryProvider:
             arguments["query_name"] = request.ura_prefix.strip()
         if cursor:
             arguments["cursor"] = cursor
+        if request.include_abilities is not None:
+            arguments["include_abilities"] = request.include_abilities
         resolution = _project_resolution(
             self._ability.invoke(request.call, "namespace.resolve", arguments)
         )

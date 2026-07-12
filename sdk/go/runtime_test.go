@@ -106,6 +106,37 @@ func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientPrepareSigningMaterialUsesStatelessTransportContract(t *testing.T) {
+	var seenOptions map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		PrepareFunc: func(_ context.Context, _ []byte, optionsJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(optionsJSON, &seenOptions); err != nil {
+				t.Fatalf("options JSON: %v", err)
+			}
+			return []byte(preparedFixture), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	material, err := client.PrepareSigningMaterial(context.Background(), completeDraftForRuntimeTest(t), PrepareOptions{
+		ExpiresInMS: 60_000,
+		SignerID:    "browser-key-1",
+	})
+	if err != nil {
+		t.Fatalf("PrepareSigningMaterial: %v", err)
+	}
+	if material.CanonicalBytesBase64() == "" {
+		t.Fatal("canonical signing material is missing")
+	}
+	if seenOptions["material_only"] != true ||
+		seenOptions["expires_in_ms"] != float64(60_000) ||
+		seenOptions["signer_id"] != "browser-key-1" {
+		t.Fatalf("stateless prepare options not sent to transport: %#v", seenOptions)
+	}
+}
+
 func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
 	receipt, err := NewRuntimeReceiptFromJSON([]byte(`{
 		"index": 1,

@@ -177,21 +177,11 @@ impl<'a> RuntimeTrust<'a> {
 
         self.mutate_anchor("identity.register_pubkey", |next_anchor| {
             match role {
-                TrustedAgentRole::Backend | TrustedAgentRole::Hub => {
+                TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::Device => {
                     next_anchor.upsert_singleton_agent(entry)?;
                 }
-                TrustedAgentRole::Device | TrustedAgentRole::User => {
-                    match next_anchor.append_agent(entry) {
-                        Ok(()) => {}
-                        Err(RealmTrustError::DuplicateUra {
-                            agent_ura: duplicate,
-                        }) if role == TrustedAgentRole::Device
-                            && next_anchor.lookup(&duplicate).is_some_and(|existing| {
-                                existing.public_key_b64 == public_key_b64
-                                    && existing.role == TrustedAgentRole::Device
-                            }) => {}
-                        Err(err) => return Err(err),
-                    }
+                TrustedAgentRole::User => {
+                    next_anchor.append_agent(entry)?;
                 }
             }
             if let Some(owner) = owner {

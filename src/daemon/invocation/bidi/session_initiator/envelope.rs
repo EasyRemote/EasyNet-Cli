@@ -1,7 +1,7 @@
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
-    AgentIdentity, CallerSignature, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
-    StreamDescriptor, SubjectIdentity,
+    AgentIdentity, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp, StreamDescriptor,
+    SubjectIdentity,
 };
 use rand::RngCore as _;
 
@@ -71,22 +71,20 @@ pub async fn build_session_envelope_open(
             crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
         .expect("session.open descriptor-bound envelope is complete");
-    let signature = signer
-        .sign_canonical(&descriptor_bound.envelope.canonical_bytes())
+    let caller_signature =
+        crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
+            signer,
+            &descriptor_bound.envelope.canonical_bytes(),
+        )
         .await?;
-    envelope.caller_signature = Some(CallerSignature {
-        algorithm: "ed25519".to_string(),
-        signature: signature.to_bytes().to_vec(),
-        key_id_hint: caller_ura.to_string(),
-    });
+    let mac = caller_signature.signature.clone();
+    envelope.caller_signature = Some(caller_signature);
     let mut session_metadata = std::collections::HashMap::new();
     session_metadata.insert(
         crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
             .to_string(),
         descriptor_ref,
     );
-    let mac = signature.to_bytes().to_vec();
-
     Ok(InvokeBidiUp {
         sequence: 0,
         mac,

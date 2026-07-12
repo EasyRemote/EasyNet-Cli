@@ -93,7 +93,9 @@ impl DeviceTrustSyncStatus {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SyncableCaller {
-    Device,
+    Device {
+        presented_pubkey_b64: Option<String>,
+    },
     User {
         presented_pubkey_b64: Option<String>,
     },
@@ -102,14 +104,19 @@ enum SyncableCaller {
 impl SyncableCaller {
     fn register_role(&self) -> &'static str {
         match self {
-            Self::Device => "device",
+            Self::Device { .. } => "device",
             Self::User { .. } => "user",
         }
     }
 
     fn cache_key(&self, caller_ura: &str) -> String {
         match self {
-            Self::Device => format!("device:{caller_ura}"),
+            Self::Device {
+                presented_pubkey_b64,
+            } => match presented_pubkey_b64 {
+                Some(pk) => format!("device:{caller_ura}:{pk}"),
+                None => format!("device:{caller_ura}:*"),
+            },
             Self::User {
                 presented_pubkey_b64,
             } => match presented_pubkey_b64 {
@@ -121,7 +128,9 @@ impl SyncableCaller {
 
     fn presented_pubkey_b64(&self) -> Option<&str> {
         match self {
-            Self::Device => None,
+            Self::Device {
+                presented_pubkey_b64,
+            } => presented_pubkey_b64.as_deref(),
             Self::User {
                 presented_pubkey_b64,
             } => presented_pubkey_b64.as_deref(),
@@ -277,7 +286,13 @@ impl DeviceTrustSync {
     ) -> Option<SyncableCaller> {
         let parsed = crate::core::ura::parse_ura(caller_ura).ok()?;
         match parsed.kind {
-            crate::core::ura::URAKind::Device => Some(SyncableCaller::Device),
+            crate::core::ura::URAKind::Device if parsed.realm == self.daemon_realm => {
+                Some(SyncableCaller::Device {
+                    presented_pubkey_b64: presented_pubkey_b64
+                        .filter(|pk| !pk.is_empty())
+                        .map(str::to_string),
+                })
+            }
             crate::core::ura::URAKind::User if parsed.realm == self.daemon_realm => {
                 Some(SyncableCaller::User {
                     presented_pubkey_b64: presented_pubkey_b64
@@ -292,7 +307,15 @@ impl DeviceTrustSync {
     fn anchor_has_caller_key(&self, caller_ura: &str, role: &SyncableCaller) -> bool {
         let anchor = self.cell.snapshot();
         match role {
-            SyncableCaller::Device => anchor.lookup(caller_ura).is_some(),
+            SyncableCaller::Device {
+                presented_pubkey_b64: Some(pk),
+            } => anchor
+                .lookup(caller_ura)
+                .map(|entry| entry.public_key_b64 == *pk)
+                .unwrap_or(false),
+            SyncableCaller::Device {
+                presented_pubkey_b64: None,
+            } => anchor.lookup(caller_ura).is_some(),
             SyncableCaller::User {
                 presented_pubkey_b64: Some(pk),
             } => anchor.lookup_user_by_pubkey(caller_ura, pk).is_some(),
@@ -446,10 +469,64 @@ mod tests {
             sync.state
                 .lock()
                 .await
-                .contains_key(&format!("device:{ura}")),
+                .contains_key(&format!("device:{ura}:*")),
             "unknown caller must be negative-cached"
         );
         assert!(!sync.ensure_caller_key(ura).await);
+    }
+
+    #[tokio::test]
+    async fn same_realm_device_existing_different_key_syncs_presented_key() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            Ok(vec![B64.encode(
+                SigningKey::from_bytes(&[0x62; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )])
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        let ura = "easynet:///r/test-realm/device/node-a";
+        let stale = B64.encode(
+            SigningKey::from_bytes(&[0x61; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let presented = B64.encode(
+            SigningKey::from_bytes(&[0x62; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let cell = SharedTrustAnchor::new(Arc::new(
+            RealmTrustAnchor::from_entries(vec![TrustedAgent {
+                agent_ura: ura.to_string(),
+                public_key_b64: stale,
+                role: TrustedAgentRole::Device,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            }])
+            .expect("stale device anchor"),
+        ));
+        let sync = DeviceTrustSync::with_source(
+            "test-realm".into(),
+            dir.path().join("realm-trust.toml"),
+            cell,
+            KeySource::Static(resolver),
+        );
+
+        assert!(
+            sync.ensure_caller_key_with_presented_pubkey(ura, Some(&presented))
+                .await,
+            "presented device key should replace the stale same-URA key"
+        );
+        assert_eq!(
+            sync.cell
+                .snapshot()
+                .lookup(ura)
+                .map(|entry| entry.public_key_b64.as_str()),
+            Some(presented.as_str())
+        );
     }
 
     #[tokio::test]

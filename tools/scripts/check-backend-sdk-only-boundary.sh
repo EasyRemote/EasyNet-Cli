@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
-  mkdir -p "$tmp/backend/internal/service" "$tmp/backend/internal/axon" "$tmp/backend/internal/pb/axon/v1" "$tmp/backend/internal/daemon_grpc"
+  mkdir -p "$tmp/backend/internal/service" "$tmp/backend/internal/runtimecontract" "$tmp/backend/internal/pb/axon/v1" "$tmp/backend/internal/daemon_grpc"
   cat >"$tmp/backend/go.mod" <<'EOF'
 module easynet-backend
 EOF
@@ -40,8 +40,8 @@ func boot() {
     _ = "unix:///tmp/easynet-control.sock"
 }
 EOF
-  cat >"$tmp/backend/internal/axon/resolve_legacy.go" <<'EOF'
-package axon
+  cat >"$tmp/backend/internal/runtimecontract/resolve_projection.go" <<'EOF'
+package runtimecontract
 
 type legacyResolveInput struct {
     QueryName string `json:"queryName"`
@@ -59,6 +59,10 @@ package daemon_grpc
 
 type Client struct{}
 EOF
+  mkdir -p "$tmp/backend/internal/axon"
+  cat >"$tmp/backend/internal/axon/legacy.go" <<'EOF'
+package axon
+EOF
   cat >>"$tmp/backend/go.mod" <<'EOF'
 require easynet.run/axon/sdk/go v0.0.0
 EOF
@@ -75,6 +79,7 @@ EOF
   grep -Fq "direct_daemon_transport_package" "$self_test_out"
   grep -Fq "raw_daemon_socket_marker" "$self_test_out"
   grep -Fq "runtime_subprocess" "$self_test_out"
+  grep -Fq "legacy_backend_axon_facade" "$self_test_out"
   grep -Fq "retired_namespace_resolve_carrier_key" "$self_test_out"
   echo "check-backend-sdk-only-boundary self-test ok"
   exit 0
@@ -372,6 +377,8 @@ for source in production_go_files(backend):
         violations.append((relative, 1, "generated_axon_pb_package", "internal/pb/axon/v1"))
     if "/internal/daemon_grpc/" in normalized:
         violations.append((relative, 1, "direct_daemon_transport_package", "internal/daemon_grpc"))
+    if "/internal/axon/" in normalized:
+        violations.append((relative, 1, "legacy_backend_axon_facade", "internal/axon"))
     for line, imported in imports:
         if imported == "C":
             violations.append((relative, line, "cgo_ffi_import", imported))
@@ -381,6 +388,8 @@ for source in production_go_files(backend):
             violations.append((relative, line, "generated_axon_pb_import", imported))
         if imported.endswith("/internal/daemon_grpc") or "/internal/daemon_grpc" in imported:
             violations.append((relative, line, "direct_daemon_transport_import", imported))
+        if imported.endswith("/internal/axon") or "/internal/axon/" in imported:
+            violations.append((relative, line, "legacy_backend_axon_facade", imported))
         if "EasyRemote" in imported or "easyremote" in imported:
             violations.append((relative, line, "easyremote_runtime_dependency", imported))
     for line, literal in string_literals:
@@ -393,6 +402,8 @@ for source in production_go_files(backend):
         literal in RUNTIME_SUBPROCESS_TARGETS for _, literal in string_literals
     ):
         violations.append((relative, 1, "runtime_subprocess", "exec.Command easynet/easynet-daemon"))
+    if re.search(r"\b[A-Za-z_][A-Za-z0-9_\.]*\.Axon\b", code_without_comments):
+        violations.append((relative, 1, "legacy_runtime_config_name", "Axon"))
     if relative == "cmd/seed-dev/main.go" and (
         "NewKeyFromSeed" in code_without_comments
         or "ed25519.PrivateKey" in code_without_comments

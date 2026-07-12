@@ -95,6 +95,18 @@ pub fn is_publishable_catalog_name(name: &str) -> bool {
     )
 }
 
+/// Local runtime routeability filter for daemon-owned ability handlers.
+///
+/// This is deliberately narrower/different than `is_publishable_catalog_name`:
+/// publishability answers "may this row leave the daemon as public catalogue
+/// metadata?", while local routeability answers "may this daemon dispatch the
+/// registered handler through the Invocation surface?". `agent.discover` is the
+/// local aggregate-discovery front door, so it is routable locally but must not
+/// be federated as a public ability row.
+pub fn is_local_runtime_routable_catalog_name(name: &str) -> bool {
+    name == discover_ability::DEVICE_DISCOVER_ABILITY || is_publishable_catalog_name(name)
+}
+
 /// Every published system ability descriptor, in deterministic
 /// order `published_ability_names()` returns.
 ///

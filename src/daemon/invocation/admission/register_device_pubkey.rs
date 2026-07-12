@@ -78,6 +78,8 @@ struct RegisterArgs {
     role: String,
     #[serde(default)]
     principal_owner_ura: Option<String>,
+    #[serde(default)]
+    principal_owner_username: Option<String>,
 }
 
 /// Narrow policy view of an `identity.register_pubkey` request.
@@ -217,11 +219,17 @@ fn trusted_principal_owner_from_args(
             "identity.register_pubkey: principal_owner_ura must include a user id",
         )
     })?;
+    let owner_username = args
+        .principal_owner_username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
     Ok(Some(TrustedPrincipalOwner {
         principal_ura: args.agent_ura.clone(),
         owner_user_id: owner_user_id.to_string(),
         owner_ura: owner_ura.to_string(),
-        owner_username: None,
+        owner_username,
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
     }))
 }
@@ -280,6 +288,23 @@ mod tests {
             "public_key_b64": key,
             "role": role,
             "principal_owner_ura": owner_ura
+        }))
+        .expect("encode")
+    }
+
+    fn args_bytes_with_owner_alias(
+        ura: &str,
+        key: &str,
+        role: &str,
+        owner_ura: &str,
+        owner_username: &str,
+    ) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "agent_ura": ura,
+            "public_key_b64": key,
+            "role": role,
+            "principal_owner_ura": owner_ura,
+            "principal_owner_username": owner_username
         }))
         .expect("encode")
     }
@@ -373,6 +398,28 @@ mod tests {
     }
 
     #[test]
+    fn principal_owner_alias_is_preserved_for_hosted_agent_publication() {
+        let (_dir, path) = fresh_path();
+        let cell = empty_cell();
+        let args = args_bytes_with_owner_alias(
+            "easynet:///r/r1/device/owned",
+            &test_pub_b64(),
+            "device",
+            "easynet:///r/r1/user/user-1",
+            "dev",
+        );
+
+        handle(&args, "r1", &path, &cell).expect("owned device ok");
+        let snap = cell.snapshot();
+        let owner = snap
+            .lookup_principal_owner("easynet:///r/r1/device/owned")
+            .expect("owner binding");
+        assert_eq!(owner.owner_ura, "easynet:///r/r1/user/user-1");
+        assert_eq!(owner.owner_user_id, "user-1");
+        assert_eq!(owner.owner_username.as_deref(), Some("dev"));
+    }
+
+    #[test]
     fn principal_owner_ura_must_be_user_ura() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
@@ -434,23 +481,22 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_device_ura_different_key_rejected_with_already_exists() {
+    fn duplicate_device_ura_different_key_replaces_stale_trust_entry() {
         let (_dir, path) = fresh_path();
         let cell = empty_cell();
-        let first = args_bytes(
-            "easynet:///r/r1/device/dup",
-            &test_pub_b64_with_seed(1),
-            "device",
-        );
-        let second = args_bytes(
-            "easynet:///r/r1/device/dup",
-            &test_pub_b64_with_seed(2),
-            "device",
-        );
+        let device_ura = "easynet:///r/r1/device/dup";
+        let old_key = test_pub_b64_with_seed(1);
+        let new_key = test_pub_b64_with_seed(2);
+        let first = args_bytes(device_ura, &old_key, "device");
+        let second = args_bytes(device_ura, &new_key, "device");
         handle(&first, "r1", &path, &cell).expect("first ok");
-        let err =
-            handle(&second, "r1", &path, &cell).expect_err("different key must reject duplicate");
-        assert_eq!(err.code(), tonic::Code::AlreadyExists);
+        handle(&second, "r1", &path, &cell).expect("device key rotation replaces stale row");
+        assert_eq!(
+            cell.snapshot()
+                .lookup(device_ura)
+                .map(|entry| entry.public_key_b64.as_str()),
+            Some(new_key.as_str())
+        );
     }
 
     #[test]

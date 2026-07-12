@@ -17,8 +17,10 @@ if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
   grep -q "standalone-hub-recovery-e2e.sh" "$0"
   grep -q "backend-live-principal-e2e.sh" "$0"
+  grep -q "backend-live-http-daemon-e2e.sh" "$0"
   bash "$SELF_DIR/standalone-hub-recovery-e2e.sh" --self-test
   bash "$SELF_DIR/backend-live-principal-e2e.sh" --self-test
+  bash "$SELF_DIR/backend-live-http-daemon-e2e.sh" --self-test
   echo "standalone-hub-principal-lifecycle-e2e self-test ok"
   exit 0
 fi
@@ -28,5 +30,8 @@ bash "$SELF_DIR/standalone-hub-recovery-e2e.sh"
 
 echo "[standalone-hub-principal-lifecycle-e2e] running Backend-present PrincipalLifecycle E2E..."
 bash "$SELF_DIR/backend-live-principal-e2e.sh"
+
+echo "[standalone-hub-principal-lifecycle-e2e] running browser HTTP to live daemon E2E..."
+bash "$SELF_DIR/backend-live-http-daemon-e2e.sh"
 
 echo "[standalone-hub-principal-lifecycle-e2e] PASS"

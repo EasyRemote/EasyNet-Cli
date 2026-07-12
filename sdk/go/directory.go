@@ -29,11 +29,12 @@ const (
 )
 
 type DirectoryResolveRequest struct {
-	Call        RuntimeCallContext   `json:"call"`
-	QueryURA    string               `json:"query_ura"`
-	RealmHint   string               `json:"realm_hint,omitempty"`
-	AbilityName string               `json:"ability_name,omitempty"`
-	Kind        DirectoryResolveKind `json:"kind,omitempty"`
+	Call             RuntimeCallContext   `json:"call"`
+	QueryURA         string               `json:"query_ura"`
+	RealmHint        string               `json:"realm_hint,omitempty"`
+	AbilityName      string               `json:"ability_name,omitempty"`
+	Kind             DirectoryResolveKind `json:"kind,omitempty"`
+	IncludeAbilities *bool                `json:"include_abilities,omitempty"`
 }
 
 type DirectoryRecord struct {
@@ -63,10 +64,11 @@ type DirectoryResolution struct {
 }
 
 type DirectoryListRequest struct {
-	Call      RuntimeCallContext `json:"call"`
-	URAPrefix string             `json:"ura_prefix"`
-	Limit     uint32             `json:"limit,omitempty"`
-	Cursor    string             `json:"cursor,omitempty"`
+	Call             RuntimeCallContext `json:"call"`
+	URAPrefix        string             `json:"ura_prefix"`
+	Limit            uint32             `json:"limit,omitempty"`
+	Cursor           string             `json:"cursor,omitempty"`
+	IncludeAbilities *bool              `json:"include_abilities,omitempty"`
 }
 
 type DirectoryPage struct {
@@ -183,6 +185,9 @@ func (p *RuntimeDirectoryProvider) Resolve(ctx context.Context, request Director
 	if ability := strings.TrimSpace(request.AbilityName); ability != "" {
 		args["ability_name"] = ability
 	}
+	if request.IncludeAbilities != nil {
+		args["include_abilities"] = *request.IncludeAbilities
+	}
 	output, err := p.ability.Invoke(ctx, request.Call, "namespace.resolve", args)
 	if err != nil {
 		return DirectoryResolution{}, err
@@ -211,6 +216,9 @@ func (p *RuntimeDirectoryProvider) List(ctx context.Context, request DirectoryLi
 	}
 	if cursor != "" {
 		args["cursor"] = cursor
+	}
+	if request.IncludeAbilities != nil {
+		args["include_abilities"] = *request.IncludeAbilities
 	}
 	output, err := p.ability.Invoke(ctx, request.Call, "namespace.resolve", args)
 	if err != nil {

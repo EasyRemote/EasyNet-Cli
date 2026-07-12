@@ -4,6 +4,7 @@ package easynet
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -27,6 +28,51 @@ func TestCABIDaemonTransportReportsMissingLibrary(t *testing.T) {
 	}
 	if !IsCode(err, ErrTransport) {
 		t.Fatalf("missing C ABI daemon library error = %v, want %s", err, ErrTransport)
+	}
+}
+
+func TestCABIBidiFrameJSONProjectsSDKFramesToFFIWire(t *testing.T) {
+	binary, err := NewBidiBinaryFrame(1, 7, []byte("hello"), "application/octet-stream")
+	if err != nil {
+		t.Fatalf("NewBidiBinaryFrame: %v", err)
+	}
+	raw, err := json.Marshal(binary)
+	if err != nil {
+		t.Fatalf("Marshal binary frame: %v", err)
+	}
+	wire, err := cabiBidiFrameJSON(raw)
+	if err != nil {
+		t.Fatalf("cabiBidiFrameJSON(binary): %v", err)
+	}
+	var binaryWire map[string]any
+	if err := json.Unmarshal(wire, &binaryWire); err != nil {
+		t.Fatalf("decode binary wire: %v", err)
+	}
+	if binaryWire["type"] != "binary_chunk" || binaryWire["data_base64"] != base64.StdEncoding.EncodeToString([]byte("hello")) {
+		t.Fatalf("unexpected binary wire: %#v", binaryWire)
+	}
+
+	control, err := NewBidiJSONFrame(2, "control", 7, json.RawMessage(`{"pty_resize":{"cols":120,"rows":40}}`))
+	if err != nil {
+		t.Fatalf("NewBidiJSONFrame: %v", err)
+	}
+	raw, err = json.Marshal(control)
+	if err != nil {
+		t.Fatalf("Marshal control frame: %v", err)
+	}
+	wire, err = cabiBidiFrameJSON(raw)
+	if err != nil {
+		t.Fatalf("cabiBidiFrameJSON(control): %v", err)
+	}
+	var controlWire map[string]any
+	if err := json.Unmarshal(wire, &controlWire); err != nil {
+		t.Fatalf("decode control wire: %v", err)
+	}
+	if controlWire["type"] != "control" {
+		t.Fatalf("unexpected control wire: %#v", controlWire)
+	}
+	if _, ok := controlWire["pty_resize"].(map[string]any); !ok {
+		t.Fatalf("control payload not projected: %#v", controlWire)
 	}
 }
 

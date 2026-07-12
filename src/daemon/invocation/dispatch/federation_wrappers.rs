@@ -832,11 +832,16 @@ pub fn handle_resolve_key(
             return None;
         }
     }
-    trust_anchor.lookup(&request.agent_ura).map(|entry| {
-        resolve_key_response(
+    trust_anchor.lookup(&request.agent_ura).and_then(|entry| {
+        if let Some(pk) = presented_pubkey_b64.as_deref() {
+            if entry.public_key_b64 != pk {
+                return None;
+            }
+        }
+        Some(resolve_key_response(
             &entry.public_key_b64,
             all_user_keys_b64(trust_anchor, &request.agent_ura),
-        )
+        ))
     })
 }
 
@@ -1982,6 +1987,49 @@ mod tests {
             &anchor,
         );
         assert!(resp.is_none(), "unknown pubkey under known user must miss");
+    }
+
+    #[test]
+    fn handle_resolve_key_single_key_roles_pin_presented_pubkey() {
+        use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+
+        let pk = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let other = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA=";
+        let device = "easynet:///r/realm/device/node-a";
+        let anchor = RealmTrustAnchor::from_entries(vec![TrustedAgent {
+            agent_ura: device.to_string(),
+            public_key_b64: pk.to_string(),
+            role: TrustedAgentRole::Device,
+            added_at_unix_ms: 1_714_000_000_000,
+            origin_realm: None,
+            hub_endpoint: None,
+            tls_ca_pem_path: None,
+        }])
+        .expect("anchor");
+
+        let resp = handle_resolve_key(
+            &ResolveKeyRequest {
+                agent_ura: device.to_string(),
+                presented_pubkey_b64: Some(pk.to_string()),
+                presented_pubkey_hex: None,
+            },
+            &anchor,
+        )
+        .expect("matching presented device key resolves");
+        assert_eq!(resp.public_key_b64, pk);
+
+        let resp = handle_resolve_key(
+            &ResolveKeyRequest {
+                agent_ura: device.to_string(),
+                presented_pubkey_b64: Some(other.to_string()),
+                presented_pubkey_hex: None,
+            },
+            &anchor,
+        );
+        assert!(
+            resp.is_none(),
+            "mismatched presented key must not resolve a stale same-URA device key"
+        );
     }
 
     // ── N3-N4 bridge: handle_discover_with_user_filter ─────────

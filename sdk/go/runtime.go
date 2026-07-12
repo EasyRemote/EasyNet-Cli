@@ -224,6 +224,25 @@ func (c *RuntimeClient) OpenBidi(ctx context.Context, draft InvocationDraft, str
 
 // Prepare delegates canonical material generation to the daemon transport.
 func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts PrepareOptions) (PreparedInvocation, SigningMaterial, error) {
+	return c.prepare(ctx, draft, opts, false)
+}
+
+// PrepareSigningMaterial returns canonical caller-signing material without
+// retaining a native prepared invocation. It supports stateless external
+// signer flows whose later request submits a signed envelope rather than using
+// a process-local prepared handle.
+func (c *RuntimeClient) PrepareSigningMaterial(ctx context.Context, draft InvocationDraft, opts PrepareOptions) (SigningMaterial, error) {
+	prepared, material, err := c.prepare(ctx, draft, opts, true)
+	if err != nil {
+		return SigningMaterial{}, err
+	}
+	// The daemon-owned prepared identifier is opaque to language bindings.
+	// The material-only transport contract guarantees that it was not retained.
+	_ = prepared
+	return material, nil
+}
+
+func (c *RuntimeClient) prepare(ctx context.Context, draft InvocationDraft, opts PrepareOptions, materialOnly bool) (PreparedInvocation, SigningMaterial, error) {
 	transport, err := c.runtimeTransport(ctx)
 	if err != nil {
 		return PreparedInvocation{}, SigningMaterial{}, err
@@ -232,7 +251,7 @@ func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts
 	if err != nil {
 		return PreparedInvocation{}, SigningMaterial{}, invalidRuntimePayload(fmt.Sprintf("encode invocation draft: %v", err), err)
 	}
-	optionsJSON, err := json.Marshal(opts)
+	optionsJSON, err := prepareOptionsJSON(opts, materialOnly)
 	if err != nil {
 		return PreparedInvocation{}, SigningMaterial{}, invalidRuntimePayload(fmt.Sprintf("encode prepare options: %v", err), err)
 	}
@@ -249,6 +268,16 @@ func (c *RuntimeClient) Prepare(ctx context.Context, draft InvocationDraft, opts
 		return PreparedInvocation{}, SigningMaterial{}, err
 	}
 	return prepared, prepared.SigningMaterial(), nil
+}
+
+func prepareOptionsJSON(opts PrepareOptions, materialOnly bool) ([]byte, error) {
+	if !materialOnly {
+		return json.Marshal(opts)
+	}
+	return json.Marshal(struct {
+		PrepareOptions
+		MaterialOnly bool `json:"material_only"`
+	}{PrepareOptions: opts, MaterialOnly: true})
 }
 
 // PrepareBuilder inspects a complete builder, prepares canonical signing

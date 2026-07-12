@@ -131,6 +131,7 @@ use crate::daemon::invocation::admission::federated_key_resolver::{
 use crate::daemon::invocation::admission::grant_matcher::{
     GrantMatchInput, PermissionEffect, PermissionGrant, PermissionGrantMatcher,
 };
+use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::nonce_replay::SharedNonceReplayStore;
 use crate::daemon::invocation::admission::policy_gate::{
@@ -142,10 +143,9 @@ use crate::daemon::invocation::admission::principal_lifecycle::{
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
 use crate::daemon::invocation::admission::usage_quota::{QuotaDenyReason, SharedUsageQuotaGate};
-#[cfg(test)]
 use crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_AGENT;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
-    ABILITY_FEDERATION_JOIN, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+    AdvertiseAgentRequest, ABILITY_FEDERATION_JOIN, ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
     AUTHORITY_PROOF_METADATA_KEY, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
@@ -856,9 +856,18 @@ impl AdmissionFacade {
                     BootstrapAuthorityDecision::Verified { authority_id } => Some(authority_id),
                     BootstrapAuthorityDecision::NotApplicable => None,
                 };
+                let hosted_agent_publication_authority_id = self
+                    .verify_hosted_agent_publication_authority(
+                        envelope,
+                        ability,
+                        args,
+                        trust_anchor.as_ref(),
+                    )
+                    .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
                 let verified_authority_id = authority_proof_id
                     .or(delegation_authority_id)
-                    .or(bootstrap_authority_id);
+                    .or(bootstrap_authority_id)
+                    .or(hosted_agent_publication_authority_id);
                 AdmissionPolicyGate::verify(AdmissionPolicyContext {
                     envelope,
                     ability,
@@ -886,6 +895,35 @@ impl AdmissionFacade {
                 Err(self.signature_denied_status(envelope, ability, axon_error_to_status(err)))
             }
         }
+    }
+
+    fn verify_hosted_agent_publication_authority(
+        &self,
+        envelope: &Envelope,
+        ability: &str,
+        args: &[u8],
+        trust_anchor: &RealmTrustAnchor,
+    ) -> Result<Option<String>, Status> {
+        if ability != ABILITY_FEDERATION_ADVERTISE_AGENT {
+            return Ok(None);
+        }
+        let request: AdvertiseAgentRequest = serde_json::from_slice(args).map_err(|err| {
+            Status::invalid_argument(format!(
+                "federation.advertise_agent: arguments JSON decode failed: {err}"
+            ))
+        })?;
+        let publication = HostedAgentPublication::verify(
+            envelope,
+            &request,
+            trust_anchor,
+            self.daemon_ura.as_deref(),
+        )
+        .map_err(|err| {
+            Status::permission_denied(format!(
+                "federation.advertise_agent: hosted publication authority denied: {err}"
+            ))
+        })?;
+        Ok(Some(publication.authority_id()))
     }
 
     fn enforce_principal_lifecycle_admission(

@@ -62,7 +62,7 @@ func connectNativeRuntime(ctx context.Context, transport DaemonTransport, option
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	runtime, health, err := openNativeRuntimeClients(ctx, handle, nativeConnectOptions(options, runtimeEndpoint))
+	runtime, health, err := openNativeRuntimeClients(ctx, handle, nativeConnectOptions(options, runtimeEndpoint), options.Signer)
 	detachErr := handle.Detach(ctx)
 	if err != nil {
 		return nil, nil, nil, errors.Join(err, detachErr)
@@ -87,7 +87,7 @@ func startNativeRuntime(ctx context.Context, control *DaemonControl, _ DaemonTra
 		_ = handle.Detach(ctx)
 		return nil, nil, nil, invalidRuntimePayload("invocation_endpoint is required", nil)
 	}
-	runtime, health, err := openNativeRuntimeClients(ctx, handle, nativeConnectOptions(options, runtimeEndpoint))
+	runtime, health, err := openNativeRuntimeClients(ctx, handle, nativeConnectOptions(options, runtimeEndpoint), options.Signer)
 	if err != nil {
 		_ = handle.Detach(ctx)
 		return nil, nil, nil, err
@@ -115,7 +115,7 @@ func nativeConnectOptions(options NativeRuntimeOptions, runtimeEndpoint string) 
 	}
 }
 
-func openNativeRuntimeClients(ctx context.Context, handle *DaemonHandle, openOptions ConnectOptions) (*RuntimeClient, *HealthClient, error) {
+func openNativeRuntimeClients(ctx context.Context, handle *DaemonHandle, openOptions ConnectOptions, signer *Signer) (*RuntimeClient, *HealthClient, error) {
 	optionsJSON, err := json.Marshal(openOptions)
 	if err != nil {
 		return nil, nil, invalidRuntimePayload(fmt.Sprintf("encode runtime options: %v", err), err)
@@ -136,6 +136,13 @@ func openNativeRuntimeClients(ctx context.Context, handle *DaemonHandle, openOpt
 	if err != nil {
 		_ = runtimeTransport.Close(ctx)
 		return nil, nil, err
+	}
+	if signer != nil {
+		runtimeTransport, err = NewRuntimeSigningTransport(runtimeTransport, *signer)
+		if err != nil {
+			_ = runtimeTransport.Close(ctx)
+			return nil, nil, err
+		}
 	}
 	runtime, err := NewRuntimeClient(runtimeTransport)
 	if err != nil {

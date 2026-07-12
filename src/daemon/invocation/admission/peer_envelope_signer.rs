@@ -23,9 +23,7 @@
 
 use tonic::Status;
 
-use easynet_axon::pb::axon::v1::{
-    AgentIdentity, CallerSignature, Envelope, InvokeRequest, SubjectIdentity,
-};
+use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
 
 use crate::daemon::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
@@ -282,19 +280,18 @@ pub(crate) async fn sign_peer_request_envelope(
             hub_signer.owner_ura()
         )));
     }
-    let signature = hub_signer
-        .sign_canonical(&descriptor_bound.envelope.canonical_bytes())
+    let caller_signature =
+        crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
+            hub_signer,
+            &descriptor_bound.envelope.canonical_bytes(),
+        )
         .await
         .map_err(|err| {
             Status::internal(format!(
                 "cross-hub canonical_invoke signing: canonical signer failed: {err}"
             ))
         })?;
-    envelope.caller_signature = Some(CallerSignature {
-        algorithm: "ed25519".to_string(),
-        signature: signature.to_bytes().to_vec(),
-        ..CallerSignature::default()
-    });
+    envelope.caller_signature = Some(caller_signature);
     Ok(descriptor_ref.to_string())
 }
 

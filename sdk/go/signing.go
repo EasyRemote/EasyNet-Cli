@@ -325,6 +325,9 @@ func (s Signer) signInvocationDraft(draft InvocationDraft) (InvocationDraft, err
 	if err := validateSignerHandle(s.handle); err != nil {
 		return InvocationDraft{}, err
 	}
+	if draft.CallerURA() != s.handle.OwnerURA {
+		return InvocationDraft{}, invalidInvocation("signer handle owner_ura must match invocation caller_ura", nil)
+	}
 	if s.provider == nil {
 		return InvocationDraft{}, invalidInvocation("signature provider is required", nil)
 	}

@@ -15,6 +15,11 @@ type NativeRuntimeOptions struct {
 	DialTimeoutMS   int64
 	InvokeTimeoutMS int64
 	MaxMessageBytes int
+	// Signer decorates direct Invoke/OpenStream/OpenBidi runtime calls with a
+	// caller_signature when the draft does not already carry one. Prepare and
+	// SubmitSigned remain unchanged because their signatures are user/browser
+	// supplied by design.
+	Signer *Signer
 	// StartConfig requests an explicit daemon lifecycle start/adopt operation
 	// before opening the runtime. When nil, OpenNativeRuntime only discovers
 	// and attaches to an existing daemon.

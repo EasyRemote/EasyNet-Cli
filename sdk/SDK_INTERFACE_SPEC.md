@@ -122,6 +122,12 @@ local execution, stream/bidi opening and cross-hub relay carry the same
 Invocation; no adapter is allowed to reconstruct a business call with a system
 caller, a new nonce or an empty causal context.
 
+`PrepareSigningMaterial` is the stateless signing half of the generic runtime
+model. It returns canonical caller-signing material and deliberately retains no
+native `Prepared` handle. It exists for external signer flows whose subsequent
+request submits a signed envelope; callers requiring SDK-local signing use
+`Prepare` and its explicit `Prepared -> Signed` lifecycle instead.
+
 ## Transport modes and transitions
 
 Axon's unary, server-stream and bidi modes are the only transport taxonomy.

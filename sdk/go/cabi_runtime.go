@@ -178,6 +178,7 @@ import "C"
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -693,6 +694,19 @@ func (t *CABIRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, op
 	}
 	raw := cabiTakeCString(t.symbols.stringFree, out)
 	preparedID := uint64(outID)
+	var options struct {
+		MaterialOnly bool `json:"material_only"`
+	}
+	if err := json.Unmarshal(optionsJSON, &options); err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("decode prepare options: %v", err), err)
+	}
+	if options.MaterialOnly {
+		if preparedID != 0 {
+			_ = t.freePreparedID(preparedID)
+			return nil, invalidCABIHandle("C ABI material-only prepare retained a prepared handle")
+		}
+		return raw, nil
+	}
 	if preparedID == 0 {
 		return nil, invalidCABIHandle("C ABI prepare returned an invalid prepared handle")
 	}
@@ -1042,13 +1056,59 @@ func (b *cabiBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte,
 	if err := b.requireOpen(); err != nil {
 		return nil, err
 	}
-	code := int32(cabiWithCString(frameJSON, func(cFrame *C.char) C.int32_t {
+	wireJSON, err := cabiBidiFrameJSON(frameJSON)
+	if err != nil {
+		return nil, err
+	}
+	code := int32(cabiWithCString(wireJSON, func(cFrame *C.char) C.int32_t {
 		return C.easynet_runtime_call_bidi_send(b.owner.symbols.bidiSend, C.uint64_t(handle), C.uint64_t(b.bidiID), cFrame)
 	}))
 	if code != 0 {
 		return nil, b.owner.lastErrorOrCode(code, "C ABI invocation bidi send failed")
 	}
 	return append([]byte(nil), frameJSON...), nil
+}
+
+func cabiBidiFrameJSON(frameJSON []byte) ([]byte, error) {
+	frame, err := NewBidiFrameFromJSON(frameJSON)
+	if err != nil {
+		return nil, err
+	}
+	switch frame.Kind() {
+	case "data", "binary_chunk", "chunk":
+		wire := map[string]any{
+			"type":      "binary_chunk",
+			"stream_id": frame.StreamID(),
+		}
+		if payload := frame.PayloadBase64(); payload != "" {
+			wire["data_base64"] = payload
+		} else if rawJSON := frame.PayloadJSON(); len(rawJSON) > 0 && string(rawJSON) != "null" {
+			encoded, err := json.Marshal(json.RawMessage(rawJSON))
+			if err != nil {
+				return nil, invalidRuntimePayload(fmt.Sprintf("encode bidi JSON payload: %v", err), err)
+			}
+			wire["data_base64"] = base64.StdEncoding.EncodeToString(encoded)
+		} else {
+			wire["data_base64"] = ""
+		}
+		return json.Marshal(wire)
+	case "eof", "close_send":
+		return json.Marshal(map[string]any{"type": "control", "eof": true})
+	case "control":
+		wire := map[string]any{"type": "control"}
+		if rawJSON := frame.PayloadJSON(); len(rawJSON) > 0 && string(rawJSON) != "null" {
+			var payload map[string]any
+			if err := json.Unmarshal(rawJSON, &payload); err != nil {
+				return nil, invalidRuntimePayload(fmt.Sprintf("decode bidi control payload_json: %v", err), err)
+			}
+			for key, value := range payload {
+				wire[key] = value
+			}
+		}
+		return json.Marshal(wire)
+	default:
+		return nil, invalidRuntimePayload(fmt.Sprintf("unsupported C ABI bidi frame kind: %s", frame.Kind()), nil)
+	}
 }
 
 func (b *cabiBidiTransport) Recv(ctx context.Context) ([]byte, error) {

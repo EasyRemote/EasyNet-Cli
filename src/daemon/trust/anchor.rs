@@ -759,10 +759,10 @@ impl RealmTrustAnchor {
     ///
     /// This is intentionally narrower than `append_agent`: it is
     /// only for roles whose URA owns exactly one active key at a
-    /// time (`Backend` and `Hub`). It lets daemon bootstrap repair a
-    /// stale trust file after the hub/backend identity key rotates
-    /// without weakening Device pairing semantics or User
-    /// multi-pubkey semantics.
+    /// time (`Backend`, `Hub`, and `Device`). It lets daemon
+    /// bootstrap and hub-attested device trust sync repair a stale
+    /// trust file after the runtime signing projection rotates
+    /// without weakening User multi-pubkey semantics.
     #[cfg(feature = "axon-pb")]
     pub(crate) fn upsert_singleton_agent(
         &mut self,
@@ -770,11 +770,13 @@ impl RealmTrustAnchor {
     ) -> Result<(), RealmTrustError> {
         let mut entry = canonicalize_entry(entry)?;
         match entry.role {
-            TrustedAgentRole::Backend | TrustedAgentRole::Hub => {
+            TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::Device => {
                 if let Some(existing) = self.by_ura.get(&entry.agent_ura) {
                     if matches!(
                         existing.role,
-                        TrustedAgentRole::Backend | TrustedAgentRole::Hub
+                        TrustedAgentRole::Backend
+                            | TrustedAgentRole::Hub
+                            | TrustedAgentRole::Device
                     ) {
                         if existing.role == TrustedAgentRole::Hub {
                             entry.role = TrustedAgentRole::Hub;
@@ -793,7 +795,7 @@ impl RealmTrustAnchor {
                 self.by_ura.insert(entry.agent_ura.clone(), entry);
                 Ok(())
             }
-            TrustedAgentRole::Device | TrustedAgentRole::User => self.insert_canonicalized(entry),
+            TrustedAgentRole::User => self.insert_canonicalized(entry),
         }
     }
 

@@ -781,12 +781,15 @@ impl<'a> DaemonRouteResolver<'a> {
         host_node_id: Option<&str>,
         kind: SelectedRouteKind,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
-        if !crate::daemon::ability::catalog::is_publishable_catalog_name(&selector.public_name) {
+        if !crate::daemon::ability::catalog::is_local_runtime_routable_catalog_name(
+            &selector.public_name,
+        ) {
             return Err(ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
                 reason: axon_pb::NegativeReason::Nodata,
-                detail: "local runtime ability is daemon-local and not remotely routable"
-                    .to_string(),
+                detail:
+                    "daemon-local ability is not routable through the public Invocation surface"
+                        .to_string(),
             });
         }
         let ability = device_local
@@ -1118,10 +1121,11 @@ impl<'a> DaemonRouteResolver<'a> {
         } else {
             Some(query_name.to_string())
         };
+        let include_abilities = json_bool(query, "include_abilities").unwrap_or(true);
         let directory = federation_wrappers::handle_resolve_at(
             &ResolveRequest {
                 ura_prefix: prefix,
-                include_abilities: true,
+                include_abilities,
                 filter: None,
             },
             self.registry,
@@ -1491,6 +1495,10 @@ fn json_string(value: &Value, key: &str) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
+}
+
+fn json_bool(value: &Value, key: &str) -> Option<bool> {
+    value.get(key).and_then(Value::as_bool)
 }
 
 fn json_resolve_type(value: &Value) -> Option<axon_pb::ResolveType> {
@@ -1961,6 +1969,36 @@ mod tests {
         assert_eq!(local["ability_ura"], ability_ura);
         assert_eq!(local["route_ura"], format!("route-ref::{ability_ura}"));
         assert_eq!(local["dispatch_name"], "agent.list");
+    }
+
+    #[test]
+    fn daemon_local_discover_resolves_as_local_runtime_front_door() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "agent.discover").expect("ability ura");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.discover"]);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&owner_ura, "agent.discover")
+            .expect("daemon-local discover must resolve through local runtime routing");
+
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
+        assert_eq!(
+            route.dispatch_target(false),
+            SelectedRouteDispatchTarget::LocalRuntime
+        );
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.execution_host_ura, owner_ura);
+        assert_eq!(route.ability_ura, ability_ura);
+        assert_eq!(
+            route.dispatch_name,
+            crate::core::ura::local_dispatch_ability_key(&owner_ura, "agent.discover")
+        );
     }
 
     #[test]
@@ -2667,6 +2705,46 @@ mod tests {
             route_value["dispatch_name"],
             selected.dispatch_name.as_str()
         );
+    }
+
+    #[test]
+    fn directory_listing_can_omit_ability_projection_for_presence_reads() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_a = device_owner_ura();
+        let owner_b = "easynet:///r/test-realm/device/dev-b";
+        mark_online(&registry, &owner_a);
+        mark_online(&registry, owner_b);
+        publish_ability(&catalog, &owner_a, &owner_a, "agent", "list");
+        publish_ability(&catalog, owner_b, owner_b, "fs", "read");
+
+        let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "qtype": axon_pb::ResolveType::DirectoryListing.as_str_name(),
+                "query_name": "easynet:///r/test-realm/device/",
+                "include_abilities": false,
+            }));
+
+        let records = answer["records"].as_array().expect("records array");
+        let record_types: Vec<&str> = records
+            .iter()
+            .filter_map(|record| record["record_type"].as_str())
+            .collect();
+        assert_eq!(
+            record_types,
+            vec![
+                axon_pb::RecordType::Id.as_str_name(),
+                axon_pb::RecordType::Id.as_str_name()
+            ],
+            "presence-only listing must not let ability records page device IDs apart"
+        );
+        let names: Vec<&str> = records
+            .iter()
+            .filter_map(|record| record["name"].as_str())
+            .collect();
+        assert!(names.contains(&owner_a.as_str()));
+        assert!(names.contains(&owner_b));
     }
 
     #[test]

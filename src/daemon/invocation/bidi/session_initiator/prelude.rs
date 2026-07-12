@@ -420,11 +420,7 @@ async fn advertise_hosted_agent_entry(
         .filter(|p| p.kind == crate::core::ura::URAKind::Agent)
         .and_then(|p| p.agent_ids().map(|(_, agent_id)| agent_id.to_string()))
         .unwrap_or_default();
-    let host_for_advertise = if is_user_scoped_synthetic_agent(&agent_id) {
-        None
-    } else {
-        caller_node_id.as_deref()
-    };
+    let host_for_advertise = caller_node_id.as_deref();
     send_advertise_agent_prelude(client, &entry.agent_ura, host_for_advertise, signer)
         .await
         .map_err(|error| {
@@ -444,10 +440,6 @@ async fn advertise_hosted_agent_entry(
         signer,
     };
     advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &agent_id).await
-}
-
-fn is_user_scoped_synthetic_agent(agent_id: &str) -> bool {
-    matches!(agent_id, "pages" | "files")
 }
 
 struct HostedAgentAbilityAdvertiseContext<'a> {
@@ -479,7 +471,9 @@ async fn advertise_hosted_agent_abilities(
                 ctx.live_registry,
             )?
         }
-        None if agent_id == "pages" => build_synthetic_pages_ability_descriptors(&entry.agent_ura),
+        None if agent_id == "pages" => {
+            build_synthetic_pages_ability_descriptors(&entry.agent_ura, ctx.caller_node_id)
+        }
         None => return Ok(()),
     };
     if descriptors.is_empty() {
@@ -741,15 +735,14 @@ async fn sign_descriptor_bound_prelude_request(
                 "{function_name} prelude descriptor-bound envelope failed: {err}"
             ))
         })?;
-    let signature = signer
-        .sign_canonical(&descriptor_bound.envelope.canonical_bytes())
+    let caller_signature =
+        crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
+            signer,
+            &descriptor_bound.envelope.canonical_bytes(),
+        )
         .await
         .map_err(|err| signing_identity_status(function_name, err))?;
-    envelope.caller_signature = Some(easynet_axon::pb::axon::v1::CallerSignature {
-        algorithm: "ed25519".to_string(),
-        signature: signature.to_bytes().to_vec(),
-        key_id_hint: caller_ura,
-    });
+    envelope.caller_signature = Some(caller_signature);
     request.metadata.insert(
         crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
             .to_string(),
@@ -1246,7 +1239,10 @@ fn build_hosted_agent_ability_descriptors(
     Ok(descriptors)
 }
 
-pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<AbilityDescriptor> {
+pub(super) fn build_synthetic_pages_ability_descriptors(
+    owner_ura: &str,
+    host_node_id: Option<&str>,
+) -> Vec<AbilityDescriptor> {
     crate::daemon::ability::builtins::resources::pages::management_ability_specs()
         .into_iter()
         .filter_map(|spec| {
@@ -1258,10 +1254,15 @@ pub(super) fn build_synthetic_pages_ability_descriptors(owner_ura: &str) -> Vec<
             )
             .ok()
             .map(|descriptor| {
-                descriptor
+                let mut descriptor = descriptor
                     .with_description(spec.description)
                     .with_input_schema(spec.input_schema)
-                    .with_source("synthetic:pages")
+                    .with_source("synthetic:pages");
+                if let Some(node_id) = host_node_id {
+                    descriptor =
+                        descriptor.with_metadata_entry("host_node_id", node_id.to_string());
+                }
+                descriptor
             })
         })
         .collect()

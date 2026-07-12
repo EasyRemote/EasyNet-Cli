@@ -123,18 +123,20 @@ impl OwnerProjectionPublicationAuthority {
             URAKind::Device => match owner.kind {
                 URAKind::Device if publication.owner_ura == caller_ura => Ok(()),
                 URAKind::Agent => {
-                    let record = advertised_agents
-                        .get(&publication.owner_ura)
-                        .ok_or(OwnerProjectionPublicationError::AgentNotAdvertised)?;
-                    if record.host_ura() != Some(caller_ura) {
-                        return Err(OwnerProjectionPublicationError::HostMismatch);
-                    }
                     let caller_owner = trust_anchor
                         .lookup_principal_owner(caller_ura)
                         .ok_or(OwnerProjectionPublicationError::OwnerBindingMissing)?;
                     let agent_owner = trust_anchor
                         .lookup_principal_owner(&publication.owner_ura)
                         .ok_or(OwnerProjectionPublicationError::OwnerBindingMissing)?;
+                    if let Some(record) = advertised_agents.get(&publication.owner_ura) {
+                        if record.host_ura() != Some(caller_ura)
+                            && (caller_owner.owner_user_id != agent_owner.owner_user_id
+                                || caller_owner.owner_ura != agent_owner.owner_ura)
+                        {
+                            return Err(OwnerProjectionPublicationError::HostMismatch);
+                        }
+                    }
                     if caller_owner.owner_user_id != agent_owner.owner_user_id
                         || caller_owner.owner_ura != agent_owner.owner_ura
                     {
@@ -170,8 +172,6 @@ pub(crate) enum OwnerProjectionPublicationError {
     HostMismatch,
     #[error("projection owner is not controlled by the authenticated caller")]
     OwnerMismatch,
-    #[error("hosted Agent must be advertised before its abilities")]
-    AgentNotAdvertised,
     #[error("projection owner has no authoritative runtime owner binding")]
     OwnerBindingMissing,
     #[error("projection integrity check failed: {0}")]

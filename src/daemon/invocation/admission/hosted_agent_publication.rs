@@ -169,6 +169,13 @@ impl HostedAgentPublication {
         &self.caller_device_ura
     }
 
+    pub(crate) fn authority_id(&self) -> String {
+        format!(
+            "hosted-agent-publication:{}:{}",
+            self.caller_device_ura, self.agent_ura
+        )
+    }
+
     pub(crate) fn into_owner_binding(self, added_at_unix_ms: u64) -> TrustedPrincipalOwner {
         TrustedPrincipalOwner {
             principal_ura: self.agent_ura,

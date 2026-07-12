@@ -36,6 +36,7 @@
 // descriptor-bound canonical bytes so production daemon IPC has one
 // wire-shape construction point.
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rand::RngCore;
 
 use anyhow::Context as _;
@@ -247,15 +248,14 @@ impl ProtoEnvelope {
                 signer.owner_ura()
             );
         }
-        let signature = signer
-            .sign_canonical(&descriptor.canonical_bytes())
+        let caller_signature =
+            crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
+                signer,
+                &descriptor.canonical_bytes(),
+            )
             .await
             .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
-        self.inner.caller_signature = Some(CallerSignature {
-            algorithm: "ed25519".to_string(),
-            signature: signature.to_bytes().to_vec(),
-            key_id_hint: caller_ura,
-        });
+        self.inner.caller_signature = Some(caller_signature);
         let mut request = InvokeRequest {
             envelope: Some(self.into_inner()),
             function_name,
@@ -279,13 +279,16 @@ impl ProtoEnvelope {
     ) -> anyhow::Result<Self> {
         let descriptor = self.descriptor_bound_envelope(ability, arguments)?;
         let caller_ura = descriptor.envelope().caller.ura.clone();
+        let public_key = signer
+            .public_key(&caller_ura)
+            .with_context(|| format!("resolve public signing projection for {caller_ura}"))?;
         let signature = signer
-            .sign(&caller_ura, &descriptor.canonical_bytes())
+            .sign_bound(&caller_ura, &public_key, &descriptor.canonical_bytes())
             .with_context(|| format!("sign descriptor-bound invocation as {caller_ura}"))?;
         self.inner.caller_signature = Some(CallerSignature {
             algorithm: "ed25519".to_string(),
             signature: signature.to_bytes().to_vec(),
-            key_id_hint: caller_ura,
+            key_id_hint: BASE64_STANDARD.encode(public_key.to_bytes()),
         });
         Ok(self)
     }

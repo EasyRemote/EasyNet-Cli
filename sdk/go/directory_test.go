@@ -21,11 +21,13 @@ func TestRuntimeDirectoryProviderResolvesThroughCanonicalAbility(t *testing.T) {
 	}
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeDirectoryProvider(ability)
+	includeAbilities := false
 	client, _ := NewDirectoryClient(provider)
 	resolution, err := client.Resolve(context.Background(), DirectoryResolveRequest{
-		Call:     runtimeAbilityTestContext(),
-		QueryURA: "easynet:///r/example/user/alice",
-		Kind:     DirectoryResolveCanonicalIdentity,
+		Call:             runtimeAbilityTestContext(),
+		QueryURA:         "easynet:///r/example/user/alice",
+		Kind:             DirectoryResolveCanonicalIdentity,
+		IncludeAbilities: &includeAbilities,
 	})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -34,7 +36,7 @@ func TestRuntimeDirectoryProviderResolvesThroughCanonicalAbility(t *testing.T) {
 		t.Fatalf("unexpected resolution: %#v", resolution)
 	}
 	args := seen["args"].(map[string]any)
-	if args["query_name"] != "easynet:///r/example/user/alice" || args["qtype"] != string(DirectoryResolveCanonicalIdentity) {
+	if args["query_name"] != "easynet:///r/example/user/alice" || args["qtype"] != string(DirectoryResolveCanonicalIdentity) || args["include_abilities"] != false {
 		t.Fatalf("canonical resolver args not preserved: %#v", args)
 	}
 }
@@ -53,11 +55,13 @@ func TestRuntimeDirectoryProviderListsWithCursor(t *testing.T) {
 	}
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeDirectoryProvider(ability)
+	includeAbilities := false
 	page, err := provider.List(context.Background(), DirectoryListRequest{
-		Call:      runtimeAbilityTestContext(),
-		URAPrefix: "easynet:///r/example/user/alice",
-		Limit:     1,
-		Cursor:    " directory:v1:cursor-1 ",
+		Call:             runtimeAbilityTestContext(),
+		URAPrefix:        "easynet:///r/example/user/alice",
+		Limit:            1,
+		Cursor:           " directory:v1:cursor-1 ",
+		IncludeAbilities: &includeAbilities,
 	})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -66,7 +70,7 @@ func TestRuntimeDirectoryProviderListsWithCursor(t *testing.T) {
 		t.Fatalf("unexpected page: %#v", page)
 	}
 	args := seen["args"].(map[string]any)
-	if args["qtype"] != string(DirectoryResolveListing) || args["limit"] != float64(1) || args["cursor"] != "directory:v1:cursor-1" {
+	if args["qtype"] != string(DirectoryResolveListing) || args["limit"] != float64(1) || args["cursor"] != "directory:v1:cursor-1" || args["include_abilities"] != false {
 		t.Fatalf("list args not preserved: %#v", args)
 	}
 

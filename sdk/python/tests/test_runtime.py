@@ -378,6 +378,25 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(transport.seen_options, {"expires_in_ms": 60000})
 
+    def test_prepare_signing_material_uses_stateless_transport_contract(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        material = client.prepare_signing_material(
+            complete_draft(),
+            PrepareOptions(expires_in_ms=60000, signer_id="browser-key-1"),
+        )
+
+        self.assertTrue(material.canonical_bytes_base64)
+        self.assertEqual(
+            transport.seen_options,
+            {
+                "expires_in_ms": 60000,
+                "material_only": True,
+                "signer_id": "browser-key-1",
+            },
+        )
+
     def test_prepare_and_sign_returns_inspectable_signed_envelope(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)

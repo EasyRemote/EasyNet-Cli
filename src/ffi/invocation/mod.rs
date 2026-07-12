@@ -1710,6 +1710,7 @@ fn prepare_builder_with_axon_pb(
             );
         }
     };
+    let material_only = options.material_only;
     let prepared = match invocation
         .into_draft()
         .prepare(options.into_prepare_options())
@@ -1731,7 +1732,11 @@ fn prepare_builder_with_axon_pb(
             "easynet_invocation_builder_prepare: out-of-memory allocating prepared JSON",
         );
     }
-    let id = insert_prepared(prepared);
+    let id = if material_only {
+        0
+    } else {
+        insert_prepared(prepared)
+    };
     unsafe {
         *out_prepared_id = id;
         *out_prepared_json = ptr;
@@ -1857,6 +1862,7 @@ fn prepare_with_axon_pb(
             );
         }
     };
+    let material_only = options.material_only;
     let prepared = match invocation
         .into_draft()
         .prepare(options.into_prepare_options())
@@ -1877,7 +1883,11 @@ fn prepare_with_axon_pb(
             "easynet_invocation_prepare: out-of-memory allocating prepared JSON",
         );
     }
-    let id = insert_prepared(prepared);
+    let id = if material_only {
+        0
+    } else {
+        insert_prepared(prepared)
+    };
     unsafe {
         *out_prepared_id = id;
         *out_prepared_json = ptr;
@@ -3949,6 +3959,7 @@ struct PrepareOptionsJson {
     signer_id: Option<String>,
     policy_ref: Option<String>,
     local_daemon_signing: bool,
+    material_only: bool,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3979,11 +3990,18 @@ impl PrepareOptionsJson {
                 .as_bool()
                 .ok_or(InvocationJsonError::InvalidBool("local_daemon_signing"))?,
         };
+        let material_only = match obj.get("material_only") {
+            None | Some(serde_json::Value::Null) => false,
+            Some(value) => value
+                .as_bool()
+                .ok_or(InvocationJsonError::InvalidBool("material_only"))?,
+        };
         Ok(Self {
             expires_in_ms,
             signer_id: optional_string(obj, "signer_id")?,
             policy_ref: optional_string(obj, "policy_ref")?,
             local_daemon_signing,
+            material_only,
         })
     }
 
@@ -4005,6 +4023,7 @@ impl Default for PrepareOptionsJson {
             signer_id: None,
             policy_ref: None,
             local_daemon_signing: false,
+            material_only: false,
         }
     }
 }
@@ -5797,6 +5816,66 @@ mod tests {
         assert!(duplicate_signed_json_ptr.is_null());
         assert_eq!(easynet_signed_invocation_free(signed_id), EASYNET_OK);
         assert!(get_signed(signed_id).is_none());
+    }
+
+    #[test]
+    fn invocation_prepare_material_only_does_not_allocate_a_prepared_handle() {
+        let (handle, _session) = alloc(test_session());
+        let raw = CString::new(canonical_invocation_json(serde_json::json!({
+            "args": {"browser": true}
+        })))
+        .unwrap();
+        let material_only_options = CString::new(
+            serde_json::json!({
+                "expires_in_ms": 60_000,
+                "signer_id": "browser-key",
+                "material_only": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut material_only_id: PreparedInvocationId = 0;
+        let mut material_only_json_ptr: *mut c_char = std::ptr::null_mut();
+
+        let code = unsafe {
+            easynet_invocation_prepare(
+                handle,
+                raw.as_ptr(),
+                material_only_options.as_ptr(),
+                &mut material_only_id,
+                &mut material_only_json_ptr,
+            )
+        };
+
+        assert_eq!(code, EASYNET_OK);
+        assert_eq!(material_only_id, 0);
+        let material_only_json: serde_json::Value = unsafe {
+            serde_json::from_str(CStr::from_ptr(material_only_json_ptr).to_str().unwrap()).unwrap()
+        };
+        unsafe { crate::ffi::strings::easynet_string_free(material_only_json_ptr) };
+        assert!(
+            material_only_json["signing_material"]["canonical_bytes_base64"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+
+        let normal_options =
+            CString::new(r#"{"expires_in_ms":60000,"signer_id":"browser-key"}"#).unwrap();
+        let mut normal_id: PreparedInvocationId = 0;
+        let mut normal_json_ptr: *mut c_char = std::ptr::null_mut();
+        let normal_code = unsafe {
+            easynet_invocation_prepare(
+                handle,
+                raw.as_ptr(),
+                normal_options.as_ptr(),
+                &mut normal_id,
+                &mut normal_json_ptr,
+            )
+        };
+        assert_eq!(normal_code, EASYNET_OK);
+        assert_ne!(normal_id, 0);
+        unsafe { crate::ffi::strings::easynet_string_free(normal_json_ptr) };
+        assert_eq!(easynet_prepared_invocation_free(normal_id), EASYNET_OK);
     }
 
     #[test]

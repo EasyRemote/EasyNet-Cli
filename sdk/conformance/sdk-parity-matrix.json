@@ -275,7 +275,7 @@
         "evidence": [
           {
             "kind": "go_test",
-            "ref": "sdk/go/signing_test.go"
+            "ref": "sdk/go/runtime_test.go"
           }
         ]
       },
@@ -284,7 +284,7 @@
         "evidence": [
           {
             "kind": "python_test",
-            "ref": "sdk/python/tests/test_signing.py"
+            "ref": "sdk/python/tests/test_runtime.py"
           }
         ]
       },
