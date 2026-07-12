@@ -613,7 +613,10 @@ User URAs, rotates Alice's first key, revokes Alice's sibling key while proving
 the rotated sibling remains active, configures recovery, recovers, suspends and
 reactivates Alice, deletes Bob through an admin grant, restarts the Hub daemon,
 and verifies persisted PrincipalLifecycle state, grant state, RuntimeTrust
-revocation projection and Device→Principal owner binding. Backend-present
+revocation projection and Device→Principal owner binding. The same live Hub
+TCP+TLS E2E now rejects replayed recovery proofs and deleted-principal recovery
+attempts, then verifies those failed replacement keys are not projected into
+RuntimeTrust. Backend-present
 mapping has now crossed the live runtime boundary: the Backend ServiceContext
 has a tested single SDK profile graph proving PrincipalLifecycle, Receipt,
 Directory, Events, Admin and AccessControl clients derive from the same Go SDK
@@ -636,6 +639,15 @@ Go and Python PrincipalLifecycle projection
 decoders now reject forbidden custody fields recursively, matching the
 managed-signing public-projection guard, and the real CLI TLS lifecycle E2E
 scans PrincipalLifecycle JSON output for private-key custody fields.
+Runtime Events now have an explicit cross-repository adapter gate covering the
+Go/Python SDK runtime-event facades, Backend SDK event subscription/open-stream
+adapters and EasyRemote product event consumer behavior. Runtime Events now
+also have a live daemon cutover gate:
+`tools/scripts/runtime-events-live-daemon-e2e.sh` composes the cross-repository
+adapter gate with Go and Python SDK live smokes that read bounded
+`RuntimeEventClient` pages from real `easynet-daemon` handle events over the C
+ABI. This promotes the runtime-events SDK capability itself to cutover-ready;
+product event taxonomies remain downstream.
 
 ---
 

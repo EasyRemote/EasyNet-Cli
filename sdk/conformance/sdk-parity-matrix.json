@@ -436,6 +436,10 @@
           {
             "kind": "go_test",
             "ref": "sdk/go/principal_test.go"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/standalone-hub-recovery-e2e.sh"
           }
         ]
       },
@@ -445,10 +449,14 @@
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_principal.py"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/standalone-hub-recovery-e2e.sh"
           }
         ]
       },
-      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and the daemon lifecycle provider now records recovery policy, consumes recovery proof references through a persisted single-use replay ledger, projects recovered public keys through RuntimeTrust, allows explicit suspended-principal recovery, and rejects deleted-principal recovery as terminal. The CLI facade now surfaces recovery replay and deleted-principal terminality without local fallback. Broader login/recovery UX packaging and standalone/backend-present cutover evidence remain incomplete."
+      "remaining": "SDK recovery policy and recovery transition lowering are provider-backed, and the daemon lifecycle provider now records recovery policy, consumes recovery proof references through a persisted single-use replay ledger, projects recovered public keys through RuntimeTrust, allows explicit suspended-principal recovery, and rejects deleted-principal recovery as terminal. The CLI facade surfaces recovery replay and deleted-principal terminality without local fallback, and the real Hub TCP+TLS E2E now proves replayed recovery proofs and deleted-principal recovery attempts are rejected by the live Hub daemon without projecting failed replacement keys into RuntimeTrust. Broader login/recovery UX packaging remains incomplete."
     },
     {
       "capability_id": "principal_authorization_grants",
@@ -493,6 +501,10 @@
           {
             "kind": "static_gate",
             "ref": "tools/scripts/check-downstream-sdk-consumer-cutover.sh"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/runtime-events-cross-repo-e2e.sh"
           }
         ]
       },
@@ -552,7 +564,7 @@
         "sdk/conformance/cases/runtime-events-seam.yaml"
       ],
       "go": {
-        "status": "provider-backed",
+        "status": "cutover-ready",
         "evidence": [
           {
             "kind": "go_test",
@@ -561,19 +573,31 @@
           {
             "kind": "static_gate",
             "ref": "tools/scripts/check-downstream-sdk-consumer-cutover.sh"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/runtime-events-live-daemon-e2e.sh"
           }
         ]
       },
       "python": {
-        "status": "provider-backed",
+        "status": "cutover-ready",
         "evidence": [
           {
             "kind": "python_test",
             "ref": "sdk/python/tests/test_runtime_events.py"
+          },
+          {
+            "kind": "static_gate",
+            "ref": "tools/scripts/runtime-events-cross-repo-e2e.sh"
+          },
+          {
+            "kind": "live_e2e",
+            "ref": "tools/scripts/runtime-events-live-daemon-e2e.sh"
           }
         ]
       },
-      "remaining": "Generic bounded handle-event reads are provider-backed, Backend runtime-event adapter cutover is guarded, and Go/Python subscription cursors are stream-scoped durable continuation facts. Final cross-repository event E2E remains before cutover-ready."
+      "remaining": ""
     },
     {
       "capability_id": "runtime_administration",

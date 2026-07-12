@@ -27,7 +27,7 @@ PROFILES = {
     "principal", "directory", "receipts", "runtime_events",
     "runtime_administration", "conformance",
 }
-EVIDENCE_KINDS = {"go_test", "python_test", "sdk_conformance_case", "static_gate", "manifest", "doc"}
+EVIDENCE_KINDS = {"go_test", "python_test", "sdk_conformance_case", "static_gate", "live_e2e", "manifest", "doc"}
 REQUIRED_CAPABILITIES = (
     "abi_version_discovery",
     "daemon_lifecycle",

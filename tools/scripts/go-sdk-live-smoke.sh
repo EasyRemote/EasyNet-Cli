@@ -30,6 +30,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   grep -q "easynet_live_smoke" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "generic C ABI v5" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "typed terminal failure decoded" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "RuntimeEventClient read live daemon handle events" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   echo "go-sdk-live-smoke self-test ok"
   exit 0
 fi

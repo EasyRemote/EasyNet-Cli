@@ -16,6 +16,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   bash -n "$0"
   grep -q "generic C ABI v5" "$0"
   grep -q "typed terminal failure decoded" "$0"
+  grep -q "RuntimeEventClient read live daemon handle events" "$0"
   grep -q "EXPECTED_ABI_VERSION = 5" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
   grep -q "class DaemonControl" "$REPO_ROOT/sdk/python/easynet_sdk/daemon.py"
   grep -q "class RuntimeClient" "$REPO_ROOT/sdk/python/easynet_sdk/runtime.py"
@@ -79,6 +80,10 @@ from easynet_sdk import (
     DaemonMode,
     HealthClient,
     InvocationSignature,
+    RuntimeEventClient,
+    RuntimeEventReadRequest,
+    RuntimeEventStreamState,
+    RuntimeHandleEventProvider,
     StartConfig,
 )
 from easynet_sdk._cabi import CABIDaemonTransport, CLILibrary
@@ -220,7 +225,8 @@ try:
             key_id_hint="python-sdk-live-smoke-invalid-signature",
         )
     )
-    terminal_failure = runtime.await_result(runtime.submit_signed(signed_failure))
+    failure_handle = runtime.submit_signed(signed_failure)
+    terminal_failure = runtime.await_result(failure_handle)
     assert terminal_failure.ok is False, terminal_failure
     assert terminal_failure.terminal_state == "Failed", terminal_failure
     assert terminal_failure.error is not None, terminal_failure
@@ -231,6 +237,19 @@ try:
         "[python-sdk-live-smoke] typed terminal failure decoded: "
         f"code={terminal_failure.error.code} stage={terminal_failure.error.stage}"
     )
+
+    event_client = RuntimeEventClient(RuntimeHandleEventProvider(runtime))
+    event_page = event_client.read(
+        RuntimeEventReadRequest(handle=failure_handle, limit=8)
+    )
+    assert event_page.terminal is True, event_page
+    assert event_page.state is RuntimeEventStreamState.TERMINAL, event_page
+    assert len(event_page.events) > 0, event_page
+    last_event = event_page.events[-1]
+    assert last_event.terminal is True, last_event
+    assert last_event.state == "Failed", last_event
+    assert event_page.cursor.sequence == last_event.sequence, event_page
+    print("[python-sdk-live-smoke] RuntimeEventClient read live daemon handle events")
 
     browser = runtime.invoke(
         draft(

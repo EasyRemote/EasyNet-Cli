@@ -152,6 +152,36 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Logf("typed terminal failure decoded: code=%s stage=%s", failure.Code(), failure.Stage())
 
+	eventProvider, err := NewRuntimeHandleEventProvider(runtime)
+	if err != nil {
+		t.Fatalf("NewRuntimeHandleEventProvider: %v", err)
+	}
+	eventClient, err := NewRuntimeEventClient(eventProvider)
+	if err != nil {
+		t.Fatalf("NewRuntimeEventClient: %v", err)
+	}
+	eventPage, err := eventClient.Read(ctx, RuntimeEventReadRequest{
+		Handle: failureHandle,
+		Limit:  8,
+	})
+	if err != nil {
+		t.Fatalf("RuntimeEventClient.Read: %v", err)
+	}
+	if !eventPage.Terminal || eventPage.State != RuntimeEventStreamTerminal {
+		t.Fatalf("runtime event page is not terminal: %#v", eventPage)
+	}
+	if len(eventPage.Events) == 0 {
+		t.Fatalf("runtime event page is empty: %#v", eventPage)
+	}
+	lastEvent := eventPage.Events[len(eventPage.Events)-1]
+	if !lastEvent.Terminal || lastEvent.State != "Failed" {
+		t.Fatalf("runtime event terminal projection = %#v", lastEvent)
+	}
+	if eventPage.Cursor.Sequence != lastEvent.Sequence {
+		t.Fatalf("runtime event cursor = %d, want %d", eventPage.Cursor.Sequence, lastEvent.Sequence)
+	}
+	t.Log("RuntimeEventClient read live daemon handle events")
+
 	browser, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, deviceURA, "browser.open_session", map[string]any{"url": "https://example.com"}, 17))
 	if err != nil {
 		t.Fatalf("browser.open_session: %v", err)

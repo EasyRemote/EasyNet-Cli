@@ -345,6 +345,33 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
     );
     assert_eq!(active_binding_count(&alice_recovered), 2);
 
+    let alice_replay_recovery_pubkey = pubkey(44);
+    let alice_replay_recovery_error = easynet_failure(
+        hub_home.path(),
+        [
+            "principal",
+            "recover",
+            "--principal-ura",
+            ALICE_URA,
+            "--proof-ref",
+            "recovery-policy:tls-alice",
+            "--public-key-b64",
+            &alice_replay_recovery_pubkey,
+            "--key-id",
+            "tls-alice-recovery-replay-key",
+            "--idempotency-key",
+            "tls-alice-recover-replay",
+            "--expected-version",
+            "7",
+            "--json",
+        ],
+        &hub,
+    );
+    assert!(
+        alice_replay_recovery_error.contains("already been consumed"),
+        "Hub TCP+TLS recovery replay must surface daemon denial, got: {alice_replay_recovery_error}"
+    );
+
     let alice_suspended = easynet_json(
         hub_home.path(),
         [
@@ -406,6 +433,26 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
     );
     assert_eq!(active_binding_count(&bob_phone), 2);
 
+    easynet_json(
+        hub_home.path(),
+        [
+            "principal",
+            "configure-recovery",
+            "--principal-ura",
+            BOB_URA,
+            "--policy-ref",
+            "recovery-policy:tls-bob-deleted",
+            "--proof-ref",
+            &bob_initial_binding_id,
+            "--idempotency-key",
+            "tls-bob-deleted-recovery-policy",
+            "--expected-version",
+            "3",
+            "--json",
+        ],
+        &hub,
+    );
+
     let delete_grant = easynet_json(
         hub_home.path(),
         [
@@ -446,12 +493,37 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
             "--idempotency-key",
             "tls-bob-delete",
             "--expected-version",
-            "3",
+            "4",
             "--json",
         ],
         &hub,
     );
     assert_eq!(bob_deleted["principal"]["state"], "deleted");
+
+    let bob_deleted_recovery_pubkey = pubkey(45);
+    let bob_deleted_recovery_error = easynet_failure(
+        hub_home.path(),
+        [
+            "principal",
+            "recover",
+            "--principal-ura",
+            BOB_URA,
+            "--proof-ref",
+            "recovery-policy:tls-bob-deleted",
+            "--public-key-b64",
+            &bob_deleted_recovery_pubkey,
+            "--key-id",
+            "tls-bob-deleted-recovery-key",
+            "--idempotency-key",
+            "tls-bob-recover-deleted",
+            "--json",
+        ],
+        &hub,
+    );
+    assert!(
+        bob_deleted_recovery_error.contains("principal must be active or suspended"),
+        "Hub TCP+TLS deleted-principal recovery must surface daemon terminality, got: {bob_deleted_recovery_error}"
+    );
 
     drop(hub);
     let mut hub = HubDaemon::spawn(hub_home.path(), port);
@@ -516,6 +588,18 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
             .is_some(),
         "recovery key must remain active after Hub restart"
     );
+    assert!(
+        hub_trust
+            .lookup_user_by_pubkey(ALICE_URA, &alice_replay_recovery_pubkey)
+            .is_none(),
+        "replayed recovery key must not be projected into RuntimeTrust"
+    );
+    assert!(
+        hub_trust
+            .lookup_user_by_pubkey(BOB_URA, &bob_deleted_recovery_pubkey)
+            .is_none(),
+        "deleted-principal recovery key must not be projected into RuntimeTrust"
+    );
 
     hub.assert_still_running();
 }
@@ -535,6 +619,7 @@ impl HubDaemon {
         let child = Command::new(env!("CARGO_BIN_EXE_easynet-daemon"))
             .env("HOME", home)
             .env("EASYNET_BOOTSTRAP_MEDIA_RESOURCES", "0")
+            .env("EASYNET_KEYRING_BIN", env!("CARGO_BIN_EXE_easynet-keyring"))
             .env_remove("EASYNET_DAEMON_GRPC_UDS")
             .env_remove("EASYNET_REALM_TRUST_PATH")
             .env_remove("EASYNET_KEYRING_SOCKET_PATH")
@@ -600,6 +685,7 @@ fn run_easynet<const N: usize>(home: &Path, args: [&str; N], hub: &HubDaemon) ->
     let output = Command::new(env!("CARGO_BIN_EXE_easynet"))
         .env("HOME", home)
         .env("EASYNET_BOOTSTRAP_MEDIA_RESOURCES", "0")
+        .env("EASYNET_KEYRING_BIN", env!("CARGO_BIN_EXE_easynet-keyring"))
         .env_remove("EASYNET_DAEMON_GRPC_UDS")
         .env_remove("EASYNET_REALM_TRUST_PATH")
         .env_remove("EASYNET_KEYRING_SOCKET_PATH")
@@ -617,6 +703,33 @@ fn run_easynet<const N: usize>(home: &Path, args: [&str; N], hub: &HubDaemon) ->
         read_to_string(&hub.stderr_log),
     );
     output.stdout
+}
+
+fn easynet_failure<const N: usize>(home: &Path, args: [&str; N], hub: &HubDaemon) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_easynet"))
+        .env("HOME", home)
+        .env("EASYNET_BOOTSTRAP_MEDIA_RESOURCES", "0")
+        .env("EASYNET_KEYRING_BIN", env!("CARGO_BIN_EXE_easynet-keyring"))
+        .env_remove("EASYNET_DAEMON_GRPC_UDS")
+        .env_remove("EASYNET_REALM_TRUST_PATH")
+        .env_remove("EASYNET_KEYRING_SOCKET_PATH")
+        .args(args)
+        .output()
+        .expect("run easynet");
+
+    assert!(
+        !output.status.success(),
+        "easynet unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}\nhub stdout:\n{}\nhub stderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        read_to_string(&hub.stdout_log),
+        read_to_string(&hub.stderr_log),
+    );
+    format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
 }
 
 fn easynet_json<const N: usize>(home: &Path, args: [&str; N], hub: &HubDaemon) -> Value {

@@ -557,9 +557,12 @@ projection and Device-to-Principal owner binding without Backend HTTP state.
 Go and Python PrincipalLifecycle projection decoders now reject forbidden
 custody fields recursively, matching the managed-signing public-projection
 guard, and the real CLI TLS lifecycle E2E scans PrincipalLifecycle JSON output
-for private-key custody fields. Backend-present mapping to the same live daemon
-runtime is now covered by the Backend live PrincipalLifecycle E2E; recovery UX
-edge-case closure still remains before section 14.3 is cutover-ready.
+for private-key custody fields. The same real CLI TLS lifecycle E2E now also
+proves that replayed recovery proofs and deleted-principal recovery attempts are
+rejected by the live Hub daemon and do not project replacement keys into
+RuntimeTrust. Backend-present mapping to the same live daemon runtime is now
+covered by the Backend live PrincipalLifecycle E2E; broader login/recovery flow
+packaging still remains before section 14.3 is cutover-ready.
 Directory now has daemon-backed resolution, stable listing cursors and explicit
 subscription resume in symmetric Go/Python providers; receipt/history now has a
 daemon-backed stable cursor provider and symmetric Go/Python cursor forwarding;
@@ -571,6 +574,14 @@ SDK facades over daemon
 `authority.binding.*` abilities, while Backend product role mapping and
 standalone-Hub governance cutover remain incomplete; and the backend still
 owns product-local runtime-profile lowering.
+Runtime Events now also have an explicit cross-repository adapter gate covering
+the Go/Python SDK event facades, Backend SDK event subscription/open-stream
+adapters and EasyRemote product event consumer behavior. This is adapter
+evidence only by itself. `tools/scripts/runtime-events-live-daemon-e2e.sh`
+now composes it with Go and Python live daemon smokes that read bounded
+`RuntimeEventClient` pages from real `easynet-daemon` handle events over the C
+ABI. Runtime Events are therefore cutover-ready in the SDK capability matrix;
+product event taxonomies remain downstream.
 AbilityDescriptor projection now has symmetric provider-backed Go/Python
 facades over daemon `meta.list_abilities`, so descriptor schema, call mode,
 hashes, visibility and hints remain daemon catalog facts rather than
@@ -674,11 +685,14 @@ The current remaining work is:
 - close the remaining standalone-Hub recovery UX edge cases beyond the
   existing TCP+TLS two-HOME lifecycle E2E. Provider and CLI evidence now pin
   replayed recovery proofs, suspended-principal recovery and deleted-principal
-  terminality as daemon-owned state-machine facts; remaining UX work is
-  broader login/recovery flow packaging rather than a second authentication
-  model;
-- run final cross-repository runtime event E2E before promoting runtime events
-  to cutover-ready;
+  terminality as daemon-owned state-machine facts, and the live Hub TCP+TLS E2E
+  now covers recovery replay plus deleted-principal recovery terminality without
+  RuntimeTrust key projection. Remaining UX work is broader login/recovery flow
+  packaging rather than a second authentication model;
+- keep the runtime-events live daemon gate in the cutover suite. Runtime events
+  now have both cross-repo adapter evidence and Go/Python live daemon
+  `RuntimeEventClient` handle-event proof, so the remaining work is regression
+  preservation rather than the missing cutover proof;
 - close the remaining standalone-Hub acceptance evidence that is not covered by
   the real TCP+TLS lifecycle E2E and SDK/CLI projection audit yet;
 - delete obsolete product modules, duplicate wire/DTO code and legacy gates
