@@ -366,10 +366,47 @@ fn validate_registered_agent_root(
     }))
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct AgentLifecycleProjectionStore;
+
+impl AgentLifecycleProjectionStore {
+    fn persist_registry(&self, registry: &AgentRegistry) -> anyhow::Result<()> {
+        agents::save_agents(registry)
+            .map_err(|error| anyhow::anyhow!("persist durable agent registry: {error:#}"))
+    }
+
+    fn persist_identities(&self, identities: &local_agents::LocalAgentsFile) -> anyhow::Result<()> {
+        local_agents::save(identities)
+            .map_err(|error| anyhow::anyhow!("persist hosted-Agent identity registry: {error:#}"))
+    }
+
+    fn restore_registry_snapshot(&self, registry: &AgentRegistry) -> anyhow::Result<()> {
+        agents::save_agents(registry).map_err(Into::into)
+    }
+
+    fn restore_identity_snapshot(
+        &self,
+        identities: &local_agents::LocalAgentsFile,
+    ) -> anyhow::Result<()> {
+        local_agents::save(identities).map_err(Into::into)
+    }
+
+    fn restore_uncommitted_purge_snapshots(
+        &self,
+        journal: &AgentPurgeJournal,
+    ) -> anyhow::Result<()> {
+        self.restore_registry_snapshot(&journal.original_registry)
+            .map_err(|error| anyhow::anyhow!("recover Agent purge agents.json: {error:#}"))?;
+        self.restore_identity_snapshot(&journal.original_local_agents)
+            .map_err(|error| anyhow::anyhow!("recover Agent purge local-agents.json: {error:#}"))
+    }
+}
+
 struct AgentLifecycleTransaction {
     operation: &'static str,
     plan: AgentLifecyclePlan,
     state: AgentLifecycleState,
+    projections: AgentLifecycleProjectionStore,
     original_registry: AgentRegistry,
     original_local_agents: local_agents::LocalAgentsFile,
     registry_written: bool,
@@ -387,6 +424,7 @@ impl AgentLifecycleTransaction {
             operation,
             plan: AgentLifecyclePlan::Start,
             state: AgentLifecycleState::Prepared,
+            projections: AgentLifecycleProjectionStore,
             original_registry,
             original_local_agents,
             registry_written: false,
@@ -404,6 +442,7 @@ impl AgentLifecycleTransaction {
             operation,
             plan: AgentLifecyclePlan::Stop,
             state: AgentLifecycleState::Prepared,
+            projections: AgentLifecycleProjectionStore,
             original_registry,
             original_local_agents,
             registry_written: false,
@@ -480,27 +519,10 @@ impl AgentLifecycleTransaction {
         registry: &AgentRegistry,
         identities: &local_agents::LocalAgentsFile,
     ) -> Result<(), AgentLifecycleError> {
-        // Mark each segment before the atomic-write call: a post-rename
-        // directory-sync error means the new bytes may already be visible and
-        // therefore still require compensation.
-        self.registry_written = true;
-        if let Err(error) = agents::save_agents(registry) {
-            return Err(
-                self.failure_with_rollback(format!("persist durable agent registry: {error:#}"))
-            );
-        }
-        if let Err(error) = self.transition(AgentLifecycleState::DurablePersisted) {
-            return Err(self.failure_with_rollback(error.to_string()));
-        }
-        self.identity_written = true;
-        if let Err(error) = local_agents::save(identities) {
-            return Err(self.failure_with_rollback(format!(
-                "persist hosted-Agent identity registry: {error:#}"
-            )));
-        }
-        if let Err(error) = self.transition(AgentLifecycleState::IdentityPersisted) {
-            return Err(self.failure_with_rollback(error.to_string()));
-        }
+        self.persist_registry_projection(registry)
+            .map_err(|error| self.failure_with_rollback(error.to_string()))?;
+        self.persist_identity_projection(identities)
+            .map_err(|error| self.failure_with_rollback(error.to_string()))?;
         Ok(())
     }
 
@@ -512,12 +534,30 @@ impl AgentLifecycleTransaction {
         self.registry_written = true;
     }
 
+    fn persist_registry_projection(&mut self, registry: &AgentRegistry) -> anyhow::Result<()> {
+        // Mark each segment before the atomic-write call: a post-rename
+        // directory-sync error means the new bytes may already be visible and
+        // therefore still require compensation.
+        self.mark_registry_write_started();
+        self.projections.persist_registry(registry)?;
+        self.mark_registry_persisted()
+    }
+
     fn mark_registry_persisted(&mut self) -> anyhow::Result<()> {
         self.transition(AgentLifecycleState::DurablePersisted)
     }
 
     fn mark_identity_write_started(&mut self) {
         self.identity_written = true;
+    }
+
+    fn persist_identity_projection(
+        &mut self,
+        identities: &local_agents::LocalAgentsFile,
+    ) -> anyhow::Result<()> {
+        self.mark_identity_write_started();
+        self.projections.persist_identities(identities)?;
+        self.mark_identity_persisted()
     }
 
     fn mark_identity_persisted(&mut self) -> anyhow::Result<()> {
@@ -562,12 +602,18 @@ impl AgentLifecycleTransaction {
         }
         self.state = AgentLifecycleState::RollingBack;
         if self.identity_written {
-            if let Err(error) = local_agents::save(&self.original_local_agents) {
+            if let Err(error) = self
+                .projections
+                .restore_identity_snapshot(&self.original_local_agents)
+            {
                 failures.push(format!("restore local-agents.json: {error:#}"));
             }
         }
         if self.registry_written {
-            if let Err(error) = agents::save_agents(&self.original_registry) {
+            if let Err(error) = self
+                .projections
+                .restore_registry_snapshot(&self.original_registry)
+            {
                 failures.push(format!("restore agents.json: {error:#}"));
             }
         }
@@ -1611,10 +1657,7 @@ fn rollback_uncommitted_purge(
 ) -> anyhow::Result<()> {
     let registrar = require_hot_registrar(hot_registrar, "agent.purge.recover")?;
     restore_uncommitted_purge_root(journal)?;
-    agents::save_agents(&journal.original_registry)
-        .map_err(|error| anyhow::anyhow!("recover Agent purge agents.json: {error:#}"))?;
-    local_agents::save(&journal.original_local_agents)
-        .map_err(|error| anyhow::anyhow!("recover Agent purge local-agents.json: {error:#}"))?;
+    AgentLifecycleProjectionStore::default().restore_uncommitted_purge_snapshots(journal)?;
     let registrar_for_restore = Arc::clone(&registrar);
     let name = journal.name.clone();
     let entry = journal.removed_entry.clone();
@@ -2610,9 +2653,7 @@ fn stop_agent_locked(
     identities
         .hosted_agents
         .retain(|entry| !(entry.profile == "llm" && entry.name == name));
-    transaction.mark_registry_write_started();
-    if let Err(error) = agents::save_agents(&registry) {
-        let error = anyhow::anyhow!("persist durable agent registry: {error:#}");
+    if let Err(error) = transaction.persist_registry_projection(&registry) {
         if purge_journal.is_some() {
             return Err(error);
         }
@@ -2624,14 +2665,11 @@ fn stop_agent_locked(
             error,
         ));
     }
-    transaction.mark_registry_persisted()?;
     if let Some(journal) = purge_journal.as_deref_mut() {
         advance_purge_journal(journal, AgentPurgeStage::RegistryPersisted)?;
     }
 
-    transaction.mark_identity_write_started();
-    if let Err(error) = local_agents::save(&identities) {
-        let error = anyhow::anyhow!("persist hosted-Agent identity registry: {error:#}");
+    if let Err(error) = transaction.persist_identity_projection(&identities) {
         if purge_journal.is_some() {
             return Err(error);
         }
@@ -2643,7 +2681,6 @@ fn stop_agent_locked(
             error,
         ));
     }
-    transaction.mark_identity_persisted()?;
     if let Some(journal) = purge_journal.as_deref_mut() {
         advance_purge_journal(journal, AgentPurgeStage::IdentityPersisted)?;
     }

@@ -54,6 +54,7 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/automation" \
     "$CLI/src/daemon/ability/builtins/agents" \
     "$CLI/src/daemon/execution/mission" \
+    "$CLI/src/daemon/execution/mcp" \
     "$CLI/src/daemon/ability/builtins/governance" \
     "$CLI/src/daemon/ability/builtins/resources" \
     "$CLI/src/daemon/ability/catalog" \
@@ -93,6 +94,39 @@ fn handler(binding: &ChatImplementationBinding) {
     binding.execute_admitted();
 }
 EOF
+  cat >"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
+struct AgentLifecycleProjectionStore;
+
+impl AgentLifecycleProjectionStore {
+    fn persist_registry(&self, registry: &AgentRegistry) {
+        agents::save_agents(registry);
+    }
+
+    fn persist_identities(&self, identities: &local_agents::LocalAgentsFile) {
+        local_agents::save(identities);
+    }
+
+    fn restore_uncommitted_purge_snapshots(&self, journal: &AgentPurgeJournal) {
+        self.persist_registry(&journal.original_registry);
+        self.persist_identities(&journal.original_local_agents);
+    }
+}
+
+impl AgentLifecycleTransaction {
+    fn persist_registry_projection(&mut self, registry: &AgentRegistry) {
+        self.projections.persist_registry(registry);
+    }
+
+    fn persist_identity_projection(&mut self, identities: &local_agents::LocalAgentsFile) {
+        self.projections.persist_identities(identities);
+    }
+}
+
+fn stop_agent_locked(registry: &AgentRegistry, identities: &local_agents::LocalAgentsFile) {
+    transaction.persist_registry_projection(&registry);
+    transaction.persist_identity_projection(&identities);
+}
+EOF
   cat >"$CLI/src/daemon/execution/mission/orchestration.rs" <<'EOF'
 struct MissionRunAggregate {
     meta: MissionRunMeta,
@@ -111,6 +145,30 @@ impl MissionRunAggregate {
 fn write_mission_meta(path: &Path, meta: &MissionRunMeta) {
     let tmp_path = path.join(".meta.json.tmp");
     fs::write(tmp_path, serde_json::to_string(meta).unwrap()).unwrap();
+}
+EOF
+  cat >"$CLI/src/daemon/execution/mcp/mod.rs" <<'EOF'
+const MAX_CHILD_STDIO_LINE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CHILD_STDIO_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+async fn read_bounded_child_stdio_line(stdout: &mut ChildStdout, line: &mut Vec<u8>, max: usize) {}
+
+async fn read_mcp_frame(stdout: &mut ChildStdout, len: usize) {
+    if len > MAX_CHILD_STDIO_FRAME_BYTES {
+        return;
+    }
+    let mut body = vec![0_u8; len];
+}
+EOF
+  cat >"$CLI/src/daemon/execution/mcp/stdio.rs" <<'EOF'
+const MAX_LINE_LENGTH: usize = 4 * 1024 * 1024;
+
+fn read_bounded_line(reader: &mut Reader, line: &mut Vec<u8>, max: usize) {}
+
+fn run(input: Input) {
+    let mut input = Reader::new(input);
+    let mut line = Vec::new();
+    read_bounded_line(&mut input, &mut line, MAX_LINE_LENGTH);
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
@@ -847,6 +905,30 @@ EOF
 expect_fail \
   "daemon exact route runtime owner fork" \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
+fn stop_agent_locked(registry: &AgentRegistry, identities: &local_agents::LocalAgentsFile) {
+    agents::save_agents(registry);
+    local_agents::save(identities);
+}
+EOF
+expect_fail \
+  "agent lifecycle projection owner fork" \
+  "R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/execution/mcp/stdio.rs" <<'EOF'
+const MAX_LINE_LENGTH: usize = 4 * 1024 * 1024;
+
+fn run(mut input: Reader) {
+    let mut line = String::new();
+    input.read_line(&mut line).unwrap();
+}
+EOF
+expect_fail \
+  "mcp stdio unbounded frame reader" \
+  "R23_MCP_STDIO_UNBOUNDED_FRAME_READER"
 
 make_good_fixture
 cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'

@@ -235,6 +235,17 @@ for family in ("EAL", "Mission"):
                     f"{family} uses {label}",
                 )
 
+mission_gateway = cli_root / "src/daemon/execution/mission/invocation_gateway.rs"
+mission_gateway_text = source(mission_gateway)
+if re.search(r"\bCatalogMissionInvocationGateway\b", mission_gateway_text):
+    match = re.search(r"\bCatalogMissionInvocationGateway\b", mission_gateway_text)
+    add(
+        "R1_MISSION_CATALOG_GATEWAY_PRODUCTION",
+        mission_gateway,
+        line_number(mission_gateway_text, match.start()),
+        "Mission direct catalog gateway must remain a cfg(test)-only seam",
+    )
+
 
 # Rule 2: Axon runtime owns terminal finalization. CLI and per-geometry
 # runtime surfaces may project a finalized receipt, but may not mint one.
@@ -1597,6 +1608,121 @@ if admission_facade.exists():
             admission_facade,
             1,
             "admission tests must prove signed cancel command replay rejection",
+        )
+
+# Rule 22: Agent lifecycle owns paired durable projections through one
+# lifecycle projection store. Start/stop/purge recovery may advance lifecycle
+# state and purge-journal stages, but production code in the handler must not
+# hand-assemble direct agents.json/local-agents.json writes outside the
+# projection owner.
+agent_lifecycle = cli_root / "src/daemon/ability/builtins/agents/lifecycle.rs"
+if agent_lifecycle.exists():
+    lifecycle_text = source(agent_lifecycle)
+    production_text = lifecycle_text.split("#[cfg(test)]", 1)[0]
+    lifecycle_requirements = (
+        (
+            "struct AgentLifecycleProjectionStore",
+            "agent lifecycle durable projections require one projection-store owner",
+        ),
+        (
+            "fn persist_registry(&self, registry: &AgentRegistry)",
+            "projection store must own agents.json persistence",
+        ),
+        (
+            "fn persist_identities(&self, identities: &local_agents::LocalAgentsFile)",
+            "projection store must own local-agents.json persistence",
+        ),
+        (
+            "fn restore_uncommitted_purge_snapshots(",
+            "purge recovery must restore paired projections through the store",
+        ),
+        (
+            "persist_registry_projection(&registry)",
+            "stop lifecycle must persist the registry through the transaction/store boundary",
+        ),
+        (
+            "persist_identity_projection(&identities)",
+            "stop lifecycle must persist identities through the transaction/store boundary",
+        ),
+    )
+    for token, detail in lifecycle_requirements:
+        if token not in production_text:
+            add("R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK", agent_lifecycle, 1, detail)
+    if production_text.count("agents::save_agents") > 2:
+        add(
+            "R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK",
+            agent_lifecycle,
+            1,
+            "production lifecycle must call agents::save_agents only inside AgentLifecycleProjectionStore",
+        )
+    if production_text.count("local_agents::save") > 2:
+        add(
+            "R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK",
+            agent_lifecycle,
+            1,
+            "production lifecycle must call local_agents::save only inside AgentLifecycleProjectionStore",
+        )
+
+# Rule 23: MCP stdio frame ownership must enforce declared bounds before
+# retaining arbitrarily long lines or allocating Content-Length bodies. The
+# daemon MCP stdio owner may drain oversized input, but it must not revive the
+# old read_line architecture where the OS peer controlled allocation size.
+mcp_client = cli_root / "src/daemon/execution/mcp/mod.rs"
+mcp_stdio_server = cli_root / "src/daemon/execution/mcp/stdio.rs"
+mcp_stdio_requirements = (
+    (
+        mcp_client,
+        (
+            (
+                "const MAX_CHILD_STDIO_LINE_BYTES",
+                "child MCP stdout must declare a bounded line limit",
+            ),
+            (
+                "const MAX_CHILD_STDIO_FRAME_BYTES",
+                "child MCP Content-Length frames must declare a bounded body limit",
+            ),
+            (
+                "read_bounded_child_stdio_line",
+                "child MCP stdout must enter through the bounded line reader",
+            ),
+            (
+                "len > MAX_CHILD_STDIO_FRAME_BYTES",
+                "Content-Length must be rejected before body allocation",
+            ),
+        ),
+    ),
+    (
+        mcp_stdio_server,
+        (
+            (
+                "const MAX_LINE_LENGTH",
+                "MCP stdio server stdin must declare a bounded line limit",
+            ),
+            (
+                "fn read_bounded_line",
+                "MCP stdio server stdin must enter through the bounded line reader",
+            ),
+            (
+                "read_bounded_line(&mut input",
+                "MCP stdio server run loop must use the bounded reader",
+            ),
+        ),
+    ),
+)
+for path, requirements in mcp_stdio_requirements:
+    if not path.exists():
+        continue
+    text = source(path)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in requirements:
+        if token not in production_text:
+            add("R23_MCP_STDIO_UNBOUNDED_FRAME_READER", path, 1, detail)
+    if re.search(r"\bread_line\s*\(", production_text):
+        add(
+            "R23_MCP_STDIO_UNBOUNDED_FRAME_READER",
+            path,
+            line_number(production_text, re.search(r"\bread_line\s*\(", production_text).start()),
+            "MCP stdio production readers must not use unbounded read_line",
         )
 
 
