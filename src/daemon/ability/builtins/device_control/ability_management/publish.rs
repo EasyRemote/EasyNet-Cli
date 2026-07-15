@@ -350,10 +350,7 @@ fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
             registry.agents.keys().collect::<Vec<_>>()
         )
     })?;
-    let root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(owner_id));
+    let root = entry.required_root_path(owner_id, "ability.publish")?;
     if !root.is_dir() {
         anyhow::bail!(
             "owner agent {owner_id:?} has no on-disk workspace at {} — cannot publish \

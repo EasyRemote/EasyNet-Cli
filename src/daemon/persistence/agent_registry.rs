@@ -220,11 +220,12 @@ impl AgentEntry {
     // gains an invariant (e.g. labels capped at 64 chars), only the
     // builder needs to learn it.
     //
-    // Read-side accessors are intentionally NOT added: every reader in
+    // Most read-side accessors are intentionally NOT added: every reader in
     // this crate uses field-access syntax against the `pub(crate)`
-    // fields, and adding mirror getters would be either dead code (the
-    // compiler flags it) or redundant noise. If a downstream crate ever
-    // needs to *read* a field, add a getter at that point — not now.
+    // fields, and mirror getters would be redundant noise. `required_root_path`
+    // is the exception because root resolution is an ownership boundary: once
+    // the registry migration has run, readers must not rebuild a fallback path
+    // from `agents_root()/name`.
 
     /// Replace the human-readable label. Returns `&mut Self` to allow
     /// the CLI `agent add` path to chain mutations without granting
@@ -246,6 +247,21 @@ impl AgentEntry {
     pub fn with_model(&mut self, model: Option<String>) -> &mut Self {
         self.model = model;
         self
+    }
+
+    /// Return the canonical, migrated root path for this registry row.
+    ///
+    /// Missing `root_path` after `load_agents()` is a corrupt registry state,
+    /// not permission for callers to infer a default path. Fresh agent creation
+    /// may still choose `agents_root()/name` before the row exists; steady-state
+    /// readers must go through this method.
+    pub(crate) fn required_root_path(&self, name: &str, context: &str) -> anyhow::Result<PathBuf> {
+        self.root_path.clone().ok_or_else(|| {
+            anyhow::anyhow!(
+                "{context}: registered agent {name:?} has no canonical root_path; \
+                 run agent registry migration before accessing agent state"
+            )
+        })
     }
 
     /// Create a new agent entry with sensible defaults for the given type.

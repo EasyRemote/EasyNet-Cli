@@ -65,7 +65,7 @@ pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
     let local_agents = crate::daemon::persistence::local_agents::load().ok();
     let scope = SkillListScope::from_args(&args, local_agents.as_ref())?;
     let hosted_agent_index = HostedAgentUraIndex::from_local_agents(local_agents.as_ref());
-    let rows = SkillInventoryBuilder::new(&registry, &scope).collect();
+    let rows = SkillInventoryBuilder::new(&registry, &scope).collect()?;
 
     // Serialise InstallRecord directly — its serde derive emits the
     // wire shape backend already speaks (content_hash via
@@ -119,21 +119,23 @@ impl<'a> SkillInventoryBuilder<'a> {
         }
     }
 
-    fn collect(mut self) -> Vec<crate::daemon::resources::skills::store::InstallRecord> {
+    fn collect(
+        mut self,
+    ) -> anyhow::Result<Vec<crate::daemon::resources::skills::store::InstallRecord>> {
         if let Some(global_pool) = self.scope.global_pool() {
             self.collect_global_pool(global_pool);
-            return self.rows;
+            return Ok(self.rows);
         }
 
         for (name, entry) in &self.registry.agents {
             if !self.scope.includes_agent(name) {
                 continue;
             }
-            self.collect_managed_installs(name, entry);
+            self.collect_managed_installs(name, entry)?;
             self.collect_global_pools(name, entry.agent_type);
         }
         self.retain_skill_name_filter();
-        self.rows
+        Ok(self.rows)
     }
 
     fn retain_skill_name_filter(&mut self) {
@@ -142,21 +144,23 @@ impl<'a> SkillInventoryBuilder<'a> {
         }
     }
 
-    fn collect_managed_installs(&mut self, name: &str, entry: &agents::AgentEntry) {
-        let root = entry
-            .root_path
-            .clone()
-            .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(name));
+    fn collect_managed_installs(
+        &mut self,
+        name: &str,
+        entry: &agents::AgentEntry,
+    ) -> anyhow::Result<()> {
+        let root = entry.required_root_path(name, "skill.list")?;
         let skills_dir = managed_skill_dir_for_agent_type(&root, entry.agent_type);
         if !skills_dir.exists() {
-            return;
+            return Ok(());
         }
         let Ok(read) = std::fs::read_dir(&skills_dir) else {
-            return;
+            return Ok(());
         };
         for dir_entry in read.flatten() {
             self.collect_managed_install_record(&dir_entry.path());
         }
+        Ok(())
     }
 
     fn collect_managed_install_record(&mut self, skill_dir: &Path) {
@@ -630,20 +634,22 @@ mod tests {
         .expect("skill md");
 
         let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
-        registry.agents.insert(
-            "alice".to_string(),
-            crate::daemon::persistence::agent_registry::AgentEntry::new(
-                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
-                None,
-            ),
+        let alice_root = crate::daemon::persistence::config::agents_root().join("alice");
+        let bob_root = crate::daemon::persistence::config::agents_root().join("bob");
+        std::fs::create_dir_all(&alice_root).expect("alice root");
+        std::fs::create_dir_all(&bob_root).expect("bob root");
+        let mut alice = crate::daemon::persistence::agent_registry::AgentEntry::new(
+            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+            None,
         );
-        registry.agents.insert(
-            "bob".to_string(),
-            crate::daemon::persistence::agent_registry::AgentEntry::new(
-                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
-                None,
-            ),
+        alice.root_path = Some(alice_root);
+        let mut bob = crate::daemon::persistence::agent_registry::AgentEntry::new(
+            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+            None,
         );
+        bob.root_path = Some(bob_root);
+        registry.agents.insert("alice".to_string(), alice);
+        registry.agents.insert("bob".to_string(), bob);
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
 
         let unscoped = handle(json!({})).expect("unscoped list");

@@ -39,7 +39,6 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::persistence::agent_registry::AgentRegistry;
-use crate::daemon::persistence::config;
 
 use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_LIST_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_LIST;
@@ -67,27 +66,24 @@ fn list_agents_handler(
     let registry = registry_provider()?;
     let local_agents = crate::daemon::persistence::local_agents::load()
         .map_err(|error| anyhow::anyhow!("agent.list: load hosted-agent URA index: {error:#}"))?;
-    Ok(json!({ "agents": agent_rows(&registry, &local_agents) }))
+    Ok(json!({ "agents": agent_rows(&registry, &local_agents)? }))
 }
 
 fn agent_rows(
     registry: &AgentRegistry,
     local_agents: &crate::daemon::persistence::local_agents::LocalAgentsFile,
-) -> Vec<Value> {
+) -> anyhow::Result<Vec<Value>> {
     let rows: Vec<Value> = registry
         .agents
         .iter()
-        .map(|(name, e)| {
-            let root = e
-                .root_path
-                .clone()
-                .unwrap_or_else(|| config::agents_root().join(name));
+        .map(|(name, e)| -> anyhow::Result<Value> {
+            let root = e.required_root_path(name, "agent.list")?;
             let ura = crate::daemon::persistence::local_agents::lookup_hosted_ura(
                 local_agents,
                 "llm",
                 name,
             );
-            json!({
+            Ok(json!({
                 "name": name,
                 "ura": ura.map(Value::String).unwrap_or(Value::Null),
                 "runtime": e.agent_type.to_string(),
@@ -96,10 +92,10 @@ fn agent_rows(
                 "timeout_secs": e.timeout_secs,
                 "root_path": root.to_string_lossy(),
                 "root_exists": root.exists(),
-            })
+            }))
         })
-        .collect();
-    rows
+        .collect::<anyhow::Result<_>>()?;
+    Ok(rows)
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -122,6 +118,13 @@ pub fn list_agents_description() -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use std::path::PathBuf;
+
+    fn registered_entry(agent_type: AgentType, model: Option<String>, name: &str) -> AgentEntry {
+        let mut entry = AgentEntry::new(agent_type, model);
+        entry.root_path = Some(PathBuf::from(format!("/tmp/easynet-test-{name}")));
+        entry
+    }
 
     #[test]
     fn registration_makes_list_agents_dispatchable() {
@@ -153,7 +156,8 @@ mod tests {
     #[test]
     fn list_agents_projects_name_runtime_model_label() {
         let mut registry = AgentRegistry::default();
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
+        let mut entry =
+            registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude");
         entry.with_label(Some("primary".to_string()));
         registry.agents.insert("claude".to_string(), entry);
 
@@ -176,7 +180,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "claude".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string())),
+            registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude"),
         );
         let mut local_agents = crate::daemon::persistence::local_agents::LocalAgentsFile::default();
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
@@ -186,7 +190,7 @@ mod tests {
             "easynet:///r/acme/agent/alice.claude",
         );
 
-        let rows = agent_rows(&registry, &local_agents);
+        let rows = agent_rows(&registry, &local_agents).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["ura"], "easynet:///r/acme/agent/alice.claude");
@@ -197,7 +201,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "minimal".to_string(),
-            AgentEntry::new(AgentType::Codex, None),
+            registered_entry(AgentType::Codex, None, "minimal"),
         );
 
         let mut reg = AxonAbilityCatalog::new();
@@ -216,17 +220,36 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "minimal".to_string(),
-            AgentEntry::new(AgentType::Codex, None),
+            registered_entry(AgentType::Codex, None, "minimal"),
         );
 
         let rows = agent_rows(
             &registry,
             &crate::daemon::persistence::local_agents::LocalAgentsFile::default(),
-        );
+        )
+        .unwrap();
 
         assert!(rows[0].get("entry").is_none());
         assert_eq!(rows[0]["runtime"], "codex");
         assert!(rows[0].get("timeout_secs").is_some());
+    }
+
+    #[test]
+    fn list_agents_rejects_registry_rows_without_canonical_root_path() {
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "minimal".to_string(),
+            AgentEntry::new(AgentType::Codex, None),
+        );
+
+        let error = agent_rows(
+            &registry,
+            &crate::daemon::persistence::local_agents::LocalAgentsFile::default(),
+        )
+        .expect_err("steady-state registry rows must not infer root_path");
+
+        assert!(error.to_string().contains("agent.list"));
+        assert!(error.to_string().contains("root_path"));
     }
 
     #[test]

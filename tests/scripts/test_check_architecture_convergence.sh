@@ -406,6 +406,28 @@ expect_fail \
   "R10_RETIRED_CARRIER_FALLBACK"
 
 make_good_fixture
+cat >"$CLI/src/daemon/execution/mission/workspace_legacy.rs" <<'EOF'
+fn legacy_agent_root() -> PathBuf {
+    state_dir().join("workspaces")
+}
+EOF
+expect_fail \
+  "agent root fallback" \
+  "R12_AGENT_ROOT_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
+fn project_agent_row(entry: AgentEntry, name: &str) -> PathBuf {
+    entry.root_path
+        .clone()
+        .unwrap_or_else(|| config::agents_root().join(name))
+}
+EOF
+expect_fail \
+  "agent root_path fallback" \
+  "R15_AGENT_ROOTPATH_FALLBACK"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/invocation/receipts"
 cat >"$CLI/src/daemon/invocation/receipts/finalization_projection.rs" <<'EOF'
 use easynet_axon::invocation::FinalizationCheckpointVerifier;

@@ -792,6 +792,30 @@ for path in sorted(set(legacy_agent_root_operational_files)):
         )
 
 
+# Rule 15: post-load agent registry rows own their canonical root path.
+# Fresh creation and registry migration may derive `agents_root()/name`; steady
+# state readers must call AgentEntry::required_root_path and fail closed when a
+# row lacks `root_path`.
+agent_root_fallback_allowed = {
+    cli_root / "src/daemon/persistence/agent_registry.rs",
+    cli_root / "src/daemon/ability/builtins/agents/lifecycle.rs",
+}
+agent_root_fallback_pattern = re.compile(
+    r"root_path[\s\S]{0,160}unwrap_or_else\s*\([\s\S]{0,160}agents_root\s*\(\s*\)\s*\.join"
+)
+for path in production_files(cli_root / "src", {".rs"}):
+    if path in agent_root_fallback_allowed:
+        continue
+    text = source(path)
+    for match in agent_root_fallback_pattern.finditer(text):
+        add(
+            "R15_AGENT_ROOTPATH_FALLBACK",
+            path,
+            line_number(text, match.start()),
+            "post-load registry readers must use AgentEntry::required_root_path, not rebuild agents_root/name",
+        )
+
+
 # Rule 13: forwarded terminal data is untrusted until Axon's canonical wire
 # parser and cryptographic checkpoint verifier authenticate both receipts.
 forwarded_finalization = (

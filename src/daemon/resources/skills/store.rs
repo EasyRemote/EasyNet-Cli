@@ -135,10 +135,7 @@ pub(crate) fn install_skill(
     let entry = registry.agents.get(agent).ok_or_else(|| {
         anyhow::anyhow!("agent '{}' not registered; run 'easynet agent list'", agent)
     })?;
-    let agent_root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(agent));
+    let agent_root = entry.required_root_path(agent, "skill.install")?;
     if !agent_root.exists() {
         anyhow::bail!(
             "agent '{}' has no on-disk root at {}",
@@ -629,10 +626,7 @@ pub(crate) fn upgrade_skill(
         .agents
         .get(agent)
         .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
-    let agent_root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(agent));
+    let agent_root = entry.required_root_path(agent, "skill.upgrade")?;
     let skill_dir = agent_root.join("skills").join(name);
     let record_path = skill_dir.join(".easynet").join("install.json");
     let existing = read_install_record(&record_path)?;
@@ -713,10 +707,7 @@ pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
         .agents
         .get(agent)
         .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
-    let agent_root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(agent));
+    let agent_root = entry.required_root_path(agent, "skill.remove")?;
     let skill_dir = agent_root.join("skills").join(name);
     if !skill_dir.exists() {
         anyhow::bail!("skill '{}' is not installed on agent '{}'", name, agent);

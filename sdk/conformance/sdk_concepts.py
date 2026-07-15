@@ -11,7 +11,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from sdk_public_surface_policy import canonical_quarantine_reason
+from sdk_public_surface_policy import (
+    PRODUCT_NEUTRAL_CUTOVER_REF,
+    canonical_quarantine_reason,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 CONCEPTS = ROOT / "sdk/conformance/canonical-public-api.json"
@@ -156,6 +159,11 @@ def validate_schema(
                 }
                 if not isinstance(entry, dict) or set(entry) != required:
                     fail(f"invalid_legacy_metadata:{language}:{section}:{value}")
+                policy_reason = canonical_quarantine_reason(value)
+                if policy_reason is None:
+                    fail(f"unapproved_legacy_quarantine:{language}:{section}:{value}")
+                if entry["reason"] != policy_reason:
+                    fail(f"legacy_quarantine_reason_mismatch:{language}:{section}:{value}")
                 replacements = entry["canonical_replacement"]
                 if not isinstance(replacements, list) or replacements != sorted(set(replacements)) or not replacements:
                     fail(f"invalid_legacy_replacement:{language}:{section}:{value}")
@@ -683,6 +691,30 @@ def self_test(tmp: Path) -> None:
             fail(f"self_test_quarantine_policy:{item}:{reason}")
     if canonical_quarantine_reason("ParsedURA.DeviceID") is not None:
         fail("self_test_ura_grammar_quarantine")
+
+    unapproved_quarantine = copy.deepcopy(concepts)
+    unapproved_value = next(
+        value
+        for value in unapproved_quarantine["languages"]["go"]
+        if canonical_quarantine_reason(value) is None
+    )
+    unapproved_quarantine["languages"]["go"].remove(unapproved_value)
+    unapproved_quarantine["non_canonical"]["languages"]["go"].append(unapproved_value)
+    unapproved_quarantine["non_canonical"]["languages"]["go"].sort()
+    unapproved_quarantine["legacy_quarantine"]["languages"]["go"][unapproved_value] = {
+        "canonical_replacement": ["capability_inventory.runtime_lifecycle"],
+        "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
+        "removal_phase": "quarantined",
+        "reason": "test-only quarantine entry",
+    }
+    expect(unapproved_quarantine, "unapproved_legacy_quarantine")
+
+    mismatched_quarantine = copy.deepcopy(concepts)
+    quarantined_value = mismatched_quarantine["non_canonical"]["languages"]["go"][0]
+    mismatched_quarantine["legacy_quarantine"]["languages"]["go"][quarantined_value][
+        "reason"
+    ] = "test-only mismatched quarantine reason"
+    expect(mismatched_quarantine, "legacy_quarantine_reason_mismatch")
 
     invented = copy.deepcopy(concepts)
     invented["capabilities"]["invented"] = {"profile": "runtime_core", "case_ids": []}
