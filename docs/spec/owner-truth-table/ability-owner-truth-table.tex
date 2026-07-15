@@ -101,7 +101,7 @@ This is a flat-fact reference: a single page-pair that answers, for every
 default-registered ability, three questions:
 
 \begin{enumerate}[leftmargin=1.6em,itemsep=0.1em,topsep=0.1em]
-  \item \emph{What URA names its owner} (the \code{owner\_agent\_uri}
+  \item \emph{What URA names its owner} (the \code{owner\_ura}
         field on its descriptor).
   \item \emph{Where it lands in the AXIOM Invocation envelope}
         (\code{caller} / \code{callee} / \code{subject} slots).
@@ -118,7 +118,7 @@ The truth table is the contract those derivations must agree with.
 
 Every value referenced in this document conforms to the v4.1.5 URA
 grammar. The grammar is closed: the parser
-(\codew{src/uri.rs::parse\_ura}) rejects any string outside the six
+(\codew{src/core/ura/mod.rs::parse\_ura}) rejects any string outside the six
 shapes below. Other "URA-shaped" tokens that have appeared in practice
 (\codew{legacy self alias}, \codew{<unjoined>}, \code{agent://self}) are
 \emph{not} URAs and must not propagate past the registration boundary.
@@ -164,7 +164,7 @@ shapes below. Other "URA-shaped" tokens that have appeared in practice
   advertise payload, or receipt field.
 
   \item[\textbf{P2} --- Owner is named at registration, not derived
-  from the name] The descriptor's \code{owner\_agent\_uri} is the
+  from the name] The descriptor's \code{owner\_ura} is the
   wire form of "who advertises this ability". It is fixed at
   \code{register\_rpc} time, by the registration site, against an
   explicit owner URA. It is \emph{not} inferred from
@@ -203,7 +203,7 @@ reproduced here.
 
 Every default-registered ability falls into one of the following
 name shapes. For each shape the table fixes the canonical
-\code{owner\_agent\_uri}, the resulting \code{envelope.callee}, and
+\code{owner\_ura}, the resulting \code{envelope.callee}, and
 the default \code{envelope.subject} convention. The \emph{Where}
 column points to the registration call site, which is the
 authoritative source for the owner per~P2.
@@ -231,7 +231,7 @@ authoritative source for the owner per~P2.
       \emph{required} resource URA; handler rejects \code{None} &
       \codew{profiles::device} (media) \\
 
-  3 & \codew{device.fleet.*}, \codew{device.observe.*}, \codew{device.admin.*}, \codew{device.discuss.*}, \codew{device.loop.*}, \codew{device.schedule.*}, \codew{device.mission.*}, \codew{device.meta.*}, \codew{device.ability.*}, \codew{device.policy.*}, \codew{device.consent.*}, \codew{device.skill.*}, \codew{device.mcp.*}, \codew{device.a2a.*}, \codew{device.voice.*} &
+  3 & \codew{device.fleet.*}, \codew{device.observe.*}, \codew{device.admin.*}, \codew{device.discuss.*}, \codew{device.loop.*}, \codew{device.schedule.*}, \codew{device.mission.*}, \codew{device.meta.*}, \codew{device.ability.*}, \codew{device.policy.*}, \codew{device.consent.*}, \codew{device.skill.*}, \codew{device.mcp.*}, \codew{device.a2a.*} &
       \code{device/<id>} &
       \code{=callee} (meta) &
       \codew{profiles::device}; runtime \codew{register_rpc} \\
@@ -261,15 +261,15 @@ authoritative source for the owner per~P2.
       task or resource URA &
       per-agent profile \code{register} \\
 
-  8 & \code{consent.*}, \code{policy.*} (handler form), \code{mcp.bridge.*}, \code{mcp.client.*}, \code{a2a.bridge.*}, \code{a2a.client.*}, \code{voice.*} (handler form), \code{skill.*} &
+  8 & \code{consent.*}, \code{policy.*} (handler form), \code{mcp.bridge.*}, \code{mcp.client.*}, \code{a2a.bridge.*}, \code{a2a.client.*}, \code{skill.*} &
       \code{agent/<u>.<helper-id>} for hosted helper agents (e.g.\ \codew{consent-default-0}); \code{device/<id>} for daemon-side adapters &
       varies; resource URAs for outbound adapters &
-      \codew{profiles::consent}; \codew{profiles::policy}; \codew{profiles::mcp}; \code{voice} module \\
+      \codew{profiles::consent}; \codew{profiles::policy}; \codew{profiles::mcp} \\
 
-  9 & \codew{hub.openai.*}, \codew{hub.<namespace>.*} &
+  9 & \code{voice.*}, \codew{hub.openai.*}, \codew{hub.<namespace>.*} &
       \code{hub} (\codew{easynet:///r/<r>/hub}, realm-singleton) &
-      \code{=callee} or per-verb (e.g.\ \codew{chat_completions} carries no subject) &
-      \codew{openai_compat_ability::register} \\
+      \code{=callee} or per-verb resource URA &
+      \codew{voice::register}; \codew{media::register}; \codew{openai_compat_ability::register} \\
 
   10 & \code{<user>.pages.*}, \codew{<user>.<project>.page.fetch}, \code{<user>.files.*} &
       \code{agent/<u>.<owner-tail>} or \code{user/<u>} depending on profile &
@@ -298,7 +298,7 @@ authoritative source for the owner per~P2.
   \item[Row 5 is exactly one row] Daemon-bundle abilities
   (\code{device.keyring.*}, \code{device.session},
   \code{device.register\_device\_pubkey}) are mounted once per daemon,
-  with \code{owner\_agent\_uri = device URA}. They are not per-agent.
+  with \code{owner\_ura = device URA}. They are not per-agent.
 
   \item[Row 8 has two sub-cases] An adapter such as \code{consent.decide}
   can be hosted either as a sub-agent (\codew{consent-default-0}, owner
@@ -310,7 +310,7 @@ authoritative source for the owner per~P2.
   run on the device daemon (the hub forwards via federation), but the
   ability is conceptually a hub-tier projection. The descriptor must
   say so. Synth derives the owner URA via
-  \codew{hub_uri(credentials.tenant_id)} --- not from the device URA.
+  \codew{hub_ura(credentials.tenant_id)} --- not from the device URA.
 
   \item[Row 11 \code{<user>} is canonical] The \code{<user>} slot is
   the canonical user-id from \code{credentials.username}; placeholder
@@ -321,7 +321,7 @@ authoritative source for the owner per~P2.
 \section{CLI render projection}
 
 The \code{easynet ability list} table projects the
-\code{owner\_agent\_uri} into the columns
+\code{owner\_ura} into the columns
 \textsc{device}~/~\textsc{agent}~/~\textsc{user}. Each column reflects
 a slot of the owner URA's kind; columns the owner does not name stay
 as a literal dash. Mixing kinds in one row (the
@@ -408,7 +408,8 @@ return \code{resource\_not\_found} on \code{None} per
   \item[\codew{screen.snapshot}, \codew{screen.subscribe}] Single
   still vs.\ pushed video stream of a display target.
   \item[\codew{speaker.publish}] Outbound audio frames to a speaker
-  resource. Companion to \codew{voice.subscribe} (TTS).
+  resource. A caller may route Hub-owned \codew{voice.subscribe} TTS
+  output into this Device-owned sink through a separate Invocation.
 \end{description}
 
 \subsection{Device-owned --- fleet operational surface (under \texttt{\small device.fleet.*})}
@@ -634,8 +635,8 @@ On this fixture device the sub-agents are \code{codex} and
   registry as the built-ins.
 \end{description}
 
-% ---------- Sub-agent voice / meta / skill (16 rows) -------------------
-\subsection{Agent-owned (LLM sub-agent surfaces): voice, meta, skill}
+% ---------- Sub-agent meta / skill -------------------
+\subsection{Agent-owned (LLM sub-agent surfaces): meta, skill}
 
 These verbs live under \code{web-builder}'s sub-agent in this
 fixture --- they are re-exported per agent, not device-wide.
@@ -656,19 +657,31 @@ fixture --- they are re-exported per agent, not device-wide.
   this is how the \code{alive-video}, \code{macos}, etc. skills land
   on a device without redeploying.
 
+\end{description}
+
+% ---------- Hub voice authority (10 rows) -------------------
+\subsection{Hub-owned --- voice signaling and model media (row 9)}
+
+Microphone and speaker handles remain Device-owned resources under
+\codew{mic.*} and \codew{speaker.*}.  The \code{voice.*} namespace is
+realm-shared state and therefore has one canonical owner:
+\codew{easynet:///r/<r>/hub}.  The call registry is keyed by the pair
+\code{(hub authority URA, call\_id)}; Device and LLM profiles must not
+re-export these descriptors, and there is no Device proxy alias.
+
+\begin{description}[leftmargin=1.4em,style=nextline,itemsep=0.15em]
   \item[\codew{voice.create_call}, \codew{voice.join_call},
         \codew{voice.leave_call}, \codew{voice.end_call},
         \codew{voice.list_calls}, \codew{voice.show_call},
         \codew{voice.watch_call}, \codew{voice.report_metrics}]
-  Voice/video call signaling. SDP, ICE, participant book-keeping.
-  Without the signaling surface there is no protocol path for an
-  agent to start or join a call --- WebRTC needs an out-of-band
-  rendezvous and these abilities provide it through Invoke.
+  Realm call signaling and participant state.  Every handler validates
+  the Invocation callee as the Hub authority before reading or mutating
+  the shared call registry.
 
   \item[\codew{voice.subscribe}, \codew{voice.transcribe}]
-  Media planes: \code{subscribe} pushes TTS audio frames out;
-  \code{transcribe} accepts streamed audio in and returns text.
-  Together they make the agent voice-bidirectional.
+  Hub-governed TTS and ASR media planes.  Their subjects name voice or
+  ASR model resources; physical capture and playback remain separate
+  Device-owned microphone and speaker Invocations.
 \end{description}
 
 % ---------- consent helper (3 rows) -----------------------------------
@@ -702,8 +715,8 @@ ownership form (row~8 sub-case~a).
   \item \codew{docs/rfc/AXON-RFC-001-plan-v4.1.5.md} --- URA grammar §A.URA, AXIOM seven-tuple §9, ability registry §18.
   \item \codew{docs/rfc/AXON-RFC-002-session-provider.md} --- §3.3 device-bundle keyring (row~5).
   \item \codew{docs/rfc/AXON-RFC-006-stateful-easynet.pdf} --- §C OpenAI compatibility surface (row~9).
-  \item \codew{src/uri.rs} --- canonical URA builders + parser; the §1 grammar is reflected here verbatim.
-  \item \codew{src/daemon/ability/descriptors/surface.rs} --- \code{AbilityDescriptor.owner\_agent\_uri}; v4.1.5 §9 \code{callee} constraint comment.
+  \item \codew{src/core/ura/mod.rs} --- canonical URA builders + parser; the §1 grammar is reflected here verbatim.
+  \item \codew{src/daemon/ability/descriptors/surface.rs} --- \code{AbilityDescriptor.owner\_ura}; v4.1.5 §9 \code{callee} constraint comment.
   \item \codew{src/daemon/ability/builtins/governance/meta.rs} --- \code{list\_abilities\_handler} synth path.
   \item \codew{src/cli/abilities.rs} --- \code{easynet ability list} render layer.
 \end{itemize}

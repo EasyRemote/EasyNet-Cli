@@ -832,7 +832,9 @@ impl ExplainRequest {
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
         if selectors.len() != 1 {
-            anyhow::bail!("admission.explain: exactly one invocation_id, request_id, trace_id, or root_id is required");
+            anyhow::bail!(
+                "admission.explain: exactly one invocation_id, request_id, trace_id, or root_id is required"
+            );
         }
         let value = selectors[0].to_string();
         if self.trace_id.as_deref().is_some() || self.root_id.as_deref().is_some() {
@@ -1226,6 +1228,86 @@ mod tests {
             .expect("hidden explain");
         assert_eq!(hidden["redacted"], true);
         assert!(hidden.get("root_trace").is_none());
+    }
+
+    #[test]
+    fn admission_explain_projects_voice_actions_from_signed_descriptor_facts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger =
+            Arc::new(InvocationLedger::open(dir.path().join("invocations.redb")).expect("ledger"));
+
+        fn put_voice_record(
+            ledger: &InvocationLedger,
+            request_id: &str,
+            ability_name: &str,
+            action: &str,
+            hash_char: char,
+        ) {
+            let digest = hash_char.to_string().repeat(64);
+            let ability_ura = format!("easynet:///r/test/ability/hub.{ability_name}");
+            let descriptor_ref = format!("{ability_ura}@1.0.0#{digest}!{action}");
+            ledger
+                .put(
+                    &easynet_axon::invocation::InvocationLedgerRecordBuilder::new()
+                        .invocation_ura(format!(
+                            "easynet:///r/test/resource/alice.invocations/{request_id}"
+                        ))
+                        .request_id(request_id)
+                        .trace_id(format!("trace-{request_id}"))
+                        .span_id(format!("span-{request_id}"))
+                        .caller_ura("easynet:///r/test/user/alice")
+                        .callee_ura("easynet:///r/test/hub")
+                        .subject_ura("easynet:///r/test/resource/hub.voice-call/call-1")
+                        .ability_ura(ability_ura)
+                        .ability_name(ability_name)
+                        .descriptor_ref(descriptor_ref)
+                        .admission_action(action)
+                        .safe_read(false)
+                        .state("completed")
+                        .started_unix_ms(1)
+                        .args(easynet_axon::invocation::LedgerEventPayload::digest(
+                            "application/json",
+                            b"{}",
+                        ))
+                        .build()
+                        .expect("voice ledger record"),
+                )
+                .expect("put voice record");
+        }
+
+        put_voice_record(
+            ledger.as_ref(),
+            "voice-create",
+            "voice.create_call",
+            "invoke",
+            'b',
+        );
+        put_voice_record(
+            ledger.as_ref(),
+            "voice-subscribe",
+            "voice.subscribe",
+            "stream",
+            'c',
+        );
+
+        let reader = AdmissionExplainReader {
+            ledger: Some(Arc::clone(&ledger)),
+        };
+        let create = reader
+            .explain(json!({
+                "observer_ura": "easynet:///r/test/user/alice",
+                "request_id": "voice-create"
+            }))
+            .expect("voice.create_call explain");
+        let subscribe = reader
+            .explain(json!({
+                "observer_ura": "easynet:///r/test/user/alice",
+                "request_id": "voice-subscribe"
+            }))
+            .expect("voice.subscribe explain");
+
+        assert_eq!(create["root_trace"]["action"], "invoke");
+        assert_eq!(subscribe["root_trace"]["action"], "stream");
     }
 
     #[test]
