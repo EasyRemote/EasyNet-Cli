@@ -33,8 +33,11 @@ failures. Earlier ABI documentation is historical and is not a release input.
   success, while signed free is the explicit release path.
 - submit-handle returns `EasynetInvocationHandleId`; await/cancel/events observe
   it and handle-free releases it.
-- stream cancel/close and bidi cancel/close are terminal. Bidi close-send is a
-  non-terminal local half-close.
+- stream cancel and bidi cancel are cancel-request operations at this provider
+  boundary; they release local callback/reader resources and must not claim
+  lifecycle terminality without a canonical terminal receipt.
+- stream close and bidi close are local resource release operations. Bidi
+  close-send is a non-terminal local half-close.
 
 Every returned `char *` is caller-owned and must be released exactly once with
 `easynet_string_free`. Callback JSON pointers are borrowed only for the callback

@@ -58,8 +58,11 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/resources" \
     "$CLI/src/daemon/ability/catalog" \
     "$CLI/src/daemon/boot/invocation" \
+    "$CLI/src/daemon/invocation/admission" \
     "$CLI/src/daemon/invocation/dispatch" \
     "$CLI/src/daemon/persistence" \
+    "$CLI/docs/spec" \
+    "$CLI/sdk/go" \
     "$CLI/sdk/python/easynet_sdk" \
     "$AXON/core/runtime-rs/src/services/invocation" \
     "$AXON/sdk/rust/src/invocation"
@@ -377,6 +380,87 @@ impl DaemonInvocationService {
     }
 }
 EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
+pub const ABILITY_INVOCATION_CANCEL: &str = "invocation.cancel";
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvocationCancelCommand {
+    pub target_lifecycle_hash: String,
+    pub reason: String,
+}
+
+impl InvocationCancelCommand {
+    pub fn new(target_lifecycle_hash: String, target_invocation_id: Option<String>, reason: String) -> Result<Self> {
+        Ok(Self { target_lifecycle_hash, reason })
+    }
+}
+
+pub fn invocation_lifecycle_hash(envelope: &DescriptorBoundEnvelope) -> String {
+    hex::encode(Sha256::digest(envelope.canonical_bytes()))
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/request.rs" <<'EOF'
+impl SignedInvocation {
+    pub(crate) fn prepare_cancel_command(&self, reason: String) -> Result<PreparedInvocation> {
+        let target = self.prepared.tuple();
+        let command = InvocationCancelCommand::new(
+            self.prepared.canonical_hash_hex(),
+            None,
+            reason,
+        )?;
+        DaemonInvocation::builder(
+            &target.caller_ura,
+            &target.callee_ura,
+            ABILITY_INVOCATION_CANCEL,
+            &target.subject_ura,
+        )?
+        .args_json(&serde_json::to_value(command)?)?
+        .build_draft()?
+        .prepare(PrepareOptions {
+            signer_id: Some(target.caller_ura),
+            policy_ref: Some("invocation.cancel.caller".to_string()),
+        })
+    }
+}
+
+#[test]
+fn signed_invocation_prepares_independent_cancel_command() {
+    let target_hash = prepared.canonical_hash_hex().to_string();
+    let target_nonce = prepared.draft().invocation.nonce();
+    let cancel = signed
+        .prepare_cancel_command("operator stop".to_string())
+        .expect("prepare independent cancel command");
+    assert_ne!(cancel.draft().invocation.nonce(), target_nonce);
+    let command: InvocationCancelCommand = serde_json::from_slice(cancel.draft().invocation.args()).unwrap();
+    assert_eq!(command.target_lifecycle_hash, target_hash);
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/client.rs" <<'EOF'
+impl RuntimeClient {
+    pub async fn request_cancel_signed(
+        &self,
+        signed: SignedInvocation,
+        reason: String,
+    ) -> Result<InvocationHandle> {
+        let caller_ura = signed.prepared().tuple().caller_ura;
+        let prepared = signed.prepare_cancel_command(reason)?;
+        let signer = RuntimeSigningIdentity::load_default(caller_ura)?;
+        let signed_cancel = prepared.sign_with_canonical_signer(&signer).await?;
+        let response = self
+            .inner
+            .invoke(signed_cancel.into_daemon_invocation())
+            .await?;
+        Ok(InvocationHandle::from_response(response))
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+#[test]
+fn signed_invocation_cancel_command_replay_is_rejected() {
+    assert!(replay_store.rejects_duplicate("invocation.cancel"));
+}
+EOF
   cat >"$CLI/sdk/python/easynet_sdk/runtime.py" <<'EOF'
 class InvocationHandle:
     def __init__(self, subject_ura: str):
@@ -385,6 +469,51 @@ class InvocationHandle:
 # Product words in comments and private symbols do not create public models.
 class _MissionFixture:
     pass
+EOF
+  cat >"$CLI/docs/spec/ffi-abi-v5.md" <<'EOF'
+# EasyNet Generic C ABI v5
+
+## Ownership state machines
+
+- stream cancel and bidi cancel are cancel-request operations at this provider
+  boundary; they release local callback/reader resources and must not claim
+  lifecycle terminality without a canonical terminal receipt.
+- stream close and bidi close are local resource release operations. Bidi
+  close-send is a non-terminal local half-close.
+EOF
+  cat >"$CLI/sdk/go/cabi_runtime.go" <<'EOF'
+func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
+    return []byte(fmt.Sprintf(`{"stream_id":%q,"cancel_requested":true,"cancelled":false,"state":"CancelRequested","terminal":false}`, streamID)), nil
+}
+
+func (b *cabiBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
+    return []byte(fmt.Sprintf(`{"session_id":%q,"state":"CancelRequested","terminal":false,"reason":"cancelled"}`, bidiID)), nil
+}
+EOF
+  cat >"$CLI/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+class _CABIStreamTransport:
+    def cancel(self, reason: str) -> bytes:
+        return _json_bytes(
+            {
+                "stream_id": str(self.stream_id),
+                "cancel_requested": True,
+                "cancelled": False,
+                "state": "CancelRequested",
+                "terminal": False,
+            }
+        )
+
+
+class _CABIBidiTransport:
+    def cancel(self, reason: str) -> bytes:
+        return _json_bytes(
+            {
+                "session_id": str(self.bidi_id),
+                "state": "CancelRequested",
+                "terminal": False,
+                "reason": reason,
+            }
+        )
 EOF
 
   cat >"$AXON/core/runtime-rs/src/services/invocation/terminal_finalization.rs" <<'EOF'
@@ -837,6 +966,73 @@ EOF
 expect_fail \
   "voice provider boundary fork" \
   "R19_VOICE_PROVIDER_BOUNDARY_FORK"
+
+make_good_fixture
+cat >"$CLI/docs/spec/ffi-abi-v5.md" <<'EOF'
+# EasyNet Generic C ABI v5
+
+## Ownership state machines
+
+- stream cancel/close and bidi cancel/close are terminal. Bidi close-send is a
+  non-terminal local half-close.
+EOF
+cat >"$CLI/sdk/go/cabi_runtime.go" <<'EOF'
+func (s *cabiStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
+    return []byte(fmt.Sprintf(`{"stream_id":%q,"cancelled":true,"state":"Cancelled","terminal":true}`, streamID)), nil
+}
+
+func (b *cabiBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
+    return []byte(fmt.Sprintf(`{"session_id":%q,"state":"Cancelled","terminal":true}`, bidiID)), nil
+}
+EOF
+cat >"$CLI/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+class _CABIStreamTransport:
+    def cancel(self, reason: str) -> bytes:
+        return _json_bytes({"state": "Cancelled", "terminal": True})
+
+
+class _CABIBidiTransport:
+    def cancel(self, reason: str) -> bytes:
+        return _json_bytes({"state": "Cancelled", "terminal": True})
+EOF
+expect_fail \
+  "stream bidi cancel terminal authority fork" \
+  "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/request.rs" <<'EOF'
+impl SignedInvocation {
+    pub(crate) fn prepare_cancel_command(&self, reason: String) -> Result<PreparedInvocation> {
+        let target = self.prepared.tuple();
+        let command = serde_json::json!({
+            "reason": reason,
+        });
+        DaemonInvocation::builder(
+            &target.caller_ura,
+            &target.callee_ura,
+            ABILITY_INVOCATION_CANCEL,
+            &target.subject_ura,
+        )?
+        .args_json(&command)?
+        .prepare(PrepareOptions::default())
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/dispatch/client.rs" <<'EOF'
+impl RuntimeClient {
+    pub async fn request_cancel_signed(
+        &self,
+        signed: SignedInvocation,
+        reason: String,
+    ) -> Result<InvocationHandle> {
+        let response = self.inner.invoke(signed.into_daemon_invocation()).await?;
+        Ok(InvocationHandle::from_response(response))
+    }
+}
+EOF
+expect_fail \
+  "unary cancel signed command fork" \
+  "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

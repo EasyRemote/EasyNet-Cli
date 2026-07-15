@@ -1289,6 +1289,317 @@ if voice_handler.exists():
         )
 
 
+# Rule 20: stream/bidi cancellation at the C ABI provider boundary is a
+# transport/resource cancel request until a canonical terminal receipt is
+# observed. Language SDK adapters may expose the request state, but must not
+# synthesize lifecycle terminality for local stream or bidi cancellation.
+ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v5.md"
+ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
+go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
+python_cabi_runtime = cli_root / "sdk/python/easynet_sdk/_cabi.py"
+
+if ffi_v5_spec.exists():
+    text = ffi_v5_spec.read_text(encoding="utf-8", errors="replace")
+    if "stream cancel and bidi cancel are cancel-request operations" not in text:
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_v5_spec,
+            1,
+            "ABI v5 contract must name stream/bidi cancel as request state, not terminal proof",
+        )
+    if not re.search(r"must\s+not\s+claim\s+lifecycle\s+terminality", text):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_v5_spec,
+            1,
+            "ABI v5 contract must forbid local cancel from claiming runtime terminality",
+        )
+    legacy_terminal_claim = re.search(
+        r"stream\s+cancel/close\s+and\s+bidi\s+cancel/close\s+are\s+terminal",
+        text,
+        flags=re.I,
+    )
+    if legacy_terminal_claim:
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_v5_spec,
+            line_number(text, legacy_terminal_claim.start()),
+            "ABI v5 must not define local stream/bidi cancel or close as lifecycle terminal",
+        )
+else:
+    add(
+        "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+        ffi_v5_spec,
+        1,
+        "ABI v5 contract is required for stream/bidi cancellation terminal authority",
+    )
+
+if ffi_invocation.exists():
+    text = source(ffi_invocation)
+    ffi_requirements = (
+        (
+            "release_stream_with_reader_cancel(",
+            "stream cancel must remain a local reader/resource release until lifecycle control exists",
+        ),
+        (
+            "session.cancel.cancel()",
+            "bidi cancel must remain an explicit local session cancellation request",
+        ),
+    )
+    for token, detail in ffi_requirements:
+        if token not in text:
+            add(
+                "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+                ffi_invocation,
+                1,
+                detail,
+            )
+
+    stream_cancel = re.search(
+        r"fn\s+easynet_invocation_stream_cancel\b.*?\n}\n",
+        text,
+        flags=re.S,
+    )
+    if stream_cancel and re.search(r'"terminal"\s*:\s*true|InvocationState::Cancelled', stream_cancel.group(0)):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_invocation,
+            line_number(text, stream_cancel.start()),
+            "C ABI stream cancel must not synthesize lifecycle terminality",
+        )
+    bidi_cancel = re.search(
+        r"fn\s+easynet_invocation_bidi_cancel\b.*?\n}\n",
+        text,
+        flags=re.S,
+    )
+    if bidi_cancel and re.search(r'"terminal"\s*:\s*true|InvocationState::Cancelled', bidi_cancel.group(0)):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            ffi_invocation,
+            line_number(text, bidi_cancel.start()),
+            "C ABI bidi cancel must not synthesize lifecycle terminality",
+        )
+
+if go_cabi_runtime.exists():
+    text = source(go_cabi_runtime)
+    go_cancel_contracts = (
+        (
+            r"func\s+\(s\s+\*cabiStreamTransport\)\s+Cancel\b.*?CancelRequested.*?terminal\":false",
+            "Go C ABI stream cancel must project CancelRequested with terminal=false",
+        ),
+        (
+            r"func\s+\(b\s+\*cabiBidiTransport\)\s+Cancel\b.*?CancelRequested.*?terminal\":false",
+            "Go C ABI bidi cancel must project CancelRequested with terminal=false",
+        ),
+    )
+    for pattern, detail in go_cancel_contracts:
+        if not re.search(pattern, text, flags=re.S):
+            add(
+                "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+                go_cabi_runtime,
+                1,
+                detail,
+            )
+
+if python_cabi_runtime.exists():
+    text = source(python_cabi_runtime)
+    python_cancel_contracts = (
+        (
+            r"class\s+_CABIStreamTransport\b.*?def\s+cancel\b.*?\"state\"\s*:\s*\"CancelRequested\".*?\"terminal\"\s*:\s*False",
+            "Python C ABI stream cancel must project CancelRequested with terminal=False",
+        ),
+        (
+            r"class\s+_CABIBidiTransport\b.*?def\s+cancel\b.*?\"state\"\s*:\s*\"CancelRequested\".*?\"terminal\"\s*:\s*False",
+            "Python C ABI bidi cancel must project CancelRequested with terminal=False",
+        ),
+    )
+    for pattern, detail in python_cancel_contracts:
+        if not re.search(pattern, text, flags=re.S):
+            add(
+                "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+                python_cabi_runtime,
+                1,
+                detail,
+            )
+
+
+# Rule 21: unary cancellation is an independently signed lifecycle-control
+# Invocation, not a replay of the target Invocation with unsigned metadata.
+# The target is identified by canonical lifecycle hash; the cancel command has
+# its own nonce, descriptor, signer policy and admission/replay result.
+cancel_domain = cli_root / "src/daemon/invocation/dispatch/cancellation.rs"
+request_model = cli_root / "src/daemon/invocation/dispatch/request.rs"
+runtime_client = cli_root / "src/daemon/invocation/dispatch/client.rs"
+admission_facade = cli_root / "src/daemon/invocation/admission/admission_facade.rs"
+
+if cancel_domain.exists():
+    text = source(cancel_domain)
+    cancel_domain_requirements = (
+        (
+            "pub const ABILITY_INVOCATION_CANCEL",
+            "cancel ability must have one named descriptor owner",
+        ),
+        (
+            "pub struct InvocationCancelCommand",
+            "cancel must be a typed command, not unsigned transport metadata",
+        ),
+        (
+            "pub target_lifecycle_hash: String",
+            "cancel command must bind the target by lifecycle hash",
+        ),
+        (
+            "#[serde(deny_unknown_fields)]",
+            "cancel command must reject unsigned metadata extensions",
+        ),
+        (
+            "invocation_lifecycle_hash(envelope: &DescriptorBoundEnvelope)",
+            "target lifecycle hash must derive from descriptor-bound canonical bytes",
+        ),
+    )
+    raw_text = cancel_domain.read_text(encoding="utf-8", errors="replace")
+    for token, detail in cancel_domain_requirements:
+        haystack = raw_text if token.startswith("#[") else text
+        if token not in haystack:
+            add(
+                "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+                cancel_domain,
+                1,
+                detail,
+            )
+else:
+    add(
+        "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+        cancel_domain,
+        1,
+        "unary cancellation command domain is required",
+    )
+
+if request_model.exists():
+    text = source(request_model)
+    raw_text = request_model.read_text(encoding="utf-8", errors="replace")
+    prepare_cancel = re.search(
+        r"fn\s+prepare_cancel_command\s*\([^)]*\)\s*->\s*Result<PreparedInvocation>\s*\{(?P<body>.*?)\n    \}",
+        text,
+        flags=re.S,
+    )
+    if not prepare_cancel:
+        add(
+            "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+            request_model,
+            1,
+            "SignedInvocation must expose prepare_cancel_command for independent cancel drafts",
+        )
+    else:
+        body = prepare_cancel.group("body")
+        prepare_requirements = (
+            (
+                "self.prepared.canonical_hash_hex()",
+                "cancel command must bind target by canonical lifecycle hash",
+            ),
+            (
+                "InvocationCancelCommand::new",
+                "cancel command must be normalized through the typed command",
+            ),
+            (
+                "ABILITY_INVOCATION_CANCEL",
+                "cancel draft must target the invocation.cancel descriptor",
+            ),
+            (
+                ".build_draft()?",
+                "cancel must build a new invocation draft with a fresh nonce",
+            ),
+            (
+                "policy_ref: Some(\"invocation.cancel.caller\".to_string())",
+                "cancel draft must carry explicit cancel caller signer policy",
+            ),
+        )
+        for token, detail in prepare_requirements:
+            if token not in body:
+                add(
+                    "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+                    request_model,
+                    line_number(text, prepare_cancel.start()),
+                    detail,
+                )
+        if "self.clone()" in body or "self.into_daemon_invocation()" in body:
+            add(
+                "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+                request_model,
+                line_number(text, prepare_cancel.start()),
+                "prepare_cancel_command must not reuse the signed target invocation",
+            )
+
+    test_requirements = (
+        "prepare independent cancel command",
+        "assert_ne!(cancel.draft().invocation.nonce(), target_nonce)",
+        "assert_eq!(command.target_lifecycle_hash, target_hash)",
+    )
+    for token in test_requirements:
+        if token not in raw_text:
+            add(
+                "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+                request_model,
+                1,
+                f"missing cancel independence test evidence: {token}",
+            )
+
+if runtime_client.exists():
+    text = source(runtime_client)
+    request_cancel = re.search(
+        r"pub\s+async\s+fn\s+request_cancel_signed\s*\([^)]*\)\s*->\s*Result<InvocationHandle>\s*\{(?P<body>.*?)\n    \}",
+        text,
+        flags=re.S,
+    )
+    if not request_cancel:
+        add(
+            "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+            runtime_client,
+            1,
+            "runtime client must expose request_cancel_signed",
+        )
+    else:
+        body = request_cancel.group("body")
+        client_requirements = (
+            (
+                "signed.prepare_cancel_command(reason)?",
+                "request_cancel_signed must prepare an independent cancel command",
+            ),
+            (
+                "sign_with_canonical_signer(&signer).await?",
+                "request_cancel_signed must independently sign the cancel command",
+            ),
+            (
+                "signed_cancel.into_daemon_invocation()",
+                "request_cancel_signed must submit the signed cancel command",
+            ),
+        )
+        for token, detail in client_requirements:
+            if token not in body:
+                add(
+                    "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+                    runtime_client,
+                    line_number(text, request_cancel.start()),
+                    detail,
+                )
+        if re.search(r"\bsigned\.into_daemon_invocation\s*\(", body):
+            add(
+                "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+                runtime_client,
+                line_number(text, request_cancel.start()),
+                "request_cancel_signed must not replay the original signed invocation",
+            )
+
+if admission_facade.exists():
+    raw_text = admission_facade.read_text(encoding="utf-8", errors="replace")
+    if "signed_invocation_cancel_command_replay_is_rejected" not in raw_text:
+        add(
+            "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK",
+            admission_facade,
+            1,
+            "admission tests must prove signed cancel command replay rejection",
+        )
+
+
 if violations:
     for violation in sorted(violations):
         print(
