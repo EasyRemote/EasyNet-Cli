@@ -28,7 +28,6 @@ from test_runtime_ability import RuntimeTransportFake, _call
 
 
 LEDGER_URA = "easynet:///r/example/resource/device.node/billing/invocations"
-LEDGER_PATH = "/runtime/ledger/invocations.redb"
 
 
 def _record(
@@ -74,7 +73,6 @@ def _provider() -> tuple[RuntimeReceiptProvider, RuntimeTransportFake]:
 def _output(**values: object) -> dict[str, object]:
     return {
         "ledger_ura": LEDGER_URA,
-        "ledger_path": LEDGER_PATH,
         **values,
     }
 
@@ -178,7 +176,6 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
     assert page.limit == DEFAULT_RECEIPT_PAGE_LIMIT
     assert page.next_cursor == "receipt-history:v1:cursor-1"
     assert page.source.ledger_ura == LEDGER_URA
-    assert page.source.ledger_path == LEDGER_PATH
     assert len(page.records) == 1
     assert isinstance(page.records[0], InvocationLedgerRecord)
     assert page.records[0].receipt_chain.anchors == ()

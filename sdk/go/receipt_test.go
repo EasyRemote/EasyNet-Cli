@@ -23,23 +23,20 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 		case strings.Contains(descriptor, "invocation.history.list"):
 			output = map[string]any{
 				"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-				"ledger_path": "/state/invocations.redb",
 				"records":     []any{receiptLedgerRecordFixture()},
 				"next_cursor": "receipt-history:v1:cursor-1",
 			}
 		case strings.Contains(descriptor, "invocation.history.get"):
 			output = map[string]any{
-				"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-				"ledger_path": "/state/invocations.redb",
-				"record":      receiptLedgerRecordFixture(),
+				"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+				"record":     receiptLedgerRecordFixture(),
 			}
 		case strings.Contains(descriptor, "invocation.trace.get"):
 			output = map[string]any{
-				"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-				"ledger_path": "/state/invocations.redb",
-				"trace_id":    "trace-1",
-				"nodes":       []any{receiptLedgerRecordFixture()},
-				"edges":       []any{},
+				"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+				"trace_id":   "trace-1",
+				"nodes":      []any{receiptLedgerRecordFixture()},
+				"edges":      []any{},
 			}
 		default:
 			t.Fatalf("unexpected descriptor_ref: %s", descriptor)
@@ -63,7 +60,7 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(page.Records) != 1 || page.Records[0].RequestID != "req-1" || page.Source.LedgerPath != "/state/invocations.redb" {
+	if len(page.Records) != 1 || page.Records[0].RequestID != "req-1" || page.Source.LedgerURA == "" {
 		t.Fatalf("unexpected page: %#v", page)
 	}
 	if page.NextCursor != "receipt-history:v1:cursor-1" {
@@ -163,7 +160,6 @@ func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 		arguments, _ = draft["args"].(map[string]any)
 		output, _ := json.Marshal(map[string]any{
 			"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-			"ledger_path": "/state/invocations.redb",
 			"records":     []any{},
 			"next_cursor": "receipt-history:v1:cursor-2",
 		})
@@ -189,7 +185,6 @@ func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 
 	repeated := runtimeReceiptProviderWithOutput(t, map[string]any{
 		"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-		"ledger_path": "/state/invocations.redb",
 		"records":     []any{},
 		"next_cursor": "receipt-history:v1:cursor-1",
 	})
@@ -221,9 +216,8 @@ func TestRuntimeReceiptProviderProjectsMultipleAbilityURAsAsOneSet(t *testing.T)
 		}
 		arguments, _ = draft["args"].(map[string]any)
 		output, _ := json.Marshal(map[string]any{
-			"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-			"ledger_path": "/state/invocations.redb",
-			"records":     []any{},
+			"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+			"records":    []any{},
 		})
 		return runtimeAbilityResultJSON(true, string(output), "", false), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
@@ -248,28 +242,25 @@ func TestRuntimeReceiptProviderProjectsMultipleAbilityURAsAsOneSet(t *testing.T)
 
 func TestRuntimeReceiptProviderRejectsMalformedBoundedResults(t *testing.T) {
 	provider := runtimeReceiptProviderWithOutput(t, map[string]any{
-		"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-		"ledger_path": "/state/invocations.redb",
-		"records":     []any{receiptLedgerRecordFixture(), receiptLedgerRecordFixture()},
+		"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+		"records":    []any{receiptLedgerRecordFixture(), receiptLedgerRecordFixture()},
 	})
 	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeAbilityTestContext(), Limit: 1}); err == nil || !strings.Contains(err.Error(), "exceeds the bounded page") {
 		t.Fatalf("bounded list error = %v", err)
 	}
 
 	provider = runtimeReceiptProviderWithOutput(t, map[string]any{
-		"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-		"ledger_path": "/state/invocations.redb",
+		"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
 	})
 	if _, err := provider.Get(context.Background(), ReceiptGetRequest{Call: runtimeAbilityTestContext(), Lookup: ReceiptLookup{RequestID: "req-1"}}); err == nil || !strings.Contains(err.Error(), "must include record") {
 		t.Fatalf("missing record error = %v", err)
 	}
 
 	provider = runtimeReceiptProviderWithOutput(t, map[string]any{
-		"ledger_ura":  "easynet:///r/example/resource/device.dev-a/billing/invocations",
-		"ledger_path": "/state/invocations.redb",
-		"trace_id":    "trace-1",
-		"nodes":       "not-an-array",
-		"edges":       []any{},
+		"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+		"trace_id":   "trace-1",
+		"nodes":      "not-an-array",
+		"edges":      []any{},
 	})
 	if _, err := provider.Trace(context.Background(), ReceiptTraceRequest{Call: runtimeAbilityTestContext(), Lookup: ReceiptLookup{TraceID: "trace-1"}}); err == nil || !strings.Contains(err.Error(), "nodes must be an array") {
 		t.Fatalf("malformed trace error = %v", err)
@@ -296,9 +287,8 @@ func TestRuntimeReceiptProviderRejectsNonCanonicalURAFilters(t *testing.T) {
 
 func TestRuntimeReceiptProviderRequiresCanonicalLedgerSource(t *testing.T) {
 	provider := runtimeReceiptProviderWithOutput(t, map[string]any{
-		"ledger_ura":  "https://example.invalid/invocations",
-		"ledger_path": "/state/invocations.redb",
-		"records":     []any{},
+		"ledger_ura": "https://example.invalid/invocations",
+		"records":    []any{},
 	})
 	_, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeAbilityTestContext()})
 	if err == nil || !strings.Contains(err.Error(), "ledger_ura must be a canonical URA") {

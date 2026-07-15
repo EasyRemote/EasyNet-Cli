@@ -114,11 +114,16 @@ def check_backend() -> None:
     events = require_file(backend, "internal/sdkevents/events.go", "backend:events")
     for required in [
         "c.events.Build",
+        "newRuntimeEventRouteCatalog",
         'metadata["backend_adapter"] = "sdkevents"',
     ]:
         require_contains(events, required, "backend:events")
     for forbidden in [
         '"easynet-backend/internal/runtimeprofile"',
+        "eventcore.NewRouteCatalog",
+        "eventcore.Route",
+        "eventcore.CursorProjection",
+        "eventcore.Topic",
         "easynetsdk.NewInvocationBuilder",
         "OwnerAbilityDescriptorRef",
         "NewRuntimeAbilityEventSubscriptionProvider",
@@ -464,7 +469,7 @@ EOF
 package sdkevents
 
 // metadata["backend_adapter"] = "sdkevents"
-var _ = []string{"c.events.Build", "metadata[\"backend_adapter\"] = \"sdkevents\""}
+var _ = []string{"c.events.Build", "newRuntimeEventRouteCatalog", "metadata[\"backend_adapter\"] = \"sdkevents\""}
 EOF
   cat >"$good_backend/internal/sdkadmin/admin.go" <<'EOF'
 package sdkadmin
@@ -620,6 +625,13 @@ EOF
     exit 1
   fi
   grep -Fq "backend:user_signing_key_revoke_principal:forbidden:Identity.RevokeSigningKey" "$tmp/bad3.out"
+
+  printf '%s\n' 'var _ = "eventcore.NewRouteCatalog"' >>"$good_backend/internal/sdkevents/events.go"
+  if run_audit "$good_backend" "$good_remote" >"$tmp/bad4.out" 2>&1; then
+    echo "self-test expected Backend SDK route catalog fixture to fail" >&2
+    exit 1
+  fi
+  grep -Fq "backend:events:forbidden:eventcore.NewRouteCatalog" "$tmp/bad4.out"
 
   echo "check-downstream-sdk-consumer-cutover self-test ok"
   exit 0

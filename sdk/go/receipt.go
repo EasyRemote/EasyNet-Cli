@@ -204,8 +204,7 @@ type ReceiptTraceRequest struct {
 }
 
 type ReceiptLedgerSource struct {
-	LedgerURA  string `json:"ledger_ura,omitempty"`
-	LedgerPath string `json:"ledger_path,omitempty"`
+	LedgerURA string `json:"ledger_ura,omitempty"`
 }
 
 type ReceiptHistoryPage struct {
@@ -490,14 +489,13 @@ func unwrapReceiptRecordValue(value any) any {
 
 func receiptLedgerSource(output map[string]any) (ReceiptLedgerSource, error) {
 	ledgerURA := receiptString(output, "ledger_ura")
-	ledgerPath := receiptString(output, "ledger_path")
-	if ledgerURA == "" || ledgerPath == "" {
-		return ReceiptLedgerSource{}, invalidReceipt("Receipt ledger_ura and ledger_path are required", nil)
+	if ledgerURA == "" {
+		return ReceiptLedgerSource{}, invalidReceipt("Receipt ledger_ura is required", nil)
 	}
 	if _, err := axonsdk.ParseURA(ledgerURA); err != nil {
 		return ReceiptLedgerSource{}, invalidReceipt("Receipt ledger_ura must be a canonical URA", err)
 	}
-	return ReceiptLedgerSource{LedgerURA: ledgerURA, LedgerPath: ledgerPath}, nil
+	return ReceiptLedgerSource{LedgerURA: ledgerURA}, nil
 }
 
 func receiptHistoryLimit(limit uint32) (uint32, error) {

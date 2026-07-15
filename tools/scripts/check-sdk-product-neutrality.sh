@@ -24,6 +24,10 @@ route_lowering_violations() {
     "$@"
 }
 
+receipt_storage_violations() {
+  rg -n '\bLedgerPath\b|ledger_path' "$@"
+}
+
 canonical_root_output="$("$PYTHON_BIN" "$CONCEPT_VALIDATOR" --print-neutrality-roots --manifest "$CONCEPTS")" \
   || fail "canonical package manifest validation failed"
 canonical_roots=()
@@ -78,6 +82,13 @@ if [[ "${1:-}" == "--self-test" ]]; then
       rm -f "$injected"
     fi
   done
+  mkdir -p "$tmp/sdk/go"
+  injected="$tmp/sdk/go/__receipt_storage_negative.go"
+  printf 'package neutralitynegative\ntype ReceiptLedgerSource struct{ LedgerPath string `json:"ledger_path,omitempty"` }\n' >"$injected"
+  if ! receipt_storage_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect receipt storage path in canonical SDK receipt surface"
+  fi
+  rm -f "$injected"
   "$PYTHON_BIN" - "$CONCEPTS" "$tmp/missing-root.json" <<'PY'
 import json, sys
 from pathlib import Path
@@ -153,6 +164,14 @@ while IFS= read -r path; do production_sources+=("$path"); done < <(
 
 if ((${#production_sources[@]} == 0)); then
   fail "no SDK production sources found"
+fi
+
+if receipt_storage_violations \
+  sdk/go/receipt.go \
+  sdk/python/easynet_sdk/receipt.py \
+  "$CONCEPTS" \
+  sdk/conformance/sdk-parity-matrix.json; then
+  fail "receipt ledger storage path leaked into the canonical SDK receipt model"
 fi
 
 forbidden_type_pattern='\b(Mission(Client|Transport|Status|Run|Event|Plan)?|Admin(Client|Transport|Carrier|Gateway|Agent|Session)?|Gateway(Status|Client|Transport|Lifecycle)?|IdentityClient|Publication(Client|Transport|Catalog|Resource)?|HostBinding(Client|Transport|Lifecycle)?|Surface(Client|Transport|Page|Manifest|Health)?|Compatibility(Client|Transport|Carrier|Model|Chat|File)?|Wrapper(Client|Transport|Carrier|File|Terminal|Browser|Media|RemoteDesktop)?|Companion(Client|Transport|Desired|Observed|Projected|Supervisor|Boot|Stop)?|AccessControlCarrier|EventClient|EventsCarrierBase|RuntimeProfileBundle|DaemonProfileBridge|DaemonHandleProfiles)\b'

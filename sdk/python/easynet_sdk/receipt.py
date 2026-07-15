@@ -114,7 +114,6 @@ class ReceiptTraceRequest:
 @dataclass(frozen=True)
 class ReceiptLedgerSource:
     ledger_ura: str
-    ledger_path: str
 
 
 @dataclass(frozen=True)
@@ -386,7 +385,6 @@ def _project_filter(receipt_filter: ReceiptFilter | None) -> dict[str, object]:
 def _project_source(output: Mapping[str, object]) -> ReceiptLedgerSource:
     return ReceiptLedgerSource(
         ledger_ura=_required_ura(output.get("ledger_ura"), "ledger_ura"),
-        ledger_path=_mapping_text(output, "ledger_path"),
     )
 
 
