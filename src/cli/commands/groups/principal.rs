@@ -27,6 +27,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::principal_routes_gen as routes;
 use crate::core::ura;
 use crate::daemon::identity::self_identity::KeyringClient;
 use crate::daemon::keyring::{ManagedSigningKeyProjection, ManagedSigningStatus};
@@ -447,16 +448,18 @@ pub fn run(args: PrincipalArgs) -> anyhow::Result<()> {
         PrincipalAction::RevokeKey(args) => run_revoke_key(args),
         PrincipalAction::ConfigureRecovery(args) => run_configure_recovery(args),
         PrincipalAction::Recover(args) => run_recover(args),
-        PrincipalAction::Suspend(args) => {
-            run_state_mutation("principal.lifecycle.suspend", "Suspended principal", args)
-        }
+        PrincipalAction::Suspend(args) => run_state_mutation(
+            routes::PRINCIPAL_ABILITY_SUSPEND,
+            "Suspended principal",
+            args,
+        ),
         PrincipalAction::Reactivate(args) => run_state_mutation(
-            "principal.lifecycle.reactivate",
+            routes::PRINCIPAL_ABILITY_REACTIVATE,
             "Reactivated principal",
             args,
         ),
         PrincipalAction::Delete(args) => {
-            run_state_mutation("principal.lifecycle.delete", "Deleted principal", args)
+            run_state_mutation(routes::PRINCIPAL_ABILITY_DELETE, "Deleted principal", args)
         }
         PrincipalAction::IssueGrant(args) => run_issue_grant(args),
         PrincipalAction::RevokeGrant(args) => run_revoke_grant(args),
@@ -482,8 +485,9 @@ fn run_bootstrap(args: BootstrapArgs) -> anyhow::Result<()> {
     };
     let (create_request, bind_request) = principal_bootstrap_requests(input, &proof_ref);
 
-    invoke_principal_ability("principal.lifecycle.create", create_request)?;
-    let response = invoke_principal_ability("principal.lifecycle.bind_first_key", bind_request)?;
+    invoke_principal_ability(routes::PRINCIPAL_ABILITY_CREATE, create_request)?;
+    let response =
+        invoke_principal_ability(routes::PRINCIPAL_ABILITY_BIND_FIRST_KEY, bind_request)?;
     render_snapshot(
         "Bootstrapped principal",
         response,
@@ -513,8 +517,9 @@ fn run_enroll(args: EnrollArgs) -> anyhow::Result<()> {
     };
     let (create_request, bind_request) = principal_enrollment_requests(input, &args.enrollment_id);
 
-    invoke_principal_ability("principal.lifecycle.create", create_request)?;
-    let response = invoke_principal_ability("principal.lifecycle.bind_first_key", bind_request)?;
+    invoke_principal_ability(routes::PRINCIPAL_ABILITY_CREATE, create_request)?;
+    let response =
+        invoke_principal_ability(routes::PRINCIPAL_ABILITY_BIND_FIRST_KEY, bind_request)?;
     render_snapshot(
         "Enrolled principal",
         response,
@@ -543,7 +548,7 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
             &proof_ref,
         ),
     );
-    let response = invoke_principal_ability("principal.lifecycle.create", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_CREATE, request)?;
     render_snapshot("Created principal", response, args.json, None)
 }
 
@@ -562,7 +567,7 @@ fn run_issue_enrollment(args: IssueEnrollmentArgs) -> anyhow::Result<()> {
         ),
         args.expires_unix_ms,
     );
-    let response = invoke_principal_ability("principal.lifecycle.issue_enrollment", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_ISSUE_ENROLLMENT, request)?;
     let extra = newest_enrollment_id(&response);
     render_snapshot("Issued enrollment", response, args.json, Some(extra))
 }
@@ -581,7 +586,7 @@ fn run_revoke_enrollment(args: RevokeEnrollmentArgs) -> anyhow::Result<()> {
             &args.proof_ref,
         ),
     );
-    let response = invoke_principal_ability("principal.lifecycle.revoke_enrollment", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_REVOKE_ENROLLMENT, request)?;
     render_snapshot("Revoked enrollment", response, args.json, None)
 }
 
@@ -602,7 +607,7 @@ fn run_bind_first_key(args: BindFirstKeyArgs) -> anyhow::Result<()> {
         ),
         args.expires_unix_ms,
     );
-    let response = invoke_principal_ability("principal.lifecycle.bind_first_key", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_BIND_FIRST_KEY, request)?;
     render_snapshot(
         "Bound first key",
         response,
@@ -640,7 +645,7 @@ fn run_add_key(args: KeyMutationArgs) -> anyhow::Result<()> {
         ),
         args.expires_unix_ms,
     );
-    let response = invoke_principal_ability("principal.lifecycle.add_key", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_ADD_KEY, request)?;
     render_snapshot(
         "Added key",
         response,
@@ -676,7 +681,7 @@ fn run_rotate_key(args: RotateKeyArgs) -> anyhow::Result<()> {
         command,
         args.expires_unix_ms,
     );
-    let response = invoke_principal_ability("principal.lifecycle.rotate_key", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_ROTATE_KEY, request)?;
     render_snapshot(
         "Rotated key",
         response,
@@ -699,7 +704,7 @@ fn run_revoke_key(args: BindingMutationArgs) -> anyhow::Result<()> {
             &args.proof_ref,
         ),
     );
-    let response = invoke_principal_ability("principal.lifecycle.revoke_key", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_REVOKE_KEY, request)?;
     render_snapshot("Revoked key", response, args.json, None)
 }
 
@@ -717,7 +722,7 @@ fn run_configure_recovery(args: ConfigureRecoveryArgs) -> anyhow::Result<()> {
             &args.proof_ref,
         ),
     );
-    let response = invoke_principal_ability("principal.lifecycle.configure_recovery", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_CONFIGURE_RECOVERY, request)?;
     render_snapshot("Configured recovery", response, args.json, None)
 }
 
@@ -747,7 +752,7 @@ fn run_recover(args: RecoverArgs) -> anyhow::Result<()> {
         command,
         args.expires_unix_ms,
     );
-    let response = invoke_principal_ability("principal.lifecycle.recover", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_RECOVER, request)?;
     render_snapshot(
         "Recovered principal",
         response,
@@ -788,7 +793,7 @@ fn run_issue_grant(args: IssueGrantArgs) -> anyhow::Result<()> {
         ),
         args.expires_unix_ms,
     );
-    let response = invoke_principal_ability("principal.lifecycle.issue_grant", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_ISSUE_GRANT, request)?;
     let extra = newest_grant_id(&response);
     render_snapshot("Issued grant", response, args.json, Some(extra))
 }
@@ -807,13 +812,13 @@ fn run_revoke_grant(args: RevokeGrantArgs) -> anyhow::Result<()> {
             &args.proof_ref,
         ),
     );
-    let response = invoke_principal_ability("principal.lifecycle.revoke_grant", request)?;
+    let response = invoke_principal_ability(routes::PRINCIPAL_ABILITY_REVOKE_GRANT, request)?;
     render_snapshot("Revoked grant", response, args.json, None)
 }
 
 fn run_get(args: GetArgs) -> anyhow::Result<()> {
     let response = invoke_principal_ability(
-        "principal.lifecycle.get",
+        routes::PRINCIPAL_ABILITY_GET,
         json!({ "principal_ura": args.principal_ura.trim() }),
     )?;
     render_snapshot("Principal snapshot", response, args.json, None)
@@ -1336,7 +1341,19 @@ fn newest_grant_id(response: &Value) -> String {
 mod tests {
     use super::*;
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use sha2::Digest as _;
     use std::cell::{Cell, RefCell};
+    use std::path::Path;
+
+    #[test]
+    fn principal_routes_are_generated_from_manifest() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("provider_routes/easynet-principal-lifecycle-routes.v1.json");
+        let digest = sha2::Sha256::digest(std::fs::read(manifest).expect("read manifest"));
+
+        assert_eq!(routes::PRINCIPAL_ROUTE_MANIFEST_SHA256, hex::encode(digest));
+        assert_eq!(routes::PRINCIPAL_LIFECYCLE_PROFILE, "principal_lifecycle");
+    }
 
     #[test]
     fn create_request_keeps_explicit_command_boundary() {
@@ -1377,10 +1394,10 @@ mod tests {
             "proof-1",
         );
         let request = principal_create_request("easynet:///r/realm/user/alice", command);
-        let target = principal_ability_target("principal.lifecycle.create", &request)
+        let target = principal_ability_target(routes::PRINCIPAL_ABILITY_CREATE, &request)
             .expect("principal target");
 
-        assert_eq!(target.dispatch_name(), "principal.lifecycle.create");
+        assert_eq!(target.dispatch_name(), routes::PRINCIPAL_ABILITY_CREATE);
         assert_eq!(target.callee_ura(), "easynet:///r/realm/hub");
         assert_eq!(
             target.default_subject_ura(),

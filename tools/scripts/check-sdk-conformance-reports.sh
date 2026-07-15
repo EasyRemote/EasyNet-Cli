@@ -46,13 +46,13 @@ fi
 
 cleanup() {
   if [[ -n "$TMP_DIR" ]]; then
-    rm -rf "$TMP_DIR"
+    rm -rf "$TMP_DIR" 2>/dev/null || true
   fi
   if [[ -n "$SELF_TEST_TMP" ]]; then
-    rm -rf "$SELF_TEST_TMP"
+    rm -rf "$SELF_TEST_TMP" 2>/dev/null || true
   fi
   if [[ -n "$SNAPSHOT_ROOT" ]]; then
-    rm -rf "$SNAPSHOT_ROOT"
+    rm -rf "$SNAPSHOT_ROOT" 2>/dev/null || true
   fi
 }
 
@@ -311,7 +311,8 @@ run_report() {
   ensure_run_nonce
   local out="$TMP_DIR/$language.out"
   echo "sdk-conformance-reports: validating $language" >&2
-  if ! run_bounded \
+  local bounded_rc=0
+  run_bounded \
     "validate $language report" \
     "$REPORT_TIMEOUT_SECONDS" \
     "$out" \
@@ -323,8 +324,9 @@ run_report() {
       --root "$REPO_ROOT" \
       --language "$language" \
       --adapter-report "$report" \
-      --format json; then
-    return 1
+      --format json || bounded_rc=$?
+  if [[ "$bounded_rc" -ne 0 ]]; then
+    return "$bounded_rc"
   fi
   python3 - "$language" "$out" "$RESULT_DIR" <<'PY'
 from __future__ import annotations
@@ -362,6 +364,50 @@ result_dir.mkdir(parents=True, exist_ok=True)
 )
 PY
 }
+
+is_terminal_report_status() {
+  local rc="$1"
+  [[ "$rc" -eq 124 || "$rc" -ge 128 ]]
+}
+
+run_selected_reports() {
+  local status=0
+  selected_count=0
+  for language_report in "${language_reports[@]}"; do
+    local language report rc
+    IFS=: read -r language report <<<"$language_report"
+    if [[ -n "$REQUESTED_LANGUAGES" && ",$REQUESTED_LANGUAGES," != *",$language,"* ]]; then
+      continue
+    fi
+    selected_count=$((selected_count + 1))
+    if run_report "$language" "$report" >/dev/null; then
+      continue
+    else
+      rc=$?
+    fi
+    if is_terminal_report_status "$rc"; then
+      return "$rc"
+    fi
+    status=1
+  done
+
+  if [[ "$selected_count" -eq 0 ]]; then
+    echo "check-sdk-conformance-reports: SDK_CONFORMANCE_LANGUAGES selected no canonical language" >&2
+    return 1
+  fi
+
+  return "$status"
+}
+
+language_reports=(
+  "rust:sdk/conformance/runner/rust-action-adapter-report.json"
+  "c_abi:sdk/conformance/runner/c-abi-action-adapter-report.json"
+  "go:sdk/conformance/runner/go-action-adapter-report.json"
+  "python:sdk/conformance/runner/python-action-adapter-report.json"
+  "node:sdk/conformance/runner/node-action-adapter-report.json"
+  "java:sdk/conformance/runner/java-action-adapter-report.json"
+  "swift:sdk/conformance/runner/swift-action-adapter-report.json"
+)
 
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d "$REPO_ROOT/target/sdk-conformance-report-gate.XXXXXX")"
@@ -505,45 +551,81 @@ EOF
     exit 1
   fi
 
+  (
+    language_reports=("rust:rust-report" "go:go-report")
+    REQUESTED_LANGUAGES=""
+    selected_count=0
+    cancel_trace="$tmp/cancel-sequence.out"
+    run_report() {
+      echo "$1" >>"$cancel_trace"
+      if [[ "$1" == "rust" ]]; then
+        return 130
+      fi
+      return 0
+    }
+    cancel_rc=0
+    run_selected_reports >/dev/null 2>&1 || cancel_rc=$?
+    if [[ "$cancel_rc" -eq 0 ]]; then
+      echo "self-test expected terminal cancellation status" >&2
+      exit 1
+    fi
+    if [[ "$cancel_rc" -ne 130 ]]; then
+      echo "self-test expected cancellation status 130, got $cancel_rc" >&2
+      exit 1
+    fi
+    if grep -Fq "go" "$cancel_trace"; then
+      echo "self-test expected cancellation to stop before go" >&2
+      cat "$cancel_trace" >&2
+      exit 1
+    fi
+    grep -Fxq "rust" "$cancel_trace"
+  )
+
+  (
+    language_reports=("rust:rust-report" "go:go-report")
+    REQUESTED_LANGUAGES=""
+    selected_count=0
+    timeout_trace="$tmp/timeout-sequence.out"
+    run_report() {
+      echo "$1" >>"$timeout_trace"
+      if [[ "$1" == "rust" ]]; then
+        return 124
+      fi
+      return 0
+    }
+    timeout_rc=0
+    run_selected_reports >/dev/null 2>&1 || timeout_rc=$?
+    if [[ "$timeout_rc" -ne 124 ]]; then
+      echo "self-test expected timeout status 124, got $timeout_rc" >&2
+      exit 1
+    fi
+    if grep -Fq "go" "$timeout_trace"; then
+      echo "self-test expected timeout to stop before go" >&2
+      cat "$timeout_trace" >&2
+      exit 1
+    fi
+    grep -Fxq "rust" "$timeout_trace"
+  )
+
   echo "check-sdk-conformance-reports self-test ok"
   exit 0
 fi
 
-status=0
 rm -rf "$RESULT_DIR"
 create_source_snapshot
 write_source_attestation_manifest
 ensure_run_nonce
 readonly RUN_NONCE
-selected_count=0
-language_reports=(
-  "rust:sdk/conformance/runner/rust-action-adapter-report.json"
-  "c_abi:sdk/conformance/runner/c-abi-action-adapter-report.json"
-  "go:sdk/conformance/runner/go-action-adapter-report.json"
-  "python:sdk/conformance/runner/python-action-adapter-report.json"
-  "node:sdk/conformance/runner/node-action-adapter-report.json"
-  "java:sdk/conformance/runner/java-action-adapter-report.json"
-  "swift:sdk/conformance/runner/swift-action-adapter-report.json"
-)
-for language_report in "${language_reports[@]}"; do
-  IFS=: read -r language report <<<"$language_report"
-  if [[ -n "$REQUESTED_LANGUAGES" && ",$REQUESTED_LANGUAGES," != *",$language,"* ]]; then
-    continue
-  fi
-  selected_count=$((selected_count + 1))
-  if ! run_report "$language" "$report" >/dev/null; then
-    status=1
-  fi
-done
 
-if [[ "$selected_count" -eq 0 ]]; then
-  echo "check-sdk-conformance-reports: SDK_CONFORMANCE_LANGUAGES selected no canonical language" >&2
-  exit 1
+report_status=0
+run_selected_reports || report_status=$?
+if is_terminal_report_status "$report_status"; then
+  echo "check-sdk-conformance-reports interrupted" >&2
+  exit "$report_status"
 fi
-
-if [[ "$status" -ne 0 ]]; then
+if [[ "$report_status" -ne 0 ]]; then
   echo "check-sdk-conformance-reports failed" >&2
-  exit "$status"
+  exit "$report_status"
 fi
 
 python3 - "$RESULT_DIR" <<'PY'

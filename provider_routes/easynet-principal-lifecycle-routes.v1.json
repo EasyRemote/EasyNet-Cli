@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "provider": "easynet",
+  "capability": "principal_lifecycle",
+  "profile": "principal_lifecycle",
+  "routes": [
+    {
+      "id": "create",
+      "go_const": "principalAbilityCreate",
+      "python_const": "_ABILITY_CREATE",
+      "rust_const": "PRINCIPAL_ABILITY_CREATE",
+      "ability": "principal.lifecycle.create"
+    },
+    {
+      "id": "bind_first_key",
+      "go_const": "principalAbilityBindFirstKey",
+      "python_const": "_ABILITY_BIND_FIRST_KEY",
+      "rust_const": "PRINCIPAL_ABILITY_BIND_FIRST_KEY",
+      "ability": "principal.lifecycle.bind_first_key"
+    },
+    {
+      "id": "add_key",
+      "go_const": "principalAbilityAddKey",
+      "python_const": "_ABILITY_ADD_KEY",
+      "rust_const": "PRINCIPAL_ABILITY_ADD_KEY",
+      "ability": "principal.lifecycle.add_key"
+    },
+    {
+      "id": "rotate_key",
+      "go_const": "principalAbilityRotateKey",
+      "python_const": "_ABILITY_ROTATE_KEY",
+      "rust_const": "PRINCIPAL_ABILITY_ROTATE_KEY",
+      "ability": "principal.lifecycle.rotate_key"
+    },
+    {
+      "id": "revoke_key",
+      "go_const": "principalAbilityRevokeKey",
+      "python_const": "_ABILITY_REVOKE_KEY",
+      "rust_const": "PRINCIPAL_ABILITY_REVOKE_KEY",
+      "ability": "principal.lifecycle.revoke_key"
+    },
+    {
+      "id": "configure_recovery",
+      "go_const": "principalAbilityConfigureRecovery",
+      "python_const": "_ABILITY_CONFIGURE_RECOVERY",
+      "rust_const": "PRINCIPAL_ABILITY_CONFIGURE_RECOVERY",
+      "ability": "principal.lifecycle.configure_recovery"
+    },
+    {
+      "id": "recover",
+      "go_const": "principalAbilityRecover",
+      "python_const": "_ABILITY_RECOVER",
+      "rust_const": "PRINCIPAL_ABILITY_RECOVER",
+      "ability": "principal.lifecycle.recover"
+    },
+    {
+      "id": "suspend",
+      "go_const": "principalAbilitySuspend",
+      "python_const": "_ABILITY_SUSPEND",
+      "rust_const": "PRINCIPAL_ABILITY_SUSPEND",
+      "ability": "principal.lifecycle.suspend"
+    },
+    {
+      "id": "reactivate",
+      "go_const": "principalAbilityReactivate",
+      "python_const": "_ABILITY_REACTIVATE",
+      "rust_const": "PRINCIPAL_ABILITY_REACTIVATE",
+      "ability": "principal.lifecycle.reactivate"
+    },
+    {
+      "id": "delete",
+      "go_const": "principalAbilityDelete",
+      "python_const": "_ABILITY_DELETE",
+      "rust_const": "PRINCIPAL_ABILITY_DELETE",
+      "ability": "principal.lifecycle.delete"
+    },
+    {
+      "id": "issue_enrollment",
+      "go_const": "principalAbilityIssueEnrollment",
+      "python_const": "_ABILITY_ISSUE_ENROLLMENT",
+      "rust_const": "PRINCIPAL_ABILITY_ISSUE_ENROLLMENT",
+      "ability": "principal.lifecycle.issue_enrollment"
+    },
+    {
+      "id": "revoke_enrollment",
+      "go_const": "principalAbilityRevokeEnrollment",
+      "python_const": "_ABILITY_REVOKE_ENROLLMENT",
+      "rust_const": "PRINCIPAL_ABILITY_REVOKE_ENROLLMENT",
+      "ability": "principal.lifecycle.revoke_enrollment"
+    },
+    {
+      "id": "issue_grant",
+      "go_const": "principalAbilityIssueGrant",
+      "python_const": "_ABILITY_ISSUE_GRANT",
+      "rust_const": "PRINCIPAL_ABILITY_ISSUE_GRANT",
+      "ability": "principal.lifecycle.issue_grant"
+    },
+    {
+      "id": "revoke_grant",
+      "go_const": "principalAbilityRevokeGrant",
+      "python_const": "_ABILITY_REVOKE_GRANT",
+      "rust_const": "PRINCIPAL_ABILITY_REVOKE_GRANT",
+      "ability": "principal.lifecycle.revoke_grant"
+    },
+    {
+      "id": "get",
+      "go_const": "principalAbilityGet",
+      "python_const": "_ABILITY_GET",
+      "rust_const": "PRINCIPAL_ABILITY_GET",
+      "ability": "principal.lifecycle.get"
+    }
+  ]
+}

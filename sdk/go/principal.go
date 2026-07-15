@@ -8,26 +8,6 @@ import (
 	"strings"
 )
 
-const (
-	principalLifecycleProfile = "principal_lifecycle"
-
-	principalAbilityCreate            = "principal.lifecycle.create"
-	principalAbilityBindFirstKey      = "principal.lifecycle.bind_first_key"
-	principalAbilityAddKey            = "principal.lifecycle.add_key"
-	principalAbilityRotateKey         = "principal.lifecycle.rotate_key"
-	principalAbilityRevokeKey         = "principal.lifecycle.revoke_key"
-	principalAbilityConfigureRecovery = "principal.lifecycle.configure_recovery"
-	principalAbilityRecover           = "principal.lifecycle.recover"
-	principalAbilitySuspend           = "principal.lifecycle.suspend"
-	principalAbilityReactivate        = "principal.lifecycle.reactivate"
-	principalAbilityDelete            = "principal.lifecycle.delete"
-	principalAbilityIssueEnrollment   = "principal.lifecycle.issue_enrollment"
-	principalAbilityRevokeEnrollment  = "principal.lifecycle.revoke_enrollment"
-	principalAbilityIssueGrant        = "principal.lifecycle.issue_grant"
-	principalAbilityRevokeGrant       = "principal.lifecycle.revoke_grant"
-	principalAbilityGet               = "principal.lifecycle.get"
-)
-
 var principalPrivateProjectionFieldTokens = []string{
 	"seed",
 	"private",

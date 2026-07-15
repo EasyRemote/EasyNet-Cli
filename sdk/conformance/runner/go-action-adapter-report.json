@@ -272,7 +272,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/principal_test.go",
-          "sha256": "d140c46c0089bb7b3a54804123dcb38662890facbdb26cda62c5c28cf7861c4e"
+          "sha256": "855e5bc7bfa85c309484a733d290fa3469b983355d2862f27c99d7f55c8a2ff3"
         }
       ],
       "profile": "principal"
@@ -283,7 +283,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/principal_test.go",
-          "sha256": "d140c46c0089bb7b3a54804123dcb38662890facbdb26cda62c5c28cf7861c4e"
+          "sha256": "855e5bc7bfa85c309484a733d290fa3469b983355d2862f27c99d7f55c8a2ff3"
         }
       ],
       "profile": "principal"

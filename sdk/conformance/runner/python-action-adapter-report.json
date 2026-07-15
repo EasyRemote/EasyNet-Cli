@@ -250,7 +250,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_principal.py",
-          "sha256": "8482afbcd67d4e9c4b23436c23d5371c1e98e034cedb5aa8118b2ee5462236c1"
+          "sha256": "c7f7ca85f2942cfff274f8159fdfe2b9ca7fb1cb41341e8a4fa199e2a83ffc37"
         }
       ],
       "profile": "principal"
@@ -261,7 +261,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_principal.py",
-          "sha256": "8482afbcd67d4e9c4b23436c23d5371c1e98e034cedb5aa8118b2ee5462236c1"
+          "sha256": "c7f7ca85f2942cfff274f8159fdfe2b9ca7fb1cb41341e8a4fa199e2a83ffc37"
         }
       ],
       "profile": "principal"

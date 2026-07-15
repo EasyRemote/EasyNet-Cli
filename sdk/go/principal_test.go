@@ -3,8 +3,13 @@ package easynet
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,6 +37,28 @@ func TestPrincipalLifecycleContractIsComplete(t *testing.T) {
 	requiredType := reflect.TypeOf((*required)(nil)).Elem()
 	if !principalType.Implements(requiredType) || !requiredType.Implements(principalType) {
 		t.Fatal("PrincipalLifecycle drifted from the canonical transition contract")
+	}
+}
+
+func TestPrincipalLifecycleRoutesGeneratedFromManifest(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	manifestPath := filepath.Join(
+		filepath.Dir(source),
+		"..",
+		"..",
+		"provider_routes",
+		"easynet-principal-lifecycle-routes.v1.json",
+	)
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read principal route manifest: %v", err)
+	}
+	digest := sha256.Sum256(manifest)
+	if got, want := principalLifecycleRouteManifestSHA256, fmt.Sprintf("%x", digest[:]); got != want {
+		t.Fatalf("principal route manifest digest = %s, want %s", got, want)
 	}
 }
 

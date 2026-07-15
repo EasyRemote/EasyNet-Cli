@@ -13,6 +13,24 @@ from enum import Enum
 from typing import Mapping, Protocol, Sequence
 
 from .errors import ErrorCode, RetryHint, SDKError
+from ._principal_routes import (
+    _ABILITY_ADD_KEY,
+    _ABILITY_BIND_FIRST_KEY,
+    _ABILITY_CONFIGURE_RECOVERY,
+    _ABILITY_CREATE,
+    _ABILITY_DELETE,
+    _ABILITY_GET,
+    _ABILITY_ISSUE_ENROLLMENT,
+    _ABILITY_ISSUE_GRANT,
+    _ABILITY_REACTIVATE,
+    _ABILITY_RECOVER,
+    _ABILITY_REVOKE_ENROLLMENT,
+    _ABILITY_REVOKE_GRANT,
+    _ABILITY_REVOKE_KEY,
+    _ABILITY_ROTATE_KEY,
+    _ABILITY_SUSPEND,
+    _PROFILE,
+)
 from .runtime_ability import RuntimeCallContext
 
 __all__ = [
@@ -43,24 +61,6 @@ __all__ = [
     "RotatePrincipalKeyRequest",
     "grant_actions",
 ]
-
-_PROFILE = "principal_lifecycle"
-
-_ABILITY_CREATE = "principal.lifecycle.create"
-_ABILITY_BIND_FIRST_KEY = "principal.lifecycle.bind_first_key"
-_ABILITY_ADD_KEY = "principal.lifecycle.add_key"
-_ABILITY_ROTATE_KEY = "principal.lifecycle.rotate_key"
-_ABILITY_REVOKE_KEY = "principal.lifecycle.revoke_key"
-_ABILITY_CONFIGURE_RECOVERY = "principal.lifecycle.configure_recovery"
-_ABILITY_RECOVER = "principal.lifecycle.recover"
-_ABILITY_SUSPEND = "principal.lifecycle.suspend"
-_ABILITY_REACTIVATE = "principal.lifecycle.reactivate"
-_ABILITY_DELETE = "principal.lifecycle.delete"
-_ABILITY_ISSUE_ENROLLMENT = "principal.lifecycle.issue_enrollment"
-_ABILITY_REVOKE_ENROLLMENT = "principal.lifecycle.revoke_enrollment"
-_ABILITY_ISSUE_GRANT = "principal.lifecycle.issue_grant"
-_ABILITY_REVOKE_GRANT = "principal.lifecycle.revoke_grant"
-_ABILITY_GET = "principal.lifecycle.get"
 
 _PRIVATE_PROJECTION_FIELD_TOKENS = (
     "seed",

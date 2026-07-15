@@ -1,7 +1,10 @@
+import hashlib
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 import unittest
 
 import easynet_sdk.principal as principal_module
+from easynet_sdk._principal_routes import _PRINCIPAL_ROUTE_MANIFEST_SHA256
 from easynet_sdk.principal import (
     BindPrincipalKeyRequest,
     IssueEnrollmentRequest,
@@ -20,6 +23,16 @@ from easynet_sdk.runtime_ability import RuntimeCallContext
 
 
 class PrincipalTests(unittest.TestCase):
+    def test_principal_routes_are_generated_from_manifest(self) -> None:
+        manifest = (
+            Path(__file__).resolve().parents[2]
+            .parent
+            / "provider_routes"
+            / "easynet-principal-lifecycle-routes.v1.json"
+        )
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        self.assertEqual(_PRINCIPAL_ROUTE_MANIFEST_SHA256, digest)
+
     def test_principal_state_vocabulary_matches_go_contract(self) -> None:
         self.assertEqual(
             [state.value for state in PrincipalState],
