@@ -171,7 +171,9 @@ mod tests {
         // conversation.* and private skill.*.
         assert!(is_llm_dynamic_ability("conversation.send"));
         assert!(is_llm_dynamic_ability("conversation.stream"));
-        assert!(!is_llm_dynamic_ability("session.list"));
+        assert!(!is_llm_dynamic_ability(
+            crate::daemon::ability::names::device_control::SESSION_LIST
+        ));
         assert!(!is_llm_dynamic_ability("session.attach"));
         assert!(is_llm_dynamic_ability("skill.alive-video"));
         assert!(is_llm_dynamic_ability("skill.design"));

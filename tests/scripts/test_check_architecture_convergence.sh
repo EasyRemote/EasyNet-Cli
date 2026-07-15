@@ -123,6 +123,52 @@ fn project_terminal_receipt(receipt: &InvocationReceipt) -> ReceiptView {
     ReceiptView::from(receipt)
 }
 EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/daemon_route_runtime.rs" <<'EOF'
+use std::sync::Arc;
+
+pub(crate) struct DaemonRouteRuntimeAdapter {
+    runtime: Arc<LocalRuntime>,
+}
+
+impl DaemonRouteRuntimeAdapter {
+    async fn register(&self, registrations: Vec<AbilityRegistration>) {
+        self.runtime.register_many(registrations).await;
+    }
+
+    async fn dispatch(&self, route: DaemonUnaryRoute, request: &InvokeRequest, ingress: DaemonRouteIngress) {
+        dispatch_rpc_admitted(&self.runtime, route, request, ingress).await;
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
+impl UnaryDispatcher {
+    pub(crate) async fn dispatch_daemon_route_runtime(
+        &self,
+        route: DaemonUnaryRoute,
+        request: &InvokeRequest,
+        ingress: DaemonRouteIngress,
+    ) {
+        DaemonRouteRuntimeAdapter::new(runtime, cancellations)
+            .dispatch(route, request, ingress)
+            .await
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
+impl DaemonInvocationService {
+    pub(crate) async fn register_daemon_unary_routes(&self, owner_ura: &str) {
+        DaemonRouteRuntimeAdapter::new(runtime, cancellations)
+            .register(owner_ura, catalog.as_ref(), provider)
+            .await;
+    }
+
+    async fn dispatch_daemon_unary_route(&self, route: DaemonUnaryRoute, request: &InvokeRequest, ingress: DaemonRouteIngress) {
+        self.unary_dispatcher()
+            .dispatch_daemon_route_runtime(route, request, ingress)
+            .await;
+    }
+}
+EOF
   cat >"$CLI/sdk/python/easynet_sdk/runtime.py" <<'EOF'
 class InvocationHandle:
     def __init__(self, subject_ura: str):
@@ -447,6 +493,23 @@ EOF
 expect_fail \
   "receipt proof primitive outside adapter" \
   "R14_RECEIPT_PROOF_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
+impl UnaryDispatcher {
+    pub(crate) async fn dispatch_daemon_route_runtime(
+        &self,
+        route: DaemonUnaryRoute,
+        request: &InvokeRequest,
+        ingress: DaemonRouteIngress,
+    ) {
+        direct_exact_route_handler(route, request, ingress).await;
+    }
+}
+EOF
+expect_fail \
+  "daemon exact route runtime owner fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

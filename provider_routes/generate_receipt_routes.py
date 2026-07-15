@@ -14,27 +14,21 @@ from route_generator import (
     write_if_changed,
 )
 
-MANIFEST = ROOT / "provider_routes/easynet-access-control-routes.v1.json"
-GO_OUTPUT = ROOT / "sdk/go/access_control_routes_gen.go"
-PY_OUTPUT = ROOT / "sdk/python/easynet_sdk/_access_control_routes.py"
-DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/access_control_routes_gen.rs"
-
-ALLOWED_ABILITY_PREFIXES = ("authority.binding.", "policy.request.")
-ALLOWED_EXACT_ABILITIES = {"admission.explain"}
+MANIFEST = ROOT / "provider_routes/easynet-receipt-routes.v1.json"
+GO_OUTPUT = ROOT / "sdk/go/receipt_routes_gen.go"
+PY_OUTPUT = ROOT / "sdk/python/easynet_sdk/_receipt_routes.py"
+DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/receipt_routes_gen.rs"
 
 
-def is_allowed_ability(ability: str) -> bool:
-    return ability in ALLOWED_EXACT_ABILITIES or ability.startswith(ALLOWED_ABILITY_PREFIXES)
-
-
-def access_control_manifest() -> dict[str, object]:
+def receipt_manifest() -> dict[str, object]:
     return load_manifest(
         MANIFEST,
         expected_provider="easynet",
-        expected_capability="access_control",
+        expected_capability="receipt",
         route_const_keys={"go_const", "python_const", "daemon_const"},
-        route_label="access-control",
-        ability_allowed=is_allowed_ability,
+        route_label="receipt",
+        ability_allowed=lambda ability: ability.startswith("invocation.history.")
+        or ability.startswith("invocation.trace."),
     )
 
 
@@ -43,7 +37,7 @@ def main() -> None:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
-    manifest = access_control_manifest()
+    manifest = receipt_manifest()
     digest = manifest_sha(MANIFEST)
     changed = [
         write_if_changed(
@@ -52,8 +46,8 @@ def main() -> None:
                 script_name=Path(__file__).name,
                 manifest=manifest,
                 digest=digest,
-                profile_const="accessControlProfile",
-                digest_const="accessControlRouteManifestSHA256",
+                profile_const="receiptProfile",
+                digest_const="receiptRouteManifestSHA256",
                 route_const_key="go_const",
             ),
             check=args.check,
@@ -64,7 +58,7 @@ def main() -> None:
                 script_name=Path(__file__).name,
                 manifest=manifest,
                 digest=digest,
-                digest_const="_ACCESS_CONTROL_ROUTE_MANIFEST_SHA256",
+                digest_const="_RECEIPT_ROUTE_MANIFEST_SHA256",
                 route_const_key="python_const",
             ),
             check=args.check,
@@ -75,15 +69,15 @@ def main() -> None:
                 script_name=Path(__file__).name,
                 manifest=manifest,
                 digest=digest,
-                profile_const="ACCESS_CONTROL_PROFILE",
-                digest_const="ACCESS_CONTROL_ROUTE_MANIFEST_SHA256",
+                profile_const="RECEIPT_PROFILE",
+                digest_const="RECEIPT_ROUTE_MANIFEST_SHA256",
                 route_const_key="daemon_const",
             ),
             check=args.check,
         ),
     ]
     if not args.check:
-        print(f"access-control route bindings generated: {sum(changed)} file(s) updated")
+        print(f"receipt route bindings generated: {sum(changed)} file(s) updated")
 
 
 if __name__ == "__main__":

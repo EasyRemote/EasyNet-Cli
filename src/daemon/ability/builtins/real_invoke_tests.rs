@@ -1633,8 +1633,11 @@ fn real_device_agent_list_returns_a_list_under_temp_home() {
 fn real_device_session_list_returns_empty_under_temp_home() {
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("session.list", json!({})))
-        .expect("session.list");
+        .execute_rpc(target(
+            crate::daemon::ability::names::device_control::SESSION_LIST,
+            json!({}),
+        ))
+        .expect(crate::daemon::ability::names::device_control::SESSION_LIST);
     assert!(resp.is_object());
 }
 

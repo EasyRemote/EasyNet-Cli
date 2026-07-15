@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 import easynet_sdk.receipt as receipt_module
+from easynet_sdk._receipt_routes import _RECEIPT_ROUTE_MANIFEST_SHA256
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.errors import ErrorCode, SDKError
 from easynet_sdk.receipt import (
@@ -28,6 +31,17 @@ from test_runtime_ability import RuntimeTransportFake, _call
 
 
 LEDGER_URA = "easynet:///r/example/resource/device.node/billing/invocations"
+
+
+def test_receipt_routes_are_generated_from_manifest() -> None:
+    manifest = (
+        Path(__file__).resolve().parents[2]
+        .parent
+        / "provider_routes"
+        / "easynet-receipt-routes.v1.json"
+    )
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert _RECEIPT_ROUTE_MANIFEST_SHA256 == digest
 
 
 def _record(

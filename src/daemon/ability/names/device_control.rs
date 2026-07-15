@@ -15,7 +15,7 @@ pub const HTTP_REQUEST: &str = "http.request";
 pub const PROCESS_EXEC: &str = "process.exec";
 pub const SHELL_RUN: &str = "shell.run";
 
-pub const SESSION_LIST: &str = "session.list";
+pub const SESSION_LIST: &str = crate::daemon::ability::runtime_admin_routes_gen::SESSION_LIST;
 pub const SESSION_ATTACH: &str = "session.attach";
 pub const SESSION_OPEN: &str = "session.open";
 

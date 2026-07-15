@@ -3,11 +3,38 @@ package easynet
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestReceiptRoutesGeneratedFromManifest(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	manifestPath := filepath.Join(
+		filepath.Dir(source),
+		"..",
+		"..",
+		"provider_routes",
+		"easynet-receipt-routes.v1.json",
+	)
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read receipt route manifest: %v", err)
+	}
+	digest := sha256.Sum256(manifest)
+	if got, want := receiptRouteManifestSHA256, fmt.Sprintf("%x", digest[:]); got != want {
+		t.Fatalf("receipt route manifest digest = %s, want %s", got, want)
+	}
+}
 
 func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.T) {
 	var invocations []map[string]any

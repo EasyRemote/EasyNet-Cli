@@ -14,27 +14,22 @@ from route_generator import (
     write_if_changed,
 )
 
-MANIFEST = ROOT / "provider_routes/easynet-access-control-routes.v1.json"
-GO_OUTPUT = ROOT / "sdk/go/access_control_routes_gen.go"
-PY_OUTPUT = ROOT / "sdk/python/easynet_sdk/_access_control_routes.py"
-DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/access_control_routes_gen.rs"
+MANIFEST = ROOT / "provider_routes/easynet-runtime-admin-routes.v1.json"
+GO_OUTPUT = ROOT / "sdk/go/runtime_admin_routes_gen.go"
+PY_OUTPUT = ROOT / "sdk/python/easynet_sdk/_runtime_admin_routes.py"
+DAEMON_RUST_OUTPUT = ROOT / "src/daemon/ability/runtime_admin_routes_gen.rs"
 
-ALLOWED_ABILITY_PREFIXES = ("authority.binding.", "policy.request.")
-ALLOWED_EXACT_ABILITIES = {"admission.explain"}
-
-
-def is_allowed_ability(ability: str) -> bool:
-    return ability in ALLOWED_EXACT_ABILITIES or ability.startswith(ALLOWED_ABILITY_PREFIXES)
+ALLOWED_ABILITIES = {"session.list", "federation.revoke"}
 
 
-def access_control_manifest() -> dict[str, object]:
+def runtime_admin_manifest() -> dict[str, object]:
     return load_manifest(
         MANIFEST,
         expected_provider="easynet",
-        expected_capability="access_control",
+        expected_capability="runtime_admin",
         route_const_keys={"go_const", "python_const", "daemon_const"},
-        route_label="access-control",
-        ability_allowed=is_allowed_ability,
+        route_label="runtime-admin",
+        ability_allowed=lambda ability: ability in ALLOWED_ABILITIES,
     )
 
 
@@ -43,7 +38,7 @@ def main() -> None:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
 
-    manifest = access_control_manifest()
+    manifest = runtime_admin_manifest()
     digest = manifest_sha(MANIFEST)
     changed = [
         write_if_changed(
@@ -52,8 +47,8 @@ def main() -> None:
                 script_name=Path(__file__).name,
                 manifest=manifest,
                 digest=digest,
-                profile_const="accessControlProfile",
-                digest_const="accessControlRouteManifestSHA256",
+                profile_const="runtimeAdminProfile",
+                digest_const="runtimeAdminRouteManifestSHA256",
                 route_const_key="go_const",
             ),
             check=args.check,
@@ -64,7 +59,7 @@ def main() -> None:
                 script_name=Path(__file__).name,
                 manifest=manifest,
                 digest=digest,
-                digest_const="_ACCESS_CONTROL_ROUTE_MANIFEST_SHA256",
+                digest_const="_RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256",
                 route_const_key="python_const",
             ),
             check=args.check,
@@ -75,15 +70,15 @@ def main() -> None:
                 script_name=Path(__file__).name,
                 manifest=manifest,
                 digest=digest,
-                profile_const="ACCESS_CONTROL_PROFILE",
-                digest_const="ACCESS_CONTROL_ROUTE_MANIFEST_SHA256",
+                profile_const="RUNTIME_ADMIN_PROFILE",
+                digest_const="RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256",
                 route_const_key="daemon_const",
             ),
             check=args.check,
         ),
     ]
     if not args.check:
-        print(f"access-control route bindings generated: {sum(changed)} file(s) updated")
+        print(f"runtime-admin route bindings generated: {sum(changed)} file(s) updated")
 
 
 if __name__ == "__main__":

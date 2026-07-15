@@ -9,11 +9,14 @@ pub const CONSENT_SUBSCRIBE: &str = "consent.subscribe";
 pub const CONSENT_DECIDE: &str = "consent.decide";
 pub const CONSENT_LIST_PENDING: &str = "consent.list_pending";
 
-pub const INVOCATION_HISTORY_LIST: &str = "invocation.history.list";
-pub const INVOCATION_HISTORY_GET: &str = "invocation.history.get";
+pub const INVOCATION_HISTORY_LIST: &str =
+    crate::daemon::ability::receipt_routes_gen::INVOCATION_HISTORY_LIST;
+pub const INVOCATION_HISTORY_GET: &str =
+    crate::daemon::ability::receipt_routes_gen::INVOCATION_HISTORY_GET;
 pub const INVOCATION_HISTORY_PATH: &str = "invocation.history.path";
 pub const INVOCATION_RECORD_GET: &str = "invocation.record.get";
-pub const INVOCATION_TRACE_GET: &str = "invocation.trace.get";
+pub const INVOCATION_TRACE_GET: &str =
+    crate::daemon::ability::receipt_routes_gen::INVOCATION_TRACE_GET;
 pub const INVOCATION_CANCEL: &str = "invocation.cancel";
 
 pub const AUTHORITY_BINDING_GRANT: &str =

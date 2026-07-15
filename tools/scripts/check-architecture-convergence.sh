@@ -900,6 +900,86 @@ for path in production_files(cli_root / "src", {".rs"}):
                 detail,
             )
 
+# Rule 16: exact daemon unary routes must enter Axon LocalRuntime through one
+# adapter owner. The tonic service may classify transport ingress, and
+# UnaryDispatcher may own product behavior behind a provider object, but neither
+# may reintroduce a direct exact-route execution table outside
+# DaemonRouteRuntimeAdapter.
+daemon_service = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+unary_dispatcher = cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs"
+daemon_route_runtime = cli_root / "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
+if daemon_service.exists():
+    service_text = source(daemon_service)
+    service_requirements = (
+        (
+            "register_daemon_unary_routes",
+            "daemon service must expose exact route registration",
+        ),
+        (
+            "DaemonRouteRuntimeAdapter::new",
+            "exact route registration must construct the runtime adapter",
+        ),
+        (
+            ".register(owner_ura",
+            "exact route registration must install routes into LocalRuntime",
+        ),
+        (
+            ".dispatch_daemon_route_runtime(",
+            "exact route dispatch must delegate to the LocalRuntime route path",
+        ),
+    )
+    for token, detail in service_requirements:
+        if token not in service_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", daemon_service, 1, detail)
+
+if unary_dispatcher.exists():
+    dispatcher_text = source(unary_dispatcher)
+    dispatcher_requirements = (
+        (
+            "fn dispatch_daemon_route_runtime",
+            "UnaryDispatcher must expose only the daemon route runtime adapter path",
+        ),
+        (
+            "DaemonRouteRuntimeAdapter::new",
+            "UnaryDispatcher exact route path must construct the runtime adapter",
+        ),
+        (
+            ".dispatch(route, request, ingress)",
+            "UnaryDispatcher exact route path must dispatch through the runtime adapter",
+        ),
+    )
+    for token, detail in dispatcher_requirements:
+        if token not in dispatcher_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", unary_dispatcher, 1, detail)
+
+if daemon_route_runtime.exists():
+    adapter_text = source(daemon_route_runtime)
+    adapter_requirements = (
+        (
+            "pub(crate) struct DaemonRouteRuntimeAdapter",
+            "exact route runtime adapter owner is missing",
+        ),
+        ("Arc<LocalRuntime>", "daemon route runtime adapter must own LocalRuntime"),
+        (
+            "register_many(registrations)",
+            "exact route adapter must atomically install route registrations",
+        ),
+        (
+            "dispatch_rpc_admitted",
+            "exact route adapter must drain Axon's admitted runtime path",
+        ),
+    )
+    for token, detail in adapter_requirements:
+        if token not in adapter_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", daemon_route_runtime, 1, detail)
+elif daemon_service.exists() or unary_dispatcher.exists():
+    add(
+        "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+        daemon_route_runtime,
+        1,
+        "exact daemon routes require a dedicated LocalRuntime adapter owner",
+    )
+
 
 if violations:
     for violation in sorted(violations):

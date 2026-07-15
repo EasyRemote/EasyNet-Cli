@@ -55,7 +55,7 @@ pub const ABILITY_ATTACH: &str = crate::daemon::ability::names::device_control::
 pub fn register(reg: &mut AxonAbilityCatalog, sessions: Arc<SessionService>) {
     let s_for_list = Arc::clone(&sessions);
     reg.register_rpc_with_owner(
-        "session.list",
+        ABILITY_LIST,
         OwnerKind::Device,
         Arc::new(move |args: Value| list_handler(&s_for_list, args)),
     );

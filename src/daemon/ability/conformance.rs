@@ -290,7 +290,8 @@ pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY: &str = "federation.subscribe_d
 pub const ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2: &str = "federation.subscribe_directory_v2";
 pub const ABILITY_FEDERATION_LIST_USER_DEVICES: &str = "federation.list_user_devices";
 pub const ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES: &str = "federation.proxy_list_user_devices";
-pub const ABILITY_FEDERATION_REVOKE: &str = "federation.revoke";
+pub const ABILITY_FEDERATION_REVOKE: &str =
+    crate::daemon::ability::runtime_admin_routes_gen::FEDERATION_REVOKE;
 pub const ABILITY_IDENTITY_REGISTER_PUBKEY: &str = "identity.register_pubkey";
 pub const ABILITY_IDENTITY_LIST_USER_PUBKEYS: &str = "identity.list_user_pubkeys";
 pub const ABILITY_IDENTITY_REVOKE_USER_PUBKEY: &str = "identity.revoke_user_pubkey";
@@ -327,6 +328,8 @@ pub const ABILITY_PRINCIPAL_GET: &str =
 pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
 pub const ABILITY_META_LIST_ABILITIES: &str = "meta.list_abilities";
 pub const ABILITY_FEDERATION_STATUS: &str = "federation.status";
+pub const ABILITY_SESSION_LIST: &str =
+    crate::daemon::ability::runtime_admin_routes_gen::SESSION_LIST;
 pub const ABILITY_SESSION_OPEN: &str = "session.open";
 
 #[cfg(test)]
@@ -407,7 +410,7 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("terminal.read", DeviceTerminal),
     local_rpc!("terminal.resize", DeviceTerminal),
     local_rpc!("terminal.close", DeviceTerminal),
-    local_rpc!("session.list", DeviceSession),
+    local_rpc!(ABILITY_SESSION_LIST, DeviceSession),
     local_stream!("session.attach", DeviceSession),
     local_stream!("consent.subscribe", DeviceConsent),
     local_rpc!("consent.decide", DeviceConsent),
@@ -826,6 +829,32 @@ mod tests {
         assert_eq!(
             ABILITY_PRINCIPAL_CREATE,
             crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_CREATE
+        );
+    }
+
+    #[test]
+    fn runtime_admin_routes_are_generated_from_manifest() {
+        use sha2::Digest as _;
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("provider_routes/easynet-runtime-admin-routes.v1.json");
+        let digest = sha2::Sha256::digest(std::fs::read(manifest).expect("read manifest"));
+
+        assert_eq!(
+            crate::daemon::ability::runtime_admin_routes_gen::RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256,
+            hex::encode(digest)
+        );
+        assert_eq!(
+            crate::daemon::ability::runtime_admin_routes_gen::RUNTIME_ADMIN_PROFILE,
+            "runtime_admin"
+        );
+        assert_eq!(
+            ABILITY_SESSION_LIST,
+            crate::daemon::ability::runtime_admin_routes_gen::SESSION_LIST
+        );
+        assert_eq!(
+            ABILITY_FEDERATION_REVOKE,
+            crate::daemon::ability::runtime_admin_routes_gen::FEDERATION_REVOKE
         );
     }
 

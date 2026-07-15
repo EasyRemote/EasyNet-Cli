@@ -1684,7 +1684,7 @@ mod tests {
                 vec![
                     d("observe.health"),
                     d("agent.list"),
-                    d("session.list"),
+                    d(crate::daemon::ability::names::device_control::SESSION_LIST),
                     d("consent.subscribe"),
                 ]
             },

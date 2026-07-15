@@ -26,6 +26,11 @@ from easynet_axon.invocation import (
 )
 
 from .errors import ErrorCode, RetryHint, SDKError
+from ._receipt_routes import (
+    _RECEIPT_HISTORY_GET,
+    _RECEIPT_HISTORY_LIST,
+    _RECEIPT_TRACE_GET,
+)
 from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 
 __all__ = [
@@ -61,9 +66,9 @@ MAX_RECEIPT_CURSOR_LENGTH = 4096
 
 
 class _RuntimeReceiptAbility:
-    HISTORY_LIST = "invocation.history.list"
-    HISTORY_GET = "invocation.history.get"
-    TRACE_GET = "invocation.trace.get"
+    HISTORY_LIST = _RECEIPT_HISTORY_LIST
+    HISTORY_GET = _RECEIPT_HISTORY_GET
+    TRACE_GET = _RECEIPT_TRACE_GET
 
 
 @dataclass(frozen=True)

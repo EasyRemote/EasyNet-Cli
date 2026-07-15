@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "provider": "easynet",
+  "capability": "runtime_admin",
+  "profile": "runtime_admin",
+  "routes": [
+    {
+      "id": "session_list",
+      "go_const": "runtimeAdminSessionListAbility",
+      "python_const": "_RUNTIME_ADMIN_SESSION_LIST_ABILITY",
+      "daemon_const": "SESSION_LIST",
+      "ability": "session.list"
+    },
+    {
+      "id": "device_revoke",
+      "go_const": "runtimeAdminDeviceRevokeAbility",
+      "python_const": "_RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY",
+      "daemon_const": "FEDERATION_REVOKE",
+      "ability": "federation.revoke"
+    }
+  ]
+}

@@ -1,3 +1,6 @@
+import hashlib
+from pathlib import Path
+
 from easynet_sdk import (
     AddressingClient,
     AxonAddressingTransport,
@@ -17,7 +20,24 @@ from easynet_sdk import (
     SDKError,
     StartConfig,
 )
+from easynet_sdk._runtime_admin_routes import (
+    _PROFILE as _RUNTIME_ADMIN_PROFILE,
+    _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
+    _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256,
+    _RUNTIME_ADMIN_SESSION_LIST_ABILITY,
+)
 from easynet_sdk.health import HealthClient
+
+
+def test_runtime_admin_routes_are_generated_from_manifest() -> None:
+    manifest = (
+        Path(__file__).resolve().parents[2]
+        .parent
+        / "provider_routes"
+        / "easynet-runtime-admin-routes.v1.json"
+    )
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256 == digest
 
 
 class MemoryDaemonTransport:
@@ -169,8 +189,11 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
         "easynet:///r/example/ability/hub.session.list@1.0.0"
     )
     assert transport.seen["args"]["include_terminated"] is False
-    assert transport.seen["metadata"]["sdk_profile"] == "runtime_admin"
-    assert transport.seen["metadata"]["system_ability"] == "session.list"
+    assert transport.seen["metadata"]["sdk_profile"] == _RUNTIME_ADMIN_PROFILE
+    assert (
+        transport.seen["metadata"]["system_ability"]
+        == _RUNTIME_ADMIN_SESSION_LIST_ABILITY
+    )
 
 
 def test_runtime_admin_ability_client_accepts_empty_sessions() -> None:
@@ -223,6 +246,7 @@ def test_runtime_admin_ability_client_revokes_device() -> None:
     assert transport.seen["descriptor_ref"] == (
         "easynet:///r/example/ability/hub.federation.revoke@1.0.0"
     )
+    assert result.system_ability == _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY
     assert transport.seen["args"] == {
         "agent_ura": "easynet:///r/example/device/laptop",
         "reason": "owner_removed_device",

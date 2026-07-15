@@ -28,7 +28,7 @@ pub const LIST_USER_DEVICES: &str =
     crate::daemon::ability::conformance::ABILITY_FEDERATION_LIST_USER_DEVICES;
 pub const PROXY_LIST_USER_DEVICES: &str =
     crate::daemon::ability::conformance::ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES;
-pub const REVOKE: &str = "federation.revoke";
+pub const REVOKE: &str = crate::daemon::ability::runtime_admin_routes_gen::FEDERATION_REVOKE;
 
 pub const IDENTITY_LIST_USER_PUBKEYS: &str = "identity.list_user_pubkeys";
 pub const IDENTITY_REGISTER_PUBKEY: &str = "identity.register_pubkey";

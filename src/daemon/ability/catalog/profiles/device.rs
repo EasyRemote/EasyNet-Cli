@@ -112,7 +112,7 @@ mod tests {
             // Session timeline state is daemon-local and therefore belongs
             // to the device-profile Agent, not the LLM sub-agent whose run
             // produced a given event.
-            "session.list",
+            crate::daemon::ability::names::device_control::SESSION_LIST,
             "session.attach",
             // Skill management and skill package file browsing are
             // device-profile-owned because the package tree lives on this

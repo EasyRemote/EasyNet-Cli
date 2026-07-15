@@ -635,7 +635,7 @@ fn is_fast_read_only_smoke_ability(name: &str) -> bool {
             | "admin.status"
             | "agent.list"
             | "terminal.list"
-            | "session.list"
+            | crate::daemon::ability::names::device_control::SESSION_LIST
             | "consent.list_pending"
             | "schedule.list"
             | "plugin.status"

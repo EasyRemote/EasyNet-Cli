@@ -2,11 +2,37 @@ package easynet
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestRuntimeAdminRoutesGeneratedFromManifest(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	manifestPath := filepath.Join(
+		filepath.Dir(source),
+		"..",
+		"..",
+		"provider_routes",
+		"easynet-runtime-admin-routes.v1.json",
+	)
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read runtime admin route manifest: %v", err)
+	}
+	digest := sha256.Sum256(manifest)
+	if got, want := runtimeAdminRouteManifestSHA256, fmt.Sprintf("%x", digest[:]); got != want {
+		t.Fatalf("runtime admin route manifest digest = %s, want %s", got, want)
+	}
+}
 
 func TestRuntimeAdminReadinessComposesLifecycleAndHealth(t *testing.T) {
 	daemon := &memoryDaemonTransport{

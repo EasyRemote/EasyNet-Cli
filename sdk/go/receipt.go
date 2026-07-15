@@ -15,9 +15,6 @@ const (
 	DefaultReceiptHistoryLimit uint32 = 50
 	MaxReceiptHistoryLimit     uint32 = 500
 	maxReceiptHistoryCursorLen        = 4096
-	receiptHistoryListAbility         = "invocation.history.list"
-	receiptHistoryGetAbility          = "invocation.history.get"
-	receiptTraceGetAbility            = "invocation.trace.get"
 )
 
 type InvocationReceiptAnchor = axoninv.InvocationReceiptAnchor

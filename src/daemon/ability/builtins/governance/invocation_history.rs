@@ -758,6 +758,28 @@ mod tests {
     }
 
     #[test]
+    fn receipt_routes_are_generated_from_manifest() {
+        use sha2::Digest as _;
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("provider_routes/easynet-receipt-routes.v1.json");
+        let digest = sha2::Sha256::digest(std::fs::read(manifest).expect("read manifest"));
+
+        assert_eq!(
+            crate::daemon::ability::receipt_routes_gen::RECEIPT_ROUTE_MANIFEST_SHA256,
+            hex::encode(digest)
+        );
+        assert_eq!(
+            crate::daemon::ability::receipt_routes_gen::RECEIPT_PROFILE,
+            "receipt"
+        );
+        assert_eq!(
+            ABILITY_HISTORY_LIST,
+            crate::daemon::ability::receipt_routes_gen::INVOCATION_HISTORY_LIST
+        );
+    }
+
+    #[test]
     fn registration_publishes_invocation_history_manifests() {
         let mut reg = AxonAbilityCatalog::new();
         register(&mut reg, None);

@@ -28,12 +28,6 @@ type RuntimeReadiness struct {
 	Messages       []string              `json:"messages,omitempty"`
 }
 
-const (
-	runtimeAdminProfile             = "runtime_admin"
-	runtimeAdminSessionListAbility  = "session.list"
-	runtimeAdminDeviceRevokeAbility = "federation.revoke"
-)
-
 type RuntimeSessionListRequest struct {
 	Call              RuntimeCallContext `json:"call"`
 	IncludeTerminated *bool              `json:"include_terminated,omitempty"`

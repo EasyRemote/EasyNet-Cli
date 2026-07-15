@@ -21,11 +21,12 @@ from .daemon import (
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import DiagnosticsReport, HealthClient, RuntimeHealth
 from .runtime import RuntimeClient
+from ._runtime_admin_routes import (
+    _PROFILE as _RUNTIME_ADMIN_PROFILE,
+    _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
+    _RUNTIME_ADMIN_SESSION_LIST_ABILITY,
+)
 from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
-
-_RUNTIME_ADMIN_PROFILE = "runtime_admin"
-_RUNTIME_ADMIN_SESSION_LIST_ABILITY = "session.list"
-_RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY = "federation.revoke"
 
 
 class RuntimeAdminCommand(StrEnum):
