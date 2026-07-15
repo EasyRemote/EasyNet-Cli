@@ -56,8 +56,10 @@ make_good_fixture() {
     "$CLI/src/daemon/execution/mission" \
     "$CLI/src/daemon/ability/builtins/governance" \
     "$CLI/src/daemon/ability/builtins/resources" \
+    "$CLI/src/daemon/ability/catalog" \
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/invocation/dispatch" \
+    "$CLI/src/daemon/persistence" \
     "$CLI/sdk/python/easynet_sdk" \
     "$AXON/core/runtime-rs/src/services/invocation" \
     "$AXON/sdk/rust/src/invocation"
@@ -150,6 +152,122 @@ fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
     parse_ura(actor_ura)
         .map_err(|err| anyhow::anyhow!("actor_ura must be a canonical URA: {err}"))?;
     Ok(actor_ura)
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/resources/voice_contract.rs" <<'EOF'
+use std::sync::Arc;
+
+pub struct VoiceCallRepositoryQualification;
+
+impl VoiceCallRepositoryQualification {
+    fn validate_production(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn production(provider_id: String) -> Self {
+        Self
+    }
+
+    #[cfg(test)]
+    fn unqualified(provider_id: String) -> Self {
+        Self
+    }
+}
+
+pub trait VoiceCallRepository: std::fmt::Debug + Send + Sync {
+    fn qualification(&self) -> VoiceCallRepositoryQualification;
+}
+
+pub struct VoiceCallProviderAssembly {
+    repository: Arc<dyn VoiceCallRepository>,
+    qualification: VoiceCallRepositoryQualification,
+}
+
+impl VoiceCallProviderAssembly {
+    pub fn try_new(repository: Arc<dyn VoiceCallRepository>) -> anyhow::Result<Self> {
+        let qualification = repository.qualification();
+        qualification.validate_production()?;
+        Ok(Self { repository, qualification })
+    }
+}
+
+#[cfg(test)]
+struct TestVoiceCallRepository;
+
+#[cfg(test)]
+impl VoiceCallRepository for TestVoiceCallRepository {
+    fn qualification(&self) -> VoiceCallRepositoryQualification {
+        VoiceCallRepositoryQualification::unqualified("test-in-memory".to_string())
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/persistence/voice_calls.rs" <<'EOF'
+use crate::daemon::ability::builtins::resources::voice_contract::{
+    VoiceCallRepository, VoiceCallRepositoryQualification,
+};
+use crate::daemon::persistence::file_lock::{ExclusiveFileLock, SharedFileLock};
+
+pub const VOICE_SHARED_ROOT_ENV: &str = "EASYNET_HUB_VOICE_SHARED_ROOT";
+
+pub struct HubRealmVoiceCallRepository;
+
+impl HubRealmVoiceCallRepository {
+    pub fn from_env(realm: &str) -> anyhow::Result<Option<std::sync::Arc<Self>>> {
+        let Some(root) = std::env::var_os(VOICE_SHARED_ROOT_ENV) else {
+            return Ok(None);
+        };
+        Self::open_qualified(root, realm).map(|repository| Some(std::sync::Arc::new(repository)))
+    }
+
+    fn open_qualified(root: impl Into<std::path::PathBuf>, realm: &str) -> anyhow::Result<Self> {
+        let root = root.into();
+        if !root.is_absolute() {
+            anyhow::bail!("{VOICE_SHARED_ROOT_ENV} must be absolute");
+        }
+        Ok(Self)
+    }
+}
+
+impl VoiceCallRepository for HubRealmVoiceCallRepository {
+    fn qualification(&self) -> VoiceCallRepositoryQualification {
+        VoiceCallRepositoryQualification::production("shared-posix".to_string())
+    }
+}
+
+fn guarded(path: &std::path::Path) -> anyhow::Result<()> {
+    let _write = ExclusiveFileLock::acquire_for_data_path(path)?;
+    let _read = SharedFileLock::acquire_for_data_path(path)?;
+    Ok(())
+}
+EOF
+  cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
+pub struct RegistrySharedStores {
+    pub voice_calls: Option<VoiceCallProviderAssembly>,
+}
+
+impl RegistrySharedStores {
+    pub fn with_voice_call_provider_assembly(mut self, provider: VoiceCallProviderAssembly) -> Self {
+        self.voice_calls = Some(provider);
+        self
+    }
+}
+
+fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool) {
+    let voice_provider_assembly = shared_stores.voice_calls.clone();
+    if hosts_hub_authority {
+        if let Some(provider) = voice_provider_assembly.as_ref() {
+            voice_call_ability::register(&mut reg, provider.clone());
+        }
+    }
+    let evidence = VoiceAssemblyEvidence {
+        repository_assembled: voice_provider_assembly.is_some(),
+        executable_delivery_evidence: false,
+    };
+}
+EOF
+  cat >>"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
+pub fn register(reg: &mut AxonAbilityCatalog, provider: VoiceCallProviderAssembly) {
+    register_with_repository(reg, provider.repository());
 }
 EOF
   cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'
@@ -686,6 +804,39 @@ EOF
 expect_fail \
   "access-control actor URA fork" \
   "R18_ACCESS_CONTROL_ACTOR_URA_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
+pub fn register(reg: &mut AxonAbilityCatalog, repository: Arc<dyn VoiceCallRepository>) {
+    register_with_repository(reg, repository);
+}
+EOF
+cat >"$CLI/src/daemon/persistence/voice_calls.rs" <<'EOF'
+pub const VOICE_SHARED_ROOT_ENV: &str = "EASYNET_HUB_VOICE_SHARED_ROOT";
+
+pub struct HubRealmVoiceCallRepository;
+
+impl HubRealmVoiceCallRepository {
+    pub fn from_env(realm: &str) -> anyhow::Result<Option<std::sync::Arc<Self>>> {
+        let root = config::state_dir().join("voice-calls");
+        Self::open_qualified(root, realm).map(|repository| Some(std::sync::Arc::new(repository)))
+    }
+
+    fn open_qualified(root: impl Into<std::path::PathBuf>, realm: &str) -> anyhow::Result<Self> {
+        let root = root.into();
+        Ok(Self)
+    }
+}
+EOF
+cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
+fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool) {
+    let repository = TestVoiceCallRepository::default();
+    voice_call_ability::register(&mut reg, Arc::new(repository));
+}
+EOF
+expect_fail \
+  "voice provider boundary fork" \
+  "R19_VOICE_PROVIDER_BOUNDARY_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

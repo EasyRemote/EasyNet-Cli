@@ -1133,6 +1133,162 @@ if access_control.exists():
         )
 
 
+# Rule 19: voice call signaling is Hub-owned realm state. Static descriptor
+# contracts may exist without live handlers, but production route registration
+# must require a qualified realm-shared repository provider. A process-local
+# map, test repository, or daemon-local state file must never become the source
+# of voice aggregate truth.
+voice_contract = cli_root / "src/daemon/ability/builtins/resources/voice_contract.rs"
+voice_repository = cli_root / "src/daemon/persistence/voice_calls.rs"
+catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
+voice_handler = cli_root / "src/daemon/ability/builtins/resources/voice.rs"
+
+if voice_contract.exists():
+    text = source(voice_contract)
+    raw_text = voice_contract.read_text(encoding="utf-8", errors="replace")
+    contract_requirements = (
+        (
+            "pub struct VoiceCallProviderAssembly",
+            "voice live-route assembly must have a typed provider boundary",
+        ),
+        (
+            "pub fn try_new(repository: Arc<dyn VoiceCallRepository>) -> anyhow::Result<Self>",
+            "voice provider assembly must validate raw repositories before registration",
+        ),
+        (
+            "qualification.validate_production()?",
+            "voice provider assembly must require production qualification",
+        ),
+        (
+            "fn qualification(&self) -> VoiceCallRepositoryQualification",
+            "voice repositories must expose provider qualification facts",
+        ),
+    )
+    for token, detail in contract_requirements:
+        if token not in text:
+            add("R19_VOICE_PROVIDER_BOUNDARY_FORK", voice_contract, 1, detail)
+
+    if "VoiceCallRepositoryQualification::unqualified" not in raw_text:
+        add(
+            "R19_VOICE_PROVIDER_BOUNDARY_FORK",
+            voice_contract,
+            1,
+            "test repositories must remain visibly unqualified",
+        )
+    if "struct TestVoiceCallRepository" not in raw_text:
+        add(
+            "R19_VOICE_PROVIDER_BOUNDARY_FORK",
+            voice_contract,
+            1,
+            "the in-memory voice repository must stay test-only",
+        )
+
+    test_repo = raw_text.find("struct TestVoiceCallRepository")
+    if test_repo >= 0:
+        prefix = raw_text[max(0, test_repo - 120) : test_repo]
+        if "cfg(test)" not in prefix:
+            add(
+                "R19_VOICE_PROVIDER_BOUNDARY_FORK",
+                voice_contract,
+                line_number(raw_text, test_repo),
+                "in-memory voice repository must be compiled only for tests",
+            )
+
+if voice_repository.exists():
+    text = source(voice_repository)
+    repository_requirements = (
+        (
+            'pub const VOICE_SHARED_ROOT_ENV: &str = "EASYNET_HUB_VOICE_SHARED_ROOT"',
+            "production voice repository root must be explicit deployment configuration",
+        ),
+        (
+            "pub fn from_env(realm: &str) -> anyhow::Result<Option<std::sync::Arc<Self>>>",
+            "production voice repository must be optional unless the shared root is configured",
+        ),
+        (
+            "std::env::var_os(VOICE_SHARED_ROOT_ENV)",
+            "production voice repository must read only the explicit shared-root setting",
+        ),
+        (
+            "if !root.is_absolute()",
+            "production voice repository must reject relative shared roots",
+        ),
+        (
+            "VoiceCallRepositoryQualification::production",
+            "Hub voice repository must be production-qualified only after shared-root validation",
+        ),
+        (
+            "ExclusiveFileLock::acquire_for_data_path",
+            "Hub voice mutations require a cross-process write guard",
+        ),
+        (
+            "SharedFileLock::acquire_for_data_path",
+            "Hub voice reads require a shared repository guard",
+        ),
+    )
+    for token, detail in repository_requirements:
+        if token not in text:
+            add("R19_VOICE_PROVIDER_BOUNDARY_FORK", voice_repository, 1, detail)
+
+    local_state = re.search(r"\b(?:config::state_dir|state_dir\s*\(|home_dir\s*\(|\.easynet)\b", text)
+    if local_state:
+        add(
+            "R19_VOICE_PROVIDER_BOUNDARY_FORK",
+            voice_repository,
+            line_number(text, local_state.start()),
+            "production voice repository must not derive authority from daemon-local state",
+        )
+
+if catalog_build.exists():
+    text = source(catalog_build)
+    catalog_requirements = (
+        (
+            "with_voice_call_provider_assembly",
+            "catalog assembly must accept voice through provider assembly only",
+        ),
+        (
+            "let voice_provider_assembly = shared_stores.voice_calls.clone()",
+            "catalog build must snapshot voice provider assembly once",
+        ),
+        (
+            "if hosts_hub_authority",
+            "voice handlers may register only for Hub-capable authority",
+        ),
+        (
+            "if let Some(provider) = voice_provider_assembly.as_ref()",
+            "voice handlers may register only when a qualified provider exists",
+        ),
+        (
+            "voice_call_ability::register(&mut reg, provider.clone())",
+            "catalog build must pass provider assembly into voice route registration",
+        ),
+        (
+            "repository_assembled: voice_provider_assembly.is_some()",
+            "voice capability evidence must derive ProviderBacked from provider assembly",
+        ),
+    )
+    for token, detail in catalog_requirements:
+        if token not in text:
+            add("R19_VOICE_PROVIDER_BOUNDARY_FORK", catalog_build, 1, detail)
+
+if voice_handler.exists():
+    text = source(voice_handler)
+    if "pub fn register(reg: &mut AxonAbilityCatalog, provider: VoiceCallProviderAssembly)" not in text:
+        add(
+            "R19_VOICE_PROVIDER_BOUNDARY_FORK",
+            voice_handler,
+            1,
+            "voice route registration must require VoiceCallProviderAssembly",
+        )
+    if re.search(r"pub\s+fn\s+register\s*\([^)]*Arc\s*<\s*dyn\s+VoiceCallRepository", text):
+        add(
+            "R19_VOICE_PROVIDER_BOUNDARY_FORK",
+            voice_handler,
+            1,
+            "voice route registration must not accept raw repositories",
+        )
+
+
 if violations:
     for violation in sorted(violations):
         print(
