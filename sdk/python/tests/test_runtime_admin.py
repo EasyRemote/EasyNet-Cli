@@ -173,6 +173,39 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
     assert transport.seen["metadata"]["system_ability"] == "session.list"
 
 
+def test_runtime_admin_ability_client_accepts_empty_sessions() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"state": "ok", "sessions": []}
+
+    page = client.list_sessions(RuntimeSessionListRequest(call=_call()))
+
+    assert page.sessions == ()
+
+
+def test_runtime_admin_ability_client_rejects_legacy_session_items() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"state": "ok", "items": []}
+
+    try:
+        client.list_sessions(RuntimeSessionListRequest(call=_call()))
+    except SDKError as exc:
+        assert "sessions must be an array" in exc.message
+    else:
+        raise AssertionError("list_sessions accepted legacy items fallback")
+
+
+def test_runtime_admin_ability_client_rejects_malformed_session_rows() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"state": "ok", "sessions": ["bad-row"]}
+
+    try:
+        client.list_sessions(RuntimeSessionListRequest(call=_call()))
+    except SDKError as exc:
+        assert "sessions entries must be objects" in exc.message
+    else:
+        raise AssertionError("list_sessions ignored malformed session row")
+
+
 def test_runtime_admin_ability_client_revokes_device() -> None:
     client, transport = _ability_client()
     transport.output_json = {"ack": False, "runtime_not_ready": True}

@@ -388,10 +388,6 @@ func newRuntimeHandle(transport RuntimeLifecycleTransport, status RuntimeLifecyc
 	}, nil
 }
 
-func newDaemonHandle(transport DaemonTransport, status DaemonStatus) (*DaemonHandle, error) {
-	return newRuntimeHandle(transport, status)
-}
-
 func (h *RuntimeHandle) Status(ctx context.Context) (RuntimeLifecycleStatus, error) {
 	if err := h.requireAttached(); err != nil {
 		return RuntimeLifecycleStatus{}, err
@@ -609,16 +605,8 @@ func requireRuntimeLifecycleReady(status RuntimeLifecycleStatus) error {
 	return invalidRuntimePayload("daemon invocation endpoint is not ready", nil)
 }
 
-func requireDaemonRuntimeReady(status DaemonStatus) error {
-	return requireRuntimeLifecycleReady(status)
-}
-
 func runtimeLifecycleReady(state RuntimeLifecycleState) bool {
 	return state == RuntimeInvocationReady || state == RuntimeRunning
-}
-
-func daemonRuntimeReady(state DaemonLifecycleState) bool {
-	return runtimeLifecycleReady(state)
 }
 
 func NewEndpointsFromJSON(raw []byte, requireInvocation bool) (Endpoints, error) {
@@ -682,18 +670,10 @@ func validateRuntimeLifecycleTransition(current, next RuntimeLifecycleState) err
 	return invalidRuntimePayload(fmt.Sprintf("runtime lifecycle cannot transition from %s to %s", current, next), nil)
 }
 
-func validDaemonState(state DaemonLifecycleState) bool {
-	return validRuntimeLifecycleState(state)
-}
-
 func wrapRuntimeLifecycleTransportError(message string, cause error) error {
 	var sdkErr *SDKError
 	if errors.As(cause, &sdkErr) {
 		return sdkErr
 	}
 	return transportRuntimeError(message, cause)
-}
-
-func wrapDaemonTransportError(message string, cause error) error {
-	return wrapRuntimeLifecycleTransportError(message, cause)
 }

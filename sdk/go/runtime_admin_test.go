@@ -65,6 +65,37 @@ func TestRuntimeAdminRejectsMissingHandle(t *testing.T) {
 	}
 }
 
+func TestRuntimeAdminUsesRuntimeLifecycleInterface(t *testing.T) {
+	lifecycle := &runtimeAdminLifecycleStub{
+		transport: &memoryDaemonTransport{
+			statusJSON: `{"handle_id":"runtime-1","state":"Running","mode":"hub","endpoints":{"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/runtime.sock"}}`,
+		},
+	}
+	admin, err := NewRuntimeAdminClient(lifecycle, nil)
+	if err != nil {
+		t.Fatalf("NewRuntimeAdminClient: %v", err)
+	}
+
+	endpoints, err := admin.Discover(context.Background(), DiscoverOptions{})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if !lifecycle.discovered || endpoints.InvocationEndpoint != "unix:///tmp/runtime.sock" {
+		t.Fatalf("runtime lifecycle interface was not used: endpoints=%#v discovered=%v", endpoints, lifecycle.discovered)
+	}
+	handle, err := admin.Start(context.Background(), StartConfig{Mode: ModeHub})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	status, err := admin.Status(context.Background(), handle)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !lifecycle.started || status.State != RuntimeRunning {
+		t.Fatalf("runtime lifecycle start/status mismatch: state=%s started=%v", status.State, lifecycle.started)
+	}
+}
+
 func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 	includeTerminated := false
 	capture := &runtimeAdminInvokeCapture{outputJSON: `{
@@ -103,6 +134,51 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 	metadata := capture.metadata(t)
 	if metadata["sdk_profile"] != runtimeAdminProfile || metadata["system_ability"] != runtimeAdminSessionListAbility {
 		t.Fatalf("runtime admin metadata missing: %#v", metadata)
+	}
+}
+
+func TestRuntimeAdminAbilityClientAcceptsEmptySessions(t *testing.T) {
+	capture := &runtimeAdminInvokeCapture{outputJSON: `{"state": "ok", "sessions": []}`}
+	client := newRuntimeAdminAbilityTestClient(t, capture)
+
+	page, err := client.ListSessions(context.Background(), RuntimeSessionListRequest{
+		Call: runtimeAdminTestCall(),
+	})
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(page.Sessions) != 0 {
+		t.Fatalf("unexpected sessions: %#v", page.Sessions)
+	}
+}
+
+func TestRuntimeAdminAbilityClientRejectsLegacySessionItems(t *testing.T) {
+	capture := &runtimeAdminInvokeCapture{outputJSON: `{"state": "ok", "items": []}`}
+	client := newRuntimeAdminAbilityTestClient(t, capture)
+
+	_, err := client.ListSessions(context.Background(), RuntimeSessionListRequest{
+		Call: runtimeAdminTestCall(),
+	})
+	if err == nil {
+		t.Fatal("ListSessions accepted legacy items fallback")
+	}
+	if !strings.Contains(err.Error(), "sessions must be an array") {
+		t.Fatalf("error = %v, want sessions array requirement", err)
+	}
+}
+
+func TestRuntimeAdminAbilityClientRejectsMalformedSessionRows(t *testing.T) {
+	capture := &runtimeAdminInvokeCapture{outputJSON: `{"state": "ok", "sessions": ["bad-row"]}`}
+	client := newRuntimeAdminAbilityTestClient(t, capture)
+
+	_, err := client.ListSessions(context.Background(), RuntimeSessionListRequest{
+		Call: runtimeAdminTestCall(),
+	})
+	if err == nil {
+		t.Fatal("ListSessions ignored malformed session row")
+	}
+	if !strings.Contains(err.Error(), "sessions entries must be objects") {
+		t.Fatalf("error = %v, want sessions entry object requirement", err)
 	}
 }
 
@@ -251,4 +327,39 @@ func runtimeAdminTestCall() RuntimeCallContext {
 		CausalContext:     map[string]any{"form": "none"},
 		Metadata:          map[string]any{"request_id": "admin-test"},
 	}
+}
+
+type runtimeAdminLifecycleStub struct {
+	transport  *memoryDaemonTransport
+	discovered bool
+	started    bool
+}
+
+func (s *runtimeAdminLifecycleStub) Discover(context.Context, DiscoverOptions) (Endpoints, error) {
+	s.discovered = true
+	return Endpoints{
+		ControlEndpoint:    "unix:///tmp/control.sock",
+		InvocationEndpoint: "unix:///tmp/runtime.sock",
+	}, nil
+}
+
+func (s *runtimeAdminLifecycleStub) Start(context.Context, StartConfig) (*RuntimeHandle, error) {
+	s.started = true
+	return newRuntimeHandle(s.transport, RuntimeLifecycleStatus{
+		HandleID: "runtime-1",
+		State:    RuntimeRunning,
+		Mode:     ModeHub,
+		Endpoints: Endpoints{
+			ControlEndpoint:    "unix:///tmp/control.sock",
+			InvocationEndpoint: "unix:///tmp/runtime.sock",
+		},
+	})
+}
+
+func (s *runtimeAdminLifecycleStub) Attach(context.Context, AttachOptions) (*RuntimeHandle, error) {
+	return s.Start(context.Background(), StartConfig{Mode: ModeHub})
+}
+
+func (s *runtimeAdminLifecycleStub) ConnectLocal(context.Context, ConnectOptions) (*RuntimeClient, error) {
+	return nil, invalidRuntimeClient("runtime client is not configured")
 }

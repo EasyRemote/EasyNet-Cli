@@ -97,7 +97,7 @@ func (c *RuntimeAdminAbilityClient) ListSessions(ctx context.Context, request Ru
 	if err != nil {
 		return RuntimeSessionPage{}, err
 	}
-	return runtimeSessionPage(output), nil
+	return runtimeSessionPage(output)
 }
 
 func (c *RuntimeAdminAbilityClient) RevokeDevice(ctx context.Context, request RuntimeDeviceRevokeRequest) (RuntimeDeviceRevokeResult, error) {
@@ -139,15 +139,15 @@ func (c *RuntimeAdminAbilityClient) RevokeDevice(ctx context.Context, request Ru
 }
 
 type RuntimeAdminClient struct {
-	host   *RuntimeHost
-	health *HealthClient
+	lifecycle RuntimeLifecycle
+	health    *HealthClient
 }
 
-func NewRuntimeAdminClient(host *RuntimeHost, health *HealthClient) (*RuntimeAdminClient, error) {
-	if host == nil {
-		return nil, invalidRuntimeClient("runtime host control is required")
+func NewRuntimeAdminClient(lifecycle RuntimeLifecycle, health *HealthClient) (*RuntimeAdminClient, error) {
+	if lifecycle == nil {
+		return nil, invalidRuntimeClient("runtime lifecycle is required")
 	}
-	return &RuntimeAdminClient{host: host, health: health}, nil
+	return &RuntimeAdminClient{lifecycle: lifecycle, health: health}, nil
 }
 
 func (c *RuntimeAdminClient) Discover(ctx context.Context, opts RuntimeHostDiscoverOptions) (RuntimeHostEndpoints, error) {
@@ -260,14 +260,14 @@ func (c *RuntimeAdminClient) Readiness(ctx context.Context, handle *RuntimeHandl
 	}, nil
 }
 
-func (c *RuntimeAdminClient) requireControl(ctx context.Context) (*RuntimeHost, error) {
-	if c == nil || c.host == nil {
+func (c *RuntimeAdminClient) requireControl(ctx context.Context) (RuntimeLifecycle, error) {
+	if c == nil || c.lifecycle == nil {
 		return nil, invalidRuntimeClient("runtime admin client is not initialized")
 	}
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	return c.host, nil
+	return c.lifecycle, nil
 }
 
 func runtimeAdminCall(call RuntimeCallContext, ability string) RuntimeCallContext {
@@ -278,10 +278,10 @@ func runtimeAdminCall(call RuntimeCallContext, ability string) RuntimeCallContex
 	return call
 }
 
-func runtimeSessionPage(output map[string]any) RuntimeSessionPage {
-	rows := runtimeAdminMapSlice(output["sessions"])
-	if len(rows) == 0 {
-		rows = runtimeAdminMapSlice(output["items"])
+func runtimeSessionPage(output map[string]any) (RuntimeSessionPage, error) {
+	rows, err := requiredRuntimeAdminSessionRows(output, "sessions")
+	if err != nil {
+		return RuntimeSessionPage{}, err
 	}
 	sessions := make([]RuntimeSession, 0, len(rows))
 	for _, row := range rows {
@@ -303,7 +303,7 @@ func runtimeSessionPage(output map[string]any) RuntimeSessionPage {
 		Sessions:      sessions,
 		NextCursor:    output["next_cursor"],
 		Raw:           cloneRuntimeAdminMap(output),
-	}
+	}, nil
 }
 
 func cloneRuntimeAdminMap(input map[string]any) map[string]any {
@@ -362,19 +362,25 @@ func runtimeAdminMap(value any) map[string]any {
 	return map[string]any{}
 }
 
-func runtimeAdminMapSlice(value any) []map[string]any {
+func requiredRuntimeAdminSessionRows(output map[string]any, field string) ([]map[string]any, error) {
+	value, exists := output[field]
+	if !exists {
+		return nil, invalidRuntimePayload("runtime admin response field "+field+" must be an array", nil)
+	}
+	if typed, ok := value.([]map[string]any); ok {
+		return typed, nil
+	}
 	rows, ok := value.([]any)
 	if !ok {
-		if typed, ok := value.([]map[string]any); ok {
-			return typed
-		}
-		return []map[string]any{}
+		return nil, invalidRuntimePayload("runtime admin response field "+field+" must be an array", nil)
 	}
 	result := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
-		if typed, ok := row.(map[string]any); ok {
-			result = append(result, typed)
+		typed, ok := row.(map[string]any)
+		if !ok {
+			return nil, invalidRuntimePayload("runtime admin response field "+field+" entries must be objects", nil)
 		}
+		result = append(result, typed)
 	}
-	return result
+	return result, nil
 }

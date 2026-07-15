@@ -259,13 +259,12 @@ def _runtime_admin_call(
 
 def _runtime_session_page(output: Mapping[str, object]) -> RuntimeSessionPage:
     raw_rows = output.get("sessions")
-    if not isinstance(raw_rows, list) or not raw_rows:
-        raw_rows = output.get("items")
-    rows = raw_rows if isinstance(raw_rows, list) else []
+    if not isinstance(raw_rows, list):
+        raise _invalid_admin("runtime admin response field sessions must be an array")
     sessions: list[RuntimeSession] = []
-    for row in rows:
+    for row in raw_rows:
         if not isinstance(row, Mapping):
-            continue
+            raise _invalid_admin("runtime admin response field sessions entries must be objects")
         raw_metadata = row.get("metadata")
         sessions.append(
             RuntimeSession(
