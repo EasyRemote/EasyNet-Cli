@@ -4,6 +4,7 @@ public struct StreamEvent: Sendable, Equatable {
     public let state: String
     public let payloadJSON: String
     public let terminal: Bool
+    public let transportTerminal: Bool
     public let error: SDKError?
 
     public init(
@@ -12,6 +13,7 @@ public struct StreamEvent: Sendable, Equatable {
         state: String,
         payloadJSON: String = "",
         terminal: Bool = false,
+        transportTerminal: Bool = false,
         error: SDKError? = nil
     ) throws {
         guard sequence >= 0 else {
@@ -28,6 +30,7 @@ public struct StreamEvent: Sendable, Equatable {
         self.state = state
         self.payloadJSON = payloadJSON
         self.terminal = terminal
+        self.transportTerminal = transportTerminal
         self.error = error
     }
 
@@ -39,12 +42,16 @@ public struct StreamEvent: Sendable, Equatable {
         try StreamEvent(sequence: sequence, kind: "terminal", state: state, terminal: true)
     }
 
+    public static func transportTerminal(_ sequence: Int, kind: String, state: String) throws -> StreamEvent {
+        try StreamEvent(sequence: sequence, kind: kind, state: state, transportTerminal: true)
+    }
+
     public static func backpressure(_ sequence: Int) throws -> StreamEvent {
         try StreamEvent(
             sequence: sequence,
-            kind: "terminal",
-            state: "BackpressureTerminated",
-            terminal: true,
+            kind: "error",
+            state: "Failed",
+            transportTerminal: true,
             error: SDKError(
                 code: .transport,
                 stage: "stream",
@@ -64,6 +71,7 @@ extension StreamEvent {
             && lhs.state == rhs.state
             && lhs.payloadJSON == rhs.payloadJSON
             && lhs.terminal == rhs.terminal
+            && lhs.transportTerminal == rhs.transportTerminal
             && lhs.error?.code == rhs.error?.code
     }
 }
@@ -76,7 +84,7 @@ public protocol StreamSource: AnyObject, Sendable {
 
 public extension StreamSource {
     func cancel(reason: String) async throws -> StreamEvent {
-        try StreamEvent.terminal(0, state: "Cancelled")
+        try StreamEvent.transportTerminal(0, kind: "cancel_requested", state: "CancelRequested")
     }
 
     func close() async throws {}
@@ -89,6 +97,7 @@ public final class StreamHandle: @unchecked Sendable {
     private var closed = false
     private var retained: [StreamEvent] = []
     private var terminal: StreamEvent?
+    private var transportTerminal: StreamEvent?
 
     public init(source: StreamSource) {
         self.source = source
@@ -99,10 +108,15 @@ public final class StreamHandle: @unchecked Sendable {
         if let terminal {
             return terminal
         }
+        if let transportTerminal {
+            return transportTerminal
+        }
         let event = try await source.next()
         try retain(event)
         if event.terminal {
             terminal = event
+        } else if event.transportTerminal {
+            transportTerminal = event
         }
         return terminal ?? event
     }
@@ -110,8 +124,12 @@ public final class StreamHandle: @unchecked Sendable {
     public func cancel(reason: String) async throws -> StreamEvent {
         try requireOpen()
         let event = try await source.cancel(reason: reason)
-        terminal = event
         try retain(event)
+        if event.terminal {
+            terminal = event
+        } else if event.transportTerminal {
+            transportTerminal = event
+        }
         return event
     }
 
@@ -123,6 +141,10 @@ public final class StreamHandle: @unchecked Sendable {
         terminal
     }
 
+    public func transportTerminalEvent() -> StreamEvent? {
+        transportTerminal
+    }
+
     public func close() async throws {
         guard !closed else {
             return
@@ -132,13 +154,13 @@ public final class StreamHandle: @unchecked Sendable {
     }
 
     private func retain(_ event: StreamEvent) throws {
-        if retained.count >= StreamHandle.maxRetainedEvents, terminal == nil {
+        if retained.count >= StreamHandle.maxRetainedEvents, terminal == nil, transportTerminal == nil {
             let overflow = try StreamEvent.backpressure(event.sequence)
-            terminal = overflow
+            transportTerminal = overflow
             retained.append(overflow)
             return
         }
-        if terminal == nil || event.terminal {
+        if (terminal == nil && transportTerminal == nil) || event.terminal || event.transportTerminal {
             retained.append(event)
         }
     }

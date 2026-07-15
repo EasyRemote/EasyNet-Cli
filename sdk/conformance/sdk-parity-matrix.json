@@ -51890,7 +51890,7 @@
         },
         {
           "item": "BidiFrame.new",
-          "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+          "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
         },
         {
           "item": "BidiFrame.payloadJson",
@@ -51911,6 +51911,14 @@
         {
           "item": "BidiFrame.toString",
           "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+        },
+        {
+          "item": "BidiFrame.transportTerminal",
+          "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+        },
+        {
+          "item": "BidiFrame.transportTerminal#2",
+          "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
         },
         {
           "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -51955,6 +51963,10 @@
         {
           "item": "BidiSession.terminalFrame",
           "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+        },
+        {
+          "item": "BidiSession.transportTerminalFrame",
+          "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
         },
         {
           "item": "BidiSource.cancel",
@@ -52013,7 +52025,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52034,6 +52046,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52078,6 +52098,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52136,7 +52160,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52157,6 +52181,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52201,6 +52233,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52259,7 +52295,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52280,6 +52316,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52324,6 +52368,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52382,7 +52430,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52403,6 +52451,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52447,6 +52503,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52505,7 +52565,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52526,6 +52586,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52570,6 +52638,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52628,7 +52700,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52649,6 +52721,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52693,6 +52773,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52751,7 +52835,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52772,6 +52856,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52816,6 +52908,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52874,7 +52970,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -52895,6 +52991,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -52939,6 +53043,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -52997,7 +53105,7 @@
             },
             {
               "item": "BidiFrame.new",
-              "sha256": "12c878305a3300c66a1cfbe370c983ded9b9306baa1cfd7aa4c3963c05a290b8"
+              "sha256": "9eff51f06c34781807845a1ed8e5f82de820558640f5b31f294675cafeeb9ee0"
             },
             {
               "item": "BidiFrame.payloadJson",
@@ -53018,6 +53126,14 @@
             {
               "item": "BidiFrame.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "76ebac1adbc3b18a2fecb56a46f5bcb9789113a6b39b753e0fa60aa50285bd15"
+            },
+            {
+              "item": "BidiFrame.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "BidiSession.MAX_RETAINED_FRAMES",
@@ -53062,6 +53178,10 @@
             {
               "item": "BidiSession.terminalFrame",
               "sha256": "2505547c90965f0b3b2982ed26f237275d7db8415d337c2d2770eb2a5a815f17"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame",
+              "sha256": "9197b0c5ce005eb6f4083cce98bb7ac335432826b57540eac3127b40a11bfb84"
             },
             {
               "item": "BidiSource.cancel",
@@ -53127,8 +53247,8 @@
           "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
         },
         {
-          "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-          "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+          "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+          "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
         },
         {
           "item": "BidiFrame.kind",
@@ -53149,6 +53269,14 @@
         {
           "item": "BidiFrame.terminal(_:kind:)",
           "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+        },
+        {
+          "item": "BidiFrame.transportTerminal",
+          "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+        },
+        {
+          "item": "BidiFrame.transportTerminal(_:kind:)",
+          "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
         },
         {
           "item": "BidiFrameIterator.next()",
@@ -53307,6 +53435,10 @@
           "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
         },
         {
+          "item": "BidiSession.transportTerminalFrame()",
+          "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
+        },
+        {
           "item": "BidiSource.cancel(reason:)",
           "sha256": "592e721387f79b3c53c5dfe169c74785c8ee4c14f6a8923631ba63cb252df2ec"
         },
@@ -53370,8 +53502,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -53392,6 +53524,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -53548,6 +53688,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -53613,8 +53757,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -53635,6 +53779,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -53791,6 +53943,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -53856,8 +54012,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -53878,6 +54034,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -54034,6 +54198,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -54099,8 +54267,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -54121,6 +54289,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -54277,6 +54453,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -54342,8 +54522,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -54364,6 +54544,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -54520,6 +54708,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -54585,8 +54777,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -54607,6 +54799,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -54763,6 +54963,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -54828,8 +55032,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -54850,6 +55054,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -55006,6 +55218,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -55071,8 +55287,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -55093,6 +55309,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -55249,6 +55473,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -55314,8 +55542,8 @@
               "sha256": "50e0bcff2a2fe2ba552c7675376ac8d6fe1469e95d41c84213e895d93eaa41ac"
             },
             {
-              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:)",
-              "sha256": "d3adb6fa1db60936a5702d3a627468ffeb7d6dc08003a7e352c2e2ea03763957"
+              "item": "BidiFrame.init(sequence:kind:payloadJSON:terminal:transportTerminal:)",
+              "sha256": "c4ec047395d0735f42478a55af41da3c954d528f67c4f9017b2ac30d6e389e98"
             },
             {
               "item": "BidiFrame.kind",
@@ -55336,6 +55564,14 @@
             {
               "item": "BidiFrame.terminal(_:kind:)",
               "sha256": "b6235a8f97540a75c8ae93014ff89da151581ea6b9342463b77778ff396e4dbd"
+            },
+            {
+              "item": "BidiFrame.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "BidiFrame.transportTerminal(_:kind:)",
+              "sha256": "b143ceb7f1c6ec0971030a8569d6e7e7399f00c8943664ae4ee72e81aab14a72"
             },
             {
               "item": "BidiFrameIterator.next()",
@@ -55492,6 +55728,10 @@
             {
               "item": "BidiSession.terminalFrame()",
               "sha256": "f7546fb26903bb6def73be5a9a31ade734bded3059f134c57e4f09c39471d33f"
+            },
+            {
+              "item": "BidiSession.transportTerminalFrame()",
+              "sha256": "5e0509850520f705c260b49ea1297f0c769df595ef0c9fc3c100d7131019a326"
             },
             {
               "item": "BidiSource.cancel(reason:)",
@@ -171424,7 +171664,7 @@
         },
         {
           "item": "StreamEvent.new",
-          "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+          "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
         },
         {
           "item": "StreamEvent.payloadJson",
@@ -171449,6 +171689,14 @@
         {
           "item": "StreamEvent.toString",
           "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+        },
+        {
+          "item": "StreamEvent.transportTerminal",
+          "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+        },
+        {
+          "item": "StreamEvent.transportTerminal#2",
+          "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
         },
         {
           "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -171485,6 +171733,10 @@
         {
           "item": "StreamHandle.terminalEvent",
           "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+        },
+        {
+          "item": "StreamHandle.transportTerminalEvent",
+          "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
         },
         {
           "item": "StreamSource.cancel",
@@ -171543,7 +171795,7 @@
             },
             {
               "item": "StreamEvent.new",
-              "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+              "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
             },
             {
               "item": "StreamEvent.payloadJson",
@@ -171568,6 +171820,14 @@
             {
               "item": "StreamEvent.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+            },
+            {
+              "item": "StreamEvent.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -171604,6 +171864,10 @@
             {
               "item": "StreamHandle.terminalEvent",
               "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent",
+              "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
             },
             {
               "item": "StreamSource.cancel",
@@ -171662,7 +171926,7 @@
             },
             {
               "item": "StreamEvent.new",
-              "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+              "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
             },
             {
               "item": "StreamEvent.payloadJson",
@@ -171687,6 +171951,14 @@
             {
               "item": "StreamEvent.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+            },
+            {
+              "item": "StreamEvent.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -171723,6 +171995,10 @@
             {
               "item": "StreamHandle.terminalEvent",
               "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent",
+              "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
             },
             {
               "item": "StreamSource.cancel",
@@ -171781,7 +172057,7 @@
             },
             {
               "item": "StreamEvent.new",
-              "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+              "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
             },
             {
               "item": "StreamEvent.payloadJson",
@@ -171806,6 +172082,14 @@
             {
               "item": "StreamEvent.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+            },
+            {
+              "item": "StreamEvent.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -171842,6 +172126,10 @@
             {
               "item": "StreamHandle.terminalEvent",
               "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent",
+              "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
             },
             {
               "item": "StreamSource.cancel",
@@ -171900,7 +172188,7 @@
             },
             {
               "item": "StreamEvent.new",
-              "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+              "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
             },
             {
               "item": "StreamEvent.payloadJson",
@@ -171925,6 +172213,14 @@
             {
               "item": "StreamEvent.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+            },
+            {
+              "item": "StreamEvent.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -171961,6 +172257,10 @@
             {
               "item": "StreamHandle.terminalEvent",
               "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent",
+              "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
             },
             {
               "item": "StreamSource.cancel",
@@ -172019,7 +172319,7 @@
             },
             {
               "item": "StreamEvent.new",
-              "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+              "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
             },
             {
               "item": "StreamEvent.payloadJson",
@@ -172044,6 +172344,14 @@
             {
               "item": "StreamEvent.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+            },
+            {
+              "item": "StreamEvent.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -172080,6 +172388,10 @@
             {
               "item": "StreamHandle.terminalEvent",
               "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent",
+              "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
             },
             {
               "item": "StreamSource.cancel",
@@ -172138,7 +172450,7 @@
             },
             {
               "item": "StreamEvent.new",
-              "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+              "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
             },
             {
               "item": "StreamEvent.payloadJson",
@@ -172163,6 +172475,14 @@
             {
               "item": "StreamEvent.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+            },
+            {
+              "item": "StreamEvent.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -172199,6 +172519,10 @@
             {
               "item": "StreamHandle.terminalEvent",
               "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent",
+              "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
             },
             {
               "item": "StreamSource.cancel",
@@ -172257,7 +172581,7 @@
             },
             {
               "item": "StreamEvent.new",
-              "sha256": "fe38d21159e09fbb847daf159db774171f2dbb60ccc707f22b1c265eb48976a6"
+              "sha256": "18c3df1d7e46f1058676bd33fc5f6c6e8a84212dda737b968d16ab81db80c190"
             },
             {
               "item": "StreamEvent.payloadJson",
@@ -172282,6 +172606,14 @@
             {
               "item": "StreamEvent.toString",
               "sha256": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "b9c8f74ce11ff26012a1f6197ad638297eb6991b47957c3ff58cfadc5367af64"
+            },
+            {
+              "item": "StreamEvent.transportTerminal#2",
+              "sha256": "a59661154aefe14d4e2cdc8d15cd3b9f4ba649d5b3a3f83ece5b39388c0fef0e"
             },
             {
               "item": "StreamHandle.MAX_RETAINED_EVENTS",
@@ -172318,6 +172650,10 @@
             {
               "item": "StreamHandle.terminalEvent",
               "sha256": "2cd79785c3433d1583d2733de3fdf6aebd1b252b26d16d6f8d3bdc2d2bea2f6f"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent",
+              "sha256": "cecb451e78a482cc83b50e418bf96287638a161af0e33805237c585e4f1ff785"
             },
             {
               "item": "StreamSource.cancel",
@@ -172385,8 +172721,8 @@
           "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
         },
         {
-          "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-          "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+          "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+          "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
         },
         {
           "item": "StreamEvent.kind",
@@ -172411,6 +172747,14 @@
         {
           "item": "StreamEvent.terminal(_:state:)",
           "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+        },
+        {
+          "item": "StreamEvent.transportTerminal",
+          "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+        },
+        {
+          "item": "StreamEvent.transportTerminal(_:kind:state:)",
+          "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
         },
         {
           "item": "StreamEventIterator.next()",
@@ -172561,6 +172905,10 @@
           "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
         },
         {
+          "item": "StreamHandle.transportTerminalEvent()",
+          "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
+        },
+        {
           "item": "StreamSource.cancel(reason:)",
           "sha256": "7eb01278360af73748262f1db88a9ac95eb960fd5db726ad5ada61c068a2a96c"
         },
@@ -172624,8 +172972,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-              "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+              "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
             },
             {
               "item": "StreamEvent.kind",
@@ -172650,6 +172998,14 @@
             {
               "item": "StreamEvent.terminal(_:state:)",
               "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "StreamEvent.transportTerminal(_:kind:state:)",
+              "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
             },
             {
               "item": "StreamEventIterator.next()",
@@ -172798,6 +173154,10 @@
             {
               "item": "StreamHandle.terminalEvent()",
               "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent()",
+              "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
             },
             {
               "item": "StreamSource.cancel(reason:)",
@@ -172863,8 +173223,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-              "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+              "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
             },
             {
               "item": "StreamEvent.kind",
@@ -172889,6 +173249,14 @@
             {
               "item": "StreamEvent.terminal(_:state:)",
               "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "StreamEvent.transportTerminal(_:kind:state:)",
+              "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
             },
             {
               "item": "StreamEventIterator.next()",
@@ -173037,6 +173405,10 @@
             {
               "item": "StreamHandle.terminalEvent()",
               "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent()",
+              "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
             },
             {
               "item": "StreamSource.cancel(reason:)",
@@ -173102,8 +173474,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-              "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+              "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
             },
             {
               "item": "StreamEvent.kind",
@@ -173128,6 +173500,14 @@
             {
               "item": "StreamEvent.terminal(_:state:)",
               "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "StreamEvent.transportTerminal(_:kind:state:)",
+              "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
             },
             {
               "item": "StreamEventIterator.next()",
@@ -173276,6 +173656,10 @@
             {
               "item": "StreamHandle.terminalEvent()",
               "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent()",
+              "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
             },
             {
               "item": "StreamSource.cancel(reason:)",
@@ -173341,8 +173725,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-              "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+              "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
             },
             {
               "item": "StreamEvent.kind",
@@ -173367,6 +173751,14 @@
             {
               "item": "StreamEvent.terminal(_:state:)",
               "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "StreamEvent.transportTerminal(_:kind:state:)",
+              "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
             },
             {
               "item": "StreamEventIterator.next()",
@@ -173515,6 +173907,10 @@
             {
               "item": "StreamHandle.terminalEvent()",
               "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent()",
+              "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
             },
             {
               "item": "StreamSource.cancel(reason:)",
@@ -173580,8 +173976,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-              "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+              "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
             },
             {
               "item": "StreamEvent.kind",
@@ -173606,6 +174002,14 @@
             {
               "item": "StreamEvent.terminal(_:state:)",
               "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "StreamEvent.transportTerminal(_:kind:state:)",
+              "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
             },
             {
               "item": "StreamEventIterator.next()",
@@ -173754,6 +174158,10 @@
             {
               "item": "StreamHandle.terminalEvent()",
               "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent()",
+              "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
             },
             {
               "item": "StreamSource.cancel(reason:)",
@@ -173819,8 +174227,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-              "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+              "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
             },
             {
               "item": "StreamEvent.kind",
@@ -173845,6 +174253,14 @@
             {
               "item": "StreamEvent.terminal(_:state:)",
               "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "StreamEvent.transportTerminal(_:kind:state:)",
+              "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
             },
             {
               "item": "StreamEventIterator.next()",
@@ -173993,6 +174409,10 @@
             {
               "item": "StreamHandle.terminalEvent()",
               "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent()",
+              "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
             },
             {
               "item": "StreamSource.cancel(reason:)",
@@ -174058,8 +174478,8 @@
               "sha256": "aa0c8ca52d62764ce25f2c742d823eac618b308c9eec02b4b913bb9f89b6334e"
             },
             {
-              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:error:)",
-              "sha256": "6fed67b1973136d32d002d06ec84f51c31e783e882b0caa404cfb924686470f2"
+              "item": "StreamEvent.init(sequence:kind:state:payloadJSON:terminal:transportTerminal:error:)",
+              "sha256": "4259abbcbdb1663058edc3525efacf21e0edd1c97bc77505b575c7e8474b60c4"
             },
             {
               "item": "StreamEvent.kind",
@@ -174084,6 +174504,14 @@
             {
               "item": "StreamEvent.terminal(_:state:)",
               "sha256": "bfce5ec6905965520cc104cdae3cad6523c6ede238983b1ee6026dc0e7f1a4b9"
+            },
+            {
+              "item": "StreamEvent.transportTerminal",
+              "sha256": "736d94b743411567a2f59eb526bee1bf87385c9aec588fdccce189dfbc97ede5"
+            },
+            {
+              "item": "StreamEvent.transportTerminal(_:kind:state:)",
+              "sha256": "153e6d9952df8fb4e00cbf08d16511be5ea8e7758bfcb2ef4b6b38ea1ea5b678"
             },
             {
               "item": "StreamEventIterator.next()",
@@ -174232,6 +174660,10 @@
             {
               "item": "StreamHandle.terminalEvent()",
               "sha256": "1958136460073338664325dd29bb41fa3ae531228d1075897abb0cc239ffbb42"
+            },
+            {
+              "item": "StreamHandle.transportTerminalEvent()",
+              "sha256": "c418e3e41be090b10074f7379e602fd1cadc4d7c4002609175ad9cab4ce02bd7"
             },
             {
               "item": "StreamSource.cancel(reason:)",

@@ -50,6 +50,10 @@ public final class RuntimeCoreSeamTest {
     runSelector(args[0]);
   }
 
+  public void testRuntimeCoreSeam() throws Exception {
+    main(new String[0]);
+  }
+
   private static void runSelector(String selector) throws Exception {
     switch (selector) {
       case "productNeutralJarExportsOnlyGenericRuntimeConcepts" ->
@@ -298,9 +302,10 @@ public final class RuntimeCoreSeamTest {
       stream.next();
     }
     check(
-        stream.terminalEvent() != null
-            && "BackpressureTerminated".equals(stream.terminalEvent().state()),
-        "stream backpressure terminal");
+        stream.terminalEvent() == null
+            && stream.transportTerminalEvent() != null
+            && stream.transportTerminalEvent().transportTerminal(),
+        "stream backpressure transport terminal");
     check(
         stream.retainedEvents().size() == StreamHandle.MAX_RETAINED_EVENTS + 1,
         "stream retained history bound");
@@ -310,11 +315,13 @@ public final class RuntimeCoreSeamTest {
     BidiSession bidi = new BidiSession(new CountingBidiSource());
     bidi.send(BidiFrame.data(0, "{\"hello\":true}"));
     BidiFrame sendClosed = bidi.closeSend();
-    check(sendClosed.terminal(), "bidi send side close acknowledged");
+    check(
+        !sendClosed.terminal() && sendClosed.transportTerminal(),
+        "bidi send side close is transport terminal");
     expectSDKError(ErrorCode.CANCELLED, () -> bidi.send(BidiFrame.data(1, "{}")));
     check(!bidi.next().terminal(), "receive side remains open after close-send");
     BidiFrame cancelled = bidi.cancel("done");
-    check(cancelled.terminal(), "bidi cancellation terminal");
+    check(!cancelled.terminal() && cancelled.transportTerminal(), "bidi cancellation transport terminal");
     bidi.close();
   }
 
@@ -373,10 +380,19 @@ public final class RuntimeCoreSeamTest {
   private static void streamAndBidiBackpressureAreBounded() {
     StreamHandle stream = new StreamHandle(new CountingStreamSource());
     for (int index = 0; index <= StreamHandle.MAX_RETAINED_EVENTS; index++) stream.next();
-    check("BackpressureTerminated".equals(stream.terminalEvent().state()), "backpressure terminal");
+    check(stream.terminalEvent() == null, "stream backpressure is not runtime terminal");
+    check(
+        stream.transportTerminalEvent() != null
+            && stream.transportTerminalEvent().transportTerminal(),
+        "stream backpressure transport terminal");
     BidiSession bidi = new BidiSession(new CountingBidiSource());
     for (int index = 0; index <= BidiSession.MAX_RETAINED_FRAMES; index++) bidi.next();
-    check("backpressure_terminated".equals(bidi.terminalFrame().kind()), "bidi backpressure terminal");
+    check(bidi.terminalFrame() == null, "bidi backpressure is not runtime terminal");
+    check(
+        bidi.transportTerminalFrame() != null
+            && "backpressure_terminated".equals(bidi.transportTerminalFrame().kind())
+            && bidi.transportTerminalFrame().transportTerminal(),
+        "bidi backpressure transport terminal");
   }
 
   private static void streamOrderAndTerminalArePreserved() {

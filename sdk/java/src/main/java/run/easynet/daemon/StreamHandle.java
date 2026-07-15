@@ -12,6 +12,7 @@ public final class StreamHandle implements AutoCloseable, Iterator<StreamEvent> 
   private final ArrayDeque<StreamEvent> retained = new ArrayDeque<>();
   private boolean closed;
   private StreamEvent terminal;
+  private StreamEvent transportTerminal;
 
   public StreamHandle(StreamSource source) {
     this.source = Objects.requireNonNull(source, "source");
@@ -19,7 +20,7 @@ public final class StreamHandle implements AutoCloseable, Iterator<StreamEvent> 
 
   @Override
   public boolean hasNext() {
-    return !closed && terminal == null;
+    return !closed && terminal == null && transportTerminal == null;
   }
 
   @Override
@@ -28,19 +29,29 @@ public final class StreamHandle implements AutoCloseable, Iterator<StreamEvent> 
     if (terminal != null) {
       return terminal;
     }
+    if (transportTerminal != null) {
+      return transportTerminal;
+    }
     StreamEvent event = source.next();
     retain(event);
     if (event.terminal()) {
       terminal = event;
+    } else if (event.transportTerminal()) {
+      transportTerminal = event;
     }
     return event;
   }
 
   public StreamEvent cancel(String reason) {
     requireOpen();
-    terminal = source.cancel(reason == null ? "" : reason);
-    retain(terminal);
-    return terminal;
+    StreamEvent event = source.cancel(reason == null ? "" : reason);
+    retain(event);
+    if (event.terminal()) {
+      terminal = event;
+    } else if (event.transportTerminal()) {
+      transportTerminal = event;
+    }
+    return event;
   }
 
   public List<StreamEvent> retainedEvents() {
@@ -49,6 +60,10 @@ public final class StreamHandle implements AutoCloseable, Iterator<StreamEvent> 
 
   public StreamEvent terminalEvent() {
     return terminal;
+  }
+
+  public StreamEvent transportTerminalEvent() {
+    return transportTerminal;
   }
 
   @Override
@@ -64,12 +79,14 @@ public final class StreamHandle implements AutoCloseable, Iterator<StreamEvent> 
     if (event == null) {
       throw SDKError.validation("stream", "stream source returned null event");
     }
-    if (retained.size() >= MAX_RETAINED_EVENTS && terminal == null) {
-      terminal = StreamEvent.backpressure(event.sequence());
-      retained.addLast(terminal);
+    if (retained.size() >= MAX_RETAINED_EVENTS && terminal == null && transportTerminal == null) {
+      transportTerminal = StreamEvent.backpressure(event.sequence());
+      retained.addLast(transportTerminal);
       return;
     }
-    if (terminal == null || event.terminal()) {
+    if ((terminal == null && transportTerminal == null)
+        || event.terminal()
+        || event.transportTerminal()) {
       retained.addLast(event);
     }
   }

@@ -13,6 +13,7 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
   private boolean closed;
   private boolean sendClosed;
   private BidiFrame terminal;
+  private BidiFrame transportTerminal;
 
   public BidiSession(BidiSource source) {
     this.source = Objects.requireNonNull(source, "source");
@@ -41,7 +42,7 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
 
   @Override
   public boolean hasNext() {
-    return !closed && terminal == null;
+    return !closed && terminal == null && transportTerminal == null;
   }
 
   @Override
@@ -50,10 +51,15 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
     if (terminal != null) {
       return terminal;
     }
+    if (transportTerminal != null) {
+      return transportTerminal;
+    }
     BidiFrame frame = source.next();
     retain(frame);
     if (frame.terminal()) {
       terminal = frame;
+    } else if (frame.transportTerminal()) {
+      transportTerminal = frame;
     }
     return frame;
   }
@@ -73,9 +79,14 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
 
   public BidiFrame cancel(String reason) {
     requireOpen();
-    terminal = source.cancel(reason == null ? "" : reason);
-    retain(terminal);
-    return terminal;
+    BidiFrame frame = source.cancel(reason == null ? "" : reason);
+    retain(frame);
+    if (frame.terminal()) {
+      terminal = frame;
+    } else if (frame.transportTerminal()) {
+      transportTerminal = frame;
+    }
+    return frame;
   }
 
   public List<BidiFrame> retainedFrames() {
@@ -84,6 +95,10 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
 
   public BidiFrame terminalFrame() {
     return terminal;
+  }
+
+  public BidiFrame transportTerminalFrame() {
+    return transportTerminal;
   }
 
   @Override
@@ -99,12 +114,14 @@ public final class BidiSession implements AutoCloseable, Iterator<BidiFrame> {
     if (frame == null) {
       throw SDKError.validation("bidi", "bidi source returned null frame");
     }
-    if (retained.size() >= MAX_RETAINED_FRAMES && terminal == null) {
-      terminal = BidiFrame.terminal(frame.sequence(), "backpressure_terminated");
-      retained.addLast(terminal);
+    if (retained.size() >= MAX_RETAINED_FRAMES && terminal == null && transportTerminal == null) {
+      transportTerminal = BidiFrame.transportTerminal(frame.sequence(), "backpressure_terminated");
+      retained.addLast(transportTerminal);
       return;
     }
-    if (terminal == null || frame.terminal()) {
+    if ((terminal == null && transportTerminal == null)
+        || frame.terminal()
+        || frame.transportTerminal()) {
       retained.addLast(frame);
     }
   }

@@ -248,7 +248,9 @@ final class RuntimeCoreSeamTests: XCTestCase {
         for _ in 0...StreamHandle.maxRetainedEvents {
             _ = try await stream.next()
         }
-        XCTAssertEqual(stream.terminalEvent()?.state, "BackpressureTerminated")
+        XCTAssertNil(stream.terminalEvent())
+        XCTAssertEqual(stream.transportTerminalEvent()?.state, "Failed")
+        XCTAssertEqual(stream.transportTerminalEvent()?.transportTerminal, true)
         XCTAssertEqual(stream.retainedEvents().count, StreamHandle.maxRetainedEvents + 1)
         try await stream.close()
         await expectSDKError(.invalidHandle) {
@@ -258,14 +260,16 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let bidi = BidiSession(source: CountingBidiSource())
         try await bidi.send(.data(0, payloadJSON: "{\"hello\":true}"))
         let sendClosed = try await bidi.closeSend()
-        XCTAssertTrue(sendClosed.terminal)
+        XCTAssertFalse(sendClosed.terminal)
+        XCTAssertTrue(sendClosed.transportTerminal)
         await expectSDKError(.cancelled) {
             try await bidi.send(.data(1, payloadJSON: "{}"))
         }
         let received = try await bidi.next()
         XCTAssertFalse(received.terminal)
         let cancelled = try await bidi.cancel(reason: "done")
-        XCTAssertTrue(cancelled.terminal)
+        XCTAssertFalse(cancelled.terminal)
+        XCTAssertTrue(cancelled.transportTerminal)
         try await bidi.close()
     }
 
@@ -330,10 +334,13 @@ final class RuntimeCoreSeamTests: XCTestCase {
     func testStreamAndBidiBackpressureAreBounded() async throws {
         let stream = StreamHandle(source: CountingStreamSource())
         for _ in 0...StreamHandle.maxRetainedEvents { _ = try await stream.next() }
-        XCTAssertEqual(stream.terminalEvent()?.state, "BackpressureTerminated")
+        XCTAssertNil(stream.terminalEvent())
+        XCTAssertEqual(stream.transportTerminalEvent()?.transportTerminal, true)
         let bidi = BidiSession(source: CountingBidiSource())
         for _ in 0...BidiSession.maxRetainedFrames { _ = try await bidi.next() }
-        XCTAssertEqual(bidi.terminalFrame()?.kind, "backpressure_terminated")
+        XCTAssertNil(bidi.terminalFrame())
+        XCTAssertEqual(bidi.transportTerminalFrame()?.kind, "backpressure_terminated")
+        XCTAssertEqual(bidi.transportTerminalFrame()?.transportTerminal, true)
     }
 
     func testStreamOrderAndTerminalArePreserved() async throws {
@@ -623,7 +630,7 @@ actor CountingStreamSource: StreamSource {
     }
 
     func cancel(reason: String) throws -> StreamEvent {
-        try .terminal(sequence, state: "Cancelled")
+        try .transportTerminal(sequence, kind: "cancel_requested", state: "CancelRequested")
     }
 
     func close() {}
@@ -659,11 +666,11 @@ actor CountingBidiSource: BidiSource {
     }
 
     func closeSend() throws -> BidiFrame {
-        try .terminal(sequence, kind: "send_closed")
+        try .transportTerminal(sequence, kind: "send_closed")
     }
 
     func cancel(reason: String) throws -> BidiFrame {
-        try .terminal(sequence, kind: "cancelled")
+        try .transportTerminal(sequence, kind: "cancel_requested")
     }
 
     func close() {}

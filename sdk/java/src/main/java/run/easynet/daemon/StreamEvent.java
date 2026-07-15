@@ -6,6 +6,7 @@ public record StreamEvent(
     String state,
     String payloadJson,
     boolean terminal,
+    boolean transportTerminal,
     SDKError error) {
   public StreamEvent {
     if (sequence < 0) {
@@ -20,19 +21,24 @@ public record StreamEvent(
   }
 
   public static StreamEvent data(long sequence, String payloadJson) {
-    return new StreamEvent(sequence, "data", "Open", payloadJson, false, null);
+    return new StreamEvent(sequence, "data", "Open", payloadJson, false, false, null);
   }
 
   public static StreamEvent terminal(long sequence, String state) {
-    return new StreamEvent(sequence, "terminal", state, "", true, null);
+    return new StreamEvent(sequence, "terminal", state, "", true, false, null);
+  }
+
+  public static StreamEvent transportTerminal(long sequence, String kind, String state) {
+    return new StreamEvent(sequence, kind, state, "", false, true, null);
   }
 
   public static StreamEvent backpressure(long sequence) {
     return new StreamEvent(
         sequence,
-        "terminal",
-        "BackpressureTerminated",
+        "error",
+        "Failed",
         "",
+        false,
         true,
         new SDKError(
             ErrorCode.TRANSPORT,

@@ -3,8 +3,15 @@ public struct BidiFrame: Sendable, Equatable {
     public let kind: String
     public let payloadJSON: String
     public let terminal: Bool
+    public let transportTerminal: Bool
 
-    public init(sequence: Int, kind: String, payloadJSON: String = "", terminal: Bool = false) throws {
+    public init(
+        sequence: Int,
+        kind: String,
+        payloadJSON: String = "",
+        terminal: Bool = false,
+        transportTerminal: Bool = false
+    ) throws {
         guard sequence >= 0 else {
             throw SDKError.validation("bidi", "sequence must be non-negative")
         }
@@ -15,6 +22,7 @@ public struct BidiFrame: Sendable, Equatable {
         self.kind = kind
         self.payloadJSON = payloadJSON
         self.terminal = terminal
+        self.transportTerminal = transportTerminal
     }
 
     public static func data(_ sequence: Int, payloadJSON: String) throws -> BidiFrame {
@@ -23,6 +31,10 @@ public struct BidiFrame: Sendable, Equatable {
 
     public static func terminal(_ sequence: Int, kind: String) throws -> BidiFrame {
         try BidiFrame(sequence: sequence, kind: kind, terminal: true)
+    }
+
+    public static func transportTerminal(_ sequence: Int, kind: String) throws -> BidiFrame {
+        try BidiFrame(sequence: sequence, kind: kind, transportTerminal: true)
     }
 }
 
@@ -36,11 +48,11 @@ public protocol BidiSource: AnyObject, Sendable {
 
 public extension BidiSource {
     func closeSend() async throws -> BidiFrame {
-        try BidiFrame.terminal(0, kind: "send_closed")
+        try BidiFrame.transportTerminal(0, kind: "send_closed")
     }
 
     func cancel(reason: String) async throws -> BidiFrame {
-        try BidiFrame.terminal(0, kind: "cancelled")
+        try BidiFrame.transportTerminal(0, kind: "cancel_requested")
     }
 
     func close() async throws {}
@@ -54,6 +66,7 @@ public final class BidiSession: @unchecked Sendable {
     private var sendClosed = false
     private var retained: [BidiFrame] = []
     private var terminal: BidiFrame?
+    private var transportTerminal: BidiFrame?
 
     public init(source: BidiSource) {
         self.source = source
@@ -80,10 +93,15 @@ public final class BidiSession: @unchecked Sendable {
         if let terminal {
             return terminal
         }
+        if let transportTerminal {
+            return transportTerminal
+        }
         let frame = try await source.next()
         try retain(frame)
         if frame.terminal {
             terminal = frame
+        } else if frame.transportTerminal {
+            transportTerminal = frame
         }
         return terminal ?? frame
     }
@@ -101,8 +119,12 @@ public final class BidiSession: @unchecked Sendable {
     public func cancel(reason: String) async throws -> BidiFrame {
         try requireOpen()
         let frame = try await source.cancel(reason: reason)
-        terminal = frame
         try retain(frame)
+        if frame.terminal {
+            terminal = frame
+        } else if frame.transportTerminal {
+            transportTerminal = frame
+        }
         return frame
     }
 
@@ -114,6 +136,10 @@ public final class BidiSession: @unchecked Sendable {
         terminal
     }
 
+    public func transportTerminalFrame() -> BidiFrame? {
+        transportTerminal
+    }
+
     public func close() async throws {
         guard !closed else {
             return
@@ -123,13 +149,13 @@ public final class BidiSession: @unchecked Sendable {
     }
 
     private func retain(_ frame: BidiFrame) throws {
-        if retained.count >= BidiSession.maxRetainedFrames, terminal == nil {
-            let overflow = try BidiFrame.terminal(frame.sequence, kind: "backpressure_terminated")
-            terminal = overflow
+        if retained.count >= BidiSession.maxRetainedFrames, terminal == nil, transportTerminal == nil {
+            let overflow = try BidiFrame.transportTerminal(frame.sequence, kind: "backpressure_terminated")
+            transportTerminal = overflow
             retained.append(overflow)
             return
         }
-        if terminal == nil || frame.terminal {
+        if (terminal == nil && transportTerminal == nil) || frame.terminal || frame.transportTerminal {
             retained.append(frame)
         }
     }

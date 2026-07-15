@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from easynet_sdk import (
+    AxonAddressingTransport,
     ErrorCode,
     SDKError,
     SdkEnvironment,
@@ -134,6 +135,37 @@ class AxonAddressingProviderTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         environment.close()
+
+    def test_transport_requires_explicit_agent_owner_kind(self) -> None:
+        transport = AxonAddressingTransport()
+
+        request = {
+            "kind": "agent",
+            "realm": "example",
+            "user_id": "alice",
+            "agent_id": "assistant",
+        }
+        with self.assertRaises(SDKError) as caught:
+            transport.build_ura(json.dumps(request).encode("utf-8"))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(caught.exception.stage, "addressing")
+
+    def test_transport_rejects_unsupported_agent_owner_kind(self) -> None:
+        transport = AxonAddressingTransport()
+
+        request = {
+            "kind": "agent",
+            "owner_kind": "team",
+            "realm": "example",
+            "user_id": "alice",
+            "agent_id": "assistant",
+        }
+        with self.assertRaises(SDKError) as caught:
+            transport.build_ura(json.dumps(request).encode("utf-8"))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(caught.exception.stage, "addressing")
 
     def test_project_ability_ura_returns_canonical_projection(self) -> None:
         environment = SdkEnvironment()
