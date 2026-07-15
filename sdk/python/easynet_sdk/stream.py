@@ -65,9 +65,7 @@ class StreamEvent:
             raise _invalid_stream(f"decode stream event JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_stream("stream event JSON must be an object")
-        kind = _optional_string(decoded.get("kind"), "kind") or _optional_string(
-            decoded.get("event"), "event"
-        )
+        kind = _optional_string(decoded.get("kind"), "kind")
         if not kind:
             raise _invalid_stream("stream event kind is required")
         return cls(
@@ -82,7 +80,6 @@ class StreamEvent:
             payload_content_type=_optional_string(
                 decoded.get("payload_content_type"), "payload_content_type"
             )
-            or _optional_string(decoded.get("content_type"), "content_type")
             or "",
             payload_base64=_optional_string(
                 decoded.get("payload_base64"), "payload_base64"

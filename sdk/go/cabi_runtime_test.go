@@ -80,7 +80,7 @@ func TestProjectCABIOrderedEventKeepsCanonicalBidiReceipts(t *testing.T) {
 	var next uint64
 	raw := []byte(`{
 		"ok": true,
-		"event": "receipt",
+		"kind": "receipt",
 		"sequence": 17,
 		"terminal": true,
 		"payload_json": {"sha256":"abc123"},
@@ -158,7 +158,7 @@ func TestProjectCABIOrderedEventCanonicalizesBidiBinaryChunkAsDataFrame(t *testi
 	var next uint64
 	projected, err := projectCABIOrderedEvent([]byte(`{
 		"ok": true,
-		"event": "binary_chunk",
+		"kind": "binary_chunk",
 		"sequence": 5,
 		"stream_id": 1,
 		"data_base64": "aGVsbG8=",
@@ -190,9 +190,9 @@ func TestProjectCABIOrderedEventCanonicalizesBidiBinaryChunkAsDataFrame(t *testi
 	}
 }
 
-func TestProjectCABIOrderedEventIgnoresNonStringLegacyEvent(t *testing.T) {
+func TestProjectCABIOrderedEventDoesNotSynthesizeKindFromLegacyEvent(t *testing.T) {
 	projected, err := projectCABIOrderedEvent(
-		[]byte(`{"event":{"name":"receipt"},"terminal":false}`),
+		[]byte(`{"event":"receipt","terminal":false}`),
 		func(*uint64) uint64 { return 1 },
 		false,
 	)
@@ -204,7 +204,7 @@ func TestProjectCABIOrderedEventIgnoresNonStringLegacyEvent(t *testing.T) {
 		t.Fatalf("decode projected frame: %v", err)
 	}
 	if _, hasKind := projectedJSON["kind"]; hasKind {
-		t.Fatalf("non-string legacy event produced kind: %#v", projectedJSON)
+		t.Fatalf("legacy event produced kind: %#v", projectedJSON)
 	}
 }
 

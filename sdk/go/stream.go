@@ -458,12 +458,10 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	var dto struct {
 		Sequence           uint64          `json:"sequence"`
 		Kind               string          `json:"kind"`
-		Event              string          `json:"event"`
 		State              string          `json:"state"`
 		Terminal           bool            `json:"terminal"`
 		TransportTerminal  bool            `json:"transport_terminal"`
 		PayloadContentType string          `json:"payload_content_type"`
-		ContentType        string          `json:"content_type"`
 		PayloadBase64      string          `json:"payload_base64"`
 		PayloadJSON        json.RawMessage `json:"payload_json"`
 		SelectedNodeID     string          `json:"selected_node_id"`
@@ -479,24 +477,16 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	if dto.ElapsedMS < 0 {
 		return StreamEvent{}, invalidRuntimePayload("elapsed_ms must be non-negative", nil)
 	}
-	kind := dto.Kind
-	if kind == "" {
-		kind = dto.Event
-	}
-	if kind == "" {
+	if dto.Kind == "" {
 		return StreamEvent{}, invalidRuntimePayload("stream event kind is required", nil)
-	}
-	contentType := dto.PayloadContentType
-	if contentType == "" {
-		contentType = dto.ContentType
 	}
 	return StreamEvent{
 		sequence:             dto.Sequence,
-		kind:                 kind,
+		kind:                 dto.Kind,
 		state:                dto.State,
 		terminal:             dto.Terminal,
 		transportTerminal:    dto.TransportTerminal,
-		payloadContentType:   contentType,
+		payloadContentType:   dto.PayloadContentType,
 		payloadBase64:        dto.PayloadBase64,
 		payloadJSON:          append(json.RawMessage(nil), dto.PayloadJSON...),
 		selectedNodeID:       dto.SelectedNodeID,

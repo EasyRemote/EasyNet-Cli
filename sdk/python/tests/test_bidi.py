@@ -95,15 +95,16 @@ class BidiTests(unittest.TestCase):
         )
         self.assertEqual(encoded["terminal_receipt"]["output_hash"], "abcd")
 
-    def test_bidi_frame_accepts_legacy_event_alias(self) -> None:
-        frame = BidiFrame.from_json(b'{"sequence":1,"event":"data","stream_id":1}')
+    def test_bidi_frame_rejects_legacy_event_alias(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            BidiFrame.from_json(b'{"sequence":1,"event":"data","stream_id":1}')
 
-        self.assertEqual(frame.kind, "data")
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_transport_terminal_fails_session_without_runtime_terminal(self) -> None:
         transport = MemoryBidiTransport(
             [
-                b'{"sequence":1,"event":"error","stream_id":1,"terminal":false,'
+                b'{"sequence":1,"kind":"error","stream_id":1,"terminal":false,'
                 b'"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}'
             ]
         )

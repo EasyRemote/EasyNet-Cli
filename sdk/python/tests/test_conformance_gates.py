@@ -41,8 +41,8 @@ def test_stream_and_bidi_backpressure_bounds() -> None:
     stream = StreamHandle.from_json(
         MemoryStreamTransport(
             [
-                b'{"sequence":1,"event":"chunk","state":"Open","terminal":false}',
-                b'{"sequence":2,"event":"chunk","state":"Open","terminal":false}',
+                b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false}',
+                b'{"sequence":2,"kind":"chunk","state":"Open","terminal":false}',
             ]
         ),
         b'{"stream_id":"stream-1","state":"Opening","max_buffered_events":1}',

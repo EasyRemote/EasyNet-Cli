@@ -1331,12 +1331,8 @@ def _project_cabi_ordered_event(
     event["sequence"] = allocate_sequence(sequence)
     if "payload_base64" not in event and "data_base64" in event:
         event["payload_base64"] = event.get("data_base64")
-    if "kind" not in event:
-        legacy_event = event.get("event")
-        if legacy_event in {"binary_chunk", "chunk"}:
-            event["kind"] = "data"
-        elif isinstance(legacy_event, str) and legacy_event:
-            event["kind"] = legacy_event
+    if event.get("kind") in {"binary_chunk", "chunk"}:
+        event["kind"] = "data"
     state = event.get("state")
     if isinstance(state, int) and not isinstance(state, bool):
         event["state"] = _axon_invocation_state_name(state)

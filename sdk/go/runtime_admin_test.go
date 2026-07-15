@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -126,6 +127,40 @@ func TestRuntimeAdminAbilityClientRevokesDevice(t *testing.T) {
 	args := capture.args(t)
 	if args["agent_ura"] != "easynet:///r/example/device/laptop" || args["reason"] != "owner_removed_device" {
 		t.Fatalf("revoke args missing: %#v", args)
+	}
+}
+
+func TestRuntimeAdminAbilityClientRejectsMissingRevokeAck(t *testing.T) {
+	capture := &runtimeAdminInvokeCapture{outputJSON: `{"runtime_not_ready": false}`}
+	client := newRuntimeAdminAbilityTestClient(t, capture)
+
+	_, err := client.RevokeDevice(context.Background(), RuntimeDeviceRevokeRequest{
+		Call:      runtimeAdminTestCall(),
+		DeviceURA: "easynet:///r/example/device/laptop",
+		Reason:    "owner_removed_device",
+	})
+	if err == nil {
+		t.Fatal("RevokeDevice fabricated success without ack")
+	}
+	if !strings.Contains(err.Error(), "ack must be a boolean") {
+		t.Fatalf("error = %v, want ack boolean requirement", err)
+	}
+}
+
+func TestRuntimeAdminAbilityClientRejectsMalformedRevokeFlags(t *testing.T) {
+	capture := &runtimeAdminInvokeCapture{outputJSON: `{"ack": true, "runtime_not_ready": "false"}`}
+	client := newRuntimeAdminAbilityTestClient(t, capture)
+
+	_, err := client.RevokeDevice(context.Background(), RuntimeDeviceRevokeRequest{
+		Call:      runtimeAdminTestCall(),
+		DeviceURA: "easynet:///r/example/device/laptop",
+		Reason:    "owner_removed_device",
+	})
+	if err == nil {
+		t.Fatal("RevokeDevice accepted malformed readiness flag")
+	}
+	if !strings.Contains(err.Error(), "runtime_not_ready must be a boolean") {
+		t.Fatalf("error = %v, want runtime_not_ready boolean requirement", err)
 	}
 }
 

@@ -110,6 +110,7 @@ func TestPreparedInvocationRejectsMaterialFieldsInTuple(t *testing.T) {
 
 func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 	prepared, err := NewPreparedInvocationFromJSON([]byte(`{
+		"prepared_id": "prepared-current-1",
 		"request_id": "req-1",
 		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
 		"descriptor_hash_hex": "aa",
@@ -144,11 +145,45 @@ func TestPreparedInvocationDecodesCurrentABIShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
 	}
+	if prepared.PreparedID() != "prepared-current-1" {
+		t.Fatalf("prepared id = %q", prepared.PreparedID())
+	}
 	if prepared.RequestID() != "req-1" {
 		t.Fatalf("request id = %q", prepared.RequestID())
 	}
 	if policy := prepared.SigningMaterial().SignerPolicy(); policy == nil || policy.SignerID() != "browser-key" {
 		t.Fatalf("signer policy not preserved: %#v", policy)
+	}
+}
+
+func TestPreparedInvocationRejectsRequestIDOnlyPayload(t *testing.T) {
+	_, err := NewPreparedInvocationFromJSON([]byte(`{
+		"request_id": "req-1",
+		"tuple": {
+			"caller_ura": "easynet:///r/example/agent/alice.sdk",
+			"callee_ura": "easynet:///r/example/device/dev-a",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+			"subject_ura": "easynet:///r/example/device/dev-a",
+			"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+			"causal_context": {"form": "none"},
+			"args": {},
+			"content_type": "application/json"
+		},
+		"signing_material": {
+			"canonical_bytes_base64": "ZXhhbXBsZQ==",
+			"args_digest_hex": "00",
+			"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+			"expires_at_unix_ms": 1783000000000
+		}
+	}`))
+	if err == nil {
+		t.Fatalf("NewPreparedInvocationFromJSON accepted request_id-only payload")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !strings.Contains(err.Error(), "prepared_id is required") {
+		t.Fatalf("error = %v, want prepared_id requirement", err)
 	}
 }
 

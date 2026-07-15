@@ -111,18 +111,18 @@ func TestBidiFramePreservesFinalizationCheckpoints(t *testing.T) {
 }
 
 func TestBidiFrameRejectsLegacyEventAlias(t *testing.T) {
-	frame, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"event":"data","stream_id":1}`))
-	if err != nil {
-		t.Fatalf("NewBidiFrameFromJSON legacy event alias: %v", err)
+	_, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"event":"data","stream_id":1}`))
+	if err == nil {
+		t.Fatalf("NewBidiFrameFromJSON accepted legacy event alias")
 	}
-	if frame.Kind() != "data" {
-		t.Fatalf("kind = %q, want data", frame.Kind())
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
 func TestBidiTransportTerminalFailsSessionWithoutRuntimeTerminal(t *testing.T) {
 	transport := &memoryBidiTransport{recvFrames: []string{
-		`{"sequence":1,"event":"error","stream_id":1,"terminal":false,"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}`,
+		`{"sequence":1,"kind":"error","stream_id":1,"terminal":false,"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}`,
 	}}
 	session := newTestBidiSession(t, transport)
 

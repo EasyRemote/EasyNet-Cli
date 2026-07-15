@@ -70,8 +70,8 @@ class PreparedInvocation:
             )
         prepared_id = _optional_string(decoded.get("prepared_id"), "prepared_id") or ""
         request_id = _optional_string(decoded.get("request_id"), "request_id") or ""
-        if prepared_id == "" and request_id == "":
-            raise _invalid_prepared("prepared_id or request_id is required")
+        if prepared_id == "":
+            raise _invalid_prepared("prepared_id is required")
         descriptor_ref = (
             _optional_string(decoded.get("descriptor_ref"), "descriptor_ref")
             or material.descriptor_ref

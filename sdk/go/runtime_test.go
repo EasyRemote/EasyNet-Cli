@@ -524,7 +524,7 @@ func TestRuntimeClientInvokeStreamOpensStreamHandle(t *testing.T) {
 				t.Fatalf("draft JSON: %v", err)
 			}
 			return &memoryStreamTransport{events: []string{
-				`{"sequence":1,"event":"terminal","state":"Completed","terminal":true}`,
+				`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true}`,
 			}}, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}`), nil
 		},
 	})

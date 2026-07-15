@@ -224,10 +224,10 @@ class RuntimeAdminAbilityClient:
         return RuntimeDeviceRevokeResult(
             system_ability=_RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY,
             device_ura=device_ura,
-            ack=_admin_bool(output.get("ack"), True),
-            runtime_not_ready=_admin_bool(output.get("runtime_not_ready"), False),
-            runtime_catalog_not_ready=_admin_bool(
-                output.get("runtime_catalog_not_ready"), False
+            ack=_required_admin_bool(output, "ack"),
+            runtime_not_ready=_optional_admin_bool(output, "runtime_not_ready"),
+            runtime_catalog_not_ready=_optional_admin_bool(
+                output, "runtime_catalog_not_ready"
             ),
             raw=dict(output),
         )
@@ -295,8 +295,20 @@ def _admin_string(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def _admin_bool(value: object, fallback: bool) -> bool:
-    return value if isinstance(value, bool) else fallback
+def _required_admin_bool(output: Mapping[str, object], field: str) -> bool:
+    value = output.get(field)
+    if not isinstance(value, bool):
+        raise _invalid_admin(f"runtime admin response field {field} must be a boolean")
+    return value
+
+
+def _optional_admin_bool(output: Mapping[str, object], field: str) -> bool:
+    value = output.get(field)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise _invalid_admin(f"runtime admin response field {field} must be a boolean")
+    return value
 
 
 def _admin_int(value: object) -> int:

@@ -60,9 +60,9 @@ class CABIEventProjectionTests(unittest.TestCase):
             },
         )
 
-    def test_bidi_event_projection_sets_canonical_kind(self) -> None:
+    def test_bidi_event_projection_normalizes_canonical_kind(self) -> None:
         projected = _project_cabi_ordered_event(
-            b'{"event":"binary_chunk","data_base64":"aGVsbG8="}',
+            b'{"kind":"binary_chunk","data_base64":"aGVsbG8="}',
             lambda observed: observed or 1,
             use_observed_sequence=True,
         )
@@ -71,7 +71,6 @@ class CABIEventProjectionTests(unittest.TestCase):
             json.loads(projected),
             {
                 "data_base64": "aGVsbG8=",
-                "event": "binary_chunk",
                 "kind": "data",
                 "payload_base64": "aGVsbG8=",
                 "sequence": 1,

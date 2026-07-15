@@ -196,6 +196,42 @@ def test_runtime_admin_ability_client_revokes_device() -> None:
     }
 
 
+def test_runtime_admin_ability_client_rejects_missing_revoke_ack() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"runtime_not_ready": False}
+
+    try:
+        client.revoke_device(
+            RuntimeDeviceRevokeRequest(
+                call=_call(),
+                device_ura="easynet:///r/example/device/laptop",
+                reason="owner_removed_device",
+            )
+        )
+    except SDKError as exc:
+        assert "ack must be a boolean" in exc.message
+    else:
+        raise AssertionError("revoke_device fabricated success without ack")
+
+
+def test_runtime_admin_ability_client_rejects_malformed_revoke_flags() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"ack": True, "runtime_not_ready": "false"}
+
+    try:
+        client.revoke_device(
+            RuntimeDeviceRevokeRequest(
+                call=_call(),
+                device_ura="easynet:///r/example/device/laptop",
+                reason="owner_removed_device",
+            )
+        )
+    except SDKError as exc:
+        assert "runtime_not_ready must be a boolean" in exc.message
+    else:
+        raise AssertionError("revoke_device accepted malformed readiness flag")
+
+
 def test_runtime_admin_ability_client_rejects_invalid_revoke_before_invoke() -> None:
     client, transport = _ability_client()
 

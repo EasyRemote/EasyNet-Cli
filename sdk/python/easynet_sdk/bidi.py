@@ -88,9 +88,7 @@ class BidiFrame:
             raise _invalid_bidi(f"decode bidi frame JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_bidi("bidi frame JSON must be an object")
-        kind = _optional_string(decoded.get("kind"), "kind") or _optional_string(
-            decoded.get("event"), "event"
-        )
+        kind = _optional_string(decoded.get("kind"), "kind")
         if not kind:
             raise _invalid_bidi("bidi frame kind is required")
         return cls(

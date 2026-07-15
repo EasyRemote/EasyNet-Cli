@@ -85,6 +85,7 @@ class SigningTests(unittest.TestCase):
     def test_prepared_invocation_decodes_current_abi_shape(self) -> None:
         prepared = PreparedInvocation.from_json(
             b"""{
+                "prepared_id": "prepared-current-1",
                 "request_id": "req-1",
                 "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
                 "descriptor_hash_hex": "aa",
@@ -118,10 +119,38 @@ class SigningTests(unittest.TestCase):
             }"""
         )
 
+        self.assertEqual(prepared.prepared_id, "prepared-current-1")
         self.assertEqual(prepared.request_id, "req-1")
         self.assertIsNotNone(prepared.signing_material.signer_policy)
         assert prepared.signing_material.signer_policy is not None
         self.assertEqual(prepared.signing_material.signer_policy.signer_id, "browser-key")
+
+    def test_prepared_invocation_rejects_request_id_only_payload(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            PreparedInvocation.from_json(
+                b"""{
+                    "request_id": "req-1",
+                    "tuple": {
+                        "caller_ura": "easynet:///r/example/agent/alice.sdk",
+                        "callee_ura": "easynet:///r/example/device/dev-a",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "subject_ura": "easynet:///r/example/device/dev-a",
+                        "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+                        "causal_context": {"form": "none"},
+                        "args": {},
+                        "content_type": "application/json"
+                    },
+                    "signing_material": {
+                        "canonical_bytes_base64": "ZXhhbXBsZQ==",
+                        "args_digest_hex": "00",
+                        "descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+                        "expires_at_unix_ms": 1783000000000
+                    }
+                }"""
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIn("prepared_id is required", caught.exception.message)
 
     def test_prepared_invocation_rejects_material_fields_in_tuple(self) -> None:
         with self.assertRaises(SDKError) as caught:

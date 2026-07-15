@@ -52,9 +52,9 @@ class StreamTests(unittest.TestCase):
     def test_stream_orders_events_and_closes_after_terminal(self) -> None:
         transport = MemoryStreamTransport(
             [
-                b'{"sequence":1,"event":"chunk","state":"Open","terminal":false,'
+                b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false,'
                 b'"payload_content_type":"application/json","payload_json":{"step":1}}',
-                b'{"sequence":2,"event":"terminal","state":"Completed","terminal":true,'
+                b'{"sequence":2,"kind":"terminal","state":"Completed","terminal":true,'
                 b'"payload_content_type":"application/json","payload_json":{"ok":true}}',
             ]
         )
@@ -78,10 +78,17 @@ class StreamTests(unittest.TestCase):
         self.assertTrue(transport.closed)
         self.assertEqual(stream.state, StreamState.CLOSED)
 
+    def test_stream_event_does_not_accept_legacy_content_type_alias(self) -> None:
+        event = StreamEvent.from_json(
+            b'{"sequence":1,"kind":"chunk","content_type":"application/json"}'
+        )
+
+        self.assertEqual(event.payload_content_type, "")
+
     def test_stream_terminal_event_projects_terminal_receipt(self) -> None:
         transport = MemoryStreamTransport(
             [
-                b'{"sequence":1,"event":"terminal","state":"Completed",'
+                b'{"sequence":1,"kind":"terminal","state":"Completed",'
                 b'"terminal":true,"payload_json":{"ok":true},'
                 b'"selected_node_id":"node-a","scheduling_reason":"local",'
                 b'"elapsed_ms":12,"terminal_receipt":{"receipt_ura":'
@@ -111,7 +118,7 @@ class StreamTests(unittest.TestCase):
 
     def test_stream_event_ignores_legacy_receipt_only_field(self) -> None:
         event = StreamEvent.from_json(
-            b'{"sequence":1,"event":"terminal","state":"Completed",'
+            b'{"sequence":1,"kind":"terminal","state":"Completed",'
             b'"terminal":true,"receipt":{"receipt_id":"legacy-only"}}'
         )
 
@@ -121,11 +128,19 @@ class StreamTests(unittest.TestCase):
         self.assertFalse(hasattr(event, "receipt"))
         self.assertIsNone(terminal.terminal_receipt)
 
+    def test_stream_event_rejects_legacy_event_alias(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            StreamEvent.from_json(
+                b'{"sequence":1,"event":"chunk","state":"Open","terminal":false}'
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
     def test_stream_rejects_next_after_terminal(self) -> None:
         transport = MemoryStreamTransport(
             [
-                b'{"sequence":1,"event":"terminal","state":"Completed","terminal":true}',
-                b'{"sequence":2,"event":"terminal","state":"Completed","terminal":true}',
+                b'{"sequence":1,"kind":"terminal","state":"Completed","terminal":true}',
+                b'{"sequence":2,"kind":"terminal","state":"Completed","terminal":true}',
             ]
         )
         stream = StreamHandle.from_json(
@@ -143,7 +158,7 @@ class StreamTests(unittest.TestCase):
     def test_transport_terminal_fails_stream_without_runtime_terminal(self) -> None:
         transport = MemoryStreamTransport(
             [
-                b'{"sequence":1,"event":"error","state":"Failed","terminal":false,'
+                b'{"sequence":1,"kind":"error","state":"Failed","terminal":false,'
                 b'"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}'
             ]
         )
@@ -177,8 +192,8 @@ class StreamTests(unittest.TestCase):
     def test_stream_enforces_buffer_bound(self) -> None:
         transport = MemoryStreamTransport(
             [
-                b'{"sequence":1,"event":"chunk","state":"Open","terminal":false}',
-                b'{"sequence":2,"event":"chunk","state":"Open","terminal":false}',
+                b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false}',
+                b'{"sequence":2,"kind":"chunk","state":"Open","terminal":false}',
             ]
         )
         stream = StreamHandle.from_json(

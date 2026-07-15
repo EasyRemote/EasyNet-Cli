@@ -33,8 +33,8 @@ func (m *memoryStreamTransport) Close(ctx context.Context) error {
 
 func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"event":"chunk","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"step":1},"selected_node_id":"node-a","scheduling_reason":"direct","elapsed_ms":11}`,
-		`{"sequence":2,"event":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true}}`,
+		`{"sequence":1,"kind":"chunk","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"step":1},"selected_node_id":"node-a","scheduling_reason":"direct","elapsed_ms":11}`,
+		`{"sequence":2,"kind":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true}}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}`))
 	if err != nil {
@@ -76,9 +76,19 @@ func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	}
 }
 
+func TestStreamEventDoesNotAcceptLegacyContentTypeAlias(t *testing.T) {
+	event, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"chunk","content_type":"application/json"}`))
+	if err != nil {
+		t.Fatalf("NewStreamEventFromJSON: %v", err)
+	}
+	if event.PayloadContentType() != "" {
+		t.Fatalf("legacy content_type alias populated payload content type: %q", event.PayloadContentType())
+	}
+}
+
 func TestStreamTerminalEventProjectsTerminalReceipt(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"event":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true},"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,
+		`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true},"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
 	if err != nil {
@@ -115,8 +125,8 @@ func TestStreamTerminalEventProjectsTerminalReceipt(t *testing.T) {
 
 func TestStreamHandleRejectsDuplicateTerminal(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"event":"terminal","state":"Completed","terminal":true}`,
-		`{"sequence":2,"event":"terminal","state":"Completed","terminal":true}`,
+		`{"sequence":1,"kind":"terminal","state":"Completed","terminal":true}`,
+		`{"sequence":2,"kind":"terminal","state":"Completed","terminal":true}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}`))
 	if err != nil {
@@ -136,7 +146,7 @@ func TestStreamHandleRejectsDuplicateTerminal(t *testing.T) {
 
 func TestStreamTransportTerminalFailsHandleWithoutRuntimeTerminal(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"event":"error","state":"Failed","terminal":false,"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}`,
+		`{"sequence":1,"kind":"error","state":"Failed","terminal":false,"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-transport","state":"Open","max_buffered_events":4}`))
 	if err != nil {
@@ -179,8 +189,8 @@ func TestStreamHandleCancelsNonTerminalStream(t *testing.T) {
 
 func TestStreamHandleEnforcesBufferBound(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"event":"chunk","state":"Open","terminal":false}`,
-		`{"sequence":2,"event":"chunk","state":"Open","terminal":false}`,
+		`{"sequence":1,"kind":"chunk","state":"Open","terminal":false}`,
+		`{"sequence":2,"kind":"chunk","state":"Open","terminal":false}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":1}`))
 	if err != nil {
@@ -199,9 +209,19 @@ func TestStreamHandleEnforcesBufferBound(t *testing.T) {
 }
 
 func TestStreamEventRejectsNegativeElapsed(t *testing.T) {
-	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"event":"chunk","state":"Open","terminal":false,"elapsed_ms":-1}`))
+	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"chunk","state":"Open","terminal":false,"elapsed_ms":-1}`))
 	if err == nil {
 		t.Fatalf("NewStreamEventFromJSON succeeded with negative elapsed")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestStreamEventRejectsLegacyEventAlias(t *testing.T) {
+	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"event":"chunk","state":"Open","terminal":false}`))
+	if err == nil {
+		t.Fatalf("NewStreamEventFromJSON accepted legacy event alias")
 	}
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("error code = %v, want %s", err, ErrInvalidArgument)
@@ -211,7 +231,7 @@ func TestStreamEventRejectsNegativeElapsed(t *testing.T) {
 func TestStreamEventPreservesTopLevelCanonicalReceipt(t *testing.T) {
 	event, err := NewStreamEventFromJSON([]byte(`{
 		"sequence": 9,
-		"event": "terminal",
+		"kind": "terminal",
 		"state": "Completed",
 		"terminal": true,
 		"payload_json": {"receipt":{"receipt_id":"payload-copy"}},
@@ -237,7 +257,7 @@ func TestStreamEventPreservesTopLevelCanonicalReceipt(t *testing.T) {
 func TestStreamEventIgnoresLegacyReceiptOnlyField(t *testing.T) {
 	event, err := NewStreamEventFromJSON([]byte(`{
 		"sequence": 10,
-		"event": "terminal",
+		"kind": "terminal",
 		"state": "Completed",
 		"terminal": true,
 		"receipt": {"receipt_id":"legacy-only"}

@@ -1385,16 +1385,10 @@ func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, 
 			event["payload_base64"] = data
 		}
 	}
-	if _, hasKind := event["kind"]; !hasKind {
-		switch legacyEvent := event["event"].(type) {
-		case string:
-			switch legacyEvent {
-			case "binary_chunk", "chunk":
-				event["kind"] = "data"
-			case "":
-			default:
-				event["kind"] = legacyEvent
-			}
+	if kind, ok := event["kind"].(string); ok {
+		switch kind {
+		case "binary_chunk", "chunk":
+			event["kind"] = "data"
 		}
 	}
 	if state, ok := cabiJSONInteger(event["state"]); ok {

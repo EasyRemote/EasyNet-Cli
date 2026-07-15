@@ -19640,10 +19640,10 @@
       "BidiChannel.close": "db179c5becb54be5a078bc6bd7829851912915915533cb678346e62e4dccecd2",
       "BidiChannel.recv": "dd0bc1f2c8088dafe6de6a2fef910d13b9cc91945a4bf5efa259e32a5f8f40ea",
       "BidiChannel.send": "ccf1d86b267d46b58c68e26ebf786164e341792064b39bd7139ff25f5106076c",
-      "BidiFrame": "6579a90c1eb4213cf9b5432d01a032c27476de402fb879bc8d4538d5d7917399",
+      "BidiFrame": "4c445182409ed9fac74c51e86793c05e7536b2a60be9dee9c87e9bdfe6f39621",
       "BidiFrame.admission_receipt": "e715101fc60b1722d8741107781e0dbb251b008266ad2af7ea75ac5783ab8e57",
       "BidiFrame.error": "3d4a076f74d0eaf1c6ed0e4a1b4f56da3e457c808dfdd966beb4aca7aeca222b",
-      "BidiFrame.from_json": "269b8e2bb4f8f4f025045324322d7d79406572af50bc556d008e4fc1a6914af9",
+      "BidiFrame.from_json": "ce3aee6bab30c11c27feb64f2c24ad6e2cbd7f9e19ba6076eedb1d7dd95bac6f",
       "BidiFrame.kind": "15429ccf94202083863c2bd6a269d4f4479c9cacec15732b39d0ccc1368674c5",
       "BidiFrame.payload_base64": "9fc441fe911388856f36f71f2f55bdcb95d7d17321702c8ecad196ecbf02a257",
       "BidiFrame.payload_content_type": "b08485e22a6e1f77a464c0bdfa89b3552e3085e06791b49b808d08082358522e",
@@ -20376,12 +20376,12 @@
       "PrepareOptions.signer_id": "0da778a7de8a24673b52c9ffde16055bb6c4a4facc3e96c0fc79f97d077d265f",
       "PrepareOptions.to_json_bytes": "9e8fe94fec0bfafa618620e80e33d5d8412f3f61eaf50e68c7db76bed1fb79e6",
       "PrepareOptions.to_json_dict": "ec3bcc7f1180d0c9532a6c6f5a7989afa2951ed20db2e58bb7422c35da208f18",
-      "PreparedInvocation": "a6986113483e48fea60619ec81c38c9087966b65e244e3d1ae02cbfcbee5cac5",
+      "PreparedInvocation": "d7148218d661a099259706b0c6cd52e623206062e07f65f88e9b199fa352eb4b",
       "PreparedInvocation.canonical_hash_hex": "f27b9a44caa3d0c947f5d6467c03758e78581c65f4c4915aaf3f4bb838f84bfa",
       "PreparedInvocation.descriptor_hash_hex": "60f1d36e5256ccf49825df5f57b19c0ad6651b4c27c556ebb325c221a5ec6bbd",
       "PreparedInvocation.descriptor_ref": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f",
       "PreparedInvocation.expires_at_unix_ms": "d452d61206c93853290b842f748d3424d3f30fa52623540ba02e643317ff6f70",
-      "PreparedInvocation.from_json": "f305d7442d182b48a3936d2909fc614530ce6696ed9a9dc427ef92dc66cd57fc",
+      "PreparedInvocation.from_json": "e31eb84f0511b7eb2224e4adecbfba2dda357b95d34284efa03470cc7dfaf6fb",
       "PreparedInvocation.prepared_id": "e72d7788cea9194be6e3c3e42e694325ec65c012f2ba0bcce9ec6c8d085a2414",
       "PreparedInvocation.request_id": "6caa6e6f8ade2c10dc7812ae21dfd81538f8095d74287ef870ec2c0525f150bc",
       "PreparedInvocation.schema_hash_hex": "4a4511c50e6276d65e34a42ace59ada170dec43b4f78fe62cce781c994b04b80",
@@ -20575,9 +20575,9 @@
       "RuntimeAccessControlProvider.list_requests": "9d8c3fb2dcadfa15b9ff2dcb7d09916aab14b84acf74568fe2d4e10257340e38",
       "RuntimeAccessControlProvider.resolve_request": "65bfb0027dc2331bd81296b12e880adfe1506ac9b501aae3b82a0a1c0dedc047",
       "RuntimeAccessControlProvider.revoke": "f6539ec5ef11e93ac56dcc08bab0bf52a68c5a1cbcc7e6393c4bd9dc6f34aea1",
-      "RuntimeAdminAbilityClient": "1468c1d1ae8be32263fa2161bc0803184306a000b5b1a9b5051b6922014c334d",
+      "RuntimeAdminAbilityClient": "ba73c02edadd4dcb68e6dd0e8f1dba0884f9b95a945bcd7612d7a354124906c5",
       "RuntimeAdminAbilityClient.list_sessions": "5fc148b8edcab34e74b074b49aab9edd8d3c642ccc348c6b320da779bbe3d7d8",
-      "RuntimeAdminAbilityClient.revoke_device": "67ee27669a84d005185cf9c727250df2cc56fe9f704e06c852c253dee4d0a9e3",
+      "RuntimeAdminAbilityClient.revoke_device": "4995fb954584ec941119aaafed4fcc98e3aa225edbcf06edf9ae99dee6aa5378",
       "RuntimeAdminClient": "4894eae65f2796031193fb1c6b569045b46f386c81d8c38abeaff9fa6c1cc211",
       "RuntimeAdminClient.attach": "d06e74e22a82b88623b6eaf60ba9e41d308cbfb5effaaf941a0fa17c2749072c",
       "RuntimeAdminClient.detach": "ff0545736e69e3475a05096ab15a9c90dbc6475f9e35ea2a798a8858cb021197",
@@ -21071,11 +21071,11 @@
       "StreamCancel.state": "70fc2bd9aac424bdc641cb604ddb957354a2288f82eb3bc623e41b89deac1892",
       "StreamCancel.stream_id": "9c3c109f14f24a7add6d723e6b06ffc33976d6178a9bf940a89505f238ec1001",
       "StreamCancel.terminal": "ccd86c152453f4c8a471b4fd57e6650646f622a56f30b5463209b0cf9cc069c4",
-      "StreamEvent": "774e393f1e24cf47187984fc308127bda589dedf2efbbfb354a100bb67479885",
+      "StreamEvent": "c3d528c78b1cc856575d0c985b551241ca4887c06bbde7be78f4a2175a76b419",
       "StreamEvent.admission_receipt": "e715101fc60b1722d8741107781e0dbb251b008266ad2af7ea75ac5783ab8e57",
       "StreamEvent.elapsed_ms": "bf99f3c66c074dc596054bb88ae7a88a0948294e97c31bd47700b25f58017136",
       "StreamEvent.error": "3d4a076f74d0eaf1c6ed0e4a1b4f56da3e457c808dfdd966beb4aca7aeca222b",
-      "StreamEvent.from_json": "dd57b31a7d740ce3147a09895cbde7875a3c147db9e79304aaebc30314f2cbdb",
+      "StreamEvent.from_json": "407ca665051afed78116c63466075bc5d1674d66fa32dbc45195bd5612fbba02",
       "StreamEvent.kind": "15429ccf94202083863c2bd6a269d4f4479c9cacec15732b39d0ccc1368674c5",
       "StreamEvent.payload_base64": "9fc441fe911388856f36f71f2f55bdcb95d7d17321702c8ecad196ecbf02a257",
       "StreamEvent.payload_content_type": "b08485e22a6e1f77a464c0bdfa89b3552e3085e06791b49b808d08082358522e",
@@ -22763,7 +22763,7 @@
       "item": "BidiFrame.from_json",
       "parent_capability": "bidi",
       "role": "serialization_projection",
-      "shape_sha256": "269b8e2bb4f8f4f025045324322d7d79406572af50bc556d008e4fc1a6914af9",
+      "shape_sha256": "ce3aee6bab30c11c27feb64f2c24ad6e2cbd7f9e19ba6076eedb1d7dd95bac6f",
       "shape_group": "serialization_projection:bidiframe.deserializejson"
     },
     {
@@ -22988,7 +22988,7 @@
       "item": "PreparedInvocation.from_json",
       "parent_capability": "prepare_sign_submit",
       "role": "serialization_projection",
-      "shape_sha256": "f305d7442d182b48a3936d2909fc614530ce6696ed9a9dc427ef92dc66cd57fc",
+      "shape_sha256": "e31eb84f0511b7eb2224e4adecbfba2dda357b95d34284efa03470cc7dfaf6fb",
       "shape_group": "serialization_projection:preparedinvocation.deserializejson"
     },
     {
@@ -23069,7 +23069,7 @@
       "item": "StreamEvent.from_json",
       "parent_capability": "stream",
       "role": "serialization_projection",
-      "shape_sha256": "dd57b31a7d740ce3147a09895cbde7875a3c147db9e79304aaebc30314f2cbdb",
+      "shape_sha256": "407ca665051afed78116c63466075bc5d1674d66fa32dbc45195bd5612fbba02",
       "shape_group": "serialization_projection:streamevent.deserializejson"
     },
     {
@@ -23710,7 +23710,7 @@
           "language": "python",
           "section": "members",
           "item": "BidiFrame.from_json",
-          "shape_sha256": "269b8e2bb4f8f4f025045324322d7d79406572af50bc556d008e4fc1a6914af9"
+          "shape_sha256": "ce3aee6bab30c11c27feb64f2c24ad6e2cbd7f9e19ba6076eedb1d7dd95bac6f"
         }
       ],
       "present_languages": [
@@ -24303,7 +24303,7 @@
           "language": "python",
           "section": "members",
           "item": "PreparedInvocation.from_json",
-          "shape_sha256": "f305d7442d182b48a3936d2909fc614530ce6696ed9a9dc427ef92dc66cd57fc"
+          "shape_sha256": "e31eb84f0511b7eb2224e4adecbfba2dda357b95d34284efa03470cc7dfaf6fb"
         }
       ],
       "present_languages": [
@@ -24516,7 +24516,7 @@
           "language": "python",
           "section": "members",
           "item": "StreamEvent.from_json",
-          "shape_sha256": "dd57b31a7d740ce3147a09895cbde7875a3c147db9e79304aaebc30314f2cbdb"
+          "shape_sha256": "407ca665051afed78116c63466075bc5d1674d66fa32dbc45195bd5612fbba02"
         }
       ],
       "present_languages": [

@@ -622,7 +622,6 @@ func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
 	var dto struct {
 		Sequence           uint64          `json:"sequence"`
 		Kind               string          `json:"kind"`
-		Event              string          `json:"event"`
 		StreamID           uint64          `json:"stream_id"`
 		Terminal           bool            `json:"terminal"`
 		TransportTerminal  bool            `json:"transport_terminal"`
@@ -636,11 +635,7 @@ func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return BidiFrame{}, invalidRuntimePayload(fmt.Sprintf("decode bidi frame JSON: %v", err), err)
 	}
-	kind := dto.Kind
-	if kind == "" {
-		kind = dto.Event
-	}
-	if kind == "" {
+	if dto.Kind == "" {
 		return BidiFrame{}, invalidRuntimePayload("bidi frame kind is required", nil)
 	}
 	if dto.Sequence == 0 {
@@ -648,7 +643,7 @@ func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
 	}
 	return BidiFrame{
 		sequence:             dto.Sequence,
-		kind:                 kind,
+		kind:                 dto.Kind,
 		streamID:             dto.StreamID,
 		terminal:             dto.Terminal,
 		transportTerminal:    dto.TransportTerminal,

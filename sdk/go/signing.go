@@ -138,8 +138,8 @@ func NewPreparedInvocationFromJSON(raw []byte) (PreparedInvocation, error) {
 		tuple:            tuple,
 		signingMaterial:  material,
 	}
-	if prepared.preparedID == "" && prepared.requestID == "" {
-		return PreparedInvocation{}, invalidInvocation("prepared_id or request_id is required", nil)
+	if prepared.preparedID == "" {
+		return PreparedInvocation{}, invalidInvocation("prepared_id is required", nil)
 	}
 	if prepared.descriptorRef == "" {
 		prepared.descriptorRef = material.DescriptorRef()

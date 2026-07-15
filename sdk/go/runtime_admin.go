@@ -116,13 +116,24 @@ func (c *RuntimeAdminAbilityClient) RevokeDevice(ctx context.Context, request Ru
 	if err != nil {
 		return RuntimeDeviceRevokeResult{}, err
 	}
-	ack := runtimeAdminBool(output["ack"], true)
+	ack, err := requiredRuntimeAdminBool(output, "ack")
+	if err != nil {
+		return RuntimeDeviceRevokeResult{}, err
+	}
+	runtimeNotReady, err := optionalRuntimeAdminBool(output, "runtime_not_ready")
+	if err != nil {
+		return RuntimeDeviceRevokeResult{}, err
+	}
+	runtimeCatalogNotReady, err := optionalRuntimeAdminBool(output, "runtime_catalog_not_ready")
+	if err != nil {
+		return RuntimeDeviceRevokeResult{}, err
+	}
 	return RuntimeDeviceRevokeResult{
 		SystemAbility:          runtimeAdminDeviceRevokeAbility,
 		DeviceURA:              deviceURA,
 		Ack:                    ack,
-		RuntimeNotReady:        runtimeAdminBool(output["runtime_not_ready"], false),
-		RuntimeCatalogNotReady: runtimeAdminBool(output["runtime_catalog_not_ready"], false),
+		RuntimeNotReady:        runtimeNotReady,
+		RuntimeCatalogNotReady: runtimeCatalogNotReady,
 		Raw:                    cloneRuntimeAdminMap(output),
 	}, nil
 }
@@ -312,11 +323,23 @@ func runtimeAdminString(value map[string]any, keys ...string) string {
 	return ""
 }
 
-func runtimeAdminBool(value any, fallback bool) bool {
-	if raw, ok := value.(bool); ok {
-		return raw
+func requiredRuntimeAdminBool(output map[string]any, field string) (bool, error) {
+	raw, ok := output[field].(bool)
+	if !ok {
+		return false, invalidRuntimePayload("runtime admin response field "+field+" must be a boolean", nil)
 	}
-	return fallback
+	return raw, nil
+}
+
+func optionalRuntimeAdminBool(output map[string]any, field string) (bool, error) {
+	value, exists := output[field]
+	if !exists || value == nil {
+		return false, nil
+	}
+	if raw, ok := value.(bool); ok {
+		return raw, nil
+	}
+	return false, invalidRuntimePayload("runtime admin response field "+field+" must be a boolean", nil)
 }
 
 func runtimeAdminInt64(value any) int64 {
