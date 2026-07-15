@@ -28,6 +28,7 @@ pub mod impl_bindings;
 /// persistence DTO, not the governed interface exposed to callers.
 pub mod manifest;
 pub mod names;
+pub(crate) mod principal_routes_gen;
 pub mod wire;
 
 pub(crate) use authority::public_route_ability_from_descriptor_ref;

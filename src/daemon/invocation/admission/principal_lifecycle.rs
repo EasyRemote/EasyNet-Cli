@@ -21,21 +21,36 @@ use crate::daemon::invocation::admission::runtime_trust::{
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::trust::anchor::TrustedAgentRole;
 
-pub const ABILITY_PRINCIPAL_CREATE: &str = "principal.lifecycle.create";
-pub const ABILITY_PRINCIPAL_BIND_FIRST_KEY: &str = "principal.lifecycle.bind_first_key";
-pub const ABILITY_PRINCIPAL_ADD_KEY: &str = "principal.lifecycle.add_key";
-pub const ABILITY_PRINCIPAL_ROTATE_KEY: &str = "principal.lifecycle.rotate_key";
-pub const ABILITY_PRINCIPAL_REVOKE_KEY: &str = "principal.lifecycle.revoke_key";
-pub const ABILITY_PRINCIPAL_CONFIGURE_RECOVERY: &str = "principal.lifecycle.configure_recovery";
-pub const ABILITY_PRINCIPAL_RECOVER: &str = "principal.lifecycle.recover";
-pub const ABILITY_PRINCIPAL_SUSPEND: &str = "principal.lifecycle.suspend";
-pub const ABILITY_PRINCIPAL_REACTIVATE: &str = "principal.lifecycle.reactivate";
-pub const ABILITY_PRINCIPAL_DELETE: &str = "principal.lifecycle.delete";
-pub const ABILITY_PRINCIPAL_ISSUE_ENROLLMENT: &str = "principal.lifecycle.issue_enrollment";
-pub const ABILITY_PRINCIPAL_REVOKE_ENROLLMENT: &str = "principal.lifecycle.revoke_enrollment";
-pub const ABILITY_PRINCIPAL_ISSUE_GRANT: &str = "principal.lifecycle.issue_grant";
-pub const ABILITY_PRINCIPAL_REVOKE_GRANT: &str = "principal.lifecycle.revoke_grant";
-pub const ABILITY_PRINCIPAL_GET: &str = "principal.lifecycle.get";
+pub const ABILITY_PRINCIPAL_CREATE: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_CREATE;
+pub const ABILITY_PRINCIPAL_BIND_FIRST_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_BIND_FIRST_KEY;
+pub const ABILITY_PRINCIPAL_ADD_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ADD_KEY;
+pub const ABILITY_PRINCIPAL_ROTATE_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ROTATE_KEY;
+pub const ABILITY_PRINCIPAL_REVOKE_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REVOKE_KEY;
+pub const ABILITY_PRINCIPAL_CONFIGURE_RECOVERY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_CONFIGURE_RECOVERY;
+pub const ABILITY_PRINCIPAL_RECOVER: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_RECOVER;
+pub const ABILITY_PRINCIPAL_SUSPEND: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_SUSPEND;
+pub const ABILITY_PRINCIPAL_REACTIVATE: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REACTIVATE;
+pub const ABILITY_PRINCIPAL_DELETE: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_DELETE;
+pub const ABILITY_PRINCIPAL_ISSUE_ENROLLMENT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ISSUE_ENROLLMENT;
+pub const ABILITY_PRINCIPAL_REVOKE_ENROLLMENT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REVOKE_ENROLLMENT;
+pub const ABILITY_PRINCIPAL_ISSUE_GRANT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ISSUE_GRANT;
+pub const ABILITY_PRINCIPAL_REVOKE_GRANT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REVOKE_GRANT;
+pub const ABILITY_PRINCIPAL_GET: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_GET;
 
 pub(crate) fn principal_lifecycle_store_path_for_trust_anchor(trust_anchor_path: &Path) -> PathBuf {
     trust_anchor_path.with_file_name("principal-lifecycle.json")

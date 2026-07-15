@@ -2,7 +2,7 @@
 
 pub(crate) const PRINCIPAL_LIFECYCLE_PROFILE: &str = "principal_lifecycle";
 pub(crate) const PRINCIPAL_ROUTE_MANIFEST_SHA256: &str =
-    "477935b9f94457f164070a6e75d56fbc13fb249a2b2a274b3807bfb8f9dcfb73";
+    "268a2e372ca9fa106c868a0b4c2561d334fd72dc62f8844b5a8add627de52038";
 pub(crate) const PRINCIPAL_ABILITY_CREATE: &str = "principal.lifecycle.create";
 pub(crate) const PRINCIPAL_ABILITY_BIND_FIRST_KEY: &str = "principal.lifecycle.bind_first_key";
 pub(crate) const PRINCIPAL_ABILITY_ADD_KEY: &str = "principal.lifecycle.add_key";

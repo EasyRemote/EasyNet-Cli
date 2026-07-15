@@ -2580,14 +2580,6 @@ mod tests {
             )
             .expect("register self.echo admission test descriptor");
         catalog
-            .hot_register_rpc_with_spec(
-                "session.open",
-                crate::daemon::ability::dispatch::OwnerKind::Device,
-                admission_test_manifest("open"),
-                test_rpc_handler(),
-            )
-            .expect("register session.open admission test descriptor");
-        catalog
     }
 
     fn admission_facade(

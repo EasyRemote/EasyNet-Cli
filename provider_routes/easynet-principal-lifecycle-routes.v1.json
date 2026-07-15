@@ -9,6 +9,7 @@
       "go_const": "principalAbilityCreate",
       "python_const": "_ABILITY_CREATE",
       "rust_const": "PRINCIPAL_ABILITY_CREATE",
+      "daemon_const": "ABILITY_PRINCIPAL_CREATE",
       "ability": "principal.lifecycle.create"
     },
     {
@@ -16,6 +17,7 @@
       "go_const": "principalAbilityBindFirstKey",
       "python_const": "_ABILITY_BIND_FIRST_KEY",
       "rust_const": "PRINCIPAL_ABILITY_BIND_FIRST_KEY",
+      "daemon_const": "ABILITY_PRINCIPAL_BIND_FIRST_KEY",
       "ability": "principal.lifecycle.bind_first_key"
     },
     {
@@ -23,6 +25,7 @@
       "go_const": "principalAbilityAddKey",
       "python_const": "_ABILITY_ADD_KEY",
       "rust_const": "PRINCIPAL_ABILITY_ADD_KEY",
+      "daemon_const": "ABILITY_PRINCIPAL_ADD_KEY",
       "ability": "principal.lifecycle.add_key"
     },
     {
@@ -30,6 +33,7 @@
       "go_const": "principalAbilityRotateKey",
       "python_const": "_ABILITY_ROTATE_KEY",
       "rust_const": "PRINCIPAL_ABILITY_ROTATE_KEY",
+      "daemon_const": "ABILITY_PRINCIPAL_ROTATE_KEY",
       "ability": "principal.lifecycle.rotate_key"
     },
     {
@@ -37,6 +41,7 @@
       "go_const": "principalAbilityRevokeKey",
       "python_const": "_ABILITY_REVOKE_KEY",
       "rust_const": "PRINCIPAL_ABILITY_REVOKE_KEY",
+      "daemon_const": "ABILITY_PRINCIPAL_REVOKE_KEY",
       "ability": "principal.lifecycle.revoke_key"
     },
     {
@@ -44,6 +49,7 @@
       "go_const": "principalAbilityConfigureRecovery",
       "python_const": "_ABILITY_CONFIGURE_RECOVERY",
       "rust_const": "PRINCIPAL_ABILITY_CONFIGURE_RECOVERY",
+      "daemon_const": "ABILITY_PRINCIPAL_CONFIGURE_RECOVERY",
       "ability": "principal.lifecycle.configure_recovery"
     },
     {
@@ -51,6 +57,7 @@
       "go_const": "principalAbilityRecover",
       "python_const": "_ABILITY_RECOVER",
       "rust_const": "PRINCIPAL_ABILITY_RECOVER",
+      "daemon_const": "ABILITY_PRINCIPAL_RECOVER",
       "ability": "principal.lifecycle.recover"
     },
     {
@@ -58,6 +65,7 @@
       "go_const": "principalAbilitySuspend",
       "python_const": "_ABILITY_SUSPEND",
       "rust_const": "PRINCIPAL_ABILITY_SUSPEND",
+      "daemon_const": "ABILITY_PRINCIPAL_SUSPEND",
       "ability": "principal.lifecycle.suspend"
     },
     {
@@ -65,6 +73,7 @@
       "go_const": "principalAbilityReactivate",
       "python_const": "_ABILITY_REACTIVATE",
       "rust_const": "PRINCIPAL_ABILITY_REACTIVATE",
+      "daemon_const": "ABILITY_PRINCIPAL_REACTIVATE",
       "ability": "principal.lifecycle.reactivate"
     },
     {
@@ -72,6 +81,7 @@
       "go_const": "principalAbilityDelete",
       "python_const": "_ABILITY_DELETE",
       "rust_const": "PRINCIPAL_ABILITY_DELETE",
+      "daemon_const": "ABILITY_PRINCIPAL_DELETE",
       "ability": "principal.lifecycle.delete"
     },
     {
@@ -79,6 +89,7 @@
       "go_const": "principalAbilityIssueEnrollment",
       "python_const": "_ABILITY_ISSUE_ENROLLMENT",
       "rust_const": "PRINCIPAL_ABILITY_ISSUE_ENROLLMENT",
+      "daemon_const": "ABILITY_PRINCIPAL_ISSUE_ENROLLMENT",
       "ability": "principal.lifecycle.issue_enrollment"
     },
     {
@@ -86,6 +97,7 @@
       "go_const": "principalAbilityRevokeEnrollment",
       "python_const": "_ABILITY_REVOKE_ENROLLMENT",
       "rust_const": "PRINCIPAL_ABILITY_REVOKE_ENROLLMENT",
+      "daemon_const": "ABILITY_PRINCIPAL_REVOKE_ENROLLMENT",
       "ability": "principal.lifecycle.revoke_enrollment"
     },
     {
@@ -93,6 +105,7 @@
       "go_const": "principalAbilityIssueGrant",
       "python_const": "_ABILITY_ISSUE_GRANT",
       "rust_const": "PRINCIPAL_ABILITY_ISSUE_GRANT",
+      "daemon_const": "ABILITY_PRINCIPAL_ISSUE_GRANT",
       "ability": "principal.lifecycle.issue_grant"
     },
     {
@@ -100,6 +113,7 @@
       "go_const": "principalAbilityRevokeGrant",
       "python_const": "_ABILITY_REVOKE_GRANT",
       "rust_const": "PRINCIPAL_ABILITY_REVOKE_GRANT",
+      "daemon_const": "ABILITY_PRINCIPAL_REVOKE_GRANT",
       "ability": "principal.lifecycle.revoke_grant"
     },
     {
@@ -107,6 +121,7 @@
       "go_const": "principalAbilityGet",
       "python_const": "_ABILITY_GET",
       "rust_const": "PRINCIPAL_ABILITY_GET",
+      "daemon_const": "ABILITY_PRINCIPAL_GET",
       "ability": "principal.lifecycle.get"
     }
   ]

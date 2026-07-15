@@ -294,21 +294,36 @@ pub const ABILITY_FEDERATION_REVOKE: &str = "federation.revoke";
 pub const ABILITY_IDENTITY_REGISTER_PUBKEY: &str = "identity.register_pubkey";
 pub const ABILITY_IDENTITY_LIST_USER_PUBKEYS: &str = "identity.list_user_pubkeys";
 pub const ABILITY_IDENTITY_REVOKE_USER_PUBKEY: &str = "identity.revoke_user_pubkey";
-pub const ABILITY_PRINCIPAL_CREATE: &str = "principal.lifecycle.create";
-pub const ABILITY_PRINCIPAL_BIND_FIRST_KEY: &str = "principal.lifecycle.bind_first_key";
-pub const ABILITY_PRINCIPAL_ADD_KEY: &str = "principal.lifecycle.add_key";
-pub const ABILITY_PRINCIPAL_ROTATE_KEY: &str = "principal.lifecycle.rotate_key";
-pub const ABILITY_PRINCIPAL_REVOKE_KEY: &str = "principal.lifecycle.revoke_key";
-pub const ABILITY_PRINCIPAL_CONFIGURE_RECOVERY: &str = "principal.lifecycle.configure_recovery";
-pub const ABILITY_PRINCIPAL_RECOVER: &str = "principal.lifecycle.recover";
-pub const ABILITY_PRINCIPAL_SUSPEND: &str = "principal.lifecycle.suspend";
-pub const ABILITY_PRINCIPAL_REACTIVATE: &str = "principal.lifecycle.reactivate";
-pub const ABILITY_PRINCIPAL_DELETE: &str = "principal.lifecycle.delete";
-pub const ABILITY_PRINCIPAL_ISSUE_ENROLLMENT: &str = "principal.lifecycle.issue_enrollment";
-pub const ABILITY_PRINCIPAL_REVOKE_ENROLLMENT: &str = "principal.lifecycle.revoke_enrollment";
-pub const ABILITY_PRINCIPAL_ISSUE_GRANT: &str = "principal.lifecycle.issue_grant";
-pub const ABILITY_PRINCIPAL_REVOKE_GRANT: &str = "principal.lifecycle.revoke_grant";
-pub const ABILITY_PRINCIPAL_GET: &str = "principal.lifecycle.get";
+pub const ABILITY_PRINCIPAL_CREATE: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_CREATE;
+pub const ABILITY_PRINCIPAL_BIND_FIRST_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_BIND_FIRST_KEY;
+pub const ABILITY_PRINCIPAL_ADD_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ADD_KEY;
+pub const ABILITY_PRINCIPAL_ROTATE_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ROTATE_KEY;
+pub const ABILITY_PRINCIPAL_REVOKE_KEY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REVOKE_KEY;
+pub const ABILITY_PRINCIPAL_CONFIGURE_RECOVERY: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_CONFIGURE_RECOVERY;
+pub const ABILITY_PRINCIPAL_RECOVER: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_RECOVER;
+pub const ABILITY_PRINCIPAL_SUSPEND: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_SUSPEND;
+pub const ABILITY_PRINCIPAL_REACTIVATE: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REACTIVATE;
+pub const ABILITY_PRINCIPAL_DELETE: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_DELETE;
+pub const ABILITY_PRINCIPAL_ISSUE_ENROLLMENT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ISSUE_ENROLLMENT;
+pub const ABILITY_PRINCIPAL_REVOKE_ENROLLMENT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REVOKE_ENROLLMENT;
+pub const ABILITY_PRINCIPAL_ISSUE_GRANT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_ISSUE_GRANT;
+pub const ABILITY_PRINCIPAL_REVOKE_GRANT: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_REVOKE_GRANT;
+pub const ABILITY_PRINCIPAL_GET: &str =
+    crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_GET;
 pub const ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str = "runtime.bootstrap_self_identity";
 pub const ABILITY_META_LIST_ABILITIES: &str = "meta.list_abilities";
 pub const ABILITY_FEDERATION_STATUS: &str = "federation.status";
@@ -790,6 +805,28 @@ mod tests {
 
         let device = DeviceBaseline::required_abilities();
         assert_eq!(duplicate_ability_names(&device), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn principal_route_bindings_are_generated_from_manifest() {
+        use sha2::Digest as _;
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("provider_routes/easynet-principal-lifecycle-routes.v1.json");
+        let digest = sha2::Sha256::digest(std::fs::read(manifest).expect("read manifest"));
+
+        assert_eq!(
+            crate::daemon::ability::principal_routes_gen::PRINCIPAL_ROUTE_MANIFEST_SHA256,
+            hex::encode(digest)
+        );
+        assert_eq!(
+            crate::daemon::ability::principal_routes_gen::PRINCIPAL_LIFECYCLE_PROFILE,
+            "principal_lifecycle"
+        );
+        assert_eq!(
+            ABILITY_PRINCIPAL_CREATE,
+            crate::daemon::ability::principal_routes_gen::ABILITY_PRINCIPAL_CREATE
+        );
     }
 
     #[test]
