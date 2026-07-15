@@ -18,6 +18,12 @@ canonical_core_violations() {
     "$@"
 }
 
+route_lowering_violations() {
+  rg -n \
+    '\b(RouteCatalog|NewRouteCatalog|RuntimeEventRoute|RuntimeEventCursorMode|CursorProjection|SubscriptionProjection)\b' \
+    "$@"
+}
+
 canonical_root_output="$("$PYTHON_BIN" "$CONCEPT_VALIDATOR" --print-neutrality-roots --manifest "$CONCEPTS")" \
   || fail "canonical package manifest validation failed"
 canonical_roots=()
@@ -58,6 +64,19 @@ if [[ "${1:-}" == "--self-test" ]]; then
       fail "self-test failed to detect product route in canonical root: $root"
     fi
     rm -f "$injected"
+    if [[ "$root" == sdk/go/runtimeevents || "$root" == sdk/python/easynet_sdk/core ]]; then
+      if [[ "$root" == sdk/go/* ]]; then
+        injected="$tmp/$root/__route_lowering_negative.go"
+        printf 'package neutralitynegative\ntype RouteCatalog struct{}\n' >"$injected"
+      else
+        injected="$tmp/$root/__route_lowering_negative.py"
+        printf 'class RouteCatalog:\n    pass\n' >"$injected"
+      fi
+      if ! route_lowering_violations "$injected" >/dev/null; then
+        fail "self-test failed to detect route lowering in canonical root: $root"
+      fi
+      rm -f "$injected"
+    fi
   done
   "$PYTHON_BIN" - "$CONCEPTS" "$tmp/missing-root.json" <<'PY'
 import json, sys
@@ -175,6 +194,9 @@ if ((${#canonical_core_sources[@]} == 0)); then
 fi
 if canonical_core_violations "${canonical_core_sources[@]}"; then
   fail "product concept leaked into a provider-neutral canonical core"
+fi
+if route_lowering_violations "${canonical_core_sources[@]}"; then
+  fail "provider route-lowering surface leaked into a provider-neutral canonical core"
 fi
 
 for path in \

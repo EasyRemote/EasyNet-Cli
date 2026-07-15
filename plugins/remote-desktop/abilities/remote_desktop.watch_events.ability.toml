@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "remote_desktop.watch_events"
-description = "Watch remote desktop control events. v1 returns the bounded current snapshot through InvokeStream; live fan-out follows the Axon contract."
+descriptor_version = "1.0.0"
+description = "Watch remote desktop control events. v1 returns the bounded current snapshot through InvokeStream; live fan-out follows the canonical invocation contract."
+call_mode = "stream"
+capability_state = "provider_backed"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

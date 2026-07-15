@@ -280,7 +280,9 @@ pub fn call_tool_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
+    use crate::daemon::ability::descriptors::{
+        AbilityDescriptor, AdmissionAction, CallMode, Visibility,
+    };
     use std::sync::OnceLock;
 
     fn d(name: &str) -> AbilityDescriptor {
@@ -355,6 +357,31 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"observe_health"));
         assert!(names.contains(&"agent_list"));
+    }
+
+    #[test]
+    fn bridge_tools_surface_excludes_non_rpc_descriptors() {
+        let arc = build_bridge_registry(|| {
+            vec![
+                d("observe.health"),
+                d("consent.subscribe").with_call_mode(CallMode::Stream),
+                d("voice.transcribe").with_call_mode(CallMode::Bidi),
+            ]
+        });
+        let list = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
+        let resp = list(json!({})).unwrap();
+        let tools = resp["tools"].as_array().expect("tools array");
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["observe_health"]);
+
+        let call = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let stream_resp = call(json!({"name": "consent_subscribe", "arguments": {}})).unwrap();
+        assert_eq!(stream_resp["isError"], true);
+        let bidi_resp = call(json!({"name": "voice_transcribe", "arguments": {}})).unwrap();
+        assert_eq!(bidi_resp["isError"], true);
     }
 
     #[test]

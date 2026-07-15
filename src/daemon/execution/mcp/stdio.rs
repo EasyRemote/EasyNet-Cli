@@ -779,6 +779,18 @@ mod tests {
     }
 
     #[test]
+    fn bounded_reader_rejects_oversized_eof_frame_without_retaining_extra_bytes() {
+        let input = "x".repeat(4096);
+        let mut reader = BufReader::with_capacity(64, input.as_bytes());
+        let mut line = Vec::new();
+        assert_eq!(
+            read_bounded_line(&mut reader, &mut line, 128).unwrap(),
+            BoundedLineRead::TooLong
+        );
+        assert_eq!(line.len(), 128);
+    }
+
+    #[test]
     fn bounded_reader_accepts_payload_at_limit_and_rejects_one_byte_over() {
         for (payload_len, expected) in [
             (127, BoundedLineRead::Line),

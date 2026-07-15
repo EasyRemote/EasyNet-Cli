@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "remote_desktop.attach"
+descriptor_version = "1.0.0"
 description = "Attach a bounded Axon InvokeBidi media plane to an existing remote desktop session. Subject MUST match the resource_ura bound when the session was created. Control metadata remains reliable JSON, while live H.264/JPEG media chunks are bounded and may drop stale frames to preserve low latency; WebRTC remains the preferred direct transport when negotiation succeeds."
+call_mode = "bidi"
+capability_state = "provider_backed"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":true}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
