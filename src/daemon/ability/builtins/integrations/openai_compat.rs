@@ -1357,11 +1357,11 @@ mod tests {
     fn openai_file_resource_ura_deref_uses_owner_local_files_get() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let (_runtime, handle) = openai_file_runtime_with_handle();
-        let uri = crate::daemon::ability::builtins::resources::files_store::state::blob_ura(
+        let ura = crate::daemon::ability::builtins::resources::files_store::state::blob_ura(
             "example", "alice", FILE_SHA,
         );
 
-        let got = deref_to_data_url(&uri, &handle).expect("files URA should dereference");
+        let got = deref_to_data_url(&ura, &handle).expect("files URA should dereference");
 
         assert_eq!(got, "data:text/plain;base64,aGk=");
     }

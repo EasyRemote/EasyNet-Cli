@@ -19,4 +19,13 @@ daemon SDK surfaces use URA terminology only.
 - Implementation errors/comments that refer to caller, subject, device, or
   ability identities use URA.
 - Tests no longer advertise or bless retired address aliases.
+- URA factory outputs are never locally named as URI values in daemon/SDK
+  production sources.
 - Focused Rust/Go tests and terminology scan pass.
+
+## 2026-07-16 Iteration
+
+The OpenAI compatibility file resource dereference path already uses the
+`blob_ura` owner as its source of truth. This iteration removes the remaining
+local `uri` spelling for that URA value and adds an architecture-convergence
+gate so the same root-fork cannot return through another file-resource caller.

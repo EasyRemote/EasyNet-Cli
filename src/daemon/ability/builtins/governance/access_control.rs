@@ -1011,6 +1011,28 @@ mod tests {
     }
 
     #[test]
+    fn access_control_routes_are_generated_from_manifest() {
+        use sha2::Digest as _;
+
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("provider_routes/easynet-access-control-routes.v1.json");
+        let digest = sha2::Sha256::digest(std::fs::read(manifest).expect("read manifest"));
+
+        assert_eq!(
+            crate::daemon::ability::access_control_routes_gen::ACCESS_CONTROL_ROUTE_MANIFEST_SHA256,
+            hex::encode(digest)
+        );
+        assert_eq!(
+            crate::daemon::ability::access_control_routes_gen::ACCESS_CONTROL_PROFILE,
+            "access_control"
+        );
+        assert_eq!(
+            AUTHORITY_BINDING_GRANT,
+            crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_GRANT
+        );
+    }
+
+    #[test]
     fn access_control_schemas_require_canonical_owner_ura() {
         for ability in [
             AUTHORITY_BINDING_LIST,

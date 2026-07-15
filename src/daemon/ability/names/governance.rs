@@ -16,16 +16,24 @@ pub const INVOCATION_RECORD_GET: &str = "invocation.record.get";
 pub const INVOCATION_TRACE_GET: &str = "invocation.trace.get";
 pub const INVOCATION_CANCEL: &str = "invocation.cancel";
 
-pub const AUTHORITY_BINDING_GRANT: &str = "authority.binding.grant";
-pub const AUTHORITY_BINDING_REVOKE: &str = "authority.binding.revoke";
-pub const AUTHORITY_BINDING_LIST: &str = "authority.binding.list";
-pub const AUTHORITY_BINDING_CHECK: &str = "authority.binding.check";
+pub const AUTHORITY_BINDING_GRANT: &str =
+    crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_GRANT;
+pub const AUTHORITY_BINDING_REVOKE: &str =
+    crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_REVOKE;
+pub const AUTHORITY_BINDING_LIST: &str =
+    crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_LIST;
+pub const AUTHORITY_BINDING_CHECK: &str =
+    crate::daemon::ability::access_control_routes_gen::AUTHORITY_BINDING_CHECK;
 
-pub const POLICY_REQUEST_CREATE: &str = "policy.request.create";
-pub const POLICY_REQUEST_RESOLVE: &str = "policy.request.resolve";
-pub const POLICY_REQUEST_LIST: &str = "policy.request.list";
+pub const POLICY_REQUEST_CREATE: &str =
+    crate::daemon::ability::access_control_routes_gen::POLICY_REQUEST_CREATE;
+pub const POLICY_REQUEST_RESOLVE: &str =
+    crate::daemon::ability::access_control_routes_gen::POLICY_REQUEST_RESOLVE;
+pub const POLICY_REQUEST_LIST: &str =
+    crate::daemon::ability::access_control_routes_gen::POLICY_REQUEST_LIST;
 
-pub const ADMISSION_EXPLAIN: &str = "admission.explain";
+pub const ADMISSION_EXPLAIN: &str =
+    crate::daemon::ability::access_control_routes_gen::ADMISSION_EXPLAIN;
 
 pub const PRINCIPAL_CREATE: &str = crate::daemon::ability::conformance::ABILITY_PRINCIPAL_CREATE;
 pub const PRINCIPAL_BIND_FIRST_KEY: &str =

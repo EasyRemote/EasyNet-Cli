@@ -5,20 +5,6 @@ import (
 	"strings"
 )
 
-const (
-	accessControlProfile = "access_control"
-
-	accessControlAbilityGrant  = "authority.binding.grant"
-	accessControlAbilityRevoke = "authority.binding.revoke"
-	accessControlAbilityList   = "authority.binding.list"
-	accessControlAbilityCheck  = "authority.binding.check"
-
-	accessControlAbilityPolicyRequestCreate  = "policy.request.create"
-	accessControlAbilityPolicyRequestResolve = "policy.request.resolve"
-	accessControlAbilityPolicyRequestList    = "policy.request.list"
-	accessControlAbilityAdmissionExplain     = "admission.explain"
-)
-
 type AccessControlGrantState string
 
 const (

@@ -546,6 +546,25 @@ transport_locator_type = re.compile(
 semantic_name = re.compile(semantic_entity, re.I)
 ura_name = re.compile(r"ura", re.I)
 http_literal = re.compile(r"[\"'](?:https?|grpc)://", re.I)
+ura_factory_bound_to_uri = re.compile(
+    r"\b(?:let|var|const)\s+(?:mut\s+)?(?:[A-Za-z_][A-Za-z0-9_]*_)?uri\b[^\n=]*="
+    r"(?:[^\n]*\n){0,4}?[^\n]*\b[A-Za-z_][A-Za-z0-9_]*_ura\s*\(",
+    re.I,
+)
+
+semantic_ura_factory_roots = (
+    cli_root / "src",
+    cli_root / "sdk/go",
+    cli_root / "sdk/python/easynet_sdk",
+    cli_root / "sdk/node",
+    cli_root / "sdk/java/src/main",
+    cli_root / "sdk/swift/Sources",
+    axon_root / "sdk/rust/src",
+)
+semantic_ura_factory_files: set[Path] = set()
+for root in semantic_ura_factory_roots:
+    if root.exists():
+        semantic_ura_factory_files.update(production_files(root))
 
 for path in ura_vocabulary_files:
     text = source(path)
@@ -585,6 +604,16 @@ for path in ura_vocabulary_files:
                 index,
                 "semantic *_ura is populated with an HTTP/gRPC transport locator",
             )
+
+for path in sorted(semantic_ura_factory_files):
+    text = source(path)
+    for match in ura_factory_bound_to_uri.finditer(text):
+        add(
+            "R4_URA_FACTORY_BOUND_TO_URI_NAME",
+            path,
+            line_number(text, match.start()),
+            "semantic URA factory result must not be bound to a URI-named variable",
+        )
 
 
 # Rule 7: unary InvocationResult uses one canonical terminal receipt projection.

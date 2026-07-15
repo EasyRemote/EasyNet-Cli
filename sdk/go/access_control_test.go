@@ -2,12 +2,39 @@ package easynet
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 type memoryAccessControlAbility struct {
 	ability string
 	args    map[string]any
+}
+
+func TestAccessControlRoutesGeneratedFromManifest(t *testing.T) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	manifestPath := filepath.Join(
+		filepath.Dir(source),
+		"..",
+		"..",
+		"provider_routes",
+		"easynet-access-control-routes.v1.json",
+	)
+	manifest, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read access-control route manifest: %v", err)
+	}
+	digest := sha256.Sum256(manifest)
+	if got, want := accessControlRouteManifestSHA256, fmt.Sprintf("%x", digest[:]); got != want {
+		t.Fatalf("access-control route manifest digest = %s, want %s", got, want)
+	}
 }
 
 func (m *memoryAccessControlAbility) Invoke(_ context.Context, call RuntimeCallContext, ability string, args any) (map[string]any, error) {

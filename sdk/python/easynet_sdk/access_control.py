@@ -9,6 +9,16 @@ from typing import Mapping, Protocol, Sequence
 from .axon_addressing import parse_ura
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime_ability import RuntimeCallContext
+from ._access_control_routes import (
+    _ABILITY_ADMISSION_EXPLAIN,
+    _ABILITY_CHECK,
+    _ABILITY_GRANT,
+    _ABILITY_LIST,
+    _ABILITY_POLICY_REQUEST_CREATE,
+    _ABILITY_POLICY_REQUEST_LIST,
+    _ABILITY_POLICY_REQUEST_RESOLVE,
+    _ABILITY_REVOKE,
+)
 
 __all__ = [
     "AccessControlAuthorityProof",
@@ -38,16 +48,6 @@ __all__ = [
     "AccessControlAdmissionExplainResult",
     "RuntimeAccessControlProvider",
 ]
-
-_ABILITY_GRANT = "authority.binding.grant"
-_ABILITY_REVOKE = "authority.binding.revoke"
-_ABILITY_LIST = "authority.binding.list"
-_ABILITY_CHECK = "authority.binding.check"
-_ABILITY_POLICY_REQUEST_CREATE = "policy.request.create"
-_ABILITY_POLICY_REQUEST_RESOLVE = "policy.request.resolve"
-_ABILITY_POLICY_REQUEST_LIST = "policy.request.list"
-_ABILITY_ADMISSION_EXPLAIN = "admission.explain"
-
 
 class AccessControlGrantState(StrEnum):
     ACTIVE = "active"

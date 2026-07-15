@@ -1,5 +1,8 @@
+import hashlib
+from pathlib import Path
 import unittest
 
+from easynet_sdk._access_control_routes import _ACCESS_CONTROL_ROUTE_MANIFEST_SHA256
 from easynet_sdk.access_control import (
     AccessControlAuthorityProof,
     AccessControlCheckRequest,
@@ -127,6 +130,16 @@ class _MemoryAbility:
 
 
 class AccessControlTests(unittest.TestCase):
+    def test_access_control_routes_are_generated_from_manifest(self) -> None:
+        manifest = (
+            Path(__file__).resolve().parents[2]
+            .parent
+            / "provider_routes"
+            / "easynet-access-control-routes.v1.json"
+        )
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        self.assertEqual(_ACCESS_CONTROL_ROUTE_MANIFEST_SHA256, digest)
+
     def test_runtime_provider_grants_with_canonical_principal_uras(self) -> None:
         ability = _MemoryAbility()
         provider = RuntimeAccessControlProvider(ability)

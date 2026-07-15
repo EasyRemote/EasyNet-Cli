@@ -28,3 +28,19 @@ Completed checks:
 - `git diff --check`
 - Targeted scan for retired implementation/test identity spellings returned no
   matches outside excluded docs/generated files.
+
+2026-07-16 planned checks:
+
+- `cargo test --features axon-pb openai_file_resource_ura_deref_uses_owner_local_files_get --lib`
+- `tools/scripts/check-architecture-convergence.sh`
+- `tools/scripts/check-sdk-ura-naming.sh`
+- `tools/scripts/check-sdk-ura-naming.sh --self-test`
+- `git diff --check`
+
+2026-07-16 completed checks:
+
+- `cargo test --features axon-pb openai_file_resource_ura_deref_uses_owner_local_files_get --lib`
+- `tools/scripts/check-architecture-convergence.sh`
+- `tools/scripts/check-sdk-ura-naming.sh`
+- `tools/scripts/check-sdk-ura-naming.sh --self-test`
+- `git diff --check`
