@@ -18,8 +18,8 @@
 // ---------------------
 // 1. Reads the `Envelope` from an inbound `pb::axon::v1::InvokeRequest`
 //    (or its server-stream / bidi counterpart)
-// 2. **Loopback bypass**: callers presenting the daemon's own URA
-//    are accepted without crypto on trusted local transports
+// 2. **Local self admission**: callers presenting the daemon's own URA
+//    are accepted without crypto only on the local-only IPC boundary
 // 3. **Trust-anchor membership** (always): unknown caller URAs are
 //    rejected with `permission_denied` before any structural work,
 //    so unrelated callers cannot push entries into the replay store
@@ -38,8 +38,8 @@
 // ----------------------------------------
 // The clean architecture has no unsigned Device compatibility arm.
 // Devices, backends, hubs, and users all enter
-// through signed Axon envelopes. The daemon-local loopback bypass is
-// reserved for the daemon's own URA on trusted local transports; it is
+// through signed Axon envelopes. Daemon-local self admission is
+// reserved for the daemon's own URA on the local-only IPC boundary; it is
 // not a public caller compatibility mechanism.
 //
 // What this module does NOT do (yet)
@@ -57,11 +57,11 @@
 // receives `Status::invalid_argument` for any RPC missing this; it
 // is a wire-level requirement, not a policy choice.
 //
-// **Invariant 2 (loopback bypass)**: When the caller URA matches
+// **Invariant 2 (local self admission)**: When the caller URA matches
 // the daemon's configured URA, admission accepts without consulting
 // the trust anchor or the replay store. The daemon trusts itself —
-// `legacy self alias.*` abilities and admin RPCs originate from the daemon's
-// own process and need not sign.
+// runtime-local control abilities and admin RPCs originate from the daemon's
+// own process over local-only IPC and need not sign.
 //
 // **Invariant 3 (strict public crypto)**: Every external caller role
 // (`Device`, `Backend`, `Hub`, and `User`) runs the full §5.2 pipeline
@@ -175,7 +175,7 @@ const REASON_CALLER_UNKNOWN: &str = "CALLER_UNKNOWN";
 /// Holds:
 /// - `Arc<RealmTrustAnchor>` — the trust set authored by PR-7's
 ///   pairing flow and read at boot by the daemon binary
-/// - `daemon_ura` — the daemon's own canonical URA (loopback bypass)
+/// - `daemon_ura` — the daemon's own canonical URA (local self admission)
 /// - `replay_store` — the daemon-shared `SharedNonceReplayStore` used by
 ///   legacy transport-wrapper strict policy checks. It is not a token that
 ///   lets callers bypass Axon's LocalRuntime admission.
@@ -221,25 +221,17 @@ pub struct AdmissionFacade {
     /// represents a local-only facade; any attempted cross-hub call fails
     /// closed in the peer signer.
     hub_signer: Option<Arc<dyn CanonicalSigner>>,
-    /// Whether the loopback bypass (Invariant 2) is honoured for
-    /// this facade. The bypass is a pure URA string-match
-    /// (`caller_ura == daemon_ura`), so any caller that can reach
-    /// the listener and spoof the daemon's own URA would otherwise
-    /// skip the trust anchor, signature, and replay checks. That is
-    /// only safe on a genuinely loopback-only transport: the daemon
-    /// serves the *same* `InvocationServer` over both a 0600 UDS and
-    /// a TCP+TLS socket (see `boot::spawn_tcp_tls_listener`), and the
-    /// TCP socket is off-box reachable. So the UDS-fed facade keeps
-    /// `loopback_trusted = true` and the TCP-fed facade sets it to
-    /// `false`, forcing every TCP caller — including a daemon-URA
-    /// spoofer — through the full strict pipeline. Defaults to `true`
-    /// so existing single-listener / test wiring is unchanged.
-    loopback_trusted: bool,
+    /// Explicit transport authority for local self admission. The daemon
+    /// serves the same Invocation service over local-only IPC and off-box
+    /// TCP/TLS; this state prevents a caller that can reach TCP and spoof the
+    /// daemon's own URA from skipping trust-anchor, signature, and replay
+    /// checks.
+    transport_boundary: AdmissionTransportBoundary,
     /// #185: reloadable per-consumer usage-quota gate. The gate is
     /// always present so SIGHUP can enable quota after boot; it is
-    /// disabled internally when `[daemon.quota]` is absent. Loopback
-    /// self calls remain exempt here because the daemon must not
-    /// throttle its own `legacy self alias.*` administrative surface.
+    /// disabled internally when `[daemon.quota]` is absent. Local self calls
+    /// remain exempt here because the daemon must not throttle its own runtime
+    /// control surface.
     quota: SharedUsageQuotaGate,
     /// Read-only view of the daemon-owned PrincipalLifecycle aggregate.
     /// Trust-anchor key presence proves a key is known; this reader proves
@@ -247,6 +239,22 @@ pub struct AdmissionFacade {
     /// reserved for tests and pre-lifecycle wiring seams; production boot
     /// derives it from the same trust-anchor path used by identity writes.
     principal_lifecycle: Option<PrincipalLifecycleReader>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdmissionTransportBoundary {
+    /// The facade is fed by daemon-local IPC only. The daemon's own URA and the
+    /// local system URA may enter without public caller signatures.
+    LocalOnlyIpc,
+    /// The facade is reachable by off-box clients. Every caller, including a
+    /// daemon-URA spoof, must enter the strict public admission pipeline.
+    OffBoxStrict,
+}
+
+impl AdmissionTransportBoundary {
+    fn admits_local_self(self) -> bool {
+        matches!(self, Self::LocalOnlyIpc)
+    }
 }
 
 struct StrictSignatureGateInput<'a> {
@@ -295,7 +303,7 @@ impl std::fmt::Debug for AdmissionFacade {
                 "hub_signer",
                 &self.hub_signer.as_ref().map(|signer| signer.owner_ura()),
             )
-            .field("loopback_trusted", &self.loopback_trusted)
+            .field("transport_boundary", &self.transport_boundary)
             .field("quota_configured", &self.quota.policy().is_some())
             .field(
                 "principal_lifecycle",
@@ -351,7 +359,7 @@ impl AdmissionFacade {
             self_realm,
             federated_key_cache: SharedFederatedKeyCache::new(),
             hub_signer: None,
-            loopback_trusted: true,
+            transport_boundary: AdmissionTransportBoundary::LocalOnlyIpc,
             quota: SharedUsageQuotaGate::disabled(),
             principal_lifecycle: None,
         }
@@ -525,7 +533,7 @@ impl AdmissionFacade {
     }
 
     /// The daemon's own canonical URA. Used by per-ability
-    /// admission filters that need to recognise the loopback
+    /// admission filters that need to recognise the local self
     /// caller (eg. `federation.list_user_devices` in N3-5
     /// admits the daemon talking to itself without requiring
     /// a Hub trust entry for its own URA).
@@ -534,15 +542,13 @@ impl AdmissionFacade {
         self.daemon_ura.as_deref()
     }
 
-    /// Set whether this facade honours the loopback bypass
-    /// (Invariant 2). Boot wires the UDS-fed service with `true`
-    /// (the daemon's own process reaches itself over the 0600 socket
-    /// and need not sign) and the TCP+TLS-fed service with `false`,
-    /// so an off-box caller that spoofs the daemon URA cannot skip
-    /// the strict trust-anchor / signature / replay pipeline.
+    /// Set the transport boundary that governs local self admission. Boot
+    /// leaves the UDS-fed service on `LocalOnlyIpc` and clones the TCP/TLS-fed
+    /// service with `OffBoxStrict`, so an off-box caller that spoofs the daemon
+    /// URA cannot skip the strict trust-anchor / signature / replay pipeline.
     #[must_use]
-    pub fn with_loopback_trusted(mut self, loopback_trusted: bool) -> Self {
-        self.loopback_trusted = loopback_trusted;
+    pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
+        self.transport_boundary = boundary;
         self
     }
 
@@ -575,7 +581,7 @@ impl AdmissionFacade {
     ///
     /// Returns:
     /// - `Ok(None)` — no metering applies (quota off, the caller is
-    ///   the daemon's own loopback/self URA, or the caller is
+    ///   the daemon's own local self URA, or the caller is
     ///   unmetered by policy). The response carries no `RateLimitInfo`.
     /// - `Ok(Some(info))` — the call is within budget; `info` is the
     ///   post-decrement quota status to surface on the response.
@@ -591,10 +597,10 @@ impl AdmissionFacade {
         };
         let caller_ura = caller_ura_required(envelope)?;
 
-        // The daemon never meters itself: loopback/self calls
-        // (`legacy self alias.*` abilities, admin RPCs) bypass quota exactly as
-        // they bypass the trust anchor.
-        if self.is_loopback(caller_ura) {
+        // The daemon never meters itself on the local-only IPC boundary:
+        // runtime-local control abilities and admin RPCs use the same
+        // admission predicate as the transport policy gate.
+        if self.accepts_local_self_caller(caller_ura) {
             return Ok(None);
         }
 
@@ -664,7 +670,7 @@ impl AdmissionFacade {
             self_realm,
             federated_key_cache: SharedFederatedKeyCache::new(),
             hub_signer: None,
-            loopback_trusted: true,
+            transport_boundary: AdmissionTransportBoundary::LocalOnlyIpc,
             quota: SharedUsageQuotaGate::disabled(),
             principal_lifecycle: None,
         }
@@ -738,7 +744,7 @@ impl AdmissionFacade {
         metadata: Option<&HashMap<String, String>>,
     ) -> Result<(), Status> {
         let caller_ura = caller_ura_required(envelope)?;
-        if self.is_loopback(caller_ura)
+        if self.accepts_local_self_caller(caller_ura)
             || (ability == ABILITY_FEDERATION_JOIN
                 && caller_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA)
         {
@@ -893,7 +899,7 @@ impl AdmissionFacade {
     ///
     /// Order:
     /// 1. Caller URA required (Invariant 1).
-    /// 2. Loopback bypass (Invariant 2).
+    /// 2. Local self admission (Invariant 2).
     /// 3. Trust-anchor membership: unknown URA → `permission_denied`.
     /// 4. Device, Backend, Hub, and User roles all run the strict
     ///    4-step §5.2 signature/replay pipeline.
@@ -911,8 +917,9 @@ impl AdmissionFacade {
             return Self::verify_provisional_federation_join(envelope, ability, args);
         }
 
-        // Invariant 2: loopback bypass. Daemon trusts itself.
-        if self.is_loopback(caller_ura) {
+        // Invariant 2: local self admission. Daemon trusts itself only on the
+        // local-only IPC boundary.
+        if self.accepts_local_self_caller(caller_ura) {
             return Ok(());
         }
         let route_ability = registry_ability_name_from_route(ability);
@@ -1371,13 +1378,11 @@ impl AdmissionFacade {
         Ok(())
     }
 
-    fn is_loopback(&self, caller_ura: &str) -> bool {
-        // Off-box transports never get the bypass, even on an exact
-        // daemon-URA match: the same URA an attacker can put in
-        // `caller.ura` would otherwise skip the entire strict
-        // pipeline. Only the loopback-only (UDS) listener wires a
-        // facade with `loopback_trusted = true`.
-        if !self.loopback_trusted {
+    fn accepts_local_self_caller(&self, caller_ura: &str) -> bool {
+        // Off-box transports never get local self admission, even on an exact
+        // daemon-URA match: the same URA an attacker can put in `caller.ura`
+        // would otherwise skip the entire strict pipeline.
+        if !self.transport_boundary.admits_local_self() {
             return false;
         }
         if caller_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
@@ -1389,7 +1394,7 @@ impl AdmissionFacade {
         }
     }
 
-    pub(crate) fn accepts_loopback_envelope(&self, envelope: Option<&Envelope>) -> bool {
+    pub(crate) fn accepts_local_self_envelope(&self, envelope: Option<&Envelope>) -> bool {
         let Some(caller_ura) = envelope
             .and_then(|envelope| envelope.caller.as_ref())
             .map(|caller| caller.ura.trim())
@@ -1397,7 +1402,7 @@ impl AdmissionFacade {
         else {
             return false;
         };
-        self.is_loopback(caller_ura)
+        self.accepts_local_self_caller(caller_ura)
     }
 
     /// **PR-N2 commit 1/N**. Decide whether `caller_ura` belongs to
@@ -2353,7 +2358,7 @@ fn reject_public_hosted_agent_delegation_metadata(
 
     Err(Status::permission_denied(format!(
         "{REASON_HOSTED_AGENT_DELEGATION_LOCAL_ONLY}: `{rejected_key}` \
-         is local daemon control metadata and is only accepted on trusted loopback ingress"
+         is local daemon control metadata and is only accepted on local self admission ingress"
     )))
 }
 
@@ -2939,11 +2944,11 @@ mod tests {
         }
     }
 
-    // ── URA/loopback gate (preserved from PR-1) ────────────────────
+    // ── URA/local self gate ────────────────────────────────────────
 
     #[test]
     fn empty_anchor_rejects_external_caller_with_permission_denied() {
-        // DEC-013: trust-anchor membership is the first non-loopback
+        // DEC-013: trust-anchor membership is the first non-local-self
         // check, so a URA not in the anchor short-circuits to
         // permission_denied without ever exercising the §5.2
         // pipeline.
@@ -2980,7 +2985,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_ura_loopback_bypasses_anchor_and_replay() {
+    fn local_self_daemon_ura_skips_public_anchor_and_replay() {
         let facade = admission_facade(
             Arc::new(RealmTrustAnchor::default()),
             Some(hub_ura("realm")),
@@ -2989,13 +2994,13 @@ mod tests {
         let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
         facade
             .verify_invoke(&req)
-            .expect("daemon loopback admitted without crypto");
-        // Loopback must not pollute the replay store.
+            .expect("local self daemon URA admitted without public crypto");
+        // Local self admission must not pollute the replay store.
         assert!(facade.replay_store.is_empty());
     }
 
     #[test]
-    fn local_system_loopback_bypasses_anchor_and_replay() {
+    fn local_system_self_admission_skips_public_anchor_and_replay() {
         let facade = admission_facade(
             Arc::new(RealmTrustAnchor::default()),
             Some(hub_ura("realm")),
@@ -3006,15 +3011,14 @@ mod tests {
 
         facade
             .verify_invoke(&req)
-            .expect("UDS-origin local system caller admitted without realm trust anchor");
+            .expect("local-only IPC local system caller admitted without realm trust anchor");
         assert!(facade.replay_store.is_empty());
     }
 
     #[test]
-    fn loopback_repeat_remains_admitted() {
-        // A daemon may invoke `legacy self alias.foo` many times with the same
-        // body; loopback bypass is unconditional, so repeated calls
-        // never trigger the replay path.
+    fn local_self_repeat_remains_admitted() {
+        // A daemon may invoke runtime-local control abilities many times with
+        // the same body; local self admission never triggers the replay path.
         let facade = admission_facade(
             Arc::new(RealmTrustAnchor::default()),
             Some(hub_ura("realm")),
@@ -3022,13 +3026,15 @@ mod tests {
         let daemon_ura = hub_ura("realm");
         let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
         for _ in 0..3 {
-            facade.verify_invoke(&req).expect("every loopback admitted");
+            facade
+                .verify_invoke(&req)
+                .expect("every local self call admitted");
         }
         assert!(facade.replay_store.is_empty());
     }
 
     #[test]
-    fn tcp_origin_facade_does_not_honour_local_system_bypass() {
+    fn off_box_facade_does_not_accept_local_system_self_admission() {
         let req = invoke_request(Some(envelope_with_caller(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         )));
@@ -3036,11 +3042,11 @@ mod tests {
             Arc::new(RealmTrustAnchor::default()),
             Some(hub_ura("realm")),
         )
-        .with_loopback_trusted(false);
+        .with_transport_boundary(AdmissionTransportBoundary::OffBoxStrict);
 
         let err = facade
             .verify_invoke(&req)
-            .expect_err("TCP-origin facade must not honour local system bypass");
+            .expect_err("off-box facade must not accept local system self admission");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
         assert!(
             err.message().contains("not in the realm trust anchor"),
@@ -3051,14 +3057,11 @@ mod tests {
     }
 
     #[test]
-    fn tcp_origin_facade_does_not_honour_loopback_bypass_for_daemon_ura_spoof() {
+    fn off_box_facade_does_not_accept_daemon_ura_spoof_as_local_self() {
         // #66: the same DaemonInvocationService is served over a
-        // loopback-only UDS and an off-box TCP+TLS socket. The UDS-fed
-        // facade trusts the loopback bypass; the TCP-fed facade must
-        // not. An unsigned envelope spoofing the daemon's own URA is
-        // admitted by the former and rejected (forced through the
-        // strict pipeline) by the latter — with no replay pollution on
-        // either path.
+        // local-only IPC socket and an off-box TCP+TLS socket. An unsigned
+        // envelope spoofing the daemon's own URA is admitted by the former and
+        // rejected by the latter with no replay pollution on either path.
         let daemon_ura = hub_ura("realm");
         let req = invoke_request(Some(envelope_with_caller(&daemon_ura)));
 
@@ -3068,13 +3071,13 @@ mod tests {
         );
         uds_facade
             .verify_invoke(&req)
-            .expect("UDS-origin loopback bypass still admits the daemon's own URA");
+            .expect("local-only IPC admits the daemon's own URA");
 
         let tcp_facade = admission_facade(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura))
-            .with_loopback_trusted(false);
+            .with_transport_boundary(AdmissionTransportBoundary::OffBoxStrict);
         let err = tcp_facade
             .verify_invoke(&req)
-            .expect_err("TCP-origin facade must not honour the loopback bypass");
+            .expect_err("off-box facade must not accept local self admission");
         // The spoofed daemon URA is not in the (empty) trust anchor, so
         // the strict path rejects it as an unknown caller rather than
         // silently admitting it.
@@ -3462,14 +3465,13 @@ mod tests {
     }
 
     #[test]
-    fn quota_exempts_loopback_self_caller() {
+    fn quota_exempts_local_self_caller() {
         use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
         use crate::daemon::persistence::daemon_config::QuotaConfig;
 
         let daemon_ura = hub_ura("realm");
-        // A cap of 1, but the daemon calling itself must never be
-        // metered — it would otherwise self-throttle its own `legacy self alias.*`
-        // abilities.
+        // A cap of 1, but the daemon calling itself over local-only IPC must
+        // never be metered; otherwise it could self-throttle runtime control.
         let config = QuotaConfig::new(1, 10_000, std::collections::BTreeMap::new());
         let facade = admission_facade(
             Arc::new(RealmTrustAnchor::default()),
@@ -3480,7 +3482,9 @@ mod tests {
 
         for _ in 0..5 {
             assert_eq!(
-                facade.check_quota(&req).expect("loopback never throttled"),
+                facade
+                    .check_quota(&req)
+                    .expect("local self never throttled"),
                 None,
                 "the daemon's own URA is exempt from quota"
             );
@@ -3527,7 +3531,7 @@ mod tests {
         // role-URA canonicality). We model the external caller as
         // a peer-realm hub so the URA shape is contract-valid while
         // the realm distinction keeps it outside the daemon's
-        // loopback bypass.
+        // local self admission path.
         let peer_hub = hub_ura("peer-realm");
         let facade = admission_facade(backend_anchor(&[peer_hub.as_str()]), Some(hub_ura("realm")));
         let req = invoke_request(Some(envelope_with_caller(&peer_hub)));
@@ -3855,7 +3859,7 @@ mod tests {
     }
 
     #[test]
-    fn loopback_may_carry_hosted_agent_delegation_metadata() {
+    fn local_self_admission_may_carry_hosted_agent_delegation_metadata() {
         let daemon_ura = hub_ura("realm");
         let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
         let mut req = invoke_request(Some(envelope_with_caller(
@@ -3868,12 +3872,12 @@ mod tests {
 
         facade
             .verify_invoke(&req)
-            .expect("trusted loopback may carry local hosted-agent delegation metadata");
+            .expect("local self admission may carry hosted-agent delegation metadata");
         assert!(facade.replay_store.is_empty());
     }
 
     #[test]
-    fn loopback_may_carry_hosted_agent_delegation_request() {
+    fn local_self_admission_may_carry_hosted_agent_delegation_request() {
         let daemon_ura = hub_ura("realm");
         let facade = admission_facade(Arc::new(RealmTrustAnchor::default()), Some(daemon_ura));
         let mut req = invoke_request(Some(envelope_with_caller(
@@ -3890,7 +3894,7 @@ mod tests {
 
         facade
             .verify_invoke(&req)
-            .expect("trusted loopback may carry local hosted-agent delegation requests");
+            .expect("local self admission may carry hosted-agent delegation requests");
         assert!(facade.replay_store.is_empty());
     }
 
@@ -3903,8 +3907,8 @@ mod tests {
     // `LedgerSink`-installed `InvocationLedger` at terminal time;
     // rejected admission is observed via the wire-level gRPC
     // error their caller sees. The behavioural contracts those
-    // tests pinned ("admission accepts signed callers", "loopback
-    // is a no-op bypass", "replay is rejected with
+    // tests pinned ("admission accepts signed callers", "local self admission
+    // does not enter replay", "replay is rejected with
     // `NONCE_REPLAY`") remain covered by the
     // signed-caller accept/reject sites in
     // the other test functions below — those still exercise the
@@ -4309,7 +4313,7 @@ mod tests {
         let device_pub_b64 = BASE64_STANDARD.encode(device_signing.verifying_key().to_bytes());
         // Backend role demands a hub URA per `canonical_ura_for_role`,
         // and the strict pipeline must NOT be short-circuited by the
-        // loopback bypass — so we route the caller through a
+        // local self admission path — so we route the caller through a
         // peer-realm hub URA. The daemon's self URA (set below as
         // the second `admission_facade` arg) stays in the local
         // `realm` so caller_ura != self_ura and the strict path runs.

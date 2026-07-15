@@ -709,10 +709,10 @@ impl BidiDispatcher {
             .envelope
             .clone()
             .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
-        let loopback_admitted = self
+        let local_self_admitted = self
             .admission
-            .accepts_loopback_envelope(envelope_open.envelope.as_ref());
-        let wire = if loopback_admitted {
+            .accepts_local_self_envelope(envelope_open.envelope.as_ref());
+        let wire = if local_self_admitted {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &envelope_open.metadata,
                 &wire_envelope,

@@ -15,9 +15,9 @@
 //    `DaemonConfig::load`. Missing or malformed configuration fails
 //    boot before lifecycle readiness can be published.
 // 2. Loads `~/.easynet/credentials.json` to derive the daemon's own
-//    URA; threads it into `AdmissionFacade` as the loopback bypass
-//    so the daemon can call its own RPCs without entering the
-//    realm trust set.
+//    URA; threads it into `AdmissionFacade` for local self admission
+//    so the daemon can call its own RPCs over local-only IPC without
+//    entering the realm trust set.
 // 3. Loads `/etc/easynet/realm-trust.toml` (or the
 //    daemon-config-supplied override) via
 //    `RealmTrustAnchor::load_or_empty`. Empty fallback is fine for
@@ -75,7 +75,9 @@ use crate::daemon::axon_bridge::hot_agent_registrar::{
 };
 use crate::daemon::invocation::bidi::session_wire::{RequestOutcome, SessionRequestError};
 
-use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use crate::daemon::invocation::admission::admission_facade::{
+    AdmissionFacade, AdmissionTransportBoundary,
+};
 use crate::daemon::invocation::admission::principal_lifecycle::{
     principal_lifecycle_store_path_for_trust_anchor, PrincipalLifecycleReader,
 };
@@ -688,12 +690,14 @@ pub fn start_daemon_invocation_transport(
     // is fail-closed for missing material.
     if capabilities.hub_runtime {
         if let Some(listen_tcp) = config.listen_tcp() {
-            // The TCP+TLS socket is off-box reachable, so its admission
-            // gate must NOT honour the loopback bypass — otherwise a
-            // caller that spoofs the daemon's own URA in `caller.ura`
-            // would skip the trust-anchor / signature / replay pipeline.
-            // The UDS listener above keeps the default (trusted) bypass.
-            spawn_tcp_tls_listener(&config, listen_tcp, service.with_loopback_trusted(false))?;
+            // The TCP+TLS socket is off-box reachable, so its admission gate
+            // must never accept local self callers. The UDS listener above
+            // keeps the default local-only IPC boundary.
+            spawn_tcp_tls_listener(
+                &config,
+                listen_tcp,
+                service.with_transport_boundary(AdmissionTransportBoundary::OffBoxStrict),
+            )?;
         }
     }
 

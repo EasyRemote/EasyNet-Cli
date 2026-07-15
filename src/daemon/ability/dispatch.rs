@@ -1344,6 +1344,11 @@ pub(crate) enum HotAgentAuthorityInventoryError {
     AuthorityNotEnrolled { agent: String },
     #[error("hosted Agent {agent:?} authority inventory lock is poisoned")]
     InventoryPoisoned { agent: String },
+    #[error("hosted Agent {agent:?} authority {counter} counter overflow")]
+    CounterOverflow {
+        agent: String,
+        counter: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1479,6 +1484,32 @@ struct HotAgentAuthorityInventoryState {
     next_incarnation: u64,
 }
 
+impl HotAgentAuthorityInventoryState {
+    fn allocate_incarnation(
+        &mut self,
+        agent: &str,
+    ) -> Result<u64, HotAgentAuthorityInventoryError> {
+        let incarnation = self.next_incarnation;
+        self.next_incarnation = self.next_incarnation.checked_add(1).ok_or_else(|| {
+            HotAgentAuthorityInventoryError::CounterOverflow {
+                agent: agent.to_string(),
+                counter: "incarnation",
+            }
+        })?;
+        Ok(incarnation)
+    }
+
+    fn advance_generation(&mut self, agent: &str) -> Result<(), HotAgentAuthorityInventoryError> {
+        self.generation = self.generation.checked_add(1).ok_or_else(|| {
+            HotAgentAuthorityInventoryError::CounterOverflow {
+                agent: agent.to_string(),
+                counter: "generation",
+            }
+        })?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct HotAgentAuthorityEntry {
     authority_root: String,
@@ -1522,7 +1553,9 @@ impl HotAgentAuthorityInventory {
             .into_iter()
             .map(|(agent, authority_root)| {
                 let incarnation = next_incarnation;
-                next_incarnation = next_incarnation.wrapping_add(1);
+                next_incarnation = next_incarnation
+                    .checked_add(1)
+                    .expect("hosted Agent boot authority inventory exceeds u64 incarnations");
                 (
                     agent,
                     HotAgentAuthorityEntry {
@@ -1574,8 +1607,8 @@ impl HotAgentAuthorityInventory {
                 });
             }
             None => {
-                let incarnation = state.next_incarnation;
-                state.next_incarnation = state.next_incarnation.wrapping_add(1);
+                state.advance_generation(agent)?;
+                let incarnation = state.allocate_incarnation(agent)?;
                 state.roots.insert(
                     agent.to_string(),
                     HotAgentAuthorityEntry {
@@ -1583,7 +1616,6 @@ impl HotAgentAuthorityInventory {
                         incarnation,
                     },
                 );
-                state.generation = state.generation.wrapping_add(1);
                 (true, incarnation)
             }
         };
@@ -1614,7 +1646,7 @@ impl HotAgentAuthorityInventory {
                     && current.incarnation == enrollment.incarnation =>
             {
                 state.roots.remove(&enrollment.agent);
-                state.generation = state.generation.wrapping_add(1);
+                state.advance_generation(&enrollment.agent)?;
                 Ok(())
             }
             Some(_) => Ok(()),
@@ -1666,7 +1698,7 @@ impl HotAgentAuthorityInventory {
                     && current.incarnation == enrollment.incarnation =>
             {
                 state.roots.remove(&enrollment.agent);
-                state.generation = state.generation.wrapping_add(1);
+                state.advance_generation(&enrollment.agent)?;
                 Ok(())
             }
             Some(current) => Err(HotAgentAuthorityInventoryError::AuthorityConflict {
@@ -6091,8 +6123,7 @@ mod tests {
 
         let stale = {
             let mut state = inventory.state.write().unwrap();
-            let incarnation = state.next_incarnation;
-            state.next_incarnation = state.next_incarnation.wrapping_add(1);
+            let incarnation = state.allocate_incarnation(agent).unwrap();
             state.roots.insert(
                 agent.to_string(),
                 HotAgentAuthorityEntry {
@@ -6111,9 +6142,8 @@ mod tests {
         let current_incarnation = {
             let mut state = inventory.state.write().unwrap();
             state.roots.remove(agent);
-            state.generation = state.generation.wrapping_add(1);
-            let incarnation = state.next_incarnation;
-            state.next_incarnation = state.next_incarnation.wrapping_add(1);
+            state.advance_generation(agent).unwrap();
+            let incarnation = state.allocate_incarnation(agent).unwrap();
             state.roots.insert(
                 agent.to_string(),
                 HotAgentAuthorityEntry {
@@ -6131,6 +6161,48 @@ mod tests {
         let current = state.roots.get(agent).expect("E2 remains enrolled");
         assert_eq!(current.incarnation, current_incarnation);
         assert_eq!(current.authority_root, root);
+    }
+
+    #[test]
+    fn hot_agent_authority_generation_overflow_fails_closed() {
+        let device =
+            CanonicalDeviceAuthority::parse("easynet:///r/acme/device/edge-01".to_string())
+                .expect("canonical device");
+        let inventory = HotAgentAuthorityInventory::new(device, BTreeMap::new());
+        let mut state = inventory.state.write().unwrap();
+        state.generation = u64::MAX;
+
+        let error = state.advance_generation("alice").unwrap_err();
+
+        assert_eq!(
+            error,
+            HotAgentAuthorityInventoryError::CounterOverflow {
+                agent: "alice".to_string(),
+                counter: "generation",
+            }
+        );
+        assert_eq!(state.generation, u64::MAX);
+    }
+
+    #[test]
+    fn hot_agent_authority_incarnation_overflow_fails_closed() {
+        let device =
+            CanonicalDeviceAuthority::parse("easynet:///r/acme/device/edge-01".to_string())
+                .expect("canonical device");
+        let inventory = HotAgentAuthorityInventory::new(device, BTreeMap::new());
+        let mut state = inventory.state.write().unwrap();
+        state.next_incarnation = u64::MAX;
+
+        let error = state.allocate_incarnation("alice").unwrap_err();
+
+        assert_eq!(
+            error,
+            HotAgentAuthorityInventoryError::CounterOverflow {
+                agent: "alice".to_string(),
+                counter: "incarnation",
+            }
+        );
+        assert_eq!(state.next_incarnation, u64::MAX);
     }
 
     #[test]

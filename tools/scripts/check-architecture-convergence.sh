@@ -1757,6 +1757,224 @@ if cancellation_registry.exists():
             "terminal_order.push_back must exist only inside retain_terminal_key",
         )
 
+# Rule 25: hosted Agent authority leases are invalidated by a monotonic
+# generation and incarnation state machine. Dynamic enroll/rollback/revoke may
+# not use wrapping counters because wraparound can make stale leases or rollback
+# receipts indistinguishable from current authority state.
+ability_dispatch = cli_root / "src/daemon/ability/dispatch.rs"
+if ability_dispatch.exists():
+    text = source(ability_dispatch)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    hot_authority_requirements = (
+        (
+            "fn allocate_incarnation(",
+            "hosted Agent authority inventory must own incarnation allocation",
+        ),
+        (
+            "fn advance_generation(",
+            "hosted Agent authority inventory must own generation advancement",
+        ),
+        (
+            "HotAgentAuthorityInventoryError::CounterOverflow",
+            "hosted Agent authority counter overflow must fail closed",
+        ),
+        (
+            ".checked_add(1)",
+            "hosted Agent authority counters must use checked arithmetic",
+        ),
+        (
+            "state.allocate_incarnation(agent)?",
+            "hot enrollment must allocate incarnations through the inventory state owner",
+        ),
+        (
+            "state.advance_generation(agent)?",
+            "hot enrollment must advance generation through the inventory state owner",
+        ),
+        (
+            "state.advance_generation(&enrollment.agent)?",
+            "rollback/revoke must advance generation through the inventory state owner",
+        ),
+    )
+    for token, detail in hot_authority_requirements:
+        if token not in production_text:
+            add("R25_HOT_AUTHORITY_GENERATION_WRAP", ability_dispatch, 1, detail)
+    for pattern, detail in (
+        (
+            r"state\.generation\s*=\s*state\.generation\.wrapping_add\s*\(",
+            "hosted Agent authority generation must not use wrapping arithmetic",
+        ),
+        (
+            r"state\.next_incarnation\s*=\s*state\.next_incarnation\.wrapping_add\s*\(",
+            "hosted Agent authority incarnation must not use wrapping arithmetic",
+        ),
+    ):
+        match = re.search(pattern, production_text)
+        if match:
+            add(
+                "R25_HOT_AUTHORITY_GENERATION_WRAP",
+                ability_dispatch,
+                line_number(production_text, match.start()),
+                detail,
+            )
+
+
+# Rule 26: MCP tools/list is a unary tools/call catalogue. Until the MCP
+# provider owns a real stream/bidi invocation path, non-RPC descriptors may
+# remain in the daemon ability catalogue but must not be published as callable
+# MCP tools or routed through the unary fallback.
+mcp_profile = cli_root / "src/daemon/ability/catalog/profiles/mcp.rs"
+if mcp_profile.exists():
+    raw_text = mcp_profile.read_text(encoding="utf-8")
+    text = source(mcp_profile)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    mcp_geometry_requirements = (
+        (
+            "fn descriptor_is_mcp_callable(",
+            "MCP callable geometry must be owned by a named descriptor predicate",
+        ),
+        (
+            "descriptor.call_mode() == crate::daemon::ability::descriptors::CallMode::Rpc",
+            "current MCP provider may advertise only RPC descriptors",
+        ),
+        (
+            "if !descriptor_is_mcp_callable(descriptor)",
+            "MCP route table must filter through the callable geometry predicate",
+        ),
+        (
+            "provider_excludes_geometries_it_cannot_invoke",
+            "MCP callable geometry must have stream/bidi exclusion coverage",
+        ),
+    )
+    for token, detail in mcp_geometry_requirements:
+        search_text = raw_text if token.startswith("provider_") else production_text
+        if token not in search_text:
+            add("R26_MCP_CALLABLE_GEOMETRY_FORK", mcp_profile, 1, detail)
+    route_builder_match = re.search(
+        r"for\s*\([^)]*descriptor[^)]*\)\s+in\s+descriptors\.iter\(\)\.enumerate\(\)\s*\{(?P<body>.*?)routes\.push",
+        production_text,
+        re.S,
+    )
+    if route_builder_match and "descriptor_is_mcp_callable(descriptor)" not in route_builder_match.group("body"):
+        add(
+            "R26_MCP_CALLABLE_GEOMETRY_FORK",
+            mcp_profile,
+            line_number(production_text, route_builder_match.start()),
+            "MCP route construction must reject non-callable descriptor geometries before push",
+        )
+
+
+# Rule 27: local self admission is a transport-boundary state, not a boolean
+# loopback bypass. The daemon serves local IPC and off-box TCP/TLS with the same
+# invocation service shape, so the TCP/TLS clone must be explicitly OffBoxStrict
+# and no production code may retain a generic loopback_trusted compatibility API.
+admission_transport = cli_root / "src/daemon/invocation/admission/admission_facade.rs"
+daemon_service_transport = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+boot_invocation_transport = cli_root / "src/daemon/boot/invocation/mod.rs"
+if admission_transport.exists():
+    raw_text = admission_transport.read_text(encoding="utf-8", errors="replace")
+    text = source(admission_transport)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    admission_boundary_requirements = (
+        (
+            "pub enum AdmissionTransportBoundary",
+            "admission transport policy must be an explicit state",
+        ),
+        (
+            "LocalOnlyIpc",
+            "admission boundary must name the local-only IPC state",
+        ),
+        (
+            "OffBoxStrict",
+            "admission boundary must name the off-box strict state",
+        ),
+        (
+            "fn admits_local_self(self) -> bool",
+            "local self admission predicate must live on the transport boundary",
+        ),
+        (
+            "transport_boundary: AdmissionTransportBoundary",
+            "AdmissionFacade must store the explicit transport boundary",
+        ),
+        (
+            "pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self",
+            "AdmissionFacade must expose explicit transport-boundary wiring",
+        ),
+        (
+            "fn accepts_local_self_caller(&self, caller_ura: &str) -> bool",
+            "AdmissionFacade must centralize local self caller admission",
+        ),
+        (
+            "self.transport_boundary.admits_local_self()",
+            "local self admission must consult the explicit boundary state",
+        ),
+    )
+    for token, detail in admission_boundary_requirements:
+        if token not in production_text:
+            add("R27_ADMISSION_TRANSPORT_BOUNDARY_FORK", admission_transport, 1, detail)
+    for token in (
+        "off_box_facade_does_not_accept_daemon_ura_spoof_as_local_self",
+        "off_box_facade_does_not_accept_local_system_self_admission",
+    ):
+        if token not in raw_text:
+            add(
+                "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK",
+                admission_transport,
+                1,
+                f"missing off-box local-self rejection test: {token}",
+            )
+    for retired in ("with_loopback_trusted", "loopback_trusted"):
+        if retired in production_text:
+            add(
+                "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK",
+                admission_transport,
+                1,
+                f"retired boolean loopback admission API remains: {retired}",
+            )
+
+if daemon_service_transport.exists():
+    text = source(daemon_service_transport)
+    service_requirements = (
+        (
+            "AdmissionTransportBoundary",
+            "DaemonInvocationService must expose the typed admission transport boundary",
+        ),
+        (
+            "pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self",
+            "DaemonInvocationService must wire typed transport boundaries",
+        ),
+        (
+            "self.admission.with_transport_boundary(boundary)",
+            "DaemonInvocationService must delegate the boundary into AdmissionFacade",
+        ),
+    )
+    for token, detail in service_requirements:
+        if token not in text:
+            add("R27_ADMISSION_TRANSPORT_BOUNDARY_FORK", daemon_service_transport, 1, detail)
+    if "with_loopback_trusted" in text or "loopback_trusted" in text:
+        add(
+            "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK",
+            daemon_service_transport,
+            1,
+            "DaemonInvocationService must not retain boolean loopback admission wiring",
+        )
+
+if boot_invocation_transport.exists():
+    text = source(boot_invocation_transport)
+    if "with_transport_boundary" not in text or "AdmissionTransportBoundary::OffBoxStrict" not in text:
+        add(
+            "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK",
+            boot_invocation_transport,
+            1,
+            "TCP/TLS invocation listener must be wired with AdmissionTransportBoundary::OffBoxStrict",
+        )
+    if "with_loopback_trusted" in text:
+        add(
+            "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK",
+            boot_invocation_transport,
+            1,
+            "boot must not configure off-box admission with the retired boolean loopback API",
+        )
+
 
 if violations:
     for violation in sorted(violations):

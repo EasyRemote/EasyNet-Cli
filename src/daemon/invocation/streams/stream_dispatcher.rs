@@ -393,11 +393,11 @@ impl StreamDispatcher {
             ability,
             &selected_route.route_ura,
         )?;
-        let loopback_admitted = self
+        let local_self_admitted = self
             .admission
-            .accepts_loopback_envelope(request.envelope.as_ref());
+            .accepts_local_self_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
-            Some(envelope) if loopback_admitted => {
+            Some(envelope) if local_self_admitted => {
                 let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,

@@ -221,6 +221,12 @@ pub fn tool_specs_from_descriptors(
         .collect()
 }
 
+fn descriptor_is_mcp_callable(
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
+) -> bool {
+    descriptor.call_mode() == crate::daemon::ability::descriptors::CallMode::Rpc
+}
+
 /// Convert a canonical EasyNet ability name into a client-safe MCP
 /// tool name. Codex and Claude Code surface MCP tools as function
 /// names, and the lowest-common-denominator function-name grammar is
@@ -310,7 +316,7 @@ impl McpToolRouteTable {
             std::collections::BTreeMap::new();
 
         for (index, descriptor) in descriptors.iter().enumerate() {
-            if descriptor.call_mode() != crate::daemon::ability::descriptors::CallMode::Rpc {
+            if !descriptor_is_mcp_callable(descriptor) {
                 continue;
             }
             let ability_ura = descriptor.canonical_ability_ura().unwrap_or_else(|| {
@@ -1004,7 +1010,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_specs_lists_every_descriptor_passed_at_construction() {
+    fn tool_specs_lists_every_rpc_descriptor_passed_at_construction() {
         let descs = vec![d("observe.health"), d("agent.list")];
         let p = InvokeMcpProvider::new(RecordingInvoker::new(Ok(serde_json::json!({}))), descs);
         let specs = p.tool_specs();
@@ -1197,9 +1203,17 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_count_matches_input() {
+    fn descriptor_count_matches_callable_routes() {
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({})));
-        let p = InvokeMcpProvider::new(invoker, vec![d("observe.health"), d("agent.list")]);
+        let p = InvokeMcpProvider::new(
+            invoker,
+            vec![
+                d("observe.health"),
+                d("agent.list"),
+                d("consent.subscribe")
+                    .with_call_mode(crate::daemon::ability::descriptors::CallMode::Stream),
+            ],
+        );
         assert_eq!(p.descriptor_count(), 2);
     }
 

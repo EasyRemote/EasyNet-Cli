@@ -1593,7 +1593,7 @@ async fn federation_proxy_caller_gate_accepts_local_hub_identity_with_hub_role()
     };
 
     svc.unary_dispatcher()
-        .require_backend_or_loopback_proxy_caller(Some(&envelope), "namespace.proxy_resolve")
+        .require_backend_or_local_self_proxy_caller(Some(&envelope), "namespace.proxy_resolve")
         .expect("local canonical hub identity is the backend proxy caller");
 }
 

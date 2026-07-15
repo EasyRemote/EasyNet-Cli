@@ -110,7 +110,9 @@ use crate::daemon::ability::CallMode;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::identity::self_identity::CanonicalSigner;
-use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use crate::daemon::invocation::admission::admission_facade::{
+    AdmissionFacade, AdmissionTransportBoundary,
+};
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::principal_lifecycle::{
     ABILITY_PRINCIPAL_ADD_KEY, ABILITY_PRINCIPAL_BIND_FIRST_KEY,
@@ -724,7 +726,7 @@ impl DaemonInvocationService {
         }
 
         if envelope.caller_signature.is_none()
-            && self.admission.accepts_loopback_envelope(Some(envelope))
+            && self.admission.accepts_local_self_envelope(Some(envelope))
         {
             return Ok(DaemonRouteIngress::TrustedLocalSystem);
         }
@@ -913,15 +915,14 @@ impl DaemonInvocationService {
         self
     }
 
-    /// Set whether this service's transport policy gate honours the loopback
-    /// bypass. Boot serves the *same* service over a loopback-only UDS
-    /// and an off-box TCP+TLS socket; the TCP-fed clone is given
-    /// `false` so a daemon-URA spoofer reaching the TCP port still
+    /// Set this service's admission transport boundary. Boot serves the same
+    /// service over local-only IPC and off-box TCP/TLS; the TCP-fed clone is
+    /// given `OffBoxStrict` so a daemon-URA spoofer reaching the TCP port still
     /// runs the full strict pipeline. See
-    /// [`AdmissionFacade::with_loopback_trusted`].
+    /// [`AdmissionFacade::with_transport_boundary`].
     #[must_use]
-    pub fn with_loopback_trusted(mut self, loopback_trusted: bool) -> Self {
-        self.admission = self.admission.with_loopback_trusted(loopback_trusted);
+    pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
+        self.admission = self.admission.with_transport_boundary(boundary);
         self
     }
 
@@ -1127,7 +1128,7 @@ impl Invocation for DaemonInvocationService {
         // #185: attach the caller's post-decrement quota status to the
         // successful response in one place, rather than threading it
         // through every dispatch arm's `InvokeResponse` builder. `None`
-        // when the caller is unmetered / loopback / quota is off, in
+        // when the caller is unmetered / local self / quota is off, in
         // which case the wire shape is unchanged.
         match (result, rate_limit) {
             (Ok(mut response), Some(info)) => {

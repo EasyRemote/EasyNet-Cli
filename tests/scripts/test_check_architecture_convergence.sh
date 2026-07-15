@@ -57,7 +57,7 @@ make_good_fixture() {
     "$CLI/src/daemon/execution/mcp" \
     "$CLI/src/daemon/ability/builtins/governance" \
     "$CLI/src/daemon/ability/builtins/resources" \
-    "$CLI/src/daemon/ability/catalog" \
+    "$CLI/src/daemon/ability/catalog/profiles" \
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/invocation/admission" \
     "$CLI/src/daemon/invocation/dispatch" \
@@ -187,6 +187,30 @@ fn run(input: Input) {
     let mut line = Vec::new();
     read_bounded_line(&mut input, &mut line, MAX_LINE_LENGTH);
 }
+EOF
+  cat >"$CLI/src/daemon/ability/catalog/profiles/mcp.rs" <<'EOF'
+fn descriptor_is_mcp_callable(
+    descriptor: &crate::daemon::ability::descriptors::AbilityDescriptor,
+) -> bool {
+    descriptor.call_mode() == crate::daemon::ability::descriptors::CallMode::Rpc
+}
+
+impl McpToolRouteTable {
+    pub fn from_descriptors(
+        descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
+    ) -> Self {
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            if !descriptor_is_mcp_callable(descriptor) {
+                continue;
+            }
+            routes.push(ToolRoute { index });
+        }
+        Self { routes }
+    }
+}
+
+#[test]
+fn provider_excludes_geometries_it_cannot_invoke() {}
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
 struct RegistryState {
@@ -420,6 +444,11 @@ fn start_daemon_invocation_transport(config: DaemonConfig) -> anyhow::Result<()>
     if capabilities.owns_upstream_session() {
         register_purge_recovery_on_outbox_ready(outbox, registrar);
     }
+    spawn_tcp_tls_listener(
+        &config,
+        listen_tcp,
+        service.with_transport_boundary(AdmissionTransportBoundary::OffBoxStrict),
+    )?;
     recover_pending_purge_on_boot(registrar)?;
     Ok(())
 }
@@ -462,6 +491,11 @@ impl UnaryDispatcher {
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
 impl DaemonInvocationService {
+    pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
+        self.admission = self.admission.with_transport_boundary(boundary);
+        self
+    }
+
     pub(crate) async fn register_daemon_unary_routes(&self, owner_ura: &str) {
         DaemonRouteRuntimeAdapter::new(runtime, cancellations)
             .register(owner_ura, catalog.as_ref(), provider)
@@ -509,6 +543,56 @@ impl RegistryState {
 
 fn mark_terminal(state: &mut RegistryState, key: &str) {
     state.retain_terminal_key(key);
+}
+EOF
+  cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
+enum HotAgentAuthorityInventoryError {
+    CounterOverflow,
+}
+
+struct HotAgentAuthorityEnrollment {
+    agent: String,
+}
+
+struct HotAgentAuthorityInventoryState {
+    generation: u64,
+    next_incarnation: u64,
+}
+
+impl HotAgentAuthorityInventoryState {
+    fn allocate_incarnation(&mut self, agent: &str) -> Result<u64, HotAgentAuthorityInventoryError> {
+        let incarnation = self.next_incarnation;
+        self.next_incarnation = self
+            .next_incarnation
+            .checked_add(1)
+            .ok_or(HotAgentAuthorityInventoryError::CounterOverflow)?;
+        Ok(incarnation)
+    }
+
+    fn advance_generation(&mut self, agent: &str) -> Result<(), HotAgentAuthorityInventoryError> {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .ok_or(HotAgentAuthorityInventoryError::CounterOverflow)?;
+        Ok(())
+    }
+}
+
+fn enroll_persisted(
+    state: &mut HotAgentAuthorityInventoryState,
+    agent: &str,
+) -> Result<(), HotAgentAuthorityInventoryError> {
+    let _incarnation = state.allocate_incarnation(agent)?;
+    state.advance_generation(agent)?;
+    Ok(())
+}
+
+fn rollback_enrollment(
+    state: &mut HotAgentAuthorityInventoryState,
+    enrollment: HotAgentAuthorityEnrollment,
+) -> Result<(), HotAgentAuthorityInventoryError> {
+    state.advance_generation(&enrollment.agent)?;
+    Ok(())
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/request.rs" <<'EOF'
@@ -567,6 +651,38 @@ impl RuntimeClient {
 }
 EOF
   cat >"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+pub struct AdmissionFacade {
+    transport_boundary: AdmissionTransportBoundary,
+}
+
+pub enum AdmissionTransportBoundary {
+    LocalOnlyIpc,
+    OffBoxStrict,
+}
+
+impl AdmissionTransportBoundary {
+    fn admits_local_self(self) -> bool {
+        matches!(self, Self::LocalOnlyIpc)
+    }
+}
+
+impl AdmissionFacade {
+    pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
+        self.transport_boundary = boundary;
+        self
+    }
+
+    fn accepts_local_self_caller(&self, caller_ura: &str) -> bool {
+        self.transport_boundary.admits_local_self() && caller_ura == self.daemon_ura()
+    }
+}
+
+#[test]
+fn off_box_facade_does_not_accept_daemon_ura_spoof_as_local_self() {}
+
+#[test]
+fn off_box_facade_does_not_accept_local_system_self_admission() {}
+
 #[test]
 fn signed_invocation_cancel_command_replay_is_rejected() {
     assert!(replay_store.rejects_duplicate("invocation.cancel"));
@@ -1013,6 +1129,63 @@ EOF
 expect_fail \
   "cancel retention duplicate terminal token" \
   "R24_CANCEL_RETENTION_IDEMPOTENCY_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
+struct HotAgentAuthorityInventoryState {
+    generation: u64,
+    next_incarnation: u64,
+}
+
+fn enroll_persisted(state: &mut HotAgentAuthorityInventoryState) {
+    state.next_incarnation = state.next_incarnation.wrapping_add(1);
+    state.generation = state.generation.wrapping_add(1);
+}
+EOF
+expect_fail \
+  "hot authority generation wrapping" \
+  "R25_HOT_AUTHORITY_GENERATION_WRAP"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/profiles/mcp.rs" <<'EOF'
+impl McpToolRouteTable {
+    pub fn from_descriptors(
+        descriptors: &[crate::daemon::ability::descriptors::AbilityDescriptor],
+    ) -> Self {
+        for (index, descriptor) in descriptors.iter().enumerate() {
+            routes.push(ToolRoute { index });
+        }
+        Self { routes }
+    }
+}
+EOF
+expect_fail \
+  "mcp callable geometry publishes stream descriptors" \
+  "R26_MCP_CALLABLE_GEOMETRY_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+pub struct AdmissionFacade {
+    loopback_trusted: bool,
+}
+
+impl AdmissionFacade {
+    pub fn with_loopback_trusted(mut self, loopback_trusted: bool) -> Self {
+        self.loopback_trusted = loopback_trusted;
+        self
+    }
+
+    fn is_loopback(&self, caller_ura: &str) -> bool {
+        self.loopback_trusted && caller_ura == self.daemon_ura()
+    }
+}
+
+#[test]
+fn signed_invocation_cancel_command_replay_is_rejected() {}
+EOF
+expect_fail \
+  "admission transport boundary regressed to loopback bool" \
+  "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'

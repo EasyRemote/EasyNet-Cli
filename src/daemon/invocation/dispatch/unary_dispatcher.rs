@@ -819,11 +819,11 @@ impl UnaryDispatcher {
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             route_ura = selected_route.route_ura.as_str(),
         );
-        let loopback_admitted = self
+        let local_self_admitted = self
             .admission
-            .accepts_loopback_envelope(request.envelope.as_ref());
+            .accepts_local_self_envelope(request.envelope.as_ref());
         let wire = match request.envelope.clone() {
-            Some(envelope) if loopback_admitted => {
+            Some(envelope) if local_self_admitted => {
                 let metadata = match HostedAgentDelegationIssuer::materialize_request_metadata(
                     &request.metadata,
                     &envelope,
@@ -1145,11 +1145,9 @@ impl UnaryDispatcher {
     /// has already accepted the call for routing; this filter narrows
     /// to the hub-only sub-surface.
     ///
-    /// Loopback bypass: the daemon's own URA is admitted into
-    /// every dispatch arm regardless of role, so a hub-mode
-    /// daemon listing its own users from a CLI on the same
-    /// machine works without configuring itself as a Hub trust
-    /// entry.
+    /// Local self admission: the daemon's own URA is admitted into every
+    /// dispatch arm regardless of role only after the transport policy gate has
+    /// accepted it on the local-only IPC boundary.
     pub(crate) fn dispatch_federation_list_user_devices(
         &self,
         caller_envelope: Option<&Envelope>,
@@ -1173,11 +1171,11 @@ impl UnaryDispatcher {
                 crate::daemon::trust::anchor::TrustedAgentRole::Hub
             )
         });
-        let is_loopback = self
+        let is_local_self = self
             .admission
             .daemon_ura()
             .is_some_and(|self_ura| self_ura == caller_ura);
-        if !(is_hub_role || is_loopback) {
+        if !(is_hub_role || is_local_self) {
             return Err(Status::permission_denied(format!(
                 "federation.list_user_devices: caller `{caller_ura}` is not a hub-role peer; \
                  only trusted hubs and the daemon itself may enumerate user devices"
@@ -1190,7 +1188,7 @@ impl UnaryDispatcher {
         encode_json_payload(&response)
     }
 
-    pub(crate) fn require_backend_or_loopback_proxy_caller(
+    pub(crate) fn require_backend_or_local_self_proxy_caller(
         &self,
         caller_envelope: Option<&Envelope>,
         ability_name: &str,
@@ -1225,14 +1223,14 @@ impl UnaryDispatcher {
                         | crate::daemon::trust::anchor::TrustedAgentRole::Hub
                 )
             });
-        let is_loopback = self
+        let is_local_self = self
             .admission
             .daemon_ura()
             .is_some_and(|self_ura| self_ura == caller_ura);
-        if !(is_backend_role || is_local_hub_role || is_loopback) {
+        if !(is_backend_role || is_local_hub_role || is_local_self) {
             return Err(Status::permission_denied(format!(
                 "{ability_name}: caller `{caller_ura}` is not the local backend; \
-                 only the backend and daemon loopback may proxy peer calls"
+                 only the backend and daemon local self caller may proxy peer calls"
             )));
         }
         Ok(())
@@ -1251,7 +1249,7 @@ impl UnaryDispatcher {
         caller_envelope: Option<&Envelope>,
         arguments: &[u8],
     ) -> Result<Vec<u8>, Status> {
-        self.require_backend_or_loopback_proxy_caller(
+        self.require_backend_or_local_self_proxy_caller(
             caller_envelope,
             "federation.proxy_list_user_devices",
         )?;
@@ -1376,7 +1374,10 @@ impl UnaryDispatcher {
         caller_envelope: Option<&Envelope>,
         arguments: &[u8],
     ) -> Result<Vec<u8>, Status> {
-        self.require_backend_or_loopback_proxy_caller(caller_envelope, "namespace.proxy_resolve")?;
+        self.require_backend_or_local_self_proxy_caller(
+            caller_envelope,
+            "namespace.proxy_resolve",
+        )?;
 
         let request: federation_wrappers::NamespaceProxyResolveRequest =
             parse_json_args(arguments)?;
