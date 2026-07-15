@@ -1,0 +1,39 @@
+id	kind	path	tags	command	description
+resolve-before-invoke-rust	rust	tests/resolve_before_invoke_e2e.rs	local,e2e	cargo test --test resolve_before_invoke_e2e -- --nocapture	Resolve descriptor metadata before invocation and fail loudly when admission fields are incomplete.
+hub-ura-tls-join-cli-rust	rust	tests/hub_ura_tls_join_cli_e2e.rs	local,e2e	cargo test --test hub_ura_tls_join_cli_e2e -- --nocapture	CLI-only Hub URA TLS join flow.
+principal-lifecycle-cli-rust	rust	tests/principal_lifecycle_cli_e2e.rs	local,e2e	cargo test --test principal_lifecycle_cli_e2e -- --nocapture	Principal enrollment and CLI join lifecycle.
+principal-lifecycle-daemon-rust	rust	tests/principal_lifecycle_daemon_e2e.rs	local,e2e	cargo test --test principal_lifecycle_daemon_e2e -- --nocapture	Daemon principal lifecycle behavior.
+cross-realm-user-binding-rust	rust	tests/cross_realm_user_binding_e2e.rs	local,e2e	cargo test --test cross_realm_user_binding_e2e -- --nocapture	Cross-realm user binding and ownership checks.
+cross-realm-signed-admission-rust	rust	tests/cross_realm_signed_admission_e2e.rs	local,e2e	cargo test --test cross_realm_signed_admission_e2e -- --nocapture	Cross-realm signed admission.
+cross-realm-directory-poll-rust	rust	tests/cross_realm_directory_poll_e2e.rs	local,e2e	cargo test --test cross_realm_directory_poll_e2e -- --nocapture	Cross-realm directory polling convergence.
+cross-realm-directory-streaming-rust	rust	tests/cross_realm_directory_streaming_e2e.rs	local,e2e	cargo test --test cross_realm_directory_streaming_e2e -- --nocapture	Cross-realm directory streaming convergence.
+mcp-hot-reload-rust	rust	tests/mcp_hot_reload_e2e.rs	local,e2e	cargo test --test mcp_hot_reload_e2e -- --nocapture	MCP hot reload and reflection.
+mcp-bench-round1-rust	rust	tests/mcp_bench_round1_e2e.rs	local,e2e,bench	cargo test --test mcp_bench_round1_e2e -- --nocapture	MCP round-one latency and load behavior.
+seven-axes-w1-discover-rust	rust	tests/seven_axes_w1_discover_e2e.rs	local,e2e	cargo test --test seven_axes_w1_discover_e2e -- --nocapture	Seven-axes discovery behavior.
+seven-axes-w2-watch-rust	rust	tests/seven_axes_w2_watch_e2e.rs	local,e2e	cargo test --test seven_axes_w2_watch_e2e -- --nocapture	Seven-axes watch behavior.
+seven-axes-w3-teach-learn-rust	rust	tests/seven_axes_w3_teach_learn_e2e.rs	local,e2e	cargo test --test seven_axes_w3_teach_learn_e2e -- --nocapture	Seven-axes teach/learn descriptor transfer.
+seven-axes-w3-usage-rust	rust	tests/seven_axes_w3_usage_e2e.rs	local,e2e	cargo test --test seven_axes_w3_usage_e2e -- --nocapture	Seven-axes usage behavior.
+frontend-daemon-cli	script	tools/scripts/frontend-daemon-cli-e2e.sh	local,e2e,daemon	bash tools/scripts/frontend-daemon-cli-e2e.sh --start-runtime --stop-runtime --iterations 3 --requests 32 --concurrency 8 --max-agents 5	Frontend-equivalent daemon-bound CLI replay and latency capture.
+docker-three-node-cli-real-user	script	tools/scripts/docker-three-node-cli-real-user-e2e.sh	docker,e2e,daemon	bash tools/scripts/docker-three-node-cli-real-user-e2e.sh --skip-build --requests 8 --concurrency 4	One Hub plus two devices under one user; custom agent, ability, and skill creation.
+docker-three-node-cli-high-concurrency	script	tools/scripts/docker-three-node-cli-real-user-e2e.sh	docker,e2e,daemon,bench	bash tools/scripts/docker-three-node-cli-real-user-e2e.sh --skip-build --requests 48 --concurrency 16	One Hub plus two devices under one user with higher-concurrency frontend-equivalent auth load.
+docker-three-node-cli-projection-strict	script	tools/scripts/docker-three-node-cli-real-user-e2e.sh	docker,e2e,daemon,architecture	bash tools/scripts/docker-three-node-cli-real-user-e2e.sh --skip-build --requests 8 --concurrency 4 --strict-frontend-projection	Strict architecture probe: local custom agent and ability state must project through frontend-equivalent auth surfaces.
+backend-live-http-daemon	script	tools/scripts/backend-live-http-daemon-e2e.sh	local,e2e,backend	bash tools/scripts/backend-live-http-daemon-e2e.sh	Backend HTTP paths against a live daemon.
+backend-live-principal	script	tools/scripts/backend-live-principal-e2e.sh	local,e2e,backend	bash tools/scripts/backend-live-principal-e2e.sh	Backend principal paths against a live setup.
+runtime-events-live-daemon	script	tools/scripts/runtime-events-live-daemon-e2e.sh	local,e2e,daemon	bash tools/scripts/runtime-events-live-daemon-e2e.sh	Live daemon runtime event capture.
+runtime-events-cross-repo	script	tools/scripts/runtime-events-cross-repo-e2e.sh	external,e2e	bash tools/scripts/runtime-events-cross-repo-e2e.sh	Cross-repository runtime events.
+standalone-hub-principal-lifecycle	script	tools/scripts/standalone-hub-principal-lifecycle-e2e.sh	local,e2e,hub	bash tools/scripts/standalone-hub-principal-lifecycle-e2e.sh	Standalone Hub principal lifecycle.
+standalone-hub-recovery	script	tools/scripts/standalone-hub-recovery-e2e.sh	local,e2e,hub	bash tools/scripts/standalone-hub-recovery-e2e.sh	Standalone Hub recovery.
+go-sdk-live-smoke	script	tools/scripts/go-sdk-live-smoke.sh	local,e2e,sdk	bash tools/scripts/go-sdk-live-smoke.sh	Go SDK live smoke.
+python-sdk-live-smoke	script	tools/scripts/python-sdk-live-smoke.sh	local,e2e,sdk	bash tools/scripts/python-sdk-live-smoke.sh	Python SDK live smoke.
+release-flow	packaging	packaging/release/e2e-release-flow.sh	manual,e2e,release	bash packaging/release/e2e-release-flow.sh	Release packaging flow.
+release-install	packaging	packaging/release/e2e-release-install.sh	manual,e2e,release	bash packaging/release/e2e-release-install.sh	Release artifact installation flow.
+easynet-docker-join-invoke	external	../EasyNet/scripts/docker-e2e-join-invoke.sh	external,docker,e2e	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-join-invoke.sh)	Sibling EasyNet Docker join and invoke smoke.
+easynet-docker-default-abilities	external	../EasyNet/scripts/docker-e2e-default-abilities.sh	external,docker,e2e	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-default-abilities.sh)	Sibling EasyNet default ability matrix.
+easynet-docker-cli-survey	external	../EasyNet/scripts/docker-e2e-cli-survey.sh	external,docker,e2e	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-cli-survey.sh)	Sibling EasyNet broad CLI survey.
+easynet-docker-latency	external	../EasyNet/scripts/docker-e2e-latency.sh	external,docker,e2e,bench	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-latency.sh)	Sibling EasyNet Docker latency harness.
+easynet-docker-lease-renewal	external	../EasyNet/scripts/docker-e2e-lease-renewal.sh	external,docker,e2e	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-lease-renewal.sh)	Sibling EasyNet lease renewal harness.
+easynet-docker-cross-hub	external	../EasyNet/scripts/docker-e2e-cross-hub.sh	external,docker,e2e	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-cross-hub.sh)	Sibling EasyNet cross-Hub harness.
+easynet-docker-deep	external	../EasyNet/scripts/docker-e2e-deep.sh	external,docker,e2e	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-deep.sh)	Sibling EasyNet deep Docker harness.
+easynet-docker-public-routes	external	../EasyNet/scripts/docker-e2e-public-routes.sh	external,docker,e2e	(cd ../EasyNet && SKIP_DOCKER_BUILD=1 bash scripts/docker-e2e-public-routes.sh)	Sibling EasyNet public routes harness.
+easynet-cli-e2e-full	external	../EasyNet/scripts/cli-e2e-full.sh	external,e2e	(cd ../EasyNet && bash scripts/cli-e2e-full.sh)	Sibling EasyNet full CLI harness.
+easynet-dev-host-e2e	external	../EasyNet/scripts/dev-host-e2e.sh	external,e2e	(cd ../EasyNet && bash scripts/dev-host-e2e.sh)	Sibling EasyNet host development E2E.
