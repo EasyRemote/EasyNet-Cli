@@ -13,8 +13,8 @@
 //
 // Implementation Approach:
 // Compare the envelope caller against the current realm trust anchor,
-// daemon loopback identity, local realm, and target mutation. Keep the
-// policy as a small object so register/revoke persistence stays focused
+// admission transport boundary, local realm, and target mutation. Keep
+// the policy as a small object so register/revoke persistence stays focused
 // on validation and atomic writes.
 //
 // Usage Contract:
@@ -32,7 +32,7 @@ use std::sync::Arc;
 use easynet_axon::pb::axon::v1::Envelope;
 use tonic::Status;
 
-use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
+use crate::daemon::invocation::admission::admission_facade::AdmissionTransportBoundary;
 use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyIntent;
 use crate::daemon::invocation::admission::revoke_user_pubkey::RevokeUserPubkeyIntent;
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
@@ -40,6 +40,7 @@ use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 pub(crate) struct IdentityWriteGate {
     trust_anchor: Arc<RealmTrustAnchor>,
     daemon_ura: Option<String>,
+    transport_boundary: AdmissionTransportBoundary,
     daemon_realm: String,
 }
 
@@ -47,11 +48,13 @@ impl IdentityWriteGate {
     pub(crate) fn new(
         trust_anchor: Arc<RealmTrustAnchor>,
         daemon_ura: Option<String>,
+        transport_boundary: AdmissionTransportBoundary,
         daemon_realm: impl Into<String>,
     ) -> Self {
         Self {
             trust_anchor,
             daemon_ura,
+            transport_boundary,
             daemon_realm: daemon_realm.into(),
         }
     }
@@ -66,14 +69,14 @@ impl IdentityWriteGate {
 
         match intent.role() {
             TrustedAgentRole::Device => {
-                if caller.loopback || self.is_local_backend_or_hub(caller_ura, caller.role) {
+                if caller.local_self || self.is_local_backend_or_hub(caller_ura, caller.role) {
                     Ok(())
                 } else {
                     Err(self.permission_denied_register(caller_ura, caller.role, intent))
                 }
             }
             TrustedAgentRole::User => {
-                if caller.loopback || self.is_local_backend_or_hub(caller_ura, caller.role) {
+                if caller.local_self || self.is_local_backend_or_hub(caller_ura, caller.role) {
                     return Ok(());
                 }
                 if caller.role == TrustedAgentRole::Device
@@ -87,7 +90,7 @@ impl IdentityWriteGate {
                 Err(self.permission_denied_register(caller_ura, caller.role, intent))
             }
             TrustedAgentRole::Backend => {
-                if caller.loopback
+                if caller.local_self
                     || (self.is_local_backend_or_hub(caller_ura, caller.role)
                         && caller_ura == intent.agent_ura())
                 {
@@ -108,7 +111,7 @@ impl IdentityWriteGate {
         intent: &RevokeUserPubkeyIntent,
     ) -> Result<(), Status> {
         let caller = self.authorized_caller(caller_envelope, "identity.revoke_user_pubkey")?;
-        if caller.loopback || self.is_local_backend_or_hub(&caller.ura, caller.role) {
+        if caller.local_self || self.is_local_backend_or_hub(&caller.ura, caller.role) {
             return Ok(());
         }
         Err(Status::permission_denied(format!(
@@ -132,11 +135,11 @@ impl IdentityWriteGate {
                 Status::invalid_argument(format!("{ability}: missing caller envelope.caller.ura"))
             })?;
 
-        if self.is_loopback(caller_ura) {
+        if self.is_local_self(caller_ura) {
             return Ok(AuthorizedIdentityWriteCaller {
                 ura: caller_ura.to_string(),
                 role: TrustedAgentRole::Backend,
-                loopback: true,
+                local_self: true,
             });
         }
 
@@ -149,16 +152,13 @@ impl IdentityWriteGate {
         Ok(AuthorizedIdentityWriteCaller {
             ura: caller_ura.to_string(),
             role: caller_role,
-            loopback: false,
+            local_self: false,
         })
     }
 
-    fn is_loopback(&self, caller_ura: &str) -> bool {
-        caller_ura == LOCAL_SYSTEM_AGENT_URA
-            || self
-                .daemon_ura
-                .as_deref()
-                .is_some_and(|daemon_ura| daemon_ura == caller_ura)
+    fn is_local_self(&self, caller_ura: &str) -> bool {
+        self.transport_boundary
+            .accepts_local_self_caller(self.daemon_ura.as_deref(), caller_ura)
     }
 
     fn is_local_backend_or_hub(&self, caller_ura: &str, caller_role: TrustedAgentRole) -> bool {
@@ -191,7 +191,7 @@ impl IdentityWriteGate {
 struct AuthorizedIdentityWriteCaller {
     ura: String,
     role: TrustedAgentRole,
-    loopback: bool,
+    local_self: bool,
 }
 
 fn role_label(role: TrustedAgentRole) -> &'static str {
@@ -259,12 +259,13 @@ mod tests {
                     .expect("test trust anchor"),
             ),
             Some("easynet:///r/local/device/daemon".to_string()),
+            AdmissionTransportBoundary::LocalOnlyIpc,
             "local",
         )
     }
 
     #[test]
-    fn loopback_can_bootstrap_backend_row_without_anchor_entry() {
+    fn local_self_can_bootstrap_backend_row_without_anchor_entry() {
         let gate = gate(vec![]);
         let env = envelope("easynet:///r/local/device/daemon");
 
@@ -275,7 +276,35 @@ mod tests {
                 TrustedAgentRole::Backend,
             ),
         )
-        .expect("daemon loopback owns bootstrap writes");
+        .expect("daemon local self caller owns bootstrap writes");
+    }
+
+    #[test]
+    fn off_box_boundary_rejects_daemon_ura_spoof_without_anchor_entry() {
+        let gate = IdentityWriteGate::new(
+            Arc::new(RealmTrustAnchor::default()),
+            Some("easynet:///r/local/device/daemon".to_string()),
+            AdmissionTransportBoundary::OffBoxStrict,
+            "local",
+        );
+        let env = envelope("easynet:///r/local/device/daemon");
+
+        let err = gate
+            .authorize_register_pubkey(
+                Some(&env),
+                &intent(
+                    &crate::core::ura::hub_ura("local"),
+                    TrustedAgentRole::Backend,
+                ),
+            )
+            .expect_err("off-box daemon URA spoof must not author trust rows");
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+        assert!(
+            err.message().contains("not trusted"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     #[test]

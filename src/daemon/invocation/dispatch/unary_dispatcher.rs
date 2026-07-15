@@ -917,6 +917,7 @@ impl UnaryDispatcher {
             crate::daemon::invocation::admission::identity_write_gate::IdentityWriteGate::new(
                 self.admission.trust_anchor_snapshot(),
                 self.admission.daemon_ura().map(str::to_string),
+                self.admission.transport_boundary(),
                 ctx.daemon_realm.clone(),
             );
         write_gate.authorize_register_pubkey(caller_envelope, &intent)?;
@@ -947,6 +948,7 @@ impl UnaryDispatcher {
             crate::daemon::invocation::admission::identity_write_gate::IdentityWriteGate::new(
                 self.admission.trust_anchor_snapshot(),
                 self.admission.daemon_ura().map(str::to_string),
+                self.admission.transport_boundary(),
                 ctx.daemon_realm.clone(),
             );
         write_gate.authorize_revoke_user_pubkey(caller_envelope, &intent)?;

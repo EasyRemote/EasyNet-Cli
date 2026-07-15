@@ -255,6 +255,18 @@ impl AdmissionTransportBoundary {
     fn admits_local_self(self) -> bool {
         matches!(self, Self::LocalOnlyIpc)
     }
+
+    pub(crate) fn accepts_local_self_caller(
+        self,
+        daemon_ura: Option<&str>,
+        caller_ura: &str,
+    ) -> bool {
+        if !self.admits_local_self() {
+            return false;
+        }
+        caller_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
+            || daemon_ura.is_some_and(|daemon_ura| daemon_ura == caller_ura)
+    }
 }
 
 struct StrictSignatureGateInput<'a> {
@@ -550,6 +562,11 @@ impl AdmissionFacade {
     pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
         self.transport_boundary = boundary;
         self
+    }
+
+    #[must_use]
+    pub(crate) fn transport_boundary(&self) -> AdmissionTransportBoundary {
+        self.transport_boundary
     }
 
     /// #185: attach the reloadable per-consumer usage-quota gate.
@@ -1382,16 +1399,8 @@ impl AdmissionFacade {
         // Off-box transports never get local self admission, even on an exact
         // daemon-URA match: the same URA an attacker can put in `caller.ura`
         // would otherwise skip the entire strict pipeline.
-        if !self.transport_boundary.admits_local_self() {
-            return false;
-        }
-        if caller_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
-            return true;
-        }
-        match self.daemon_ura.as_deref() {
-            Some(self_ura) => caller_ura == self_ura,
-            None => false,
-        }
+        self.transport_boundary
+            .accepts_local_self_caller(self.daemon_ura.as_deref(), caller_ura)
     }
 
     pub(crate) fn accepts_local_self_envelope(&self, envelope: Option<&Envelope>) -> bool {

@@ -501,14 +501,7 @@ fn bootstrap_local_agent_projection(
     creds: &config::Credentials,
 ) -> anyhow::Result<Vec<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapOutcome>> {
     let plan = build_bootstrap_plan(creds)?;
-    let mut file = crate::daemon::persistence::local_agents::load()?;
-    let outcomes = crate::daemon::ability::catalog::profiles::bootstrap::bootstrap_local_agents(
-        &plan,
-        &mut file,
-        &crate::daemon::ability::catalog::profiles::bootstrap::UuidMinter,
-    );
-    crate::daemon::persistence::local_agents::save(&file)?;
-    Ok(outcomes)
+    crate::daemon::ability::builtins::agents::lifecycle::bootstrap_local_agent_projection(&plan)
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.

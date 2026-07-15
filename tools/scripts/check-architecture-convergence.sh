@@ -1637,6 +1637,18 @@ if agent_lifecycle.exists():
             "purge recovery must restore paired projections through the store",
         ),
         (
+            "fn bootstrap_local_agent_projection(",
+            "startup hosted identity projection must be owned by Agent lifecycle",
+        ),
+        (
+            "agent.bootstrap: acquire lifecycle transaction",
+            "startup hosted identity projection must acquire the lifecycle mutation guard",
+        ),
+        (
+            ".persist_identities(&identities)",
+            "startup hosted identity projection must persist through the projection store",
+        ),
+        (
             "persist_registry_projection(&registry)",
             "stop lifecycle must persist the registry through the transaction/store boundary",
         ),
@@ -1661,6 +1673,25 @@ if agent_lifecycle.exists():
             agent_lifecycle,
             1,
             "production lifecycle must call local_agents::save only inside AgentLifecycleProjectionStore",
+        )
+
+cli_start = cli_root / "src/cli/commands/start.rs"
+if cli_start.exists():
+    start_text = source(cli_start)
+    production_text = start_text.split("#[cfg(test)]", 1)[0]
+    if "lifecycle::bootstrap_local_agent_projection(&plan)" not in production_text:
+        add(
+            "R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK",
+            cli_start,
+            1,
+            "cli start must delegate hosted identity projection to the Agent lifecycle owner",
+        )
+    if "local_agents::save" in production_text:
+        add(
+            "R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK",
+            cli_start,
+            1,
+            "cli start must not write local-agents.json directly",
         )
 
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
@@ -1892,6 +1923,10 @@ if admission_transport.exists():
             "local self admission predicate must live on the transport boundary",
         ),
         (
+            "pub(crate) fn accepts_local_self_caller(",
+            "transport boundary must own the full local self caller predicate",
+        ),
+        (
             "transport_boundary: AdmissionTransportBoundary",
             "AdmissionFacade must store the explicit transport boundary",
         ),
@@ -1904,8 +1939,8 @@ if admission_transport.exists():
             "AdmissionFacade must centralize local self caller admission",
         ),
         (
-            "self.transport_boundary.admits_local_self()",
-            "local self admission must consult the explicit boundary state",
+            "self.transport_boundary\n            .accepts_local_self_caller",
+            "AdmissionFacade local self admission must delegate to the transport boundary owner",
         ),
     )
     for token, detail in admission_boundary_requirements:
@@ -1973,6 +2008,71 @@ if boot_invocation_transport.exists():
             boot_invocation_transport,
             1,
             "boot must not configure off-box admission with the retired boolean loopback API",
+        )
+
+# Rule 28: identity trust-row writers must not own a second local-self model.
+# Transport admission owns the local/off-box boundary; IdentityWriteGate may
+# project that state for trust-row policy, but it must not revive a separate
+# loopback flag or predicate.
+identity_write_gate = cli_root / "src/daemon/invocation/admission/identity_write_gate.rs"
+unary_dispatcher = cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs"
+if identity_write_gate.exists():
+    raw_text = identity_write_gate.read_text(encoding="utf-8", errors="replace")
+    text = source(identity_write_gate)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    identity_gate_requirements = (
+        (
+            "use crate::daemon::invocation::admission::admission_facade::AdmissionTransportBoundary;",
+            "IdentityWriteGate must consume the admission transport-boundary type",
+        ),
+        (
+            "transport_boundary: AdmissionTransportBoundary",
+            "IdentityWriteGate must store the explicit boundary projection",
+        ),
+        (
+            "fn is_local_self(&self, caller_ura: &str) -> bool",
+            "IdentityWriteGate must name local self admission explicitly",
+        ),
+        (
+            ".accepts_local_self_caller(self.daemon_ura.as_deref(), caller_ura)",
+            "IdentityWriteGate local self checks must delegate to AdmissionTransportBoundary",
+        ),
+        (
+            "local_self: bool",
+            "authorized identity-write caller state must use local_self, not loopback",
+        ),
+    )
+    for token, detail in identity_gate_requirements:
+        if token not in production_text:
+            add("R28_IDENTITY_WRITE_LOCAL_SELF_BOUNDARY_FORK", identity_write_gate, 1, detail)
+    for token in (
+        "off_box_boundary_rejects_daemon_ura_spoof_without_anchor_entry",
+        "local_self_can_bootstrap_backend_row_without_anchor_entry",
+    ):
+        if token not in raw_text:
+            add(
+                "R28_IDENTITY_WRITE_LOCAL_SELF_BOUNDARY_FORK",
+                identity_write_gate,
+                1,
+                f"missing identity-write local-self boundary test: {token}",
+            )
+    for retired in ("loopback: bool", "caller.loopback", "fn is_loopback("):
+        if retired in production_text:
+            add(
+                "R28_IDENTITY_WRITE_LOCAL_SELF_BOUNDARY_FORK",
+                identity_write_gate,
+                1,
+                f"retired identity-write loopback state remains: {retired}",
+            )
+
+if unary_dispatcher.exists():
+    text = source(unary_dispatcher)
+    if "self.admission.transport_boundary()" not in text:
+        add(
+            "R28_IDENTITY_WRITE_LOCAL_SELF_BOUNDARY_FORK",
+            unary_dispatcher,
+            1,
+            "UnaryDispatcher must pass AdmissionFacade transport boundary into IdentityWriteGate",
         )
 
 

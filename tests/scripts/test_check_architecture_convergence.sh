@@ -50,6 +50,7 @@ expect_fail() {
 make_good_fixture() {
   rm -rf "$CLI" "$AXON"
   mkdir -p \
+    "$CLI/src/cli/commands" \
     "$CLI/src/eal/interpreter" \
     "$CLI/src/daemon/ability/builtins/automation" \
     "$CLI/src/daemon/ability/builtins/agents" \
@@ -112,6 +113,15 @@ impl AgentLifecycleProjectionStore {
     }
 }
 
+fn bootstrap_local_agent_projection(plan: &BootstrapPlan) {
+    let _mutation_guard = AgentLifecycleMutationGuard::acquire()
+        .map_err(|error| anyhow::anyhow!("agent.bootstrap: acquire lifecycle transaction: {error:#}"))?;
+    let mut identities = local_agents::load()?;
+    let outcomes = bootstrap::bootstrap_local_agents(plan, &mut identities, &UuidMinter);
+    AgentLifecycleProjectionStore::default().persist_identities(&identities)?;
+    Ok(outcomes)
+}
+
 impl AgentLifecycleTransaction {
     fn persist_registry_projection(&mut self, registry: &AgentRegistry) {
         self.projections.persist_registry(registry);
@@ -125,6 +135,12 @@ impl AgentLifecycleTransaction {
 fn stop_agent_locked(registry: &AgentRegistry, identities: &local_agents::LocalAgentsFile) {
     transaction.persist_registry_projection(&registry);
     transaction.persist_identity_projection(&identities);
+}
+EOF
+  cat >"$CLI/src/cli/commands/start.rs" <<'EOF'
+fn bootstrap_local_agent_projection(creds: &Credentials) {
+    let plan = build_bootstrap_plan(creds)?;
+    lifecycle::bootstrap_local_agent_projection(&plan)
 }
 EOF
   cat >"$CLI/src/daemon/execution/mission/orchestration.rs" <<'EOF'
@@ -487,6 +503,16 @@ impl UnaryDispatcher {
             .dispatch(route, request, ingress)
             .await
     }
+
+    pub(crate) fn authorize_identity_write(&self, caller_envelope: Option<&Envelope>, intent: &RegisterPubkeyIntent) {
+        let gate = IdentityWriteGate::new(
+            self.admission.trust_anchor_snapshot(),
+            self.admission.daemon_ura().map(str::to_string),
+            self.admission.transport_boundary(),
+            self.identity.daemon_realm.clone(),
+        );
+        gate.authorize_register_pubkey(caller_envelope, intent)?;
+    }
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
@@ -664,6 +690,17 @@ impl AdmissionTransportBoundary {
     fn admits_local_self(self) -> bool {
         matches!(self, Self::LocalOnlyIpc)
     }
+
+    pub(crate) fn accepts_local_self_caller(
+        self,
+        daemon_ura: Option<&str>,
+        caller_ura: &str,
+    ) -> bool {
+        if !self.admits_local_self() {
+            return false;
+        }
+        daemon_ura.is_some_and(|daemon_ura| daemon_ura == caller_ura)
+    }
 }
 
 impl AdmissionFacade {
@@ -672,8 +709,13 @@ impl AdmissionFacade {
         self
     }
 
+    pub(crate) fn transport_boundary(&self) -> AdmissionTransportBoundary {
+        self.transport_boundary
+    }
+
     fn accepts_local_self_caller(&self, caller_ura: &str) -> bool {
-        self.transport_boundary.admits_local_self() && caller_ura == self.daemon_ura()
+        self.transport_boundary
+            .accepts_local_self_caller(self.daemon_ura(), caller_ura)
     }
 }
 
@@ -687,6 +729,31 @@ fn off_box_facade_does_not_accept_local_system_self_admission() {}
 fn signed_invocation_cancel_command_replay_is_rejected() {
     assert!(replay_store.rejects_duplicate("invocation.cancel"));
 }
+EOF
+  cat >"$CLI/src/daemon/invocation/admission/identity_write_gate.rs" <<'EOF'
+use crate::daemon::invocation::admission::admission_facade::AdmissionTransportBoundary;
+
+pub(crate) struct IdentityWriteGate {
+    daemon_ura: Option<String>,
+    transport_boundary: AdmissionTransportBoundary,
+}
+
+impl IdentityWriteGate {
+    fn is_local_self(&self, caller_ura: &str) -> bool {
+        self.transport_boundary
+            .accepts_local_self_caller(self.daemon_ura.as_deref(), caller_ura)
+    }
+}
+
+struct AuthorizedIdentityWriteCaller {
+    local_self: bool,
+}
+
+#[test]
+fn local_self_can_bootstrap_backend_row_without_anchor_entry() {}
+
+#[test]
+fn off_box_boundary_rejects_daemon_ura_spoof_without_anchor_entry() {}
 EOF
   cat >"$CLI/sdk/python/easynet_sdk/runtime.py" <<'EOF'
 class InvocationHandle:
@@ -1101,6 +1168,20 @@ expect_fail \
   "R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK"
 
 make_good_fixture
+cat >"$CLI/src/cli/commands/start.rs" <<'EOF'
+fn bootstrap_local_agent_projection(creds: &Credentials) {
+    let plan = build_bootstrap_plan(creds)?;
+    let mut file = local_agents::load()?;
+    let outcomes = bootstrap::bootstrap_local_agents(&plan, &mut file, &UuidMinter);
+    local_agents::save(&file)?;
+    Ok(outcomes)
+}
+EOF
+expect_fail \
+  "cli start hosted identity projection bypasses lifecycle owner" \
+  "R22_AGENT_LIFECYCLE_PROJECTION_OWNER_FORK"
+
+make_good_fixture
 cat >"$CLI/src/daemon/execution/mcp/stdio.rs" <<'EOF'
 const MAX_LINE_LENGTH: usize = 4 * 1024 * 1024;
 
@@ -1186,6 +1267,27 @@ EOF
 expect_fail \
   "admission transport boundary regressed to loopback bool" \
   "R27_ADMISSION_TRANSPORT_BOUNDARY_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/identity_write_gate.rs" <<'EOF'
+pub(crate) struct IdentityWriteGate {
+    daemon_ura: Option<String>,
+}
+
+impl IdentityWriteGate {
+    fn is_loopback(&self, caller_ura: &str) -> bool {
+        caller_ura == LOCAL_SYSTEM_AGENT_URA
+            || self.daemon_ura.as_deref().is_some_and(|daemon_ura| daemon_ura == caller_ura)
+    }
+}
+
+struct AuthorizedIdentityWriteCaller {
+    loopback: bool,
+}
+EOF
+expect_fail \
+  "identity write local self boundary regressed to loopback flag" \
+  "R28_IDENTITY_WRITE_LOCAL_SELF_BOUNDARY_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'

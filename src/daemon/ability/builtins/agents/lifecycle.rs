@@ -1571,6 +1571,30 @@ pub(crate) fn recover_pending_purge_before_agent_replay(
     Ok(true)
 }
 
+/// Refresh the daemon-local hosted identity projection from the Agent
+/// bootstrap plan during startup.
+///
+/// Startup needs this projection before the daemon replays hosted agents, but
+/// the write still belongs to the Agent lifecycle aggregate. Keeping the
+/// mutation here means `cli start` can prepare the plan without becoming a
+/// second `local-agents.json` writer.
+pub(crate) fn bootstrap_local_agent_projection(
+    plan: &BootstrapPlan,
+) -> anyhow::Result<Vec<bootstrap::BootstrapOutcome>> {
+    let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
+        anyhow::anyhow!("agent.bootstrap: acquire lifecycle transaction: {error:#}")
+    })?;
+    let mut identities = local_agents::load()
+        .map_err(|error| anyhow::anyhow!("agent.bootstrap: load hosted identities: {error:#}"))?;
+    let outcomes = bootstrap::bootstrap_local_agents(plan, &mut identities, &UuidMinter);
+    AgentLifecycleProjectionStore::default()
+        .persist_identities(&identities)
+        .map_err(|error| {
+            anyhow::anyhow!("agent.bootstrap: persist hosted identities: {error:#}")
+        })?;
+    Ok(outcomes)
+}
+
 /// Resume committed publication/finalization during boot. Hub transport may
 /// not yet have a live session; a failed publication remains discoverable in
 /// the journal and boot continues so the session can reconnect.
@@ -3276,6 +3300,39 @@ mod tests {
             },
         )
         .expect("seed joined credentials");
+    }
+
+    #[test]
+    fn startup_bootstrap_projection_persists_through_lifecycle_owner() {
+        with_isolated_home(|| {
+            let plan = BootstrapPlan {
+                realm: "local".to_string(),
+                user_id: "user-dev".to_string(),
+                username: "dev".to_string(),
+                host_device_ura: crate::core::ura::device_ura("local", "dev-1"),
+                consent: false,
+                mcp: false,
+                llm_sub_agents: vec![LlmSubAgent {
+                    name: "claude".to_string(),
+                    agent_type_display: "claude-code".to_string(),
+                    model: None,
+                }],
+            };
+
+            let outcomes = bootstrap_local_agent_projection(&plan)
+                .expect("startup bootstrap projection persists");
+            let identities = local_agents::load().expect("load persisted hosted identities");
+
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(identities.host_device_agent_ura, plan.host_device_ura);
+            assert_eq!(identities.hosted_agents.len(), 1);
+            assert_eq!(identities.hosted_agents[0].profile, "llm");
+            assert_eq!(identities.hosted_agents[0].name, "claude");
+            assert_eq!(
+                identities.hosted_agents[0].signing_authority,
+                format!("hosted_by:{}", plan.host_device_ura)
+            );
+        });
     }
 
     #[derive(Default)]
