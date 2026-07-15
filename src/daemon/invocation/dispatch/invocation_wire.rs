@@ -54,10 +54,6 @@ use crate::daemon::axon_bridge::wire_descriptor::{
 
 pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 
-/// Invocation metadata keys carrying caller-authority proofs
-/// (single wire-contract source; admission verifies, ledger records).
-pub(crate) const DELEGATION_METADATA_KEY: &str = "x-easynet-delegation";
-pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-easynet-session-authority";
 pub(crate) const AUTHORITY_PROOF_METADATA_KEY: &str = "x-easynet-authority-proof";
 pub(crate) const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-descriptor-ref";
 
@@ -467,6 +463,14 @@ pub(crate) fn status_from_axon_invoke_error(
     if err.reason.contains("unknown_ability") || err.reason.contains("mode_not_supported") {
         return Status::not_found(message);
     }
+    if axon_error_is_trust_denial(&err) {
+        let message = if message.contains("not in the realm trust anchor") {
+            message
+        } else {
+            format!("{message}; caller is not in the realm trust anchor")
+        };
+        return Status::permission_denied(message);
+    }
     match err.kind {
         AxonErrorKind::Cancelled => Status::cancelled(message),
         AxonErrorKind::DeadlineExceeded => Status::deadline_exceeded(message),
@@ -476,6 +480,15 @@ pub(crate) fn status_from_axon_invoke_error(
         AxonErrorKind::PermissionDenied => Status::permission_denied(message),
         AxonErrorKind::Internal => Status::internal(message),
     }
+}
+
+fn axon_error_is_trust_denial(err: &easynet_axon::invocation::AxonError) -> bool {
+    let reason = err.reason.to_ascii_uppercase();
+    let message = err.message.to_ascii_lowercase();
+    reason.contains("CALLER_KEY_NOT_FOUND")
+        || reason.contains("CALLER_KEY_REVOKED")
+        || message.contains("realm_trust_anchor: no entry")
+        || message.contains("caller not trusted")
 }
 
 /// Explain why a descriptor-bound request cannot be routed through a
@@ -545,11 +558,7 @@ pub(crate) fn parse_json_args<T: serde::de::DeserializeOwned>(
 pub(crate) fn wrap_json_response<T: serde::Serialize>(
     response: &T,
 ) -> Result<Response<InvokeResponse>, Status> {
-    let bytes = serde_json::to_vec(response).map_err(|err| {
-        Status::internal(format!(
-            "federation wrapper: failed to encode JSON response: {err}"
-        ))
-    })?;
+    let bytes = encode_json_payload(response)?;
     let invoke_response = InvokeResponse {
         result: bytes,
         result_content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
@@ -557,6 +566,17 @@ pub(crate) fn wrap_json_response<T: serde::Serialize>(
         ..InvokeResponse::default()
     };
     Ok(Response::new(invoke_response))
+}
+
+/// Serialize product output without asserting invocation lifecycle state.
+/// Exact-route providers return these bytes to Axon; only LocalRuntime may
+/// project admission and terminal state onto the public Invoke response.
+pub(crate) fn encode_json_payload<T: serde::Serialize>(response: &T) -> Result<Vec<u8>, Status> {
+    serde_json::to_vec(response).map_err(|err| {
+        Status::internal(format!(
+            "federation wrapper: failed to encode JSON response: {err}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -705,7 +725,7 @@ mod tests {
         let payload = br#"{"x":1}"#.to_vec();
         let callee = "easynet:///r/acme/device/dev-a";
         let descriptor_ref = format!(
-            "{}@1.0.0",
+            "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             crate::core::ura::owner_ability_ura(callee, "demo.echo").unwrap()
         );
         let envelope = ProtoEnvelope::targeted(
@@ -754,7 +774,7 @@ mod tests {
         let payload = br#"{"message":"hi"}"#.to_vec();
         let callee = "easynet:///r/acme/device/dev-a";
         let descriptor_ref = format!(
-            "{}@2.3.0",
+            "{}@2.3.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
             crate::core::ura::owner_ability_ura(callee, "echo").unwrap()
         );
         let envelope = ProtoEnvelope::targeted(

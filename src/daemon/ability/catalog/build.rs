@@ -5,7 +5,9 @@
 // wiring, plugin-runtime manager assembly, daemon keyring init.
 // Catalog build owner for daemon-owned system abilities.
 
-use super::profiles;
+use super::{daemon_invocation_contracts, profiles, runtime_admin_contracts};
+#[cfg(feature = "axon-pb")]
+use crate::daemon::ability::builtins::governance::invocation_cancel as invocation_cancel_ability;
 use crate::daemon::ability::builtins::{
     agents::{
         chat as chat_ability, chat_history as chat_history_ability, discover as discover_ability,
@@ -58,6 +60,22 @@ use crate::daemon::persistence::agent_registry::AgentRegistry;
 use anyhow::Context as _;
 use std::sync::Arc;
 
+fn registry_assembly_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
+    #[cfg(test)]
+    {
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None)
+    }
+    #[cfg(not(test))]
+    {
+        // Production daemon boot injects an owner-bound runtime from
+        // runtime_factory::build_production_local_runtime. This default exists
+        // only for descriptor/catalogue assembly callers that need registration
+        // to see a LocalRuntime-shaped object before transport boot wires
+        // admission and ledger policy.
+        easynet_axon::invocation::LocalRuntime::new()
+    }
+}
+
 /// Build a `AxonAbilityCatalog` populated with every v1 system
 /// ability handler plus deterministic builtin plugin abilities.
 /// Suitable for early-boot smoke tests + the `published_ability_names`
@@ -97,8 +115,14 @@ pub fn build_registry() -> Arc<AxonAbilityCatalog> {
 
 fn build_registry_uncached() -> Arc<AxonAbilityCatalog> {
     build_registry_with_services_result_inner(
-        RegistryBuildConfig::new(RegistryBuildServices::fresh(), &AgentRegistry::default()),
-        PluginRegistryMode::BuiltinOnlyDeterministic,
+        deterministic_snapshot_build_config_for_profile(
+            RegistryBuildServices::fresh(),
+            &AgentRegistry::default(),
+            DeterministicAuthorityProfile::DeviceDefault,
+        ),
+        RegistryAssemblyMode::DeterministicSnapshot {
+            plugins: PluginRegistryMode::BuiltinOnlyDeterministic,
+        },
     )
     .expect("canonical builtin ability catalog must assemble")
     .catalog
@@ -116,11 +140,57 @@ pub(crate) fn build_system_registry() -> Arc<AxonAbilityCatalog> {
 
 fn build_system_registry_uncached() -> Arc<AxonAbilityCatalog> {
     build_registry_with_services_result_inner(
-        RegistryBuildConfig::new(RegistryBuildServices::fresh(), &AgentRegistry::default()),
-        PluginRegistryMode::None,
+        deterministic_snapshot_build_config_for_profile(
+            RegistryBuildServices::fresh(),
+            &AgentRegistry::default(),
+            DeterministicAuthorityProfile::SystemInventory,
+        ),
+        RegistryAssemblyMode::DeterministicSnapshot {
+            plugins: PluginRegistryMode::None,
+        },
     )
     .expect("canonical system ability catalog must assemble")
     .catalog
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeterministicAuthorityProfile {
+    /// Live/default read model for this daemon's device authority surface.
+    DeviceDefault,
+    /// Descriptor inventory read model spanning every static system owner.
+    SystemInventory,
+}
+
+fn deterministic_snapshot_build_config_for_profile<'a>(
+    services: RegistryBuildServices,
+    agents: &'a AgentRegistry,
+    authority_profile: DeterministicAuthorityProfile,
+) -> RegistryBuildConfig<'a> {
+    let snapshot_device =
+        crate::core::ura::device_ura(crate::core::ura::REALM_EASYNET, "ability-catalog-snapshot");
+    let authority_context = match authority_profile {
+        DeterministicAuthorityProfile::DeviceDefault => {
+            AbilityAuthorityContext::for_device_authority_root(snapshot_device)
+                .expect("deterministic Device snapshot authority must be canonical")
+        }
+        DeterministicAuthorityProfile::SystemInventory => {
+            // Descriptor generation and static metadata describe the complete
+            // system catalogue, not one daemon deployment mode. Runtime
+            // publication never uses this snapshot; it captures the live
+            // authority-filtered catalogue.
+            AbilityAuthorityContext::for_combined_authority_roots(snapshot_device)
+                .expect("deterministic Device+Hub snapshot authorities must be canonical")
+        }
+    };
+    let mut config =
+        RegistryBuildConfig::new_with_authority_context(services, agents, authority_context);
+    // Descriptor snapshots register every handler but never invoke one. Some
+    // handlers bind their canonical dispatch gateway during registration, so
+    // the snapshot must provide the same runtime object shape as daemon
+    // assembly instead of maintaining a second, partially constructible
+    // registration path.
+    config.local_runtime = Some(registry_assembly_runtime());
+    config
 }
 
 /// Build a `AxonAbilityCatalog` with sub-service handles wired
@@ -147,6 +217,14 @@ fn build_system_registry_uncached() -> Arc<AxonAbilityCatalog> {
 pub struct BuiltAbilityRegistry {
     pub catalog: Arc<AxonAbilityCatalog>,
     pub plugin_runtime_manager: Arc<crate::daemon::plugins::PluginRuntimeManager>,
+    /// Capability-state evidence derived from this exact assembly. A
+    /// repository makes signaling ProviderBacked; executable delivery proof
+    /// is a separate cutover input and is never inferred from registration.
+    pub voice_capability_state:
+        Vec<crate::daemon::ability::conformance::VoiceCapabilityStateEvidence>,
+    #[cfg(feature = "axon-pb")]
+    pub invocation_cancellations:
+        crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
     /// Late-wired device-ability registrar cell. Populated during the
     /// build with a pending registrar; boot calls `set_runtime` on it
     /// (and may `replay_from_store`) once the `LocalRuntime` exists, so
@@ -160,6 +238,9 @@ pub struct RegistrySharedStores {
     pub hub_published_abilities: Arc<
         crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
     >,
+    pub voice_calls: Option<
+        crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly,
+    >,
 }
 
 impl RegistrySharedStores {
@@ -171,7 +252,17 @@ impl RegistrySharedStores {
     ) -> Self {
         Self {
             hub_published_abilities,
+            voice_calls: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_voice_call_provider_assembly(
+        mut self,
+        provider: crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly,
+    ) -> Self {
+        self.voice_calls = Some(provider);
+        self
     }
 }
 
@@ -207,7 +298,7 @@ impl RegistryBuildServices {
             schedule,
             loop_svc,
             discover_federation_resolver: Arc::new(
-                discover_ability::BridgeDiscoverFederationResolver,
+                discover_ability::DetachedDiscoverFederationResolver,
             ),
         }
     }
@@ -248,14 +339,31 @@ pub struct RegistryBuildConfig<'a> {
 impl<'a> RegistryBuildConfig<'a> {
     #[must_use]
     pub fn new(services: RegistryBuildServices, agents: &'a AgentRegistry) -> Self {
+        Self::new_with_authority_context(
+            services,
+            agents,
+            AbilityAuthorityContext::from_local_environment(),
+        )
+    }
+
+    /// Construct a registry assembly request from an already-resolved authority
+    /// snapshot. Deterministic read models and daemon boot use this path so
+    /// configuration assembly cannot observe HOME before the caller-supplied
+    /// authority state is installed.
+    #[must_use]
+    pub fn new_with_authority_context(
+        services: RegistryBuildServices,
+        agents: &'a AgentRegistry,
+        authority_context: AbilityAuthorityContext,
+    ) -> Self {
         Self {
             services,
             invocation_ledger: None,
             agents,
             loaders: Arc::new(Vec::new()),
             pages_identity: PagesIdentity::default(),
-            local_runtime: None,
-            authority_context: Some(AbilityAuthorityContext::from_local_environment()),
+            local_runtime: Some(registry_assembly_runtime()),
+            authority_context: Some(authority_context),
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
             ),
@@ -283,7 +391,7 @@ impl RegistryDaemonBuildConfig {
             invocation_ledger: None,
             loaders: None,
             pages_identity: PagesIdentity::default(),
-            local_runtime: None,
+            local_runtime: Some(registry_assembly_runtime()),
             authority_context: Some(AbilityAuthorityContext::from_local_environment()),
             hot_agent_registrar_cell: Arc::new(
                 agent_lifecycle_ability::SharedHotRegistrarCell::new(),
@@ -296,7 +404,7 @@ impl RegistryDaemonBuildConfig {
 pub fn build_registry_with_services_result(
     config: RegistryBuildConfig<'_>,
 ) -> anyhow::Result<BuiltAbilityRegistry> {
-    build_registry_with_services_result_inner(config, PluginRegistryMode::DefaultDaemon)
+    build_registry_with_services_result_inner(config, RegistryAssemblyMode::DaemonRuntime)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,6 +418,25 @@ enum PluginRegistryMode {
     BuiltinOnlyDeterministic,
     /// Load builtin plus installed plugin packages using daemon boot policy.
     DefaultDaemon,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegistryAssemblyMode {
+    DeterministicSnapshot { plugins: PluginRegistryMode },
+    DaemonRuntime,
+}
+
+impl RegistryAssemblyMode {
+    fn plugin_registry_mode(self) -> PluginRegistryMode {
+        match self {
+            Self::DeterministicSnapshot { plugins } => plugins,
+            Self::DaemonRuntime => PluginRegistryMode::DefaultDaemon,
+        }
+    }
+
+    fn starts_runtime_services(self) -> bool {
+        matches!(self, Self::DaemonRuntime)
+    }
 }
 
 fn build_plugin_runtime_manager(
@@ -337,7 +464,7 @@ fn build_plugin_runtime_manager(
 
 fn build_registry_with_services_result_inner(
     config: RegistryBuildConfig<'_>,
-    plugin_registry_mode: PluginRegistryMode,
+    assembly_mode: RegistryAssemblyMode,
 ) -> anyhow::Result<BuiltAbilityRegistry> {
     let RegistryBuildConfig {
         services,
@@ -358,29 +485,18 @@ fn build_registry_with_services_result_inner(
         loop_svc,
         discover_federation_resolver,
     } = services;
+    #[cfg(feature = "axon-pb")]
+    let invocation_cancellations =
+        crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry::default(
+        );
 
-    let mut authority_context = authority_context.unwrap_or_default();
+    let authority_context = authority_context.unwrap_or_default();
     let hosts_device_authority = authority_context.hosts_device_authority();
-    // Pages management is user-owned but executes through the stable
-    // `<user>.pages` daemon Agent. Declare that host from the same explicit
-    // boot identity that drives Pages registration so authority admission
-    // never falls back to ambient local-agent state.
-    if hosts_device_authority {
-        if let Some(user) = pages_identity.user.as_deref() {
-            let realm = pages_identity
-                .realm
-                .as_deref()
-                .unwrap_or(crate::core::ura::REALM_EASYNET);
-            let pages_host = pages::management_agent_ura(realm, user);
-            authority_context = authority_context
-                .with_declared_agent_authority_root(pages_host)
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "Pages execution host cannot be admitted by the daemon authority context: {error}"
-                    )
-                });
-        }
-    }
+    let hosts_hub_authority = authority_context.hosts_hub_authority();
+    let daemon_runtime_assembly = assembly_mode.starts_runtime_services();
+    let plugin_registry_mode = assembly_mode.plugin_registry_mode();
+    let authority_context =
+        declare_daemon_native_agent_authorities(authority_context, &pages_identity)?;
     // Hub-only assembly must not consult or replay Device product state. Keep
     // one empty registry view for provider constructors while static owner
     // admission remains centralized in `StaticRegistration::commit`.
@@ -401,13 +517,36 @@ fn build_registry_with_services_result_inner(
         PluginRegistryMode::None
     };
     let local_runtime_owners = authority_context.local_runtime_owners();
-    let runtime = local_runtime.unwrap_or_else(easynet_axon::invocation::LocalRuntime::new);
-    let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        Arc::clone(&runtime),
-        authority_context,
-    );
+    let voice_provider_assembly = shared_stores.voice_calls.clone();
+    // Shared late-bound view of the completed live catalogue. Every handler
+    // that needs post-assembly control-plane truth closes over this one cell.
+    let local_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
+        Arc::new(std::sync::OnceLock::new());
+    let registration_runtime = local_runtime.clone();
+    let mut reg = match local_runtime {
+        Some(runtime) => {
+            AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority_context)
+        }
+        None => AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context),
+    };
+    if hosts_device_authority {
+        daemon_invocation_contracts::register_for_owner(
+            &mut reg,
+            &crate::daemon::ability::dispatch::OwnerKind::Device,
+        )
+        .context("register Device daemon Invocation descriptor contracts")?;
+    }
+    if hosts_hub_authority {
+        daemon_invocation_contracts::register_for_owner(
+            &mut reg,
+            &crate::daemon::ability::dispatch::OwnerKind::Hub,
+        )
+        .context("register Hub daemon Invocation descriptor contracts")?;
+        runtime_admin_contracts::register(&mut reg)
+            .context("register Hub runtime-admin descriptor contracts")?;
+    }
     ping::register(&mut reg);
-    network_health_ability::register(&mut reg);
+    network_health_ability::register(&mut reg, Arc::clone(&discover_federation_resolver));
     // AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
     // half. Three stateless handlers (fs.read / fs.write /
     // fs.list) — every host-embodied agent claiming
@@ -447,7 +586,13 @@ fn build_registry_with_services_result_inner(
     // These handlers are daemon policy management/read-model adapters over the
     // text-backed access-control store; they do not touch keyring secrets and
     // do not introduce a standalone policy engine.
-    access_control_ability::register_with_ledger(&mut reg, invocation_ledger.clone());
+    access_control_ability::register_with_ledger(
+        &mut reg,
+        invocation_ledger.clone(),
+        Arc::clone(&local_registry_handle),
+    );
+    #[cfg(feature = "axon-pb")]
+    invocation_cancel_ability::register(&mut reg, invocation_cancellations.clone());
     // AXIOM §"Tier 2.5" Baseline Locomotion — PTY data-plane and
     // its lifecycle control-plane. terminal.create /
     // terminal.close manage the session catalog;
@@ -515,7 +660,12 @@ fn build_registry_with_services_result_inner(
     {
         panic!("device registrar cell must be written exactly once during registry build");
     }
-    device_ops_ability::register(&mut reg, Arc::clone(&device_registrar_cell));
+    device_ops_ability::register(
+        &mut reg,
+        Arc::clone(&device_registrar_cell),
+        Arc::clone(&local_registry_handle),
+        Arc::clone(&discover_federation_resolver),
+    );
     // browser.* — RFC-012 §RemoteWebSurface; v0 mock
     // handlers per RFC-013 plan. capture_viewport is a streaming
     // verb; the other three are unary RPC.
@@ -523,7 +673,11 @@ fn build_registry_with_services_result_inner(
     // voice.* call signaling abilities — `easynet call …`
     // subcommand surface routes through these via the same
     // ability-only invocation path every other CLI surface uses.
-    voice_call_ability::register(&mut reg);
+    if hosts_hub_authority {
+        if let Some(provider) = voice_provider_assembly.as_ref() {
+            voice_call_ability::register(&mut reg, provider.clone());
+        }
+    }
     // Stateful device plugins. Package discovery, boot-time load decisions, and
     // handler registration stay separate so install/remove/update state cannot
     // leak into runtime call semantics.
@@ -552,14 +706,6 @@ fn build_registry_with_services_result_inner(
     discuss_ability::register(&mut reg, Arc::clone(&discuss));
     schedule_ability::register(&mut reg, schedule);
     loop_ability::register(&mut reg, loop_svc);
-    // The shared OnceLock consumed by every ability that needs
-    // to resolve against the live catalogue post-boot:
-    // mcp.bridge.call_tool, a2a.bridge.send_task, meta.list_abilities,
-    // and per-agent <agent>.invoke. Created before agent ability
-    // registration so every handler can close over the same live
-    // registry handle. Set once after `Arc::new(reg)` below.
-    let local_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
-        Arc::new(std::sync::OnceLock::new());
     plugin_lifecycle_ability::register(
         &mut reg,
         Arc::clone(&local_registry_handle),
@@ -583,9 +729,11 @@ fn build_registry_with_services_result_inner(
                 Arc::clone(&local_registry_handle),
                 Arc::clone(&discover_federation_resolver),
             );
-        hot_registrar
-            .set_runtime(Arc::clone(&runtime))
-            .context("wire hosted-Agent registrar runtime")?;
+        if let Some(runtime) = registration_runtime.as_ref() {
+            hot_registrar
+                .set_runtime(Arc::clone(runtime))
+                .context("wire hosted-Agent registrar runtime")?;
+        }
         // Mirror ProcessSingleton::once()::set's diagnostic: a
         // second writer on this `OnceLock` is a boot-wiring bug
         // (`build_registry` is supposed to run exactly once per
@@ -604,14 +752,10 @@ fn build_registry_with_services_result_inner(
     // The CLI `easynet mission discuss …` and any EAL caller drive
     // multi-agent discussions through this name. Shares the
     // DiscussService with the discuss.* triple (same room state)
-    // and consumes the shared registry handle so per-cycle
-    // <agent>.chat invocations stay in-process — going through
-    // IPC would deadlock the daemon's accept loop.
-    orchestration_ability::register(
-        &mut reg,
-        Arc::clone(&discuss),
-        Arc::clone(&local_registry_handle),
-    );
+    // and routes every child turn through daemon Invocation, so
+    // resolution, admission, dispatch, and receipt ownership stay
+    // identical to SDK and CLI calls.
+    orchestration_ability::register(&mut reg, Arc::clone(&discuss));
     // Hosted-agent abilities are deliberately NOT registered into the static
     // boot maps. Static maps cannot be removed through `agent.stop` after the
     // catalog is wrapped in `Arc`, which previously left catalog/control-plane
@@ -687,11 +831,9 @@ fn build_registry_with_services_result_inner(
     // order independence.
     skill_publish_ability::register(&mut reg);
     // mission.think — long-running worker+judge orchestration.
-    // Consumes the shared catalogue handle so per-cycle
-    // <agent>.chat invocations stay in-process; same rationale as
-    // mission.discuss_round (going back through the IPC client
-    // would deadlock the daemon's accept loop).
-    think_ability::register(&mut reg, Arc::clone(&local_registry_handle));
+    // Worker, judge, curator, and publication child calls re-enter
+    // daemon Invocation through the Mission application gateway.
+    think_ability::register(&mut reg);
     // mcp.bridge.{list_tools, call_tool} — MCP edge adapter.
     //
     // list_tools projects local AbilityDescriptors to the MCP
@@ -791,7 +933,7 @@ fn build_registry_with_services_result_inner(
     // a2a.client.send_task — outbound A2A. The handler submits a signed
     // descriptor-bound InvokeRequest to the local daemon's canonical
     // Invocation service.
-    a2a_client_ability::register(&mut reg);
+    a2a_client_ability::register(&mut reg, Arc::clone(&discover_federation_resolver));
     // mcp.client.{list,call} — outbound MCP. Boots an
     // McpClientService from ~/.easynet/mcps.json (missing
     // file → empty service, no upstreams). Each upstream MCP
@@ -799,7 +941,7 @@ fn build_registry_with_services_result_inner(
     // reuse the live connection. Parse errors at boot bubble up
     // because a malformed file is an operator typo, not a "no
     // upstreams" condition.
-    let mcp_svc = if hosts_device_authority {
+    let mcp_svc = if hosts_device_authority && daemon_runtime_assembly {
         let mcps_path = crate::daemon::execution::mcp::McpClientService::default_config_path();
         Arc::new(
             crate::daemon::execution::mcp::McpClientService::from_path(&mcps_path)
@@ -817,7 +959,7 @@ fn build_registry_with_services_result_inner(
     // `mcp.client.*`, reflective registry below, and exec —
     // shares one connection pool, one config snapshot, one `next_id`
     // sequence per upstream. No silent divergence between surfaces.
-    if hosts_device_authority {
+    if hosts_device_authority && daemon_runtime_assembly {
         crate::daemon::ability::builtins::integrations::mcp::executor::set_process_client(
             mcp_svc.clone(),
         );
@@ -852,7 +994,7 @@ fn build_registry_with_services_result_inner(
     // exclusive-pair-of-Option threading across the Arc::new(reg)
     // boundary — every branch is a named variant carrying exactly
     // the data the apply step needs.
-    let reflection_plan = if hosts_device_authority {
+    let reflection_plan = if hosts_device_authority && daemon_runtime_assembly {
         let reflection_realm = pages_identity
             .realm
             .clone()
@@ -894,7 +1036,7 @@ fn build_registry_with_services_result_inner(
         });
     }
     let authority_exclusions = reg.static_authority_exclusion_snapshot();
-    if !authority_exclusions.is_empty() {
+    if daemon_runtime_assembly && !authority_exclusions.is_empty() {
         let excluded_total = authority_exclusions.values().sum::<usize>().to_string();
         let excluded_by_owner = authority_exclusions
             .iter()
@@ -932,7 +1074,20 @@ fn build_registry_with_services_result_inner(
 
     if hosts_device_authority {
         if let Some(hot_registrar) = hot_agent_registrar_cell.get().cloned() {
-            for (agent_name, entry) in agents.agents.iter() {
+            let recovered_purge =
+                agent_lifecycle_ability::recover_pending_purge_before_agent_replay(
+                    &hot_agent_registrar_cell,
+                )
+                .context("recover pending Agent purge before hosted-Agent boot replay")?;
+            let recovered_agents;
+            let replay_agents = if recovered_purge {
+                recovered_agents = crate::daemon::persistence::agent_registry::load_agents()
+                    .context("reload Agent registry after purge boot recovery")?;
+                &recovered_agents
+            } else {
+                agents
+            };
+            for (agent_name, entry) in replay_agents.agents.iter() {
                 crate::support::async_bridge::run_blocking(
                     hot_registrar.register_agent(agent_name, entry),
                     crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
@@ -988,11 +1143,61 @@ fn build_registry_with_services_result_inner(
     // compute its own once the background reflection pass finishes.
     reflection_plan.apply(Arc::clone(&mcp_svc), Arc::clone(&arc));
 
+    let voice_capability_state =
+        crate::daemon::ability::conformance::voice_capability_state_evidence(
+            crate::daemon::ability::conformance::VoiceAssemblyEvidence {
+                repository_assembled: voice_provider_assembly.is_some(),
+                executable_delivery_evidence: false,
+            },
+        );
+
     Ok(BuiltAbilityRegistry {
         catalog: arc,
         plugin_runtime_manager,
+        voice_capability_state,
         device_registrar_cell,
+        #[cfg(feature = "axon-pb")]
+        invocation_cancellations,
     })
+}
+
+/// Declare the stable Agent execution planes derived from the daemon's paired
+/// user identity before the catalog is constructed. These roots are runtime
+/// architecture, not hosted-agent lifecycle rows: Pages executes management
+/// abilities through `<user>.pages`, while reflected MCP tools execute through
+/// `<user>.mcp`. Both static eager registration and the post-boot dynamic MCP
+/// overlay therefore pass the same immutable authority gate.
+fn declare_daemon_native_agent_authorities(
+    mut authority_context: AbilityAuthorityContext,
+    identity: &PagesIdentity,
+) -> anyhow::Result<AbilityAuthorityContext> {
+    if !authority_context.hosts_device_authority() {
+        return Ok(authority_context);
+    }
+    let Some(user) = identity.user.as_deref() else {
+        return Ok(authority_context);
+    };
+    let realm = identity
+        .realm
+        .as_deref()
+        .unwrap_or(crate::core::ura::REALM_EASYNET);
+    let declared_roots = [
+        ("Pages", pages::management_agent_ura(realm, user)),
+        (
+            "MCP reflection",
+            easynet_axon::ura::agent_ura(realm, user, "mcp"),
+        ),
+    ];
+    for (executor, authority_root) in declared_roots {
+        authority_context = authority_context
+            .with_declared_agent_authority_root(authority_root)
+            .with_context(|| {
+                format!(
+                    "{executor} execution host cannot be admitted by the daemon authority context"
+                )
+            })?;
+    }
+    Ok(authority_context)
 }
 
 /// Daemon-side assembly entry point. Loads the agent registry and builds the
@@ -1090,4 +1295,64 @@ pub(crate) fn recover_descriptor_import_transactions_before_daemon_registry_boot
         );
     }
     Ok(recovered_descriptor_imports)
+}
+
+#[cfg(test)]
+mod daemon_native_authority_tests {
+    use super::*;
+    use crate::daemon::ability::dispatch::{ControlPlaneImplementation, OwnerKind, StreamSource};
+    use crate::daemon::ability::manifest::AbilityManifest;
+    use crate::daemon::ability::AuthorityScope;
+
+    #[test]
+    fn paired_identity_declares_dynamic_mcp_execution_authority() {
+        let device_ura = crate::core::ura::device_ura("native-authority", "dev-1");
+        let identity = PagesIdentity {
+            user: Some("alice".to_string()),
+            realm: Some("native-authority".to_string()),
+            listener_port: None,
+        };
+        let authority_context = declare_daemon_native_agent_authorities(
+            AbilityAuthorityContext::for_combined_authority_roots(device_ura)
+                .expect("combined authority context"),
+            &identity,
+        )
+        .expect("declare daemon-native Agent authorities");
+        let registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            registry_assembly_runtime(),
+            authority_context,
+        );
+        let mcp_root = easynet_axon::ura::agent_ura("native-authority", "alice", "mcp");
+        let handler = Arc::new(|_args| {
+            let (_tx, rx) = tokio::sync::broadcast::channel(1);
+            Ok(StreamSource::Live(rx))
+        });
+
+        registry
+            .hot_register_stream_with_spec_impl_and_authority_scope(
+                "mcp_authority_probe",
+                OwnerKind::Agent("mcp".to_string()),
+                AuthorityScope::new("agent:mcp", &mcp_root).expect("MCP authority scope"),
+                AbilityManifest::new(
+                    "mcp_authority_probe",
+                    "MCP authority assembly probe",
+                    serde_json::json!({"type": "object"}),
+                )
+                .and_then(|manifest| manifest.with_admission_action("stream"))
+                .expect("probe manifest"),
+                handler,
+                ControlPlaneImplementation::native_daemon(),
+            )
+            .expect("dynamic MCP registration must use the declared execution authority");
+
+        let record = registry
+            .control_plane_record_for_authority_mode(
+                &mcp_root,
+                "mcp_authority_probe",
+                crate::daemon::ability::CallMode::Stream,
+            )
+            .expect("authority-scoped lookup")
+            .expect("dynamic MCP control-plane row");
+        assert_eq!(record.authority().scope().authority_root(), mcp_root);
+    }
 }

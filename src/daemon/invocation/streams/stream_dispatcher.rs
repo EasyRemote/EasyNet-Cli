@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Response, Status};
 
+use easynet_axon::invocation::CallMode;
 use easynet_axon::pb::axon::v1::{
     Error, InvokeServerStreamRequest, InvokeStreamChunk, ResponseHeader,
 };
@@ -32,21 +33,28 @@ use easynet_axon::pb::axon::v1::{
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::daemon::invocation::admission::target_gate::{
-    route_negative_status, route_profile_blocked_status, selected_host_unavailable_message,
-    signed_envelope_for_selected_route, TargetGate,
+    route_negative_status, route_profile_blocked_status, signed_envelope_for_selected_route,
+    TargetGate,
 };
-use crate::daemon::invocation::bidi::session_wire::build_carrier_v1_dispatch_frame;
+use crate::daemon::invocation::bidi::session_wire::{
+    build_carrier_v1_dispatch_frame, require_canonical_dispatch_session,
+};
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent,
 };
 use crate::daemon::invocation::dispatch::deps::{DirectoryPlane, RuntimePlane, SessionPlane};
 use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility;
 use crate::daemon::invocation::dispatch::federation_wrappers;
+use crate::daemon::invocation::dispatch::forwarded_finalization::{
+    ForwardedFinalizationVerifier, ForwardedInvocationBinding,
+};
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
     FEDERATION_RESULT_CONTENT_TYPE, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
-use crate::daemon::invocation::routing::route_resolver::SelectedInvokeRoute;
+use crate::daemon::invocation::routing::route_resolver::{
+    CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
+};
 
 /// `InvokeStream` routing surface. Cheap per-call construction: both
 /// planes and the gate are `Arc`-shaped.
@@ -327,7 +335,18 @@ impl StreamDispatcher {
         &self,
         request: &InvokeServerStreamRequest,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        let selected_route = self.resolve_stream_route(request).await?;
+        let selection = self.resolve_stream_route(request).await?;
+        let call_mode = selection.call_mode();
+        let selected_route = match selection.into_dispatch() {
+            CanonicalRouteDispatch::Local(route) => route,
+            CanonicalRouteDispatch::Peer(route) => {
+                return Err(Status::unimplemented(format!(
+                    "InvokeStream selected canonical peer route to hub `{}` for `{}`, but the \
+                     generic cross-realm server-stream carrier is unsupported",
+                    route.hub_ura, route.query_name,
+                )));
+            }
+        };
         let execution_host_is_self = self
             .gate
             .matches_self_target_ura(&selected_route.execution_host_ura)
@@ -336,10 +355,10 @@ impl StreamDispatcher {
             .dispatch_target(execution_host_is_self)
             .is_local_runtime()
         {
-            self.dispatch_local_resolved_route(request, selected_route)
+            self.dispatch_local_resolved_route(request, selected_route, call_mode)
                 .await
         } else {
-            self.dispatch_remote_selected_route(request, selected_route)
+            self.dispatch_remote_selected_route(request, selected_route, call_mode)
                 .await
         }
     }
@@ -348,6 +367,7 @@ impl StreamDispatcher {
         &self,
         request: &InvokeServerStreamRequest,
         selected_route: SelectedInvokeRoute,
+        call_mode: CallMode,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         let ability = request.function_name.trim();
         let Some(runtime) = self.runtime.local_runtime.as_ref() else {
@@ -356,7 +376,6 @@ impl StreamDispatcher {
                  is not wired at boot"
             )));
         };
-        let selected_ability_ura = selected_route.ability_ura.clone();
         let bound_ability =
             RuntimeBoundAbility::from_selected_route("InvokeStream", runtime, &selected_route)
                 .await?;
@@ -364,7 +383,7 @@ impl StreamDispatcher {
             .descriptor_ref_for_mode(
                 "InvokeStream",
                 &selected_route.callee_ura,
-                easynet_axon::invocation::CallMode::Stream,
+                call_mode,
                 Some(&selected_route.route_ura),
             )?
             .into_descriptor_ref();
@@ -417,9 +436,19 @@ impl StreamDispatcher {
             crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(runtime, wire)
                 .await
                 .map_err(|err| status_from_axon_invoke_error("InvokeStream", ability, err))?;
+        let admission_receipt = handle.admission_receipt().await.map_err(|err| {
+            Status::failed_precondition(format!(
+                "InvokeStream `{ability}` canonical admission unavailable: {err}"
+            ))
+        })?;
+        let admission_wire = easynet_axon::invocation::wire::receipt_to_wire(&admission_receipt)
+            .map_err(|error| {
+                Status::failed_precondition(format!(
+                    "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
+                ))
+            })?;
 
         let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
-        let ability_name = selected_ability_ura;
         let invocation_id = handle.invocation_id().to_string();
         let selected_node_id = selected_route.route_ura.clone();
         tokio::spawn(async move {
@@ -429,41 +458,81 @@ impl StreamDispatcher {
                 match frame_result {
                     Ok(frame) => {
                         let terminal = frame.terminal;
-                        let content_type = if frame.content_type.is_empty() {
-                            FEDERATION_RESULT_CONTENT_TYPE.to_string()
+                        let finalized = if terminal {
+                            match handle.finalized().await {
+                                Ok(finalized) => Some(finalized),
+                                Err(err) => {
+                                    let _ = tx
+                                        .send(Err(Status::failed_precondition(format!(
+                                            "CANONICAL_FINALIZATION_REQUIRED: {err}"
+                                        ))))
+                                        .await;
+                                    break;
+                                }
+                            }
                         } else {
-                            frame.content_type
+                            None
                         };
-                        // Payload emptiness is business content; `terminal`
-                        // is lifecycle state. Preserve Axon's terminal frame
-                        // even for finite streams that complete with
-                        // `Ok(Vec::new())`.
-                        let receipts = handle.receipts().await;
-                        let admission_receipt = if admission_receipt_sent {
+                        if finalized.as_ref().is_some_and(|value| {
+                            value.terminal_state
+                                != easynet_axon::invocation::InvocationState::Completed
+                                || value.failure.is_some()
+                        }) {
+                            let _ = tx
+                                .send(Err(Status::failed_precondition(
+                                    "CANONICAL_FINALIZATION_STATE_MISMATCH: successful stream frame did not finalize Completed",
+                                )))
+                                .await;
+                            break;
+                        }
+                        let frame_admission_receipt = if admission_receipt_sent {
                             None
                         } else {
                             admission_receipt_sent = true;
-                            receipts
-                                .iter()
-                                .find(|receipt| {
-                                    receipt.state
-                                        == easynet_axon::invocation::InvocationState::Admitted
-                                })
-                                .map(easynet_axon::invocation::wire::receipt_to_wire)
+                            Some(admission_wire.clone())
                         };
-                        let terminal_receipt = if terminal {
-                            receipts
-                                .iter()
-                                .rev()
-                                .find(|receipt| receipt.state.is_terminal())
-                                .map(easynet_axon::invocation::wire::receipt_to_wire)
+                        let state = finalized
+                            .as_ref()
+                            .map(|value| value.terminal_state)
+                            .unwrap_or(easynet_axon::invocation::InvocationState::Running);
+                        let frame_payload = frame.payload;
+                        let frame_content_type = frame.content_type;
+                        let payload = if terminal && frame_payload.is_empty() {
+                            finalized
+                                .as_ref()
+                                .map(|value| value.output().to_vec())
+                                .unwrap_or_default()
                         } else {
-                            None
+                            frame_payload
                         };
-                        let state = if terminal {
-                            easynet_axon::invocation::InvocationState::Completed
+                        let frame_content_type = if frame_content_type.is_empty() {
+                            finalized
+                                .as_ref()
+                                .map(|value| value.output_content_type().to_string())
+                                .unwrap_or_default()
                         } else {
-                            easynet_axon::invocation::InvocationState::Running
+                            frame_content_type
+                        };
+                        let content_type = if frame_content_type.is_empty() {
+                            FEDERATION_RESULT_CONTENT_TYPE.to_string()
+                        } else {
+                            frame_content_type
+                        };
+                        let terminal_receipt = match finalized.as_ref() {
+                            Some(value) => match easynet_axon::invocation::wire::receipt_to_wire(
+                                &value.terminal_receipt,
+                            ) {
+                                Ok(receipt) => Some(receipt),
+                                Err(error) => {
+                                    let _ = tx
+                                        .send(Err(Status::failed_precondition(format!(
+                                            "CANONICAL_TERMINAL_PROJECTION_FAILED: {error}"
+                                        ))))
+                                        .await;
+                                    break;
+                                }
+                            },
+                            None => None,
                         };
                         let chunk = InvokeStreamChunk {
                             header: Some(ResponseHeader {
@@ -476,10 +545,10 @@ impl StreamDispatcher {
                             scheduling_reason: "local-runtime".to_string(),
                             state: state.to_wire_i32(),
                             content_type,
-                            payload: frame.payload,
+                            payload,
                             sequence,
                             terminal,
-                            admission_receipt,
+                            admission_receipt: frame_admission_receipt,
                             terminal_receipt,
                             ..InvokeStreamChunk::default()
                         };
@@ -489,13 +558,52 @@ impl StreamDispatcher {
                         }
                     }
                     Err(err) => {
-                        let _ = tx
-                            .send(Err(status_from_axon_invoke_error(
-                                "InvokeStream",
-                                &ability_name,
-                                err,
-                            )))
-                            .await;
+                        let finalized = match handle.finalized().await {
+                            Ok(finalized) => finalized,
+                            Err(finalization_error) => {
+                                let _ = tx
+                                    .send(Err(Status::failed_precondition(format!(
+                                        "CANONICAL_FINALIZATION_REQUIRED: frame_error={err}; finalization_error={finalization_error}"
+                                    ))))
+                                    .await;
+                                break;
+                            }
+                        };
+                        let terminal_error = finalized.failure.as_ref().unwrap_or(&err);
+                        let terminal_receipt = match easynet_axon::invocation::wire::receipt_to_wire(
+                            &finalized.terminal_receipt,
+                        ) {
+                            Ok(receipt) => receipt,
+                            Err(error) => {
+                                let _ = tx
+                                    .send(Err(Status::failed_precondition(format!(
+                                        "CANONICAL_TERMINAL_PROJECTION_FAILED: {error}"
+                                    ))))
+                                    .await;
+                                break;
+                            }
+                        };
+                        let chunk = InvokeStreamChunk {
+                            header: Some(ResponseHeader {
+                                request_id: invocation_id.clone(),
+                                status: finalized.terminal_state.as_str().to_string(),
+                                ..ResponseHeader::default()
+                            }),
+                            invocation_id: invocation_id.clone(),
+                            selected_node_id: selected_node_id.clone(),
+                            scheduling_reason: "local-runtime".to_string(),
+                            state: finalized.terminal_state.to_wire_i32(),
+                            sequence,
+                            terminal: true,
+                            admission_receipt: (!admission_receipt_sent)
+                                .then(|| admission_wire.clone()),
+                            terminal_receipt: Some(terminal_receipt),
+                            error: Some(easynet_axon::invocation::wire::error_to_wire(
+                                terminal_error,
+                            )),
+                            ..InvokeStreamChunk::default()
+                        };
+                        let _ = tx.send(Ok(chunk)).await;
                         break;
                     }
                 }
@@ -511,6 +619,7 @@ impl StreamDispatcher {
         &self,
         request: &InvokeServerStreamRequest,
         selected_route: SelectedInvokeRoute,
+        call_mode: CallMode,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         let ability = request.function_name.trim().to_string();
         let Some(envelope) = request.envelope.clone() else {
@@ -536,41 +645,34 @@ impl StreamDispatcher {
                 selected_route.dispatch_name
             ))
         })?;
-        let (session_id, sender) = self
-            .directory
-            .presence
-            .lookup_tracked(&selected_route.execution_host_ura)
-            .ok_or_else(|| {
-                Status::failed_precondition(selected_host_unavailable_message(&selected_route))
-            })?;
+        let session = require_canonical_dispatch_session(
+            &self.directory.presence,
+            &selected_route.execution_host_ura,
+            &selected_route.route_ura,
+            "InvokeStream",
+        )?;
+        let session_id = session.session_id;
+        let sender = session.sender;
+        let carrier_version = session.contract_version;
 
         let mut handle = pending.register_pending_for(&selected_route.execution_host_ura);
         let call_id = handle.call_id();
-        let carrier_version = self
-            .directory
-            .presence
-            .dispatch_contract_version(&selected_route.execution_host_ura)
-            .unwrap_or(0);
-        if carrier_version < 1 {
-            return Err(Status::failed_precondition(format!(
-                "InvokeStream selected host `{}` negotiated session carrier v{carrier_version}; \
-                 canonical relay requires v1 or newer",
-                selected_route.execution_host_ura
-            )));
-        }
+        let forwarded_request = easynet_axon::pb::axon::v1::InvokeRequest {
+            envelope: request.envelope.clone(),
+            function_name: request.function_name.clone(),
+            arguments: request.arguments.clone(),
+            content_type: request.content_type.clone(),
+            content_envelope: request.content_envelope.clone(),
+            metadata: request.metadata.clone(),
+            payload_ref: request.payload_ref.clone(),
+            ..easynet_axon::pb::axon::v1::InvokeRequest::default()
+        };
+        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
         let dispatch_frame = build_carrier_v1_dispatch_frame(
             call_id,
-            easynet_axon::pb::axon::v1::InvokeRequest {
-                envelope: request.envelope.clone(),
-                function_name: request.function_name.clone(),
-                arguments: request.arguments.clone(),
-                content_type: request.content_type.clone(),
-                content_envelope: request.content_envelope.clone(),
-                metadata: request.metadata.clone(),
-                payload_ref: request.payload_ref.clone(),
-                ..easynet_axon::pb::axon::v1::InvokeRequest::default()
-            },
-            false,
+            forwarded_request,
+            matches!(call_mode, CallMode::Bidi),
         );
         match sender.try_send(Ok(dispatch_frame)) {
             Ok(()) => {}
@@ -607,17 +709,54 @@ impl StreamDispatcher {
         let route_ura = selected_route.route_ura.clone();
         tokio::spawn(async move {
             let mut sequence = 0_u64;
-            let fallback_invocation_id = format!("remote-stream-{call_id}");
+            let mut canonical_invocation_id = None::<String>;
+            let mut finalization =
+                ForwardedFinalizationVerifier::new(forwarded_binding, receipt_resolver);
             while let Some(event) = handle.recv().await {
                 match event {
-                    DispatchStreamEvent::Chunk(payload) => {
+                    DispatchStreamEvent::Admission(receipt) => {
+                        if let Err(status) = finalization.admit(receipt.clone()) {
+                            let _ = tx.send(Err(status)).await;
+                            break;
+                        }
+                        canonical_invocation_id = Some(receipt.invocation_id.clone());
                         let chunk = remote_stream_chunk(RemoteStreamChunkParts {
-                            invocation_id: fallback_invocation_id.clone(),
+                            invocation_id: receipt.invocation_id.clone(),
+                            selected_node_id: route_ura.clone(),
+                            state: easynet_axon::invocation::InvocationState::Running,
+                            payload: Vec::new(),
+                            sequence,
+                            terminal: false,
+                            admission_receipt: Some(receipt),
+                            terminal_receipt: None,
+                            error: None,
+                        });
+                        sequence = sequence.saturating_add(1);
+                        if tx.send(Ok(chunk)).await.is_err() {
+                            break;
+                        }
+                    }
+                    DispatchStreamEvent::Chunk(payload) => {
+                        if let Err(status) = finalization.observe_data() {
+                            let _ = tx.send(Err(status)).await;
+                            break;
+                        }
+                        let Some(invocation_id) = canonical_invocation_id.clone() else {
+                            let _ = tx
+                                .send(Err(Status::failed_precondition(
+                                    "CANONICAL_ADMISSION_REQUIRED: remote stream data arrived before admission receipt",
+                                )))
+                                .await;
+                            break;
+                        };
+                        let chunk = remote_stream_chunk(RemoteStreamChunkParts {
+                            invocation_id,
                             selected_node_id: route_ura.clone(),
                             state: easynet_axon::invocation::InvocationState::Running,
                             payload,
                             sequence,
                             terminal: false,
+                            admission_receipt: None,
                             terminal_receipt: None,
                             error: None,
                         });
@@ -628,29 +767,47 @@ impl StreamDispatcher {
                     }
                     DispatchStreamEvent::Terminal(result) => {
                         let DispatchResult {
-                            payload,
-                            receipt,
+                            payload: _,
+                            admission_receipt,
+                            terminal_receipt,
                             error,
-                            failure,
-                            request_id,
+                            failure: _,
+                            request_id: _,
                         } = *result;
-                        let state = if error.is_some() {
-                            easynet_axon::invocation::InvocationState::Failed
-                        } else {
-                            easynet_axon::invocation::InvocationState::Completed
+                        if let Some(error) = error.filter(|_| terminal_receipt.is_none()) {
+                            let _ = tx
+                                .send(Err(Status::unavailable(format!(
+                                    "remote stream transport failed: {error}"
+                                ))))
+                                .await;
+                            break;
+                        }
+                        let Some(terminal_receipt) = terminal_receipt else {
+                            let _ = tx
+                                .send(Err(Status::failed_precondition(
+                                    "CANONICAL_TERMINAL_RECEIPT_REQUIRED: remote stream ended without a terminal checkpoint",
+                                )))
+                                .await;
+                            break;
                         };
-                        let invocation_id = request_id
-                            .filter(|request_id| !request_id.trim().is_empty())
-                            .unwrap_or_else(|| fallback_invocation_id.clone());
+                        let finalized =
+                            match finalization.finalize(admission_receipt, terminal_receipt) {
+                                Ok(finalized) => finalized,
+                                Err(status) => {
+                                    let _ = tx.send(Err(status)).await;
+                                    break;
+                                }
+                            };
                         let chunk = remote_stream_chunk(RemoteStreamChunkParts {
-                            invocation_id,
+                            invocation_id: finalized.terminal_receipt.invocation_id.clone(),
                             selected_node_id: route_ura.clone(),
-                            state,
-                            payload,
+                            state: finalized.terminal_state,
+                            payload: finalized.output,
                             sequence,
                             terminal: true,
-                            terminal_receipt: receipt,
-                            error: remote_stream_error(error, failure),
+                            admission_receipt: None,
+                            terminal_receipt: Some(finalized.terminal_receipt),
+                            error: finalized.failure,
                         });
                         let _ = tx.send(Ok(chunk)).await;
                         break;
@@ -667,7 +824,7 @@ impl StreamDispatcher {
     async fn resolve_stream_route(
         &self,
         request: &InvokeServerStreamRequest,
-    ) -> Result<SelectedInvokeRoute, Status> {
+    ) -> Result<CanonicalRouteSelection, Status> {
         let target_ura = local_stream_target_ura(request)?;
         let ability = request.function_name.trim();
         if ability.is_empty() {
@@ -676,16 +833,18 @@ impl StreamDispatcher {
             ));
         }
 
-        let selected_route = self
+        let selection = self
             .gate
             .route_resolver()
             .await
-            .resolve_route(&target_ura, ability)
+            .resolve_canonical_route(&target_ura, ability, CallMode::Stream)
             .map_err(route_negative_status)?;
-        if !selected_route.is_authoritative_local_or_better() {
-            return Err(route_profile_blocked_status(&selected_route));
+        if let CanonicalRouteDispatch::Local(selected_route) = selection.dispatch() {
+            if !selected_route.is_authoritative_local_or_better() {
+                return Err(route_profile_blocked_status(selected_route));
+            }
         }
-        Ok(selected_route)
+        Ok(selection)
     }
 }
 
@@ -726,6 +885,7 @@ struct RemoteStreamChunkParts {
     payload: Vec<u8>,
     sequence: u64,
     terminal: bool,
+    admission_receipt: Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
     terminal_receipt: Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
     error: Option<Error>,
 }
@@ -745,42 +905,10 @@ fn remote_stream_chunk(parts: RemoteStreamChunkParts) -> InvokeStreamChunk {
         payload: parts.payload,
         sequence: parts.sequence,
         terminal: parts.terminal,
+        admission_receipt: parts.admission_receipt,
         terminal_receipt: parts.terminal_receipt,
         error: parts.error,
         ..InvokeStreamChunk::default()
-    }
-}
-
-fn remote_stream_error(
-    error: Option<String>,
-    failure: Option<crate::daemon::invocation::bidi::state::session_failure::SessionFailure>,
-) -> Option<Error> {
-    match (failure, error) {
-        (Some(failure), _) => Some(Error {
-            code: failure.code,
-            message: failure.message,
-            retryable: failure.retryable,
-            stage: failure.stage,
-            security_class: failure.security_class,
-            ..Error::default()
-        }),
-        (None, Some(message)) => {
-            let failure =
-                crate::daemon::invocation::bidi::state::session_failure::SessionFailure::from_reason(
-                    message,
-                    "INVOCATION_FAILED",
-                    false,
-                );
-            Some(Error {
-                code: failure.code,
-                message: failure.message,
-                retryable: failure.retryable,
-                stage: failure.stage,
-                security_class: failure.security_class,
-                ..Error::default()
-            })
-        }
-        (None, None) => None,
     }
 }
 

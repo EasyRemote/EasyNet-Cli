@@ -141,13 +141,9 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_NAMESPACE_RESOLVE,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{wrap_json_response, BoxedDownStream};
-use crate::daemon::invocation::dispatch::unary_dispatcher::{
-    is_runtime_admin_ability, UnaryDispatcher,
-};
-use crate::daemon::invocation::receipts::ledger_projection::build_unary_ledger_record;
+use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
 use crate::daemon::invocation::streams::stream_dispatcher::StreamDispatcher;
 
-use crate::daemon::federation::directory::now_unix_ms;
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     PendingDispatchMap, PendingStreamDispatchMap,
 };
@@ -395,6 +391,10 @@ pub struct DaemonInvocationService {
     /// Local execution + audit plane: Axon LocalRuntime, invocation
     /// ledger, bidi wire registry. See [`RuntimePlane`].
     runtime: RuntimePlane,
+    /// Exact-route provider installation lifecycle shared by every clone of
+    /// this service. The cell transitions once from uninitialized to either a
+    /// fully registered owner or a terminal installation failure.
+    daemon_unary_route_registration: Arc<tokio::sync::OnceCell<Result<String, String>>>,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -471,6 +471,7 @@ impl DaemonInvocationService {
                 ability_catalog: Arc::new(
                     crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
                 ),
+                local_ability_catalog: None,
                 federated_directory:
                     crate::daemon::federation::directory::SharedFederatedDirectoryView::default(),
                 federated_bindings: None,
@@ -497,7 +498,9 @@ impl DaemonInvocationService {
                 local_runtime: None,
                 invocation_ledger: None,
                 ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
+                cancellations: Default::default(),
             },
+            daemon_unary_route_registration: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -522,40 +525,15 @@ impl DaemonInvocationService {
         self
     }
 
-    fn record_unary_invocation(
-        &self,
-        request: &InvokeRequest,
-        started_unix_ms: i64,
-        result: &Result<Response<InvokeResponse>, Status>,
-    ) {
-        let Some(ledger) = self.runtime.invocation_ledger.as_ref() else {
-            return;
-        };
-        let completed_unix_ms = now_unix_ms();
-        let record =
-            match build_unary_ledger_record(request, started_unix_ms, completed_unix_ms, result) {
-                Ok(record) => record,
-                Err(err) => {
-                    let err_msg = format!("{err}");
-                    crate::op_event!(
-                        component = daemon_invocation,
-                        kind = ledger_record_skipped,
-                        shape = "unary",
-                        error = err_msg,
-                    );
-                    return;
-                }
-            };
-        if let Err(err) = ledger.put(&record) {
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = daemon_invocation,
-                kind = ledger_write_failed,
-                shape = "unary",
-                invocation_ura = record.invocation_ura,
-                error = err_msg,
-            );
-        }
+    /// Attach the process-wide live ability control plane used by both local
+    /// route admission and directory publication.
+    #[must_use]
+    pub fn with_local_ability_catalog(
+        mut self,
+        catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    ) -> Self {
+        self.directory.local_ability_catalog = Some(catalog);
+        self
     }
 
     /// Side-effect-free `invocation.record.get`: fetch one ledger record by
@@ -632,7 +610,6 @@ impl DaemonInvocationService {
             self.directory.clone(),
             self.federation.clone(),
             self.identity.clone(),
-            self.runtime.clone(),
         )
     }
 
@@ -660,6 +637,98 @@ impl DaemonInvocationService {
             self.runtime.clone(),
             self.target_gate(),
         )
+    }
+
+    /// Install the complete exact unary route family into the shared runtime.
+    /// Boot calls this only after all product planes have reached their final
+    /// configuration and before either listener becomes reachable.
+    pub(crate) async fn register_daemon_unary_routes(
+        &self,
+        owner_ura: &str,
+    ) -> Result<(), easynet_axon::invocation::AxonError> {
+        let owner_ura = owner_ura.trim();
+        if owner_ura.is_empty() {
+            return Err(easynet_axon::invocation::AxonError::invalid_argument(
+                "daemon unary route owner URA must not be empty",
+            ));
+        }
+        let registration = self
+            .daemon_unary_route_registration
+            .get_or_init(|| async {
+                let runtime = self.runtime.local_runtime.as_ref().ok_or_else(|| {
+                    "daemon unary route registration requires shared LocalRuntime".to_string()
+                })?;
+                let catalog = self.directory.local_ability_catalog.as_ref().ok_or_else(|| {
+                    "daemon unary route registration requires live ability catalog".to_string()
+                })?;
+                let unary = self.unary_dispatcher();
+                crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
+                    Arc::clone(runtime),
+                    self.runtime.cancellations.clone(),
+                )
+                .register(owner_ura, catalog.as_ref(), unary.daemon_route_provider())
+                .await
+                .map_err(|error| error.to_string())?;
+                Ok(owner_ura.to_string())
+            })
+            .await;
+        match registration {
+            Ok(registered_owner) if registered_owner == owner_ura => Ok(()),
+            Ok(registered_owner) => Err(easynet_axon::invocation::AxonError::invalid_argument(
+                format!(
+                    "daemon unary routes are registered for `{registered_owner}`, not `{owner_ura}`"
+                ),
+            )),
+            Err(error) => Err(easynet_axon::invocation::AxonError::internal(format!(
+                "daemon unary route registration failed: {error}"
+            ))),
+        }
+    }
+
+    async fn dispatch_daemon_unary_route(
+        &self,
+        route: DaemonUnaryRoute,
+        request: &InvokeRequest,
+        ingress: crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteIngress,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        self.unary_dispatcher()
+            .dispatch_daemon_route_runtime(route, request, ingress)
+            .await
+    }
+
+    fn daemon_route_ingress(
+        &self,
+        route: DaemonUnaryRoute,
+        request: &InvokeRequest,
+    ) -> Result<crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteIngress, Status>
+    {
+        use crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteIngress;
+
+        let envelope = request.envelope.as_ref().ok_or_else(|| {
+            Status::invalid_argument(format!("{}: envelope is required", route.name()))
+        })?;
+        let caller_ura = envelope
+            .caller
+            .as_ref()
+            .map(|caller| caller.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(format!("{}: envelope caller is required", route.name()))
+            })?;
+
+        if caller_ura.starts_with("provisional:") {
+            let proof = crate::daemon::invocation::dispatch::daemon_route_runtime::ProvisionalJoinProof::verify(
+                route, request,
+            )?;
+            return Ok(DaemonRouteIngress::Bootstrap(proof));
+        }
+
+        if envelope.caller_signature.is_none()
+            && self.admission.accepts_loopback_envelope(Some(envelope))
+        {
+            return Ok(DaemonRouteIngress::TrustedLocalSystem);
+        }
+        Ok(DaemonRouteIngress::ExternalSigned)
     }
 
     /// `InvokeBidi` routing surface (commit-plan-2 E2). pub(crate) so
@@ -867,6 +936,15 @@ impl DaemonInvocationService {
         self
     }
 
+    #[must_use]
+    pub fn with_invocation_cancellation_registry(
+        mut self,
+        registry: crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
+    ) -> Self {
+        self.runtime.cancellations = registry;
+        self
+    }
+
     /// Attach the daemon-owned wire profile registry used for local bidi
     /// dispatch. Boot computes this after plugin load planning.
     #[must_use]
@@ -992,165 +1070,60 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let inner = request.into_inner();
-        let started_unix_ms = now_unix_ms();
-        if let Err(err) = self.admission.verify_invoke(&inner) {
-            let result: Result<Response<InvokeResponse>, Status> = Err(err);
-            self.record_unary_invocation(&inner, started_unix_ms, &result);
-            return result;
-        }
         let function = inner.function_name.as_str();
         let route_function =
             dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
+        let daemon_route = DaemonUnaryRoute::from_function(&route_function);
+        let daemon_route_ingress = if let Some(route) = daemon_route {
+            Some(self.daemon_route_ingress(route, &inner)?)
+        } else {
+            self.admission.verify_invoke(&inner)?;
+            None
+        };
         // #185: meter the caller after the transport policy gate. This
         // is not an Axon runtime-admitted token; descriptor-bound local
         // dispatch still enters LocalRuntime through public Axon
         // admission below. A throttled caller is rejected here with
         // `ResourceExhausted` before any dispatch work.
-        let rate_limit = if quota_meters_request(&inner) {
+        let rate_limit = if daemon_route.is_none() && quota_meters_request(&inner) {
             match self.admission.check_quota(&inner) {
                 Ok(info) => info,
-                Err(err) => {
-                    let result: Result<Response<InvokeResponse>, Status> = Err(err);
-                    self.record_unary_invocation(&inner, started_unix_ms, &result);
-                    return result;
-                }
+                Err(err) => return Err(err),
             }
         } else {
             None
         };
 
-        // Phase 5e: flag set by the Axon-routed catch-all arm so we
-        // skip the manual `record_unary_invocation` call below
-        // (otherwise the LedgerSink write + manual write produce two
-        // rows for the same call).
         let unary = self.unary_dispatcher();
-        let mut axon_took_it = false;
-        // Set by the side-effect-free `invocation.record.get` read arm: it
-        // observes the ledger without dispatching, so it must write NO ledger
-        // row (neither the Axon LedgerSink nor the manual `record_unary_invocation`
-        // path). Distinct from `axon_took_it`, which means "Axon already wrote a
-        // row" — here nothing should be written at all.
-        let mut skip_ledger_record = false;
         let result = if route_function == ABILITY_INVOCATION_RECORD_GET {
-            skip_ledger_record = true;
             self.dispatch_invocation_record_get(&inner.arguments)
         } else if route_function == ABILITY_TRACE_GET {
-            skip_ledger_record = true;
             self.dispatch_invocation_trace_get(&inner.arguments)
         } else {
-            match DaemonUnaryRoute::from_function(&route_function) {
-                Some(DaemonUnaryRoute::FederationJoin) => {
-                    unary.dispatch_federation_join(&inner.arguments)
-                }
-                Some(DaemonUnaryRoute::FederationAdvertiseAgent) => {
-                    unary.dispatch_federation_advertise_agent(
-                        &inner.arguments,
-                        inner.envelope.as_ref(),
+            match daemon_route {
+                Some(route) => {
+                    self.dispatch_daemon_unary_route(
+                        route,
+                        &inner,
+                        daemon_route_ingress.expect("exact route ingress must be classified"),
                     )
+                    .await
                 }
-                Some(DaemonUnaryRoute::FederationAdvertiseAbilities) => {
-                    unary.dispatch_federation_advertise_abilities(
-                        &inner.arguments,
-                        inner.envelope.as_ref(),
-                    )
-                }
-                Some(DaemonUnaryRoute::FederationHeartbeat) => {
-                    unary.dispatch_federation_heartbeat(&inner.arguments)
-                }
-                Some(DaemonUnaryRoute::FederationStatus) => unary.dispatch_federation_status(),
-                Some(DaemonUnaryRoute::FederationResolve) => {
-                    unary.dispatch_federation_resolve(&inner.arguments)
-                }
-                Some(DaemonUnaryRoute::NamespaceResolve) => {
-                    unary.dispatch_namespace_resolve(&inner.arguments).await
-                }
-                Some(DaemonUnaryRoute::FederationResolveKey) => {
-                    unary.dispatch_federation_resolve_key(&inner.arguments)
-                }
-                Some(DaemonUnaryRoute::FederationDiscover) => {
-                    unary.dispatch_federation_discover(&inner.arguments)
-                }
-                Some(DaemonUnaryRoute::FederationListUserDevices) => unary
-                    .dispatch_federation_list_user_devices(
-                        inner.envelope.as_ref(),
-                        &inner.arguments,
-                    ),
-                Some(DaemonUnaryRoute::FederationProxyListUserDevices) => {
-                    unary
-                        .dispatch_federation_proxy_list_user_devices(
-                            inner.envelope.as_ref(),
-                            &inner.arguments,
-                        )
-                        .await
-                }
-                Some(DaemonUnaryRoute::NamespaceProxyResolve) => {
-                    unary
-                        .dispatch_namespace_proxy_resolve(inner.envelope.as_ref(), &inner.arguments)
-                        .await
-                }
-                Some(DaemonUnaryRoute::FederationRevoke) => {
-                    unary.dispatch_federation_revoke(&inner.arguments)
-                }
-                Some(DaemonUnaryRoute::IdentityRegisterPubkey) => {
-                    unary.dispatch_register_device_pubkey(inner.envelope.as_ref(), &inner.arguments)
-                }
-                Some(DaemonUnaryRoute::IdentityRevokeUserPubkey) => {
-                    unary.dispatch_revoke_user_pubkey(inner.envelope.as_ref(), &inner.arguments)
-                }
-                Some(DaemonUnaryRoute::IdentityListUserPubkeys) => {
-                    unary.dispatch_list_user_pubkeys(&inner.arguments)
-                }
-                Some(
-                    DaemonUnaryRoute::PrincipalCreate
-                    | DaemonUnaryRoute::PrincipalBindFirstKey
-                    | DaemonUnaryRoute::PrincipalAddKey
-                    | DaemonUnaryRoute::PrincipalRotateKey
-                    | DaemonUnaryRoute::PrincipalRevokeKey
-                    | DaemonUnaryRoute::PrincipalConfigureRecovery
-                    | DaemonUnaryRoute::PrincipalRecover
-                    | DaemonUnaryRoute::PrincipalSuspend
-                    | DaemonUnaryRoute::PrincipalReactivate
-                    | DaemonUnaryRoute::PrincipalDelete
-                    | DaemonUnaryRoute::PrincipalIssueEnrollment
-                    | DaemonUnaryRoute::PrincipalRevokeEnrollment
-                    | DaemonUnaryRoute::PrincipalIssueGrant
-                    | DaemonUnaryRoute::PrincipalRevokeGrant
-                    | DaemonUnaryRoute::PrincipalGet,
-                ) => unary.dispatch_principal_lifecycle(&route_function, &inner.arguments),
                 None if DaemonStreamRoute::from_function(&route_function).is_some() => {
                     Err(Status::invalid_argument(format!(
                         "{route_function} is a server-stream ability and must be invoked via InvokeStream, not Invoke"
                     )))
                 }
-                // `runtime.*` are node-internal admin handshakes hosted by the
-                // receiving daemon, not owner-routed abilities. Dispatch them
-                // directly on the LocalRuntime so a hub-owner callee URA does
-                // not get rejected as `NXDOMAIN owner is not online`.
-                None if is_runtime_admin_ability(&route_function) => {
-                    unary
-                        .dispatch_runtime_admin_ability(&inner, &route_function)
-                        .await
-                }
                 // Catch-all user abilities must pass through namespace.resolve
                 // before Axon LocalRuntime dispatch. The runtime executes the
                 // selected route; it is not a resolver fallback.
-                //
-                // `axon_took_it` gates the post-dispatch
-                // `record_unary_invocation` so we don't write a duplicate
-                // ledger row for calls Axon already persisted via
-                // `LedgerSink`. Federation-wrapper arms above still run
-                // the manual record path because they are explicit service
-                // handlers rather than LocalRuntime ability dispatches.
                 None => {
-                    let (r, axon) = unary.dispatch_local_rpc_selected_route(&inner).await;
-                    axon_took_it = axon;
+                    let (r, _runtime_started) =
+                        unary.dispatch_local_rpc_selected_route(&inner).await;
                     r
                 }
             }
         };
-        if !axon_took_it && !skip_ledger_record {
-            self.record_unary_invocation(&inner, started_unix_ms, &result);
-        }
         // #185: attach the caller's post-decrement quota status to the
         // successful response in one place, rather than threading it
         // through every dispatch arm's `InvokeResponse` builder. `None`

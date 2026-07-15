@@ -4221,16 +4221,13 @@ impl AxonAbilityCatalog {
             .slots(key)
     }
 
-    /// Register an RPC handler under `ability` with explicit owner.
-    /// Replaces any prior handler at the same key — the daemon owns
-    /// this registry and is the only writer, so accidental duplicate
-    /// registration would be a bug at startup, not a race.
+    /// Register an RPC handler under `ability` with an explicit owner.
     ///
-    /// **M0 of the system-namespace migration.** New call sites
-    /// must use this variant; the legacy [`register_rpc`] is a
-    /// transitional shim that defaults `owner` to
-    /// [`OwnerKind::Device`]. Once every call site has migrated
-    /// (M0 commit 6) the shim is deleted.
+    /// This is the static registration facade for descriptor-governed local
+    /// handlers that do not need an imported manifest. Ownership is declared by
+    /// the caller and is written into the control plane through
+    /// [`StaticRegistration`]; there is no owner-inference fallback at this
+    /// boundary.
     pub fn register_rpc_with_owner(
         &mut self,
         ability: impl Into<String>,
@@ -4372,8 +4369,8 @@ impl AxonAbilityCatalog {
         )
     }
 
-    /// Register a stream handler with explicit owner. See
-    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    /// Register a stream handler under `ability` with an explicit owner.
+    /// See [`register_rpc_with_owner`] for the static registration contract.
     pub fn register_stream_with_owner(
         &mut self,
         ability: impl Into<String>,
@@ -4387,8 +4384,8 @@ impl AxonAbilityCatalog {
         ));
     }
 
-    /// Register a bidi handler with explicit owner. See
-    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    /// Register a bidi handler under `ability` with an explicit owner.
+    /// See [`register_rpc_with_owner`] for the static registration contract.
     pub fn register_bidi_with_owner(
         &mut self,
         ability: impl Into<String>,
@@ -4439,10 +4436,9 @@ impl AxonAbilityCatalog {
         );
     }
 
-    /// Register an envelope-aware RPC handler with explicit owner.
-    /// See [`register_rpc_with_owner`] for the M0 migration
-    /// rationale and [`register_rpc_with_envelope`] for the
-    /// envelope-context contract.
+    /// Register an envelope-aware RPC handler under `ability` with an explicit
+    /// owner. See [`register_rpc_with_owner`] for the static registration
+    /// contract.
     pub fn register_rpc_with_envelope_and_owner(
         &mut self,
         ability: impl Into<String>,
@@ -4517,8 +4513,9 @@ impl AxonAbilityCatalog {
         )
     }
 
-    /// Envelope-aware stream variant with explicit owner. See
-    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    /// Register an envelope-aware stream handler under `ability` with an
+    /// explicit owner. See [`register_rpc_with_owner`] for the static
+    /// registration contract.
     pub fn register_stream_with_envelope_and_owner(
         &mut self,
         ability: impl Into<String>,
@@ -4588,8 +4585,9 @@ impl AxonAbilityCatalog {
         )
     }
 
-    /// Envelope-aware bidi variant with explicit owner. See
-    /// [`register_rpc_with_owner`] for the M0 migration rationale.
+    /// Register an envelope-aware bidi handler under `ability` with an explicit
+    /// owner. See [`register_rpc_with_owner`] for the static registration
+    /// contract.
     pub fn register_bidi_with_envelope_and_owner(
         &mut self,
         ability: impl Into<String>,
@@ -4660,10 +4658,9 @@ impl AxonAbilityCatalog {
     }
 
     /// Control-plane read-through for an ability's `OwnerKind`, derived from
-    /// the canonical control-plane record rather than the legacy `owner`
-    /// side table (SPEC §9.1.A: handler maps and side tables become an
-    /// execution index; owner/authority/manifest truth lives in the
-    /// control-plane registry).
+    /// the canonical control-plane record rather than the execution index
+    /// (SPEC §9.1.A: handler maps are only executable bindings;
+    /// owner/authority/manifest truth lives in the control-plane registry).
     ///
     /// The `OwnerKind` is reconstructed from the record's authority
     /// `owner_projection` — the exact string `OwnerKind::authority_scope`
@@ -4671,8 +4668,8 @@ impl AxonAbilityCatalog {
     /// `user:<id>`). This is the precise inverse of the registration
     /// mapping: no Ability-URA round-trip and no owner-class policy (the
     /// MCP reflective path's System-Agent rejection does not apply to
-    /// general ownership). A missing record yields `None` rather than
-    /// falling back to a legacy owner table.
+    /// general ownership). A missing record yields `None` rather than guessing
+    /// from the ability name or execution handlers.
     pub fn control_plane_owner(&self, ability: &str) -> Option<OwnerKind> {
         let record = self
             .control_plane
