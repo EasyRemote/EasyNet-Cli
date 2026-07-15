@@ -337,7 +337,6 @@ from .runtime_events import (
 from .runtime_identity import (
     DaemonKeyringSignatureProvider,
     RuntimeSigningIdentity,
-    default_runtime_keyring_socket_path,
     ensure_runtime_signing_identity,
     load_runtime_signing_identity,
 )
@@ -663,7 +662,6 @@ __all__ = [
     "connect_runtime_local",
     "default_control_path",
     "default_environment",
-    "default_runtime_keyring_socket_path",
     "device_ability_ura",
     "device_agent_ura",
     "device_ura",

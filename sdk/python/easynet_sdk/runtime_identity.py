@@ -33,16 +33,6 @@ from .signing import SignatureProvider, SigningMaterial
 _T = TypeVar("_T")
 
 
-def default_runtime_keyring_socket_path() -> str:
-    """Retained API that rejects product endpoint discovery.
-
-    A generic runtime SDK cannot infer a product daemon endpoint. Consumers
-    must obtain it from their own daemon lifecycle and pass it explicitly.
-    """
-
-    raise _invalid("daemon key-service endpoint must be supplied by the product runtime")
-
-
 @dataclass(frozen=True)
 class RuntimeSigningIdentity:
     """Opaque capability for one runtime owner URA."""

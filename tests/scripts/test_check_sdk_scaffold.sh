@@ -74,6 +74,7 @@ make_sandbox() {
     check-sdk-package-metadata.sh \
     check-sdk-parity-matrix.sh \
     check-sdk-product-smokes.sh \
+    check-python-sdk-static-contract.sh \
     check-sdk-receipt-ura-boundary.sh \
     check-sdk-scaffold.sh \
     check-sdk-ura-naming.sh \

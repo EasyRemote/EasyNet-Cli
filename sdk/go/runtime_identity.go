@@ -83,13 +83,6 @@ type EnsureRuntimeSigningIdentityRequest struct {
 	Timeout    time.Duration
 }
 
-// DefaultRuntimeIdentitySocketPath is retained for source compatibility.
-// Generic SDKs do not own product endpoint discovery, so callers must obtain
-// and pass the daemon endpoint through their product runtime lifecycle.
-func DefaultRuntimeIdentitySocketPath() (string, error) {
-	return "", invalidDaemonKeyServiceInput("daemon key-service endpoint must be supplied by the product runtime")
-}
-
 // LoadRuntimeSigningIdentity resolves an existing identity without reading a
 // keyring file or materializing private-key bytes in the facade process.
 func LoadRuntimeSigningIdentity(req RuntimeSigningIdentityRequest) (RuntimeSigningIdentity, error) {

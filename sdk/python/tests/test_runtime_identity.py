@@ -7,7 +7,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from easynet_sdk import ErrorCode, SDKError
 from easynet_sdk.runtime_identity import (
-    default_runtime_keyring_socket_path,
     ensure_runtime_signing_identity,
     load_runtime_signing_identity,
 )
@@ -16,11 +15,6 @@ from key_service_fake import KeyServiceServer
 
 class RuntimeIdentityTests(unittest.TestCase):
     def test_runtime_identity_requires_explicit_daemon_endpoint(self) -> None:
-        with self.assertRaises(SDKError) as caught:
-            default_runtime_keyring_socket_path()
-        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
-        self.assertEqual(caught.exception.stage, "runtime_identity")
-
         for socket_path in ("", " \t\n "):
             with self.subTest(socket_path=socket_path):
                 with self.assertRaises(SDKError) as caught:

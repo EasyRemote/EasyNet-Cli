@@ -530,7 +530,6 @@
       "DefaultDirectoryPageLimit",
       "DefaultReceiptHistoryLimit",
       "DefaultRuntimeEventPageLimit",
-      "DefaultRuntimeIdentitySocketPath",
       "DelegationMetadataKey",
       "DelegationProof",
       "DelegationProofRaw",
@@ -1228,7 +1227,6 @@
       "connect_runtime_local",
       "default_control_path",
       "default_environment",
-      "default_runtime_keyring_socket_path",
       "device_ability_ura",
       "device_agent_ura",
       "device_ura",
@@ -14607,7 +14605,6 @@
           "RuntimeIdentityProjection",
           "RuntimeSigningIdentity",
           "SignerHandle",
-          "default_runtime_keyring_socket_path",
           "ensure_runtime_signing_identity",
           "load_runtime_signing_identity",
           "read_runtime_identity_projection",
@@ -17703,7 +17700,6 @@
       "DefaultDirectoryPageLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
       "DefaultReceiptHistoryLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
       "DefaultRuntimeEventPageLimit": "4bdfbcc03de0e1be3f60c602ba79892450166e1ffe081579cf06515f0e98a273",
-      "DefaultRuntimeIdentitySocketPath": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b",
       "DelegationMetadataKey": "56696799396929ef16b64b09ee25ef286e203c3f4193bc1de230aa61ee4761b6",
       "DelegationProof": "1cee37f3cdb4a0d2dd00cb52274a04ccab30ba358c6d0339e3165292fe2e81f4",
       "DelegationProof.Audience": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -21153,7 +21149,6 @@
       "connect_runtime_local": "9907baeff8fbb2efd7801f774820408fc4e3ae210e123c86f9b50dec42bd8863",
       "default_control_path": "e93c7f1650e986b22a27b3388f97fc76db7ef2e19bcfc2784ede21b75ed6317b",
       "default_environment": "c798fa0fd4fe2df5c844cb3a81a2234a65c9ed54cd374edefab4b43a873a6f55",
-      "default_runtime_keyring_socket_path": "469305cd8350c1c7e4aa009be46eddeabe8688fefdc0ba15fec68bcedeb16cd3",
       "device_ability_ura": "571198e9cfdbf6e5ca907c511d708fc6cfc9e9977abb3a599a58edcf6817f9b4",
       "device_agent_ura": "8f5bf65b0873da56e5102cbd7d706baccca8776bc285f291f1f5ae50dfb868e5",
       "device_ura": "f59d5c8986440de8937ffb8761344b8f72c143af056f386d97cc37d363067062",
@@ -22679,15 +22674,6 @@
     {
       "language": "go",
       "section": "symbols",
-      "item": "DefaultRuntimeIdentitySocketPath",
-      "parent_capability": "runtime_identity",
-      "role": "configuration_limit",
-      "shape_sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b",
-      "shape_group": "configuration_limit:defaultruntimeidentitysocketpath"
-    },
-    {
-      "language": "go",
-      "section": "symbols",
       "item": "MaxBidiBufferedFrames",
       "parent_capability": "bidi",
       "role": "configuration_limit",
@@ -23368,29 +23354,6 @@
       "missing_languages": [
         "rust",
         "c_abi",
-        "node",
-        "java",
-        "swift"
-      ]
-    },
-    "configuration_limit:defaultruntimeidentitysocketpath": {
-      "parent_capability": "runtime_identity",
-      "role": "configuration_limit",
-      "members": [
-        {
-          "language": "go",
-          "section": "symbols",
-          "item": "DefaultRuntimeIdentitySocketPath",
-          "shape_sha256": "d0e696d61e60a01ffa0f71f3c010905126a9a2416d9d4afd670d223ad46f490b"
-        }
-      ],
-      "present_languages": [
-        "go"
-      ],
-      "missing_languages": [
-        "rust",
-        "c_abi",
-        "python",
         "node",
         "java",
         "swift"

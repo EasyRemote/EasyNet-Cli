@@ -14,10 +14,6 @@ import (
 )
 
 func TestRuntimeSigningIdentityRequiresExplicitDaemonEndpoint(t *testing.T) {
-	if _, err := DefaultRuntimeIdentitySocketPath(); !IsCode(err, ErrInvalidArgument) {
-		t.Fatalf("DefaultRuntimeIdentitySocketPath error = %v, want INVALID_ARGUMENT", err)
-	}
-
 	for _, socketPath := range []string{"", " \t\n "} {
 		_, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
 			OwnerURA:   "easynet:///r/acme/hub",
