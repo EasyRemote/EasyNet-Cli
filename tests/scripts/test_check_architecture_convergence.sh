@@ -54,7 +54,9 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/automation" \
     "$CLI/src/daemon/ability/builtins/agents" \
     "$CLI/src/daemon/execution/mission" \
+    "$CLI/src/daemon/ability/builtins/governance" \
     "$CLI/src/daemon/ability/builtins/resources" \
+    "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/invocation/dispatch" \
     "$CLI/sdk/python/easynet_sdk" \
     "$AXON/core/runtime-rs/src/services/invocation" \
@@ -116,6 +118,94 @@ use easynet_axon::{
 
 fn register(reg: &mut Catalog) {
     reg.register_rpc_with_owner("voice.list_calls", OwnerKind::Hub, handler);
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/governance/access_control.rs" <<'EOF'
+fn revoke_handler(args: Value) -> anyhow::Result<Value> {
+    let request: RevokeRequest = serde_json::from_value(args)?;
+    let owner_user_id = owner_user_id_from_mutation_boundary(request.owner_ura.as_deref())?;
+    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
+    let mut store = AccessControlStore::open_or_create(owner_user_id.clone())?;
+    let grant = store.revoke_grant(&request.grant_id, &owner_user_id, actor_ura, request.reason)?;
+    Ok(json!({ "grant": grant }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevokeRequest {
+    grant_id: String,
+    #[serde(default)]
+    owner_ura: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    actor_ura: Option<String>,
+}
+
+fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
+    let actor_ura = actor_ura
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("actor_ura is required for an audited mutation"))?;
+    parse_ura(actor_ura)
+        .map_err(|err| anyhow::anyhow!("actor_ura must be a canonical URA: {err}"))?;
+    Ok(actor_ura)
+}
+EOF
+  cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'
+enum PublicationRecoveryOwner {
+    None,
+    UpstreamSession,
+    Unsupported,
+}
+
+struct InvocationModeCapabilities {
+    device_identity: bool,
+    hub_runtime: bool,
+    publication_recovery: PublicationRecoveryOwner,
+}
+
+impl InvocationModeCapabilities {
+    fn for_mode(mode: DaemonMode) -> Self {
+        match mode {
+            DaemonMode::Device => Self {
+                device_identity: true,
+                hub_runtime: false,
+                publication_recovery: PublicationRecoveryOwner::UpstreamSession,
+            },
+            DaemonMode::Hub => Self {
+                device_identity: false,
+                hub_runtime: true,
+                publication_recovery: PublicationRecoveryOwner::None,
+            },
+            DaemonMode::Both => Self {
+                device_identity: true,
+                hub_runtime: true,
+                publication_recovery: PublicationRecoveryOwner::Unsupported,
+            },
+        }
+    }
+
+    fn validate(self, mode: DaemonMode) -> anyhow::Result<()> {
+        if self.device_identity && self.publication_recovery == PublicationRecoveryOwner::Unsupported {
+            anyhow::bail!("{} mode has no owner; refusing before lifecycle mutation", mode.as_str());
+        }
+        Ok(())
+    }
+
+    fn owns_upstream_session(self) -> bool {
+        self.publication_recovery == PublicationRecoveryOwner::UpstreamSession
+    }
+}
+
+fn start_daemon_invocation_transport(config: DaemonConfig) -> anyhow::Result<()> {
+    let capabilities = InvocationModeCapabilities::for_mode(config.mode());
+    capabilities.validate(config.mode())?;
+    if capabilities.owns_upstream_session() {
+        register_purge_recovery_on_outbox_ready(outbox, registrar);
+    }
+    recover_pending_purge_on_boot(registrar)?;
+    Ok(())
 }
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/receipt_projection.rs" <<'EOF'
@@ -510,6 +600,92 @@ EOF
 expect_fail \
   "daemon exact route runtime owner fork" \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'
+enum PublicationRecoveryOwner {
+    None,
+    UpstreamSession,
+    Unsupported,
+}
+
+struct InvocationModeCapabilities {
+    device_identity: bool,
+    hub_runtime: bool,
+    publication_recovery: PublicationRecoveryOwner,
+}
+
+impl InvocationModeCapabilities {
+    fn for_mode(mode: DaemonMode) -> Self {
+        match mode {
+            DaemonMode::Device => Self {
+                device_identity: true,
+                hub_runtime: false,
+                publication_recovery: PublicationRecoveryOwner::UpstreamSession,
+            },
+            DaemonMode::Hub => Self {
+                device_identity: false,
+                hub_runtime: true,
+                publication_recovery: PublicationRecoveryOwner::None,
+            },
+            DaemonMode::Both => Self {
+                device_identity: true,
+                hub_runtime: true,
+                publication_recovery: PublicationRecoveryOwner::UpstreamSession,
+            },
+        }
+    }
+
+    fn validate(self, mode: DaemonMode) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn owns_upstream_session(self) -> bool {
+        self.publication_recovery == PublicationRecoveryOwner::UpstreamSession
+    }
+}
+
+fn start_daemon_invocation_transport(config: DaemonConfig) -> anyhow::Result<()> {
+    let capabilities = InvocationModeCapabilities::for_mode(config.mode());
+    if capabilities.owns_upstream_session() {
+        register_purge_recovery_on_outbox_ready(outbox, registrar);
+    }
+    recover_pending_purge_on_boot(registrar)?;
+    capabilities.validate(config.mode())?;
+    Ok(())
+}
+EOF
+expect_fail \
+  "purge publication mode owner fork" \
+  "R17_PURGE_PUBLICATION_MODE_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/governance/access_control.rs" <<'EOF'
+fn revoke_handler(args: Value) -> anyhow::Result<Value> {
+    let request: RevokeRequest = serde_json::from_value(args)?;
+    let owner_user_id = request.owner_user_id.clone();
+    let actor_ura = request
+        .actor_ura
+        .as_deref()
+        .unwrap_or(owner_user_id.as_str());
+    let mut store = AccessControlStore::open_or_create(owner_user_id.clone())?;
+    let grant = store.revoke_grant(&request.grant_id, &owner_user_id, actor_ura, request.reason)?;
+    Ok(json!({ "grant": grant }))
+}
+
+#[derive(Debug, Deserialize)]
+struct RevokeRequest {
+    grant_id: String,
+    owner_user_id: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    actor_ura: Option<String>,
+}
+EOF
+expect_fail \
+  "access-control actor URA fork" \
+  "R18_ACCESS_CONTROL_ACTOR_URA_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

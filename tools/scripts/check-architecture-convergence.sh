@@ -981,6 +981,158 @@ elif daemon_service.exists() or unary_dispatcher.exists():
     )
 
 
+# Rule 17: device-capable daemon modes must declare exactly one purge
+# publication recovery owner before transport boot can perform lifecycle
+# recovery or expose device-owned mutation routes. `both` is explicitly
+# unsupported until it has a real publication/session owner; treating it like a
+# device or hub silently strands committed purge outbox work.
+boot_invocation = cli_root / "src/daemon/boot/invocation/mod.rs"
+if boot_invocation.exists():
+    text = source(boot_invocation)
+    boot_requirements = (
+        (
+            "enum PublicationRecoveryOwner",
+            "transport boot must model purge publication recovery ownership",
+        ),
+        (
+            "struct InvocationModeCapabilities",
+            "daemon mode capabilities must be explicit before boot wiring",
+        ),
+        (
+            "fn for_mode(mode: DaemonMode) -> Self",
+            "daemon mode capabilities must be derived in one owner",
+        ),
+        (
+            "fn validate(self, mode: DaemonMode) -> anyhow::Result<()>",
+            "unsupported device-capable modes must fail closed before mutation",
+        ),
+        (
+            "fn owns_upstream_session(self) -> bool",
+            "session-owned publication recovery must be a typed capability",
+        ),
+        (
+            "register_purge_recovery_on_outbox_ready",
+            "session readiness must redrive the durable purge publication outbox",
+        ),
+    )
+    for token, detail in boot_requirements:
+        if token not in text:
+            add("R17_PURGE_PUBLICATION_MODE_OWNER_FORK", boot_invocation, 1, detail)
+
+    mode_contracts = (
+        (
+            r"DaemonMode::Device\s*=>\s*Self\s*\{(?:(?!DaemonMode::).)*"
+            r"publication_recovery\s*:\s*PublicationRecoveryOwner::UpstreamSession",
+            "device mode must own purge publication recovery through the upstream session",
+        ),
+        (
+            r"DaemonMode::Hub\s*=>\s*Self\s*\{(?:(?!DaemonMode::).)*"
+            r"publication_recovery\s*:\s*PublicationRecoveryOwner::None",
+            "hub mode must not pretend to own a device purge publication outbox",
+        ),
+        (
+            r"DaemonMode::Both\s*=>\s*Self\s*\{(?:(?!DaemonMode::).)*"
+            r"publication_recovery\s*:\s*PublicationRecoveryOwner::Unsupported",
+            "both mode must fail closed until it owns a purge publication recovery path",
+        ),
+    )
+    for pattern, detail in mode_contracts:
+        match = re.search(pattern, text, re.S)
+        if not match:
+            add("R17_PURGE_PUBLICATION_MODE_OWNER_FORK", boot_invocation, 1, detail)
+
+    validate_offset = text.find("capabilities.validate(config.mode())?")
+    recovery_offset = text.find("recover_pending_purge_on_boot")
+    if validate_offset < 0:
+        add(
+            "R17_PURGE_PUBLICATION_MODE_OWNER_FORK",
+            boot_invocation,
+            1,
+            "transport boot must validate mode capabilities before lifecycle recovery",
+        )
+    elif recovery_offset >= 0 and validate_offset > recovery_offset:
+        add(
+            "R17_PURGE_PUBLICATION_MODE_OWNER_FORK",
+            boot_invocation,
+            line_number(text, validate_offset),
+            "mode capability validation must happen before purge lifecycle recovery",
+        )
+
+
+# Rule 18: audited access-control mutations must be URA-only at the public
+# boundary. A missing actor_ura must fail before store mutation; it must never
+# be inferred from scalar owner_user_id or any nested grant/request DTO.
+access_control = cli_root / "src/daemon/ability/builtins/governance/access_control.rs"
+if access_control.exists():
+    text = source(access_control)
+    access_requirements = (
+        (
+            "fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str>",
+            "access-control mutations need one actor URA validator",
+        ),
+        (
+            "actor_ura is required for an audited mutation",
+            "missing actor_ura must fail closed before mutation",
+        ),
+        (
+            "actor_ura must be a canonical URA",
+            "scalar actor IDs must not be persisted as audit URAs",
+        ),
+        (
+            "let actor_ura = require_actor_ura(request.actor_ura.as_deref())?",
+            "revoke must validate actor_ura through the shared boundary validator",
+        ),
+        (
+            ".revoke_grant(&request.grant_id, &owner_user_id, actor_ura",
+            "revoke audit must persist the validated actor_ura, not a scalar fallback",
+        ),
+    )
+    for token, detail in access_requirements:
+        if token not in text:
+            add("R18_ACCESS_CONTROL_ACTOR_URA_FORK", access_control, 1, detail)
+
+    revoke_match = re.search(r"struct\s+RevokeRequest\s*\{(?P<body>[^}]*)\}", text)
+    if revoke_match is None:
+        add(
+            "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
+            access_control,
+            1,
+            "access-control revoke must have a typed request boundary",
+        )
+    else:
+        prefix = text[max(0, revoke_match.start() - 160) : revoke_match.start()]
+        if "deny_unknown_fields" not in prefix:
+            add(
+                "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
+                access_control,
+                line_number(text, revoke_match.start()),
+                "revoke request must reject scalar compatibility fields",
+            )
+        if re.search(r"\bowner_user_id\b|\bactor_user_id\b", revoke_match.group("body")):
+            add(
+                "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
+                access_control,
+                line_number(text, revoke_match.start()),
+                "revoke request must not expose scalar identity fields",
+            )
+
+    scalar_actor_fallback = re.compile(
+        r"actor_ura[\s\S]{0,160}(?:unwrap_or|unwrap_or_else|or_else)\s*\("
+        r"[\s\S]{0,160}owner_user_id|"
+        r"owner_user_id[\s\S]{0,160}(?:unwrap_or|unwrap_or_else|or_else)\s*\("
+        r"[\s\S]{0,160}actor_ura",
+        re.S,
+    )
+    match = scalar_actor_fallback.search(text)
+    if match:
+        add(
+            "R18_ACCESS_CONTROL_ACTOR_URA_FORK",
+            access_control,
+            line_number(text, match.start()),
+            "audited actor_ura must not fall back to scalar owner_user_id",
+        )
+
+
 if violations:
     for violation in sorted(violations):
         print(

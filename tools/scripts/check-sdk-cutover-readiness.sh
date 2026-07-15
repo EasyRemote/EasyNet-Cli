@@ -57,6 +57,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "EasyRemote boundary self-test" bash "$SELF_DIR/check-easyremote-sdk-boundary.sh" --self-test
   run_gate "backend SDK-only boundary self-test" bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" --self-test
   run_gate "backend route-family coverage self-test" bash "$SELF_DIR/check-backend-route-family-coverage.sh" --self-test
+  run_gate "SDK completion matrix self-test" bash "$SELF_DIR/check-sdk-completion-audit.sh" --self-test
   run_gate "SDK URA naming self-test" bash "$SELF_DIR/check-sdk-ura-naming.sh" --self-test
   run_gate "SDK product-neutrality syntax" bash -n "$SELF_DIR/check-sdk-product-neutrality.sh"
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
@@ -94,6 +95,7 @@ status=0
 
 run_gate "SDK scaffold" bash "$SELF_DIR/check-sdk-scaffold.sh" || status=1
 run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-test || status=1
+run_gate "SDK completion matrix" bash "$SELF_DIR/check-sdk-completion-audit.sh" --matrix-only || status=1
 run_gate "SDK canonical public API" bash "$SELF_DIR/check-sdk-canonical-public-api.sh" || status=1
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_gate "SDK conformance reports" bash "$SELF_DIR/check-sdk-conformance-reports.sh" || status=1
