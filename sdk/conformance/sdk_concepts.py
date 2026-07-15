@@ -21,6 +21,16 @@ CONCEPTS = ROOT / "sdk/conformance/canonical-public-api.json"
 LANGUAGES = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
 PUBLIC_LANGUAGES = LANGUAGES
 STATUSES = ["unsupported", "seam", "provider-backed", "cutover-ready"]
+PACKAGE_CATEGORIES = {
+    "canonical_axon_sdk",
+    "easynet_provider",
+    "generated_wire",
+    "provider_neutral_core",
+    "provider_registry",
+    "public_abi",
+    "public_facade",
+}
+PRODUCT_NEUTRAL_PACKAGE_CATEGORIES = {"provider_neutral_core", "public_facade"}
 
 
 def fail(message: str) -> None:
@@ -32,6 +42,10 @@ def load_json(path: Path = CONCEPTS) -> dict[str, Any]:
     if not isinstance(value, dict):
         fail(f"object_required:{path}")
     return value
+
+
+def package_identity(path: str) -> str:
+    return Path(path).name
 
 
 def case_contracts() -> dict[str, dict[str, Any]]:
@@ -359,12 +373,12 @@ def validate_schema(
             fail(f"canonical_packages_not_unique:{language}")
         for entry in entries:
             path = entry.get("path")
-            if entry.get("category") not in {
-                "canonical_axon_sdk", "public_abi", "public_facade",
-                "provider_neutral_core", "generated_wire", "easynet_provider",
-                "provider_registry",
-            } or not isinstance(path, str):
+            category = entry.get("category")
+            if category not in PACKAGE_CATEGORIES or not isinstance(path, str):
                 fail(f"invalid_canonical_package:{language}")
+            reason = canonical_quarantine_reason(package_identity(path))
+            if reason is not None and category in PRODUCT_NEUTRAL_PACKAGE_CATEGORIES:
+                fail(f"product_branded_canonical_package:{language}:{category}:{path}")
             if check_paths and not (ROOT / path).exists():
                 fail(f"missing_canonical_package:{language}:{path}")
 
@@ -726,6 +740,10 @@ def self_test(tmp: Path) -> None:
     missing_root = copy.deepcopy(concepts)
     missing_root["canonical_packages"]["go"][0]["path"] = "sdk/go/000-missing-core"
     expect(missing_root, "missing_canonical_package", check_paths=True)
+
+    branded_canonical_root = copy.deepcopy(concepts)
+    branded_canonical_root["canonical_packages"]["python"][0]["category"] = "public_facade"
+    expect(branded_canonical_root, "product_branded_canonical_package")
 
     provider_capability_id = (
         "native_runtime" if "native_runtime" in concepts["capabilities"] else capability_id

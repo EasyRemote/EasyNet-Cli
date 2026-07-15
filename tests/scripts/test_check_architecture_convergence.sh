@@ -147,6 +147,23 @@ fn write_mission_meta(path: &Path, meta: &MissionRunMeta) {
     fs::write(tmp_path, serde_json::to_string(meta).unwrap()).unwrap();
 }
 EOF
+  cat >"$CLI/src/daemon/execution/mission/invocation_gateway.rs" <<'EOF'
+struct DaemonMissionInvocationGateway {
+    parent: AbilityContext,
+}
+
+impl DaemonMissionInvocationGateway {
+    async fn invoke_child(&self, child: ChildInvocationRequest) {
+        let prepared = self.parent.prepare_child_dispatch(child).await.unwrap();
+        runtime.invoke_descriptor_bound_request_async(prepared.into_descriptor_request()).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+struct CatalogMissionInvocationGateway {
+    catalog: AxonAbilityCatalog,
+}
+EOF
   cat >"$CLI/src/daemon/execution/mcp/mod.rs" <<'EOF'
 const MAX_CHILD_STDIO_LINE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CHILD_STDIO_FRAME_BYTES: usize = 4 * 1024 * 1024;
@@ -170,6 +187,26 @@ fn run(input: Input) {
     let mut line = Vec::new();
     read_bounded_line(&mut input, &mut line, MAX_LINE_LENGTH);
 }
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
+struct RegistryState {
+    terminal_order: VecDeque<String>,
+}
+
+impl RegistryState {
+    fn retain_terminal_key(&mut self, key: &str) {
+        if !self.terminal_order.iter().any(|retained| retained == key) {
+            self.terminal_order.push_back(key.to_string());
+        }
+    }
+}
+
+fn mark_terminal(state: &mut RegistryState, key: &str) {
+    state.retain_terminal_key(key);
+}
+
+#[test]
+fn terminal_retention_order_is_idempotent() {}
 EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
 use easynet_axon::{
@@ -457,6 +494,22 @@ impl InvocationCancelCommand {
 pub fn invocation_lifecycle_hash(envelope: &DescriptorBoundEnvelope) -> String {
     hex::encode(Sha256::digest(envelope.canonical_bytes()))
 }
+
+struct RegistryState {
+    terminal_order: VecDeque<String>,
+}
+
+impl RegistryState {
+    fn retain_terminal_key(&mut self, key: &str) {
+        if !self.terminal_order.iter().any(|retained| retained == key) {
+            self.terminal_order.push_back(key.to_string());
+        }
+    }
+}
+
+fn mark_terminal(state: &mut RegistryState, key: &str) {
+    state.retain_terminal_key(key);
+}
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/request.rs" <<'EOF'
 impl SignedInvocation {
@@ -633,6 +686,20 @@ fn bypass_child(registry: &Catalog) {
 }
 EOF
 expect_fail "Mission direct catalog bypass" "R1_INVOCATION_BYPASS"
+
+make_good_fixture
+cat >"$CLI/src/daemon/execution/mission/invocation_gateway.rs" <<'EOF'
+struct DaemonMissionInvocationGateway {
+    parent: AbilityContext,
+}
+
+struct CatalogMissionInvocationGateway {
+    catalog: AxonAbilityCatalog,
+}
+EOF
+expect_fail \
+  "Mission catalog gateway escaped test cfg" \
+  "R1_MISSION_CATALOG_GATEWAY_PRODUCTION"
 
 make_good_fixture
 cat >"$CLI/src/daemon/invocation/dispatch/bidi_dispatcher.rs" <<'EOF'
@@ -929,6 +996,23 @@ EOF
 expect_fail \
   "mcp stdio unbounded frame reader" \
   "R23_MCP_STDIO_UNBOUNDED_FRAME_READER"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
+struct RegistryState {
+    terminal_order: VecDeque<String>,
+}
+
+fn mark_terminal(state: &mut RegistryState, key: &str) {
+    state.terminal_order.push_back(key.to_string());
+}
+
+#[test]
+fn terminal_retention_order_is_idempotent() {}
+EOF
+expect_fail \
+  "cancel retention duplicate terminal token" \
+  "R24_CANCEL_RETENTION_IDEMPOTENCY_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'

@@ -50,7 +50,7 @@
     "python": [
       {
         "path": "sdk/python/easynet_sdk",
-        "category": "public_facade"
+        "category": "easynet_provider"
       },
       {
         "path": "sdk/python/easynet_sdk/_axon_pb",
@@ -78,13 +78,13 @@
     "java": [
       {
         "path": "sdk/java/src/main/java/run/easynet/daemon",
-        "category": "public_facade"
+        "category": "easynet_provider"
       }
     ],
     "swift": [
       {
         "path": "sdk/swift/Sources/EasyNetDaemonSDK",
-        "category": "public_facade"
+        "category": "easynet_provider"
       }
     ]
   },

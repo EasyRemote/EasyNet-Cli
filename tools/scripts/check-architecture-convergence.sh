@@ -1725,6 +1725,38 @@ for path, requirements in mcp_stdio_requirements:
             "MCP stdio production readers must not use unbounded read_line",
         )
 
+# Rule 24: cancellation terminal retention is an idempotent lifecycle index.
+# Repeated observation of the same terminal invocation must not enqueue
+# duplicate eviction tokens that can later remove the current terminal map row.
+cancellation_registry = cli_root / "src/daemon/invocation/dispatch/cancellation.rs"
+if cancellation_registry.exists():
+    text = source(cancellation_registry)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    cancellation_requirements = (
+        (
+            "fn retain_terminal_key(&mut self, key: &str)",
+            "cancellation terminal retention requires one idempotent queue owner",
+        ),
+        (
+            "if !self.terminal_order.iter().any(|retained| retained == key)",
+            "terminal retention must check for an existing key before enqueue",
+        ),
+        (
+            "state.retain_terminal_key(key)",
+            "mark_terminal must retain terminal keys through the idempotent helper",
+        ),
+    )
+    for token, detail in cancellation_requirements:
+        if token not in text:
+            add("R24_CANCEL_RETENTION_IDEMPOTENCY_FORK", cancellation_registry, 1, detail)
+    if production_text.count("terminal_order.push_back") != 1:
+        add(
+            "R24_CANCEL_RETENTION_IDEMPOTENCY_FORK",
+            cancellation_registry,
+            1,
+            "terminal_order.push_back must exist only inside retain_terminal_key",
+        )
+
 
 if violations:
     for violation in sorted(violations):

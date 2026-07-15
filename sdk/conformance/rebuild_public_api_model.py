@@ -230,6 +230,8 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
             category = "provider_neutral_core"
         elif "/_axon_pb" in path:
             category = "generated_wire"
+        elif path == "sdk/python/easynet_sdk":
+            category = "easynet_provider"
         else:
             category = "public_facade"
         python_categories[path] = category
@@ -239,8 +241,8 @@ def package_manifest() -> dict[str, list[dict[str, str]]]:
         "go": [{"path": path, "category": go_categories[path]} for path in go_paths],
         "python": [{"path": path, "category": python_categories[path]} for path in python_paths],
         "node": [{"path": "sdk/node/index.d.ts", "category": "public_facade"}],
-        "java": [{"path": "sdk/java/src/main/java/run/easynet/daemon", "category": "public_facade"}],
-        "swift": [{"path": "sdk/swift/Sources/EasyNetDaemonSDK", "category": "public_facade"}],
+        "java": [{"path": "sdk/java/src/main/java/run/easynet/daemon", "category": "easynet_provider"}],
+        "swift": [{"path": "sdk/swift/Sources/EasyNetDaemonSDK", "category": "easynet_provider"}],
     }
 
 
