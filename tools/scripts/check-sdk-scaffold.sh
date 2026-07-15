@@ -12,7 +12,8 @@ required=(
   PROJECT_STRUCTURE.md
   include/easynet_cli.h
   include/easynet_cli.exports.v5
-  src/bin/sdk-conformance-runner.rs
+  tools/sdk-conformance-runner/Cargo.toml
+  tools/sdk-conformance-runner/src/main.rs
   sdk/README.md
   sdk/SDK_INTERFACE_SPEC.md
   sdk/SDK_PARITY.md
@@ -91,6 +92,31 @@ if not isinstance(rows, list) or not rows:
     fail("fixture-schema-bindings must contain bindings")
 
 fixture_names = {path.name for path in fixtures}
+retired_schemas = {
+    "agent-record.schema.json",
+    "ability-deploy-request.schema.json",
+    "ability-deploy-result.schema.json",
+    "ability-package-manifest.schema.json",
+    "package-validation.schema.json",
+    "published-ability.schema.json",
+    "resource-ref.schema.json",
+    "local-resource-ref-request.schema.json",
+    "lifecycle-status.schema.json",
+}
+retired_fixtures = {
+    "ability-deploy-request.v4.json",
+    "ability-package-manifest.v4.json",
+    "local-resource-ref-request.v4.json",
+    "package-validation.v4.json",
+    "resource-ref.local-fs.v4.json",
+}
+retired_schema_hits = sorted(path.name for path in schemas if path.name in retired_schemas)
+retired_fixture_hits = sorted(path.name for path in fixtures if path.name in retired_fixtures)
+if retired_schema_hits or retired_fixture_hits:
+    fail(
+        "retired product SDK schema fixtures remain: "
+        f"schemas={retired_schema_hits}, fixtures={retired_fixture_hits}"
+    )
 bound_names: list[str] = []
 for index, row in enumerate(rows):
     if not isinstance(row, dict):
@@ -101,6 +127,8 @@ for index, row in enumerate(rows):
         fail(f"invalid fixture binding name: {fixture!r}")
     if not isinstance(schema, str) or not schema.endswith(".schema.json"):
         fail(f"invalid schema binding for {fixture}")
+    if fixture in retired_fixtures or schema in retired_schemas:
+        fail(f"retired product fixture binding remains: {fixture} -> {schema}")
     if not (schema_dir / schema).is_file():
         fail(f"missing bound schema: {fixture} -> {schema}")
     bound_names.append(fixture)
@@ -116,7 +144,7 @@ for path in cases:
     text = path.read_text(encoding="utf-8")
     case_id = re.search(r"(?m)^id:\s*(\S.*?)\s*$", text)
     profile = re.search(r"(?m)^profile:\s*(\S.*?)\s*$", text)
-    required = re.search(r"(?m)^required_for:\s*$", text)
+    required = re.search(r"(?m)^required_for:(?:\s*\[\])?\s*$", text)
     steps = re.search(r"(?m)^steps:\s*$", text)
     action = re.search(r"(?m)^\s+- action:\s*\S", text)
     expect = re.search(r"(?m)^expect:\s*$", text)
@@ -128,16 +156,25 @@ if duplicates:
     fail("duplicate conformance case ids: " + ", ".join(duplicates))
 
 matrix = load_json(root / "sdk/conformance/sdk-parity-matrix.json")
-if not isinstance(matrix, dict) or matrix.get("schema_version") != 1:
-    fail("SDK parity matrix schema_version must be 1")
-if matrix.get("languages") != ["go", "python"]:
-    fail("SDK parity matrix must declare Go and Python")
+if not isinstance(matrix, dict) or matrix.get("schema_version") != 4:
+    fail("SDK parity matrix schema_version must be 4")
+languages = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
+if matrix.get("languages") != languages:
+    fail("SDK parity matrix must declare all seven canonical languages")
+capabilities = matrix.get("capability_ids")
+cells = matrix.get("cells")
+if not isinstance(capabilities, list) or not isinstance(cells, list):
+    fail("SDK parity matrix is missing capabilities or cells")
+keys = [(cell.get("capability_id"), cell.get("language")) for cell in cells]
+expected = [(capability, language) for capability in capabilities for language in languages]
+if keys != expected or len(keys) != len(set(keys)):
+    fail("SDK parity matrix is not the complete ordered Cartesian product")
 if "product_boundary_rules" in matrix:
     fail("product boundary rows do not belong in the runtime SDK matrix")
 
 for path in reports:
     report = load_json(path)
-    if not isinstance(report, dict) or report.get("schema_version") != 1:
+    if not isinstance(report, dict) or report.get("schema_version") != 2:
         fail(f"invalid adapter report header: {path.relative_to(root)}")
     if not isinstance(report.get("records"), list):
         fail(f"missing adapter records: {path.relative_to(root)}")
@@ -157,8 +194,9 @@ if printf '%s\n' "$export_symbols" | rg -q '_(admin|directory|identity|mission|p
 fi
 
 if command -v cc >/dev/null 2>&1; then
-  tmp="$(mktemp "${TMPDIR:-/tmp}/easynet-sdk-header.XXXXXX.c")"
-  trap 'rm -f "$tmp"' EXIT
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/easynet-sdk-header.XXXXXX")"
+  tmp="$tmp_dir/header.c"
+  trap 'rm -rf "$tmp_dir"' EXIT
   printf '#include "include/easynet_cli.h"\n' >"$tmp"
   cc -fsyntax-only -I"$ROOT" "$tmp" >/dev/null 2>&1 || fail "include/easynet_cli.h does not compile as C"
 fi

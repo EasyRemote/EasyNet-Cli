@@ -205,26 +205,23 @@ class RuntimeConnection:
     def connect(self, options: ConnectOptions = ConnectOptions()) -> None:
         if self.state == ConnectionState.CLOSED:
             raise _invalid_connection("runtime connection is closed")
-        self.state = ConnectionState.RESOLVING
-        try:
-            endpoint_json = self.connector.resolve(options.to_json_bytes())
-            endpoint = RuntimeEndpoint.from_json(endpoint_json)
-            self.state = ConnectionState.CONNECTING
-            transport, handshake_json = self.connector.handshake(endpoint_json)
-            if transport is None:
-                raise _invalid_connection("runtime transport is required after handshake")
-            self.endpoint = endpoint
-            self._transport = transport
-            self.handshake_facts = _handshake_facts(handshake_json)
-            self.last_error = None
-            self.state = ConnectionState.READY
-        except SDKError as exc:
-            self._fail(exc)
-            raise
-        except Exception as exc:
-            error = _transport_error("runtime connection failed", exc)
-            self._fail(error)
-            raise error from exc
+        options_json = options.to_json_bytes()
+        attempts = 2 if options.reconnect else 1
+        for attempt in range(attempts):
+            self._transition(ConnectionState.RESOLVING)
+            try:
+                self._connect_attempt(options_json)
+                return
+            except SDKError as exc:
+                error = exc
+            except Exception as exc:
+                error = _transport_error("runtime connection failed", exc)
+            self.last_error = error
+            if attempt + 1 == attempts:
+                self._fail(error)
+                raise error
+            self._transition(ConnectionState.DEGRADED)
+            self._transition(ConnectionState.RECONNECTING)
 
     def runtime_client(self) -> RuntimeClient:
         if self.state != ConnectionState.READY or self._transport is None:
@@ -238,24 +235,82 @@ class RuntimeConnection:
             self.connector.close()
         except SDKError as exc:
             self._transport = None
-            self.state = ConnectionState.CLOSED
+            self._transition(ConnectionState.CLOSED)
             self.last_error = exc
             raise
         except Exception as exc:
             self._transport = None
-            self.state = ConnectionState.CLOSED
+            self._transition(ConnectionState.CLOSED)
             error = _transport_error("runtime close failed", exc)
             self.last_error = error
             raise error from exc
         self._transport = None
         self.last_error = None
-        self.state = ConnectionState.CLOSED
+        self._transition(ConnectionState.CLOSED)
+
+    def _connect_attempt(self, options_json: bytes) -> None:
+        endpoint_json = self.connector.resolve(options_json)
+        endpoint = RuntimeEndpoint.from_json(endpoint_json)
+        self._transition(ConnectionState.CONNECTING)
+        transport, handshake_json = self.connector.handshake(endpoint_json)
+        if transport is None:
+            raise _invalid_connection("runtime transport is required after handshake")
+        self.endpoint = endpoint
+        self._transport = transport
+        self.handshake_facts = _handshake_facts(handshake_json)
+        self.last_error = None
+        self._transition(ConnectionState.READY)
 
     def _fail(self, error: SDKError) -> None:
         self._transport = None
         self.last_error = error
         if self.state != ConnectionState.CLOSED:
-            self.state = ConnectionState.FAILED
+            self._transition(ConnectionState.FAILED)
+
+    def _transition(self, next_state: ConnectionState) -> None:
+        allowed = {
+            ConnectionState.IDLE: {
+                ConnectionState.RESOLVING,
+                ConnectionState.CLOSED,
+            },
+            ConnectionState.RESOLVING: {
+                ConnectionState.CONNECTING,
+                ConnectionState.DEGRADED,
+                ConnectionState.FAILED,
+                ConnectionState.CLOSED,
+            },
+            ConnectionState.CONNECTING: {
+                ConnectionState.READY,
+                ConnectionState.DEGRADED,
+                ConnectionState.FAILED,
+                ConnectionState.CLOSED,
+            },
+            ConnectionState.READY: {
+                ConnectionState.RESOLVING,
+                ConnectionState.CLOSED,
+            },
+            ConnectionState.DEGRADED: {
+                ConnectionState.RECONNECTING,
+                ConnectionState.FAILED,
+                ConnectionState.CLOSED,
+            },
+            ConnectionState.RECONNECTING: {
+                ConnectionState.RESOLVING,
+                ConnectionState.FAILED,
+                ConnectionState.CLOSED,
+            },
+            ConnectionState.FAILED: {
+                ConnectionState.RESOLVING,
+                ConnectionState.CLOSED,
+            },
+            ConnectionState.CLOSED: {ConnectionState.CLOSED},
+        }
+        if next_state not in allowed.get(self.state, set()):
+            raise _invalid_connection(
+                "runtime connection cannot transition "
+                f"from {self.state.value} to {next_state.value}"
+            )
+        self.state = next_state
 
 
 def _handshake_facts(raw: bytes) -> Mapping[str, object]:

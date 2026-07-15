@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "discuss.subscribe"
+descriptor_version = "1.0.0"
 description = "Subscribe to a room's turn stream. Replays every turn ≥ `since_seq` (default 0). v1 returns a snapshot; live tail lands with PR-INVOCATION-EXEC-UNITY."
+call_mode = "stream"
+capability_state = "cutover_ready"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

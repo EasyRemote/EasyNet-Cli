@@ -48,16 +48,12 @@ pub enum RuntimeLifecycleStatus {
     ProjectionPresentProcessMissing,
     /// Control accepts but Invocation does not; the daemon is half alive.
     ControlOnlyInvocationDown,
-    /// Projection describes the retired raw Axon bridge runtime.
-    LegacyAxonBridge,
     /// Start refused because an existing daemon identity does not match.
     IdentityMismatch,
     /// Daemon reached Ready but projection commit failed.
     StartProjectionCommitFailed,
     /// Stop did not reach process/socket terminal postconditions.
     StopTimedOut,
-    /// Legacy janitor failed while cleaning retired runtime artifacts.
-    LegacyCleanupFailed,
 }
 
 impl RuntimeLifecycleStatus {
@@ -69,11 +65,9 @@ impl RuntimeLifecycleStatus {
             Self::ProjectionMissingProcessRunning => "projection_missing_process_running",
             Self::ProjectionPresentProcessMissing => "projection_present_process_missing",
             Self::ControlOnlyInvocationDown => "control_only_invocation_down",
-            Self::LegacyAxonBridge => "legacy_axon_bridge",
             Self::IdentityMismatch => "identity_mismatch",
             Self::StartProjectionCommitFailed => "start_projection_commit_failed",
             Self::StopTimedOut => "stop_timed_out",
-            Self::LegacyCleanupFailed => "legacy_cleanup_failed",
         }
     }
 }
@@ -191,10 +185,6 @@ fn classify(
 ) -> RuntimeLifecycleStatus {
     let has_projection = projection.is_some();
     let has_daemon_fact = daemon.has_daemon_fact();
-
-    if projection.is_some_and(RuntimeSessionProjection::uses_bridge) {
-        return RuntimeLifecycleStatus::LegacyAxonBridge;
-    }
 
     if daemon.control_accepting() && !daemon.invocation_accepting() {
         return RuntimeLifecycleStatus::ControlOnlyInvocationDown;
@@ -360,24 +350,5 @@ mod tests {
             report.status(),
             RuntimeLifecycleStatus::ControlOnlyInvocationDown
         );
-    }
-
-    #[test]
-    fn status_classifier_preserves_legacy_axon_bridge_projection() {
-        let projection = RuntimeSessionProjection::from_state(config::RuntimeState {
-            endpoint: "127.0.0.1:50091".to_string(),
-            runtime_kind: config::RuntimeKind::AxonBridge,
-            pid: Some(12_345),
-            hub: None,
-            tenant: None,
-            label: None,
-            started_at: None,
-            credential_verified: None,
-        });
-        let daemon =
-            DaemonDiscoverySnapshot::from_parts(None, None, false, false, false, endpoints());
-        let report = RuntimeStatusReport::from_parts(Some(projection), daemon);
-
-        assert_eq!(report.status(), RuntimeLifecycleStatus::LegacyAxonBridge);
     }
 }

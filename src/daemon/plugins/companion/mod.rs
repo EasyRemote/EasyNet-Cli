@@ -729,7 +729,7 @@ mod tests {
             )
             .expect("desired state");
 
-        let failures = manager.ensure_running_after_daemon_ready(&[package.clone()]);
+        let failures = manager.ensure_running_after_daemon_ready(std::slice::from_ref(&package));
 
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].code, "start_failed");
@@ -767,7 +767,7 @@ mod tests {
             )
             .expect("desired state");
 
-        let failures = manager.ensure_running_after_daemon_ready(&[package.clone()]);
+        let failures = manager.ensure_running_after_daemon_ready(std::slice::from_ref(&package));
 
         assert!(failures.is_empty());
         let status = manager.status_for_package(&package).expect("status");

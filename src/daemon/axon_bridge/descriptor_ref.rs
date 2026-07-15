@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use easynet_axon::invocation::{
+    ability_ura_from_descriptor_ref as axon_ability_ura_from_descriptor_ref,
     canonical_ability_descriptor_ref, AxonError, CallMode as AxonInvocationCallMode, LocalRuntime,
 };
 
@@ -21,7 +22,7 @@ use easynet_axon::invocation::{
 /// registered, version-bound descriptor cannot be stamped with a truthful
 /// version, so resolution fails closed.
 #[derive(Debug)]
-pub(crate) enum DescriptorVersionError {
+pub(crate) enum DescriptorBindingError {
     /// The ability is not registered in the local runtime. The message carries
     /// the canonical not-found tokens so a pre-dispatch miss classifies as
     /// NOT_FOUND (via `is_not_found_error` / `NOT_FOUND_REASON_FRAGMENTS`)
@@ -32,7 +33,7 @@ pub(crate) enum DescriptorVersionError {
     VersionUnbound(String),
 }
 
-impl DescriptorVersionError {
+impl DescriptorBindingError {
     pub(crate) fn message(&self) -> &str {
         match self {
             Self::AbilityNotFound(message) | Self::VersionUnbound(message) => message,
@@ -40,38 +41,48 @@ impl DescriptorVersionError {
     }
 }
 
-impl std::fmt::Display for DescriptorVersionError {
+impl std::fmt::Display for DescriptorBindingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.message())
     }
 }
 
-impl From<DescriptorVersionError> for AxonError {
-    fn from(error: DescriptorVersionError) -> Self {
+impl From<DescriptorBindingError> for AxonError {
+    fn from(error: DescriptorBindingError) -> Self {
         AxonError::invalid_argument(error.message().to_string())
     }
 }
 
 pub(crate) fn ability_ura_from_descriptor_ref(descriptor_ref: &str) -> Result<String, AxonError> {
     let canonical = canonical_ability_descriptor_ref(descriptor_ref)?;
-    let (ability_ura, _) = canonical.split_once('@').ok_or_else(|| {
-        AxonError::invalid_argument("ability_descriptor_ref_malformed".to_string())
-    })?;
-    Ok(ability_ura.to_string())
+    axon_ability_ura_from_descriptor_ref(&canonical).map(str::to_string)
 }
 
 pub(crate) fn descriptor_version_from_descriptor_ref(
     descriptor_ref: &str,
 ) -> Result<String, AxonError> {
     let canonical = canonical_ability_descriptor_ref(descriptor_ref)?;
-    let (_, descriptor_version) = canonical.split_once('@').ok_or_else(|| {
-        AxonError::invalid_argument("ability_descriptor_ref_malformed".to_string())
-    })?;
-    Ok(descriptor_version.to_string())
+    let Some((_ability_ura, version_and_digest)) = canonical.rsplit_once('@') else {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability ref is missing descriptor version",
+        ));
+    };
+    let Some((version, _digest)) = version_and_digest.split_once('#') else {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability ref is missing descriptor digest",
+        ));
+    };
+    let version = version.trim();
+    if version.is_empty() {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability descriptor version is empty",
+        ));
+    }
+    Ok(version.to_string())
 }
 
-/// Read the descriptor version the runtime registered for `runtime_ability`
-/// in `mode`.
+/// Read the complete descriptor binding registered for `runtime_ability` in
+/// `mode`: version, canonical descriptor digest, and admission action.
 ///
 /// The version is bound into the runtime's per-mode `AbilityProofBinding` at
 /// registration time (see `AxonAbilityCatalog::bind_runtime_proof_for_mode`),
@@ -79,29 +90,133 @@ pub(crate) fn descriptor_version_from_descriptor_ref(
 /// dispatch path resolves through this one helper so the wire envelope and its
 /// receipt proof facts carry the version actually admitted at registration
 /// rather than a fabricated default.
-pub(crate) async fn registered_descriptor_version(
+pub(crate) async fn registered_descriptor_binding(
     runtime: &Arc<LocalRuntime>,
     runtime_ability: &str,
     mode: AxonInvocationCallMode,
-) -> Result<String, DescriptorVersionError> {
+) -> Result<String, DescriptorBindingError> {
     let options = runtime
         .ability_options(runtime_ability)
         .await
         .ok_or_else(|| {
-            DescriptorVersionError::AbilityNotFound(format!(
+            DescriptorBindingError::AbilityNotFound(format!(
                 "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
              version: unknown_ability `{runtime_ability}` is not registered in the local \
              runtime (ability_not_found)"
             ))
         })?;
-    let version = options.proof_for_mode(mode).descriptor_version;
+    let proof = options.proof_for_mode(mode);
+    let version = proof.descriptor_version;
     if version.trim().is_empty() {
-        return Err(DescriptorVersionError::VersionUnbound(format!(
+        return Err(DescriptorBindingError::VersionUnbound(format!(
             "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor \
              version: runtime registration left the {mode:?} descriptor proof unbound"
         )));
     }
-    Ok(version)
+    if proof.descriptor_hash == [0u8; 32] {
+        return Err(DescriptorBindingError::VersionUnbound(format!(
+            "descriptor-bound dispatch of `{runtime_ability}` cannot resolve a descriptor digest"
+        )));
+    }
+    if proof.admission_action.trim().is_empty() {
+        return Err(DescriptorBindingError::VersionUnbound(format!(
+            "descriptor-bound dispatch of `{runtime_ability}` has no admission action"
+        )));
+    }
+    descriptor_binding_for_wire(&version, proof.descriptor_hash, &proof.admission_action)
+        .map_err(|error| DescriptorBindingError::VersionUnbound(error.to_string()))
+}
+
+pub(crate) fn descriptor_binding_for_wire(
+    descriptor_version: &str,
+    descriptor_hash: [u8; 32],
+    admission_action: &str,
+) -> Result<String, AxonError> {
+    let descriptor_version = descriptor_version.trim();
+    let admission_action = admission_action.trim();
+    if descriptor_version.is_empty() {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability descriptor version is empty",
+        ));
+    }
+    if descriptor_hash == [0u8; 32] {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability descriptor hash is empty",
+        ));
+    }
+    if admission_action.is_empty() {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability admission action is empty",
+        ));
+    }
+    Ok(format!(
+        "{descriptor_version}#{}!{admission_action}",
+        hex::encode(descriptor_hash)
+    ))
+}
+
+pub(crate) fn catalog_descriptor_binding_for_wire(
+    callee_ura: &str,
+    ability: &str,
+    call_mode: crate::daemon::ability::CallMode,
+) -> Result<String, AxonError> {
+    let ability_ura = ability_ura_for_wire(callee_ura, ability)?;
+    let selector = crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|err| {
+        AxonError::invalid_argument(format!(
+            "descriptor-bound ability `{ability_ura}` is not a canonical Ability URA: {err}"
+        ))
+    })?;
+    let catalog = crate::daemon::ability::catalog::build_system_registry();
+    let owner = catalog_owner_kind_for_wire(selector.owner_ura())?;
+    let mut matches = catalog
+        .authority_ability_catalog_snapshot()
+        .into_iter()
+        .filter(|row| row.owner == owner)
+        .filter(|row| row.name == selector.local_registry_ability())
+        .filter(|row| row.descriptor.public_name() == selector.public_name())
+        .filter(|row| row.descriptor.call_mode() == call_mode);
+    let record = matches.next().ok_or_else(|| {
+        AxonError::invalid_argument(format!(
+            "descriptor-bound ability `{}` has no system catalog descriptor for owner `{}` \
+             in {:?}; callers must provide an explicit descriptor-bound Ability ref",
+            selector.public_name(),
+            selector.owner_ura(),
+            call_mode
+        ))
+    })?;
+    if matches.next().is_some() {
+        return Err(AxonError::invalid_argument(format!(
+            "descriptor-bound ability `{}` is ambiguous in the system catalog for owner `{}` \
+             in {:?}",
+            selector.public_name(),
+            selector.owner_ura(),
+            call_mode
+        )));
+    }
+    let descriptor = record
+        .descriptor
+        .rebind_owner_ura(selector.owner_ura())
+        .map_err(|err| {
+            AxonError::invalid_argument(format!(
+                "descriptor-bound ability `{}` cannot rebind descriptor owner to `{}`: {err}",
+                selector.public_name(),
+                selector.owner_ura()
+            ))
+        })?;
+    descriptor_binding_for_wire(
+        &descriptor.version,
+        descriptor.descriptor_hash_bytes(),
+        descriptor.admission_action().as_str(),
+    )
+}
+
+pub(crate) fn catalog_descriptor_ref_for_wire(
+    callee_ura: &str,
+    ability: &str,
+    call_mode: crate::daemon::ability::CallMode,
+) -> Result<String, AxonError> {
+    let descriptor_binding = catalog_descriptor_binding_for_wire(callee_ura, ability, call_mode)?;
+    ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_binding)
 }
 
 pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<String, AxonError> {
@@ -149,7 +264,7 @@ pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<St
 pub(crate) fn ability_descriptor_ref_for_wire(
     callee_ura: &str,
     ability: &str,
-    descriptor_version: &str,
+    descriptor_binding: &str,
 ) -> Result<String, AxonError> {
     let callee_ura = callee_ura.trim();
     let ability = ability.trim();
@@ -173,17 +288,34 @@ pub(crate) fn ability_descriptor_ref_for_wire(
                 ))
             })
             .and_then(|selector| ensure_ability_owner_matches_callee(callee_ura, &selector))?;
+        let expected = canonical_ability_descriptor_ref(&format!(
+            "{ability_ura}@{}",
+            descriptor_binding.trim()
+        ))?;
+        if descriptor_ref != expected {
+            return Err(AxonError::invalid_argument(
+                "explicit descriptor ref does not match the runtime-selected descriptor binding",
+            ));
+        }
         return Ok(descriptor_ref);
     }
 
-    let descriptor_version = descriptor_version.trim();
+    let descriptor_binding = descriptor_binding.trim();
+    let Some((descriptor_version, descriptor_hash_and_action)) = descriptor_binding.split_once('#')
+    else {
+        return Err(AxonError::invalid_argument(
+            "descriptor-bound ability descriptor digest is required",
+        ));
+    };
     if descriptor_version.is_empty() {
         return Err(AxonError::invalid_argument(
             "descriptor-bound ability descriptor version is empty",
         ));
     }
     let ability_ura = ability_ura_for_wire(callee_ura, ability)?;
-    Ok(format!("{ability_ura}@{descriptor_version}"))
+    canonical_ability_descriptor_ref(&format!(
+        "{ability_ura}@{descriptor_version}#{descriptor_hash_and_action}"
+    ))
 }
 
 fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
@@ -200,6 +332,36 @@ fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
         }
         crate::core::ura::URAKind::Device => ability.to_string(),
         _ => ability.to_string(),
+    }
+}
+
+pub(crate) fn catalog_owner_kind_for_wire(
+    owner_ura: &str,
+) -> Result<crate::daemon::ability::dispatch::OwnerKind, AxonError> {
+    let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|err| {
+        AxonError::invalid_argument(format!(
+            "descriptor-bound ability owner `{owner_ura}` is not a valid URA: {err}"
+        ))
+    })?;
+    match parsed.kind {
+        crate::core::ura::URAKind::Device => {
+            Ok(crate::daemon::ability::dispatch::OwnerKind::Device)
+        }
+        crate::core::ura::URAKind::Hub => Ok(crate::daemon::ability::dispatch::OwnerKind::Hub),
+        crate::core::ura::URAKind::Agent => {
+            let Some((_, agent_id)) = parsed.agent_ids().or_else(|| parsed.device_agent_ids())
+            else {
+                return Err(AxonError::invalid_argument(format!(
+                    "descriptor-bound ability owner `{owner_ura}` is an Agent URA without agent id"
+                )));
+            };
+            Ok(crate::daemon::ability::dispatch::OwnerKind::Agent(
+                agent_id.to_string(),
+            ))
+        }
+        _ => Err(AxonError::invalid_argument(format!(
+            "descriptor-bound ability owner `{owner_ura}` is not a catalog owner"
+        ))),
     }
 }
 
@@ -252,22 +414,17 @@ fn ensure_ability_owner_matches_callee(
 mod tests {
     use super::*;
 
+    const TEST_BINDING: &str =
+        "1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+
     #[test]
     fn descriptor_ref_requires_callee_to_own_ability() {
         let callee = crate::core::ura::device_ura("acme", "host-a");
         let other = crate::core::ura::device_ura("acme", "host-b");
         let ability_ura = crate::core::ura::owner_ability_ura(&other, "fs.read").unwrap();
-        let ability_ref = format!(
-            "{ability_ura}@{}",
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-        );
+        let ability_ref = format!("{ability_ura}@{TEST_BINDING}");
 
-        let err = ability_descriptor_ref_for_wire(
-            &callee,
-            &ability_ref,
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-        )
-        .unwrap_err();
+        let err = ability_descriptor_ref_for_wire(&callee, &ability_ref, TEST_BINDING).unwrap_err();
 
         assert!(err.to_string().contains("does not match callee"));
     }
@@ -276,19 +433,24 @@ mod tests {
     fn descriptor_ref_round_trips_when_callee_owns_ability() {
         let callee = crate::core::ura::device_ura("acme", "host-a");
         let ability_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
-        let ability_ref = format!(
-            "{ability_ura}@{}",
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-        );
+        let ability_ref = format!("{ability_ura}@{TEST_BINDING}");
 
-        let normalized = ability_descriptor_ref_for_wire(
-            &callee,
-            &ability_ref,
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-        )
-        .unwrap();
+        let normalized =
+            ability_descriptor_ref_for_wire(&callee, &ability_ref, TEST_BINDING).unwrap();
 
         assert_eq!(normalized, ability_ref);
+    }
+
+    #[test]
+    fn explicit_descriptor_ref_rejects_a_different_runtime_digest() {
+        let callee = crate::core::ura::device_ura("acme", "host-a");
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
+        let ability_ref = format!("{ability_ura}@1.0.0#{}!read", "11".repeat(32));
+
+        let err = ability_descriptor_ref_for_wire(&callee, &ability_ref, TEST_BINDING)
+            .expect_err("caller-selected digest must not replace the runtime binding");
+
+        assert!(err.to_string().contains("runtime-selected"), "{err}");
     }
 
     #[test]
@@ -297,6 +459,39 @@ mod tests {
         let err = require_descriptor_ref_for_wire(&callee, "fs.read").unwrap_err();
 
         assert!(err.to_string().contains("explicit descriptor ref"), "{err}");
+    }
+
+    #[test]
+    fn system_catalog_descriptor_lookup_is_owner_plane_aware() {
+        let device = crate::core::ura::device_ura("localhost", "host-a");
+        let hub = crate::core::ura::hub_ura("localhost");
+        let ability = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+
+        let device_ref = catalog_descriptor_ref_for_wire(
+            &device,
+            ability,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("Device meta.list_abilities descriptor");
+        let hub_ref =
+            catalog_descriptor_ref_for_wire(&hub, ability, crate::daemon::ability::CallMode::Rpc)
+                .expect("Hub meta.list_abilities descriptor");
+
+        assert!(
+            device_ref.starts_with(&format!(
+                "{}/ability/device.host-a.{ability}@",
+                "easynet:///r/localhost"
+            )),
+            "{device_ref}"
+        );
+        assert!(
+            hub_ref.starts_with(&format!(
+                "{}/ability/hub.{ability}@",
+                "easynet:///r/localhost"
+            )),
+            "{hub_ref}"
+        );
+        assert_ne!(device_ref, hub_ref);
     }
 
     /// Regression: the session prelude (`sign_descriptor_bound_prelude_request`)
@@ -315,21 +510,11 @@ mod tests {
         assert!(require_descriptor_ref_for_wire(&callee, "fs.read").is_err());
 
         // Builder turns the SAME bare name into a canonical `<ability-ura>@<version>`.
-        let built = ability_descriptor_ref_for_wire(
-            &callee,
-            "fs.read",
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-        )
-        .expect("builder accepts a bare ability name plus an explicit version");
+        let built = ability_descriptor_ref_for_wire(&callee, "fs.read", TEST_BINDING)
+            .expect("builder accepts a bare ability name plus an explicit version");
 
         let expected_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
-        assert_eq!(
-            built,
-            format!(
-                "{expected_ura}@{}",
-                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-            )
-        );
+        assert_eq!(built, format!("{expected_ura}@{}", TEST_BINDING));
         // The built ref carries EXACTLY one `@`, which is what the hub ingress
         // (`ability_descriptor_ref_malformed` guard) requires.
         assert_eq!(built.matches('@').count(), 1);

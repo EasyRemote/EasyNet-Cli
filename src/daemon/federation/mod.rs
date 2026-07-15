@@ -14,10 +14,6 @@ pub mod client;
 #[cfg(feature = "axon-pb")]
 pub mod directory;
 pub mod directory_reader;
-pub mod gateway;
-pub mod gateway_api;
-pub mod init;
 pub mod peers;
-pub mod publish;
 pub mod read_model;
 pub mod resolver;

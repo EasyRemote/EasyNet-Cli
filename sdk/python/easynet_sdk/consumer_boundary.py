@@ -34,8 +34,8 @@ _FORBIDDEN_DEPENDENCY_NAMES = {
 _LEGACY_TRANSPORT_PACKAGE = "_transport"
 _SDK_DIRECT_RUNTIME_MODULE = _SDK_MODULE + ".direct_runtime"
 _DIRECT_RUNTIME_SYMBOLS = {
-    "DirectDaemonRuntimeConnector",
-    "DirectDaemonRuntimeTransport",
+    "DirectRuntimeConnector",
+    "DirectRuntimeTransport",
 }
 _RAW_DAEMON_SOCKET_MARKERS = (
     "control.sock",
@@ -468,7 +468,7 @@ def _raw_daemon_session_markers(node: ast.AST) -> set[str]:
     if isinstance(node, ast.Call):
         dotted = _dotted_name(node.func)
         if dotted in _RAW_DAEMON_SESSION_CALLS:
-            argument_markers = set()
+            argument_markers: set[str] = set()
             for value in _string_constants_in_args(node.args):
                 argument_markers.update(
                     marker

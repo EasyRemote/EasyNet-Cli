@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "voice.show_call"
+descriptor_version = "1.0.0"
 description = "Read one call's signaling state, including participants, SDP, ICE candidates, last metrics, and accumulated events."
+call_mode = "rpc"
+capability_state = "seam"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{\"additionalProperties\":false,\"properties\":{\"call_id\":{\"type\":\"string\"},\"created_at_ms\":{\"minimum\":0,\"type\":\"integer\"},\"end_reason\":{\"type\":[\"string\",\"null\"]},\"end_reason_code\":{\"type\":[\"integer\",\"null\"]},\"ended_at_ms\":{\"minimum\":0,\"type\":[\"integer\",\"null\"]},\"participants\":{\"items\":{\"type\":\"object\"},\"type\":\"array\"},\"state\":{\"type\":\"string\"},\"state_code\":{\"type\":\"integer\"}},\"required\":[\"call_id\",\"state\",\"state_code\",\"created_at_ms\",\"participants\"],\"type\":\"object\"}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

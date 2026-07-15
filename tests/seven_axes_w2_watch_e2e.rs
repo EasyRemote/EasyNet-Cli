@@ -34,9 +34,7 @@
 mod seven_axes_fixture;
 
 use easynet_cli::cli::invocation_watch::{self, WatchArgs, WatchEvent};
-use easynet_cli::cli::mission_runs::{
-    self, MissionRunDir, MissionRunMeta, MissionRunOpts, MissionRunStatus,
-};
+use easynet_cli::cli::mission_runs::{self, MissionRunDir, MissionRunOpts};
 use easynet_cli::cli::receipt_verification::CliReceiptChainVerification;
 use seven_axes_fixture::{SevenAxesHome, TESTBOT_ECHO_DESCRIPTOR_VERSION};
 
@@ -194,15 +192,6 @@ mission "watch-stream" {
         .expect("run dir has a final component")
         .to_string_lossy()
         .to_string();
-    stale_run
-        .write_meta(&MissionRunMeta {
-            name: "watch-stale-heartbeat".into(),
-            trace_id: stale_trace.clone(),
-            started_at: "2026-06-13T00:00:00+00:00".into(),
-            status: MissionRunStatus::Running,
-            ..Default::default()
-        })
-        .expect("write running meta");
     stale_run.finish();
 
     let liveness_events = invocation_watch::execute_follow_until_terminal(&WatchArgs {

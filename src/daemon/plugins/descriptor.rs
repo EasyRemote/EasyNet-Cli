@@ -20,6 +20,7 @@ pub struct PluginAbilityMetadata {
     pub input_schema: Value,
     pub output_schema: Option<Value>,
     pub hints: AbilityHints,
+    pub admission_action: crate::daemon::ability::descriptors::AdmissionAction,
 }
 
 /// Descriptor projector over package index state.
@@ -45,6 +46,7 @@ impl PluginDescriptorProjector {
                     input_schema: descriptor.input_schema().clone(),
                     output_schema: descriptor.output_schema().cloned(),
                     hints: hints_for_call_mode(ability.call_mode()),
+                    admission_action: descriptor.admission_action(),
                 });
             }
         }

@@ -35,6 +35,7 @@ pub enum AdvertisedAgentSigningAuthority {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdvertisedAgentRecord {
     pub agent_ura: String,
+    pub generation: u64,
     pub public_key_hex: String,
     pub host_node_id: Option<String>,
     pub signing_authority: AdvertisedAgentSigningAuthority,
@@ -46,6 +47,30 @@ impl AdvertisedAgentRecord {
         match &self.signing_authority {
             AdvertisedAgentSigningAuthority::SelfSigned => None,
             AdvertisedAgentSigningAuthority::HostedBy { host_ura } => Some(host_ura.as_str()),
+        }
+    }
+}
+
+impl From<crate::daemon::persistence::federation_revoke::HostedAgentInventoryRecord>
+    for AdvertisedAgentRecord
+{
+    fn from(
+        record: crate::daemon::persistence::federation_revoke::HostedAgentInventoryRecord,
+    ) -> Self {
+        let signing_authority = match record.signing_authority {
+            crate::daemon::persistence::federation_revoke::DurableSigningAuthority::SelfSigned => {
+                AdvertisedAgentSigningAuthority::SelfSigned
+            }
+            crate::daemon::persistence::federation_revoke::DurableSigningAuthority::HostedBy {
+                host_ura,
+            } => AdvertisedAgentSigningAuthority::HostedBy { host_ura },
+        };
+        Self {
+            agent_ura: record.agent_ura,
+            generation: record.generation,
+            public_key_hex: record.public_key_hex,
+            host_node_id: record.host_node_id,
+            signing_authority,
         }
     }
 }
@@ -70,6 +95,18 @@ impl AdvertisedAgentStore {
 
     pub fn remove(&self, agent_ura: &str) -> Option<AdvertisedAgentRecord> {
         self.inner.remove(agent_ura).map(|(_, record)| record)
+    }
+
+    /// Compare-and-remove prevents a delayed revoke for an old incarnation
+    /// from deleting a newly advertised row with the same URA.
+    pub fn remove_generation(
+        &self,
+        agent_ura: &str,
+        generation: u64,
+    ) -> Option<AdvertisedAgentRecord> {
+        self.inner
+            .remove_if(agent_ura, |_ura, record| record.generation == generation)
+            .map(|(_, record)| record)
     }
 
     /// Remove every advertised agent whose canonical owner is the supplied
@@ -141,6 +178,7 @@ mod tests {
         let store = AdvertisedAgentStore::new();
         let record = AdvertisedAgentRecord {
             agent_ura: "easynet:///r/realm/agent/user.alice".into(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".into()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -156,6 +194,7 @@ mod tests {
         let store = AdvertisedAgentStore::new();
         let record = AdvertisedAgentRecord {
             agent_ura: "ura".into(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: None,
             signing_authority: AdvertisedAgentSigningAuthority::SelfSigned,
@@ -170,6 +209,7 @@ mod tests {
         let store = AdvertisedAgentStore::new();
         let alice_agent = AdvertisedAgentRecord {
             agent_ura: "easynet:///r/realm/agent/alice.helper".into(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".into()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -178,6 +218,7 @@ mod tests {
         };
         let alice_second = AdvertisedAgentRecord {
             agent_ura: "easynet:///r/realm/agent/alice.researcher".into(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".into()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -186,6 +227,7 @@ mod tests {
         };
         let bob_agent = AdvertisedAgentRecord {
             agent_ura: "easynet:///r/realm/agent/bob.helper".into(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-2".into()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -194,6 +236,7 @@ mod tests {
         };
         let other_realm_alice = AdvertisedAgentRecord {
             agent_ura: "easynet:///r/other/agent/alice.helper".into(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-3".into()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -232,6 +275,7 @@ mod tests {
         let store = AdvertisedAgentStore::new();
         let record = AdvertisedAgentRecord {
             agent_ura: "easynet:///r/realm/agent/alice.helper".into(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".into()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {

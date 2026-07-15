@@ -21,11 +21,9 @@
 // Who reads this
 // --------------
 // * `daemon::execution::mission::directory` enumerates the files on disk.
-// * `publish` (dry-run in PR-4; live in PR-5b) converts each manifest
-//   into the `<agent>.<verb>` ToolSpec it would register on an
-//   `AbilityToolAdapter`.
-// * `a2a_labels` emits the discovery JSON under
-//   `a2a.agents_json[*].skills` from the same manifests.
+// * `HotAgentRegistrar` commits each manifest as one governed
+//   descriptor/authority/implementation binding in the daemon catalog.
+// * `a2a_labels` projects discovery JSON from that live catalog snapshot.
 //
 // Why this lives in `daemon::ability`
 // -----------------------------------
@@ -38,8 +36,8 @@
 // ------------------------
 // * Filesystem enumeration — `daemon::execution::mission::directory` walks
 //   `<agent-root>/abilities/` and parses each file.
-// * Invocation plumbing — `publish/` turns a manifest into a
-//   tool-registration call; `daemon::execution::mission::dispatch` does the
+// * Invocation plumbing — the hot registrar binds a manifest to daemon
+//   Invocation; `daemon::execution::mission::dispatch` does the
 //   actual subprocess wrangling when an invocation lands.
 // * Any agent-name awareness — the manifest does NOT know which
 //   agent it belongs to. The agent name is contributed by the
@@ -147,7 +145,7 @@ impl AbilityKind {
 ///      version into the new shape on load, and re-saves them.
 ///   3. Only remove the old version once every supported agent
 ///      install has been through a migration pass.
-pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1"];
+pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1", "2"];
 
 /// One ability the owning agent offers as a network-visible tool.
 ///
@@ -207,6 +205,11 @@ pub struct AbilityManifest {
     schema_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     descriptor_version: Option<String>,
+    /// Authorization action committed into the governed descriptor. Absence
+    /// is accepted while editing metadata, but canonical registration rejects
+    /// it; no action is inferred from the ability name or transport mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admission_action: Option<String>,
     name: String,
     description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -757,6 +760,7 @@ impl AbilityManifest {
         let m = Self {
             schema_version: Some(CURRENT_SCHEMA_VERSION.to_string()),
             descriptor_version: None,
+            admission_action: None,
             name: name.into(),
             description: description.into(),
             timeout_seconds: None,
@@ -843,6 +847,12 @@ impl AbilityManifest {
         Ok(self)
     }
 
+    pub fn with_admission_action(mut self, action: impl Into<String>) -> anyhow::Result<Self> {
+        self.admission_action = Some(action.into());
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Override the default `None` timeout. Returns `self` for the
     /// builder-style chain a caller of `new(...)` might use.
     pub fn with_timeout_seconds(mut self, seconds: u64) -> anyhow::Result<Self> {
@@ -916,6 +926,10 @@ impl AbilityManifest {
             .unwrap_or(DEFAULT_DESCRIPTOR_VERSION)
     }
 
+    pub fn admission_action(&self) -> Option<&str> {
+        self.admission_action.as_deref()
+    }
+
     /// Per-ability invocation timeout. `None` means "inherit
     /// runtime default"; see module doc for semantics.
     pub fn timeout_seconds(&self) -> Option<u64> {
@@ -982,6 +996,11 @@ impl AbilityManifest {
                     version
                 );
             }
+        }
+        if self.admission_action.as_deref().is_some_and(|action| {
+            !matches!(action, "invoke" | "read" | "manage" | "grant" | "stream")
+        }) {
+            anyhow::bail!("ability.toml `admission_action` is invalid");
         }
         let trimmed = self.name.trim();
         if trimmed.is_empty() {
@@ -1582,6 +1601,11 @@ pub fn default_chat_manifest() -> AbilityManifest {
     .expect(
         "default_chat_manifest is a constant, well-formed input; validation failing \
          here would be a compile-time contract violation in this file",
+    )
+    .with_admission_action("invoke")
+    .expect(
+        "the embedded chat admission action is a constant canonical enum value; validation \
+         failure here would be a compile-time contract violation in this file",
     )
     .with_output_schema(output_schema)
     .expect(

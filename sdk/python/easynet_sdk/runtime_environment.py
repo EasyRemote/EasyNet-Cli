@@ -80,9 +80,7 @@ def runtime_identity_projection_from_json(
     if not isinstance(decoded, Mapping):
         raise _invalid("runtime identity projection must be a JSON object")
     realm = _projection_text(decoded, "realm")
-    device_id = _projection_text(decoded, "device_id") or _projection_text(
-        decoded, "node_id"
-    )
+    device_id = _projection_text(decoded, "device_id")
     if not realm:
         raise _invalid("runtime identity projection missing realm")
     if not device_id:

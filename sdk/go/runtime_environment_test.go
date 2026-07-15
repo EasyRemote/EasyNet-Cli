@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-func TestRuntimeIdentityProjectionReadsNodeIDCredentials(t *testing.T) {
+func TestRuntimeIdentityProjectionReadsCredentials(t *testing.T) {
 	dir := t.TempDir()
 	credentials := filepath.Join(dir, "credentials.json")
 	if err := os.WriteFile(credentials, []byte(`{
 		"realm": "acme",
-		"node_id": "dev-a",
+		"device_id": "dev-a",
 		"username": "alice",
 		"hub_endpoint": "hub:443"
 	}`), 0o600); err != nil {
@@ -25,6 +25,16 @@ func TestRuntimeIdentityProjectionReadsNodeIDCredentials(t *testing.T) {
 	}
 	if projection.Realm != "acme" || projection.DeviceID != "dev-a" || projection.Username != "alice" || projection.HubEndpoint != "hub:443" {
 		t.Fatalf("unexpected projection: %#v", projection)
+	}
+}
+
+func TestRuntimeIdentityProjectionRejectsNodeIDAlias(t *testing.T) {
+	_, err := NewRuntimeIdentityProjectionFromJSON([]byte(`{"realm":"acme","node_id":"dev-a"}`))
+	if err == nil {
+		t.Fatal("expected node_id-only projection to fail")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

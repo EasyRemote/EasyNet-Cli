@@ -55,25 +55,6 @@ impl RuntimeProjectionStore {
     }
 }
 
-/// Lifecycle-domain process kind for `runtime.json`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeProcessKind {
-    /// Current EasyNet product daemon process.
-    EasynetDaemon,
-    /// Historical raw Axon bridge runtime.
-    LegacyAxonBridge,
-}
-
-impl RuntimeProcessKind {
-    /// Stable lifecycle wire string.
-    pub fn as_wire_str(self) -> &'static str {
-        match self {
-            Self::EasynetDaemon => "easynet_daemon",
-            Self::LegacyAxonBridge => "legacy_axon_bridge",
-        }
-    }
-}
-
 /// Parsed `runtime.json` as lifecycle input.
 ///
 /// Invariants:
@@ -114,29 +95,13 @@ impl RuntimeSessionProjection {
         self.state.runtime_kind
     }
 
-    /// Lifecycle-domain process kind declared by this projection.
-    pub fn process_kind(&self) -> RuntimeProcessKind {
-        match self.state.runtime_kind {
-            config::RuntimeKind::DaemonOnly => RuntimeProcessKind::EasynetDaemon,
-            config::RuntimeKind::AxonBridge => RuntimeProcessKind::LegacyAxonBridge,
-        }
-    }
-
-    /// Whether this projection describes the legacy raw Axon bridge.
-    pub fn uses_bridge(&self) -> bool {
-        self.state.uses_bridge()
-    }
-
     /// JSON representation used by lifecycle status reports.
     pub fn to_json(&self) -> Value {
         let state = &self.state;
         json!({
             "endpoint": state.endpoint,
-            "process_kind": self.process_kind().as_wire_str(),
-            "runtime_kind": match state.runtime_kind {
-                config::RuntimeKind::DaemonOnly => "daemon_only",
-                config::RuntimeKind::AxonBridge => "axon_bridge",
-            },
+            "process_kind": "easynet_daemon",
+            "runtime_kind": "daemon_only",
             "pid": state.pid,
             "hub": state.hub,
             "realm": state.tenant,

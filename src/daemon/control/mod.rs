@@ -30,20 +30,13 @@
 //                      subscriptions and diagnostics.
 //   frames.rs        — boot/status-only length-prefixed JSON frame
 //                      codec types.
-//   runtime_dispatch.rs
-//                    — newline-delimited internal UDS responder used
-//                      by Axon runtime-local-tool dispatch.
-//   runtime_dispatch_adapter.rs
-//                    — small adapter from runtime-dispatch requests
-//                      to the daemon-hosted Axon LocalRuntime.
-//
 // v1 status
 // ---------
 // `control.sock` is no longer a product ability transport. Keep it
 // narrow: boot lifecycle events, status discovery, and protocol
-// diagnostics. Product calls must enter through daemon Invocation or
-// through the daemon-internal runtime-dispatch adapter when Axon owns
-// the incoming Invocation and delegates to a locally registered tool.
+// diagnostics. Every product call enters through daemon Invocation;
+// the daemon dispatches admitted calls directly to its embedded
+// Axon `LocalRuntime`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -51,15 +44,5 @@
 pub mod boot_events;
 pub mod discovery;
 pub mod frames;
-/// Step 3 of the cross-repo plan: separate UDS responder for
-/// runtime-routed Invokes that arrived at axon-runtime for an
-/// ability the daemon registered via `runtime.register_local_tool`.
-/// Distinct from `server.rs` (length-delimited JSON IPC for CLI
-/// subcommands + local stdio MCP) — the runtime side speaks
-/// newline-delimited single-line JSON instead.
-#[cfg(feature = "axon-pb")]
-pub mod runtime_dispatch;
-#[cfg(feature = "axon-pb")]
-pub mod runtime_dispatch_adapter;
 pub mod server;
 pub mod transport;

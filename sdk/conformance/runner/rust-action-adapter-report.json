@@ -7,229 +7,188 @@
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": "Rust Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
-      "case_id": "bidi/frame0_required",
+      "case_id": "runtime/control_only",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/bidi.rs"
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "9d63709320778b87b0147e1f2415cab4dd815ee85f374a4b31e5e1c0d6591ed2"
         }
       ],
-      "message": "Rust Runtime Core rejects bidi open paths without the required opening frame0 payload before session admission.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "daemon/control_only",
-      "evidence": [
-        {
-          "kind": "rust_test",
-          "ref_path": "src/daemon/boot/lifecycle/mod.rs"
-        }
-      ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "daemon/permission_denied",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+          "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs",
+          "sha256": "f4a3fbb36881d88a602ffd1023dfc018726c57140f6ba2d58c8d184fa429cb37"
         }
       ],
-      "message": "Rust daemon runtime maps permission-denied admission and dispatch failures to typed PermissionDenied without untyped transport fallback.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/retry_hint",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/errors/mod.rs"
+          "ref_path": "src/ffi/errors/mod.rs",
+          "sha256": "5ee0f9ffd08b2cfcb3fa93554ae38549da335973c0285a62729e96ac5e9f468c"
         }
       ],
-      "message": "Rust typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/typed_json",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/errors/mod.rs"
+          "ref_path": "src/ffi/errors/mod.rs",
+          "sha256": "5ee0f9ffd08b2cfcb3fa93554ae38549da335973c0285a62729e96ac5e9f468c"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "health/api_vs_runtime",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/daemon/ability/health.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "health",
-      "status": "passed"
+      "profile": "health"
     },
     {
       "case_id": "invocation/builder_handle_state",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/canonical_material",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/daemon/invocation/dispatch/request.rs"
+          "ref_path": "src/daemon/invocation/dispatch/request.rs",
+          "sha256": "1af285a2a44d8971a14ac71bb0a5f839fe2afaeba1d268da92914d08dcd6e396"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/complete_tuple",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/local_daemon_signing_boundary",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/daemon/invocation/dispatch/request.rs"
+          "ref_path": "src/daemon/invocation/dispatch/request.rs",
+          "sha256": "1af285a2a44d8971a14ac71bb0a5f839fe2afaeba1d268da92914d08dcd6e396"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/presigned_submit",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/daemon/invocation/dispatch/request.rs"
+          "ref_path": "src/daemon/invocation/dispatch/request.rs",
+          "sha256": "1af285a2a44d8971a14ac71bb0a5f839fe2afaeba1d268da92914d08dcd6e396"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/terminal_monotonicity",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "runtime_core/feature_discovery",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/features/mod.rs"
+          "ref_path": "src/ffi/features/mod.rs",
+          "sha256": "db2fecd6a1c08d5c9b86a96ca5acf68cb3ec55014c050985e23c3f254c41b7f5"
         }
       ],
-      "message": "Rust owns the canonical feature discovery catalog and checks it against the shared fixture.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "stream/backpressure_bound",
-      "evidence": [
-        {
-          "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/backpressure.rs"
-        }
-      ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/order_terminal",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": "Rust Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_compatible",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/mod.rs"
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "9d63709320778b87b0147e1f2415cab4dd815ee85f374a4b31e5e1c0d6591ed2"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_incompatible",
       "evidence": [
         {
           "kind": "rust_test",
-          "ref_path": "src/ffi/mod.rs"
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "9d63709320778b87b0147e1f2415cab4dd815ee85f374a4b31e5e1c0d6591ed2"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     }
   ],
-  "schema_version": 1
+  "schema_version": 2
 }

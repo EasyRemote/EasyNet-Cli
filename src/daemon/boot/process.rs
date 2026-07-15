@@ -37,6 +37,7 @@ pub struct DaemonStartConfig {
     realm: Option<String>,
     node_id: String,
     daemon_bin: Option<PathBuf>,
+    working_dir: Option<PathBuf>,
     env: BTreeMap<String, String>,
     log_path: Option<PathBuf>,
     detach: bool,
@@ -70,6 +71,7 @@ impl DaemonStartConfig {
             realm: None,
             node_id: "hub".to_string(),
             daemon_bin: None,
+            working_dir: None,
             env: BTreeMap::new(),
             log_path: None,
             detach: true,
@@ -86,6 +88,7 @@ impl DaemonStartConfig {
             realm: None,
             node_id,
             daemon_bin: None,
+            working_dir: None,
             env: BTreeMap::new(),
             log_path: None,
             detach: true,
@@ -107,6 +110,16 @@ impl DaemonStartConfig {
             return Err(DaemonError::EmptyBinaryPath);
         }
         self.daemon_bin = Some(path);
+        Ok(self)
+    }
+
+    /// Override the daemon process working directory.
+    pub fn with_working_dir(mut self, path: impl Into<PathBuf>) -> Result<Self> {
+        let path = path.into();
+        if path.as_os_str().is_empty() {
+            return Err(DaemonError::EmptyWorkingDir);
+        }
+        self.working_dir = Some(path);
         Ok(self)
     }
 
@@ -321,6 +334,9 @@ impl DaemonStartConfig {
             })?;
 
         let mut cmd = Command::new(binary);
+        if let Some(working_dir) = &self.working_dir {
+            cmd.current_dir(working_dir);
+        }
         cmd.env("EASYNET_NODE_ID", self.node_id.trim());
         for (key, value) in &self.env {
             cmd.env(key, value);

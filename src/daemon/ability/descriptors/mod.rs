@@ -17,9 +17,9 @@ use super::AbilityControlPlaneError;
 mod surface;
 
 pub use surface::{
-    AbilityDescriptor, AbilityHints, AbilityIdentity, AbilitySchemaSummary, DescriptorError,
-    ReceiptSemantics, ScopeRule, StateTransition, StateTransitionError, TransitionClass,
-    Visibility,
+    AbilityDescriptor, AbilityHints, AbilityIdentity, AbilitySchemaSummary, AdmissionAction,
+    DescriptorError, ReceiptSemantics, ScopeRule, StateTransition, StateTransitionError,
+    TransitionClass, Visibility,
 };
 
 pub const DEFAULT_ABILITY_DESCRIPTOR_VERSION: &str =
@@ -219,18 +219,13 @@ fn is_stable_authority_root(authority_root: &str) -> bool {
         && !authority_root.chars().any(char::is_control)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CallMode {
+    #[default]
     Rpc,
     Stream,
     Bidi,
-}
-
-impl Default for CallMode {
-    fn default() -> Self {
-        Self::Rpc
-    }
 }
 
 impl CallMode {
@@ -361,6 +356,10 @@ pub fn governed_schema_summary(
     access_policy: Value,
     hints: Value,
     receipt_semantics: Value,
+    admission_action: Value,
+    description: &str,
+    source: &str,
+    metadata: Value,
 ) -> Value {
     serde_json::json!({
         "input": input,
@@ -368,6 +367,10 @@ pub fn governed_schema_summary(
         "access_policy": access_policy,
         "hints": hints,
         "receipt_semantics": receipt_semantics,
+        "admission_action": admission_action,
+        "description": description,
+        "source": source,
+        "metadata": metadata,
     })
 }
 
@@ -460,8 +463,13 @@ mod tests {
 
     #[test]
     fn descriptor_hash_changes_when_version_changes() {
-        let descriptor =
-            AbilityDescriptor::new("fs.read", LOCAL_DEVICE_URA, Visibility::Scoped).unwrap();
+        let descriptor = AbilityDescriptor::new(
+            "fs.read",
+            LOCAL_DEVICE_URA,
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap();
         let v1 = descriptor.clone().with_version("1.0.0").unwrap();
         let v2 = descriptor.with_version("2.0.0").unwrap();
         assert_ne!(v1.descriptor_hash_bytes(), v2.descriptor_hash_bytes());
@@ -481,6 +489,7 @@ mod tests {
             "mentor.quote",
             "easynet:///r/default/agent/u.mentor",
             CallMode::Rpc,
+            AdmissionAction::Invoke,
             Some(&manifest),
         )
         .unwrap();

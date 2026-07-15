@@ -81,16 +81,6 @@ fn run_status() -> anyhow::Result<()> {
             output::info("'easynet mcp serve' will route MCP calls through this daemon.");
         }
         Err(e) => match state {
-            Some(state) if state.uses_bridge() => {
-                output::warn(
-                    "runtime metadata exists, but no local daemon MCP surface is available",
-                );
-                output::detail("bridge_endpoint", &state.endpoint);
-                output::detail("tenant", state.tenant.as_deref().unwrap_or("default"));
-                output::info(
-                    "'easynet mcp serve' needs easynet-daemon. Hub/bridge-only mode does not provide it.",
-                );
-            }
             Some(state) => {
                 output::warn("runtime metadata exists, but the local daemon is not responding");
                 output::detail("grpc_socket", &state.endpoint);

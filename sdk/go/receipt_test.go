@@ -49,7 +49,7 @@ func TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities(t *testing.
 			return nil, err
 		}
 		return runtimeAbilityResultJSON(true, string(encoded), "", false), nil
-	}}
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
@@ -115,6 +115,21 @@ func TestReceiptReferenceDelegatesScalarCausalProjectionToAxon(t *testing.T) {
 	}
 }
 
+func TestParseReceiptRecordsAcceptsLedgerRecordWrapper(t *testing.T) {
+	records, err := parseReceiptRecords([]any{
+		map[string]any{
+			"record": receiptLedgerRecordFixture(),
+			"source": "invocation.history.list",
+		},
+	})
+	if err != nil {
+		t.Fatalf("parseReceiptRecords: %v", err)
+	}
+	if len(records) != 1 || records[0].RequestID != "req-1" {
+		t.Fatalf("records = %#v", records)
+	}
+}
+
 func TestReceiptReferenceFromRuntimeReceiptUsesSummaryAnchor(t *testing.T) {
 	reference, err := ReceiptReferenceFromRuntimeReceipt(RuntimeReceipt{
 		ReceiptURA:  "easynet:///r/example/resource/device.dev-a/invocation/req-1/receipt/1",
@@ -153,7 +168,7 @@ func TestRuntimeReceiptProviderForwardsAndValidatesCursor(t *testing.T) {
 			"next_cursor": "receipt-history:v1:cursor-2",
 		})
 		return runtimeAbilityResultJSON(true, string(output), "", false), nil
-	}}
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
@@ -211,7 +226,7 @@ func TestRuntimeReceiptProviderProjectsMultipleAbilityURAsAsOneSet(t *testing.T)
 			"records":     []any{},
 		})
 		return runtimeAbilityResultJSON(true, string(output), "", false), nil
-	}}
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
@@ -299,7 +314,7 @@ func runtimeReceiptProviderWithOutput(t *testing.T, output map[string]any) *Runt
 			return nil, err
 		}
 		return runtimeAbilityResultJSON(true, string(encoded), "", false), nil
-	}}
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, err := NewRuntimeClient(transport)
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)

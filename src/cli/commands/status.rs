@@ -21,7 +21,6 @@ use crate::daemon::boot::join_connection_state;
 use crate::daemon::lifecycle::{RuntimeLifecycleService, RuntimeLifecycleStatus};
 use crate::daemon::persistence::config;
 use crate::support::platform::local_invoke::invoke_local_ability;
-use crate::support::platform::net;
 use crate::support::platform::output;
 
 #[derive(Debug, Args)]
@@ -88,28 +87,14 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     let mut rows: Vec<(&str, String)> = Vec::new();
     if let Some(projection) = report.projection() {
         let state = projection.as_runtime_state();
-        match state.runtime_kind {
-            config::RuntimeKind::DaemonOnly => {
-                rows.push(("Mode", "daemon-only".to_string()));
-                rows.push(("gRPC socket", state.endpoint.clone()));
-                rows.push((
-                    "Control socket",
-                    crate::daemon::control::transport::default_socket_path()
-                        .display()
-                        .to_string(),
-                ));
-            }
-            config::RuntimeKind::AxonBridge => {
-                // Legacy raw axon-runtime state. Both device and hub product
-                // paths now record DaemonOnly; this arm is reached only by
-                // pre-unification runtime.json or non-product axon-runtime use.
-                rows.push(("Mode", "bridge (legacy)".to_string()));
-                rows.push(("Bridge endpoint", state.endpoint.clone()));
-                if let Some(pid) = state.pid {
-                    rows.push(("PID", pid.to_string()));
-                }
-            }
-        }
+        rows.push(("Mode", "daemon-only".to_string()));
+        rows.push(("gRPC socket", state.endpoint.clone()));
+        rows.push((
+            "Control socket",
+            crate::daemon::control::transport::default_socket_path()
+                .display()
+                .to_string(),
+        ));
     } else if let Some(discovery) = report.daemon().control_discovery() {
         rows.push((
             "Mode",
@@ -137,24 +122,12 @@ pub fn run(args: StatusArgs) -> anyhow::Result<()> {
     ) {
         output::warn("Runtime projection is missing, but daemon facts are present.");
     }
-    if let Some(projection) = report.projection() {
-        let state = projection.as_runtime_state();
+    if let Some(state) = report
+        .projection()
+        .map(|projection| projection.as_runtime_state())
+    {
         if state.credential_verified == Some(false) {
             output::info("Credential: NOT VERIFIED (Hub was unreachable at startup)");
-        }
-        if state.uses_bridge() {
-            let alive = state.pid.is_some_and(net::is_pid_alive)
-                || net::discover_pid_from_endpoint(&state.endpoint).is_some();
-            if alive {
-                output::info(
-                    "Bridge-mode runtime is up. Local daemon-only device and ability probes are skipped in this mode.",
-                );
-            } else {
-                output::warn(
-                    "Runtime metadata exists, but the recorded bridge process is not responding.",
-                );
-            }
-            return Ok(());
         }
     }
 

@@ -54,10 +54,10 @@ pub async fn build_session_envelope_open(
     // presence check but fail signature verification — the sign target MUST be
     // the descriptor-bound canonical bytes.
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
             caller_ura,
             ABILITY_SESSION_OPEN,
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::CallMode::Bidi,
         )
         .expect("session.open descriptor ref is well-formed for the device's own URA");
     let mut nonce = [0_u8; 16];

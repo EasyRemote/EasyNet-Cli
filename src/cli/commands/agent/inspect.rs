@@ -4,14 +4,13 @@
 use console::style;
 
 use crate::cli::daemon_client::agent_view::AgentRuntimeKind;
-use crate::daemon::execution::mission::directory::AgentDirectory;
 use crate::daemon::execution::mission::drivers::{claude_code, codex};
 
 use super::*;
 
 pub(super) fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
-    let daemon_client = required_local_daemon_agent_client()?;
-    let rows = invoke_daemon_agent_list_required(&daemon_client)?;
+    let gateway = agent_command_gateway();
+    let rows = invoke_daemon_agent_list_required(gateway.as_ref())?;
 
     let agents_to_check: Vec<(String, AgentRuntimeKind)> = match args.name {
         Some(name) => {
@@ -79,27 +78,6 @@ pub(super) fn run_doctor(args: DoctorArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-/// Look up the on-disk root for a registered agent. Returns a
-/// typed error if the registry has no row for that name, or if
-/// the row's root is missing / unparseable. Shared between
-/// `agent abilities` and `agent publish`: both need to open
-/// `<agent-root>/abilities/*` and both must fail with the same
-/// phrasing when the agent is unknown.
-fn open_registered_agent(name: &str) -> anyhow::Result<AgentDirectory> {
-    let daemon_client = required_local_daemon_agent_client()?;
-    let row = daemon_agent_row(&daemon_client, name)?;
-    let root = daemon_row_root(&row);
-    if !root.exists() {
-        anyhow::bail!(
-            "agent '{name}' has no on-disk root at {}. Either the directory was \
-             removed (run `agent prune` to clear the row) or the path is stale. \
-             Re-register with `agent add {name} --type …` to re-materialize.",
-            root.display()
-        );
-    }
-    AgentDirectory::open(&root)
 }
 
 pub(super) fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {

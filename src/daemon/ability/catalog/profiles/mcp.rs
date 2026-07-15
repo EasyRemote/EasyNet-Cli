@@ -39,6 +39,8 @@
 //! while this module owns provider trait wiring, route tables,
 //! descriptor projection, and dispatch into daemon Invocation.
 
+use crate::daemon::execution::mcp::stdio::{McpToolProvider, ProgressSink, ToolResult};
+
 /// AbilityDescriptors for every mcp.bridge.* + mcp.client.* in the
 /// live registry, anchored to the mcp-profile's canonical URA. All
 /// SCOPED per §18 — local MCP clients only for bridge.*; the daemon
@@ -258,9 +260,11 @@ struct ToolRoute {
     /// `[A-Za-z0-9_-]+` grammar; deterministic projection of
     /// `ability_name`).
     tool_name: String,
-    /// Canonical dotted EasyNet ability name (the runtime registry key
-    /// and URA tail).
-    ability_name: String,
+    /// Descriptor-bound local invocation target. Keeping this value in the
+    /// same row that produced `tool_name` makes listing and calling one atomic
+    /// projection: tools/call cannot silently replace an Agent/Hub owner with
+    /// the local Device default.
+    target: crate::daemon::invocation::routing::target::LocalAbilityTarget,
     /// Index of the source descriptor in the caller-provided slice.
     /// Lets `tool_spec_from_descriptor_with_name` re-attach metadata
     /// from the original descriptor without cloning it into the route.
@@ -289,9 +293,8 @@ struct ToolRoute {
 #[derive(Debug, Clone, Default)]
 pub struct McpToolRouteTable {
     routes: Vec<ToolRoute>,
-    /// MCP tool name → canonical ability name. Hot path for
-    /// `call_tool` dispatch.
-    reverse: std::collections::BTreeMap<String, String>,
+    /// MCP tool name → route row. Hot path for `call_tool` dispatch.
+    reverse: std::collections::BTreeMap<String, usize>,
 }
 
 impl McpToolRouteTable {
@@ -307,36 +310,56 @@ impl McpToolRouteTable {
             std::collections::BTreeMap::new();
 
         for (index, descriptor) in descriptors.iter().enumerate() {
-            let base = mcp_tool_name_for_ability(&descriptor.name);
+            if descriptor.call_mode() != crate::daemon::ability::descriptors::CallMode::Rpc {
+                continue;
+            }
+            let ability_ura = descriptor.canonical_ability_ura().unwrap_or_else(|| {
+                panic!(
+                    "validated AbilityDescriptor {} owned by {} has no canonical Ability URA",
+                    descriptor.name, descriptor.owner_ura
+                )
+            });
+            let selector =
+                crate::core::ura::AbilitySelector::parse(&ability_ura).unwrap_or_else(|error| {
+                    panic!(
+                        "validated AbilityDescriptor {} produced invalid Ability URA {}: {error}",
+                        descriptor.name, ability_ura
+                    )
+                });
+            let target =
+                crate::daemon::invocation::routing::target::LocalAbilityTarget::from_selector(
+                    &selector,
+                );
+            let base = mcp_tool_name_for_ability(target.dispatch_name());
             let mut tool_name = match used.get(&base) {
                 None => base.clone(),
-                Some(existing) if existing == &descriptor.name => base.clone(),
-                Some(_) => format!("{base}__{}", short_ability_hash(&descriptor.name)),
+                Some(existing) if existing == &ability_ura => base.clone(),
+                Some(_) => format!("{base}__{}", short_ability_hash(&ability_ura)),
             };
             if let Some(existing) = used.get(&tool_name) {
-                if existing != &descriptor.name {
-                    let hash = short_ability_hash(&descriptor.name);
+                if existing != &ability_ura {
+                    let hash = short_ability_hash(&ability_ura);
                     let mut suffix = 2usize;
                     while used
                         .get(&tool_name)
-                        .is_some_and(|existing| existing != &descriptor.name)
+                        .is_some_and(|existing| existing != &ability_ura)
                     {
                         tool_name = format!("{base}__{hash}_{suffix}");
                         suffix += 1;
                     }
                 }
             }
-            used.insert(tool_name.clone(), descriptor.name.clone());
+            used.insert(tool_name.clone(), ability_ura);
             routes.push(ToolRoute {
                 tool_name,
-                ability_name: descriptor.name.clone(),
+                target,
                 index,
             });
         }
 
         let mut reverse = std::collections::BTreeMap::new();
-        for r in &routes {
-            reverse.insert(r.tool_name.clone(), r.ability_name.clone());
+        for (index, route) in routes.iter().enumerate() {
+            reverse.insert(route.tool_name.clone(), index);
         }
 
         Self { routes, reverse }
@@ -345,7 +368,30 @@ impl McpToolRouteTable {
     /// Resolve `tool_name` (an MCP-facing name) back to the canonical
     /// dotted EasyNet ability name.
     pub fn canonical_for_tool<'a>(&'a self, tool_name: &str) -> Option<&'a str> {
-        self.reverse.get(tool_name).map(String::as_str)
+        self.target_for_tool(tool_name)
+            .map(crate::daemon::invocation::routing::target::LocalAbilityTarget::dispatch_name)
+    }
+
+    /// Resolve the complete descriptor-bound target advertised for a tool.
+    pub fn target_for_tool(
+        &self,
+        tool_name: &str,
+    ) -> Option<&crate::daemon::invocation::routing::target::LocalAbilityTarget> {
+        self.route_for_tool(tool_name).map(|route| &route.target)
+    }
+
+    fn len(&self) -> usize {
+        self.routes.len()
+    }
+
+    fn descriptor_index_for_tool(&self, tool_name: &str) -> Option<usize> {
+        self.route_for_tool(tool_name).map(|route| route.index)
+    }
+
+    fn route_for_tool(&self, tool_name: &str) -> Option<&ToolRoute> {
+        self.reverse
+            .get(tool_name)
+            .and_then(|index| self.routes.get(*index))
     }
 
     /// Iterate every row in projection order. Yields `(tool_name,
@@ -366,16 +412,9 @@ pub fn canonical_ability_name_for_mcp_tool<'a>(
     tool_name: &str,
 ) -> Option<&'a str> {
     let table = McpToolRouteTable::from_descriptors(descriptors);
-    // We cannot return `&'a str` from the table's owned strings, so
-    // resolve through the descriptor slice once we know the canonical
-    // ability name. The clone is cheap (a single lookup); long-lived
-    // call sites should switch to `McpToolRouteTable::canonical_for_tool`
-    // directly to avoid even this.
-    let canonical = table.canonical_for_tool(tool_name)?.to_string();
     descriptors
-        .iter()
-        .find(|d| d.name == canonical)
-        .map(|d| d.name.as_str())
+        .get(table.descriptor_index_for_tool(tool_name)?)
+        .map(|descriptor| descriptor.name.as_str())
 }
 
 /// Truncated SHA-256 used to disambiguate two canonical ability names
@@ -389,67 +428,6 @@ fn short_ability_hash(ability_name: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(ability_name.as_bytes());
     hex::encode(&digest[..8])
-}
-
-fn metadata_for_agent_ability(
-    agent_name: &str,
-    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-) -> Vec<(&'static str, String)> {
-    let mut metadata = vec![
-        ("owner_agent", agent_name.to_string()),
-        ("owner_user", "local".to_string()),
-    ];
-    // Exec kind + exec-specific metadata first. Cost is layered on
-    // top: a manifest-declared `[cost]` table wins over the per-exec
-    // heuristic so an operator who declares "this MCP-backed tool
-    // hits Google Maps and bills $5/1000" sees that label propagate
-    // verbatim into the MCP description and the `x-easynet.cost_*`
-    // fields. When the manifest is silent we fall back to the
-    // per-exec default — `unknown` for anything we cannot prove is
-    // local (the honesty rule that replaced the older "free for
-    // everything we don't recognise" lie).
-    let (heur_kind, heur_label): (&str, &str) = match manifest.and_then(|m| m.exec()) {
-        Some(crate::daemon::ability::manifest::AbilityExec::Mcp(exec)) => {
-            metadata.push(("exec_kind", "mcp".to_string()));
-            metadata.push(("mcp_server", exec.server.clone()));
-            metadata.push(("mcp_tool", exec.tool.clone()));
-            ("unknown", "upstream cost declared by operator")
-        }
-        Some(crate::daemon::ability::manifest::AbilityExec::Http(_)) => {
-            metadata.push(("exec_kind", "http".to_string()));
-            ("external_metered", "HTTP/API billing may apply")
-        }
-        Some(crate::daemon::ability::manifest::AbilityExec::Shell(_)) => {
-            metadata.push(("exec_kind", "shell".to_string()));
-            ("free", "free/local")
-        }
-        Some(crate::daemon::ability::manifest::AbilityExec::Eal(_)) => {
-            metadata.push(("exec_kind", "eal".to_string()));
-            ("unknown", "composed ability cost depends on steps")
-        }
-        Some(crate::daemon::ability::manifest::AbilityExec::HostStream(_)) => {
-            metadata.push(("exec_kind", "host_stream".to_string()));
-            ("free", "free/local")
-        }
-        None => {
-            metadata.push(("exec_kind", "agent_chat".to_string()));
-            ("llm_metered", "LLM token billing may apply")
-        }
-    };
-    let (cost_kind, cost_label) = match manifest.and_then(|m| m.cost()) {
-        Some(declared) => {
-            let kind = declared.kind.as_wire_str().to_string();
-            let label = declared
-                .label
-                .clone()
-                .unwrap_or_else(|| heur_label.to_string());
-            (kind, label)
-        }
-        None => (heur_kind.to_string(), heur_label.to_string()),
-    };
-    metadata.push(("cost_kind", cost_kind));
-    metadata.push(("cost_label", cost_label));
-    metadata
 }
 
 /// The identity trace a successful daemon invocation echoes back, folded
@@ -473,7 +451,11 @@ impl InvocationToolTrace {
     /// Project the daemon invocation `_meta` echo (see
     /// `local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta`)
     /// onto the driver-facing trace object.
-    fn from_daemon_meta(meta: &serde_json::Value, mcp_tool: &str) -> Self {
+    fn from_daemon_meta(
+        meta: &crate::support::platform::local_invoke::VerifiedLocalInvocationMeta,
+        mcp_tool: &str,
+    ) -> Self {
+        let meta = meta.as_value();
         let field = |key: &str| meta.get(key).and_then(|v| v.as_str()).map(str::to_string);
         Self {
             ability: field("ability").unwrap_or_default(),
@@ -514,7 +496,7 @@ pub trait LocalInvoker {
     /// Result frame's value, or an error message.
     fn invoke_sync(
         &self,
-        ability: &str,
+        target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String>;
 
@@ -524,11 +506,11 @@ pub trait LocalInvoker {
     /// `mcp_tool` is the wire tool name the driver matches against.
     fn invoke_traced(
         &self,
-        ability: &str,
+        target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
         _mcp_tool: &str,
         args: serde_json::Value,
     ) -> Result<(serde_json::Value, Option<InvocationToolTrace>), String> {
-        self.invoke_sync(ability, args).map(|value| (value, None))
+        self.invoke_sync(target, args).map(|value| (value, None))
     }
 }
 
@@ -537,35 +519,50 @@ pub trait LocalInvoker {
 /// instead of through an isolated in-process kernel snapshot.
 pub struct DaemonLocalInvoker;
 
+impl DaemonLocalInvoker {
+    fn invoke_verified(
+        &self,
+        target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
+        args: serde_json::Value,
+    ) -> anyhow::Result<(
+        serde_json::Value,
+        crate::support::platform::local_invoke::VerifiedLocalInvocationMeta,
+    )> {
+        crate::support::platform::local_invoke::invoke_local_ability_target_with_invocation_meta(
+            target,
+            args,
+            None,
+            &[],
+            Some(std::time::Duration::from_secs(30)),
+            None,
+        )
+    }
+}
+
 impl LocalInvoker for DaemonLocalInvoker {
     fn invoke_sync(
         &self,
-        ability: &str,
+        target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
         args: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        crate::support::platform::local_invoke::invoke_local_ability(ability, args)
+        self.invoke_verified(target, args)
+            .map(|(value, _)| value)
             .map_err(|err| err.to_string())
     }
 
     fn invoke_traced(
         &self,
-        ability: &str,
+        target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
         mcp_tool: &str,
         args: serde_json::Value,
     ) -> Result<(serde_json::Value, Option<InvocationToolTrace>), String> {
-        let (value, meta) =
-            crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
-                ability,
-                args,
-                None,
-                &[],
-                None,
-                None,
-                None,
-            )
+        let (value, meta) = self
+            .invoke_verified(target, args)
             .map_err(|err| err.to_string())?;
-        let trace = InvocationToolTrace::from_daemon_meta(&meta, mcp_tool);
-        Ok((value, Some(trace)))
+        Ok((
+            value,
+            Some(InvocationToolTrace::from_daemon_meta(&meta, mcp_tool)),
+        ))
     }
 }
 
@@ -573,14 +570,14 @@ impl LocalInvoker for DaemonLocalInvoker {
 /// `easynet start --mcp` use after the P4.8d facade retirement. Every
 /// `tools/list` returns the host's AbilityDescriptors projected to
 /// MCP shape; every `tools/call` routes through
-/// `LocalInvoker::invoke_sync`, which production wires to daemon.sock
-/// Axon Invoke. Zero direct bridge calls; zero hub-mediated MCP tool
-/// catalog.
+/// `LocalInvoker::invoke_traced`, which production wires to daemon.sock Axon
+/// Invoke and verified finalization metadata. Zero direct bridge calls; zero
+/// hub-mediated MCP tool catalog.
 pub struct InvokeMcpProvider<I: LocalInvoker> {
     invoker: I,
-    /// Snapshot of the host's ability descriptors at construction.
-    /// Refreshed on daemon restart; for now we keep a static list
-    /// because the registry doesn't change at runtime.
+    /// Atomic snapshot returned by the daemon's live catalog at construction.
+    /// The provider and route table retain this exact snapshot so tools/list
+    /// and tools/call cannot observe different descriptor generations.
     descriptors: Vec<crate::daemon::ability::descriptors::AbilityDescriptor>,
     /// Tool-name routing built from `descriptors` at construction.
     /// Kept paired with `descriptors` via the constructor — this is
@@ -605,7 +602,7 @@ impl<I: LocalInvoker> InvokeMcpProvider<I> {
     /// Number of descriptors the provider will surface in tools/list.
     /// Used by tests + by `easynet mcp_server`'s startup banner.
     pub fn descriptor_count(&self) -> usize {
-        self.descriptors.len()
+        self.routes.len()
     }
 }
 
@@ -621,26 +618,46 @@ pub struct StdioServerConfig {
     /// Tenant ID — informational; routed dispatch honours whatever
     /// the loaded credentials carry.
     pub tenant_id: String,
-    /// Optional: when this MCP server is the workspace MCP for a
-    /// specific agent (the daemon spawned it as
-    /// `easynet mcp serve --agent <name>`), set this to that
-    /// agent's name. The descriptor list will then include the
-    /// agent's per-workspace ability TOMLs from
-    /// `<agent_root>/abilities/*.toml` IN ADDITION to the
-    /// host-wide profile descriptors. None = host-only catalog
-    /// (the operator-installed `easynet mcp install` path).
-    ///
-    /// Why this matters: every claude.chat / codex.chat call
-    /// spawns a workspace MCP server with --agent set. Without
-    /// this field, agents could only see the device-profile
-    /// abilities through MCP — never their own abilities, which
-    /// is the whole point of letting an agent expose abilities
-    /// per the EasyNet ontology.
+    /// Workspace agent label. The daemon catalog remains the only descriptor
+    /// authority; the label is used solely to suppress recursive chat tools in
+    /// an agent's own MCP surface.
     pub agent_name: Option<String>,
 }
 
+trait AbilityCatalogReader {
+    fn read(&self) -> anyhow::Result<Vec<crate::daemon::ability::descriptors::AbilityDescriptor>>;
+}
+
+struct DaemonAbilityCatalogReader;
+
+impl AbilityCatalogReader for DaemonAbilityCatalogReader {
+    fn read(&self) -> anyhow::Result<Vec<crate::daemon::ability::descriptors::AbilityDescriptor>> {
+        use anyhow::Context;
+
+        let response = crate::support::platform::local_invoke::invoke_local_ability(
+            "meta.list_abilities",
+            serde_json::json!({"scope": "local"}),
+        )
+        .context("read live daemon ability catalog for MCP")?;
+        let rows = response
+            .get("abilities")
+            .and_then(serde_json::Value::as_array)
+            .context("meta.list_abilities response missing abilities array")?;
+        let mut descriptors = Vec::with_capacity(rows.len());
+        for row in rows {
+            let descriptor = serde_json::from_value::<
+                crate::daemon::ability::descriptors::AbilityDescriptor,
+            >(row.clone())
+            .context("decode live daemon AbilityDescriptor for MCP")?;
+            descriptors.push(descriptor);
+        }
+
+        Ok(descriptors)
+    }
+}
+
 /// Pre-built provider + server name, ready to hand to
-/// `easynet_axon::mcp::StdioMcpServer::new`. Returned by
+/// `crate::daemon::execution::mcp::stdio::StdioMcpServer::new`. Returned by
 /// `build_stdio_server` so callers can decide whether to run
 /// foreground (mcp_server) or in a spawned thread (start --mcp).
 pub struct ConfiguredStdioServer {
@@ -656,228 +673,34 @@ impl ConfiguredStdioServer {
     }
 }
 
-/// One-stop builder: derive the host's AbilityDescriptors from
-/// local-agents.json and produce a configured InvokeMcpProvider ready
-/// for the stdio runner.
+/// One-stop builder: read the live daemon's authoritative ability catalog and
+/// produce a configured InvokeMcpProvider ready for the stdio runner.
 ///
 /// Both `easynet mcp_server` and `easynet start --mcp` call this
 /// — they differ only in argument parsing and how they launch the
 /// stdio server (foreground vs. spawned thread).
-pub fn build_stdio_server(config: &StdioServerConfig) -> ConfiguredStdioServer {
-    let mut descriptors = crate::daemon::ability::catalog::profiles::load_host_descriptors();
-
-    // Workspace MCP: when --agent <name> is set, append that
-    // agent's per-workspace ability descriptors. Read straight
-    // from the agent's on-disk manifests (the same path
-    // `easynet agent abilities <name>` walks). This is what makes
-    // an agent's own abilities (e.g. `claude.audit-test-ability`
-    // declared at <workspace>/abilities/...) visible to the
-    // spawned LLM CLI as MCP tools — without this, the EasyNet
-    // ontology's "agent exposes abilities" promise was just
-    // metadata: agents could declare abilities but the LLM
-    // running inside them couldn't call them.
-    if let Some(agent_name) = config.agent_name.as_deref() {
-        descriptors.extend(per_agent_workspace_descriptors(agent_name));
-    }
-
-    let invoker = DaemonLocalInvoker;
-    let provider = InvokeMcpProvider::new(invoker, descriptors);
-    let _ = config.tenant_id; // tenant is informational for now
-    ConfiguredStdioServer {
-        provider,
-        server_name: config.server_name.clone(),
-    }
+pub fn build_stdio_server(config: &StdioServerConfig) -> anyhow::Result<ConfiguredStdioServer> {
+    build_stdio_server_with_catalog(config, &DaemonAbilityCatalogReader)
 }
 
-/// Build AbilityDescriptors for one agent's per-workspace
-/// ability TOMLs. Reads from the canonical disk path that
-/// `easynet agent abilities <name>` reads from. Returns an
-/// empty Vec when the agent isn't registered or its workspace
-/// has no ability manifests; the MCP server proceeds with the
-/// host-wide catalog only.
-fn per_agent_workspace_descriptors(
-    agent_name: &str,
-) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
-
-    // Resolve the agent entry. If unregistered, no per-agent
-    // catalog to add — the workspace MCP server is still useful
-    // for the host catalog alone.
-    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
-    let entry = match registry.agents.get(agent_name) {
-        Some(e) => e,
-        None => return Vec::new(),
-    };
-    let local_agents = match crate::daemon::persistence::local_agents::load() {
-        Ok(local_agents) => local_agents,
-        Err(_) => return Vec::new(),
-    };
-    let owner_ura_for = |name: &str| {
-        crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(&local_agents, name)
-            .ok()
-            .flatten()
-            .map(|entry| entry.agent_ura.clone())
-            .filter(|owner_ura| AbilityDescriptor::validate_owner_ura(owner_ura).is_ok())
-    };
-    let Some(own_owner_ura) = owner_ura_for(agent_name) else {
-        // A workspace short name is a registry key, not a network identity.
-        // Until bootstrap has persisted its canonical Agent URA there is no
-        // routable descriptor to expose through MCP.
-        return Vec::new();
-    };
-
-    let mut out: Vec<AbilityDescriptor> = Vec::new();
-
-    let to_descriptor =
-        |s: crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec,
-         owner_ura: &str,
-         source: String,
-         metadata: Vec<(&'static str, String)>|
-         -> Option<AbilityDescriptor> {
-            AbilityDescriptor::new(s.name().to_string(), owner_ura, Visibility::Scoped)
-                .ok()
-                .map(|mut d| {
-                    // AgentAbilitySpec calls its JSON-Schema field
-                    // `parameters()` (carrying the input schema in
-                    // the chat-style "parameters" shape) — that
-                    // IS the input schema for the descriptor.
-                    d = d
-                        .with_input_schema(s.parameters().clone())
-                        .with_source(source)
-                        .with_description(s.description());
-                    for (key, value) in metadata {
-                        d = d.with_metadata_entry(key, value);
-                    }
-                    d
-                })
-        };
-
-    // Phase 1: this agent's own abilities. Owner URA uses the
-    // agent's own name. The agent's `<agent_name>.chat` ability is
-    // filtered out — it is the outgoing surface, not something to
-    // expose AS a tool to the LLM running INSIDE it (that would
-    // invite infinite recursion).
-    let own_manifests: std::collections::BTreeMap<
-        String,
-        crate::daemon::ability::manifest::AbilityManifest,
-    > = crate::daemon::execution::mission::agent_ability_specs::manifests_for(agent_name, entry)
-        .into_iter()
-        .map(|manifest| (manifest.qualified_name(agent_name), manifest))
-        .collect();
-    let own_specs =
-        crate::daemon::execution::mission::agent_ability_specs::abilities_for(agent_name, entry);
-    let self_chat = format!("{agent_name}.chat");
-    for s in own_specs.into_iter().filter(|s| s.name() != self_chat) {
-        let metadata = metadata_for_agent_ability(agent_name, own_manifests.get(s.name()));
-        if let Some(d) = to_descriptor(s, &own_owner_ura, format!("agent:{agent_name}"), metadata) {
-            out.push(d);
-        }
+fn build_stdio_server_with_catalog(
+    config: &StdioServerConfig,
+    catalog: &dyn AbilityCatalogReader,
+) -> anyhow::Result<ConfiguredStdioServer> {
+    let mut descriptors = catalog.read()?;
+    if config.agent_name.is_some() {
+        descriptors.retain(|descriptor| {
+            let owner_is_agent = crate::core::ura::parse_ura(&descriptor.owner_ura)
+                .is_ok_and(|owner| owner.kind == crate::core::ura::URAKind::Agent);
+            !(owner_is_agent && descriptor.public_name() == "chat")
+        });
     }
-
-    // Phase 1b: synthesise descriptors for the agent's self-bundle
-    // builtins — `<agent>.discover` and `<agent>.invoke`. These are
-    // registered programmatically in `build_registry_with_services`,
-    // not declared via on-disk TOMLs, so the workspace enumeration
-    // above never sees them. Without these synthesised entries an
-    // LLM running inside this agent cannot call its own discovery /
-    // invocation surface even though the daemon would happily
-    // dispatch them — exactly the gap that left `claude.discover`
-    // missing from `tools/list` after the ability-only refactor.
-    //
-    // The two descriptors are intentionally per-agent: every agent
-    // projection advertises its own discover / invoke (the discovery
-    // ladder is projection-scoped). Source = `kernel:built-in:self-bundle`
-    // so an operator inspecting the descriptor catalogue can tell at a
-    // glance the entry came from a synth path, not a TOML.
-    {
-        let discover_name = format!(
-            "{agent_name}.{}",
-            crate::daemon::ability::builtins::agents::discover::ABILITY_VERB
-        );
-        let invoke_name = format!(
-            "{agent_name}.{}",
-            crate::daemon::ability::builtins::agents::invoke::ABILITY_VERB
-        );
-        for (name, schema, description) in [
-            (
-                discover_name,
-                crate::daemon::ability::builtins::agents::discover::input_schema(),
-                crate::daemon::ability::builtins::agents::discover::description(),
-            ),
-            (
-                invoke_name,
-                crate::daemon::ability::builtins::agents::invoke::input_schema(),
-                crate::daemon::ability::builtins::agents::invoke::description(),
-            ),
-        ] {
-            if let Ok(d) = AbilityDescriptor::new(name, &own_owner_ura, Visibility::Scoped) {
-                let mut d = d
-                    .with_input_schema(schema)
-                    .with_source("kernel:built-in:self-bundle")
-                    .with_description(description);
-                for (key, value) in [
-                    ("owner_agent", agent_name.to_string()),
-                    ("owner_user", "local".to_string()),
-                    ("exec_kind", "builtin".to_string()),
-                    ("cost_kind", "free".to_string()),
-                    ("cost_label", "free/local".to_string()),
-                ] {
-                    d = d.with_metadata_entry(key, value);
-                }
-                out.push(d);
-            }
-        }
-    }
-
-    // Phase 2: every OTHER registered agent's abilities. This is
-    // the cross-agent surface — when agent A is the active LLM and
-    // the user asks for something only agent B has the skill for,
-    // agent A's tool list now includes `<B>.<verb>` so the LLM can
-    // route to it. Calling those tools dispatches through B's
-    // materialized per-agent handler with B's own skills exposed.
-    //
-    // `<other_name>.chat` is excluded for the same reason: chat is
-    // the agent's outgoing surface, not a callable tool. Calling
-    // another agent's chat from inside agent A would just spawn
-    // a nested chat session that bypasses the per-ability route
-    // we are trying to encourage.
-    for (other_name, other_entry) in &registry.agents {
-        if other_name == agent_name {
-            continue;
-        }
-        let other_chat = format!("{other_name}.chat");
-        let Some(other_owner) = owner_ura_for(other_name) else {
-            continue;
-        };
-        let other_manifests: std::collections::BTreeMap<
-            String,
-            crate::daemon::ability::manifest::AbilityManifest,
-        > = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
-            other_name,
-            other_entry,
-        )
-        .into_iter()
-        .map(|manifest| (manifest.qualified_name(other_name), manifest))
-        .collect();
-        for s in crate::daemon::execution::mission::agent_ability_specs::abilities_for(
-            other_name,
-            other_entry,
-        )
-        .into_iter()
-        .filter(|s| s.name() != other_chat)
-        {
-            let metadata = metadata_for_agent_ability(other_name, other_manifests.get(s.name()));
-            if let Some(d) = to_descriptor(s, &other_owner, format!("agent:{other_name}"), metadata)
-            {
-                out.push(d);
-            }
-        }
-    }
-
-    out
+    let invoker = DaemonLocalInvoker;
+    let provider = InvokeMcpProvider::new(invoker, descriptors);
+    Ok(ConfiguredStdioServer {
+        provider,
+        server_name: config.server_name.clone(),
+    })
 }
 
 /// Fold the invocation identity trace into a successful tool-call payload
@@ -906,23 +729,28 @@ fn fold_invocation_trace(
     }
 }
 
-impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I> {
+impl<I: LocalInvoker> McpToolProvider for InvokeMcpProvider<I> {
     fn tool_specs(&self) -> Vec<serde_json::Value> {
-        tool_specs_from_descriptors(&self.descriptors)
+        self.routes
+            .iter()
+            .map(|(tool_name, index)| {
+                tool_spec_from_descriptor_with_name(&self.descriptors[index], tool_name)
+            })
+            .collect()
     }
 
     fn handle_tool_call(
         &self,
         name: &str,
         args: &serde_json::Map<String, serde_json::Value>,
-    ) -> easynet_axon::mcp::ToolResult {
-        let ability_name = self.routes.canonical_for_tool(name);
+    ) -> ToolResult {
+        let target = self.routes.target_for_tool(name);
 
         // Reject calls for tools we don't advertise. The descriptor
         // list is the single source of truth — if a name isn't
         // there, this is a caller-side bug, not a transient.
-        let Some(ability_name) = ability_name else {
-            return easynet_axon::mcp::ToolResult {
+        let Some(target) = target else {
+            return ToolResult {
                 payload: serde_json::json!({
                     "error": format!("unknown tool: `{name}`")
                 }),
@@ -930,12 +758,12 @@ impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I
             };
         };
         let args_value = serde_json::Value::Object(args.clone());
-        match self.invoker.invoke_traced(ability_name, name, args_value) {
-            Ok((value, trace)) => easynet_axon::mcp::ToolResult {
+        match self.invoker.invoke_traced(target, name, args_value) {
+            Ok((value, trace)) => ToolResult {
                 payload: fold_invocation_trace(value, trace),
                 is_error: false,
             },
-            Err(msg) => easynet_axon::mcp::ToolResult {
+            Err(msg) => ToolResult {
                 payload: serde_json::json!({"error": msg}),
                 is_error: true,
             },
@@ -960,8 +788,8 @@ impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I
         &self,
         name: &str,
         args: &serde_json::Map<String, serde_json::Value>,
-        sink: &mut dyn easynet_axon::mcp::ProgressSink,
-    ) -> easynet_axon::mcp::ToolResult {
+        sink: &mut dyn ProgressSink,
+    ) -> ToolResult {
         // Single "received" pulse so the client gets immediate
         // ack-of-progress even before the unary handler returns.
         // The throttle in WriterProgressSink ensures this never
@@ -980,9 +808,8 @@ impl<I: LocalInvoker> easynet_axon::mcp::McpToolProvider for InvokeMcpProvider<I
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
-    use easynet_axon::mcp::McpToolProvider;
-    use std::cell::RefCell;
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
+    use std::cell::{Cell, RefCell};
 
     const TEST_DEVICE_OWNER: &str = "easynet:///r/acme/device/01DEV";
     const TEST_AGENT_OWNER: &str = "easynet:///r/acme/agent/test-user.claude";
@@ -1004,48 +831,37 @@ mod tests {
     }
 
     fn d(name: &str) -> AbilityDescriptor {
-        AbilityDescriptor::new(name, "easynet:///r/acme/device/01DEV", Visibility::Scoped)
-            .unwrap()
-            .with_source("kernel:built-in")
-            .with_input_schema(serde_json::json!({"type":"object"}))
-            .with_description("List every registered agent on this host.")
-    }
-
-    fn create_manifest_backed_agent_entry(
-        agent: &str,
-    ) -> (
-        std::path::PathBuf,
-        crate::daemon::persistence::agent_registry::AgentEntry,
-    ) {
-        use crate::core::agent::spec::{AgentSpec, RuntimeKind};
-        use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
-        use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
-
-        let workspace_root = crate::daemon::persistence::config::agents_root().join(agent);
-        let _ = std::fs::remove_dir_all(&workspace_root);
-        AgentDirectory::create(
-            &Location::Local {
-                root: workspace_root.clone(),
-            },
-            AgentSpec::new(agent.to_string(), RuntimeKind::ClaudeCode),
+        AbilityDescriptor::new(
+            name,
+            "easynet:///r/acme/device/01DEV",
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
         )
-        .expect("create manifest-backed test agent directory");
-
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        entry.root_path = Some(workspace_root.clone());
-        (workspace_root, entry)
+        .unwrap()
+        .with_source("kernel:built-in")
+        .with_input_schema(serde_json::json!({"type":"object"}))
+        .with_description("List every registered agent on this host.")
     }
 
-    fn save_test_authorities(agent: &str) {
-        let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: TEST_DEVICE_OWNER.to_string(),
-            ..Default::default()
-        };
-        let agent_ura = crate::core::ura::agent_ura("acme", "test-user", agent);
-        crate::daemon::persistence::local_agents::upsert_hosted_agent(
-            &mut local, "llm", agent, &agent_ura,
-        );
-        crate::daemon::persistence::local_agents::save(&local).unwrap();
+    struct FixtureAbilityCatalog {
+        descriptors: Vec<AbilityDescriptor>,
+        reads: Cell<usize>,
+    }
+
+    impl FixtureAbilityCatalog {
+        fn new(descriptors: Vec<AbilityDescriptor>) -> Self {
+            Self {
+                descriptors,
+                reads: Cell::new(0),
+            }
+        }
+    }
+
+    impl AbilityCatalogReader for FixtureAbilityCatalog {
+        fn read(&self) -> anyhow::Result<Vec<AbilityDescriptor>> {
+            self.reads.set(self.reads.get() + 1);
+            Ok(self.descriptors.clone())
+        }
     }
 
     #[test]
@@ -1084,9 +900,14 @@ mod tests {
         // No `.with_description(...)` → empty string → fall back to
         // qualified name so the MCP wire never carries an empty
         // description (which Claude Code's tool list rejects).
-        let desc = AbilityDescriptor::new("a.b", TEST_DEVICE_OWNER, Visibility::Public)
-            .unwrap()
-            .with_input_schema(serde_json::json!({"type":"object"}));
+        let desc = AbilityDescriptor::new(
+            "a.b",
+            TEST_DEVICE_OWNER,
+            Visibility::Public,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_input_schema(serde_json::json!({"type":"object"}));
         let spec = tool_spec_from_descriptor(&desc);
         assert!(spec["description"].as_str().unwrap().ends_with("] a.b"));
         assert_eq!(spec["name"], "a_b");
@@ -1094,8 +915,13 @@ mod tests {
 
     #[test]
     fn tool_spec_falls_back_to_object_schema_when_input_is_null() {
-        let mut desc =
-            AbilityDescriptor::new("a.b", TEST_DEVICE_OWNER, Visibility::Public).unwrap();
+        let mut desc = AbilityDescriptor::new(
+            "a.b",
+            TEST_DEVICE_OWNER,
+            Visibility::Public,
+            AdmissionAction::Invoke,
+        )
+        .unwrap();
         desc.schema_summary.input = serde_json::Value::Null;
         let spec = tool_spec_from_descriptor(&desc);
         assert_eq!(spec["inputSchema"]["type"], "object");
@@ -1120,6 +946,7 @@ mod tests {
             "openai.mcp_google_maps__geocode",
             "easynet:///r/acme/agent/silan.openai",
             Visibility::Scoped,
+            AdmissionAction::Invoke,
         )
         .unwrap()
         .with_description("Geocode an address.")
@@ -1149,6 +976,7 @@ mod tests {
     /// dispatcher and surface its result verbatim (or its error).
     struct RecordingInvoker {
         last_ability: RefCell<Option<String>>,
+        last_callee_ura: RefCell<Option<String>>,
         last_args: RefCell<Option<serde_json::Value>>,
         reply: Result<serde_json::Value, String>,
     }
@@ -1156,6 +984,7 @@ mod tests {
         fn new(reply: Result<serde_json::Value, String>) -> Self {
             Self {
                 last_ability: RefCell::new(None),
+                last_callee_ura: RefCell::new(None),
                 last_args: RefCell::new(None),
                 reply,
             }
@@ -1164,10 +993,11 @@ mod tests {
     impl LocalInvoker for RecordingInvoker {
         fn invoke_sync(
             &self,
-            ability: &str,
+            target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
             args: serde_json::Value,
         ) -> Result<serde_json::Value, String> {
-            *self.last_ability.borrow_mut() = Some(ability.to_string());
+            *self.last_ability.borrow_mut() = Some(target.dispatch_name().to_string());
+            *self.last_callee_ura.borrow_mut() = Some(target.callee_ura().to_string());
             *self.last_args.borrow_mut() = Some(args);
             self.reply.clone()
         }
@@ -1185,12 +1015,46 @@ mod tests {
     }
 
     #[test]
-    fn mcp_provider_advertises_and_routes_agent_discover() {
-        let desc = AbilityDescriptor::new("claude.discover", TEST_AGENT_OWNER, Visibility::Scoped)
-            .unwrap()
-            .with_source("kernel:built-in:self-bundle")
-            .with_input_schema(crate::daemon::ability::builtins::agents::discover::input_schema())
-            .with_description(crate::daemon::ability::builtins::agents::discover::description());
+    fn provider_excludes_geometries_it_cannot_invoke() {
+        let descriptors = vec![
+            d("observe.health"),
+            d("consent.subscribe")
+                .with_call_mode(crate::daemon::ability::descriptors::CallMode::Stream),
+            d("voice.session").with_call_mode(crate::daemon::ability::descriptors::CallMode::Bidi),
+        ];
+        let provider = InvokeMcpProvider::new(
+            RecordingInvoker::new(Ok(serde_json::json!({}))),
+            descriptors,
+        );
+
+        let specs = provider.tool_specs();
+        assert_eq!(provider.descriptor_count(), 1);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0]["x-easynet"]["ability"], "observe.health");
+        assert!(
+            provider
+                .handle_tool_call("consent_subscribe", &serde_json::Map::new())
+                .is_error
+        );
+        assert!(
+            provider
+                .handle_tool_call("voice_session", &serde_json::Map::new())
+                .is_error
+        );
+    }
+
+    #[test]
+    fn tools_list_owner_is_tools_call_callee() {
+        let desc = AbilityDescriptor::new(
+            "discover",
+            TEST_AGENT_OWNER,
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_source("kernel:built-in:self-bundle")
+        .with_input_schema(crate::daemon::ability::builtins::agents::discover::input_schema())
+        .with_description(crate::daemon::ability::builtins::agents::discover::description());
         let invoker = RecordingInvoker::new(Ok(serde_json::json!({
             "candidates": [],
             "scope": "device",
@@ -1201,7 +1065,8 @@ mod tests {
         let specs = p.tool_specs();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0]["name"], "claude_discover");
-        assert_eq!(specs[0]["x-easynet"]["ability"], "claude.discover");
+        assert_eq!(specs[0]["x-easynet"]["ability"], "discover");
+        assert_eq!(specs[0]["x-easynet"]["owner_ura"], TEST_AGENT_OWNER);
         assert_eq!(
             specs[0]["inputSchema"]["properties"]["scope"]["enum"],
             serde_json::json!(["self", "device", "user", "public"])
@@ -1216,6 +1081,11 @@ mod tests {
         assert_eq!(
             p.invoker.last_ability.borrow().as_deref(),
             Some("claude.discover")
+        );
+        assert_eq!(
+            p.invoker.last_callee_ura.borrow().as_deref(),
+            Some(TEST_AGENT_OWNER),
+            "tools/call must use the same owner advertised by tools/list"
         );
         assert_eq!(
             p.invoker.last_args.borrow().as_ref().unwrap()["query"],
@@ -1336,8 +1206,15 @@ mod tests {
     #[test]
     fn daemon_local_invoker_surfaces_daemon_not_running() {
         let _h = crate::cli::commands::test_support::HomeGuard::new();
+        let descriptor = d("observe.health");
+        let selector =
+            crate::core::ura::AbilitySelector::parse(&descriptor.canonical_ability_ura().unwrap())
+                .unwrap();
+        let target = crate::daemon::invocation::routing::target::LocalAbilityTarget::from_selector(
+            &selector,
+        );
         let err = DaemonLocalInvoker
-            .invoke_sync("observe.health", serde_json::json!({}))
+            .invoke_sync(&target, serde_json::json!({}))
             .expect_err("daemon-backed invoker must fail when no daemon is running");
         assert!(
             err.contains("daemon not running"),
@@ -1346,271 +1223,110 @@ mod tests {
     }
 
     #[test]
-    fn build_stdio_server_pre_join_has_no_synthetic_descriptor_identity() {
-        // Single-source-of-truth contract: both `easynet mcp_server`
-        // and `easynet start --mcp` go through `build_stdio_server`.
-        // Before bootstrap persists an authority URA, no routable descriptor
-        // exists and the server must not invent a `self` owner.
+    fn build_stdio_server_fails_closed_when_daemon_is_unavailable() {
         let _h = crate::cli::commands::test_support::HomeGuard::new();
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
             tenant_id: "test-tenant".into(),
             agent_name: None,
         };
-        let configured = build_stdio_server(&cfg);
-        assert_eq!(configured.server_name, "easynet-test");
-        assert_eq!(configured.descriptor_count(), 0);
+        let error = match build_stdio_server(&cfg) {
+            Ok(_) => panic!("MCP builder must not synthesize a catalog when daemon is unavailable"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("read live daemon ability catalog for MCP"),
+            "unexpected daemon-unavailable error: {error:#}"
+        );
     }
 
     #[test]
-    fn build_stdio_server_anchors_descriptors_on_persisted_host_ura_when_present() {
-        let _h = crate::cli::commands::test_support::HomeGuard::new();
-        // Pre-populate local-agents.json with a host URA; build_stdio_server
-        // must pick it up.
-        let file = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
-            ..crate::daemon::persistence::local_agents::LocalAgentsFile::default()
-        };
-        crate::daemon::persistence::local_agents::save(&file).unwrap();
-
+    fn live_catalog_reader_input_is_projected_without_reconstruction() {
+        let input_schema = serde_json::json!({
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+            "additionalProperties": false
+        });
+        let descriptor = AbilityDescriptor::new(
+            "review",
+            TEST_AGENT_OWNER,
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap()
+        .with_description("Review one change.")
+        .with_source("manifest:workspace/abilities/review.ability.toml")
+        .with_input_schema(input_schema.clone())
+        .with_metadata_entry("owner_user", "test-user")
+        .with_metadata_entry("owner_agent", "claude")
+        .with_metadata_entry("exec_kind", "eal")
+        .with_metadata_entry("cost_kind", "unknown")
+        .with_metadata_entry("cost_label", "composed ability cost depends on steps");
+        let catalog = FixtureAbilityCatalog::new(vec![descriptor.clone()]);
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
             tenant_id: "t".into(),
             agent_name: None,
         };
-        let configured = build_stdio_server(&cfg);
-        let owners: std::collections::HashSet<String> = configured
-            .provider
-            .descriptors
-            .iter()
-            .map(|d| d.owner_ura.clone())
-            .collect();
-        assert!(
-            owners.contains("easynet:///r/acme/device/01DEV"),
-            "post-join descriptors must anchor on the persisted URA; \
-             got owners = {owners:?}"
-        );
-        assert!(
-            !owners.contains("self"),
-            "post-join descriptors must NOT fall back to `self` when the URA is known"
-        );
+        let configured = build_stdio_server_with_catalog(&cfg, &catalog).unwrap();
+
+        assert_eq!(catalog.reads.get(), 1, "catalog must be captured once");
+        assert_eq!(configured.provider.descriptors, vec![descriptor]);
+        let specs = configured.provider.tool_specs();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0]["name"], "claude_review");
+        assert_eq!(specs[0]["inputSchema"], input_schema);
+        assert_eq!(specs[0]["x-easynet"]["owner_ura"], TEST_AGENT_OWNER);
+        assert_eq!(specs[0]["x-easynet"]["owner_user"], "test-user");
+        assert_eq!(specs[0]["x-easynet"]["owner_agent"], "claude");
+        assert_eq!(specs[0]["x-easynet"]["exec_kind"], "eal");
+        assert_eq!(specs[0]["x-easynet"]["cost_kind"], "unknown");
     }
 
     #[test]
-    fn build_stdio_server_with_agent_name_includes_per_workspace_abilities() {
-        // The G1 fix: when --agent <name> is set on `easynet mcp serve`,
-        // the descriptor list MUST include the agent's own
-        // ability TOMLs from <agent_root>/abilities/. Without this
-        // the agent's own abilities are invisible to the LLM
-        // running inside that agent's workspace, which breaks
-        // the EasyNet ontology's "agent exposes abilities"
-        // promise: agents could declare abilities but the LLM
-        // they wrap couldn't call them.
-        use crate::cli::commands::test_support::HomeGuard;
-
-        let _g = HomeGuard::new();
-
-        // Set up an agent + a custom ability under its workspace.
-        // Use a name unlikely to collide with the developer's
-        // real ~/.easynet/workspaces/* contents. HomeGuard already
-        // isolates HOME, but multiple in-process tests can still
-        // race on the same per-test tempdir if they all pick
-        // generic names like "alice" or "bob".
-        let agent = "g1-test-agent";
-
-        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
-        let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
-        registry.agents.insert(agent.into(), entry);
-        crate::daemon::persistence::agent_registry::save_agents(&registry).unwrap();
-        save_test_authorities(agent);
-
-        std::fs::write(
-            workspace_root.join("abilities/code-review.ability.toml"),
-            "schema_version = \"1\"\n\
-             name = \"code-review\"\n\
-             description = \"Custom workspace ability.\"\n\
-             [input_schema]\n\
-             type = \"object\"\n\
-             additionalProperties = false\n",
+    fn workspace_catalog_filters_agent_chat_without_rebuilding_live_descriptors() {
+        let own_chat = AbilityDescriptor::new(
+            "chat",
+            TEST_AGENT_OWNER,
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
         )
         .unwrap();
-        std::fs::write(
-            workspace_root.join("abilities/mcp-google-maps__geocode.ability.toml"),
-            "schema_version = \"1\"\n\
-             name = \"mcp-google-maps__geocode\"\n\
-             description = \"Geocode an address using Google Maps.\"\n\
-             [input_schema]\n\
-             type = \"object\"\n\
-             [exec]\n\
-             kind = \"mcp\"\n\
-             server = \"Google Maps\"\n\
-             tool = \"geocode\"\n",
+        let other_chat = AbilityDescriptor::new(
+            "chat",
+            "easynet:///r/acme/agent/test-user.codex",
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
         )
         .unwrap();
-
-        // Build with agent_name = Some("alice").
+        let discover = AbilityDescriptor::new(
+            "discover",
+            TEST_AGENT_OWNER,
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .unwrap();
+        let catalog = FixtureAbilityCatalog::new(vec![own_chat, other_chat, discover.clone()]);
         let cfg = StdioServerConfig {
             server_name: "easynet-test".into(),
             tenant_id: "t".into(),
-            agent_name: Some(agent.to_string()),
+            agent_name: Some("claude".into()),
         };
-        let configured = build_stdio_server(&cfg);
-        let names: Vec<String> = configured
-            .provider
-            .descriptors
-            .iter()
-            .map(|d| d.name.clone())
-            .collect();
-        assert!(
-            names.iter().any(|n| n == &format!("{agent}.code-review")),
-            "build_stdio_server with agent_name={agent} MUST include \
-             the {agent}.code-review ability from its workspace; got {names:?}"
-        );
-        let mcp_desc = configured
-            .provider
-            .descriptors
-            .iter()
-            .find(|d| d.name == format!("{agent}.mcp-google-maps__geocode"))
-            .expect("mcp-backed ability descriptor");
+        let configured = build_stdio_server_with_catalog(&cfg, &catalog).unwrap();
+        assert_eq!(catalog.reads.get(), 1);
+        assert_eq!(configured.provider.descriptors, vec![discover]);
         assert_eq!(
-            mcp_desc.metadata.get("owner_agent").map(String::as_str),
-            Some(agent)
-        );
-        assert_eq!(
-            mcp_desc.metadata.get("exec_kind").map(String::as_str),
-            Some("mcp")
-        );
-        // MCP-backed abilities default to `cost_kind = "unknown"` —
-        // the manifest's [exec] kind="mcp" block does not declare
-        // cost, and substring-sniffing the upstream server/tool name
-        // (e.g. "google-maps") for the word "google" / "map" used to
-        // mis-tag internal upstreams as `external_metered`. The
-        // honest contract: catalog metadata must be declared, not
-        // inferred. The wire prefix surfaces the same string so an
-        // LLM sampling only the description sees the disclosure.
-        assert_eq!(
-            mcp_desc.metadata.get("cost_kind").map(String::as_str),
-            Some("unknown")
-        );
-        let mcp_tool = tool_spec_from_descriptor(mcp_desc);
-        assert!(mcp_tool["description"]
-            .as_str()
-            .unwrap()
-            .contains("cost: unknown"));
-        // The agent's own .chat ability is excluded — exposing it
-        // to the LLM running INSIDE alice would invite recursion.
-        assert!(
-            !names.iter().any(|n| n == &format!("{agent}.chat")),
-            "{agent}.chat must be excluded from its own MCP tool catalog \
-             to prevent the agent from calling itself recursively; got {names:?}"
-        );
-
-        // Same build with agent_name = None must NOT include alice's abilities.
-        let cfg_no_agent = StdioServerConfig {
-            server_name: "easynet-test".into(),
-            tenant_id: "t".into(),
-            agent_name: None,
-        };
-        let no_agent = build_stdio_server(&cfg_no_agent);
-        let no_agent_names: Vec<String> = no_agent
-            .provider
-            .descriptors
-            .iter()
-            .map(|d| d.name.clone())
-            .collect();
-        assert!(
-            !no_agent_names
-                .iter()
-                .any(|n| n == &format!("{agent}.code-review")),
-            "agent_name=None must NOT include any per-agent abilities; got {no_agent_names:?}"
-        );
-    }
-
-    #[test]
-    fn manifest_declared_cost_overrides_exec_kind_heuristic() {
-        // A `[cost]` table in the per-workspace manifest must win
-        // over `metadata_for_agent_ability`'s exec-kind fallback.
-        // This is the whole point of Day-1 work — give operators a
-        // way to say "this MCP-backed tool actually hits a billed
-        // upstream" without the system burying that under the
-        // fallback `cost: unknown`.
-        use crate::cli::commands::test_support::HomeGuard;
-
-        let _g = HomeGuard::new();
-        let agent = "day1-cost-test-agent";
-
-        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
-        let (workspace_root, entry) = create_manifest_backed_agent_entry(agent);
-        registry.agents.insert(agent.into(), entry);
-        crate::daemon::persistence::agent_registry::save_agents(&registry).unwrap();
-        save_test_authorities(agent);
-
-        // MCP-backed ability whose [exec] kind = "mcp" would normally
-        // resolve to `cost_kind = unknown` via the heuristic. The
-        // [cost] table here overrides that to the declared bucket +
-        // label, which is what an LLM choosing between two geocoders
-        // should see.
-        std::fs::write(
-            workspace_root.join("abilities/geocode.ability.toml"),
-            "schema_version = \"1\"\n\
-             name = \"geocode\"\n\
-             description = \"Geocode an address.\"\n\
-             [input_schema]\n\
-             type = \"object\"\n\
-             [exec]\n\
-             kind = \"mcp\"\n\
-             server = \"Google Maps\"\n\
-             tool = \"geocode\"\n\
-             [cost]\n\
-             kind = \"external_metered\"\n\
-             label = \"Google Maps Geocoding — $5 per 1000 requests\"\n",
-        )
-        .unwrap();
-
-        let cfg = StdioServerConfig {
-            server_name: "easynet-test".into(),
-            tenant_id: "t".into(),
-            agent_name: Some(agent.to_string()),
-        };
-        let configured = build_stdio_server(&cfg);
-        let desc = configured
-            .provider
-            .descriptors
-            .iter()
-            .find(|d| d.name == format!("{agent}.geocode"))
-            .expect("geocode descriptor must be registered");
-
-        // Declared bucket wins over the exec=mcp fallback (`unknown`).
-        assert_eq!(
-            desc.metadata.get("cost_kind").map(String::as_str),
-            Some("external_metered"),
-            "manifest [cost] must override the exec_kind heuristic"
-        );
-        // Declared label flows verbatim — what reaches the operator's
-        // eye in MCP descriptions and the `x-easynet.cost_label`
-        // field.
-        assert_eq!(
-            desc.metadata.get("cost_label").map(String::as_str),
-            Some("Google Maps Geocoding — $5 per 1000 requests")
-        );
-
-        // And the MCP description prefix includes the declared label.
-        let spec = tool_spec_from_descriptor(desc);
-        let description = spec["description"].as_str().unwrap();
-        assert!(
-            description.contains("cost: external_metered"),
-            "description must surface declared cost bucket; got: {description}"
-        );
-        assert!(
-            description.contains("Google Maps Geocoding — $5 per 1000 requests"),
-            "description must surface declared cost label; got: {description}"
+            configured.provider.tool_specs()[0]["name"],
+            "claude_discover"
         );
     }
 
     #[test]
     fn invoke_provider_routes_observe_health_through_local_invoker() {
         use crate::daemon::ability::descriptors::Visibility;
-        use easynet_axon::mcp::McpToolProvider;
         let invoker = FakeInvoker {
             value: serde_json::json!({"echo": {}}),
         };
@@ -1619,6 +1335,7 @@ mod tests {
             "observe.health",
             "easynet:///r/acme/device/01DEV",
             Visibility::Public,
+            AdmissionAction::Invoke,
         )
         .unwrap()];
         let provider = InvokeMcpProvider::new(invoker, descs);
@@ -1646,7 +1363,7 @@ mod tests {
     impl LocalInvoker for FakeInvoker {
         fn invoke_sync(
             &self,
-            _ability: &str,
+            _target: &crate::daemon::invocation::routing::target::LocalAbilityTarget,
             _args: serde_json::Value,
         ) -> std::result::Result<serde_json::Value, String> {
             Ok(self.value.clone())
@@ -1661,18 +1378,18 @@ mod tests {
     struct CountingSink {
         reports: CountingReports,
     }
-    impl easynet_axon::mcp::ProgressSink for CountingSink {
+    impl ProgressSink for CountingSink {
         fn report(
             &mut self,
             progress: f64,
             total: Option<f64>,
             message: Option<&str>,
-        ) -> easynet_axon::AxonResult<easynet_axon::mcp::ReportOutcome> {
+        ) -> anyhow::Result<crate::daemon::execution::mcp::stdio::ReportOutcome> {
             self.reports
                 .lock()
                 .unwrap()
                 .push((progress, total, message.map(|s| s.to_string())));
-            Ok(easynet_axon::mcp::ReportOutcome::Emitted)
+            Ok(crate::daemon::execution::mcp::stdio::ReportOutcome::Emitted)
         }
     }
 
@@ -1686,6 +1403,7 @@ mod tests {
                 "observe.health",
                 "easynet:///r/acme/device/01DEV",
                 Visibility::Public,
+                AdmissionAction::Invoke,
             )
             .unwrap()],
         );
@@ -1731,6 +1449,7 @@ mod tests {
                 "observe.health",
                 "easynet:///r/acme/device/01DEV",
                 Visibility::Public,
+                AdmissionAction::Invoke,
             )
             .unwrap()],
         );

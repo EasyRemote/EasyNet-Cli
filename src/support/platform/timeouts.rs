@@ -4,7 +4,7 @@
 // File: src/shared/timeouts.rs
 // Description: Single source of truth for every timeout constant in
 //              the CLI — both the user-visible `--timeout` defaults
-//              and the internal plumbing deadlines (bridge connect,
+//              and the internal plumbing deadlines (daemon connect,
 //              …). Values are declared *here* and referenced by each
 //              call site, so help text, compiled-in value, and
 //              cross-command policy cannot drift from one another.
@@ -39,8 +39,8 @@
 // 2. **Infrastructure** (internal plumbing deadlines, never surfaced
 //    as a flag). Today there is one:
 //
-//     - [`BRIDGE_CONNECT_TIMEOUT_MS`] — how long a `DendriteBridge::
-//                                      connect` is allowed to block
+//     - [`LOCAL_DAEMON_CONNECT_TIMEOUT_MS`] — how long local daemon
+//                                      connection is allowed to block
 //                                      before we declare the local
 //                                      runtime unreachable. 5 s is
 //                                      short enough to fail fast for
@@ -58,13 +58,7 @@
 // Why the infrastructure constant lives here, not in `shared::mod`
 // ----------------------------------------------------------------
 //
-// Before this consolidation, `BRIDGE_CONNECT_TIMEOUT_MS` sat bare at
-// the top of `shared/mod.rs` alongside an ad-hoc `connect_bridge()`
-// helper. Two readers went looking for "what deadline governs X?"
-// and found answers in two files — the timeout tower claimed to be
-// the single source of truth while the most-called timeout in the
-// codebase escaped it. Hoisting this constant into the tower closes
-// that gap: every `grep` for timeout policy lands in one file.
+// All timeout policy lives here so callers cannot silently drift.
 //
 // Unit convention
 // ---------------
@@ -104,8 +98,8 @@ pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
 #[cfg(test)]
 pub const THINK_DEFAULT_SECS: u64 = 3600;
 
-/// How long a `DendriteBridge::connect` may block before we declare
-/// the local Axon runtime unreachable, in milliseconds.
+/// How long a local daemon connection may block before we declare the
+/// runtime unreachable, in milliseconds.
 ///
 /// 5 s is the calibrated floor:
 ///
@@ -123,7 +117,7 @@ pub const THINK_DEFAULT_SECS: u64 = 3600;
 /// the runtime should wait the same amount, so `doctor` output is
 /// comparable across commands and operators can learn the shape of a
 /// "runtime down" failure once.
-pub const BRIDGE_CONNECT_TIMEOUT_MS: u64 = 5_000;
+pub const LOCAL_DAEMON_CONNECT_TIMEOUT_MS: u64 = 5_000;
 
 /// Convert a user-facing seconds value (from a `--timeout <N>` flag) to
 /// the `Option<Duration>`-in-milliseconds shape used by the bridge API.
@@ -180,8 +174,8 @@ mod tests {
     #[test]
     fn bridge_connect_budget_is_calibrated_not_ambient() {
         assert_eq!(
-            BRIDGE_CONNECT_TIMEOUT_MS, 5_000,
-            "BRIDGE_CONNECT_TIMEOUT_MS is a reviewed timeout-policy \
+            LOCAL_DAEMON_CONNECT_TIMEOUT_MS, 5_000,
+            "LOCAL_DAEMON_CONNECT_TIMEOUT_MS is a reviewed timeout-policy \
              constant — if you are changing it, update the module \
              doc's rationale too"
         );

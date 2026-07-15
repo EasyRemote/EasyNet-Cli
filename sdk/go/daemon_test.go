@@ -139,6 +139,28 @@ func TestDaemonStartReturnsRuntimeReadyHandle(t *testing.T) {
 	}
 }
 
+func TestRuntimeHostStartReturnsRuntimeHandleWithDaemonAliases(t *testing.T) {
+	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
+	host, err := NewRuntimeHost(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeHost: %v", err)
+	}
+
+	handle, err := host.Start(context.Background(), RuntimeHostStartConfig{Mode: RuntimeModeHub})
+	if err != nil {
+		t.Fatalf("RuntimeHost.Start: %v", err)
+	}
+
+	var daemonHandle *DaemonHandle = handle
+	var daemonState DaemonLifecycleState = handle.State()
+	if daemonHandle.HandleID() != "daemon-1" || daemonState != DaemonRunning {
+		t.Fatalf("alias compatibility lost: id=%q state=%s", daemonHandle.HandleID(), daemonState)
+	}
+	if _, err := NewDaemonControl(transport); err != nil {
+		t.Fatalf("NewDaemonControl compatibility wrapper: %v", err)
+	}
+}
+
 func TestDaemonStartRejectsUnsafeModePolicyBeforeTransport(t *testing.T) {
 	transport := &memoryDaemonTransport{startJSON: readyDaemonStatus()}
 

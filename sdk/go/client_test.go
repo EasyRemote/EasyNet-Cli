@@ -54,6 +54,22 @@ func TestFeatureDiscoveryDecodesRuntimeCoreFacts(t *testing.T) {
 	}
 }
 
+func TestRequireABIAcceptsExactVersion(t *testing.T) {
+	client, err := NewClient(DiscoveryTransportFunc(func(context.Context) ([]byte, error) {
+		return []byte(`{"abi_version":5,"sdk_version":"test"}`), nil
+	}))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	features, err := client.RequireABI(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("RequireABI: %v", err)
+	}
+	if features.Version().ABIVersion != 5 {
+		t.Fatalf("ABI version = %d, want 5", features.Version().ABIVersion)
+	}
+}
+
 func TestRequireABIReturnsTypedVersionMismatch(t *testing.T) {
 	client, err := NewClient(DiscoveryTransportFunc(func(ctx context.Context) ([]byte, error) {
 		return []byte(`{"abi_version": 3, "sdk_version": "0.91.30"}`), nil

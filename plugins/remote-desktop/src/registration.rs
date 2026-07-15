@@ -27,6 +27,7 @@ use serde_json::Value;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     ScreenSnapshotBackend, XcapBackend,
 };
+use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{BidiSource, EnvelopeContext, StreamSource};
 use crate::daemon::ability::AbilityImplSource;
 use crate::daemon::plugins::package::BuiltinPluginAbilitySpec;
@@ -129,6 +130,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_CREATE_SESSION,
                 layer: PluginAbilityLayer::Control,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
                 description: schema::create_session_description,
                 input_schema: schema::create_session_input_schema,
@@ -142,6 +144,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_SHOW_SESSION,
                 layer: PluginAbilityLayer::Observation,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
                 description: schema::show_session_description,
                 input_schema: schema::show_session_input_schema,
@@ -155,6 +158,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_SET_DESCRIPTION,
                 layer: PluginAbilityLayer::Control,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
                 description: schema::set_description_description,
                 input_schema: schema::set_description_input_schema,
@@ -168,6 +172,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_ADD_ICE_CANDIDATE,
                 layer: PluginAbilityLayer::Control,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
                 description: schema::add_ice_candidate_description,
                 input_schema: schema::add_ice_candidate_input_schema,
@@ -181,6 +186,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_WATCH_EVENTS,
                 layer: PluginAbilityLayer::Observation,
                 call_mode: CallMode::Stream,
+                admission_action: AdmissionAction::Stream,
                 bidi_wire_kind: None,
                 description: schema::watch_events_description,
                 input_schema: schema::watch_events_input_schema,
@@ -194,6 +200,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_REFRESH_LEASE,
                 layer: PluginAbilityLayer::Control,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
                 description: schema::refresh_lease_description,
                 input_schema: schema::refresh_lease_input_schema,
@@ -207,6 +214,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_END_SESSION,
                 layer: PluginAbilityLayer::Control,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
                 description: schema::end_session_description,
                 input_schema: schema::end_session_input_schema,
@@ -220,6 +228,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_ATTACH_SESSION,
                 layer: PluginAbilityLayer::Operational,
                 call_mode: CallMode::Bidi,
+                admission_action: AdmissionAction::Stream,
                 bidi_wire_kind: Some(PluginBidiWireKind::JsonFrames),
                 description: schema::attach_description,
                 input_schema: schema::attach_input_schema,
@@ -233,6 +242,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_PERMISSION_STATUS,
                 layer: PluginAbilityLayer::Observation,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
                 description: schema::permission_status_description,
                 input_schema: schema::permission_status_input_schema,
@@ -246,6 +256,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 name: ABILITY_REQUEST_PERMISSION,
                 layer: PluginAbilityLayer::Control,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
                 description: schema::request_permission_description,
                 input_schema: schema::request_permission_input_schema,

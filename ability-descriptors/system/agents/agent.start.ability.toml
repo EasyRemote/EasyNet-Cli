@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "agent.start"
+descriptor_version = "1.0.0"
 description = "Register a new LLM sub-agent (claude/codex/…) in the device's agent registry. This is the daemon-hosted surface behind `easynet agent add`; callers may send primitive fields or a rich entry object. Returns agent_ura and replaced_prior=true means the call overwrote an existing row."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

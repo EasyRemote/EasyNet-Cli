@@ -70,6 +70,9 @@ use serde_json::{json, Value};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::mission::discuss::DiscussService;
+use crate::daemon::execution::mission::invocation_gateway::{
+    DaemonMissionInvocationGateway, MissionInvocationGateway, MissionInvocationRequest,
+};
 
 pub const ABILITY_DISCUSS_ROUND: &str =
     crate::daemon::ability::names::automation::MISSION_DISCUSS_ROUND;
@@ -85,8 +88,6 @@ const DEFAULT_MAX_CYCLES: u32 = 10;
 /// number of agent chat calls; this is the safety governor.
 const HARD_MAX_CYCLES: u32 = 100;
 
-type DispatchRegistryHandle = Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>;
-
 /// Owns `mission.discuss_round` runtime state for one ability registry.
 ///
 /// Invariant 1: `agent_sessions` is keyed by `(room_id, agent_name)` and
@@ -94,21 +95,17 @@ type DispatchRegistryHandle = Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>;
 /// ability.
 /// Invariant 2: session continuity is scoped to this service instance, so
 /// separate registry builds do not share hidden orchestration state.
-/// Invariant 3: nested chat calls dispatch through the registry handle
-/// populated by the daemon build site; this service never opens a recursive
-/// daemon IPC connection.
-#[derive(Debug)]
+/// Invariant 3: every nested chat call re-enters daemon Invocation through
+/// `invocation_gateway`; this service never executes an Ability handler.
 struct OrchestrationService {
     discuss: Arc<DiscussService>,
-    dispatch_registry_handle: DispatchRegistryHandle,
     agent_sessions: Mutex<HashMap<(String, String), String>>,
 }
 
 impl OrchestrationService {
-    fn new(discuss: Arc<DiscussService>, dispatch_registry_handle: DispatchRegistryHandle) -> Self {
+    fn new(discuss: Arc<DiscussService>) -> Self {
         Self {
             discuss,
-            dispatch_registry_handle,
             agent_sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -129,28 +126,35 @@ impl OrchestrationService {
 
 /// Register `mission.discuss_round`. Called once at daemon boot
 /// from `daemon::ability::catalog::build_registry_with_services`. The
-/// `dispatch_registry_handle` is populated AFTER `Arc::new(reg)`
-/// so the handler can dispatch into peer abilities in-process —
-/// going back through the IPC client would deadlock the
-/// daemon's single-thread accept loop while waiting on a nested
-/// chat call.
-pub fn register(
-    reg: &mut AxonAbilityCatalog,
-    discuss: Arc<DiscussService>,
-    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) {
-    let service = Arc::new(OrchestrationService::new(discuss, dispatch_registry_handle));
-    reg.register_rpc_with_owner(
+/// Child chat turns re-enter the daemon's canonical Invocation service. The
+/// transport is run on a dedicated blocking thread, so this synchronous
+/// Ability handler does not nest a Tokio runtime on the service worker.
+pub fn register(reg: &mut AxonAbilityCatalog, discuss: Arc<DiscussService>) {
+    let service = Arc::new(OrchestrationService::new(discuss));
+    let runtime = reg.runtime();
+    reg.register_rpc_with_envelope_and_owner(
         "mission.discuss_round",
         OwnerKind::Device,
-        Arc::new(move |args| service.discuss_round(args)),
+        Arc::new(move |envelope, args| {
+            let runtime = runtime.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("mission.discuss_round execution requires the shared Axon runtime")
+            })?;
+            let gateway: Arc<dyn MissionInvocationGateway> = Arc::new(
+                DaemonMissionInvocationGateway::from_envelope(&envelope, Arc::clone(runtime))?,
+            );
+            service.discuss_round(gateway, args)
+        }),
     );
 }
 
 // ── Service methods ─────────────────────────────────────────────
 
 impl OrchestrationService {
-    fn discuss_round(self: &Arc<Self>, args: Value) -> anyhow::Result<Value> {
+    fn discuss_round(
+        self: &Arc<Self>,
+        invocation_gateway: Arc<dyn MissionInvocationGateway>,
+        args: Value,
+    ) -> anyhow::Result<Value> {
         let room_id = args
             .get("room_id")
             .and_then(Value::as_str)
@@ -215,16 +219,12 @@ impl OrchestrationService {
                 .map_err(|e| anyhow::anyhow!("read room transcript: {e}"))?;
             let snapshot_str = render_transcript(&snapshot);
 
-            // Run all agents in parallel for this cycle using OS
-            // threads. We deliberately do NOT spin up a nested tokio
-            // runtime here: this handler already executes on the
-            // daemon's main tokio worker thread, and `Builder::new_*
-            // ... build()` panics with "Cannot start a runtime from
-            // within a runtime". The chat handler we resolve in
-            // `run_agent_cycle` is a sync closure (it returns a
-            // `Value`, not a Future); std::thread::spawn is the
-            // correct primitive. Failures are caught per-thread and
-            // turned into skip + an entry in `errors`.
+            // Run all agents in parallel for this cycle using OS threads.
+            // The Mission gateway is synchronous from the orchestrator's
+            // perspective and waits for a terminal daemon Invocation; one
+            // coordination thread per agent prevents a slow model from
+            // serializing the other participants. Failures are caught per
+            // thread and turned into skip + an entry in `errors`.
             let mut handles: Vec<(
                 String,
                 std::thread::JoinHandle<Result<AgentCycleOutcome, String>>,
@@ -241,7 +241,10 @@ impl OrchestrationService {
                     assigned_role: roles.get(agent).cloned(),
                 };
                 let service = Arc::clone(self);
-                let join = std::thread::spawn(move || service.run_agent_cycle(request));
+                let invocation_gateway = Arc::clone(&invocation_gateway);
+                let join = std::thread::spawn(move || {
+                    service.run_agent_cycle(invocation_gateway.as_ref(), request)
+                });
                 handles.push((agent.clone(), join));
             }
 
@@ -368,7 +371,11 @@ impl OrchestrationService {
     /// failed (transport / driver / agent not registered) — those map
     /// to `errors[]` in the envelope. Skip is `Ok(Skip)`, normal
     /// speech is `Ok(Speak(reply))`.
-    fn run_agent_cycle(&self, request: AgentCycleRequest) -> Result<AgentCycleOutcome, String> {
+    fn run_agent_cycle(
+        &self,
+        invocation_gateway: &dyn MissionInvocationGateway,
+        request: AgentCycleRequest,
+    ) -> Result<AgentCycleOutcome, String> {
         // Resume per-(room, agent) chat session so the agent's own
         // history (its prior cycles' reasoning + tool use) carries
         // forward. First cycle for a new (room, agent) pair has no
@@ -393,42 +400,13 @@ impl OrchestrationService {
             chat_args["session_id"] = json!(sid);
         }
 
-        // In-process dispatch through the daemon's shared Axon
-        // LocalRuntime. Going through `support::local_invoke` would open
-        // a fresh IPC connection back to the daemon while the original
-        // request is still in flight.
-        let registry = self.dispatch_registry_handle.get().ok_or_else(|| {
-            "internal_error: dispatch registry handle not yet set when \
-             mission.discuss_round invoked"
-                .to_string()
-        })?;
-        // Wrap the chat call in catch_unwind so an `eprintln!` to a
-        // closed stderr (broken pipe → panic in the std macros) does
-        // not take down our orchestration thread. The chat handler
-        // does heavy fd juggling — spawning child processes, dup'ing
-        // stdin/out/err for the LLM subprocess — and on rare paths
-        // its `eprintln!` progress lines can panic when the parent
-        // shell's stderr is no longer reachable. Catching the panic
-        // and surfacing it as a typed error keeps the cycle's other
-        // agents unaffected and surfaces a clean error envelope to
-        // the operator.
-        let response_or_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            registry.invoke_rpc_json(&qualified_chat, chat_args)
-        }));
-        let response = match response_or_panic {
-            Ok(Ok(v)) => v,
-            Ok(Err(e)) => return Err(format!("{e}")),
-            Err(panic_payload) => {
-                let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
-                    (*s).to_string()
-                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "non-string panic payload from chat handler".to_string()
-                };
-                return Err(format!("chat handler panicked: {msg}"));
-            }
-        };
+        let response = invocation_gateway
+            .invoke(MissionInvocationRequest::hosted_agent(
+                request.agent.clone(),
+                "chat",
+                chat_args,
+            ))
+            .map_err(|err| format!("invoke {qualified_chat} through daemon Invocation: {err}"))?;
 
         // Capture the (possibly newly minted) session_id for next
         // cycle. Driver may echo the caller's id (resume) or mint a
@@ -673,6 +651,60 @@ pub fn discuss_round_input_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingInvocationGateway {
+        calls: Mutex<Vec<(String, Option<String>)>>,
+    }
+
+    impl MissionInvocationGateway for RecordingInvocationGateway {
+        fn invoke(&self, request: MissionInvocationRequest) -> anyhow::Result<Value> {
+            self.calls.lock().expect("record calls").push((
+                request.ability().to_string(),
+                request.hosted_agent_name().map(str::to_string),
+            ));
+            Ok(json!({
+                "reply": "gateway-routed response",
+                "session_id": "session-1",
+            }))
+        }
+    }
+
+    #[test]
+    fn agent_cycle_targets_hosted_agent_chat_through_invocation_gateway() {
+        let gateway = Arc::new(RecordingInvocationGateway::default());
+        let invocation_gateway: Arc<dyn MissionInvocationGateway> = gateway.clone();
+        let service = OrchestrationService::new(Arc::new(DiscussService::new()));
+
+        let outcome = service
+            .run_agent_cycle(
+                invocation_gateway.as_ref(),
+                AgentCycleRequest {
+                    room_id: "room-1".to_string(),
+                    agent: "alice".to_string(),
+                    agents: vec!["alice".to_string()],
+                    cycle: 1,
+                    max_cycles: 1,
+                    transcript: "(no turns yet)".to_string(),
+                    topic: Some("topic".to_string()),
+                    assigned_role: None,
+                },
+            )
+            .expect("gateway invocation succeeds");
+
+        assert!(matches!(
+            outcome,
+            AgentCycleOutcome::Speak(ref reply) if reply == "gateway-routed response"
+        ));
+        assert_eq!(
+            gateway.calls.lock().expect("read calls").as_slice(),
+            &[("chat".to_string(), Some("alice".to_string()))]
+        );
+        assert_eq!(
+            service.prior_session("room-1", "alice").as_deref(),
+            Some("session-1")
+        );
+    }
 
     #[test]
     fn render_transcript_returns_placeholder_when_empty() {

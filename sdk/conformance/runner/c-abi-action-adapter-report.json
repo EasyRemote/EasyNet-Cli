@@ -7,229 +7,199 @@
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "include/easynet_cli.h"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": "C ABI Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
-      "case_id": "bidi/frame0_required",
+      "case_id": "runtime/control_only",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "9d63709320778b87b0147e1f2415cab4dd815ee85f374a4b31e5e1c0d6591ed2"
         }
       ],
-      "message": "C ABI bidi open preserves the runtime frame0 requirement and projects missing-frame0 rejection through typed errors.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "daemon/control_only",
-      "evidence": [
-        {
-          "kind": "c_abi_test",
-          "ref_path": "src/ffi/daemon/mod.rs"
-        }
-      ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "daemon/permission_denied",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": "C ABI maps daemon PermissionDenied status to ERR_PERMISSION_DENIED and schema-backed typed last-error JSON.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/retry_hint",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/errors/mod.rs"
+          "ref_path": "src/ffi/errors/mod.rs",
+          "sha256": "5ee0f9ffd08b2cfcb3fa93554ae38549da335973c0285a62729e96ac5e9f468c"
         }
       ],
-      "message": "C ABI typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/typed_json",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/errors/mod.rs"
+          "ref_path": "src/ffi/errors/mod.rs",
+          "sha256": "5ee0f9ffd08b2cfcb3fa93554ae38549da335973c0285a62729e96ac5e9f468c"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "health/api_vs_runtime",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/daemon/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "health",
-      "status": "passed"
+      "profile": "health"
     },
     {
       "case_id": "invocation/builder_handle_state",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/canonical_material",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/complete_tuple",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/local_daemon_signing_boundary",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/presigned_submit",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/terminal_monotonicity",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/submitted_handle_authority",
+      "evidence": [
+        {
+          "kind": "c_abi_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
+        }
+      ],
+      "profile": "conformance"
     },
     {
       "case_id": "runtime_core/feature_discovery",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "src/ffi/mod.rs"
+          "ref_path": "src/ffi/features/mod.rs",
+          "sha256": "db2fecd6a1c08d5c9b86a96ca5acf68cb3ec55014c050985e23c3f254c41b7f5"
         }
       ],
-      "message": "C ABI exports easynet_feature_discovery as the binding-facing SDK-root feature catalog.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "stream/backpressure_bound",
-      "evidence": [
-        {
-          "kind": "c_abi_test",
-          "ref_path": "src/ffi/invocation/mod.rs"
-        }
-      ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/order_terminal",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "include/easynet_cli.h"
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "941900510e50c4083ccc61d36a14ed9ccb67a36b367186250cb115c5c3939004"
         }
       ],
-      "message": "C ABI Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_compatible",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "include/easynet_cli.h"
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "9d63709320778b87b0147e1f2415cab4dd815ee85f374a4b31e5e1c0d6591ed2"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_incompatible",
       "evidence": [
         {
           "kind": "c_abi_test",
-          "ref_path": "include/easynet_cli.h"
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "9d63709320778b87b0147e1f2415cab4dd815ee85f374a4b31e5e1c0d6591ed2"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     }
   ],
-  "schema_version": 1
+  "schema_version": 2
 }

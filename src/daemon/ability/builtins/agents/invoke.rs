@@ -92,9 +92,10 @@ pub fn register_for_agent<F>(
     let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let caller = agent_name.clone();
-    reg.register_rpc_with_spec(
+    reg.register_rpc_with_spec_and_action(
         &qualified,
         OwnerKind::Agent(agent_name),
+        crate::daemon::ability::descriptors::AdmissionAction::Invoke,
         manifest(),
         Arc::new(move |args: Value| dispatch(&caller, &provider, &dispatch_registry_handle, args)),
     );
@@ -587,7 +588,9 @@ mod tests {
 
     #[test]
     fn register_publishes_invoke_manifest_description() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -635,11 +638,14 @@ mod tests {
         target_handlers: &[(&str, crate::daemon::ability::dispatch::LocalRpcHandler)],
         agents: AgentRegistry,
     ) -> impl Fn(Value) -> anyhow::Result<Value> {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         for (name, h) in target_handlers {
-            reg.register_rpc_with_owner(
+            reg.register_rpc_with_owner_and_action(
                 *name,
                 crate::daemon::ability::dispatch::OwnerKind::Device,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                 Arc::clone(h),
             );
         }

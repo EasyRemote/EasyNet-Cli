@@ -24,7 +24,7 @@ SPEC_REF = "docs/spec/daemon-sdk-requirements-v1.md#29.2"
 REQUIRED = {
     "health_readiness_liveness": {
         "route_family": "/health, daemon readiness, runtime liveness",
-        "sdk_primitives": ["HealthClient", "DaemonControl", "RuntimeClient"],
+        "sdk_primitives": ["HealthClient", "RuntimeHost", "RuntimeClient"],
         "backend_profile_refs": ["health"],
     },
     "identity_prepare_submit": {

@@ -85,6 +85,62 @@ func TestBidiSessionSendsAndReceivesOrderedFrames(t *testing.T) {
 	}
 }
 
+func TestBidiFramePreservesFinalizationCheckpoints(t *testing.T) {
+	raw := []byte(`{"sequence":9,"kind":"terminal","stream_id":1,"terminal":true,"admission_receipt":{"invocation_id":"inv-1","index":3,"authority_proof":{"proof_type":"signed"}},"terminal_receipt":{"invocation_id":"inv-1","index":8,"output_hash":"abcd"}}`)
+	frame, err := NewBidiFrameFromJSON(raw)
+	if err != nil {
+		t.Fatalf("NewBidiFrameFromJSON: %v", err)
+	}
+	if string(frame.AdmissionReceiptJSON()) != `{"invocation_id":"inv-1","index":3,"authority_proof":{"proof_type":"signed"}}` {
+		t.Fatalf("admission receipt = %s", frame.AdmissionReceiptJSON())
+	}
+	if string(frame.TerminalReceiptJSON()) != `{"invocation_id":"inv-1","index":8,"output_hash":"abcd"}` {
+		t.Fatalf("terminal receipt = %s", frame.TerminalReceiptJSON())
+	}
+	encoded, err := json.Marshal(frame)
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	if len(decoded["admission_receipt"]) == 0 || len(decoded["terminal_receipt"]) == 0 {
+		t.Fatalf("finalization checkpoints omitted: %s", encoded)
+	}
+}
+
+func TestBidiFrameRejectsLegacyEventAlias(t *testing.T) {
+	frame, err := NewBidiFrameFromJSON([]byte(`{"sequence":1,"event":"data","stream_id":1}`))
+	if err != nil {
+		t.Fatalf("NewBidiFrameFromJSON legacy event alias: %v", err)
+	}
+	if frame.Kind() != "data" {
+		t.Fatalf("kind = %q, want data", frame.Kind())
+	}
+}
+
+func TestBidiTransportTerminalFailsSessionWithoutRuntimeTerminal(t *testing.T) {
+	transport := &memoryBidiTransport{recvFrames: []string{
+		`{"sequence":1,"event":"error","stream_id":1,"terminal":false,"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}`,
+	}}
+	session := newTestBidiSession(t, transport)
+
+	frame, err := session.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("Receive transport terminal: %v", err)
+	}
+	if frame.Terminal() || !frame.TransportTerminal() {
+		t.Fatalf("transport terminal flags = terminal:%v transport:%v", frame.Terminal(), frame.TransportTerminal())
+	}
+	if session.State() != BidiFailed {
+		t.Fatalf("state = %s, want Failed", session.State())
+	}
+	if _, err := session.TerminalFrame(); err == nil {
+		t.Fatalf("TerminalFrame succeeded for transport terminal")
+	}
+}
+
 func TestBidiCloseSendDiffersFromCancel(t *testing.T) {
 	transport := &memoryBidiTransport{}
 	session := newTestBidiSession(t, transport)
@@ -142,7 +198,7 @@ func TestBidiRemoteCloseThenLocalCloseSendReachesTerminal(t *testing.T) {
 
 func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
 	transport := &memoryBidiTransport{recvFrames: []string{
-		`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}`,
+		`{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,"payload_json":{"ok":true},"terminal_receipt":{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}`,
 	}}
 	session := newTestBidiSession(t, transport)
 
@@ -156,8 +212,8 @@ func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
 	if terminal.SessionID() != "bidi-1" || terminal.FrameType() != "terminal" || terminal.Seq() != 1 {
 		t.Fatalf("unexpected terminal frame projection: %#v", terminal)
 	}
-	if string(terminal.ReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}` {
-		t.Fatalf("receipt = %s", terminal.ReceiptJSON())
+	if string(terminal.TerminalReceiptJSON()) != `{"receipt_ura":"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}` {
+		t.Fatalf("terminal receipt = %s", terminal.TerminalReceiptJSON())
 	}
 	raw, err := json.Marshal(terminal)
 	if err != nil {
@@ -169,6 +225,29 @@ func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
 	}
 	if decoded["frame_type"] != "terminal" || decoded["session_id"] != "bidi-1" || decoded["seq"].(float64) != 1 {
 		t.Fatalf("unexpected terminal JSON: %s", raw)
+	}
+	if _, ok := decoded["receipt"]; ok {
+		t.Fatalf("legacy receipt field serialized: %s", raw)
+	}
+	if _, ok := decoded["terminal_receipt"]; !ok {
+		t.Fatalf("terminal receipt omitted: %s", raw)
+	}
+}
+
+func TestBidiFrameIgnoresLegacyReceiptOnlyField(t *testing.T) {
+	frame, err := NewBidiFrameFromJSON([]byte(`{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,"receipt":{"receipt_id":"legacy-only"}}`))
+	if err != nil {
+		t.Fatalf("NewBidiFrameFromJSON: %v", err)
+	}
+	if got := frame.TerminalReceiptJSON(); len(got) != 0 {
+		t.Fatalf("legacy receipt-only field must not populate terminal receipt: %s", got)
+	}
+	terminal, err := NewBidiTerminalFrame("bidi-legacy", frame)
+	if err != nil {
+		t.Fatalf("NewBidiTerminalFrame: %v", err)
+	}
+	if got := terminal.TerminalReceiptJSON(); len(got) != 0 {
+		t.Fatalf("legacy receipt-only field must not project into terminal schema: %s", got)
 	}
 }
 

@@ -33,6 +33,7 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 const REALM: &str = "cli-smoke";
 const SMOKE_SCHEMA_HASH: [u8; 32] = [0x11; 32];
 const SMOKE_IMPL_HASH: [u8; 32] = [0x22; 32];
+const SMOKE_DESCRIPTOR_HASH: [u8; 32] = [0x33; 32];
 
 fn agent(ura: &str) -> AgentIdentity {
     AgentIdentity::new(ura, UraProfile::EasynetStrictV2)
@@ -54,6 +55,8 @@ fn runtime_ability_ura(ability: &str) -> String {
 fn descriptor_proof_options(options: AbilityOptions) -> AbilityOptions {
     options.with_descriptor_proof(
         DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        "invoke",
+        SMOKE_DESCRIPTOR_HASH,
         SMOKE_SCHEMA_HASH,
         SMOKE_IMPL_HASH,
     )
@@ -103,10 +106,11 @@ fn build_signed_envelope(
     let callee = agent(&callee_ura());
     let subject = SubjectIdentity::from_callee(&callee);
     let ability_ref = format!(
-        "{}@{}",
+        "{}@{}#{}!invoke",
         easynet_cli::core::ura::owner_ability_ura(&callee.ura, ability)
             .expect("callee-owned ability URA"),
-        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        hex::encode(SMOKE_DESCRIPTOR_HASH)
     );
     let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
         caller: agent(&caller_ura()),

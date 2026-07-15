@@ -37,6 +37,14 @@ use easynet_axon::invocation::{
 
 use crate::daemon::identity::local_invocation::{sign_system_canonical, LOCAL_SYSTEM_AGENT_URA};
 
+/// Runtime-owned metadata projection of the operational trace id.
+///
+/// Arbitrary request metadata cannot assert this key: the canonical factory
+/// removes caller-supplied values and writes only the dedicated trace field
+/// admitted by the daemon boundary. Invocation-scoped child gateways use the
+/// projection to continue traces without parsing Mission arguments.
+pub(crate) const AXON_TRACE_CONTEXT_METADATA_KEY: &str = "axon.trace_id";
+
 /// Daemon classification of one descriptor-bound ingress into Axon
 /// `LocalRuntime`.
 #[derive(Debug)]
@@ -121,11 +129,18 @@ impl LocalRuntimeRequestFactory {
             }
         };
 
-        if !options.trace_id.is_empty() {
-            request = request.with_trace_id(options.trace_id);
+        let trace_id = options.trace_id.trim().to_string();
+        let mut request_metadata = options.request_metadata;
+        request_metadata.remove(AXON_TRACE_CONTEXT_METADATA_KEY);
+        if !trace_id.is_empty() {
+            request_metadata.insert(
+                AXON_TRACE_CONTEXT_METADATA_KEY.to_string(),
+                trace_id.clone(),
+            );
+            request = request.with_trace_id(trace_id);
         }
-        if !options.request_metadata.is_empty() {
-            request = request.with_request_metadata(options.request_metadata);
+        if !request_metadata.is_empty() {
+            request = request.with_request_metadata(request_metadata);
         }
         Ok(request)
     }

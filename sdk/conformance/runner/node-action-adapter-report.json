@@ -7,217 +7,199 @@
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": "Node Authority projects delegated/session authority metadata, delegates minting through injected transports, preserves unrelated Invocation metadata, and rejects ambiguous authority metadata.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "bidi/close_send_not_cancel",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": "Node Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "bidi/frame0_required",
-      "evidence": [
-        {
-          "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
-        }
-      ],
-      "message": "Node Runtime Core seam keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/profile_source_refs",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "errors",
-      "status": "passed"
+      "profile": "errors"
     },
     {
       "case_id": "error/retry_hint",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": "Node typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/typed_json",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "health/api_vs_runtime",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "health",
-      "status": "passed"
+      "profile": "health"
     },
     {
       "case_id": "invocation/builder_handle_state",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/canonical_material",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/complete_tuple",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/presigned_submit",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/terminal_monotonicity",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_receipt_facts",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
+        }
+      ],
+      "profile": "runtime_core"
     },
     {
       "case_id": "runtime_core/feature_discovery",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": "Node decodes the canonical Runtime Core feature discovery facts through an injected transport seam.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/backpressure_bound",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/order_terminal",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": "Node Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_compatible",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_incompatible",
       "evidence": [
         {
           "kind": "node_test",
-          "ref_path": "sdk/node/test/runtime-core.test.mjs"
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "8aae46f58e9b1d2cf64f0ee17c92486e7dded2ccbea0885fe0af713bb1d07ebc"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     }
   ],
-  "schema_version": 1
+  "schema_version": 2
 }

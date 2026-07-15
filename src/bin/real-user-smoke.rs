@@ -24,8 +24,8 @@
 // daemon::ability::builtins::real_invoke_tests for the deterministic
 // CI-runnable subset.
 //
-//   cargo run --bin real-user-smoke
-//   EASYNET_REAL_CHAT_OK=1 cargo run --bin real-user-smoke
+//   cargo run --features local-fast-probes --bin real-user-smoke
+//   EASYNET_REAL_CHAT_OK=1 cargo run --features local-fast-probes --bin real-user-smoke
 //
 // Author: Silan.Hu
 // Email: silan.hu@u.nus.edu
@@ -71,7 +71,7 @@ struct RuntimeSmoke {
 
 impl RuntimeSmoke {
     fn system() -> Self {
-        let runtime = LocalRuntime::new();
+        let runtime = LocalRuntime::new_local_fast();
         let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
         let mut config = RegistryBuildConfig::new(RegistryBuildServices::fresh(), &agents);
         config.local_runtime = Some(Arc::clone(&runtime));
@@ -82,7 +82,7 @@ impl RuntimeSmoke {
     }
 
     fn daemon(loaders: Option<Arc<Vec<Arc<dyn ContextLoader>>>>) -> Self {
-        let runtime = LocalRuntime::new();
+        let runtime = LocalRuntime::new_local_fast();
         let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
         config.loaders = loaders;
         config.pages_identity =

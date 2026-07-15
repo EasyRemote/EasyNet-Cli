@@ -6,7 +6,7 @@
 //              recursion guard.
 //
 // Every call creates a timestamped run directory under the agent's workspace
-// (`~/.easynet/workspaces/<agent>/runs/<stamp>/`) that stores the composed
+// (`~/.easynet/agents/<agent>/runs/<stamp>/`) that stores the composed
 // prompt, the raw stream trace, the final markdown response, and a meta.json
 // with timing / token counts. The run directory path is surfaced on the
 // returned `AgentResponse` so CLI callers can show it to the user.
@@ -208,7 +208,7 @@ pub(crate) fn resolve_model(
 /// This is the production entry point for remote `<agent>.chat`
 /// invocations — the agent's default-input ability surfaced
 /// over MCP. When a remote caller invokes that ability against
-/// this node via [`AbilityToolAdapter`], the request originates
+/// this node through daemon Invocation, the request originates
 /// outside any local mission, so recursion depth starts at 0
 /// and no parent-mission id is propagated to the child
 /// subprocess. Functionally equivalent to
@@ -897,7 +897,7 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
     // fake dir — but it eliminates the trivial-forgery case and
     // catches the common bug pattern of "user set the env var by
     // mistake".
-    let mission_run_dir = crate::cli::commands::mission_runs::root_dir().join(&mission_id);
+    let mission_run_dir = super::orchestration::root_dir().join(&mission_id);
     if !mission_run_dir.exists() {
         anyhow::bail!(
             "mission_id={} does not correspond to an existing \
@@ -1117,8 +1117,7 @@ mod tests {
     /// Safe unit test: pin that `send_external` is a one-line
     /// delegation to `send_to_agent_with_depth` with
     /// `depth_override = Some(0)`. We cannot run `send_external`
-    /// inline (it would spawn the real `claude` binary — see the
-    /// `#[ignore]` notes on the e2e tests below), so we symbolically
+    /// inline without crossing the process adapter boundary, so we symbolically
     /// test the two halves of its contract via the already-guarded
     /// inner function:
     ///
@@ -1129,8 +1128,8 @@ mod tests {
     /// The equality `send_external(x) == send_to_agent_with_depth(x, Some(0))`
     /// is enforced structurally by the implementation (single
     /// delegation line, see `send_external`'s body). If a future
-    /// refactor breaks that structural equality, the `#[ignore]`
-    /// e2e tests will catch the behavioural regression when run.
+    /// refactor breaks that structural equality, the direct
+    /// `send_external` tests below catch the behavioural regression.
     #[test]
     fn send_external_depth_guard_pins_at_max_not_below() {
         let entry = dummy_entry();
@@ -1150,11 +1149,8 @@ mod tests {
             "override=MAX must trip the guard; got: {msg}"
         );
 
-        // The inverse — "override < MAX does not trip the guard" —
-        // cannot be tested inline without spawning the real binary,
-        // because the path past the early-check leads straight to
-        // `adapter.invoke()`. That's what the `#[ignore]` tests
-        // below pin. Here we only verify the MAX boundary.
+        // The direct tests below cover the inverse through a fixture command
+        // that fails after the guard, without depending on an installed agent.
     }
 
     #[test]
@@ -1216,115 +1212,6 @@ mod tests {
             assert!(!msg.contains("depth limit"));
             assert!(!msg.contains("mission context"));
         }
-    }
-
-    // The next two tests are end-to-end and require external binaries
-    // (claude CLI with auth, MCP server child, etc.). They are gated
-    // by `#[ignore]` so they only run under
-    // `cargo test -- --ignored`. They exist to validate the full
-    // production path that the unit tests above only exercise in
-    // pieces.
-
-    /// End-to-end recursion guard via the MCP server. Spawns
-    /// `easynet mcp serve --enable-agent-dispatch --agent claude` as
-    /// a child with `EASYNET_AGENT_DEPTH=2` pre-set, then sends a
-    /// `tools/call` for `send_to_agent`. The response must contain
-    /// the depth-limit error.
-    ///
-    /// Inline JSON-RPC over stdio — no dev-dep added. ~30 lines.
-    #[test]
-    #[ignore]
-    fn recursion_guard_e2e() {
-        use std::io::{BufRead, BufReader, Write};
-        use std::process::{Command, Stdio};
-        use std::time::Duration;
-
-        // Locate the binary the test was built against. Falls back to
-        // `easynet` on PATH if neither path exists, but in practice
-        // `cargo test` ensures `target/debug/easynet` is fresh.
-        let bin = if std::path::Path::new("./target/release/easynet").exists() {
-            "./target/release/easynet"
-        } else if std::path::Path::new("./target/debug/easynet").exists() {
-            "./target/debug/easynet"
-        } else {
-            "easynet"
-        };
-
-        let mut child = Command::new(bin)
-            .args([
-                "mcp",
-                "serve",
-                "--enable-agent-dispatch",
-                "--agent",
-                "claude",
-            ])
-            .env("EASYNET_AGENT_DEPTH", "2")
-            // Set a fake mission id pointing at a tmp dir we control
-            // so the anti-forgery check passes.
-            .env("EASYNET_MISSION_ID", "test-recursion-guard-e2e")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn easynet mcp serve");
-
-        // Create the fake mission run dir so the anti-forgery check
-        // doesn't fire before the depth check does.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let runs_root = crate::daemon::persistence::config::state_dir()
-            .join("missions")
-            .join("runs");
-        let _ = std::fs::create_dir_all(runs_root.join("test-recursion-guard-e2e"));
-
-        let stdin = child.stdin.as_mut().expect("child stdin");
-        let init = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "test", "version": "1"},
-            },
-        });
-        writeln!(stdin, "{init}").unwrap();
-
-        let call = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "send_to_agent",
-                "arguments": {
-                    "agent": "claude",
-                    "prompt": "hi",
-                },
-            },
-        });
-        writeln!(stdin, "{call}").unwrap();
-
-        // Read responses until we see the call result or timeout.
-        let stdout = child.stdout.take().expect("child stdout");
-        let mut reader = BufReader::new(stdout);
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let mut found_depth_error = false;
-        let mut line = String::new();
-        while std::time::Instant::now() < deadline {
-            line.clear();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                break;
-            }
-            if line.contains("depth limit") {
-                found_depth_error = true;
-                break;
-            }
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(
-            found_depth_error,
-            "expected 'depth limit' in MCP server response stream"
-        );
     }
 
     /// End-to-end success path: `easynet agent send claude "say only

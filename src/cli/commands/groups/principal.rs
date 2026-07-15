@@ -30,7 +30,9 @@ use uuid::Uuid;
 use crate::core::ura;
 use crate::daemon::identity::self_identity::KeyringClient;
 use crate::daemon::keyring::{ManagedSigningKeyProjection, ManagedSigningStatus};
-use crate::support::platform::local_invoke::invoke_local_ability_with_subject;
+use crate::support::platform::local_invoke::{
+    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget,
+};
 use crate::support::platform::output;
 
 const PROFILE_PURPOSE: &str = "user_signing.cli";
@@ -469,16 +471,16 @@ fn run_bootstrap(args: BootstrapArgs) -> anyhow::Result<()> {
     let proof_ref = bootstrap_proof_ref(args.proof_ref, &create_idempotency_key);
     let bind_idempotency_key =
         command_id_with_prefix(args.bind_idempotency_key, "principal-bootstrap-bind");
-    let (create_request, bind_request) = principal_bootstrap_requests(
-        &args.principal_ura,
-        args.actor_ura.as_deref(),
-        &proof_ref,
-        &create_idempotency_key,
-        &bind_idempotency_key,
-        args.key_id.as_deref().unwrap_or(key.key_id.as_str()),
-        &key.public_key_b64,
-        args.expires_unix_ms,
-    );
+    let input = FirstKeyRequestInput {
+        principal_ura: &args.principal_ura,
+        actor_ura: args.actor_ura.as_deref(),
+        create_idempotency_key: &create_idempotency_key,
+        bind_idempotency_key: &bind_idempotency_key,
+        key_id: args.key_id.as_deref().unwrap_or(key.key_id.as_str()),
+        public_key_b64: &key.public_key_b64,
+        expires_unix_ms: args.expires_unix_ms,
+    };
+    let (create_request, bind_request) = principal_bootstrap_requests(input, &proof_ref);
 
     invoke_principal_ability("principal.lifecycle.create", create_request)?;
     let response = invoke_principal_ability("principal.lifecycle.bind_first_key", bind_request)?;
@@ -500,16 +502,16 @@ fn run_enroll(args: EnrollArgs) -> anyhow::Result<()> {
         command_id_with_prefix(args.create_idempotency_key, "principal-enroll-create");
     let bind_idempotency_key =
         command_id_with_prefix(args.bind_idempotency_key, "principal-enroll-bind");
-    let (create_request, bind_request) = principal_enrollment_requests(
-        &args.principal_ura,
-        args.actor_ura.as_deref(),
-        &args.enrollment_id,
-        &create_idempotency_key,
-        &bind_idempotency_key,
-        args.key_id.as_deref().unwrap_or(key.key_id.as_str()),
-        &key.public_key_b64,
-        args.expires_unix_ms,
-    );
+    let input = FirstKeyRequestInput {
+        principal_ura: &args.principal_ura,
+        actor_ura: args.actor_ura.as_deref(),
+        create_idempotency_key: &create_idempotency_key,
+        bind_idempotency_key: &bind_idempotency_key,
+        key_id: args.key_id.as_deref().unwrap_or(key.key_id.as_str()),
+        public_key_b64: &key.public_key_b64,
+        expires_unix_ms: args.expires_unix_ms,
+    };
+    let (create_request, bind_request) = principal_enrollment_requests(input, &args.enrollment_id);
 
     invoke_principal_ability("principal.lifecycle.create", create_request)?;
     let response = invoke_principal_ability("principal.lifecycle.bind_first_key", bind_request)?;
@@ -818,13 +820,37 @@ fn run_get(args: GetArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_principal_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
-    let subject = crate::core::ura::owner_ability_ura(
-        &crate::daemon::identity::local_invocation::local_device_ura(),
-        ability,
+    let target = principal_ability_target(ability, &args)?;
+    invoke_local_ability_target_with_subject_timeout(
+        &target,
+        args,
+        None,
+        std::time::Duration::from_secs(30),
     )
-    .ok_or_else(|| anyhow!("derive {ability} descriptor subject"))?;
-    invoke_local_ability_with_subject(ability, args, Some(subject))
-        .with_context(|| format!("invoke {ability}"))
+    .with_context(|| format!("invoke {ability}"))
+}
+
+fn principal_ability_target(ability: &str, args: &Value) -> anyhow::Result<LocalAbilityTarget> {
+    let principal_ura = principal_ability_realm_source(args)?;
+    let parsed = ura::parse_ura(principal_ura)
+        .with_context(|| format!("parse PrincipalLifecycle principal URA {principal_ura:?}"))?;
+    if parsed.kind != ura::URAKind::User {
+        anyhow::bail!("principal.lifecycle principal_ura must be a User URA");
+    }
+    let hub_ura = ura::hub_ura(&parsed.realm);
+    let ability_ura = ura::owner_ability_ura(&hub_ura, ability)
+        .ok_or_else(|| anyhow!("derive Hub PrincipalLifecycle Ability URA for {ability}"))?;
+    let selector = ura::AbilitySelector::parse(&ability_ura)?;
+    Ok(LocalAbilityTarget::from_selector(&selector))
+}
+
+fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {
+    args.pointer("/request/principal_ura")
+        .or_else(|| args.get("principal_ura"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("principal.lifecycle request missing principal_ura"))
 }
 
 fn principal_command(
@@ -862,87 +888,60 @@ fn principal_create_request(principal_ura: &str, command: Value) -> Value {
     })
 }
 
-fn principal_bootstrap_requests(
-    principal_ura: &str,
-    actor_ura: Option<&str>,
-    proof_ref: &str,
-    create_idempotency_key: &str,
-    bind_idempotency_key: &str,
-    key_id: &str,
-    public_key_b64: &str,
+#[derive(Clone, Copy)]
+struct FirstKeyRequestInput<'a> {
+    principal_ura: &'a str,
+    actor_ura: Option<&'a str>,
+    create_idempotency_key: &'a str,
+    bind_idempotency_key: &'a str,
+    key_id: &'a str,
+    public_key_b64: &'a str,
     expires_unix_ms: Option<i64>,
+}
+
+fn principal_bootstrap_requests(
+    input: FirstKeyRequestInput<'_>,
+    proof_ref: &str,
 ) -> (Value, Value) {
-    principal_create_and_bind_first_key_requests(
-        principal_ura,
-        actor_ura,
-        ProofKindArg::Bootstrap,
-        proof_ref,
-        create_idempotency_key,
-        bind_idempotency_key,
-        key_id,
-        public_key_b64,
-        expires_unix_ms,
-    )
+    principal_create_and_bind_first_key_requests(input, ProofKindArg::Bootstrap, proof_ref)
 }
 
 fn principal_enrollment_requests(
-    principal_ura: &str,
-    actor_ura: Option<&str>,
+    input: FirstKeyRequestInput<'_>,
     enrollment_id: &str,
-    create_idempotency_key: &str,
-    bind_idempotency_key: &str,
-    key_id: &str,
-    public_key_b64: &str,
-    expires_unix_ms: Option<i64>,
 ) -> (Value, Value) {
-    principal_create_and_bind_first_key_requests(
-        principal_ura,
-        actor_ura,
-        ProofKindArg::Enrollment,
-        enrollment_id,
-        create_idempotency_key,
-        bind_idempotency_key,
-        key_id,
-        public_key_b64,
-        expires_unix_ms,
-    )
+    principal_create_and_bind_first_key_requests(input, ProofKindArg::Enrollment, enrollment_id)
 }
 
 fn principal_create_and_bind_first_key_requests(
-    principal_ura: &str,
-    actor_ura: Option<&str>,
+    input: FirstKeyRequestInput<'_>,
     proof_kind: ProofKindArg,
     proof_ref: &str,
-    create_idempotency_key: &str,
-    bind_idempotency_key: &str,
-    key_id: &str,
-    public_key_b64: &str,
-    expires_unix_ms: Option<i64>,
 ) -> (Value, Value) {
     let create_request = principal_create_request(
-        principal_ura,
+        input.principal_ura,
         principal_command(
-            actor_ura,
-            principal_ura,
-            create_idempotency_key,
+            input.actor_ura,
+            input.principal_ura,
+            input.create_idempotency_key,
             None,
             proof_kind,
             proof_ref,
         ),
     );
     let bind_request = principal_bind_key_request(
-        principal_ura,
-        public_key_b64,
-        key_id,
+        input.principal_ura,
+        input.public_key_b64,
+        input.key_id,
         principal_command(
-            actor_ura,
-            principal_ura,
-            bind_idempotency_key,
+            input.actor_ura,
+            input.principal_ura,
+            input.bind_idempotency_key,
             Some(1),
             proof_kind,
             proof_ref,
         ),
-        expires_unix_ms,
+        input.expires_unix_ms,
     );
     (create_request, bind_request)
 }
@@ -1368,16 +1367,40 @@ mod tests {
     }
 
     #[test]
+    fn principal_ability_target_uses_hub_owner_from_principal_realm() {
+        let command = principal_command(
+            None,
+            "easynet:///r/realm/user/alice",
+            "idem-1",
+            Some(1),
+            ProofKindArg::Bootstrap,
+            "proof-1",
+        );
+        let request = principal_create_request("easynet:///r/realm/user/alice", command);
+        let target = principal_ability_target("principal.lifecycle.create", &request)
+            .expect("principal target");
+
+        assert_eq!(target.dispatch_name(), "principal.lifecycle.create");
+        assert_eq!(target.callee_ura(), "easynet:///r/realm/hub");
+        assert_eq!(
+            target.default_subject_ura(),
+            "easynet:///r/realm/ability/hub.principal.lifecycle.create"
+        );
+    }
+
+    #[test]
     fn bootstrap_requests_share_proof_and_lock_bind_version() {
         let (create_request, bind_request) = principal_bootstrap_requests(
-            " easynet:///r/realm/user/alice ",
-            Some(" easynet:///r/realm/user/admin "),
+            FirstKeyRequestInput {
+                principal_ura: " easynet:///r/realm/user/alice ",
+                actor_ura: Some(" easynet:///r/realm/user/admin "),
+                create_idempotency_key: "create-idem",
+                bind_idempotency_key: "bind-idem",
+                key_id: "key-1",
+                public_key_b64: "PUB",
+                expires_unix_ms: Some(12345),
+            },
             " bootstrap-proof-1 ",
-            "create-idem",
-            "bind-idem",
-            "key-1",
-            "PUB",
-            Some(12345),
         );
 
         assert_eq!(
@@ -1425,14 +1448,16 @@ mod tests {
     #[test]
     fn bootstrap_request_has_no_product_account_or_private_key_fields() {
         let (create_request, bind_request) = principal_bootstrap_requests(
-            "easynet:///r/realm/user/alice",
-            None,
+            FirstKeyRequestInput {
+                principal_ura: "easynet:///r/realm/user/alice",
+                actor_ura: None,
+                create_idempotency_key: "create-idem",
+                bind_idempotency_key: "bind-idem",
+                key_id: "key-1",
+                public_key_b64: "PUB",
+                expires_unix_ms: None,
+            },
             "bootstrap-proof-1",
-            "create-idem",
-            "bind-idem",
-            "key-1",
-            "PUB",
-            None,
         );
 
         assert!(create_request["request"].get("username").is_none());
@@ -1465,14 +1490,16 @@ mod tests {
     #[test]
     fn enrollment_requests_consume_capability_for_create_and_bind() {
         let (create_request, bind_request) = principal_enrollment_requests(
-            " easynet:///r/realm/user/bob ",
-            None,
+            FirstKeyRequestInput {
+                principal_ura: " easynet:///r/realm/user/bob ",
+                actor_ura: None,
+                create_idempotency_key: "create-bob",
+                bind_idempotency_key: "bind-bob",
+                key_id: "key-bob",
+                public_key_b64: "BOB_PUB",
+                expires_unix_ms: Some(98765),
+            },
             " enrollment_1 ",
-            "create-bob",
-            "bind-bob",
-            "key-bob",
-            "BOB_PUB",
-            Some(98765),
         );
 
         assert_eq!(
@@ -1512,14 +1539,16 @@ mod tests {
     #[test]
     fn enrollment_requests_have_no_product_account_or_private_key_fields() {
         let (create_request, bind_request) = principal_enrollment_requests(
-            "easynet:///r/realm/user/bob",
-            Some("easynet:///r/realm/user/bob"),
+            FirstKeyRequestInput {
+                principal_ura: "easynet:///r/realm/user/bob",
+                actor_ura: Some("easynet:///r/realm/user/bob"),
+                create_idempotency_key: "create-bob",
+                bind_idempotency_key: "bind-bob",
+                key_id: "key-bob",
+                public_key_b64: "BOB_PUB",
+                expires_unix_ms: None,
+            },
             "enrollment_1",
-            "create-bob",
-            "bind-bob",
-            "key-bob",
-            "BOB_PUB",
-            None,
         );
 
         assert!(create_request["request"].get("username").is_none());

@@ -7,15 +7,14 @@
 //
 // Protocol Responsibility:
 //   Abilities are owned by Agents. This module keeps the CLI grammar
-//   object-shaped (`agent <id-or-ura> new-ability ...`) and writes only
-//   local `<agent-root>/abilities/*.ability.toml` manifests; runtime
-//   publication remains the existing `agent refresh` / daemon
-//   advertise path.
+//   object-shaped (`agent <id-or-ura> new-ability ...`) and translates
+//   source-specific flags into canonical manifests. Non-dry-run state
+//   changes cross the AgentCommandGateway and commit inside the daemon.
 //
 // Implementation Approach:
 //   Parse the scoped tail with a small Clap sub-parser, project source
 //   catalogues (HTTP endpoint, OpenAPI operation, MCP tool) into
-//   `AbilityManifest`, then atomically materialise the TOML.
+//   `AbilityManifest`, then submit one daemon-owned authoring transaction.
 //
 // Usage Contract:
 //   No global `ability api add` entry point is exposed here because a
@@ -33,8 +32,6 @@ use crate::daemon::ability::manifest::{
     AbilityExec, AbilityManifest, CostMeta, HttpExec, ShellExec,
 };
 use crate::daemon::execution::mission::directory::AgentDirectory;
-use crate::daemon::persistence::agent_registry as agents;
-use crate::daemon::persistence::config;
 use crate::support::platform::output;
 
 pub(crate) fn run_scoped(selector: &str, tail: &[String]) -> anyhow::Result<()> {
@@ -306,19 +303,16 @@ fn run_new_ability(agent_name: &str, args: NewAbilityArgs) -> anyhow::Result<()>
 }
 
 fn run_api_add(agent_name: &str, args: ApiAddArgs) -> anyhow::Result<()> {
-    let dir = open_registered_agent(agent_name)?;
     let manifest = api_manifest_for(&args)?;
-    write_manifest(agent_name, &dir, &manifest, args.overwrite, args.dry_run)
+    materialize_manifest(agent_name, manifest, args.overwrite, args.dry_run)
 }
 
 fn run_script_add(agent_name: &str, args: ScriptAddArgs) -> anyhow::Result<()> {
-    let dir = open_registered_agent(agent_name)?;
     let manifest = script_manifest_for(&args)?;
-    write_manifest(agent_name, &dir, &manifest, args.overwrite, args.dry_run)
+    materialize_manifest(agent_name, manifest, args.overwrite, args.dry_run)
 }
 
 fn run_from_openapi(agent_name: &str, args: FromOpenApiArgs) -> anyhow::Result<()> {
-    let dir = open_registered_agent(agent_name)?;
     let spec = load_openapi_spec(&args.spec)?;
     let op = select_openapi_operation(
         &spec,
@@ -327,7 +321,7 @@ fn run_from_openapi(agent_name: &str, args: FromOpenApiArgs) -> anyhow::Result<(
         args.method.as_deref(),
     )?;
     let manifest = openapi_manifest_for(&spec, &op, &args)?;
-    write_manifest(agent_name, &dir, &manifest, args.overwrite, args.dry_run)
+    materialize_manifest(agent_name, manifest, args.overwrite, args.dry_run)
 }
 
 fn resolve_agent_selector(selector: &str) -> anyhow::Result<String> {
@@ -348,18 +342,11 @@ fn resolve_agent_selector(selector: &str) -> anyhow::Result<String> {
     }
 }
 
-fn open_registered_agent(name: &str) -> anyhow::Result<AgentDirectory> {
-    let registry = agents::load_agents()?;
-    let entry = registry.agents.get(name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "agent '{name}' is not registered; run 'easynet agent list' to see registered names"
-        )
-    })?;
-    let root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(name));
-    if !root.exists() {
+pub(crate) fn preview_agent_directory(name: &str) -> anyhow::Result<AgentDirectory> {
+    let gateway = crate::cli::daemon_client::agent_gateway::agent_command_gateway();
+    let row = crate::cli::commands::agent::daemon_agent_row(gateway.as_ref(), name)?;
+    let root = crate::cli::daemon_client::agent_view::agent_root(&row)?;
+    if row.root_exists == Some(false) || !root.is_dir() {
         anyhow::bail!("agent '{name}' has no on-disk root at {}", root.display());
     }
     AgentDirectory::open(&root)
@@ -493,19 +480,24 @@ fn openapi_manifest_for(
     Ok(manifest)
 }
 
-fn write_manifest(
+fn materialize_manifest(
     agent_name: &str,
-    dir: &AgentDirectory,
-    manifest: &AbilityManifest,
+    manifest: AbilityManifest,
     overwrite: bool,
     dry_run: bool,
 ) -> anyhow::Result<()> {
-    let body = manifest.to_toml_string()?;
-    let path = dir
-        .abilities_dir()
-        .join(format!("{}.ability.toml", manifest.name()));
-
     if dry_run {
+        let dir = preview_agent_directory(agent_name)?;
+        let body = manifest.to_toml_string()?;
+        let path = dir
+            .abilities_dir()
+            .join(format!("{}.ability.toml", manifest.name()));
+        if path.exists() && !overwrite {
+            anyhow::bail!(
+                "refusing to overwrite existing ability manifest {}; pass --overwrite to replace it",
+                path.display()
+            );
+        }
         println!("--- {}", path.display());
         print!("{body}");
         output::success(&format!(
@@ -516,30 +508,83 @@ fn write_manifest(
         return Ok(());
     }
 
-    std::fs::create_dir_all(dir.abilities_dir()).map_err(|e| {
-        anyhow::anyhow!(
-            "create abilities directory {}: {e}",
-            dir.abilities_dir().display()
-        )
-    })?;
-    if path.exists() && !overwrite {
-        anyhow::bail!(
-            "refusing to overwrite existing ability manifest {}; pass --overwrite to replace it",
-            path.display()
-        );
-    }
-    config::atomic_write(&path, body.as_bytes())
-        .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+    let ability_name = manifest.name().to_string();
+    let outcome = commit_ability_manifests(
+        agent_name,
+        vec![manifest],
+        overwrite,
+        AbilityConflictPolicy::Reject,
+    )?;
     output::success(&format!(
         "added ability '{}' to agent '{}'",
-        manifest.name(),
-        agent_name
+        ability_name, agent_name
     ));
-    output::detail("path", &path.display().to_string());
-    output::info(
-        "Run 'easynet agent refresh' if a running catalogue surface needs to publish it immediately.",
+    output::detail(
+        "path",
+        &outcome
+            .root_path
+            .join("abilities")
+            .join(format!("{ability_name}.ability.toml"))
+            .display()
+            .to_string(),
     );
+    output::info("The daemon committed the ability to the live capability catalog.");
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AbilityConflictPolicy {
+    Reject,
+    RetainSameBinding,
+}
+
+impl AbilityConflictPolicy {
+    fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Reject => "reject",
+            Self::RetainSameBinding => "retain_same_binding",
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct AgentAbilityCommitOutcome {
+    pub(crate) root_path: PathBuf,
+    pub(crate) written: Vec<String>,
+    pub(crate) skipped: Vec<String>,
+    pub(crate) publication: Vec<Value>,
+}
+
+pub(crate) fn commit_ability_manifests(
+    agent_name: &str,
+    manifests: Vec<AbilityManifest>,
+    overwrite: bool,
+    conflict_policy: AbilityConflictPolicy,
+) -> anyhow::Result<AgentAbilityCommitOutcome> {
+    if manifests.is_empty() {
+        anyhow::bail!("ability authoring transaction requires at least one manifest");
+    }
+    let manifests_toml = manifests
+        .iter()
+        .map(AbilityManifest::to_toml_string)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let gateway = crate::cli::daemon_client::agent_gateway::agent_command_gateway();
+    let response = gateway.invoke(
+        crate::daemon::ability::builtins::agents::authoring::ABILITY_PUT_AGENT_ABILITY,
+        json!({
+            "name": agent_name,
+            "manifests_toml": manifests_toml,
+            "overwrite": overwrite,
+            "conflict_policy": conflict_policy.as_wire_str(),
+        }),
+    )?;
+    if response.get("ok").and_then(Value::as_bool) != Some(true)
+        || response.get("state").and_then(Value::as_str) != Some("committed")
+    {
+        anyhow::bail!("agent.ability.put returned a non-committed outcome: {response}");
+    }
+    serde_json::from_value(response)
+        .map_err(|error| anyhow::anyhow!("agent.ability.put returned invalid payload: {error}"))
 }
 
 fn parse_headers(items: &[String]) -> anyhow::Result<BTreeMap<String, String>> {

@@ -1,0 +1,29 @@
+schema_version = "2"
+name = "identity.revoke_user_pubkey"
+descriptor_version = "1.0.0"
+description = "Revoke one trusted public key row for a user URA."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["agent_ura", "public_key_b64"]
+additionalProperties = false
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "User URA whose key row should be revoked."
+
+[input_schema.properties.public_key_b64]
+type = "string"
+description = "Base64-encoded Ed25519 verifying key to revoke."

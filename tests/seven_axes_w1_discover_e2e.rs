@@ -204,7 +204,7 @@ fn advertise_remote_user_tier_ability(
         host_device_ura,
         projection_revision,
         0,
-        &[ability_summary.clone()],
+        std::slice::from_ref(&ability_summary),
     );
 
     invoke_daemon_ability(

@@ -12,8 +12,8 @@
 //   A3 camera.snapshot      Rpc     operational       device
 //   A4 screen.subscribe     Stream  operational       device
 //   A5 speaker.publish      Bidi    operational       device
-//   A6 voice.subscribe      Stream  operational       llm
-//   A7 voice.transcribe     Bidi    operational       llm
+//   A6 voice.subscribe      Stream  provider seam     hub
+//   A7 voice.transcribe     Bidi    provider seam     hub
 //   A8 screen.snapshot      Rpc     operational       device
 //   A9 camera.record_start  Rpc     state-transition  device
 //   A10 camera.record_stop  Rpc     state-transition  device
@@ -44,18 +44,13 @@
 //     cannot accidentally land a real handler that accepts
 //     `args.subject`.
 //
-// PR3 scope (NOT in this file yet)
-// --------------------------------
+// Real media backend scope (NOT in this file yet)
+// ------------------------------------------------
 // Real device IO (cpal mic capture, nokhwa camera capture, screen
-// capture). The signature change to read `subject` from the
-// invocation envelope (rather than args) also lands in PR3 — the
-// current `Fn(Value) -> anyhow::Result<Value>` LocalRpcHandler
-// signature has no envelope hook, so PR2 stubs document the
-// invariant via `reject_subject_in_args` but cannot satisfy the
-// positive half of INV-SUBJECT-ENVELOPE without dispatcher
-// plumbing. The stubs return InvalidArgument before ever reaching
-// the device IO branch, so the rule's negative half is enforceable
-// today.
+// capture), plus Hub TTS/ASR providers. Hub voice rows remain descriptor
+// metadata only until such a provider is explicitly assembled; this module
+// does not publish an unavailable handler. Physical media stubs remain
+// Device-owned and never act as a voice proxy or fallback.
 //
 // INV-RESOURCE-VALIDITY
 // ---------------------
@@ -211,9 +206,9 @@ const ABILITIES: &[AbilityRow] = &[
     },
     AbilityRow {
         name: ABILITY_VOICE_SUBSCRIBE,
-        description: "Subscribe to an LLM voice profile. Returns a server-pushed \
+        description: "Subscribe to a realm Hub voice-synthesis resource. Returns a server-pushed \
                       stream of TTS audio BinaryChunk frames. Subject MUST be a \
-                      voice resource_ura (one llm may expose multiple voice \
+                      voice resource_ura (one Hub may expose multiple voice \
                       profiles).",
         input_schema: tts_output_args,
         call_mode: CallMode::Stream,
@@ -224,7 +219,7 @@ const ABILITIES: &[AbilityRow] = &[
         description: "Stream audio in, receive transcription text out. True bidi: \
                       caller pushes audio BinaryChunk UP, callee returns text \
                       BinaryChunk (or structured JSON) DOWN. Subject MUST be an \
-                      ASR-model resource_ura.",
+                      ASR-model resource_ura governed by the realm Hub.",
         input_schema: transcribe_args,
         call_mode: CallMode::Bidi,
         receipt_semantics: operational_receipt,
@@ -328,9 +323,10 @@ fn row(name: &str) -> Option<&'static AbilityRow> {
 /// name = row.name;` is needed.
 pub fn register(reg: &mut AxonAbilityCatalog) {
     for row in ABILITIES {
-        if has_real_media_handler(row.name) {
+        if has_real_media_handler(row.name) || is_unprovided_hub_voice(row.name) {
             continue;
         }
+        let owner = OwnerKind::Device;
         // Post-M3 of the system-namespace migration: `row.name` is
         // already canonical (`device.<segment>.<verb>`). Earlier
         // revisions stored the legacy form in the table and
@@ -341,7 +337,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
             CallMode::Rpc => {
                 reg.register_rpc_with_spec_and_semantics(
                     row.name,
-                    OwnerKind::Device,
+                    owner.clone(),
                     registry_manifest(row.name),
                     (row.receipt_semantics)(),
                     Arc::new(|args| query_stub(row.name, args)),
@@ -350,7 +346,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
             CallMode::Stream => {
                 reg.register_stream_with_spec_and_semantics(
                     row.name,
-                    OwnerKind::Device,
+                    owner,
                     registry_manifest(row.name),
                     (row.receipt_semantics)(),
                     Arc::new(|args| stream_stub(row.name, args)),
@@ -359,7 +355,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
             CallMode::Bidi => {
                 reg.register_bidi_with_spec_and_semantics(
                     row.name,
-                    OwnerKind::Device,
+                    owner,
                     registry_manifest(row.name),
                     (row.receipt_semantics)(),
                     Arc::new(|args| bidi_stub(row.name, args)),
@@ -367,6 +363,10 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
             }
         }
     }
+}
+
+fn is_unprovided_hub_voice(name: &str) -> bool {
+    matches!(name, ABILITY_VOICE_SUBSCRIBE | ABILITY_VOICE_TRANSCRIBE)
 }
 
 fn has_real_media_handler(name: &str) -> bool {
@@ -425,11 +425,8 @@ fn query_stub(ability: &str, args: Value) -> anyhow::Result<Value> {
 
 fn bidi_stub(ability: &str, args: Value) -> anyhow::Result<BidiSource> {
     reject_subject_in_args(ability, &args)?;
-    // PR3: resolve envelope.subject → audio device →
-    //   (speaker.publish): consume up-frames, decode, write to
-    //                      cpal output stream.
-    //   (voice.transcribe): consume up-frames, decode, feed ASR,
-    //                       emit text frames down.
+    // PR3: resolve envelope.subject → audio device, consume speaker.publish
+    // up-frames, decode them, and write them to the cpal output stream.
     anyhow::bail!("{ability}: device backend not yet wired (PR3 lands bidi audio)")
 }
 
@@ -469,10 +466,10 @@ fn playback_audio_args() -> Value {
     })
 }
 
-/// TTS output (voice.subscribe): the LLM picks the voice via
+/// TTS output (voice.subscribe): the Hub service selects the voice via
 /// subject (resource_ura); the caller picks how it wants the
 /// audio framed. No `channels` (TTS is mono); no codec list (the
-/// llm's voice resource declares its codec capabilities, the
+/// Hub voice resource declares its codec capabilities, the
 /// caller asks for one).
 fn tts_output_args() -> Value {
     json!({
@@ -608,12 +605,12 @@ mod tests {
         let mut reg = AxonAbilityCatalog::new();
         register(&mut reg);
         for row in ABILITIES {
-            if has_real_media_handler(row.name) {
+            if has_real_media_handler(row.name) || is_unprovided_hub_voice(row.name) {
                 assert!(
                     reg.get_rpc(row.name).is_none()
                         && reg.get_stream(row.name).is_none()
                         && reg.get_bidi(row.name).is_none(),
-                    "{} has a real media module and must not also be stub-registered",
+                    "{} must not be stub-registered",
                     row.name
                 );
                 continue;
@@ -625,17 +622,22 @@ mod tests {
                     row.name
                 ),
                 CallMode::Stream => assert!(
-                    reg.get_stream(row.name).is_some(),
+                    reg.has_stream(row.name),
                     "{} declared call_mode=Stream but not registered as Stream",
                     row.name
                 ),
                 CallMode::Bidi => assert!(
-                    reg.get_bidi(row.name).is_some(),
+                    reg.has_bidi(row.name),
                     "{} declared call_mode=Bidi but not registered as Bidi",
                     row.name
                 ),
             }
         }
+
+        assert!(!reg.has_stream(ABILITY_VOICE_SUBSCRIBE));
+        assert!(!reg.has_bidi(ABILITY_VOICE_TRANSCRIBE));
+        assert!(reg.get_bidi(ABILITY_SPEAKER_PUBLISH).is_some());
+        assert!(reg.resolve_bidi_with_env(ABILITY_SPEAKER_PUBLISH).is_none());
     }
 
     #[test]
@@ -645,7 +647,7 @@ mod tests {
         let rows = reg.authority_ability_catalog_snapshot();
 
         for row in ABILITIES {
-            if has_real_media_handler(row.name) {
+            if has_real_media_handler(row.name) || is_unprovided_hub_voice(row.name) {
                 continue;
             }
             let descriptor = rows
@@ -714,7 +716,6 @@ mod tests {
             ABILITY_MIC_SUBSCRIBE,
             ABILITY_CAMERA_SUBSCRIBE,
             ABILITY_SCREEN_SUBSCRIBE,
-            ABILITY_VOICE_SUBSCRIBE,
         ] {
             let err = stream_stub(ability, bad.clone()).unwrap_err().to_string();
             assert!(
@@ -722,13 +723,28 @@ mod tests {
                 "{ability} did not enforce INV-SUBJECT-ENVELOPE: {err}"
             );
         }
-        for ability in [ABILITY_SPEAKER_PUBLISH, ABILITY_VOICE_TRANSCRIBE] {
+        for ability in [ABILITY_SPEAKER_PUBLISH] {
             let err = bidi_stub(ability, bad.clone()).unwrap_err().to_string();
             assert!(
                 err.contains(REASON_SUBJECT_IN_ARGS),
                 "{ability} did not enforce INV-SUBJECT-ENVELOPE: {err}"
             );
         }
+
+        let _ = bad;
+    }
+
+    #[test]
+    fn unprovided_hub_voice_geometries_are_not_registered_or_published() {
+        let mut reg = AxonAbilityCatalog::new();
+        register(&mut reg);
+        let rows = reg.authority_ability_catalog_snapshot();
+        for voice in [ABILITY_VOICE_SUBSCRIBE, ABILITY_VOICE_TRANSCRIBE] {
+            assert!(reg.control_plane_owner(voice).is_none());
+            assert!(!rows.iter().any(|row| row.name == voice));
+        }
+        assert_eq!(call_mode(ABILITY_VOICE_SUBSCRIBE), Some(CallMode::Stream));
+        assert_eq!(call_mode(ABILITY_VOICE_TRANSCRIBE), Some(CallMode::Bidi));
     }
 
     #[test]

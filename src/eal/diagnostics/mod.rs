@@ -138,8 +138,7 @@ impl EalError {
     ///   exceeded its budget. Retry with a longer backoff; a tighter
     ///   retry can compound peer overload.
     /// - [`AxonError::Bridge`] / [`AxonError::NativeBridge`] /
-    ///   [`AxonError::Stream`] / [`AxonError::Invocation`] /
-    ///   [`AxonError::Mcp`] →
+    ///   [`AxonError::Stream`] / [`AxonError::Invocation`] →
     ///   [`EalError::Unavailable`]: transport / peer-side failures
     ///   that may succeed on retry after recovery. `Invocation` is a
     ///   *remote* execution failure (the SDK already split local
@@ -168,12 +167,9 @@ impl EalError {
             A::Validation(_) | A::PolicyDenied(_) => EalError::Validation(msg),
             A::NotInstalled(_) | A::NotActivated(_) => EalError::NotFound(msg),
             A::DeadlineExceeded(_) => EalError::DeadlineExceeded(msg),
-            A::Bridge(_)
-            | A::NativeBridge { .. }
-            | A::Stream(_)
-            | A::Invocation(_)
-            | A::Mcp(_)
-            | A::Io(_) => EalError::Unavailable(msg),
+            A::Bridge(_) | A::NativeBridge { .. } | A::Stream(_) | A::Invocation(_) | A::Io(_) => {
+                EalError::Unavailable(msg)
+            }
             A::SymbolNotFound(_) | A::Json(_) | A::PartialSuccess { .. } => EalError::Internal(msg),
         }
     }
@@ -317,7 +313,6 @@ mod tests {
             Axon::Bridge("connect refused".into()),
             Axon::Stream("peer closed".into()),
             Axon::Invocation("remote panic".into()),
-            Axon::Mcp("protocol drift".into()),
             Axon::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
         ] {
             let code = EalError::from_axon_error(axon).error_code();

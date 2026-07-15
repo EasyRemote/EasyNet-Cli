@@ -155,8 +155,8 @@ class AccessControlTests(unittest.TestCase):
         self.assertIsInstance(grant, dict)
         self.assertEqual(ability.arguments["owner_ura"], "easynet:///r/example/user/alice")
         self.assertEqual(ability.arguments["principal_ura"], "easynet:///r/example/user/bob")
-        self.assertEqual(grant["owner_user_id"], "alice")  # type: ignore[index]
-        self.assertEqual(grant["principal_id"], "bob")  # type: ignore[index]
+        self.assertNotIn("owner_user_id", grant)
+        self.assertNotIn("principal_id", grant)
         self.assertEqual(grant["token_class"], "service")  # type: ignore[index]
         self.assertEqual(grant["lifetime"], "session")  # type: ignore[index]
         self.assertEqual(grant["last_used_at"], "2026-07-11T01:00:00Z")  # type: ignore[index]
@@ -188,8 +188,10 @@ class AccessControlTests(unittest.TestCase):
 
         self.assertEqual(len(page.grants), 1)
         self.assertEqual(page.grants[0].grant_id, "grant-1")
-        self.assertEqual(ability.arguments["owner_user_id"], "alice")
-        self.assertEqual(ability.arguments["principal_id"], "bob")
+        self.assertEqual(ability.arguments["owner_ura"], "easynet:///r/example/user/alice")
+        self.assertEqual(ability.arguments["principal_ura"], "easynet:///r/example/user/bob")
+        self.assertNotIn("owner_user_id", ability.arguments)
+        self.assertNotIn("principal_id", ability.arguments)
         self.assertEqual(ability.arguments["limit"], 10)
         self.assertEqual(ability.arguments["cursor"], "cursor-1")
         self.assertEqual(page.grants[0].token_class, "service")
@@ -240,8 +242,8 @@ class AccessControlTests(unittest.TestCase):
         self.assertEqual(ability.ability, "policy.request.create")
         request_wire = ability.arguments["request"]
         self.assertIsInstance(request_wire, dict)
-        self.assertEqual(request_wire["owner_user_id"], "alice")  # type: ignore[index]
-        self.assertEqual(request_wire["principal_id"], "bob")  # type: ignore[index]
+        self.assertNotIn("owner_user_id", request_wire)
+        self.assertNotIn("principal_id", request_wire)
         self.assertEqual(ability.arguments["actor_ura"], "easynet:///r/example/user/alice")
 
         resolved = provider.resolve_request(

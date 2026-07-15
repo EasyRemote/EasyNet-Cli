@@ -33,6 +33,7 @@ use super::user_binding_chain::{
 };
 use super::{ManagedPeer, ManagedSigningKeyProjection, ManagedSigningStatus};
 use crate::core::ura::{parse_ura, URAKind};
+use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::identity::self_identity::KeyringClient;
 
@@ -567,63 +568,73 @@ pub fn register_for_owner(
     let name = |verb: &str| format!("{owner}.keyring.{verb}");
 
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("create"),
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_create(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("list"),
         OwnerKind::Device,
+        AdmissionAction::Read,
         Arc::new(move |args| handle_list(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("get_public"),
         OwnerKind::Device,
+        AdmissionAction::Read,
         Arc::new(move |args| handle_get_public(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("rotate"),
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_rotate(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("revoke"),
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_revoke(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("expire_set"),
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_expire_set(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("bind_subject"),
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_bind_subject(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("peer_add"),
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_peer_add(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("peer_list"),
         OwnerKind::Device,
+        AdmissionAction::Read,
         Arc::new(move |args| handle_peer_list(&h, args)),
     );
     let h = provider.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         name("federate_user_identity_token"),
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_federate_user_identity_token(&h, args)),
     );
 }
@@ -642,9 +653,10 @@ pub fn register_federated_consume_for_owner(
 ) {
     let name = format!("{owner}.keyring.consume_federate_user_token");
     let b = bindings.clone();
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         &name,
         OwnerKind::Device,
+        AdmissionAction::Manage,
         Arc::new(move |args| handle_consume_federate_user_token(&b, args)),
     );
 }

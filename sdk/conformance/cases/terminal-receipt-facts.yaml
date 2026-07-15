@@ -3,6 +3,9 @@ profile: runtime_core
 required_for:
   - go
   - python
+  - java
+  - swift
+  - node
 description: InvocationResult preserves opaque terminal receipt facts for audit and causal continuation without exposing a receipt-history product profile.
 steps:
   - action: project_terminal_invocation_result

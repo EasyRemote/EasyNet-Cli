@@ -24,11 +24,13 @@
 // - CLI daemon runtime layer. Backend and frontend consume this through daemon
 //   Invocation, never as an in-process library.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use easynet_axon::invocation::CallMode;
 use serde_json::{json, Value};
 
+use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
@@ -46,42 +48,6 @@ const MAX_DIRECTORY_LIMIT: usize = 500;
 const DIRECTORY_CURSOR_PREFIX: &str = "directory:v1:";
 const MAX_DIRECTORY_CURSOR_LEN: usize = 4096;
 
-/// Local runtime namespace authority (RFC-005 §4 / D105).
-///
-/// A daemon is the authority for the abilities it can execute in its own
-/// `LocalRuntime`: its device-owned control-plane abilities and the
-/// owner-local abilities of agents hosted by this device. Their `ABILITY`
-/// existence and executable `ROUTE` are proven from live local dispatch
-/// bindings, never from the hub projection cache. The hub
-/// `AbilityCatalogStore` is a signed, lease-bound rendezvous projection
-/// for *other* consumers (peer devices, backend discovery) — it is not
-/// consulted when this daemon resolves its own executable surface.
-///
-/// This trait is the dependency-injection seam between the synchronous
-/// resolver and the asynchronous `LocalRuntime`. Implementors snapshot
-/// the runtime's registered abilities before the resolver runs (the
-/// resolver call sites are already async) and answer membership
-/// synchronously.
-pub(crate) trait LocalRuntimeAuthority: Send + Sync {
-    /// Resolve an owner-local ability by public name against the live
-    /// local dispatch bindings.
-    ///
-    /// `owner_ura` is the canonical owner whose ability is being
-    /// selected. For device control-plane abilities it equals the daemon
-    /// device URA; for hosted agents it is the hosted Agent URA while the
-    /// selected execution host remains the daemon device.
-    /// `public_name` is the owner-local ability name (e.g. `agent.start`,
-    /// `discover`, `fs.read`). Returns the runtime dispatch binding when
-    /// the local runtime actually registers a dispatchable route for it
-    /// (the D105 ROUTE gate), or `None` when it does not — which the
-    /// resolver maps to a typed `NODATA` negative.
-    fn resolve_owner_ability(
-        &self,
-        owner_ura: &str,
-        public_name: &str,
-    ) -> Option<LocalRuntimeAbility>;
-}
-
 /// An ability proven from the local runtime dispatch table.
 ///
 /// `dispatch_name` is the implementation-local registry key the runtime
@@ -92,51 +58,6 @@ pub(crate) trait LocalRuntimeAuthority: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalRuntimeAbility {
     pub dispatch_name: String,
-}
-
-/// `LocalRuntimeAuthority` backed by a snapshot of the live `LocalRuntime`
-/// dispatch table.
-///
-/// The daemon takes this snapshot at the (already async) resolver call
-/// sites via [`LocalRuntimeAuthoritySnapshot::capture`], then hands
-/// ownership to the synchronous resolver. Membership is exact: a public
-/// name resolves only when the runtime registers the matching canonical
-/// Ability URA, which is the literal D105 "owner device has a matching
-/// runtime-local dispatch binding" gate.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct LocalRuntimeAuthoritySnapshot {
-    ability_uras: HashSet<String>,
-}
-
-impl LocalRuntimeAuthoritySnapshot {
-    /// Snapshot every registered dispatch key from the local runtime.
-    pub(crate) async fn capture(runtime: &easynet_axon::invocation::LocalRuntime) -> Self {
-        let ability_uras = runtime
-            .list_abilities()
-            .await
-            .into_iter()
-            .map(|descriptor| descriptor.name)
-            .collect();
-        Self { ability_uras }
-    }
-}
-
-impl LocalRuntimeAuthority for LocalRuntimeAuthoritySnapshot {
-    fn resolve_owner_ability(
-        &self,
-        owner_ura: &str,
-        public_name: &str,
-    ) -> Option<LocalRuntimeAbility> {
-        let runtime_key = crate::core::ura::owner_ability_ura(owner_ura, public_name)?;
-        if !self.ability_uras.contains(&runtime_key) {
-            return None;
-        }
-        let dispatch_name = crate::core::ura::local_dispatch_ability_key(owner_ura, public_name);
-        if dispatch_name.is_empty() {
-            return None;
-        }
-        Some(LocalRuntimeAbility { dispatch_name })
-    }
 }
 
 /// Closed daemon-internal route-locality classification.
@@ -216,6 +137,7 @@ impl SelectedInvokeRoute {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn dispatch_key(&self) -> String {
         crate::core::ura::local_dispatch_ability_key(&self.callee_ura, &self.dispatch_name)
     }
@@ -334,15 +256,54 @@ pub(crate) struct DelegatedInvokeRoute {
     pub release_profile: axon_pb::ResolverReleaseProfile,
 }
 
-/// Resolver-owned route selection for a canonical `InvokeRequest`.
-///
-/// A signed invocation may execute via a local final route or delegate to a
-/// peer hub. Keeping that branch here prevents dispatchers from parsing URAs
-/// and re-implementing locality policy outside the resolver.
+/// Resolver-owned dispatch branch for one canonical Invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CanonicalInvokeRouteSelection {
+pub(crate) enum CanonicalRouteDispatch {
     Local(SelectedInvokeRoute),
     Peer(DelegatedInvokeRoute),
+}
+
+/// Call-mode-bound result of the daemon's canonical route policy.
+///
+/// Owner/target validation, local route selection, and cross-realm delegation
+/// run once regardless of carrier. The selected Axon call mode then travels
+/// with the route so descriptor binding and carrier construction cannot drift
+/// from the policy decision made at resolution time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalRouteSelection {
+    call_mode: CallMode,
+    dispatch: CanonicalRouteDispatch,
+}
+
+impl CanonicalRouteSelection {
+    fn local(call_mode: CallMode, route: SelectedInvokeRoute) -> Self {
+        Self {
+            call_mode,
+            dispatch: CanonicalRouteDispatch::Local(route),
+        }
+    }
+
+    fn peer(call_mode: CallMode, route: DelegatedInvokeRoute) -> Self {
+        Self {
+            call_mode,
+            dispatch: CanonicalRouteDispatch::Peer(route),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn call_mode(&self) -> CallMode {
+        self.call_mode
+    }
+
+    #[must_use]
+    pub(crate) fn dispatch(&self) -> &CanonicalRouteDispatch {
+        &self.dispatch
+    }
+
+    #[must_use]
+    pub(crate) fn into_dispatch(self) -> CanonicalRouteDispatch {
+        self.dispatch
+    }
 }
 
 fn route_owner_mismatch_detail(
@@ -501,8 +462,22 @@ struct PeerDelegationSource<'a> {
 /// have to outlive the snapshot's stack frame.
 struct LocalNamespaceAuthoritySource {
     local_authority_ura: String,
-    authority: Box<dyn LocalRuntimeAuthority>,
+    authority: LocalAbilityPublicationSnapshot,
     hosted_agents: LocalHostedAgentPlacements,
+}
+
+impl LocalNamespaceAuthoritySource {
+    fn resolve_owner_ability(
+        &self,
+        owner_ura: &str,
+        public_name: &str,
+    ) -> Option<LocalRuntimeAbility> {
+        if !self.authority.resolves(owner_ura, public_name) {
+            return None;
+        }
+        let dispatch_name = crate::core::ura::local_dispatch_ability_key(owner_ura, public_name);
+        (!dispatch_name.is_empty()).then_some(LocalRuntimeAbility { dispatch_name })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -605,10 +580,10 @@ impl<'a> DaemonRouteResolver<'a> {
     /// agents (e.g. `dev.pages`) before any projection has been
     /// published.
     #[must_use]
-    pub(crate) fn with_local_runtime_authority(
+    pub(crate) fn with_local_catalog_authority(
         mut self,
         local_authority_ura: impl Into<String>,
-        authority: Box<dyn LocalRuntimeAuthority>,
+        authority: LocalAbilityPublicationSnapshot,
     ) -> Self {
         self.device_local = Some(LocalNamespaceAuthoritySource {
             local_authority_ura: local_authority_ura.into(),
@@ -645,18 +620,6 @@ impl<'a> DaemonRouteResolver<'a> {
             allow_directory_auto_route,
         });
         self
-    }
-
-    /// This daemon's own device URA, when local runtime authority is
-    /// injected. The directory listing path uses it to include the static
-    /// device profile only for this device's own surface.
-    fn self_device_ura(&self) -> Option<&str> {
-        self.device_local.as_ref().and_then(|device_local| {
-            crate::core::ura::parse_ura(&device_local.local_authority_ura)
-                .ok()
-                .filter(|parsed| parsed.kind == crate::core::ura::URAKind::Device)
-                .map(|_| device_local.local_authority_ura.as_str())
-        })
     }
 
     #[must_use]
@@ -738,6 +701,23 @@ impl<'a> DaemonRouteResolver<'a> {
                 );
             }
 
+            let is_hub_owner = crate::core::ura::parse_ura(&selector.owner_ura)
+                .ok()
+                .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Hub);
+            if is_hub_owner
+                && device_local
+                    .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
+                    .is_some()
+            {
+                return self.resolve_route_from_local_runtime(
+                    &selector,
+                    device_local,
+                    selector.owner_ura.as_str(),
+                    None,
+                    SelectedRouteKind::HubOwned,
+                );
+            }
+
             if let Some(host_node_id) = self.local_host_node_id_for_agent(&selector, device_local) {
                 return self.resolve_route_from_local_runtime(
                     &selector,
@@ -753,7 +733,6 @@ impl<'a> DaemonRouteResolver<'a> {
                 .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Agent);
             if is_agent_owner
                 && device_local
-                    .authority
                     .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
                     .is_some()
             {
@@ -793,7 +772,6 @@ impl<'a> DaemonRouteResolver<'a> {
             });
         }
         let ability = device_local
-            .authority
             .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
             .ok_or_else(|| ResolveRouteFailure {
                 query_name: selector.query_name.clone(),
@@ -882,7 +860,7 @@ impl<'a> DaemonRouteResolver<'a> {
             self.registry,
             self.advertised_agents,
             self.catalog,
-            self.self_device_ura(),
+            self.device_local.as_ref().map(|source| &source.authority),
             self.now_unix_ms,
         );
 
@@ -1036,11 +1014,12 @@ impl<'a> DaemonRouteResolver<'a> {
         }))
     }
 
-    pub(crate) fn resolve_canonical_invoke_route(
+    pub(crate) fn resolve_canonical_route(
         &self,
         target_ura: &str,
         ability_ura: &str,
-    ) -> Result<CanonicalInvokeRouteSelection, ResolveRouteFailure> {
+        call_mode: CallMode,
+    ) -> Result<CanonicalRouteSelection, ResolveRouteFailure> {
         let selector = route_selector_from_query(ability_ura, "")
             .or_else(|| route_selector_from_query(target_ura, ability_ura))
             .ok_or_else(|| ResolveRouteFailure {
@@ -1078,7 +1057,7 @@ impl<'a> DaemonRouteResolver<'a> {
                         ),
                     });
                 }
-                Ok(CanonicalInvokeRouteSelection::Local(selected_route))
+                Ok(CanonicalRouteSelection::local(call_mode, selected_route))
             }
             Err(local_failure) => {
                 let Some(peer_source) = self.peer_delegation.as_ref() else {
@@ -1096,7 +1075,7 @@ impl<'a> DaemonRouteResolver<'a> {
                     return Err(local_failure);
                 }
                 self.resolve_delegation(&canonical_query, "")?
-                    .map(CanonicalInvokeRouteSelection::Peer)
+                    .map(|route| CanonicalRouteSelection::peer(call_mode, route))
                     .ok_or(ResolveRouteFailure {
                         query_name: selector.query_name,
                         reason: axon_pb::NegativeReason::Noroute,
@@ -1131,7 +1110,7 @@ impl<'a> DaemonRouteResolver<'a> {
             self.registry,
             self.advertised_agents,
             self.catalog,
-            self.self_device_ura(),
+            self.device_local.as_ref().map(|source| &source.authority),
             self.now_unix_ms,
         );
         let requested_limit = directory_page_limit(query.get("limit").and_then(Value::as_u64));
@@ -1298,6 +1277,9 @@ fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<Rou
                 public_name: selector.public_name().to_string(),
             });
         }
+        if looks_like_descriptor_ref(query_name) {
+            return None;
+        }
         if is_ability_ura(query_name) {
             let selector = crate::core::ura::AbilitySelector::parse(query_name).ok()?;
             return Some(RouteSelector {
@@ -1315,6 +1297,9 @@ fn route_selector_from_query(query_name: &str, ability_name: &str) -> Option<Rou
     }
     if let Some(selector) = route_selector_from_descriptor_ref(owner_ura, ability_name) {
         return Some(selector);
+    }
+    if looks_like_descriptor_ref(ability_name) {
+        return None;
     }
     let public_name = crate::core::ura::owner_local_ability_name(owner_ura, ability_name);
     let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, &public_name)?;
@@ -1486,6 +1471,11 @@ fn is_ability_ura(value: &str) -> bool {
 
 fn is_descriptor_ref(value: &str) -> bool {
     easynet_axon::invocation::canonical_ability_descriptor_ref(value).is_ok()
+}
+
+fn looks_like_descriptor_ref(value: &str) -> bool {
+    let value = value.trim();
+    value.contains('@') || value.contains('#') || value.contains('!')
 }
 
 fn json_string(value: &Value, key: &str) -> String {
@@ -1833,41 +1823,22 @@ mod tests {
         registry.insert(owner_ura.to_string(), make_dispatch_sender());
     }
 
-    /// Test double for [`LocalRuntimeAuthority`] holding a fixed set of
-    /// canonical Ability URAs, matching the membership contract of the
-    /// production [`LocalRuntimeAuthoritySnapshot`] without a runtime.
-    struct FakeLocalRuntimeAuthority {
-        ability_uras: HashSet<String>,
-    }
+    /// Test builder for the same immutable local publication snapshot used by
+    /// production route and directory resolution.
+    struct FakeLocalRuntimeAuthority;
 
     impl FakeLocalRuntimeAuthority {
-        fn with_owner_keys(owner_ura: &str, keys: &[&str]) -> Box<dyn LocalRuntimeAuthority> {
-            Box::new(Self {
-                ability_uras: keys
-                    .iter()
-                    .map(|public_name| {
-                        crate::core::ura::owner_ability_ura(owner_ura, public_name)
-                            .expect("test owner ability ura")
-                    })
-                    .collect(),
-            })
+        fn with_owner_keys(owner_ura: &str, keys: &[&str]) -> LocalAbilityPublicationSnapshot {
+            LocalAbilityPublicationSnapshot::from_owner_public_names(owner_ura, keys)
         }
     }
 
-    impl LocalRuntimeAuthority for FakeLocalRuntimeAuthority {
-        fn resolve_owner_ability(
-            &self,
-            owner_ura: &str,
-            public_name: &str,
-        ) -> Option<LocalRuntimeAbility> {
-            let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, public_name)?;
-            if !self.ability_uras.contains(&ability_ura) {
-                return None;
-            }
-            let dispatch_name =
-                crate::core::ura::local_dispatch_ability_key(owner_ura, public_name);
-            Some(LocalRuntimeAbility { dispatch_name })
-        }
+    fn descriptor_ref_for_test(ability_ura: &str) -> String {
+        easynet_axon::invocation::canonical_ability_descriptor_ref(&format!(
+            "{ability_ura}@1.0.0#{}!invoke",
+            "a".repeat(64)
+        ))
+        .expect("test descriptor ref")
     }
 
     /// Publish a single ability projection for `owner_ura`, mirroring the
@@ -1908,6 +1879,7 @@ mod tests {
             owner_ura.to_string(),
             host_device_ura.to_string(),
             1,
+            1,
             "sha256:test".to_string(),
             LEASE_EXPIRES_MS,
             vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
@@ -1941,7 +1913,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.list")
             .expect("device-owned ability online must resolve a final route");
@@ -1972,6 +1944,101 @@ mod tests {
     }
 
     #[test]
+    fn canonical_policy_selects_identical_local_route_for_every_carrier() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
+        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_catalog_authority(owner_ura.clone(), authority)
+            .at(TEST_NOW_MS);
+
+        let mut fingerprints = Vec::new();
+        for call_mode in [CallMode::Rpc, CallMode::Stream, CallMode::Bidi] {
+            let selection = resolver
+                .resolve_canonical_route(&owner_ura, &ability_ura, call_mode)
+                .expect("all carriers use the same canonical local route policy");
+            assert_eq!(selection.call_mode(), call_mode);
+            let CanonicalRouteDispatch::Local(route) = selection.into_dispatch() else {
+                panic!("same-realm local route must not delegate");
+            };
+            let kind = route.kind();
+            fingerprints.push((
+                route.owner_ura,
+                route.callee_ura,
+                route.execution_host_ura,
+                route.ability_ura,
+                route.route_ura,
+                route.dispatch_name,
+                kind,
+            ));
+        }
+
+        assert!(fingerprints.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn canonical_policy_selects_identical_peer_route_for_every_carrier() {
+        let registry = PresenceRegistry::new();
+        let peers = SharedFederatedPeers::new(BTreeMap::from([(
+            "remote-realm".to_string(),
+            "https://remote-hub.example".to_string(),
+        )]));
+        let directory = SharedFederatedDirectoryView::default();
+        let owner_ura = crate::core::ura::device_ura("remote-realm", "remote-device");
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "observe.health").expect("ability ura");
+        let resolver = DaemonRouteResolver::new(&registry, None, None)
+            .with_peer_delegation("local-realm", &peers, &directory, false)
+            .at(TEST_NOW_MS);
+
+        let mut fingerprints = Vec::new();
+        for call_mode in [CallMode::Rpc, CallMode::Stream, CallMode::Bidi] {
+            let selection = resolver
+                .resolve_canonical_route(&owner_ura, &ability_ura, call_mode)
+                .expect("all carriers use the same canonical cross-realm policy");
+            assert_eq!(selection.call_mode(), call_mode);
+            let CanonicalRouteDispatch::Peer(route) = selection.into_dispatch() else {
+                panic!("cross-realm route must delegate");
+            };
+            let primary_endpoint = route.primary_endpoint().map(ToOwned::to_owned);
+            fingerprints.push((
+                route.owner_ura,
+                route.realm,
+                route.hub_ura,
+                primary_endpoint,
+            ));
+        }
+
+        assert!(fingerprints.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn canonical_policy_rejects_owner_target_mismatch_identically_for_every_carrier() {
+        let registry = PresenceRegistry::new();
+        let owner_ura = crate::core::ura::device_ura("test-realm", "owner-a");
+        let other_target = crate::core::ura::device_ura("test-realm", "owner-b");
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let resolver = DaemonRouteResolver::new(&registry, None, None).at(TEST_NOW_MS);
+
+        let failures = [CallMode::Rpc, CallMode::Stream, CallMode::Bidi]
+            .into_iter()
+            .map(|call_mode| {
+                let failure = resolver
+                    .resolve_canonical_route(&other_target, &ability_ura, call_mode)
+                    .expect_err("owner/target mismatch must fail before carrier dispatch");
+                (failure.reason, failure.detail)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(failures.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(failures[0].0, axon_pb::NegativeReason::Refused);
+    }
+
+    #[test]
     fn daemon_local_discover_resolves_as_local_runtime_front_door() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
@@ -1982,7 +2049,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.discover"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.discover")
             .expect("daemon-local discover must resolve through local runtime routing");
@@ -2014,7 +2081,7 @@ mod tests {
                 &["plugin.companion_status", "plugin.companion_reconcile"],
             );
             let err = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-                .with_local_runtime_authority(owner_ura.clone(), authority)
+                .with_local_catalog_authority(owner_ura.clone(), authority)
                 .at(TEST_NOW_MS)
                 .resolve_route(&owner_ura, ability)
                 .expect_err("daemon-local companion control must not resolve as remote route");
@@ -2036,11 +2103,11 @@ mod tests {
         mark_online(&registry, &owner_ura);
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
-        let descriptor_ref = format!("{ability_ura}@1.0.0");
+        let descriptor_ref = descriptor_ref_for_test(&ability_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, &descriptor_ref)
             .expect("descriptor-bound device ability must resolve through the same route gate");
@@ -2063,11 +2130,11 @@ mod tests {
         mark_online(&registry, &owner_ura);
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
-        let descriptor_ref = format!("{ability_ura}@1.0.0");
+        let descriptor_ref = descriptor_ref_for_test(&ability_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&descriptor_ref, "")
             .expect("descriptor-bound ability query must resolve through the same route gate");
@@ -2076,6 +2143,36 @@ mod tests {
         assert_eq!(route.owner_ura, owner_ura);
         assert_eq!(route.ability_ura, ability_ura);
         assert_eq!(route.dispatch_name, "agent.list");
+    }
+
+    #[test]
+    fn malformed_descriptor_ref_does_not_fall_through_as_public_name() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
+        let old_short_descriptor_ref = format!("{ability_ura}@1.0.0");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
+        let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_catalog_authority(owner_ura.clone(), authority)
+            .at(TEST_NOW_MS);
+
+        for (query_name, ability_name) in [
+            (owner_ura.as_str(), old_short_descriptor_ref.as_str()),
+            (old_short_descriptor_ref.as_str(), ""),
+        ] {
+            let failure = resolver
+                .resolve_route(query_name, ability_name)
+                .expect_err("malformed descriptor refs must fail before public-name fallback");
+            assert_eq!(failure.reason, axon_pb::NegativeReason::Refused);
+            assert!(
+                failure.detail.contains("route query"),
+                "unexpected failure detail: {}",
+                failure.detail
+            );
+        }
     }
 
     #[test]
@@ -2090,7 +2187,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &profile_keys);
 
         let resolver = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS);
         for ability in profile_keys {
             let route = resolver
@@ -2113,6 +2210,36 @@ mod tests {
             assert_eq!(route.dispatch_name, ability);
             assert!(route.is_authoritative_local_or_better());
         }
+    }
+
+    #[test]
+    fn registered_skill_list_routes_from_the_live_control_plane_snapshot() {
+        let registry = PresenceRegistry::new();
+        let projection_store = AbilityCatalogStore::new();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+
+        let mut live_catalog =
+            crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+                easynet_axon::invocation::LocalRuntime::new(),
+                crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                    owner_ura.clone(),
+                )
+                .expect("device authority"),
+            );
+        crate::daemon::ability::builtins::resources::skills::publish::register(&mut live_catalog);
+        let authority = LocalAbilityPublicationSnapshot::capture(&live_catalog);
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&projection_store))
+            .with_local_catalog_authority(owner_ura.clone(), authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&owner_ura, "skill.list")
+            .expect("registered skill.list must route from the live catalog");
+
+        assert_eq!(route.kind(), SelectedRouteKind::LocalDevice);
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.dispatch_name, "skill.list");
+        assert!(route.is_authoritative_local_or_better());
     }
 
     #[test]
@@ -2141,6 +2268,7 @@ mod tests {
         // Advertised with a host linkage, but the host is NOT in presence.
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: agent_ura.clone(),
+            generation: 1,
             public_key_hex: "00".to_string(),
             host_node_id: Some("node-1".to_string()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -2190,7 +2318,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.start"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.start")
             .expect("device-owned ability must resolve from local authority with no catalog row");
@@ -2221,7 +2349,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.start"]);
 
         let failure = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "fs.read")
             .expect_err("unregistered device ability must resolve negative");
@@ -2241,7 +2369,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.start"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.start")
             .expect("device-local authority must not depend on projection presence");
@@ -2265,7 +2393,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["chat"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(host_ura.clone(), authority)
+            .with_local_catalog_authority(host_ura.clone(), authority)
             .with_local_hosted_agent_placements(LocalHostedAgentPlacements::single(
                 agent_ura.clone(),
                 host_ura.clone(),
@@ -2304,7 +2432,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(host_ura.clone(), authority)
+            .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, "project_list")
             .expect("hosted agent registry key must resolve through owner-local public name");
@@ -2328,7 +2456,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(host_ura.clone(), authority)
+            .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, "project_list")
             .expect("hub-mode local runtime authority must route built-in pages agent");
@@ -2353,7 +2481,7 @@ mod tests {
             FakeLocalRuntimeAuthority::with_owner_keys(&host_ura, &["federation.status"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(host_ura.clone(), authority)
+            .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&host_ura, "federation.status")
             .expect("hub-owned runtime ability must resolve through local hub authority");
@@ -2372,6 +2500,34 @@ mod tests {
     }
 
     #[test]
+    fn combined_local_authority_resolves_hub_owned_ability_from_catalog_snapshot() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let device_ura = crate::core::ura::device_ura("test-realm", "device-a");
+        let hub_ura = crate::core::ura::hub_ura("test-realm");
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys(
+            &hub_ura,
+            &["runtime.bootstrap_self_identity"],
+        );
+
+        let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
+            .with_local_catalog_authority(device_ura, authority)
+            .at(TEST_NOW_MS)
+            .resolve_route(&hub_ura, "runtime.bootstrap_self_identity")
+            .expect("combined local authority must route Hub runtime-admin ability");
+
+        assert_eq!(route.kind(), SelectedRouteKind::HubOwned);
+        assert_eq!(
+            route.dispatch_target(true),
+            SelectedRouteDispatchTarget::LocalRuntime
+        );
+        assert_eq!(route.owner_ura, hub_ura);
+        assert_eq!(route.callee_ura, route.owner_ura);
+        assert_eq!(route.execution_host_ura, route.owner_ura);
+        assert_eq!(route.dispatch_name, "runtime.bootstrap_self_identity");
+    }
+
+    #[test]
     fn hosted_agent_descriptor_ref_resolves_owner_local_public_name() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
@@ -2379,11 +2535,11 @@ mod tests {
         let agent_ura = crate::core::ura::agent_ura("test-realm", "dev", "pages");
         let ability_ura = crate::core::ura::owner_ability_ura(&agent_ura, "project_list")
             .expect("agent ability ura");
-        let descriptor_ref = format!("{ability_ura}@1.0.0");
+        let descriptor_ref = descriptor_ref_for_test(&ability_ura);
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
 
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(host_ura.clone(), authority)
+            .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&agent_ura, &descriptor_ref)
             .expect("descriptor-bound hosted-agent ability must resolve through local authority");
@@ -2448,7 +2604,7 @@ mod tests {
         mark_online(&registry, &owner_ura);
         publish_ability(&catalog, &owner_ura, &owner_ura, "agent", "list");
 
-        // No `.with_local_runtime_authority(...)`: this resolver is not the
+        // No `.with_local_catalog_authority(...)`: this resolver is not the
         // owner's own daemon, but it is still authoritative for routing.
         let route = DaemonRouteResolver::new(&registry, None, Some(&catalog))
             .at(TEST_NOW_MS)
@@ -2577,7 +2733,7 @@ mod tests {
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
 
         let answer = DaemonRouteResolver::new(&registry, None, Some(&catalog))
-            .with_local_runtime_authority(owner_ura.clone(), authority)
+            .with_local_catalog_authority(owner_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&owner_ura, "agent.list")
             .expect("route resolves")

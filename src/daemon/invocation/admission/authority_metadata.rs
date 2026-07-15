@@ -275,12 +275,9 @@ pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind 
 }
 
 fn canonical_session_resource_parts(parsed: &crate::core::ura::ParsedURA) -> Option<(&str, &str)> {
-    let Some(owner_user_id) = parsed
+    let owner_user_id = parsed
         .resource_owner_id()
-        .and_then(|owner| owner.strip_prefix("user."))
-    else {
-        return None;
-    };
+        .and_then(|owner| owner.strip_prefix("user."))?;
     if owner_user_id.is_empty() || owner_user_id.contains('.') {
         return None;
     }

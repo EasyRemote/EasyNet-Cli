@@ -9,7 +9,7 @@ const CALLEE: &str = "easynet:///r/test-realm/device/target";
 const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.target.echo";
 
 fn complete_request() -> InvokeRequest {
-    let descriptor_ref = format!("{ABILITY_URA}@1.0.0");
+    let descriptor_ref = test_descriptor_ref(CALLEE, "echo");
     InvokeRequest {
         envelope: Some(Envelope {
             caller: Some(AgentIdentity {

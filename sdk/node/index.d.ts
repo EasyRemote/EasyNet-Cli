@@ -99,7 +99,6 @@ export class Client {
 
 export interface RuntimeHealthFields {
   api_ready: boolean;
-  daemon_ready: boolean;
   invocation_ready: boolean;
   directory_ready: boolean;
   trust_ready: boolean;
@@ -112,7 +111,6 @@ export interface RuntimeHealthFields {
 
 export class RuntimeHealth {
   apiReady: boolean;
-  daemonReady: boolean;
   invocationReady: boolean;
   directoryReady: boolean;
   trustReady: boolean;
@@ -392,10 +390,10 @@ export interface RuntimeTransport {
   invoke(draftJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
   prepare?(draftJSON: Uint8Array, optionsJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
   submitSigned?(signedJSON: Uint8Array): Promise<Uint8Array | string> | Uint8Array | string;
-  awaitHandle?(handleId: number): Promise<Uint8Array | string> | Uint8Array | string;
-  cancelHandle?(handleId: number, reason: string): Promise<Uint8Array | string> | Uint8Array | string;
-  handleEvents?(handleId: number): Promise<Uint8Array | string> | Uint8Array | string;
-  freeHandle?(handleId: number): Promise<void> | void;
+  awaitHandle?(control: InvocationControlCapability): Promise<Uint8Array | string> | Uint8Array | string;
+  cancelHandle?(control: InvocationControlCapability, reason: string): Promise<Uint8Array | string> | Uint8Array | string;
+  handleEvents?(control: InvocationControlCapability): Promise<Uint8Array | string> | Uint8Array | string;
+  freeHandle?(control: InvocationControlCapability): Promise<void> | void;
   openStream?(draftJSON: Uint8Array): Promise<{ transport: StreamTransport; open: Uint8Array | string }> | { transport: StreamTransport; open: Uint8Array | string };
   openBidi?(draftJSON: Uint8Array, streamsJSON: Uint8Array): Promise<{ transport: BidiTransport; open: Uint8Array | string }> | { transport: BidiTransport; open: Uint8Array | string };
   close?(): Promise<void> | void;
@@ -545,6 +543,8 @@ export class RuntimeClient {
   close(): Promise<void>;
 }
 
+export interface InvocationControlCapability {}
+
 export interface InvocationHandleEventFields {
   sequence: number;
   kind: string;
@@ -574,7 +574,7 @@ export interface InvocationHandleFields {
 }
 
 export class InvocationHandle {
-  handleId: number;
+  controlCapability: InvocationControlCapability;
   state: string;
   terminal: boolean;
   events: InvocationHandleEvent[];
@@ -591,13 +591,17 @@ export class InvocationHandle {
 
 export interface InvocationCancelFields {
   handle_id: number;
+  request_accepted: boolean;
+  deduplicated: boolean;
   cancelled: boolean;
   state: string;
   terminal: boolean;
 }
 
 export class InvocationCancel {
-  handleId: number;
+  controlCapability: InvocationControlCapability;
+  requestAccepted: boolean;
+  deduplicated: boolean;
   cancelled: boolean;
   state: string;
   terminal: boolean;

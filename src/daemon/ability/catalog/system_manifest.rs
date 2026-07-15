@@ -9,6 +9,27 @@ use serde_json::Value;
 
 use crate::daemon::ability::manifest::{AbilityManifest, AccessPolicy, ManifestAccessScope};
 
+pub(crate) fn canonical_registration_contract(
+    ability_key: &str,
+) -> anyhow::Result<super::SystemAbilityContract> {
+    let path = super::system_ability_descriptor_path(ability_key);
+    let body = std::fs::read_to_string(&path).map_err(|error| {
+        anyhow::anyhow!(
+            "read canonical descriptor contract for {ability_key:?} from {}: {error}",
+            path.display()
+        )
+    })?;
+    let contract = super::ability_toml::parse_ability_contract_toml(&body)?;
+    if contract.name != ability_key {
+        anyhow::bail!(
+            "canonical descriptor {} names {:?}, expected {ability_key:?}",
+            path.display(),
+            contract.name
+        );
+    }
+    Ok(contract)
+}
+
 /// Import the daemon's pure system metadata for a schema-less static
 /// registration.
 ///
@@ -16,19 +37,25 @@ use crate::daemon::ability::manifest::{AbilityManifest, AccessPolicy, ManifestAc
 /// resulting manifest is immediately normalized into the control-plane
 /// `AbilityDescriptor` and is never retained as a parallel read model.
 pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<AbilityManifest> {
+    let contract = canonical_registration_contract(ability_key)?;
     let manifest_name = ability_key.rsplit('.').next().unwrap_or(ability_key);
     let mut manifest = AbilityManifest::new(
         manifest_name,
-        super::description_for_owned(ability_key),
-        super::input_schema_for(ability_key),
+        contract.description.clone(),
+        contract.input_schema.clone(),
     )?;
+    if !contract.output_receipt_schema.is_null() {
+        manifest = manifest.with_output_schema(contract.output_receipt_schema.clone())?;
+    }
     if ability_key.starts_with("observe.") {
         manifest = manifest.with_access(AccessPolicy {
             visibility: ManifestAccessScope::Public,
             ..Default::default()
         })?;
     }
-    Ok(manifest)
+    manifest
+        .with_descriptor_version(contract.descriptor_version)?
+        .with_admission_action(contract.admission_action.as_str())
 }
 
 /// Build the manifest metadata attached to a daemon-owned ability registration.
@@ -42,10 +69,9 @@ pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<Ability
 /// downgraded to a name-only descriptor.
 pub(crate) fn registry_manifest(
     ability_key: &'static str,
-    description: &'static str,
-    input_schema: Value,
+    _description: &'static str,
+    _input_schema: Value,
 ) -> AbilityManifest {
-    let manifest_name = ability_key.rsplit('.').next().unwrap_or(ability_key);
-    AbilityManifest::new(manifest_name, description, input_schema)
+    registration_manifest(ability_key)
         .unwrap_or_else(|error| panic!("{ability_key} system manifest must be valid: {error}"))
 }

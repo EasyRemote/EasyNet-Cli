@@ -86,6 +86,12 @@ func TestCanonicalAddressingRejectsNonPublisherAndMalformedDescriptor(t *testing
 	); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("descriptor error = %v, want %s", err, ErrInvalidArgument)
 	}
+	if _, err := addressing.BuildURA(
+		ctx,
+		CanonicalURABuildRequest{Kind: "agent", Realm: "example", UserID: "alice", AgentID: "assistant"},
+	); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing owner_kind error = %v, want %s", err, ErrInvalidArgument)
+	}
 }
 
 func TestCanonicalAddressingSharedProjectionCorpus(t *testing.T) {

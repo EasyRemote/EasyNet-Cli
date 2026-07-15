@@ -7,193 +7,166 @@
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift Runtime Core projects typed delegation/session authority metadata, preserves metadata on Invocation drafts, delegates authority minting through injected transports, and rejects ambiguous authority metadata without owning canonical authority signing or policy.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "bidi/close_send_not_cancel",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "bidi/frame0_required",
-      "evidence": [
-        {
-          "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
-        }
-      ],
-      "message": "Swift Runtime Core seam keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/retry_hint",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/typed_json",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "health/api_vs_runtime",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": null,
-      "profile": "health",
-      "status": "passed"
-    },
-    {
-      "case_id": "invocation/builder_handle_state",
-      "evidence": [
-        {
-          "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
-        }
-      ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "health"
     },
     {
       "case_id": "invocation/canonical_material",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift RuntimeClient.prepare delegates complete Invocation draft JSON to the injected transport and projects daemon-provided PreparedInvocation signing material without deriving canonical bytes.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/complete_tuple",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift rejects PreparedInvocation submission before transport; only SignedInvocation is accepted by submitSigned.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/presigned_submit",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift SignedInvocation preserves caller signature material and daemon-provided canonical bytes when submitSigned serializes the envelope.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_receipt_facts",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
+        }
+      ],
+      "profile": "runtime_core"
     },
     {
       "case_id": "runtime_core/feature_discovery",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift decodes the canonical Runtime Core feature discovery facts through an injected transport seam.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/backpressure_bound",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/order_terminal",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": "Swift Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_compatible",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_incompatible",
       "evidence": [
         {
           "kind": "swift_test",
-          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift"
+          "ref_path": "sdk/swift/Tests/EasyNetDaemonSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "94af0b5cd2fb3cba87e97cbcc8433fdf8e1c64657d44ec74671e3f381e4889e3"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     }
   ],
-  "schema_version": 1
+  "schema_version": 2
 }

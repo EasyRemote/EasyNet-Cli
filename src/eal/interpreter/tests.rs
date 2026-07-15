@@ -504,12 +504,11 @@ mod cases {
     }
 
     #[test]
-    fn dispatch_to_agent_chat_stays_local_when_daemon_is_absent() {
-        // Regression pin for `easynet agent send`: chat must not go
-        // through the legacy unary control-socket invoke, because
-        // that hides the driver's live stderr timeline inside the
-        // daemon process. The local path fails here on the bogus
-        // binary name, not on missing control.json.
+    fn dispatch_to_agent_chat_requires_canonical_daemon_invocation() {
+        // Mission/EAL must never execute chat directly when the daemon
+        // is absent. A direct fallback would bypass Invocation admission
+        // and receipts and could duplicate a turn after an uncertain
+        // transport failure.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut registry = AgentRegistry::default();
         registry
@@ -528,16 +527,16 @@ mod cases {
             &[],
             "trace-test",
         )
-        .expect_err("bogus binary must fail on local chat dispatch");
+        .expect_err("chat dispatch must fail when the canonical daemon is absent");
         let msg = format!("{err}");
 
         assert!(
-            msg.contains("easynet-test-nonexistent-agent-binary"),
-            "expected local driver spawn failure, got: {msg}"
+            msg.contains("daemon") || msg.contains("gRPC"),
+            "expected canonical daemon invocation failure, got: {msg}"
         );
         assert!(
-            !msg.contains("control.json") && !msg.contains("daemon:"),
-            "chat dispatch must not depend on daemon unary invoke, got: {msg}"
+            !msg.contains("easynet-test-nonexistent-agent-binary"),
+            "chat dispatch must not spawn a direct fallback driver, got: {msg}"
         );
     }
 

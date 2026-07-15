@@ -64,15 +64,17 @@ pub fn register(
         }),
     );
     let companion_status_runtime_manager = Arc::clone(&plugin_runtime_manager);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         COMPANION_STATUS_ABILITY,
         OwnerKind::Device,
+        crate::daemon::ability::descriptors::AdmissionAction::Read,
         Arc::new(move |args| companion_status(args, &companion_status_runtime_manager)),
     );
     let companion_reconcile_runtime_manager = Arc::clone(&plugin_runtime_manager);
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_owner_and_action(
         COMPANION_RECONCILE_ABILITY,
         OwnerKind::Device,
+        crate::daemon::ability::descriptors::AdmissionAction::Manage,
         Arc::new(move |args| companion_reconcile(args, &companion_reconcile_runtime_manager)),
     );
 }
@@ -397,103 +399,33 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "remote-desktop")]
     #[test]
     fn activate_realtime_projects_ready_resource_and_permission_actions() {
-        let manifest = PluginPackageManifest::parse(
-            "plugins/test/plugin.toml",
-            r#"
-id = "easynet.remote_desktop"
-schema_version = "1"
-version = "0.1.0"
-kind = "builtin"
-entrypoint = "builtin:remote_desktop"
-abilities = ["abilities/*.ability.toml"]
-permissions = []
-resources = []
-platforms = []
-
-[limits]
-max_sessions = 1
-max_frame_queue = 1
-
-[[ability_metadata]]
-name = "remote_desktop.create_session"
-descriptor_path = "remote_desktop/create_session.toml"
-layer = "control"
-call_mode = "rpc"
-
-[[ability_metadata]]
-name = "remote_desktop.set_description"
-descriptor_path = "remote_desktop/set_description.toml"
-layer = "control"
-call_mode = "rpc"
-
-[[ability_metadata]]
-name = "remote_desktop.add_ice_candidate"
-descriptor_path = "remote_desktop/add_ice_candidate.toml"
-layer = "control"
-call_mode = "rpc"
-
-[[ability_metadata]]
-name = "remote_desktop.end_session"
-descriptor_path = "remote_desktop/end_session.toml"
-layer = "control"
-call_mode = "rpc"
-
-[[ability_metadata]]
-name = "remote_desktop.permission_status"
-descriptor_path = "remote_desktop/permission_status.toml"
-layer = "observation"
-call_mode = "rpc"
-
-[[ability_metadata]]
-name = "remote_desktop.request_permission"
-descriptor_path = "remote_desktop/request_permission.toml"
-layer = "control"
-call_mode = "rpc"
-
-[[realtime_capability]]
-kind = "screen"
-modes = ["subscribe", "record"]
-transport = "webrtc"
-fallback_transport = "invoke_bidi"
-activation_abilities = [
-  "remote_desktop.create_session",
-  "remote_desktop.set_description",
-  "remote_desktop.add_ice_candidate",
-  "remote_desktop.end_session",
-  "remote_desktop.permission_status",
-  "remote_desktop.request_permission",
-]
-permissions = ["screen_capture"]
-resources = ["display"]
-quick_add = true
-"#,
-        )
-        .unwrap();
-        let daemon_abilities = BTreeSet::from([
-            "remote_desktop.create_session".to_string(),
-            "remote_desktop.set_description".to_string(),
-            "remote_desktop.add_ice_candidate".to_string(),
-            "remote_desktop.end_session".to_string(),
-            "remote_desktop.permission_status".to_string(),
-            "remote_desktop.request_permission".to_string(),
-        ]);
+        let provider = crate::daemon::plugins::remote_desktop::provider();
+        let manifest =
+            PluginPackageManifest::parse(provider.manifest_path(), provider.manifest_body())
+                .unwrap();
+        let daemon_abilities: BTreeSet<String> = provider
+            .ability_specs()
+            .into_iter()
+            .map(|spec| spec.name.to_string())
+            .collect();
         let package = PluginPackageSurfaceRecord {
-            package_id: "easynet.remote_desktop".to_string(),
-            package_version: "0.1.0".to_string(),
+            package_id: provider.package_id().to_string(),
+            package_version: manifest.version().to_string(),
             kind: PluginKindView::Builtin,
             planned_load_status: "loaded".to_string(),
             daemon_runtime_status: "loaded".to_string(),
             load_status: "loaded".to_string(),
-            ability_count: 6,
+            ability_count: daemon_abilities.len(),
             descriptor_published: true,
             runtime_published: true,
             invokable: true,
             companion: None,
             realtime_activation_plans: activation_plans_for_manifest(
-                "easynet.remote_desktop",
-                "0.1.0",
+                provider.package_id(),
+                manifest.version(),
                 &manifest,
                 Some(&daemon_abilities),
             ),
@@ -504,19 +436,11 @@ quick_add = true
             abilities: Vec::new(),
         };
         let resources = ResourcesFile {
-            resources: vec![ResourceEntry {
-                resource_ura: crate::daemon::persistence::resources::build_resource_ura(
-                    "acme",
-                    "display.1",
-                ),
-                owner_agent: crate::core::ura::device_ura("acme", "dev-a"),
-                kind: ResourceType::Display,
-                binding: ResourceBinding::LocalDevice,
-                hardware_id: "display-1".to_string(),
-                display_name: "Main Display".to_string(),
-                metadata: json!({}),
-                first_seen_at: "2026-07-01T00:00:00Z".to_string(),
-            }],
+            resources: vec![
+                resource(ResourceType::Display, "display-1"),
+                resource(ResourceType::Window, "window-1"),
+                resource(ResourceType::Application, "application-1"),
+            ],
         };
 
         let outcomes = PluginActivationBroker::new(&resources).realtime_outcomes(
@@ -534,6 +458,22 @@ quick_add = true
             PluginRealtimePermissionStatus::StatusAbilityAvailable
         );
         assert_eq!(outcome.resources.missing, Vec::<String>::new());
+    }
+
+    fn resource(kind: ResourceType, hardware_id: &str) -> ResourceEntry {
+        ResourceEntry {
+            resource_ura: crate::daemon::persistence::resources::build_resource_ura(
+                "acme",
+                hardware_id,
+            ),
+            owner_agent: crate::core::ura::device_ura("acme", "dev-a"),
+            kind,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: hardware_id.to_string(),
+            display_name: hardware_id.to_string(),
+            metadata: json!({}),
+            first_seen_at: "2026-07-01T00:00:00Z".to_string(),
+        }
     }
 
     #[test]

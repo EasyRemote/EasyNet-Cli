@@ -1,6 +1,8 @@
 pub const ADMIN_STATUS: &str = "admin.status";
 pub const OBSERVE_HEALTH: &str = "observe.health";
 pub const OBSERVE_NETWORK_HEALTH: &str = "observe.network_health";
+pub const RUNTIME_BOOTSTRAP_SELF_IDENTITY: &str =
+    crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY;
 pub const SYSTEM_WATCH_BOOT: &str = "system.watch_boot";
 
 pub const CONSENT_SUBSCRIBE: &str = "consent.subscribe";
@@ -12,6 +14,7 @@ pub const INVOCATION_HISTORY_GET: &str = "invocation.history.get";
 pub const INVOCATION_HISTORY_PATH: &str = "invocation.history.path";
 pub const INVOCATION_RECORD_GET: &str = "invocation.record.get";
 pub const INVOCATION_TRACE_GET: &str = "invocation.trace.get";
+pub const INVOCATION_CANCEL: &str = "invocation.cancel";
 
 pub const AUTHORITY_BINDING_GRANT: &str = "authority.binding.grant";
 pub const AUTHORITY_BINDING_REVOKE: &str = "authority.binding.revoke";
@@ -23,6 +26,31 @@ pub const POLICY_REQUEST_RESOLVE: &str = "policy.request.resolve";
 pub const POLICY_REQUEST_LIST: &str = "policy.request.list";
 
 pub const ADMISSION_EXPLAIN: &str = "admission.explain";
+
+pub const PRINCIPAL_CREATE: &str = crate::daemon::ability::conformance::ABILITY_PRINCIPAL_CREATE;
+pub const PRINCIPAL_BIND_FIRST_KEY: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_BIND_FIRST_KEY;
+pub const PRINCIPAL_ADD_KEY: &str = crate::daemon::ability::conformance::ABILITY_PRINCIPAL_ADD_KEY;
+pub const PRINCIPAL_ROTATE_KEY: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_ROTATE_KEY;
+pub const PRINCIPAL_REVOKE_KEY: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_REVOKE_KEY;
+pub const PRINCIPAL_CONFIGURE_RECOVERY: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_CONFIGURE_RECOVERY;
+pub const PRINCIPAL_RECOVER: &str = crate::daemon::ability::conformance::ABILITY_PRINCIPAL_RECOVER;
+pub const PRINCIPAL_SUSPEND: &str = crate::daemon::ability::conformance::ABILITY_PRINCIPAL_SUSPEND;
+pub const PRINCIPAL_REACTIVATE: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_REACTIVATE;
+pub const PRINCIPAL_DELETE: &str = crate::daemon::ability::conformance::ABILITY_PRINCIPAL_DELETE;
+pub const PRINCIPAL_ISSUE_ENROLLMENT: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_ISSUE_ENROLLMENT;
+pub const PRINCIPAL_REVOKE_ENROLLMENT: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_REVOKE_ENROLLMENT;
+pub const PRINCIPAL_ISSUE_GRANT: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_ISSUE_GRANT;
+pub const PRINCIPAL_REVOKE_GRANT: &str =
+    crate::daemon::ability::conformance::ABILITY_PRINCIPAL_REVOKE_GRANT;
+pub const PRINCIPAL_GET: &str = crate::daemon::ability::conformance::ABILITY_PRINCIPAL_GET;
 
 pub const META_ACQUIRE: &str = "meta.acquire";
 pub const META_DESCRIBE: &str = "meta.describe";

@@ -73,7 +73,7 @@ silan 在 Mac 上写了几个 HTML/CSS。想给团队一个 URL 让他们浏览�
 ━━ 2. Publish (mints a resource URA, opens folder fd, registers fetch ability)
 $ easynet pages create d1-snapshot --folder ...
 Published.
-  project_uri:  easynet:///r/easynet.run/resource/alice.d1-snapshot/
+  project_ura:  easynet:///r/easynet.run/resource/alice.d1-snapshot/
   url_root:     http://d1-snapshot.alice.pages.localhost:8787/
 
 ━━ 3. curl /index.html — real bytes from disk through sandbox
@@ -162,7 +162,7 @@ silan 用 cursor / Continue / langchain / openai-python / curl，**任何**说 O
 
 ### 关键点
 
-1. **mint 一个 capability-URI 形态的 API key**
+1. **mint 一个 capability-URA 形态的 API key**
    ```bash
    easynet api-key create --label "demo"
    # → easynet-sk-<256-bit-hex>  (只显示这一次)

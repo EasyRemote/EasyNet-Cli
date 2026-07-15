@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+const INVOCATION_CONTROL_RUNTIME_TOKEN = Symbol("invocation-control-runtime-token");
+
 const ERROR_CODES = new Set([
   "INVALID_ARGUMENT",
   "INVALID_HANDLE",
@@ -7,7 +9,6 @@ const ERROR_CODES = new Set([
   "INVALID_UTF8",
   "NOT_INITIALIZED",
   "ALREADY_INIT",
-  "DAEMON_OFFLINE",
   "PERMISSION_DENIED",
   "ADMISSION_DENIED",
   "HTTP_AUTH_DENIED",
@@ -97,7 +98,7 @@ export class SDKError extends Error {
     if (text.trim() === "null") {
       return null;
     }
-    const decoded = parseJSON(text, "daemon error");
+    const decoded = parseJSON(text, "runtime error");
     return new SDKError({
       code: requiredWireString(decoded.code, "code"),
       stage: requiredWireString(decoded.stage, "stage"),
@@ -189,7 +190,6 @@ export class RuntimeHealth {
   constructor(fields) {
     const value = objectValue(fields, "runtime health");
     this.apiReady = requiredHealthBoolean(value.api_ready, "api_ready");
-    this.daemonReady = requiredHealthBoolean(value.daemon_ready, "daemon_ready");
     this.invocationReady = requiredHealthBoolean(value.invocation_ready, "invocation_ready");
     this.directoryReady = requiredHealthBoolean(value.directory_ready, "directory_ready");
     this.trustReady = requiredHealthBoolean(value.trust_ready, "trust_ready");
@@ -205,7 +205,7 @@ export class RuntimeHealth {
   }
 
   apiAlive() {
-    return this.apiReady && this.daemonReady;
+    return this.apiReady;
   }
 
   ready() {
@@ -215,7 +215,6 @@ export class RuntimeHealth {
   toJSON() {
     return {
       api_ready: this.apiReady,
-      daemon_ready: this.daemonReady,
       invocation_ready: this.invocationReady,
       directory_ready: this.directoryReady,
       trust_ready: this.trustReady,
@@ -805,7 +804,7 @@ export class RuntimeClient {
 
   async invoke(draft) {
     const raw = await this.requireOpen().invoke(Buffer.from(assertDraft(draft).toJSONString()));
-    return parseJSON(raw, "invocation result");
+    return invocationResultFromJSON(raw);
   }
 
   async prepare(draft, options = {}) {
@@ -829,7 +828,7 @@ export class RuntimeClient {
       throw invalidRuntime("signed invocation is required");
     }
     const raw = await transport.submitSigned(Buffer.from(JSON.stringify(signed.toJSON())));
-    return InvocationHandle.fromJSON(raw).bindRuntime(this);
+    return invocationHandleFromRuntimeJSON(raw).bindRuntime(this);
   }
 
   async awaitResult(handle) {
@@ -837,7 +836,8 @@ export class RuntimeClient {
     if (typeof transport.awaitHandle !== "function") {
       throw invalidSDK("runtime await-handle transport function is required");
     }
-    return parseJSON(await transport.awaitHandle(assertHandle(handle).handleId), "invocation result");
+    const control = runtimeControlCapability(handle);
+    return invocationResultFromJSON(await transport.awaitHandle(control));
   }
 
   async cancel(handle, reason = "") {
@@ -848,7 +848,8 @@ export class RuntimeClient {
     if (typeof reason !== "string") {
       throw invalidRuntime("cancel reason must be a string");
     }
-    return InvocationCancel.fromJSON(await transport.cancelHandle(assertHandle(handle).handleId, reason));
+    const control = runtimeControlCapability(handle);
+    return invocationCancelFromJSONWithControl(await transport.cancelHandle(control, reason), control);
   }
 
   async events(handle) {
@@ -856,8 +857,8 @@ export class RuntimeClient {
     if (typeof transport.handleEvents !== "function") {
       throw invalidSDK("runtime handle-events transport function is required");
     }
-    return InvocationHandle.fromJSON(await transport.handleEvents(assertHandle(handle).handleId))
-      .bindRuntime(this);
+    const control = runtimeControlCapability(handle);
+    return invocationHandleFromJSONWithControl(await transport.handleEvents(control), control).bindRuntime(this);
   }
 
   async closeHandle(handle) {
@@ -865,7 +866,7 @@ export class RuntimeClient {
     if (typeof transport.freeHandle !== "function") {
       throw invalidSDK("runtime free-handle transport function is required");
     }
-    await transport.freeHandle(assertHandle(handle).handleId);
+    await transport.freeHandle(runtimeControlCapability(handle));
   }
 
   async invokeStream(draft) {
@@ -1173,6 +1174,38 @@ export class SignedInvocation {
   }
 }
 
+class InvocationControlCapability {
+  #handleId;
+  #runtimeBound;
+
+  constructor(fields) {
+    const value = objectValue(fields, "invocation control capability");
+    rejectRuntimeFields(value, ["handle_id", "runtime_bound"]);
+    this.#handleId = positiveRuntimeInteger(value.handle_id, "handle_id");
+    this.#runtimeBound =
+      value.runtime_bound === true && value[INVOCATION_CONTROL_RUNTIME_TOKEN] === true;
+  }
+
+  static fromHandleId(handleId) {
+    return InvocationControlCapability.fromSnapshotHandleId(handleId);
+  }
+
+  static fromSnapshotHandleId(handleId) {
+    return new InvocationControlCapability({ handle_id: handleId, runtime_bound: false });
+  }
+
+  _adapterHandleId() {
+    if (!this.#runtimeBound) {
+      throw invalidRuntime("runtime-bound invocation control capability is required");
+    }
+    return this.#handleId;
+  }
+
+  _rawHandleId() {
+    return this.#handleId;
+  }
+}
+
 export class InvocationHandleEvent {
   constructor(fields) {
     const value = objectValue(fields, "invocation handle event");
@@ -1206,7 +1239,9 @@ export class InvocationHandle {
   constructor(fields) {
     const value = objectValue(fields, "invocation handle");
     rejectRuntimeFields(value, ["handle_id", "state", "terminal", "events", "result"]);
-    this.handleId = positiveRuntimeInteger(value.handle_id, "handle_id");
+    this.controlCapability = InvocationControlCapability.fromSnapshotHandleId(
+      positiveRuntimeInteger(value.handle_id, "handle_id"),
+    );
     this.state = requiredRuntimeString(value.state, "state");
     this.terminal = runtimeBoolean(value.terminal, "terminal");
     const events = value.events ?? [];
@@ -1246,7 +1281,7 @@ export class InvocationHandle {
 
   toJSON() {
     return {
-      handle_id: this.handleId,
+      handle_id: this.controlCapability._rawHandleId(),
       state: this.state,
       terminal: this.terminal,
       events: this.events.map((event) => event.toJSON()),
@@ -1258,8 +1293,19 @@ export class InvocationHandle {
 export class InvocationCancel {
   constructor(fields) {
     const value = objectValue(fields, "invocation cancel");
-    rejectRuntimeFields(value, ["handle_id", "cancelled", "state", "terminal"]);
-    this.handleId = positiveRuntimeInteger(value.handle_id, "handle_id");
+    rejectRuntimeFields(value, [
+      "handle_id",
+      "request_accepted",
+      "deduplicated",
+      "cancelled",
+      "state",
+      "terminal",
+    ]);
+    this.controlCapability = InvocationControlCapability.fromSnapshotHandleId(
+      positiveRuntimeInteger(value.handle_id, "handle_id"),
+    );
+    this.requestAccepted = runtimeBoolean(value.request_accepted, "request_accepted");
+    this.deduplicated = runtimeBoolean(value.deduplicated, "deduplicated");
     this.cancelled = runtimeBoolean(value.cancelled, "cancelled");
     this.state = requiredRuntimeString(value.state, "state");
     this.terminal = runtimeBoolean(value.terminal, "terminal");
@@ -1271,12 +1317,46 @@ export class InvocationCancel {
 
   toJSON() {
     return {
-      handle_id: this.handleId,
+      handle_id: this.controlCapability._rawHandleId(),
+      request_accepted: this.requestAccepted,
+      deduplicated: this.deduplicated,
       cancelled: this.cancelled,
       state: this.state,
       terminal: this.terminal,
     };
   }
+}
+
+function invocationHandleFromRuntimeJSON(raw) {
+  const handle = new InvocationHandle(parseJSON(raw, "invocation handle"));
+  handle.controlCapability = runtimeControlCapabilityFromHandleId(handle.controlCapability._rawHandleId());
+  return handle;
+}
+
+function invocationHandleFromJSONWithControl(raw, control) {
+  const handle = new InvocationHandle(parseJSON(raw, "invocation handle"));
+  if (handle.controlCapability._rawHandleId() !== control._adapterHandleId()) {
+    throw invalidRuntime("handle_id does not match invocation control capability");
+  }
+  handle.controlCapability = control;
+  return handle;
+}
+
+function invocationCancelFromJSONWithControl(raw, control) {
+  const cancel = new InvocationCancel(parseJSON(raw, "invocation cancel"));
+  if (cancel.controlCapability._rawHandleId() !== control._adapterHandleId()) {
+    throw invalidRuntime("handle_id does not match invocation control capability");
+  }
+  cancel.controlCapability = control;
+  return cancel;
+}
+
+function runtimeControlCapabilityFromHandleId(handleId) {
+  return new InvocationControlCapability({
+    handle_id: handleId,
+    runtime_bound: true,
+    [INVOCATION_CONTROL_RUNTIME_TOKEN]: true,
+  });
 }
 
 export class StreamHandle {
@@ -1564,11 +1644,30 @@ function assertHandle(value) {
   return value;
 }
 
+function runtimeControlCapability(value) {
+  const control = assertHandle(value).controlCapability;
+  control._adapterHandleId();
+  return control;
+}
+
 function requireBoundRuntime(runtime) {
   if (!runtime || typeof runtime.awaitResult !== "function") {
     throw invalidRuntime("invocation handle is not bound to a runtime client");
   }
   return runtime;
+}
+
+function invocationResultFromJSON(raw) {
+  const decoded = parseJSON(raw, "invocation result");
+  const result = { ...decoded };
+  delete result.receipt;
+  if (decoded.terminal_receipt === undefined || decoded.terminal_receipt === null) {
+    delete result.terminalReceipt;
+  } else {
+    result.terminalReceipt = objectValue(decoded.terminal_receipt, "terminal_receipt");
+  }
+  delete result.terminal_receipt;
+  return result;
 }
 
 function rejectRuntimeFields(value, allowed) {
@@ -1758,7 +1857,7 @@ function validatePreparedHash(canonicalBytesBase64, canonicalHashHex) {
 function normalizeErrorCode(code) {
   const text = requiredWireString(code, "code");
   if (!ERROR_CODES.has(text)) {
-    throw invalidDaemonError(`unknown daemon error code: ${text}`);
+    throw invalidRuntimeError(`unknown runtime error code: ${text}`);
   }
   return text;
 }
@@ -1799,8 +1898,8 @@ function errorClassForCode(code) {
     case ErrorCode.NOT_INITIALIZED:
     case ErrorCode.ALREADY_INIT:
       return ErrorClass.LIFECYCLE;
-    case ErrorCode.DAEMON_OFFLINE:
     case ErrorCode.TRANSPORT:
+    case ErrorCode.ROUTE_UNAVAILABLE:
       return ErrorClass.AVAILABILITY;
     case ErrorCode.PERMISSION_DENIED:
     case ErrorCode.HTTP_AUTH_DENIED:
@@ -1813,7 +1912,6 @@ function errorClassForCode(code) {
     case ErrorCode.ABILITY_FAILED:
       return ErrorClass.ADMISSION;
     case ErrorCode.ABILITY_NOT_FOUND:
-    case ErrorCode.ROUTE_UNAVAILABLE:
     case ErrorCode.NOT_FOUND:
       return ErrorClass.ROUTING;
     case ErrorCode.TIMEOUT:
@@ -1841,7 +1939,7 @@ function parseRetryHint(value) {
       return value;
     }
   }
-  throw invalidDaemonError("retry must be never, safe, after_backoff, or unknown");
+  throw invalidRuntimeError("retry must be never, safe, after_backoff, or unknown");
 }
 
 function parseJSON(raw, label) {
@@ -1868,7 +1966,7 @@ function decodeText(raw) {
   if (typeof raw === "string") {
     return raw;
   }
-  throw invalidDaemonError("JSON payload must be bytes or string");
+  throw invalidRuntimeError("JSON payload must be bytes or string");
 }
 
 function rejectUnknownFields(value, allowed) {
@@ -1906,7 +2004,7 @@ function requiredBuilderString(value, field) {
 
 function requiredWireString(value, field) {
   if (typeof value !== "string" || value.trim() === "") {
-    throw invalidDaemonError(`${field} is required`);
+    throw invalidRuntimeError(`${field} is required`);
   }
   return value;
 }
@@ -1916,28 +2014,28 @@ function stringValue(value, field, allowEmpty = false) {
     return "";
   }
   if (typeof value !== "string" || (!allowEmpty && value === "")) {
-    throw invalidDaemonError(`${field} must be a string`);
+    throw invalidRuntimeError(`${field} must be a string`);
   }
   return value;
 }
 
 function objectValue(value, field) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw invalidDaemonError(`${field} must be an object`);
+    throw invalidRuntimeError(`${field} must be an object`);
   }
   return { ...value };
 }
 
 function nonNegativeInteger(value, field) {
   if (!Number.isInteger(value) || value < 0) {
-    throw invalidDaemonError(`${field} must be a non-negative integer`);
+    throw invalidRuntimeError(`${field} must be a non-negative integer`);
   }
   return value;
 }
 
 function booleanValue(value, field) {
   if (typeof value !== "boolean") {
-    throw invalidDaemonError(`${field} must be a boolean`);
+    throw invalidRuntimeError(`${field} must be a boolean`);
   }
   return value;
 }
@@ -1946,7 +2044,7 @@ function stringMap(value, field) {
   const map = objectValue(value, field);
   for (const item of Object.values(map)) {
     if (typeof item !== "string") {
-      throw invalidDaemonError(`${field} must map strings to strings`);
+      throw invalidRuntimeError(`${field} must map strings to strings`);
     }
   }
   return map;
@@ -1956,7 +2054,7 @@ function boolMap(value, field) {
   const map = objectValue(value, field);
   for (const item of Object.values(map)) {
     if (typeof item !== "boolean") {
-      throw invalidDaemonError(`${field} must map strings to booleans`);
+      throw invalidRuntimeError(`${field} must map strings to booleans`);
     }
   }
   return map;
@@ -2262,7 +2360,7 @@ function invalidRuntime(message) {
   });
 }
 
-function invalidDaemonError(message) {
+function invalidRuntimeError(message) {
   return new SDKError({
     code: ErrorCode.INVALID_ARGUMENT,
     stage: "decode",

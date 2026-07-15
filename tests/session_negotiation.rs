@@ -5,6 +5,8 @@
 // verified through the public face — and stays runnable even when
 // unrelated inline-test modules are mid-refactor.
 
+#![cfg(feature = "axon-pb")]
+
 use easynet_cli::daemon::invocation::bidi::state::presence::{PresenceRegistry, SessionContract};
 
 fn registry() -> PresenceRegistry {
@@ -26,7 +28,8 @@ async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
     assert!(first.displaced.is_none());
     assert!(first.displaced_claimant_nonce.is_none());
     assert_eq!(
-        reg.dispatch_contract_version("easynet:///r/t/device/d1"),
+        reg.lookup_dispatch_session("easynet:///r/t/device/d1")
+            .map(|session| session.contract_version),
         Some(1)
     );
 
@@ -45,7 +48,8 @@ async fn negotiated_insert_remembers_contract_and_surfaces_prior_nonce() {
     assert!(second.displaced.is_some());
     assert_eq!(second.displaced_claimant_nonce, Some(vec![1; 16]));
     assert_eq!(
-        reg.dispatch_contract_version("easynet:///r/t/device/d1"),
+        reg.lookup_dispatch_session("easynet:///r/t/device/d1")
+            .map(|session| session.contract_version),
         Some(0)
     );
 }
@@ -57,7 +61,8 @@ async fn legacy_insert_tracked_registers_contract_v0() {
     let r = reg.insert_tracked("easynet:///r/t/device/d2".into(), tx);
     assert!(r.displaced_claimant_nonce.is_none());
     assert_eq!(
-        reg.dispatch_contract_version("easynet:///r/t/device/d2"),
+        reg.lookup_dispatch_session("easynet:///r/t/device/d2")
+            .map(|session| session.contract_version),
         Some(0)
     );
 }
@@ -65,7 +70,9 @@ async fn legacy_insert_tracked_registers_contract_v0() {
 #[tokio::test]
 async fn no_live_session_means_no_contract() {
     assert_eq!(
-        registry().dispatch_contract_version("easynet:///r/t/device/ghost"),
+        registry()
+            .lookup_dispatch_session("easynet:///r/t/device/ghost")
+            .map(|session| session.contract_version),
         None
     );
 }

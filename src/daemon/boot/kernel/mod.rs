@@ -2,8 +2,8 @@
 // =====================================================
 //
 // File: src/daemon/kernel/mod.rs
-// Description: The Kernel holds one handle per Execution sub-service
-//              plus a Gateway handle; every KernelApi method routes
+// Description: The Kernel holds one handle per Execution sub-service;
+//              every KernelApi method routes
 //              through the Kernel. Kernel::invoke is the single
 //              execution entry that v10.3 C* pins as the only daemon
 //              kernel path into local execution.
@@ -42,14 +42,12 @@ use crate::daemon::execution::{
     schedule::ScheduleService,
     session::SessionService,
 };
-use crate::daemon::federation::gateway_api::GatewayApi;
 use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::daemon::invocation::receipts::runtime_record::{
     runtime_invocation_id, PriorChain, Receipt, ReceiptEvent, RuntimeInvocation, TerminalState,
 };
 
-/// The runtime kernel. Holds one sub-service per feature and one
-/// Gateway handle for federation calls. Feature PRs extend the
+/// The runtime kernel. Holds one sub-service per feature. Feature PRs extend the
 /// sub-service handles; the Kernel itself stays thin — it is a
 /// router, not a state owner.
 ///
@@ -65,8 +63,6 @@ pub struct Kernel {
     discuss: Arc<DiscussService>,
     schedule: Arc<ScheduleService>,
     loop_svc: Arc<LoopService>,
-    #[allow(dead_code)]
-    gateway: Arc<dyn GatewayApi>,
     /// Shared Axon LocalRuntime, set by daemon boot after the runtime
     /// is constructed. `Kernel::invoke` dispatches through this handle
     /// so daemon-internal invocation sources (schedule ticks, loop
@@ -126,20 +122,19 @@ impl KernelDispatchOutcome {
 }
 
 impl Kernel {
-    /// Construct a Kernel backed by fresh sub-services and the
-    /// provided Gateway. Uses the AllowAllBroker permission default
+    /// Construct a Kernel backed by fresh sub-services. Uses the
+    /// AllowAllBroker permission default
     /// — every Kernel::invoke admission auto-allows. Daemons that
     /// want interactive approval should use
     /// `new_with_subscriber_broker` instead so a Client subscribed
     /// to consent.subscribe sees pending requests.
-    pub fn new(gateway: Arc<dyn GatewayApi>) -> Self {
+    pub fn new() -> Self {
         Self {
             session: Arc::new(SessionService::new()),
             permission: Arc::new(PermissionService::new()),
             discuss: Arc::new(DiscussService::new()),
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
-            gateway,
             local_runtime: OnceLock::new(),
         }
     }
@@ -157,14 +152,13 @@ impl Kernel {
     /// tests and for daemons running without a Client; the
     /// daemon bin uses this constructor so the Permission tab
     /// in the GUI sees real pending requests.
-    pub fn new_with_subscriber_broker(gateway: Arc<dyn GatewayApi>) -> Self {
+    pub fn new_with_subscriber_broker() -> Self {
         Self {
             session: Arc::new(SessionService::new()),
             permission: Arc::new(PermissionService::with_subscriber_broker()),
             discuss: Arc::new(DiscussService::new()),
             schedule: Arc::new(ScheduleService::new()),
             loop_svc: Arc::new(LoopService::new()),
-            gateway,
             local_runtime: OnceLock::new(),
         }
     }
@@ -357,8 +351,8 @@ impl Kernel {
                 dispatch_invocation.ability.as_str(),
             )
             .map_err(|err| anyhow::anyhow!("{err}"))?;
-            let descriptor_version =
-                crate::daemon::axon_bridge::descriptor_ref::registered_descriptor_version(
+            let descriptor_binding =
+                crate::daemon::axon_bridge::descriptor_ref::registered_descriptor_binding(
                     &runtime,
                     &runtime_ability,
                     AxonInvocationCallMode::Rpc,
@@ -366,7 +360,7 @@ impl Kernel {
                 .await
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
             let (envelope, payload) =
-                dispatch_invocation.axon_descriptor_bound_envelope(&descriptor_version)?;
+                dispatch_invocation.axon_descriptor_bound_envelope(&descriptor_binding)?;
             let ingress = match caller_signature {
                 Some(signature) => LocalRuntimeIngress::ExternalSigned {
                     envelope,
@@ -387,7 +381,7 @@ impl Kernel {
                 .map(|(handle, _signed)| handle)
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
             let state = handle.wait().await;
-            let events = handle.core().snapshot_events().await;
+            let events = handle.events_snapshot().await;
             let terminal = events.iter().rev().find(|e| e.state.is_terminal()).cloned();
             let receipt_events = receipt_events_from_axon(&events)?;
             match (state, terminal) {
@@ -755,31 +749,11 @@ impl KernelApi for Kernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::federation::gateway_api::PeerInfo;
     use crate::daemon::invocation::receipts::runtime_record::{
         RuntimeCausalContext, RuntimeInvocation,
     };
     use easynet_axon::invocation::{make_ability, AbilityCallModes, AbilityOptions};
     use serde_json::json;
-
-    struct NoopGateway;
-
-    impl GatewayApi for NoopGateway {
-        fn publish_ability(
-            &self,
-            _name: &str,
-            _description: &str,
-            _schema: &serde_json::Value,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn list_peers(&self) -> anyhow::Result<Vec<PeerInfo>> {
-            Ok(Vec::new())
-        }
-        fn send_heartbeat(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
 
     #[test]
     fn kernel_invoke_without_runtime_keeps_receipt_id_and_fails_closed() {
@@ -787,7 +761,7 @@ mod tests {
         // deterministic invocation id. What must not survive is the
         // old false success marker: an unwired LocalRuntime is a
         // failed invocation, not a successful no-op.
-        let k = Kernel::new(Arc::new(NoopGateway));
+        let k = Kernel::new();
         let caller = crate::core::ura::device_ura("localhost", "a");
         let callee = crate::core::ura::device_ura("localhost", "b");
         let inv = RuntimeInvocation {
@@ -865,7 +839,7 @@ mod tests {
         // timeline contains permission_pending → permission_denied
         // events the GUI needs to render the dialog.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let k = Arc::new(Kernel::new_with_subscriber_broker(Arc::new(NoopGateway)));
+        let k = Arc::new(Kernel::new_with_subscriber_broker());
 
         // Subscribe to the broker BEFORE invoking — has_subscribers()
         // gates the SubscriberBroker fallback to Allow when empty.
@@ -924,7 +898,7 @@ mod tests {
         // Kernel dispatch now enters Axon's LocalRuntime directly,
         // so we wire an empty runtime — same observable contract
         // through the daemon's current source of truth.
-        let k = Kernel::new(Arc::new(NoopGateway));
+        let k = Kernel::new();
         k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let device_ura = crate::core::ura::device_ura("localhost", "a");
@@ -952,8 +926,8 @@ mod tests {
 
     #[test]
     fn invoke_success_receipt_projects_axon_event_sequence() {
-        let k = Kernel::new(Arc::new(NoopGateway));
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let k = Kernel::new();
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
         let device_ura = crate::core::ura::device_ura("localhost", "a");
         let runtime_ability = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
             &device_ura,
@@ -971,6 +945,8 @@ mod tests {
                             .with_modes(AbilityCallModes::RPC)
                             .with_descriptor_proof(
                                 crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                                "invoke",
+                                [0x33; 32],
                                 [0x11; 32],
                                 [0x22; 32],
                             ),
@@ -1018,7 +994,7 @@ mod tests {
 
     #[test]
     fn invoke_user_without_signature_rejects_before_local_runtime_dispatch() {
-        let k = Kernel::new(Arc::new(NoopGateway));
+        let k = Kernel::new();
         k.set_local_runtime(easynet_axon::invocation::LocalRuntime::new());
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let caller_ura = crate::core::ura::user_ura("localhost", "alice");
@@ -1051,7 +1027,7 @@ mod tests {
         // and run the permission gate, but dispatch must fail closed.
         // Returning Succeeded here would turn a daemon boot wiring
         // regression into a false-positive invocation receipt.
-        let k = Kernel::new(Arc::new(NoopGateway));
+        let k = Kernel::new();
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let device_ura = crate::core::ura::device_ura("localhost", "a");
         let inv = RuntimeInvocation {
@@ -1078,7 +1054,7 @@ mod tests {
 
     #[test]
     fn invoke_rejects_malformed_invocation_ura_before_admission() {
-        let k = Kernel::new(Arc::new(NoopGateway));
+        let k = Kernel::new();
         let inv = RuntimeInvocation {
             caller: "easynet://nodes/a".into(),
             callee: crate::core::ura::device_ura("localhost", "a"),

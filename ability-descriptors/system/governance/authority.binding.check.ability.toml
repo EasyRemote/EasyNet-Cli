@@ -1,10 +1,23 @@
-schema_version = "1"
+schema_version = "2"
 name = "authority.binding.check"
+descriptor_version = "1.0.0"
 description = "Run RFC-014 PolicyEngine.check in read-only mode."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
-required = ["caller_ura", "principal_kind", "principal_id", "callee_ura", "subject_ura", "ability_ura", "action"]
+required = ["caller_ura", "principal_kind", "callee_ura", "subject_ura", "ability_ura", "action"]
 additionalProperties = false
 
 [input_schema.properties.ability_ura]
@@ -35,12 +48,6 @@ type = "boolean"
 type = "string"
 
 [input_schema.properties.owner_ura]
-type = "string"
-
-[input_schema.properties.owner_user_id]
-type = "string"
-
-[input_schema.properties.principal_id]
 type = "string"
 
 [input_schema.properties.principal_kind]

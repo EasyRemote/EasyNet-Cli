@@ -21,7 +21,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   grep -q "using Python interpreter" "$0"
   grep -q "install uv/python3" "$0"
   grep -q "EXPECTED_ABI_VERSION = 5" "$REPO_ROOT/sdk/python/easynet_sdk/_cabi.py"
-  grep -q "class DaemonControl" "$REPO_ROOT/sdk/python/easynet_sdk/daemon.py"
+  grep -q "DaemonControl = RuntimeLifecycle" "$REPO_ROOT/sdk/python/easynet_sdk/daemon.py"
   grep -q "class RuntimeClient" "$REPO_ROOT/sdk/python/easynet_sdk/runtime.py"
   echo "python-sdk-live-smoke self-test ok"
   exit 0
@@ -118,6 +118,7 @@ from easynet_sdk import (
     StartConfig,
 )
 from easynet_sdk._cabi import CABIDaemonTransport, CLILibrary
+from easynet_sdk.errors import SDKError
 
 
 def wait_until(label, predicate, timeout_s=8.0):
@@ -179,10 +180,13 @@ def nonce(start):
     return base64.b64encode(bytes(range(start, start + 16))).decode("ascii")
 
 
-def draft(runtime, device_ura, ability, args, nonce_start):
-    realm, device_id = device_ura.removeprefix("easynet:///r/").split("/device/", 1)
-    descriptor_ref = (
-        f"easynet:///r/{realm}/ability/device.{device_id}.{ability}@1.0.0"
+def draft(runtime, device_ura, ability, args, nonce_start, call_mode="rpc"):
+    descriptor_ref = runtime.resolve_descriptor_ref(
+        callee_ura=device_ura,
+        ability=ability,
+        call_mode=call_mode,
+        caller_ura=device_ura,
+        subject_ura=device_ura,
     )
     return (
         runtime.new_invocation()
@@ -240,11 +244,24 @@ try:
     assert unary.output_json["echo"]["smoke"] == "python-sdk", unary.output_json
     print("[python-sdk-live-smoke] unary RuntimeClient.invoke OK")
 
+    try:
+        runtime.resolve_descriptor_ref(
+            callee_ura=device_ura,
+            ability="sdk.live_smoke_missing",
+            call_mode="rpc",
+            caller_ura=device_ura,
+            subject_ura=device_ura,
+        )
+        raise AssertionError("unknown ability unexpectedly resolved descriptor_ref")
+    except SDKError as exc:
+        assert exc.code == "NOT_FOUND", exc
+    print("[python-sdk-live-smoke] missing ability descriptor resolve fails closed")
+
     prepared_failure, _ = runtime.prepare(
         draft(
             runtime,
             device_ura,
-            "sdk.live_smoke_missing",
+            "browser.open_session",
             {"smoke": "python-sdk-terminal-failure"},
             65,
         )
@@ -300,10 +317,11 @@ try:
             "browser.capture_viewport",
             {"session_ura": session_ura},
             33,
+            call_mode="stream",
         )
     )
     stream_event = stream.next(timeout=5.0)
-    assert stream_event.kind == "chunk", stream_event
+    assert stream_event.kind == "data", stream_event
     assert stream_event.payload_json["is_placeholder"] is True, stream_event.payload_json
     stream.cancel("python-sdk-live-smoke")
     print("[python-sdk-live-smoke] StreamHandle received daemon frame")

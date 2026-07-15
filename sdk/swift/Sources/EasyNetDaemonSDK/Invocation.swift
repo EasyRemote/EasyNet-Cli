@@ -357,32 +357,58 @@ public final class SignedInvocation: @unchecked Sendable {
 }
 
 public final class InvocationHandle: @unchecked Sendable {
-    public let handleId: Int64
+    public private(set) var controlCapability: InvocationControlCapability
     public let state: String
     public let terminal: Bool
     private weak var runtime: RuntimeClient?
 
-    public init(handleId: Int64, state: String, terminal: Bool) throws {
-        guard handleId > 0 else {
-            throw SDKError.validation("invocation_handle", "handle_id must be positive")
-        }
-        self.handleId = handleId
+    init(handleId: Int64, state: String, terminal: Bool) throws {
+        self.controlCapability = try InvocationControlCapability.runtimeBound(handleId: handleId)
         self.state = try requiredNonEmpty(state, "state", "invocation_handle")
         self.terminal = terminal
     }
 
     public static func fromJSON(_ raw: Data) throws -> InvocationHandle {
+        try fromJSON(raw, expectedControl: nil, runtimeBound: false)
+    }
+
+    static func fromRuntimeJSON(_ raw: Data) throws -> InvocationHandle {
+        try fromJSON(raw, expectedControl: nil, runtimeBound: true)
+    }
+
+    static func fromJSON(_ raw: Data, expectedControl: InvocationControlCapability) throws -> InvocationHandle {
+        try fromJSON(raw, expectedControl: expectedControl, runtimeBound: false)
+    }
+
+    private static func fromJSON(
+        _ raw: Data,
+        expectedControl: InvocationControlCapability?,
+        runtimeBound: Bool
+    ) throws -> InvocationHandle {
         let object = try decodeJSONObject(raw, "invocation handle")
         try rejectUnknownFields(
             object,
             allowed: ["handle_id", "state", "terminal", "events", "result"],
             label: "invocation_handle"
         )
-        return try InvocationHandle(
-            handleId: requiredInt64(object, "handle_id", "invocation_handle"),
+        let handleId = try requiredInt64(object, "handle_id", "invocation_handle")
+        let handle = try InvocationHandle(
+            handleId: handleId,
             state: requiredString(object, "state", "invocation_handle"),
             terminal: requiredBool(object, "terminal", "invocation_handle")
         )
+        if let expectedControl {
+            guard expectedControl.rawHandleId() == handleId else {
+                throw SDKError.validation(
+                    "invocation_handle",
+                    "handle_id does not match invocation control capability"
+                )
+            }
+            handle.controlCapability = expectedControl
+        } else if !runtimeBound {
+            handle.controlCapability = try InvocationControlCapability.snapshot(handleId: handleId)
+        }
+        return handle
     }
 
     @discardableResult

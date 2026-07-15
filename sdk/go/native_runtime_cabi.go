@@ -9,12 +9,12 @@ import (
 	"fmt"
 )
 
-// OpenNativeRuntime opens the SDK-owned native daemon Runtime provider.
+// OpenNativeRuntime opens the SDK-owned native runtime provider.
 func OpenNativeRuntime(ctx context.Context, options NativeRuntimeOptions) (*NativeRuntimeHandle, error) {
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	transport, err := OpenCABIDaemonTransport(options.LibraryPath)
+	transport, err := OpenCABIRuntimeLifecycleTransport(options.LibraryPath)
 	if err != nil {
 		return nil, err
 	}
@@ -35,15 +35,15 @@ func OpenNativeRuntime(ctx context.Context, options NativeRuntimeOptions) (*Nati
 	return handle, nil
 }
 
-func connectNativeRuntime(ctx context.Context, transport DaemonTransport, options NativeRuntimeOptions) (*RuntimeClient, *HealthClient, func(context.Context) error, error) {
-	control, err := NewDaemonControl(transport)
+func connectNativeRuntime(ctx context.Context, transport RuntimeLifecycleTransport, options NativeRuntimeOptions) (*RuntimeClient, *HealthClient, func(context.Context) error, error) {
+	host, err := NewRuntimeHost(transport)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if options.StartConfig != nil {
-		return startNativeRuntime(ctx, control, transport, options)
+		return startNativeRuntime(ctx, host, options)
 	}
-	endpoints, err := control.Discover(ctx, DiscoverOptions{ControlPath: options.ControlPath})
+	endpoints, err := host.Discover(ctx, RuntimeHostDiscoverOptions{ControlPath: options.ControlPath})
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -54,7 +54,7 @@ func connectNativeRuntime(ctx context.Context, transport DaemonTransport, option
 	if runtimeEndpoint == "" {
 		return nil, nil, nil, invalidRuntimePayload("invocation_endpoint is required", nil)
 	}
-	handle, err := control.Attach(ctx, AttachOptions{
+	handle, err := host.Attach(ctx, RuntimeHostAttachOptions{
 		ControlEndpoint:    endpoints.ControlEndpoint,
 		InvocationEndpoint: runtimeEndpoint,
 		ControlPath:        options.ControlPath,
@@ -73,9 +73,9 @@ func connectNativeRuntime(ctx context.Context, transport DaemonTransport, option
 	return runtime, health, func(context.Context) error { return nil }, nil
 }
 
-func startNativeRuntime(ctx context.Context, control *DaemonControl, _ DaemonTransport, options NativeRuntimeOptions) (*RuntimeClient, *HealthClient, func(context.Context) error, error) {
+func startNativeRuntime(ctx context.Context, host *RuntimeHost, options NativeRuntimeOptions) (*RuntimeClient, *HealthClient, func(context.Context) error, error) {
 	startConfig := *options.StartConfig
-	handle, err := control.Start(ctx, startConfig)
+	handle, err := host.Start(ctx, startConfig)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -115,14 +115,14 @@ func nativeConnectOptions(options NativeRuntimeOptions, runtimeEndpoint string) 
 	}
 }
 
-func openNativeRuntimeClients(ctx context.Context, handle *DaemonHandle, openOptions ConnectOptions, signer *Signer) (*RuntimeClient, *HealthClient, error) {
+func openNativeRuntimeClients(ctx context.Context, handle *RuntimeHandle, openOptions ConnectOptions, signer *Signer) (*RuntimeClient, *HealthClient, error) {
 	optionsJSON, err := json.Marshal(openOptions)
 	if err != nil {
 		return nil, nil, invalidRuntimePayload(fmt.Sprintf("encode runtime options: %v", err), err)
 	}
 	runtimeTransport, _, err := handle.transport.OpenRuntime(ctx, handle.handleID, optionsJSON)
 	if err != nil {
-		return nil, nil, wrapDaemonTransportError("daemon open runtime failed", err)
+		return nil, nil, wrapRuntimeLifecycleTransportError("daemon open runtime failed", err)
 	}
 	if runtimeTransport == nil {
 		return nil, nil, invalidRuntimeClient("runtime transport is required")

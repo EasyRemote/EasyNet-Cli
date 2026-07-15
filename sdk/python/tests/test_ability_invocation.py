@@ -105,9 +105,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             addressing=AddressingClient(identity),
         )
 
-        draft = client.build_invocation(
-            _request(ability_ura=ABILITY_URA)
-        )
+        draft = client.build_invocation(_request(ability_ura=ABILITY_URA))
 
         self.assertEqual(
             draft.descriptor_ref,
@@ -115,9 +113,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         self.assertEqual(
             identity.seen_requests,
-            [
-                {"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"}
-            ],
+            [{"ability_ura": ABILITY_URA, "descriptor_version": "1.0.0"}],
         )
 
     def test_build_invocation_from_descriptor_ref_canonicalizes_ref(self) -> None:
@@ -127,13 +123,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             addressing=AddressingClient(identity),
         )
 
-        draft = client.build_invocation(
-            _request(
-                descriptor_ref=(
-                    DESCRIPTOR_REF
-                )
-            )
-        )
+        draft = client.build_invocation(_request(descriptor_ref=(DESCRIPTOR_REF)))
 
         self.assertEqual(
             draft.descriptor_ref,
@@ -141,13 +131,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
         self.assertEqual(
             identity.seen_requests,
-            [
-                {
-                    "descriptor_ref": (
-                        DESCRIPTOR_REF
-                    )
-                }
-            ],
+            [{"descriptor_ref": (DESCRIPTOR_REF)}],
         )
 
     def test_invoke_stream_and_bidi_dispatch_built_draft(self) -> None:
@@ -190,11 +174,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             addressing=AddressingClient(identity),
         )
 
-        result = client.invoke_target(
-            _target_request(
-                ability_ura=ABILITY_URA
-            )
-        )
+        result = client.invoke_target(_target_request(ability_ura=ABILITY_URA))
 
         self.assertTrue(result.ok)
         assert runtime.seen_draft is not None
@@ -226,11 +206,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         draft = client.build_target_invocation(
-            _target_request(
-                descriptor_ref=(
-                    DESCRIPTOR_REF
-                )
-            )
+            _target_request(descriptor_ref=(DESCRIPTOR_REF))
         )
 
         self.assertEqual(draft.callee_ura, "easynet:///r/example/device/dev-a")
@@ -241,11 +217,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         self.assertEqual(
             identity.seen_requests,
             [
-                {
-                    "descriptor_ref": (
-                        DESCRIPTOR_REF
-                    )
-                },
+                {"descriptor_ref": (DESCRIPTOR_REF)},
                 {"ura": ABILITY_URA},
             ],
         )
@@ -308,9 +280,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         signed, material = client.prepare_and_sign_target(
-            _target_request(
-                ability_ura=ABILITY_URA
-            ),
+            _target_request(ability_ura=ABILITY_URA),
             signer,
             PrepareOptions(expires_in_ms=60000),
         )
@@ -335,9 +305,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
         events = client.events(handle)
         client.close_handle(handle)
 
-        self.assertEqual(handle.handle_id, 7)
+        self.assertEqual(handle.control_capability()._adapter_handle_id(), 7)
         self.assertTrue(result.ok)
-        self.assertTrue(cancelled.cancelled)
+        self.assertFalse(cancelled.request_accepted)
+        self.assertTrue(cancelled.deduplicated)
+        self.assertFalse(cancelled.cancelled)
+        self.assertEqual(cancelled.state, "Completed")
         self.assertTrue(events.terminal)
         self.assertEqual(runtime.seen_await_id, 7)
         self.assertEqual(runtime.seen_cancel_reason, "client stop")
@@ -611,8 +584,7 @@ def _parent_result_with_receipt() -> InvocationResult:
                     "caller_ura": "easynet:///r/example/agent/alice.sdk",
                     "callee_ura": "easynet:///r/example/device/dev-a",
                     "descriptor_ref": (
-                        "easynet:///r/example/ability/"
-                        "device.dev-a.observe.health@1.0.0"
+                        "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
                     ),
                     "subject_ura": "easynet:///r/example/device/dev-a",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
@@ -625,7 +597,7 @@ def _parent_result_with_receipt() -> InvocationResult:
                 "output_base64": "e30=",
                 "output_json": {},
                 "elapsed_ms": 8,
-                "receipt": {
+                "terminal_receipt": {
                     "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
                     "invocation_id": "inv-parent-1",
                     "self_hash_hex": (

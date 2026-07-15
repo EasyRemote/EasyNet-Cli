@@ -122,8 +122,11 @@ func TestRuntimeAccessControlProviderGrantsWithCanonicalPrincipalURAs(t *testing
 	if transport.args["owner_ura"] != "easynet:///r/example/user/alice" || transport.args["principal_ura"] != "easynet:///r/example/user/bob" {
 		t.Fatalf("canonical boundary URAs missing: %#v", transport.args)
 	}
-	if grant["owner_user_id"] != "alice" || grant["principal_id"] != "bob" {
-		t.Fatalf("canonical URAs not lowered to current daemon wire: %#v", grant)
+	if _, ok := grant["owner_user_id"]; ok {
+		t.Fatalf("owner storage key leaked into grant wire: %#v", grant)
+	}
+	if _, ok := grant["principal_id"]; ok {
+		t.Fatalf("principal storage key leaked into grant wire: %#v", grant)
 	}
 	if grant["token_class"] != "service" || grant["lifetime"] != "session" || grant["last_used_at"] != "2026-07-11T01:00:00Z" || grant["reason"] != "operator-approved" {
 		t.Fatalf("grant lifecycle fields not lowered: %#v", grant)
@@ -163,8 +166,14 @@ func TestRuntimeAccessControlProviderListsAndChecksCanonicalPolicies(t *testing.
 	if len(list.Grants) != 1 || list.Grants[0].GrantID != "grant-1" {
 		t.Fatalf("unexpected grants: %#v", list)
 	}
-	if transport.args["owner_user_id"] != "alice" || transport.args["principal_id"] != "bob" || transport.args["limit"] != uint32(10) || transport.args["cursor"] != "cursor-1" {
+	if transport.args["owner_ura"] != "easynet:///r/example/user/alice" || transport.args["principal_ura"] != "easynet:///r/example/user/bob" || transport.args["limit"] != uint32(10) || transport.args["cursor"] != "cursor-1" {
 		t.Fatalf("list args not canonicalized: %#v", transport.args)
+	}
+	if _, ok := transport.args["owner_user_id"]; ok {
+		t.Fatalf("owner storage key leaked into list args: %#v", transport.args)
+	}
+	if _, ok := transport.args["principal_id"]; ok {
+		t.Fatalf("principal storage key leaked into list args: %#v", transport.args)
 	}
 	if list.Grants[0].TokenClass != "service" || list.Grants[0].Lifetime != "session" || list.Grants[0].Reason != "operator-approved" {
 		t.Fatalf("grant lifecycle projection lost: %#v", list.Grants[0])
@@ -223,8 +232,14 @@ func TestRuntimeAccessControlProviderManagesPermissionRequests(t *testing.T) {
 		t.Fatalf("unexpected created request: %#v ability=%s", created, transport.ability)
 	}
 	requestWire := transport.args["request"].(map[string]any)
-	if requestWire["owner_user_id"] != "alice" || requestWire["principal_id"] != "bob" || requestWire["ability_ura"] == "" {
+	if requestWire["ability_ura"] == "" {
 		t.Fatalf("permission request not lowered canonically: %#v", requestWire)
+	}
+	if _, ok := requestWire["owner_user_id"]; ok {
+		t.Fatalf("owner storage key leaked into permission request wire: %#v", requestWire)
+	}
+	if _, ok := requestWire["principal_id"]; ok {
+		t.Fatalf("principal storage key leaked into permission request wire: %#v", requestWire)
 	}
 
 	grant := AccessControlGrant{

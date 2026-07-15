@@ -76,12 +76,13 @@ pub enum DispatchReceipt {}
 pub struct DispatchResult {
     /// Reply payload from the target ability (opaque bytes).
     pub payload: Vec<u8>,
-    /// Callee-signed execution receipt when the target spoke
-    /// carrier-v1 (DEC-F004 landing audit 3). Internal projection
-    /// field — never serialized; the invocation consumer side
-    /// projects it into the hub ledger where the full call context
-    /// (ability, route) lives. `None` on the JSON carrier.
-    pub receipt: Option<DispatchReceipt>,
+    /// Exact callee-signed admission checkpoint. Unary carries this together
+    /// with terminal; stream/bidi deliver it through the ordered admission
+    /// event before data.
+    pub admission_receipt: Option<DispatchReceipt>,
+    /// Exact callee-signed terminal checkpoint. This is never synthesized by
+    /// the hub or by a carrier error path.
+    pub terminal_receipt: Option<DispatchReceipt>,
     /// `Some(message)` if the target reported an execution error;
     /// `None` for a clean reply.
     pub error: Option<String>,
@@ -244,7 +245,8 @@ impl PendingDispatchMap {
                         true,
                     )),
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 });
                 count += 1;
             }
@@ -261,9 +263,11 @@ impl PendingDispatchMap {
 
 /// One streamed event flowing back from a target device's remote
 /// bidi session. Same-hub remote `fs.transfer` uses this:
-/// zero or more `Chunk`s followed by exactly one `Terminal`.
+/// one canonical `Admission`, zero or more `Chunk`s, then exactly one
+/// `Terminal`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DispatchStreamEvent {
+    Admission(DispatchReceipt),
     Chunk(Vec<u8>),
     Terminal(Box<DispatchResult>),
 }
@@ -436,6 +440,41 @@ impl PendingStreamDispatchMap {
         }
     }
 
+    /// Deliver the target runtime's exact admission receipt before data. This
+    /// uses the same per-call backpressure policy as ordinary stream frames;
+    /// callers must never synthesize admission when this event is absent.
+    pub async fn deliver_admission(&self, call_id: u64, receipt: DispatchReceipt) -> StreamDeliver {
+        let Some((sender, delivery_policy)) = self
+            .inner
+            .entries
+            .get(&call_id)
+            .map(|entry| (entry.sender.clone(), entry.delivery_policy))
+        else {
+            return StreamDeliver::NoMatch;
+        };
+        match delivery_policy {
+            StreamDeliveryPolicy::BoundedNoWait => {
+                match sender.try_send(DispatchStreamEvent::Admission(receipt)) {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        self.inner.entries.remove(&call_id);
+                        StreamDeliver::ConsumerStalled
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => StreamDeliver::NoMatch,
+                }
+            }
+            StreamDeliveryPolicy::LosslessBackpressure => {
+                match sender.send(DispatchStreamEvent::Admission(receipt)).await {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(_) => {
+                        self.inner.entries.remove(&call_id);
+                        StreamDeliver::NoMatch
+                    }
+                }
+            }
+        }
+    }
+
     /// Deliver the terminal event according to the entry's policy. Lossless
     /// streams must not drop the terminal receipt behind buffered chunks.
     pub async fn deliver_terminal(&self, call_id: u64, result: DispatchResult) -> StreamDeliver {
@@ -536,7 +575,8 @@ impl PendingStreamDispatchMap {
                             true,
                         )),
                         request_id: None,
-                        receipt: None,
+                        admission_receipt: None,
+                        terminal_receipt: None,
                     })));
                 count += 1;
             }
@@ -575,7 +615,8 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
         });
@@ -607,7 +648,8 @@ mod tests {
         let still_completes = map.complete(
             id,
             DispatchResult {
-                receipt: None,
+                admission_receipt: None,
+                terminal_receipt: None,
                 payload: b"too late".to_vec(),
                 error: None,
                 failure: None,
@@ -634,7 +676,8 @@ mod tests {
                     error: Some("target ability raised".into()),
                     failure: Some(failure),
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
         });
@@ -689,7 +732,8 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
         });
@@ -733,7 +777,8 @@ mod tests {
                     map.finish(
                         id,
                         DispatchResult {
-                            receipt: None,
+                            admission_receipt: None,
+                            terminal_receipt: None,
                             payload: br#"{"sha256":"abc"}"#.to_vec(),
                             error: None,
                             failure: None,
@@ -752,7 +797,8 @@ mod tests {
         assert_eq!(
             handle.recv().await,
             Some(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
-                receipt: None,
+                admission_receipt: None,
+                terminal_receipt: None,
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
                 error: None,
                 failure: None,
@@ -852,7 +898,8 @@ mod tests {
                         error: None,
                         failure: None,
                         request_id: None,
-                        receipt: None,
+                        admission_receipt: None,
+                        terminal_receipt: None,
                     },
                 )
                 .await
@@ -876,7 +923,8 @@ mod tests {
                 error: None,
                 failure: None,
                 request_id: None,
-                receipt: None,
+                admission_receipt: None,
+                terminal_receipt: None,
             })))
         );
         assert_eq!(map.outstanding(), 0);
@@ -898,7 +946,8 @@ mod tests {
                     error: None,
                     failure: None,
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
             .await

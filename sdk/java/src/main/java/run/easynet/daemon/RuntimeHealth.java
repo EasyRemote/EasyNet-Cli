@@ -7,7 +7,6 @@ import java.util.Objects;
 
 public record RuntimeHealth(
     boolean apiReady,
-    boolean daemonReady,
     boolean invocationReady,
     boolean directoryReady,
     boolean trustReady,
@@ -29,7 +28,6 @@ public record RuntimeHealth(
     Map<String, Object> fields = JsonValueReader.object(raw, "runtime health JSON");
     return new RuntimeHealth(
         requiredBoolean(fields, "api_ready"),
-        requiredBoolean(fields, "daemon_ready"),
         requiredBoolean(fields, "invocation_ready"),
         requiredBoolean(fields, "directory_ready"),
         requiredBoolean(fields, "trust_ready"),
@@ -41,7 +39,7 @@ public record RuntimeHealth(
   }
 
   public boolean apiAlive() {
-    return apiReady && daemonReady;
+    return apiReady;
   }
 
   public boolean ready() {

@@ -17,10 +17,7 @@
 // -------------------
 // Pure data shapes + a small protocol-helper layer. It does not
 // itself open a connection to the hub. Callers hand the JSON args
-// produced here to whichever transport they already have wired
-// (today: `DendriteBridge::ability_call_raw`; tomorrow: a thin
-// `axon_runtime_local_invoke` shim once the daemon-internal IPC
-// path lands).
+// produced here to the daemon's canonical Invocation/session transport.
 //
 // Why this split exists
 // ---------------------
@@ -36,7 +33,7 @@
 //      shape without needing a live runtime.
 //   3. A natural seam for adding DelegationProof later. When P3+
 //      ships JWT-derived delegation, only this module changes; the
-//      bridge call site stays untouched.
+//      transport call site stays untouched.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.

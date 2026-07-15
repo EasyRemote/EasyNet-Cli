@@ -219,6 +219,66 @@ func TestRuntimeSigningTransportSignsStreamAndBidiDrafts(t *testing.T) {
 	assertRuntimeSigningSignature(t, bidiDraft)
 }
 
+func TestRuntimeSigningTransportPreservesDescriptorResolverCapability(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	signer, err := NewSigner(signerHandle(""), provider)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	var seen RuntimeDescriptorRefRequest
+	transport, err := NewRuntimeSigningTransport(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				t.Fatalf("decode descriptor request: %v", err)
+			}
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
+		},
+	}, signer)
+	if err != nil {
+		t.Fatalf("NewRuntimeSigningTransport: %v", err)
+	}
+
+	descriptorRef, err := NewRuntimeClientMust(t, transport).ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA:  "easynet:///r/example/device/dev-a",
+		Ability:    "observe.health",
+		CallMode:   "stream",
+		CallerURA:  "easynet:///r/example/agent/alice.sdk",
+		SubjectURA: "easynet:///r/example/device/dev-a",
+	})
+	if err != nil {
+		t.Fatalf("ResolveDescriptorRef: %v", err)
+	}
+	if descriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream" {
+		t.Fatalf("descriptor_ref = %q", descriptorRef)
+	}
+	if seen.CallMode != "stream" || seen.CallerURA != "easynet:///r/example/agent/alice.sdk" {
+		t.Fatalf("descriptor request was not preserved: %#v", seen)
+	}
+	if provider.material.CanonicalBytesBase64() != "" {
+		t.Fatal("descriptor resolution must not sign invocation material")
+	}
+}
+
+func TestRuntimeSigningTransportReportsMissingDescriptorResolver(t *testing.T) {
+	provider := &memorySignatureProvider{}
+	signer, err := NewSigner(signerHandle(""), provider)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	transport, err := NewRuntimeSigningTransport(runtimeSigningNoResolverTransport{}, signer)
+	if err != nil {
+		t.Fatalf("NewRuntimeSigningTransport: %v", err)
+	}
+
+	_, err = NewRuntimeClientMust(t, transport).ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA: "easynet:///r/example/device/dev-a",
+		Ability:   "observe.health",
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("ResolveDescriptorRef error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestRuntimeSigningTransportRejectsInvalidConstruction(t *testing.T) {
 	provider := &memorySignatureProvider{}
 	signer, err := NewSigner(signerHandle(""), provider)
@@ -252,4 +312,46 @@ func assertRuntimeSigningSignature(t *testing.T, draft map[string]any) {
 	if signature["algorithm"] != "ed25519" || signature["signature_base64"] != "c2lnbmF0dXJl" {
 		t.Fatalf("unexpected signature: %#v", signature)
 	}
+}
+
+type runtimeSigningNoResolverTransport struct{}
+
+func (runtimeSigningNoResolverTransport) Invoke(context.Context, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) OpenStream(context.Context, []byte) (StreamTransport, []byte, error) {
+	return nil, nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) OpenBidi(context.Context, []byte, []byte) (BidiTransport, []byte, error) {
+	return nil, nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) Prepare(context.Context, []byte, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) SubmitSigned(context.Context, []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) AwaitHandle(context.Context, InvocationControlCapability) ([]byte, error) {
+	return nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) CancelHandle(context.Context, InvocationControlCapability, string) ([]byte, error) {
+	return nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) HandleEvents(context.Context, InvocationControlCapability) ([]byte, error) {
+	return nil, nil
+}
+
+func (runtimeSigningNoResolverTransport) FreeHandle(context.Context, InvocationControlCapability) error {
+	return nil
+}
+
+func (runtimeSigningNoResolverTransport) Close(context.Context) error {
+	return nil
 }

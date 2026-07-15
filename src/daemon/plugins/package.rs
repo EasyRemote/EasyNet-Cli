@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::daemon::ability::descriptors::AdmissionAction;
 use sha2::{Digest, Sha256};
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
@@ -73,6 +75,7 @@ pub struct BuiltinPluginAbilitySpec {
     pub name: &'static str,
     pub layer: PluginAbilityLayer,
     pub call_mode: CallMode,
+    pub admission_action: AdmissionAction,
     pub bidi_wire_kind: Option<PluginBidiWireKind>,
     pub description: fn() -> &'static str,
     pub input_schema: fn() -> Value,
@@ -100,6 +103,7 @@ impl BuiltinPluginAbilitySpec {
             (self.description)(),
             (self.input_schema)(),
         )
+        .and_then(|manifest| manifest.with_admission_action(self.admission_action.as_str()))
         .map_err(|source| PluginHostError::DescriptorProjectionFailed {
             ability: self.name.to_string(),
             reason: source.to_string(),
@@ -118,6 +122,7 @@ pub struct PluginAbilityDescriptor {
     description: String,
     input_schema: Value,
     output_schema: Option<Value>,
+    admission_action: AdmissionAction,
 }
 
 impl PluginAbilityDescriptor {
@@ -139,6 +144,10 @@ impl PluginAbilityDescriptor {
     /// Optional JSON schema for the result body.
     pub fn output_schema(&self) -> Option<&Value> {
         self.output_schema.as_ref()
+    }
+
+    pub fn admission_action(&self) -> AdmissionAction {
+        self.admission_action
     }
 
     /// Project this plugin descriptor into the daemon registry manifest shape.
@@ -167,6 +176,12 @@ impl PluginAbilityDescriptor {
             ability: self.name.clone(),
             reason: source.to_string(),
         })?;
+        manifest = manifest
+            .with_admission_action(self.admission_action.as_str())
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.clone(),
+                reason: source.to_string(),
+            })?;
         if let Some(output_schema) = &self.output_schema {
             manifest = manifest
                 .with_output_schema(output_schema.clone())
@@ -380,10 +395,10 @@ pub type SharedPluginPackage = Arc<PluginPackage>;
 
 #[derive(Debug, Deserialize)]
 struct RawPluginAbilityDescriptor {
-    #[serde(default)]
-    schema_version: Option<String>,
+    schema_version: String,
     name: String,
     description: String,
+    admission_action: AdmissionAction,
     input_schema: Value,
     #[serde(default)]
     output_schema: Option<Value>,
@@ -408,6 +423,7 @@ fn builtin_descriptors(
                 description: (spec.description)().to_string(),
                 input_schema: (spec.input_schema)(),
                 output_schema: None,
+                admission_action: spec.admission_action,
             }),
         );
     }
@@ -451,17 +467,10 @@ fn validate_descriptor(
     expected_name: &str,
     raw: RawPluginAbilityDescriptor,
 ) -> Result<PluginAbilityDescriptor> {
-    if raw
-        .schema_version
-        .as_deref()
-        .is_some_and(|version| version != "1")
-    {
+    if raw.schema_version != "2" {
         return Err(PluginHostError::InvalidAbilityDescriptor {
             path: path.to_path_buf(),
-            reason: format!(
-                "unsupported schema_version {:?}",
-                raw.schema_version.unwrap_or_default()
-            ),
+            reason: format!("unsupported schema_version {:?}", raw.schema_version),
         });
     }
     if raw.name != expected_name {
@@ -500,6 +509,7 @@ fn validate_descriptor(
         description: raw.description,
         input_schema: raw.input_schema,
         output_schema: raw.output_schema,
+        admission_action: raw.admission_action,
     })
 }
 
@@ -758,6 +768,7 @@ pub(crate) mod tests {
                 name: "test.echo",
                 layer: PluginAbilityLayer::Observation,
                 call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
                 description,
                 input_schema,
@@ -1022,9 +1033,10 @@ layer = "control"
 
     pub(crate) fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "1"
+            r#"schema_version = "2"
 name = "{ability}"
 description = "test descriptor for {ability}"
+admission_action = "invoke"
 
 [input_schema]
 type = "object"

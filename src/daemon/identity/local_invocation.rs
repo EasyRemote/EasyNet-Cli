@@ -171,11 +171,34 @@ fn persisted_local_device_ura() -> Option<String> {
 /// resolver.
 pub(crate) struct LocalSystemKeyResolver {
     upstream: Option<Arc<dyn KeyResolver>>,
+    receipt_signing_runtime: Option<std::sync::Weak<easynet_axon::invocation::LocalRuntime>>,
 }
 
 impl LocalSystemKeyResolver {
     pub(crate) fn new(upstream: Option<Arc<dyn KeyResolver>>) -> Self {
-        Self { upstream }
+        Self {
+            upstream,
+            receipt_signing_runtime: None,
+        }
+    }
+
+    pub(crate) fn with_receipt_signing_runtime(
+        mut self,
+        runtime: std::sync::Weak<easynet_axon::invocation::LocalRuntime>,
+    ) -> Self {
+        self.receipt_signing_runtime = Some(runtime);
+        self
+    }
+
+    fn receipt_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+        let Some(runtime) = self
+            .receipt_signing_runtime
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+        else {
+            return Ok(None);
+        };
+        runtime.resolve_receipt_signer_key(signer_ura)
     }
 
     fn unknown_agent_key(agent_ura: &str) -> AxonError {
@@ -196,6 +219,9 @@ impl KeyResolver for LocalSystemKeyResolver {
                 ))
             });
         }
+        if let Some(key) = self.receipt_signer_key(agent_ura)? {
+            return Ok(key);
+        }
         self.upstream
             .as_ref()
             .ok_or_else(|| Self::unknown_agent_key(agent_ura))?
@@ -211,6 +237,9 @@ impl KeyResolver for LocalSystemKeyResolver {
                         "daemon-local system identity unavailable from key service: {error}"
                     ))
                 });
+        }
+        if let Some(key) = self.receipt_signer_key(agent_ura)? {
+            return Ok(vec![key]);
         }
         self.upstream
             .as_ref()

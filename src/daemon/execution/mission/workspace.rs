@@ -392,7 +392,7 @@ const ABILITY_AUTHOR_SKILL_MD: &str =
 /// --------------------------------------------
 /// During this audit conversation, `cargo run --bin
 /// real-user-smoke` corrupted the developer's
-/// `~/.easynet/workspaces/claude/.mcp.json` to point at the
+/// `~/.easynet/agents/claude/.mcp.json` to point at the
 /// smoke binary. The smoke binary doesn't implement
 /// `mcp-server`, so the next claude.chat invocation that tries
 /// to use an EasyNet MCP tool would fail silently. The check
@@ -412,7 +412,7 @@ fn resolve_easynet_binary() -> String {
     // We deliberately do NOT use `easynet-daemon` even when the
     // current process IS easynet-daemon. `easynet-daemon` does not
     // parse subcommand args at all — it always boots the full
-    // daemon (binds control.sock + runtime-dispatch.sock). When
+    // daemon (binds control.sock + daemon.sock). When
     // `.mcp.json` invokes `easynet-daemon mcp serve …` to satisfy
     // the host AI client's MCP request, the spawned subprocess
     // forcibly removes the parent daemon's control.sock file
@@ -467,24 +467,10 @@ fn resolve_easynet_binary() -> String {
     "easynet".to_string()
 }
 
-/// Build the (command, args, env) tuple for launching the EasyNet MCP
-/// server as a subprocess of an agent. The launching agent's name is
-/// threaded through so the MCP server knows which agent it belongs to,
-/// for two purposes:
-///
-/// 1. The `--agent <name>` flag becomes the `from=` label in the
-///    per-call audit line emitted by `mcp::handlers::send_to_agent`.
-/// 2. `--enable-agent-dispatch` is set so the MCP server is allowed to
-///    spawn other agents through the mission runtime. This is what
-///    makes ontology §6.2 derivation 3 ("there is no second path") hold
-///    *inside* an agent, not just at the CLI surface.
-///
-/// Defaulting `--enable-agent-dispatch` is a behaviour-semantics
-/// change, not pure plumbing. The scoping rules that make it safe live
-/// in `mcp::handlers::send_to_agent` (audit log, recursion guard,
-/// future tenant check). The MCP server itself prints a one-line
-/// stderr banner on startup so the operator sees that the workspace
-/// MCP can spawn other agents.
+/// Build the command, arguments, and environment for the read-only EasyNet
+/// MCP subprocess in an agent workspace. Cross-agent execution is owned by
+/// the mission runtime; the MCP entry carries only tenant and launching-agent
+/// identity for discovery and audit projection.
 pub(super) fn build_mcp_entry(agent_name: &str) -> (String, Vec<String>, serde_json::Value) {
     let cmd = resolve_easynet_binary();
     // The CLI subcommand is `easynet mcp serve` (a two-token
@@ -719,12 +705,8 @@ easynet device list                     # list hosting substrates
 mod tests {
     use super::*;
 
-    /// Verify that the workspace MCP entry includes the agent dispatch
-    /// flag and the launching agent name. This is the load-bearing
-    /// behaviour from Step 5 of the implementation plan: every agent
-    /// workspace must launch its MCP server with `--enable-agent-dispatch`
-    /// and `--agent <name>` so cross-agent dispatch is always available
-    /// from inside an agent.
+    /// Verify that workspace generation resolves the production CLI rather
+    /// than accidentally persisting the Rust test-runner path.
     #[test]
     fn resolve_easynet_binary_does_not_use_test_runner_path() {
         // During `cargo test`, `current_exe()` returns the path of

@@ -7,469 +7,419 @@
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/ability_descriptor_test.go"
+          "ref_path": "sdk/go/ability_descriptor_test.go",
+          "sha256": "d1170465defd23cf5ed81f1a3d6705d89ae3999309e567023e141fbc831baa1d"
         }
       ],
-      "message": "Go projects only governed AbilityDescriptor facts and delegates descriptor-reference grammar to Addressing.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "authority/metadata",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/authority_test.go"
+          "ref_path": "sdk/go/authority_test.go",
+          "sha256": "7a8751f9e922a76e6e4140575b6d6fb7e4d6078228322666cfb4b5bbe0e1ac10"
         }
       ],
-      "message": "Go preserves one typed authority metadata projection and rejects ambiguous authority before preparation.",
-      "profile": "authority",
-      "status": "passed"
+      "profile": "authority"
     },
     {
       "case_id": "invocation/terminal_receipt_facts",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/runtime_test.go"
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "f9cf03879be36ee947b6ead910b6db9576a6505100bd8963f9762d06f1c08938"
         }
       ],
-      "message": "Go InvocationResult preserves opaque terminal receipt facts without a receipt-history profile.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "sdk/product_neutrality",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/import_boundary_test.go"
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "521e3eace9ee98412c6077a076a2ed1d95ca83d49fb8271e7d3f78a475666988"
         }
       ],
-      "message": "Go SDK exports only generic runtime concepts; the repository guard rejects product profiles and aliases.",
-      "profile": "conformance",
-      "status": "passed"
+      "profile": "conformance"
     },
     {
       "case_id": "runtime_core/canonical_addressing_provider",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/addressing_test.go"
+          "ref_path": "sdk/go/addressing_test.go",
+          "sha256": "c7d14ce654dd44884336597d77fa680a5e82e42b76c0043a0dbe11199e96075c"
         }
       ],
-      "message": "Go executes the shared Axon-backed canonical Addressing fixture without opening a product Identity profile.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "runtime/ability_lowering",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/runtime_ability_test.go"
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "836e1e0b5e3e811e77f6d1dea81cad7a9d778aa33755ed1a5a2d574bd9500198"
         }
       ],
-      "message": "Go capability providers share one Addressing-backed lowering path that preserves explicit caller, nonce, causal context, metadata, and typed runtime failures.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "access_control/provider",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/access_control_test.go"
+          "ref_path": "sdk/go/access_control_test.go",
+          "sha256": "3c400bdacb1ffef8acce76ade8c1c805e1f44be7baa41265e5cf4f27948e4274"
         }
       ],
-      "message": "Go AccessControl lowers canonical owner/principal URAs through the generic runtime ability path without Backend account or product role fields.",
-      "profile": "access_control",
-      "status": "passed"
+      "profile": "access_control"
     },
     {
       "case_id": "authority/mutual_exclusion",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/authority_test.go",
+          "sha256": "7a8751f9e922a76e6e4140575b6d6fb7e4d6078228322666cfb4b5bbe0e1ac10"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "backend/hub_route_family_coverage",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "521e3eace9ee98412c6077a076a2ed1d95ca83d49fb8271e7d3f78a475666988"
         }
       ],
-      "message": null,
-      "profile": "backend_cutover",
-      "status": "passed"
+      "profile": "backend_cutover"
     },
     {
       "case_id": "backend/import_ban",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "521e3eace9ee98412c6077a076a2ed1d95ca83d49fb8271e7d3f78a475666988"
         }
       ],
-      "message": null,
-      "profile": "backend_cutover",
-      "status": "passed"
+      "profile": "backend_cutover"
     },
     {
       "case_id": "bidi/close_send_not_cancel",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/bidi_test.go",
+          "sha256": "ab8b8bdca0598b099167f313d118045de43e93e0fc65c473837a498b7981115b"
         }
       ],
-      "message": "Go Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
-      "case_id": "bidi/frame0_required",
+      "case_id": "runtime/control_only",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/health_test.go",
+          "sha256": "3955b660c6150a694985cddb193e71502b3e580ffc59f14ac8eedbd010338c3f"
         }
       ],
-      "message": "Go Runtime Core keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "daemon/control_only",
-      "evidence": [
-        {
-          "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
-        }
-      ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "daemon/permission_denied",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/errors_test.go"
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "ce054a5db0a475920ba257760b0225c1b65f454f151d3e3cadf15449cd9debb4"
         }
       ],
-      "message": "Go SDK maps permission-denied daemon/runtime failures to the canonical permission error class and non-retryable retry hint.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "environment/process_root",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/environment_test.go",
+          "sha256": "63dda63905a38798a03e7f9e3d68ca56a17293129a61cd4fbc5995f0be5725ad"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/profile_source_refs",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "ce054a5db0a475920ba257760b0225c1b65f454f151d3e3cadf15449cd9debb4"
         }
       ],
-      "message": null,
-      "profile": "errors",
-      "status": "passed"
+      "profile": "errors"
     },
     {
       "case_id": "error/retry_hint",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "ce054a5db0a475920ba257760b0225c1b65f454f151d3e3cadf15449cd9debb4"
         }
       ],
-      "message": "Go typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages or legacy error-code aliases.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/typed_json",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "ce054a5db0a475920ba257760b0225c1b65f454f151d3e3cadf15449cd9debb4"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "health/api_vs_runtime",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/health_test.go",
+          "sha256": "3955b660c6150a694985cddb193e71502b3e580ffc59f14ac8eedbd010338c3f"
         }
       ],
-      "message": null,
-      "profile": "health",
-      "status": "passed"
+      "profile": "health"
     },
     {
       "case_id": "invocation/builder_handle_state",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/invocation_test.go",
+          "sha256": "f97a05dc39820ea16b16c624854998a9771271fa92730767f3eacaee221fac1b"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/canonical_material",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/invocation_canonical_test.go",
+          "sha256": "6ed6c2f1e0bf3769fc4b086590cad5712d83d3457b9ebfda804a3b56c0bcdc87"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/complete_tuple",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/invocation_test.go",
+          "sha256": "f97a05dc39820ea16b16c624854998a9771271fa92730767f3eacaee221fac1b"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/local_daemon_signing_boundary",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/signing_test.go",
+          "sha256": "f7cf2295d0e9ae60bc64fdb691125c98a786cbc1973f3916cc340c7b77e1ac56"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "managed_signing/provider_lifecycle",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/managed_signing_test.go"
+          "ref_path": "sdk/go/managed_signing_test.go",
+          "sha256": "bf7802520507d700abc23b0daab6aef0fc22115b21264a3b2c06784938474da5"
         }
       ],
-      "message": "Go validates explicit daemon endpoint binding, key-service protocol v2, purpose-bound versioned policy, strict public projections, lifecycle postconditions, immutable peer trust anchors, and verified key-bound signer behavior.",
-      "profile": "managed_signing",
-      "status": "passed"
+      "profile": "managed_signing"
     },
     {
       "case_id": "directory/resolution_provider",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/directory_test.go"
+          "ref_path": "sdk/go/directory_test.go",
+          "sha256": "9af0426e645157b2f9148e46936d355d9c41ebd4ba4a2e9608c40bcff37a21e6"
         }
       ],
-      "message": "Go Directory facade resolves, lists with daemon-owned opaque cursors, and subscribes with explicit resume cursors through the generic runtime ability contract without product read-model projection.",
-      "profile": "directory",
-      "status": "passed"
+      "profile": "directory"
     },
     {
       "case_id": "principal/lifecycle_seam",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/principal_test.go"
+          "ref_path": "sdk/go/principal_test.go",
+          "sha256": "d140c46c0089bb7b3a54804123dcb38662890facbdb26cda62c5c28cf7861c4e"
         }
       ],
-      "message": "Go PrincipalLifecycle exposes the canonical generic transition vocabulary without Backend account or EasyRemote product concepts.",
-      "profile": "principal",
-      "status": "passed"
+      "profile": "principal"
     },
     {
       "case_id": "principal/lifecycle_provider",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/principal_test.go"
+          "ref_path": "sdk/go/principal_test.go",
+          "sha256": "d140c46c0089bb7b3a54804123dcb38662890facbdb26cda62c5c28cf7861c4e"
         }
       ],
-      "message": "Go RuntimePrincipalProvider lowers product-neutral PrincipalLifecycle transitions through generic runtime abilities without private-key or product account fields.",
-      "profile": "principal",
-      "status": "passed"
+      "profile": "principal"
     },
     {
       "case_id": "receipt/history_provider",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/receipt_test.go"
+          "ref_path": "sdk/go/receipt_test.go",
+          "sha256": "05e6faf5b30c9c36bb2e9959af37e31c559e80a1455aed301db139dd67417cea"
         }
       ],
-      "message": "Go Receipt facade provides daemon-backed bounded list/get/trace reads with opaque cursor forwarding while leaving canonical receipt verification and ledger semantics Axon-owned.",
-      "profile": "receipts",
-      "status": "passed"
+      "profile": "receipts"
     },
     {
       "case_id": "runtime/administration_seam",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/runtime_admin_test.go"
+          "ref_path": "sdk/go/runtime_admin_test.go",
+          "sha256": "fccabc8b6a38a4767c078503c80aaf3b5b3dec72c5d5da12f1f29f50713b0bbf"
         }
       ],
-      "message": "Go runtime administration remains a generic daemon health/lifecycle surface without product account, page, or workflow policy.",
-      "profile": "runtime_administration",
-      "status": "passed"
+      "profile": "runtime_administration"
     },
     {
       "case_id": "runtime/events_seam",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/runtime_events_test.go"
+          "ref_path": "sdk/go/runtime_events_test.go",
+          "sha256": "71c7505d85cd840ca59c763cc88eeeac92796cfe4e68526cd07d9ef78cb72d10"
         }
       ],
-      "message": "Go runtime events preserve bounded stream-scoped cursor/resume projection through the generic runtime contract without product event naming.",
-      "profile": "runtime_events",
-      "status": "passed"
+      "profile": "runtime_events"
     },
     {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/signing_test.go",
+          "sha256": "f7cf2295d0e9ae60bc64fdb691125c98a786cbc1973f3916cc340c7b77e1ac56"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/presigned_submit",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "f9cf03879be36ee947b6ead910b6db9576a6505100bd8963f9762d06f1c08938"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/terminal_monotonicity",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/stream_test.go",
+          "sha256": "9c1ac06615bdf55a086a47f85111507964e409f37080450ff258dc57bf0d3eec"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "runtime_core/feature_discovery",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/client_test.go",
+          "sha256": "dad3ac00630f4dc1f03350fd77fc147b24937933cbff78d6a926fd0a8044fe0e"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
-      "case_id": "sdk/go_python_parity_matrix",
+      "case_id": "sdk/seven_language_capability_matrix",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "521e3eace9ee98412c6077a076a2ed1d95ca83d49fb8271e7d3f78a475666988"
         }
       ],
-      "message": null,
-      "profile": "sdk_parity",
-      "status": "passed"
+      "profile": "sdk_parity"
     },
     {
       "case_id": "stream/backpressure_bound",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "521e3eace9ee98412c6077a076a2ed1d95ca83d49fb8271e7d3f78a475666988"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/order_terminal",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/stream_test.go",
+          "sha256": "9c1ac06615bdf55a086a47f85111507964e409f37080450ff258dc57bf0d3eec"
         }
       ],
-      "message": "Go Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_compatible",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/client_test.go",
+          "sha256": "dad3ac00630f4dc1f03350fd77fc147b24937933cbff78d6a926fd0a8044fe0e"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_incompatible",
       "evidence": [
         {
           "kind": "go_test",
-          "ref_path": "sdk/go/conformance_test.go"
+          "ref_path": "sdk/go/client_test.go",
+          "sha256": "dad3ac00630f4dc1f03350fd77fc147b24937933cbff78d6a926fd0a8044fe0e"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     }
   ],
-  "schema_version": 1
+  "schema_version": 2
 }

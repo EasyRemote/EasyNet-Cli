@@ -7,7 +7,9 @@
 //! advertisement remains best-effort but is always represented explicitly.
 //!
 //! Implementation approach: lifecycle mutations advance through an explicit
-//! state machine and retain pre-mutation snapshots. Any local failure triggers
+//! state machine and retain pre-mutation snapshots. Purge isolates the
+//! registered root with a same-directory atomic rename before durable commit,
+//! then deletes only that quarantine after commit. Any local failure triggers
 //! reverse-order compensation; incomplete compensation is returned as a typed
 //! partial failure. Registrar readiness is a hard precondition, never a
 //! boot-window no-op or restart repair path.
@@ -43,18 +45,13 @@
 //                          replaced_prior=true means the call
 //                          overwrote an existing row of the same
 //                          name (operator-visible event).
-//   * agent.stop  — { name | agent_ura } → { ack: bool }
+//   * agent.stop  — { name | agent_ura, purge? } → { ack: bool }
 //                          ack=false when the row didn't exist
 //                          (idempotent: callers can retry without
 //                          triggering an error).
 //
 // What does NOT live here
 // -----------------------
-//   * Workspace cleanup. `easynet agent remove --purge` deletes
-//     `~/.easynet/workspaces/<name>/`; the ability deliberately
-//     doesn't, so a remote stop_agent can't accidentally wipe an
-//     operator's local files. Workspace lifecycle stays under the
-//     CLI subcommand.
 //   * Process kill signals. There are no resident agent processes
 //     today (see Lifecycle model above); a future per-agent
 //     long-runner would land its own a future device.session operation.
@@ -77,6 +74,12 @@ use crate::daemon::axon_bridge::hot_agent_registrar::{
     HotAgentRegistrarError,
 };
 use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
+use crate::daemon::persistence::agent_lifecycle::{
+    self as lifecycle_store, AgentLifecycleMutationGuard, AgentPurgeJournal,
+    AgentPurgeNoPublicationReason, AgentPurgePublication, AgentPurgePublicationEntry,
+    AgentPurgePublicationPlan, AgentPurgePublicationRetry, AgentPurgePublicationStage,
+    AgentPurgeStage, AgentRootIdentity,
+};
 use crate::daemon::persistence::agent_registry as agents;
 use crate::daemon::persistence::agent_registry::{
     AgentEntry, AgentRegistry, AgentType, CURRENT_REGISTRY_SCHEMA,
@@ -86,6 +89,9 @@ use crate::daemon::persistence::{config, local_agents};
 use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_START_AGENT: &str = crate::daemon::ability::names::agents::AGENT_START;
 pub const ABILITY_STOP_AGENT: &str = crate::daemon::ability::names::agents::AGENT_STOP;
+pub const ABILITY_PURGE_AGENT: &str = crate::daemon::ability::names::agents::AGENT_PURGE;
+pub const ABILITY_RECONCILE_AGENT_PURGE: &str =
+    crate::daemon::ability::names::agents::AGENT_PURGE_RECONCILE;
 pub const ABILITY_REFRESH_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_REFRESH;
 
 /// Single-assignment registrar shared by catalogue assembly and lifecycle
@@ -102,6 +108,7 @@ enum AgentLifecycleState {
     DurablePersisted,
     IdentityPersisted,
     RuntimeSynchronized,
+    AuthoritySynchronized,
     Committed,
     RollingBack,
     RolledBack,
@@ -116,12 +123,19 @@ impl std::fmt::Display for AgentLifecycleState {
             Self::DurablePersisted => "durable_persisted",
             Self::IdentityPersisted => "identity_persisted",
             Self::RuntimeSynchronized => "runtime_synchronized",
+            Self::AuthoritySynchronized => "authority_synchronized",
             Self::Committed => "committed",
             Self::RollingBack => "rolling_back",
             Self::RolledBack => "rolled_back",
             Self::PartialFailure => "partial_failure",
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentLifecyclePlan {
+    Start,
+    Stop,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -210,8 +224,151 @@ impl MaterializationRollback {
     }
 }
 
+struct OpenRegisteredAgentRoot {
+    root: std::path::PathBuf,
+    handle: Option<std::fs::File>,
+    identity: AgentRootIdentity,
+}
+
+enum RegisteredAgentRoot {
+    Present(OpenRegisteredAgentRoot),
+    Absent(std::path::PathBuf),
+}
+
+fn validate_registered_agent_root(
+    name: &str,
+    registered_root: &std::path::Path,
+) -> anyhow::Result<RegisteredAgentRoot> {
+    use std::path::Component;
+
+    if !registered_root.is_absolute() {
+        anyhow::bail!(
+            "agent.purge: registered root for `{name}` is not absolute: {}; refusing purge",
+            registered_root.display()
+        );
+    }
+    if registered_root
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        anyhow::bail!(
+            "agent.purge: registered root for `{name}` is not normalized: {}; refusing purge",
+            registered_root.display()
+        );
+    }
+    let metadata = match std::fs::symlink_metadata(registered_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = registered_root.parent().ok_or_else(|| {
+                anyhow::anyhow!("agent.purge: registered root has no parent; refusing purge")
+            })?;
+            let canonical_parent = std::fs::canonicalize(parent).map_err(|parent_error| {
+                anyhow::anyhow!(
+                    "agent.purge: cannot validate absent registered root {} because parent {} is not canonical: {parent_error}",
+                    registered_root.display(),
+                    parent.display()
+                )
+            })?;
+            #[cfg(unix)]
+            if canonical_parent != parent {
+                anyhow::bail!(
+                    "agent.purge: absent registered root {} has non-canonical parent {} (canonical {}); refusing purge",
+                    registered_root.display(),
+                    parent.display(),
+                    canonical_parent.display()
+                );
+            }
+            return Ok(RegisteredAgentRoot::Absent(registered_root.to_path_buf()));
+        }
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "agent.purge: inspect registered root {}: {error}",
+                registered_root.display()
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        anyhow::bail!(
+            "agent.purge: registered root {} is a symlink; refusing purge",
+            registered_root.display()
+        );
+    }
+    if !metadata.is_dir() {
+        anyhow::bail!(
+            "agent.purge: registered root {} is not a directory; refusing purge",
+            registered_root.display()
+        );
+    }
+    let canonical_root = std::fs::canonicalize(registered_root).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: canonicalize registered root {}: {error}",
+            registered_root.display()
+        )
+    })?;
+    #[cfg(unix)]
+    if canonical_root != registered_root {
+        anyhow::bail!(
+            "agent.purge: registered root {} is not canonical (canonical {}); refusing purge",
+            registered_root.display(),
+            canonical_root.display()
+        );
+    }
+    #[cfg(unix)]
+    let validated_root = canonical_root;
+    #[cfg(not(unix))]
+    let validated_root = registered_root.to_path_buf();
+    let directory = AgentDirectory::open(&validated_root).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: registered root {} is not a valid agent directory: {error:#}",
+            validated_root.display()
+        )
+    })?;
+    if directory.spec().name != name {
+        anyhow::bail!(
+            "agent.purge: registered root {} belongs to agent `{}`, not `{name}`; refusing purge",
+            validated_root.display(),
+            directory.spec().name
+        );
+    }
+    #[cfg(unix)]
+    let handle = Some(std::fs::File::open(&validated_root).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: open registered root handle {}: {error}",
+            validated_root.display()
+        )
+    })?);
+    #[cfg(not(unix))]
+    let handle: Option<std::fs::File> = None;
+    #[cfg(unix)]
+    let identity_metadata = handle
+        .as_ref()
+        .map(std::fs::File::metadata)
+        .transpose()?
+        .unwrap_or(metadata);
+    #[cfg(unix)]
+    let identity = AgentRootIdentity::from_metadata(&identity_metadata).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: derive filesystem identity for {}: {error:#}",
+            validated_root.display()
+        )
+    })?;
+    #[cfg(not(unix))]
+    let identity = AgentRootIdentity::from_path(&validated_root).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: derive filesystem identity for {}: {error:#}",
+            validated_root.display()
+        )
+    })?;
+    Ok(RegisteredAgentRoot::Present(OpenRegisteredAgentRoot {
+        root: validated_root,
+        handle,
+        identity,
+    }))
+}
+
 struct AgentLifecycleTransaction {
     operation: &'static str,
+    plan: AgentLifecyclePlan,
     state: AgentLifecycleState,
     original_registry: AgentRegistry,
     original_local_agents: local_agents::LocalAgentsFile,
@@ -221,13 +378,14 @@ struct AgentLifecycleTransaction {
 }
 
 impl AgentLifecycleTransaction {
-    fn new(
+    fn for_start(
         operation: &'static str,
         original_registry: AgentRegistry,
         original_local_agents: local_agents::LocalAgentsFile,
     ) -> Self {
         Self {
             operation,
+            plan: AgentLifecyclePlan::Start,
             state: AgentLifecycleState::Prepared,
             original_registry,
             original_local_agents,
@@ -237,9 +395,84 @@ impl AgentLifecycleTransaction {
         }
     }
 
-    fn record_materialization(&mut self, rollback: MaterializationRollback) {
+    fn for_stop(
+        operation: &'static str,
+        original_registry: AgentRegistry,
+        original_local_agents: local_agents::LocalAgentsFile,
+    ) -> Self {
+        Self {
+            operation,
+            plan: AgentLifecyclePlan::Stop,
+            state: AgentLifecycleState::Prepared,
+            original_registry,
+            original_local_agents,
+            registry_written: false,
+            identity_written: false,
+            materialization: MaterializationRollback::None,
+        }
+    }
+
+    fn transition(&mut self, next: AgentLifecycleState) -> anyhow::Result<()> {
+        let valid = match self.plan {
+            AgentLifecyclePlan::Start => matches!(
+                (self.state, next),
+                (
+                    AgentLifecycleState::Prepared,
+                    AgentLifecycleState::Materialized
+                ) | (
+                    AgentLifecycleState::Prepared,
+                    AgentLifecycleState::DurablePersisted
+                ) | (
+                    AgentLifecycleState::Materialized,
+                    AgentLifecycleState::DurablePersisted
+                ) | (
+                    AgentLifecycleState::DurablePersisted,
+                    AgentLifecycleState::IdentityPersisted
+                ) | (
+                    AgentLifecycleState::IdentityPersisted,
+                    AgentLifecycleState::RuntimeSynchronized
+                ) | (
+                    AgentLifecycleState::RuntimeSynchronized,
+                    AgentLifecycleState::Committed
+                )
+            ),
+            AgentLifecyclePlan::Stop => matches!(
+                (self.state, next),
+                (
+                    AgentLifecycleState::Prepared,
+                    AgentLifecycleState::RuntimeSynchronized
+                ) | (
+                    AgentLifecycleState::RuntimeSynchronized,
+                    AgentLifecycleState::DurablePersisted
+                ) | (
+                    AgentLifecycleState::DurablePersisted,
+                    AgentLifecycleState::IdentityPersisted
+                ) | (
+                    AgentLifecycleState::IdentityPersisted,
+                    AgentLifecycleState::AuthoritySynchronized
+                ) | (
+                    AgentLifecycleState::AuthoritySynchronized,
+                    AgentLifecycleState::Committed
+                )
+            ),
+        };
+        if !valid {
+            anyhow::bail!(
+                "{}: invalid {:?} lifecycle transition {} -> {}",
+                self.operation,
+                self.plan,
+                self.state,
+                next
+            );
+        }
+        self.state = next;
+        Ok(())
+    }
+
+    fn record_materialization(&mut self, rollback: MaterializationRollback) -> anyhow::Result<()> {
+        self.transition(AgentLifecycleState::Materialized)?;
         self.materialization = rollback;
-        self.state = AgentLifecycleState::Materialized;
+        Ok(())
     }
 
     fn persist(
@@ -256,23 +489,47 @@ impl AgentLifecycleTransaction {
                 self.failure_with_rollback(format!("persist durable agent registry: {error:#}"))
             );
         }
-        self.state = AgentLifecycleState::DurablePersisted;
+        if let Err(error) = self.transition(AgentLifecycleState::DurablePersisted) {
+            return Err(self.failure_with_rollback(error.to_string()));
+        }
         self.identity_written = true;
         if let Err(error) = local_agents::save(identities) {
             return Err(self.failure_with_rollback(format!(
                 "persist hosted-Agent identity registry: {error:#}"
             )));
         }
-        self.state = AgentLifecycleState::IdentityPersisted;
+        if let Err(error) = self.transition(AgentLifecycleState::IdentityPersisted) {
+            return Err(self.failure_with_rollback(error.to_string()));
+        }
         Ok(())
     }
 
-    fn mark_runtime_synchronized(&mut self) {
-        self.state = AgentLifecycleState::RuntimeSynchronized;
+    fn mark_runtime_synchronized(&mut self) -> anyhow::Result<()> {
+        self.transition(AgentLifecycleState::RuntimeSynchronized)
     }
 
-    fn commit(&mut self) {
-        self.state = AgentLifecycleState::Committed;
+    fn mark_registry_write_started(&mut self) {
+        self.registry_written = true;
+    }
+
+    fn mark_registry_persisted(&mut self) -> anyhow::Result<()> {
+        self.transition(AgentLifecycleState::DurablePersisted)
+    }
+
+    fn mark_identity_write_started(&mut self) {
+        self.identity_written = true;
+    }
+
+    fn mark_identity_persisted(&mut self) -> anyhow::Result<()> {
+        self.transition(AgentLifecycleState::IdentityPersisted)
+    }
+
+    fn mark_authority_synchronized(&mut self) -> anyhow::Result<()> {
+        self.transition(AgentLifecycleState::AuthoritySynchronized)
+    }
+
+    fn commit(&mut self) -> anyhow::Result<()> {
+        self.transition(AgentLifecycleState::Committed)
     }
 
     fn failure_with_rollback(&mut self, cause: String) -> AgentLifecycleError {
@@ -291,8 +548,19 @@ impl AgentLifecycleTransaction {
     }
 
     fn rollback(&mut self) -> Vec<String> {
-        self.state = AgentLifecycleState::RollingBack;
         let mut failures = Vec::new();
+        if matches!(
+            self.state,
+            AgentLifecycleState::Committed
+                | AgentLifecycleState::RolledBack
+                | AgentLifecycleState::PartialFailure
+        ) {
+            return vec![format!(
+                "invalid rollback transition from terminal state {}",
+                self.state
+            )];
+        }
+        self.state = AgentLifecycleState::RollingBack;
         if self.identity_written {
             if let Err(error) = local_agents::save(&self.original_local_agents) {
                 failures.push(format!("restore local-agents.json: {error:#}"));
@@ -306,11 +574,13 @@ impl AgentLifecycleTransaction {
         if let Err(error) = self.materialization.rollback() {
             failures.push(format!("restore agent directory: {error:#}"));
         }
-        self.state = if failures.is_empty() {
+        let terminal = if failures.is_empty() {
             AgentLifecycleState::RolledBack
         } else {
             AgentLifecycleState::PartialFailure
         };
+        debug_assert_eq!(self.state, AgentLifecycleState::RollingBack);
+        self.state = terminal;
         failures
     }
 }
@@ -333,6 +603,7 @@ fn require_hot_registrar(
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegistrarCell>) {
+    super::authoring::register(reg, Arc::clone(&hot_registrar));
     let registrar_for_start = Arc::clone(&hot_registrar);
     reg.register_rpc_with_owner(
         "agent.start",
@@ -345,12 +616,77 @@ pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegist
         OwnerKind::Device,
         Arc::new(move |args: Value| stop_agent_handler(args, &registrar_for_stop)),
     );
+    let registrar_for_purge = Arc::clone(&hot_registrar);
+    reg.register_rpc_with_owner(
+        ABILITY_PURGE_AGENT,
+        OwnerKind::Device,
+        Arc::new(move |args: Value| purge_agent_handler(args, &registrar_for_purge)),
+    );
+    reg.register_rpc_with_envelope_and_owner(
+        ABILITY_RECONCILE_AGENT_PURGE,
+        OwnerKind::Device,
+        Arc::new(purge_reconciliation_handler),
+    );
     let registrar_for_refresh = Arc::clone(&hot_registrar);
     reg.register_rpc_with_owner(
         "agent.refresh",
         OwnerKind::Device,
         Arc::new(move |args: Value| refresh_agents_handler(args, &registrar_for_refresh)),
     );
+}
+
+fn purge_reconciliation_handler(
+    envelope: crate::daemon::ability::dispatch::EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let transaction_id = args
+        .get("transaction_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("agent.purge.reconcile: transaction_id is required"))?;
+    let command_id = args
+        .get("command_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("agent.purge.reconcile: command_id is required"))?;
+    if args
+        .get("action")
+        .and_then(Value::as_str)
+        .is_some_and(|action| action != "retry")
+    {
+        anyhow::bail!("agent.purge.reconcile: only `retry` is supported");
+    }
+    let actor_ura = envelope.caller().trim();
+    if actor_ura.is_empty() {
+        anyhow::bail!("agent.purge.reconcile: admitted caller identity is missing");
+    }
+    let command = lifecycle_store::AgentPurgeReconciliationCommand {
+        command_id: command_id.to_string(),
+        transaction_id: transaction_id.to_string(),
+        actor_ura: actor_ura.to_string(),
+        action: lifecycle_store::AgentPurgePublicationReconciliation::Retry,
+    };
+    let authorization = lifecycle_store::AuthorizedPurgeReconciliation::from_admission(
+        actor_ura,
+        format!(
+            "admission:{}:{}",
+            envelope.invocation_id(),
+            envelope.ability()
+        ),
+    )?;
+    let outcome = lifecycle_store::reconcile_publication(
+        &command,
+        &authorization,
+        purge_publication_now_unix_ms()?,
+    )?;
+    Ok(json!({
+        "transaction_id": outcome.entry.transaction_id,
+        "command_id": command.command_id,
+        "action": "retry",
+        "replayed": outcome.replayed,
+        "stage": outcome.entry.stage,
+        "state": outcome.entry.retry.state,
+    }))
 }
 
 /// `agent.start` handler.
@@ -376,12 +712,37 @@ fn start_agent_handler(
     args: Value,
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<Value> {
+    let response = {
+        let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
+            anyhow::anyhow!("agent.start: acquire lifecycle transaction: {error:#}")
+        })?;
+        recover_pending_purge_local_locked(hot_registrar)?;
+        start_agent_locked(args, hot_registrar)?
+    };
+    drain_scheduled_purge_publications(hot_registrar)?;
+    Ok(response)
+}
+
+fn start_agent_locked(
+    args: Value,
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<Value> {
     let name = args
         .get("name")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("agent.start: `name` (non-empty string) required"))?
         .to_string();
+    if let Some(pending) = lifecycle_store::load_publication_outbox()?
+        .entries
+        .into_iter()
+        .find(|entry| entry.name == name)
+    {
+        anyhow::bail!(
+            "agent.start: `{name}` still has durable purge publication transaction `{}` pending; identity reuse is fenced until the tombstone/revoke outbox drains",
+            pending.transaction_id
+        );
+    }
     // DEC-F048: hosted user agent ≠ device-sponsored System Agent.
     if crate::daemon::axon_bridge::hot_agent_registrar::name_claims_reserved_device_owner(&name) {
         anyhow::bail!(
@@ -472,7 +833,7 @@ fn start_agent_handler(
         .map_err(|error| anyhow::anyhow!("agent.start: load durable agent registry: {error:#}"))?;
     let original_local_agents = local_agents::load()
         .map_err(|error| anyhow::anyhow!("agent.start: load hosted-Agent identities: {error:#}"))?;
-    let mut transaction = AgentLifecycleTransaction::new(
+    let mut transaction = AgentLifecycleTransaction::for_start(
         "agent.start",
         original_registry.clone(),
         original_local_agents.clone(),
@@ -528,7 +889,7 @@ fn start_agent_handler(
                 transaction.record_materialization(MaterializationRollback::UpdatedSpec {
                     path: spec_path.clone(),
                     prior_bytes,
-                });
+                })?;
                 updated_spec = true;
             }
             directory
@@ -559,7 +920,7 @@ fn start_agent_handler(
             transaction.record_materialization(MaterializationRollback::Created {
                 root,
                 root_preexisted,
-            });
+            })?;
             created_directory = true;
             directory
         };
@@ -588,7 +949,18 @@ fn start_agent_handler(
 
     if let Some(directory) = materialized_directory.as_ref() {
         normalize_v2_entry(&mut entry);
-        entry.root_path = Some(directory.root().to_path_buf());
+        let canonical_root = match std::fs::canonicalize(directory.root()) {
+            Ok(root) => root,
+            Err(error) => {
+                return Err(transaction
+                    .failure_with_rollback(format!(
+                        "canonicalize materialized agent root {}: {error}",
+                        directory.root().display()
+                    ))
+                    .into());
+            }
+        };
+        entry.root_path = Some(canonical_root);
     }
     if agent_type == AgentType::External {
         if let Some(command) = custom_command
@@ -653,8 +1025,8 @@ fn start_agent_handler(
                 .into());
         }
     };
-    transaction.mark_runtime_synchronized();
-    transaction.commit();
+    transaction.mark_runtime_synchronized()?;
+    transaction.commit()?;
 
     let mut workspace_projected = false;
     let mut workspace_projection_error: Option<String> = None;
@@ -685,72 +1057,89 @@ fn start_agent_handler(
     // persisting the cursor here makes the owner event-driven instead of
     // boot-only. Best-effort: a cursor write failure degrades to
     // "advertise still attempts" + an op_event, never blocks agent.start.
-    let owner_projection_descriptors = build_hot_agent_descriptors(&name, &entry, &agent_ura);
+    let owner_projection_snapshot = registrar.publication_snapshot();
+    let owner_projection_descriptors = owner_projection_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.owner_descriptors(&agent_ura))
+        .unwrap_or_default();
     let mut abilities_payload: Option<Vec<u8>> = None;
-    let mut owner_projection_state = "not_configured";
-    let mut owner_projection_error: Option<String> = None;
-    if let Some(host_device_ura) = config::load_credentials()
-        .ok()
-        .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
-        .filter(|ura| !ura.is_empty())
-    {
-        match crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
-            &agent_ura,
-            &host_device_ura,
-            &owner_projection_descriptors,
-        ) {
-            Ok(publication) => {
-                owner_projection_state = "persisted";
-                // Persisted to the cursor → owner now appears in
-                // `heartbeat_refresh_owner_uras`. Also build the wire
-                // payload so the advertiser pushes it to the hub NOW
-                // (event-driven), not at the next heartbeat. ISS-002.
-                match crate::daemon::federation::advertise::advertise_abilities_payload(
-                    &agent_ura,
-                    &publication,
-                )
-                .and_then(|payload| {
-                    serde_json::to_vec(&payload)
-                        .map_err(|e| format!("encode advertise_abilities payload: {e}"))
-                }) {
-                    Ok(bytes) => abilities_payload = Some(bytes),
-                    Err(err) => {
-                        owner_projection_error = Some(err.clone());
-                        crate::op_event!(
-                            component = agent_lifecycle,
-                            kind = hot_agent_abilities_payload_build_failed,
-                            agent_name = name.as_str(),
-                            agent_ura = agent_ura.as_str(),
-                            error = err.as_str(),
-                            message = "owner projection persisted but advertise payload \
+    let mut owner_generation: Option<u64> = None;
+    let mut owner_projection_state = if owner_projection_snapshot.is_ok() {
+        "not_configured"
+    } else {
+        "failed"
+    };
+    let mut owner_projection_error = owner_projection_snapshot
+        .as_ref()
+        .err()
+        .map(|error| format!("capture committed ability publication: {error}"));
+    if owner_projection_snapshot.is_ok() {
+        if let Some(host_device_ura) = config::load_credentials()
+            .ok()
+            .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+            .filter(|ura| !ura.is_empty())
+        {
+            match crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
+                &agent_ura,
+                &host_device_ura,
+                &owner_projection_descriptors,
+            ) {
+                Ok(publication) => {
+                    owner_projection_state = "persisted";
+                    owner_generation = Some(publication.generation);
+                    // Persisted to the cursor → owner now appears in
+                    // `heartbeat_refresh_owner_uras`. Also build the wire
+                    // payload so the advertiser pushes it to the hub NOW
+                    // (event-driven), not at the next heartbeat. ISS-002.
+                    match crate::daemon::federation::advertise::advertise_abilities_payload(
+                        &agent_ura,
+                        &publication,
+                    )
+                    .and_then(|payload| {
+                        serde_json::to_vec(&payload)
+                            .map_err(|e| format!("encode advertise_abilities payload: {e}"))
+                    }) {
+                        Ok(bytes) => abilities_payload = Some(bytes),
+                        Err(err) => {
+                            owner_projection_error = Some(err.clone());
+                            crate::op_event!(
+                                component = agent_lifecycle,
+                                kind = hot_agent_abilities_payload_build_failed,
+                                agent_name = name.as_str(),
+                                agent_ura = agent_ura.as_str(),
+                                error = err.as_str(),
+                                message = "owner projection persisted but advertise payload \
                                        build failed; hub learns abilities on next \
                                        heartbeat refresh instead",
-                        );
+                            );
+                        }
                     }
                 }
-            }
-            Err(err) => {
-                owner_projection_state = "failed";
-                owner_projection_error = Some(err.clone());
-                crate::op_event!(
-                    component = agent_lifecycle,
-                    kind = hot_agent_owner_projection_persist_failed,
-                    agent_name = name.as_str(),
-                    agent_ura = agent_ura.as_str(),
-                    error = err.as_str(),
-                    message = "agent registered but owner projection cursor was not \
-                               persisted; abilities resolvable locally but may lag in \
-                               the hub directory until next boot republish",
-                );
+                Err(err) => {
+                    owner_projection_state = "failed";
+                    owner_projection_error = Some(err.clone());
+                    crate::op_event!(
+                        component = agent_lifecycle,
+                        kind = hot_agent_owner_projection_persist_failed,
+                        agent_name = name.as_str(),
+                        agent_ura = agent_ura.as_str(),
+                        error = err.as_str(),
+                        message = "agent registered but owner projection cursor was not \
+                                   persisted; abilities resolvable locally but may lag in \
+                                   the hub directory until next boot republish",
+                    );
+                }
             }
         }
     }
 
-    let hub_advertise_outcome = registrar.hot_agent_advertiser().map(|advertiser| {
-        advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
+    let hub_advertise_outcome = registrar.hot_agent_advertiser().and_then(|advertiser| {
+        let generation = owner_generation?;
+        Some(advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
             agent_ura: agent_ura.clone(),
+            generation,
             abilities_payload: abilities_payload.clone(),
-        })
+        }))
     });
     if let Some(outcome) = hub_advertise_outcome.as_ref() {
         if let Some(err) = outcome.error() {
@@ -800,57 +1189,6 @@ fn start_agent_handler(
     }))
 }
 
-/// Build the owner-projection ability descriptors for one hot-added
-/// agent, using the SAME construction as the boot-time republish path
-/// (`daemon::federation::publish` step 5b): `abilities_for_publication` →
-/// owner-local public name → `AbilityDescriptor`. Kept byte-equivalent
-/// to boot so the hot-add path is not a second, lossy catalogue (the
-/// divergence that previously omitted newly-added abilities from
-/// `namespace.resolve`). ISS-002.
-fn build_hot_agent_descriptors(
-    name: &str,
-    entry: &AgentEntry,
-    agent_ura: &str,
-) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    let live_registry = crate::daemon::ability::catalog::build_registry();
-    let mut descriptors = Vec::new();
-    for spec in crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
-        name, entry,
-    ) {
-        let registry_name = spec.name();
-        match crate::daemon::ability::catalog::profiles::llm::descriptor_for_agent_spec(
-            &live_registry,
-            agent_ura,
-            name,
-            &spec,
-        ) {
-            Ok(desc) => {
-                let mut desc = desc
-                    .with_metadata_entry("runtime", entry.agent_type.to_string())
-                    .with_metadata_entry("agent_type", entry.agent_type.to_string())
-                    .with_metadata_entry("base_runtime", entry.agent_type.to_string());
-                if let Some(model) = entry.model.as_ref() {
-                    desc = desc
-                        .with_metadata_entry("model", model.clone())
-                        .with_metadata_entry("base_model", model.clone());
-                }
-                descriptors.push(desc);
-            }
-            Err(err) => crate::op_event!(
-                component = agent_lifecycle,
-                kind = hot_agent_descriptor_build_failed,
-                agent_name = name,
-                agent_ura = agent_ura,
-                ability = registry_name,
-                error = err.to_string().as_str(),
-                message = "skipped one ability descriptor for the hot-added agent's \
-                           owner projection; remaining abilities still publish",
-            ),
-        }
-    }
-    descriptors
-}
-
 fn runtime_kind_from(t: AgentType) -> RuntimeKind {
     t.runtime_kind()
 }
@@ -864,18 +1202,1357 @@ fn normalize_v2_entry(entry: &mut AgentEntry) {
     entry.schema_version = CURRENT_REGISTRY_SCHEMA;
 }
 
+#[derive(Debug)]
+struct PurgeFinalizeOutcome {
+    state: &'static str,
+    root: std::path::PathBuf,
+}
+
+fn advance_purge_journal(
+    journal: &mut AgentPurgeJournal,
+    stage: AgentPurgeStage,
+) -> anyhow::Result<()> {
+    journal.advance(stage)?;
+    maybe_inject_purge_crash(stage)
+}
+
+#[cfg(not(test))]
+fn maybe_inject_purge_crash(_stage: AgentPurgeStage) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static PURGE_CRASH_STAGE: std::cell::Cell<Option<AgentPurgeStage>> = const { std::cell::Cell::new(None) };
+    static PURGE_PRE_RENAME_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&std::path::Path)>>> =
+        std::cell::RefCell::new(None);
+    static PURGE_PRE_FINALIZE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&std::path::Path)>>> =
+        std::cell::RefCell::new(None);
+    static PURGE_CHILD_ENTRY_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&std::ffi::OsStr) -> bool>>> =
+        std::cell::RefCell::new(None);
+    static PURGE_AFTER_TOMBSTONE_PUBLISH_CRASH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PURGE_AFTER_REVOKE_PUBLISH_CRASH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn maybe_inject_purge_crash(stage: AgentPurgeStage) -> anyhow::Result<()> {
+    if PURGE_CRASH_STAGE.with(|slot| slot.get() == Some(stage)) {
+        anyhow::bail!("injected Agent purge crash after {stage:?}");
+    }
+    Ok(())
+}
+
+fn is_injected_purge_crash(error: &anyhow::Error) -> bool {
+    error.to_string().contains("injected Agent purge crash")
+}
+
+#[derive(Clone, Copy)]
+enum QuarantineValidation {
+    FullIdentity,
+    CommittedFinalize,
+}
+
+#[cfg(not(unix))]
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "agent.purge is unsupported on target `{target}`: identity-bound recursive deletion is unavailable"
+)]
+struct PurgePlatformUnsupported {
+    target: &'static str,
+}
+
+#[cfg(unix)]
+fn ensure_identity_bound_purge_supported() -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_identity_bound_purge_supported() -> anyhow::Result<()> {
+    Err(PurgePlatformUnsupported {
+        target: std::env::consts::OS,
+    }
+    .into())
+}
+
+#[cfg(test)]
+fn run_purge_pre_rename_hook(root: &std::path::Path) {
+    if let Some(hook) = PURGE_PRE_RENAME_HOOK.with(|slot| slot.borrow_mut().take()) {
+        hook(root);
+    }
+}
+
+#[cfg(not(test))]
+fn run_purge_pre_rename_hook(_root: &std::path::Path) {}
+
+#[cfg(test)]
+fn run_purge_pre_finalize_hook(quarantine: &std::path::Path) {
+    if let Some(hook) = PURGE_PRE_FINALIZE_HOOK.with(|slot| slot.borrow_mut().take()) {
+        hook(quarantine);
+    }
+}
+
+#[cfg(not(test))]
+fn run_purge_pre_finalize_hook(_quarantine: &std::path::Path) {}
+
+#[cfg(test)]
+fn run_purge_child_entry_hook(name: &std::ffi::OsStr) {
+    PURGE_CHILD_ENTRY_HOOK.with(|slot| {
+        let mut hook = slot.borrow_mut();
+        let consumed = hook.as_mut().is_some_and(|hook| hook(name));
+        if consumed {
+            hook.take();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_purge_child_entry_hook(_name: &std::ffi::OsStr) {}
+
+#[cfg(test)]
+fn maybe_inject_after_tombstone_publication() -> anyhow::Result<()> {
+    if PURGE_AFTER_TOMBSTONE_PUBLISH_CRASH.with(|slot| slot.get()) {
+        anyhow::bail!("injected Agent purge crash after Hub tombstone publication");
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn maybe_inject_after_tombstone_publication() -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+fn maybe_inject_after_revoke_publication() -> anyhow::Result<()> {
+    if PURGE_AFTER_REVOKE_PUBLISH_CRASH.with(|slot| slot.get()) {
+        anyhow::bail!("injected Agent purge crash after Hub revoke publication");
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn maybe_inject_after_revoke_publication() -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn validate_quarantined_agent_root(
+    name: &str,
+    root: &std::path::Path,
+    quarantine: &std::path::Path,
+    expected_identity: &AgentRootIdentity,
+    open_root: Option<&std::fs::File>,
+    validation: QuarantineValidation,
+) -> anyhow::Result<()> {
+    let expected_parent = root.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent.purge: registered root {} has no parent",
+            root.display()
+        )
+    })?;
+    let quarantine_parent = quarantine.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent.purge: quarantine {} has no parent",
+            quarantine.display()
+        )
+    })?;
+    let canonical_parent = std::fs::canonicalize(quarantine_parent).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: canonicalize quarantine parent {}: {error}",
+            quarantine_parent.display()
+        )
+    })?;
+    if quarantine_parent != expected_parent {
+        anyhow::bail!(
+            "agent.purge: quarantine parent mismatch: registered={}, quarantine={}",
+            expected_parent.display(),
+            quarantine_parent.display()
+        );
+    }
+    #[cfg(unix)]
+    if canonical_parent != expected_parent {
+        anyhow::bail!(
+            "agent.purge: quarantine parent is not canonical: expected={}, canonical={}",
+            expected_parent.display(),
+            canonical_parent.display()
+        );
+    }
+    let metadata = std::fs::symlink_metadata(quarantine).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: inspect quarantine {}: {error}",
+            quarantine.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        anyhow::bail!(
+            "agent.purge: quarantine {} is not a real directory",
+            quarantine.display()
+        );
+    }
+    let canonical_quarantine = std::fs::canonicalize(quarantine)?;
+    #[cfg(unix)]
+    if canonical_quarantine != quarantine {
+        anyhow::bail!(
+            "agent.purge: quarantine {} is not canonical (canonical {})",
+            quarantine.display(),
+            canonical_quarantine.display()
+        );
+    }
+    if !expected_identity.matches_path(quarantine)? {
+        anyhow::bail!(
+            "agent.purge: quarantine {} metadata identity differs from the registered root",
+            quarantine.display()
+        );
+    }
+    if let Some(handle) = open_root {
+        let handle_metadata = handle.metadata()?;
+        if !expected_identity.matches_metadata(&handle_metadata) {
+            anyhow::bail!(
+                "agent.purge: open root handle identity changed before quarantine validation"
+            );
+        }
+    }
+    if matches!(validation, QuarantineValidation::FullIdentity) {
+        let directory = AgentDirectory::open(quarantine).map_err(|error| {
+            anyhow::anyhow!(
+                "agent.purge: quarantined root {} is not an agent directory: {error:#}",
+                quarantine.display()
+            )
+        })?;
+        if directory.spec().name != name {
+            anyhow::bail!(
+                "agent.purge: quarantined root {} belongs to `{}`, not `{name}`",
+                quarantine.display(),
+                directory.spec().name
+            );
+        }
+    }
+    Ok(())
+}
+
+fn restore_quarantine_atomically(
+    root: &std::path::Path,
+    quarantine: &std::path::Path,
+) -> anyhow::Result<()> {
+    if std::fs::symlink_metadata(root).is_ok() {
+        anyhow::bail!(
+            "agent.purge: cannot restore quarantine because registered root {} already exists",
+            root.display()
+        );
+    }
+    std::fs::rename(quarantine, root).map_err(|error| {
+        anyhow::anyhow!(
+            "agent.purge: restore quarantine {} to {}: {error}",
+            quarantine.display(),
+            root.display()
+        )
+    })?;
+    config::sync_parent_dir(root)
+        .map_err(|error| anyhow::anyhow!("sync restored purge root parent: {error:#}"))
+}
+
+fn quarantine_registered_root(journal: &mut AgentPurgeJournal) -> anyhow::Result<()> {
+    match validate_registered_agent_root(&journal.name, &journal.root_path)? {
+        RegisteredAgentRoot::Absent(root) => {
+            journal.root_path = root;
+            journal.root_identity = None;
+        }
+        RegisteredAgentRoot::Present(open_root) => {
+            journal.root_path = open_root.root.clone();
+            journal.root_identity = Some(open_root.identity.clone());
+            lifecycle_store::save_purge_journal(journal)?;
+            maybe_inject_purge_crash(AgentPurgeStage::Prepared)?;
+            run_purge_pre_rename_hook(&journal.root_path);
+            std::fs::rename(&journal.root_path, &journal.quarantine_path).map_err(|error| {
+                anyhow::anyhow!(
+                    "agent.purge: quarantine {} as {}: {error}",
+                    journal.root_path.display(),
+                    journal.quarantine_path.display()
+                )
+            })?;
+            config::sync_parent_dir(&journal.quarantine_path)?;
+            if let Err(error) = validate_quarantined_agent_root(
+                &journal.name,
+                &journal.root_path,
+                &journal.quarantine_path,
+                &open_root.identity,
+                open_root.handle.as_ref(),
+                QuarantineValidation::FullIdentity,
+            ) {
+                let restore =
+                    restore_quarantine_atomically(&journal.root_path, &journal.quarantine_path);
+                return match restore {
+                    Ok(()) => Err(error.context("post-rename quarantine validation failed; root restored")),
+                    Err(restore_error) => Err(anyhow::anyhow!(
+                        "post-rename quarantine validation failed: {error:#}; restore failed: {restore_error:#}; residual_path={}",
+                        journal.quarantine_path.display()
+                    )),
+                };
+            }
+        }
+    }
+    advance_purge_journal(journal, AgentPurgeStage::Quarantined)
+}
+
+#[derive(Debug)]
+enum PurgeRecoveryStatus {
+    Complete,
+    PublicationPending(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PurgePublicationRetryTrigger {
+    Scheduled,
+    ConnectivityReady,
+}
+
+/// Recover local lifecycle state before boot reads transport credentials or
+/// replays hosted agents. Committed transactions finish deletion and durable
+/// outbox handoff here; external publication is owned by later transport boot.
+pub(crate) fn recover_pending_purge_before_agent_replay(
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<bool> {
+    let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
+        anyhow::anyhow!("agent.purge boot recovery: acquire lifecycle transaction: {error:#}")
+    })?;
+    let Some(mut journal) = lifecycle_store::load_purge_journal()? else {
+        return Ok(false);
+    };
+    if journal.stage.is_committed() {
+        roll_forward_committed_purge(&mut journal)?;
+        lifecycle_store::clear_purge_journal()?;
+        return Ok(true);
+    }
+    rollback_uncommitted_purge(&journal, hot_registrar)?;
+    Ok(true)
+}
+
+/// Resume committed publication/finalization during boot. Hub transport may
+/// not yet have a live session; a failed publication remains discoverable in
+/// the journal and boot continues so the session can reconnect.
+pub(crate) fn recover_pending_purge_on_boot(
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<bool> {
+    {
+        let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
+            anyhow::anyhow!("agent.purge boot recovery: acquire lifecycle transaction: {error:#}")
+        })?;
+        recover_pending_purge_local_locked(hot_registrar)?;
+    }
+    match publication_recovery_status(
+        hot_registrar,
+        PurgePublicationRetryTrigger::ConnectivityReady,
+    )? {
+        PurgeRecoveryStatus::Complete => Ok(true),
+        PurgeRecoveryStatus::PublicationPending(reason) => {
+            crate::op_event!(
+                component = agent_lifecycle,
+                kind = purge_roll_forward_pending,
+                level = "warn",
+                error = reason.as_str(),
+                journal = lifecycle_store::journal_path()
+                    .display()
+                    .to_string()
+                    .as_str(),
+                message = "Agent purge is locally complete; durable publication remains queued",
+            );
+            Ok(false)
+        }
+    }
+}
+
+fn recover_pending_purge_local_locked(
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<bool> {
+    let Some(mut journal) = lifecycle_store::load_purge_journal()? else {
+        return Ok(false);
+    };
+    if !journal.stage.is_committed() {
+        rollback_uncommitted_purge(&journal, hot_registrar)?;
+        return Ok(true);
+    }
+    roll_forward_committed_purge(&mut journal)?;
+    lifecycle_store::clear_purge_journal()?;
+    Ok(true)
+}
+
+fn publication_recovery_status(
+    hot_registrar: &SharedHotRegistrarCell,
+    trigger: PurgePublicationRetryTrigger,
+) -> anyhow::Result<PurgeRecoveryStatus> {
+    match drain_purge_publication_outbox(hot_registrar, trigger)? {
+        None => Ok(PurgeRecoveryStatus::Complete),
+        Some(reason) => Ok(PurgeRecoveryStatus::PublicationPending(reason)),
+    }
+}
+
+fn drain_scheduled_purge_publications(
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<()> {
+    if let PurgeRecoveryStatus::PublicationPending(reason) =
+        publication_recovery_status(hot_registrar, PurgePublicationRetryTrigger::Scheduled)?
+    {
+        crate::op_event!(
+            component = agent_lifecycle,
+            kind = purge_publication_deferred,
+            level = "warn",
+            error = reason.as_str(),
+            outbox = lifecycle_store::publication_outbox_path()
+                .display()
+                .to_string()
+                .as_str(),
+            message = "local lifecycle mutations remain available while publication retries",
+        );
+    }
+    Ok(())
+}
+
+fn rollback_uncommitted_purge(
+    journal: &AgentPurgeJournal,
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<()> {
+    let registrar = require_hot_registrar(hot_registrar, "agent.purge.recover")?;
+    restore_uncommitted_purge_root(journal)?;
+    agents::save_agents(&journal.original_registry)
+        .map_err(|error| anyhow::anyhow!("recover Agent purge agents.json: {error:#}"))?;
+    local_agents::save(&journal.original_local_agents)
+        .map_err(|error| anyhow::anyhow!("recover Agent purge local-agents.json: {error:#}"))?;
+    let registrar_for_restore = Arc::clone(&registrar);
+    let name = journal.name.clone();
+    let entry = journal.removed_entry.clone();
+    block_on_hot_registrar(
+        async move { registrar_for_restore.register_agent(&name, &entry).await },
+    )
+    .map_err(|error| anyhow::anyhow!("recover Agent purge runtime/authority: {error}"))?;
+    lifecycle_store::clear_purge_journal()
+}
+
+fn restore_uncommitted_purge_root(journal: &AgentPurgeJournal) -> anyhow::Result<()> {
+    let root_exists = std::fs::symlink_metadata(&journal.root_path).is_ok();
+    let quarantine_exists = std::fs::symlink_metadata(&journal.quarantine_path).is_ok();
+    match (&journal.root_identity, root_exists, quarantine_exists) {
+        (None, false, false) => Ok(()),
+        (Some(identity), false, true) => {
+            validate_quarantined_agent_root(
+                &journal.name,
+                &journal.root_path,
+                &journal.quarantine_path,
+                identity,
+                None,
+                QuarantineValidation::FullIdentity,
+            )?;
+            restore_quarantine_atomically(&journal.root_path, &journal.quarantine_path)
+        }
+        (Some(identity), true, false) => {
+            if !identity.matches_path(&journal.root_path)? {
+                anyhow::bail!(
+                    "agent.purge recovery: registered root metadata changed at {}",
+                    journal.root_path.display()
+                );
+            }
+            Ok(())
+        }
+        _ => anyhow::bail!(
+            "agent.purge recovery is ambiguous: root_exists={root_exists}, quarantine_exists={quarantine_exists}, journal={}",
+            lifecycle_store::journal_path().display()
+        ),
+    }
+}
+
+#[cfg(unix)]
+fn remove_quarantined_directory_identity_bound(
+    quarantine: &std::path::Path,
+    expected_identity: &AgentRootIdentity,
+) -> anyhow::Result<()> {
+    use rustix::fs::{openat, unlinkat, AtFlags, Mode, OFlags, CWD};
+
+    let parent = quarantine.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "identity-bound purge path {} has no parent",
+            quarantine.display()
+        )
+    })?;
+    let name = quarantine.file_name().ok_or_else(|| {
+        anyhow::anyhow!(
+            "identity-bound purge path {} has no basename",
+            quarantine.display()
+        )
+    })?;
+    let parent_fd = openat(
+        CWD,
+        parent,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| anyhow::anyhow!("open purge parent {}: {error}", parent.display()))?;
+    let claimed_fd = openat(
+        &parent_fd,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| anyhow::anyhow!("open claimed purge directory: {error}"))?;
+    let claimed = std::fs::File::from(claimed_fd);
+    let claimed_metadata = claimed.metadata()?;
+    if !expected_identity.matches_metadata(&claimed_metadata) {
+        anyhow::bail!("claimed purge directory identity changed before descriptor-bound deletion");
+    }
+
+    run_purge_pre_finalize_hook(quarantine);
+    remove_open_directory_contents(&claimed)?;
+
+    // Re-open the name immediately before unlinkat. If an attacker moved the
+    // claimed inode while its descriptor was being drained, the replacement
+    // path is preserved and recovery reports the residual instead of deleting
+    // a different tree.
+    let current_fd = openat(
+        &parent_fd,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map_err(|error| anyhow::anyhow!("re-open claimed purge directory: {error}"))?;
+    let current = std::fs::File::from(current_fd);
+    if !expected_identity.matches_metadata(&current.metadata()?) {
+        anyhow::bail!("claimed purge directory identity changed before unlinkat");
+    }
+    unlinkat(&parent_fd, name, AtFlags::REMOVEDIR)
+        .map_err(|error| anyhow::anyhow!("unlinkat claimed purge directory: {error}"))
+}
+
+#[cfg(unix)]
+fn remove_open_directory_contents(directory: &std::fs::File) -> anyhow::Result<()> {
+    use rustix::fs::{openat, statat, unlinkat, AtFlags, Dir, FileType, Mode, OFlags};
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let entries = Dir::read_from(directory)
+        .map_err(|error| anyhow::anyhow!("read claimed purge directory: {error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| anyhow::anyhow!("read purge entry: {error}"))?;
+        let name = entry.file_name();
+        if matches!(name.to_bytes(), b"." | b"..") {
+            continue;
+        }
+        let stat = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| anyhow::anyhow!("inspect purge entry {:?}: {error}", name))?;
+        let initial_identity = UnixDirectoryEntryIdentity::from_stat(&stat);
+        run_purge_child_entry_hook(std::ffi::OsStr::from_bytes(name.to_bytes()));
+        if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
+            let child_fd = openat(
+                directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| anyhow::anyhow!("open purge child {:?}: {error}", name))?;
+            let child = std::fs::File::from(child_fd);
+            if !initial_identity.matches_metadata(&child.metadata()?) {
+                anyhow::bail!(
+                    "purge child {:?} changed identity between statat and openat",
+                    name
+                );
+            }
+            remove_open_directory_contents(&child)?;
+            let current_fd = openat(
+                directory,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|error| anyhow::anyhow!("re-open purge child {:?}: {error}", name))?;
+            let current = std::fs::File::from(current_fd);
+            if !initial_identity.matches_metadata(&current.metadata()?) {
+                anyhow::bail!("purge child {:?} changed identity before unlinkat", name);
+            }
+            unlinkat(directory, name, AtFlags::REMOVEDIR)
+                .map_err(|error| anyhow::anyhow!("unlinkat purge child {:?}: {error}", name))?;
+        } else {
+            let current = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(|error| anyhow::anyhow!("re-inspect purge entry {:?}: {error}", name))?;
+            if !initial_identity.matches_stat(&current) {
+                anyhow::bail!("purge entry {:?} changed identity before unlinkat", name);
+            }
+            unlinkat(directory, name, AtFlags::empty())
+                .map_err(|error| anyhow::anyhow!("unlinkat purge entry {:?}: {error}", name))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct UnixDirectoryEntryIdentity {
+    device: u64,
+    inode: u64,
+    file_type: u32,
+}
+
+#[cfg(unix)]
+impl UnixDirectoryEntryIdentity {
+    fn from_stat(stat: &rustix::fs::Stat) -> Self {
+        Self {
+            device: stat.st_dev as u64,
+            inode: stat.st_ino as u64,
+            file_type: stat.st_mode as u32 & libc::S_IFMT as u32,
+        }
+    }
+
+    fn matches_stat(self, stat: &rustix::fs::Stat) -> bool {
+        self.device == stat.st_dev as u64
+            && self.inode == stat.st_ino as u64
+            && self.file_type == (stat.st_mode as u32 & libc::S_IFMT as u32)
+    }
+
+    fn matches_metadata(self, metadata: &std::fs::Metadata) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+        self.device == metadata.dev()
+            && self.inode == metadata.ino()
+            && self.file_type == (metadata.mode() & libc::S_IFMT as u32)
+    }
+}
+
+#[cfg(not(unix))]
+fn remove_quarantined_directory_identity_bound(
+    _quarantine: &std::path::Path,
+    _expected_identity: &AgentRootIdentity,
+) -> anyhow::Result<()> {
+    ensure_identity_bound_purge_supported()
+}
+
+fn finalize_committed_purge(journal: &AgentPurgeJournal) -> anyhow::Result<PurgeFinalizeOutcome> {
+    let registry = agents::load_agents()?;
+    if registry.agents.contains_key(&journal.name) {
+        anyhow::bail!(
+            "agent.purge committed journal conflicts with agents.json row `{}`",
+            journal.name
+        );
+    }
+    let identities = local_agents::load()?;
+    if local_agents::lookup_hosted_ura(&identities, "llm", &journal.name).is_some() {
+        anyhow::bail!(
+            "agent.purge committed journal conflicts with local-agents.json entry `{}`",
+            journal.name
+        );
+    }
+    let root_exists = std::fs::symlink_metadata(&journal.root_path).is_ok();
+    let quarantine_exists = std::fs::symlink_metadata(&journal.quarantine_path).is_ok();
+    if root_exists {
+        anyhow::bail!(
+            "agent.purge committed journal cannot finalize because root reappeared at {}",
+            journal.root_path.display()
+        );
+    }
+    if quarantine_exists {
+        let identity = journal.root_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("agent.purge quarantine exists without a journaled root identity")
+        })?;
+        validate_quarantined_agent_root(
+            &journal.name,
+            &journal.root_path,
+            &journal.quarantine_path,
+            identity,
+            None,
+            QuarantineValidation::CommittedFinalize,
+        )?;
+        remove_quarantined_directory_identity_bound(&journal.quarantine_path, identity).map_err(
+            |error| {
+                anyhow::anyhow!(
+                    "agent.purge: delete committed quarantine {}: {error}; residual_path={}",
+                    journal.quarantine_path.display(),
+                    journal.quarantine_path.display()
+                )
+            },
+        )?;
+        config::sync_parent_dir(&journal.quarantine_path)?;
+    }
+    Ok(PurgeFinalizeOutcome {
+        state: if journal.root_identity.is_some() {
+            "purged"
+        } else {
+            "already_absent"
+        },
+        root: journal.root_path.clone(),
+    })
+}
+
+fn roll_forward_committed_purge(
+    journal: &mut AgentPurgeJournal,
+) -> anyhow::Result<PurgeFinalizeOutcome> {
+    if !journal.stage.is_committed() {
+        anyhow::bail!(
+            "agent.purge: roll-forward requires committed journal, got {:?}",
+            journal.stage
+        );
+    }
+
+    if journal.stage == AgentPurgeStage::Committed {
+        let outcome = finalize_committed_purge(journal)?;
+        advance_purge_journal(journal, AgentPurgeStage::Finalized)?;
+        maybe_inject_purge_crash(AgentPurgeStage::Finalized)?;
+        if outcome.root != journal.root_path {
+            anyhow::bail!("agent.purge: finalized root diverged from journaled root");
+        }
+    }
+
+    if journal.stage == AgentPurgeStage::Finalized {
+        journal.publication_plan = prepare_purge_tombstone_publication(journal)?;
+        advance_purge_journal(journal, AgentPurgeStage::TombstonePrepared)?;
+        maybe_inject_purge_crash(AgentPurgeStage::TombstonePrepared)?;
+    }
+
+    if journal.stage == AgentPurgeStage::TombstonePrepared {
+        match &journal.publication_plan {
+            AgentPurgePublicationPlan::Required { publication } => {
+                enqueue_purge_publication(journal, publication)?;
+                crate::daemon::federation::read_model::owner_projection::retire_removal_cursor(
+                    &journal.agent_ura,
+                    publication.projection_revision,
+                    &publication.projection_digest,
+                )
+                .map_err(|error| anyhow::anyhow!("retire committed purge cursor: {error}"))?;
+            }
+            AgentPurgePublicationPlan::NotRequired { .. } => {}
+            AgentPurgePublicationPlan::Undetermined => {
+                anyhow::bail!(
+                    "agent.purge: TombstonePrepared journal has undetermined publication plan"
+                );
+            }
+        }
+        advance_purge_journal(journal, AgentPurgeStage::OutboxEnqueued)?;
+        maybe_inject_purge_crash(AgentPurgeStage::OutboxEnqueued)?;
+    }
+
+    if journal.stage == AgentPurgeStage::OutboxEnqueued {
+        return Ok(PurgeFinalizeOutcome {
+            state: if journal.root_identity.is_some() {
+                "purged"
+            } else {
+                "already_absent"
+            },
+            root: journal.root_path.clone(),
+        });
+    }
+
+    anyhow::bail!(
+        "agent.purge: unsupported committed roll-forward stage {:?}",
+        journal.stage
+    )
+}
+
+fn enqueue_purge_publication(
+    journal: &AgentPurgeJournal,
+    publication: &AgentPurgePublication,
+) -> anyhow::Result<()> {
+    lifecycle_store::update_publication_outbox(|outbox| {
+        if let Some(existing) = outbox
+            .entries
+            .iter()
+            .find(|entry| entry.transaction_id == journal.transaction_id)
+        {
+            if existing.name != journal.name
+                || existing.agent_ura != journal.agent_ura
+                || existing.publication != *publication
+            {
+                anyhow::bail!(
+                    "Agent purge publication transaction `{}` changed during replay",
+                    journal.transaction_id
+                );
+            }
+            return Ok(());
+        }
+        if let Some(existing) = outbox
+            .entries
+            .iter()
+            .find(|entry| entry.agent_ura == journal.agent_ura)
+        {
+            anyhow::bail!(
+                "Agent purge publication for `{}` is already pending as transaction `{}`",
+                journal.agent_ura,
+                existing.transaction_id
+            );
+        }
+        outbox.entries.push(AgentPurgePublicationEntry {
+            transaction_id: journal.transaction_id.clone(),
+            name: journal.name.clone(),
+            agent_ura: journal.agent_ura.clone(),
+            publication: publication.clone(),
+            stage: AgentPurgePublicationStage::TombstonePending,
+            retry: AgentPurgePublicationRetry::default(),
+            next_delivery_fence: 1,
+        });
+        outbox
+            .entries
+            .sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+        Ok(())
+    })
+}
+
+fn drain_purge_publication_outbox(
+    hot_registrar: &SharedHotRegistrarCell,
+    trigger: PurgePublicationRetryTrigger,
+) -> anyhow::Result<Option<String>> {
+    let Some(_drain_guard) = lifecycle_store::AgentPurgePublicationDrainGuard::try_acquire()?
+    else {
+        return Ok(Some(
+            "purge publication drain is already active in this state directory".to_string(),
+        ));
+    };
+    let drain_epoch =
+        lifecycle_store::update_publication_outbox(|outbox| outbox.begin_drain_epoch())?;
+    let advertiser = require_hot_registrar(hot_registrar, "agent.purge.publish")
+        .map_err(|error| error.to_string())
+        .and_then(|registrar| {
+            registrar.hot_agent_advertiser().ok_or_else(|| {
+                "Hub publisher is unavailable for durable purge publication".to_string()
+            })
+        });
+
+    let mut attempted_transactions = std::collections::BTreeSet::new();
+    for _ in 0..lifecycle_store::PUBLICATION_DRAIN_BATCH_SIZE {
+        let now_unix_ms = purge_publication_now_unix_ms()?;
+        let Some(mut entry) =
+            claim_next_purge_publication(trigger, drain_epoch, &attempted_transactions)?
+        else {
+            break;
+        };
+        attempted_transactions.insert(entry.transaction_id.clone());
+        let claim_id = entry
+            .claim_id()
+            .ok_or_else(|| anyhow::anyhow!("claimed purge publication has no claim ID"))?
+            .to_string();
+        let delivery_fence = entry
+            .delivery_fence()
+            .ok_or_else(|| anyhow::anyhow!("claimed purge publication has no delivery fence"))?;
+        let advertiser = match &advertiser {
+            Ok(advertiser) => advertiser,
+            Err(error) => {
+                record_purge_publication_failure(
+                    &entry.transaction_id,
+                    &claim_id,
+                    now_unix_ms,
+                    error.clone(),
+                )?;
+                continue;
+            }
+        };
+
+        if entry.stage == AgentPurgePublicationStage::TombstonePending {
+            let mut tombstone: crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication =
+                serde_json::from_slice(&entry.publication.tombstone_payload).map_err(|error| {
+                    anyhow::anyhow!(
+                        "decode journaled purge tombstone `{}`: {error}",
+                        entry.transaction_id
+                    )
+                })?;
+            tombstone.purge_delivery = Some(
+                crate::daemon::federation::read_model::owner_projection::PurgeProjectionDelivery {
+                    protocol_version:
+                        crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
+                    transaction_id: entry.transaction_id.clone(),
+                    generation: entry.publication.generation,
+                    authority_ura: entry.publication.host_device_ura.clone(),
+                    delivery_fence,
+                },
+            );
+            let tombstone_payload = serde_json::to_vec(&tombstone).map_err(|error| {
+                anyhow::anyhow!(
+                    "encode fenced purge tombstone `{}`: {error}",
+                    entry.transaction_id
+                )
+            })?;
+            let outcome = advertiser.publish_owner_projection(
+                crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest {
+                    agent_ura: entry.agent_ura.clone(),
+                    generation: entry.publication.generation,
+                    transaction_id: entry.transaction_id.clone(),
+                    delivery_fence,
+                    abilities_payload: tombstone_payload,
+                },
+            );
+            if outcome.state() != HotAgentAdvertiseState::Succeeded {
+                record_purge_publication_failure(
+                    &entry.transaction_id,
+                    &claim_id,
+                    now_unix_ms,
+                    format!(
+                        "Hub ability tombstone failed: {}",
+                        outcome.error().unwrap_or("unknown publication failure")
+                    ),
+                )?;
+                continue;
+            }
+            maybe_inject_after_tombstone_publication()?;
+            entry = lifecycle_store::update_publication_outbox(|outbox| {
+                let current = outbox
+                    .entries
+                    .iter_mut()
+                    .find(|current| current.transaction_id == entry.transaction_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "purge publication `{}` disappeared after tombstone",
+                            entry.transaction_id
+                        )
+                    })?;
+                current.advance_claim_to_revoke(&claim_id)?;
+                Ok(current.clone())
+            })?;
+        }
+
+        let outcome = advertiser.revoke_hosted_agent(
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest {
+                agent_ura: entry.agent_ura.clone(),
+                generation: entry.publication.generation,
+                reason: "agent.purge".to_string(),
+                purge_transaction_id: Some(entry.transaction_id.clone()),
+                authority_ura: entry.publication.host_device_ura.clone(),
+                protocol_version:
+                    crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
+                delivery_fence,
+            },
+        );
+        if outcome.state() != HotAgentAdvertiseState::Succeeded {
+            record_purge_publication_failure(
+                &entry.transaction_id,
+                &claim_id,
+                now_unix_ms,
+                format!(
+                    "Hub Agent revoke failed: {}",
+                    outcome.error().unwrap_or("unknown revoke failure")
+                ),
+            )?;
+            continue;
+        }
+        maybe_inject_after_revoke_publication()?;
+        lifecycle_store::update_publication_outbox(|outbox| {
+            let index = outbox
+                .entries
+                .iter()
+                .position(|current| current.transaction_id == entry.transaction_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "purge publication `{}` disappeared before completion",
+                        entry.transaction_id
+                    )
+                })?;
+            if outbox.entries[index].claim_id() != Some(claim_id.as_str()) {
+                anyhow::bail!(
+                    "purge publication `{}` completion lost its durable claim",
+                    entry.transaction_id
+                );
+            }
+            outbox.entries.remove(index);
+            Ok(())
+        })?;
+    }
+
+    let pending = lifecycle_store::load_publication_outbox()?;
+    if pending.entries.is_empty() {
+        return Ok(None);
+    }
+    let failed = pending
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            entry.retry.last_failure.as_ref().map(|failure| {
+                format!(
+                    "{} transaction={} stage={:?}: {}",
+                    entry.agent_ura, entry.transaction_id, failure.stage, failure.error
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    let reconciliation_required = pending
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.retry.state,
+                lifecycle_store::AgentPurgePublicationRetryState::ReconciliationRequired { .. }
+            )
+        })
+        .count();
+    Ok(Some(if failed.is_empty() {
+        format!(
+            "{} purge publication transaction(s) remain pending; {} require reconciliation",
+            pending.entries.len(),
+            reconciliation_required
+        )
+    } else {
+        failed.join("; ")
+    }))
+}
+
+fn purge_publication_now_unix_ms() -> anyhow::Result<u64> {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| anyhow::anyhow!("system clock precedes Unix epoch: {error}"))?;
+    u64::try_from(elapsed.as_millis())
+        .map_err(|_| anyhow::anyhow!("system clock milliseconds exceed durable u64 range"))
+}
+
+fn claim_next_purge_publication(
+    trigger: PurgePublicationRetryTrigger,
+    drain_epoch: u64,
+    excluded_transactions: &std::collections::BTreeSet<String>,
+) -> anyhow::Result<Option<AgentPurgePublicationEntry>> {
+    lifecycle_store::update_publication_outbox(|outbox| {
+        for entry in &mut outbox.entries {
+            if excluded_transactions.contains(&entry.transaction_id) {
+                continue;
+            }
+            let claim_id = uuid::Uuid::new_v4().simple().to_string();
+            if entry.claim(
+                drain_epoch,
+                trigger == PurgePublicationRetryTrigger::ConnectivityReady,
+                claim_id,
+            )? {
+                return Ok(Some(entry.clone()));
+            }
+        }
+        Ok(None)
+    })
+}
+
+fn record_purge_publication_failure(
+    transaction_id: &str,
+    claim_id: &str,
+    now_unix_ms: u64,
+    error: String,
+) -> anyhow::Result<()> {
+    lifecycle_store::update_publication_outbox(|outbox| {
+        let current = outbox
+            .entries
+            .iter_mut()
+            .find(|current| current.transaction_id == transaction_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "purge publication `{}` disappeared while recording failure",
+                    transaction_id
+                )
+            })?;
+        current.record_claim_failure(claim_id, now_unix_ms, error)?;
+        Ok(())
+    })
+}
+
+fn prepare_purge_tombstone_publication(
+    journal: &AgentPurgeJournal,
+) -> anyhow::Result<AgentPurgePublicationPlan> {
+    let publication_required =
+        crate::daemon::federation::read_model::owner_projection::publication_required(
+            &journal.agent_ura,
+        )
+        .map_err(anyhow::Error::msg)?;
+    if !publication_required {
+        return Ok(AgentPurgePublicationPlan::NotRequired {
+            reason: AgentPurgeNoPublicationReason::NoActiveOwnerProjection,
+        });
+    }
+    let Some(publication) =
+        crate::daemon::federation::read_model::owner_projection::prepare_journaled_removal(
+            &journal.agent_ura,
+        )
+        .map_err(|error| anyhow::anyhow!("prepare committed purge tombstone: {error}"))?
+    else {
+        return Ok(AgentPurgePublicationPlan::NotRequired {
+            reason: AgentPurgeNoPublicationReason::NoActiveOwnerProjection,
+        });
+    };
+    let payload = serde_json::to_vec(&publication)
+        .map_err(|error| anyhow::anyhow!("encode committed purge tombstone: {error}"))?;
+    Ok(AgentPurgePublicationPlan::Required {
+        publication: AgentPurgePublication {
+            host_device_ura: publication.host_device_ura,
+            generation: publication.generation,
+            projection_revision: publication.projection_revision,
+            projection_digest: publication.projection_digest,
+            tombstone_payload: payload,
+        },
+    })
+}
+
+fn compensate_nonjournaled_removal(
+    transaction: &mut AgentLifecycleTransaction,
+    registrar: &Arc<HotAgentRegistrar>,
+    name: &str,
+    entry: &AgentEntry,
+    cause: anyhow::Error,
+) -> anyhow::Error {
+    let mut failures = transaction.rollback();
+    let registrar_for_restore = Arc::clone(registrar);
+    let name_for_restore = name.to_string();
+    let entry_for_restore = entry.clone();
+    if let Err(error) = block_on_hot_registrar(async move {
+        registrar_for_restore
+            .register_agent(&name_for_restore, &entry_for_restore)
+            .await
+    }) {
+        failures.push(format!("restore runtime/catalog/authority: {error}"));
+    }
+    AgentLifecycleError::Mutation {
+        operation: "agent.stop",
+        state: if failures.is_empty() {
+            AgentLifecycleState::RolledBack
+        } else {
+            AgentLifecycleState::PartialFailure
+        },
+        cause: cause.to_string(),
+        rollback: if failures.is_empty() {
+            "completed".to_string()
+        } else {
+            format!("partial({})", failures.join("; "))
+        },
+    }
+    .into()
+}
+
+fn purge_agent_handler(
+    args: Value,
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<Value> {
+    ensure_identity_bound_purge_supported()?;
+    let mut committed = {
+        let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
+            anyhow::anyhow!("agent.purge: acquire lifecycle transaction: {error:#}")
+        })?;
+        recover_pending_purge_local_locked(hot_registrar)?;
+        purge_agent_locked(args, hot_registrar)?
+    };
+    if committed.transaction_id.is_some() {
+        drain_purge_publication_outbox(hot_registrar, PurgePublicationRetryTrigger::Scheduled)?;
+        decorate_purge_publication_response(&mut committed)?;
+    }
+    Ok(committed.response)
+}
+
+struct CommittedPurgeResponse {
+    response: Value,
+    transaction_id: Option<String>,
+    publication_required: bool,
+}
+
+fn purge_agent_locked(
+    args: Value,
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<CommittedPurgeResponse> {
+    let name = agent_name_from_lifecycle_args(&args, "agent.purge")?;
+    let original_registry = agents::load_agents()
+        .map_err(|error| anyhow::anyhow!("agent.purge: load agents.json: {error:#}"))?;
+    let Some(removed_entry) = original_registry.agents.get(&name).cloned() else {
+        return Ok(CommittedPurgeResponse {
+            response: json!({
+                "ack": false,
+                "purge_state": "not_applicable",
+                "purged_path": Value::Null,
+                "runtime_removed": 0,
+                "removed_entry": Value::Null,
+            }),
+            transaction_id: None,
+            publication_required: false,
+        });
+    };
+    let root_path = removed_entry.root_path.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent.purge: registered agent `{name}` has no `root_path`; refusing to infer a destructive path"
+        )
+    })?;
+    let parent = root_path.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent.purge: registered root {} has no parent",
+            root_path.display()
+        )
+    })?;
+    let original_local_agents = local_agents::load()
+        .map_err(|error| anyhow::anyhow!("agent.purge: load local-agents.json: {error:#}"))?;
+    let agent_ura = hosted_agent_ura_from_file(&original_local_agents, &name)
+        .map_err(|error| anyhow::anyhow!("agent.purge: {error:#}"))?;
+    let transaction_id = uuid::Uuid::new_v4().simple().to_string();
+    let quarantine_path = parent.join(format!(".{name}.easynet-purge-{transaction_id}"));
+    match std::fs::symlink_metadata(&quarantine_path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => anyhow::bail!(
+            "agent.purge: unique quarantine path already exists at {}; refusing overwrite",
+            quarantine_path.display()
+        ),
+        Err(error) => anyhow::bail!(
+            "agent.purge: inspect quarantine candidate {}: {error}",
+            quarantine_path.display()
+        ),
+    }
+    let mut journal = AgentPurgeJournal::new(
+        transaction_id,
+        name.clone(),
+        agent_ura,
+        root_path,
+        quarantine_path,
+        removed_entry,
+        original_registry,
+        original_local_agents,
+    );
+
+    if let Err(error) = quarantine_registered_root(&mut journal) {
+        if is_injected_purge_crash(&error) {
+            return Err(error);
+        }
+        let rollback = recover_pending_purge_local_locked(hot_registrar);
+        return Err(match rollback {
+            Ok(_) => anyhow::anyhow!(
+                "agent.purge preparation failed: {error:#}; rollback=completed"
+            ),
+            Err(rollback_error) => anyhow::anyhow!(
+                "agent.purge preparation failed: {error:#}; rollback failed: {rollback_error:#}; journal={}",
+                lifecycle_store::journal_path().display()
+            ),
+        });
+    }
+
+    let removal = stop_agent_locked(
+        json!({"name": name}),
+        hot_registrar,
+        "agent.purge",
+        Some(&mut journal),
+    );
+    let mut response = match removal {
+        Ok(response) => response,
+        Err(error) if is_injected_purge_crash(&error) => return Err(error),
+        Err(error) => {
+            let rollback = recover_pending_purge_local_locked(hot_registrar);
+            return Err(match rollback {
+                Ok(_) => anyhow::anyhow!(
+                    "agent.purge application transaction failed: {error:#}; rollback=completed"
+                ),
+                Err(rollback_error) => anyhow::anyhow!(
+                    "agent.purge failed: {error:#}; recovery failed: {rollback_error:#}; journal={}",
+                    lifecycle_store::journal_path().display()
+                ),
+            });
+        }
+    };
+
+    let outcome = roll_forward_committed_purge(&mut journal)?;
+    lifecycle_store::clear_purge_journal()?;
+    let publication_required = matches!(
+        &journal.publication_plan,
+        AgentPurgePublicationPlan::Required { .. }
+    );
+    let object = response
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("agent.purge internal response is not an object"))?;
+    object.insert("purge_state".to_string(), json!(outcome.state));
+    object.insert(
+        "purged_path".to_string(),
+        json!(outcome.root.to_string_lossy().to_string()),
+    );
+    Ok(CommittedPurgeResponse {
+        response,
+        transaction_id: Some(journal.transaction_id),
+        publication_required,
+    })
+}
+
+fn decorate_purge_publication_response(
+    committed: &mut CommittedPurgeResponse,
+) -> anyhow::Result<()> {
+    let transaction_id = committed
+        .transaction_id
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("committed purge response has no transaction ID"))?;
+    let pending_outbox = lifecycle_store::load_publication_outbox()?;
+    let own_pending_publication = pending_outbox
+        .entries
+        .iter()
+        .find(|entry| entry.transaction_id == transaction_id);
+    let publication_pending = own_pending_publication.is_some();
+    let reconciliation_required = own_pending_publication.is_some_and(|entry| {
+        matches!(
+            entry.retry.state,
+            lifecycle_store::AgentPurgePublicationRetryState::ReconciliationRequired { .. }
+        )
+    });
+    let own_publication_error = own_pending_publication.map(|entry| {
+        entry
+            .retry
+            .last_failure
+            .as_ref()
+            .map(|failure| failure.error.clone())
+            .unwrap_or_else(|| "publication is durably queued for retry".to_string())
+    });
+    let object = committed
+        .response
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("agent.purge internal response is not an object"))?;
+    object.insert(
+        "publication_state".to_string(),
+        json!(if !committed.publication_required {
+            "not_applicable"
+        } else if reconciliation_required {
+            "reconciliation_required"
+        } else if publication_pending {
+            "pending"
+        } else {
+            "published"
+        }),
+    );
+    object.insert(
+        "publication_error".to_string(),
+        json!(own_publication_error.clone()),
+    );
+    let legacy_publication_state = if !committed.publication_required {
+        "not_applicable"
+    } else if reconciliation_required {
+        "failed"
+    } else if publication_pending {
+        "pending"
+    } else {
+        "succeeded"
+    };
+    object.insert(
+        "hub_tombstone_state".to_string(),
+        json!(legacy_publication_state),
+    );
+    object.insert(
+        "hub_tombstone_error".to_string(),
+        json!(own_publication_error.clone()),
+    );
+    object.insert(
+        "hub_revoke_state".to_string(),
+        json!(legacy_publication_state),
+    );
+    object.insert("hub_revoke_error".to_string(), json!(own_publication_error));
+    Ok(())
+}
+
 /// `agent.stop` handler.
 ///
-/// Args: `{ "name": "claude" }` or `{ "agent_ura": "easynet:///r/<realm>/agent/<user>.claude" }`.
-/// Behaviour: remove the registry row. Idempotent — `ack=false` if
-/// the row didn't exist; never errors on missing target.
+/// Args: `{ "name": "claude" }` or
+/// `{ "agent_ura": "easynet:///r/<realm>/agent/<user>.claude" }`.
+/// Behaviour: remove the registry row while preserving its root directory.
+/// Idempotent — `ack=false` if the row didn't exist.
 fn stop_agent_handler(
     args: Value,
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<Value> {
+    let response = {
+        let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
+            anyhow::anyhow!("agent.stop: acquire lifecycle transaction: {error:#}")
+        })?;
+        recover_pending_purge_local_locked(hot_registrar)?;
+        stop_agent_locked(args, hot_registrar, "agent.stop", None)?
+    };
+    drain_scheduled_purge_publications(hot_registrar)?;
+    Ok(response)
+}
+
+fn stop_agent_locked(
+    args: Value,
+    hot_registrar: &SharedHotRegistrarCell,
+    operation: &'static str,
+    mut purge_journal: Option<&mut AgentPurgeJournal>,
+) -> anyhow::Result<Value> {
+    if args.get("purge").is_some() {
+        anyhow::bail!("{operation}: `purge` is not accepted; invoke `agent.purge`");
+    }
     let original_registry = agents::load_agents()
-        .map_err(|error| anyhow::anyhow!("agent.stop: load durable agent registry: {error:#}"))?;
-    let name = stop_agent_name_from_args(&args)?;
+        .map_err(|error| anyhow::anyhow!("{operation}: load durable agent registry: {error:#}"))?;
+    let name = agent_name_from_lifecycle_args(&args, operation)?;
     let Some(removed_entry) = original_registry.agents.get(&name).cloned() else {
         return Ok(json!({
             "ack": false,
@@ -887,14 +2564,17 @@ fn stop_agent_handler(
             "hub_revoke_error": Value::Null,
         }));
     };
-    let registrar = require_hot_registrar(hot_registrar, "agent.stop")?;
+    let registrar = require_hot_registrar(hot_registrar, operation)?;
     let original_local_agents = local_agents::load()
-        .map_err(|error| anyhow::anyhow!("agent.stop: load hosted-Agent identities: {error:#}"))?;
+        .map_err(|error| anyhow::anyhow!("{operation}: load hosted-Agent identities: {error:#}"))?;
     let agent_ura = hosted_agent_ura_from_file(&original_local_agents, &name)
-        .map_err(|error| anyhow::anyhow!("agent.stop: {error:#}"))?;
+        .map_err(|error| anyhow::anyhow!("{operation}: {error:#}"))?;
+    let mut transaction = AgentLifecycleTransaction::for_stop(
+        operation,
+        original_registry.clone(),
+        original_local_agents.clone(),
+    );
 
-    // Phase one removes runtime/catalog rows while durable lifecycle state
-    // still proves that this daemon owns the Agent authority.
     let registrar_for_remove = Arc::clone(&registrar);
     let name_for_remove = name.clone();
     let entry_for_remove = removed_entry.clone();
@@ -902,12 +2582,27 @@ fn stop_agent_handler(
         registrar_for_remove
             .unregister_agent(&name_for_remove, &entry_for_remove)
             .await
-    })
-    .map_err(|source| AgentLifecycleError::Registrar {
-        operation: "agent.stop",
-        source: Box::new(source),
-    })?;
+    });
+    let removal = removal
+        .map_err(|error| anyhow::anyhow!("synchronize authority/catalog/runtime removal: {error}"));
+    let removal = match removal {
+        Ok(removal) => removal,
+        Err(error) if purge_journal.is_some() => return Err(error),
+        Err(error) => {
+            return Err(compensate_nonjournaled_removal(
+                &mut transaction,
+                &registrar,
+                &name,
+                &removed_entry,
+                error,
+            ));
+        }
+    };
     let runtime_removed = removal.outcome().removed;
+    transaction.mark_runtime_synchronized()?;
+    if let Some(journal) = purge_journal.as_deref_mut() {
+        advance_purge_journal(journal, AgentPurgeStage::RuntimeSynchronized)?;
+    }
 
     let mut registry = original_registry.clone();
     registry.agents.remove(&name);
@@ -915,58 +2610,75 @@ fn stop_agent_handler(
     identities
         .hosted_agents
         .retain(|entry| !(entry.profile == "llm" && entry.name == name));
-    let mut transaction =
-        AgentLifecycleTransaction::new("agent.stop", original_registry, original_local_agents);
-    transaction.mark_runtime_synchronized();
-    if let Err(error) = transaction.persist(&registry, &identities) {
-        let registrar_for_restore = Arc::clone(&registrar);
-        let name_for_restore = name.clone();
-        let entry_for_restore = removed_entry.clone();
-        let restore = block_on_hot_registrar(async move {
-            registrar_for_restore
-                .register_agent(&name_for_restore, &entry_for_restore)
-                .await
-        });
-        return match restore {
-            Ok(_) => Err(error.into()),
-            Err(restore_error) => Err(AgentLifecycleError::Mutation {
-                operation: "agent.stop",
-                state: AgentLifecycleState::PartialFailure,
-                cause: error.to_string(),
-                rollback: format!("partial(restore runtime/catalog: {restore_error})"),
-            }
-            .into()),
-        };
+    transaction.mark_registry_write_started();
+    if let Err(error) = agents::save_agents(&registry) {
+        let error = anyhow::anyhow!("persist durable agent registry: {error:#}");
+        if purge_journal.is_some() {
+            return Err(error);
+        }
+        return Err(compensate_nonjournaled_removal(
+            &mut transaction,
+            &registrar,
+            &name,
+            &removed_entry,
+            error,
+        ));
+    }
+    transaction.mark_registry_persisted()?;
+    if let Some(journal) = purge_journal.as_deref_mut() {
+        advance_purge_journal(journal, AgentPurgeStage::RegistryPersisted)?;
+    }
+
+    transaction.mark_identity_write_started();
+    if let Err(error) = local_agents::save(&identities) {
+        let error = anyhow::anyhow!("persist hosted-Agent identity registry: {error:#}");
+        if purge_journal.is_some() {
+            return Err(error);
+        }
+        return Err(compensate_nonjournaled_removal(
+            &mut transaction,
+            &registrar,
+            &name,
+            &removed_entry,
+            error,
+        ));
+    }
+    transaction.mark_identity_persisted()?;
+    if let Some(journal) = purge_journal.as_deref_mut() {
+        advance_purge_journal(journal, AgentPurgeStage::IdentityPersisted)?;
     }
 
     // Phase two proves both lifecycle rows are gone before revoking authority.
     if let Err(error) = registrar.commit_agent_removal(&removal) {
-        let rollback_failures = transaction.rollback();
-        let registrar_for_restore = Arc::clone(&registrar);
-        let name_for_restore = name.clone();
-        let entry_for_restore = removed_entry.clone();
-        let runtime_restore = block_on_hot_registrar(async move {
-            registrar_for_restore
-                .register_agent(&name_for_restore, &entry_for_restore)
-                .await
-        });
-        let mut failures = rollback_failures;
-        if let Err(restore_error) = runtime_restore {
-            failures.push(format!("restore runtime/catalog: {restore_error}"));
+        let error = anyhow::anyhow!("revoke hosted-Agent authority: {error}");
+        if purge_journal.is_some() {
+            return Err(error);
         }
-        return Err(AgentLifecycleError::Mutation {
-            operation: "agent.stop",
-            state: AgentLifecycleState::IdentityPersisted,
-            cause: format!("revoke hosted-Agent authority: {error}"),
-            rollback: if failures.is_empty() {
-                "completed".to_string()
-            } else {
-                format!("partial({})", failures.join("; "))
-            },
-        }
-        .into());
+        return Err(compensate_nonjournaled_removal(
+            &mut transaction,
+            &registrar,
+            &name,
+            &removed_entry,
+            error,
+        ));
     }
-    transaction.commit();
+    if let Some(journal) = purge_journal.as_deref_mut() {
+        advance_purge_journal(journal, AgentPurgeStage::AuthorityCommitted)?;
+    }
+    transaction.mark_authority_synchronized()?;
+    transaction.commit()?;
+    if let Some(journal) = purge_journal.as_deref_mut() {
+        advance_purge_journal(journal, AgentPurgeStage::Committed)?;
+        return Ok(json!({
+            "ack": true,
+            "runtime_removed": runtime_removed,
+            "removed_entry": removed_entry,
+            "hub_tombstone_state": "pending",
+            "hub_tombstone_error": Value::Null,
+            "hub_revoke_state": "pending",
+            "hub_revoke_error": Value::Null,
+        }));
+    }
 
     // ISS-002 closed loop (stop side, symmetric to start): tell the hub
     // the agent's abilities are gone NOW instead of waiting for the next
@@ -979,6 +2691,7 @@ fn stop_agent_handler(
     let mut hub_tombstone_error: Option<String> = None;
     let mut hub_revoke_state = "not_configured";
     let mut hub_revoke_error: Option<String> = None;
+    let mut revoke_generation: Option<u64> = None;
     if let Some(host_device_ura) = config::load_credentials()
         .ok()
         .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
@@ -994,6 +2707,7 @@ fn stop_agent_handler(
             &host_device_ura,
         ) {
             Ok(Some(publication)) => {
+                revoke_generation = Some(publication.generation);
                 let tombstone_payload =
                     crate::daemon::federation::advertise::advertise_abilities_payload(
                         &agent_ura,
@@ -1006,9 +2720,17 @@ fn stop_agent_handler(
                     });
                 match (tombstone_payload, advertiser.as_ref()) {
                     (Ok(payload), Some(advertiser)) => {
-                        let outcome = advertiser.advertise_hosted_agent(HotAgentAdvertiseRequest {
+                        let transaction_id = purge_journal
+                            .as_deref()
+                            .map(|journal| journal.transaction_id.clone())
+                            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+                        let outcome = advertiser.publish_owner_projection(
+                            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest {
                             agent_ura: agent_ura.clone(),
-                            abilities_payload: Some(payload),
+                            generation: publication.generation,
+                            transaction_id,
+                            delivery_fence: 1,
+                            abilities_payload: payload,
                         });
                         hub_tombstone_state =
                             if outcome.state() == HotAgentAdvertiseState::Succeeded {
@@ -1058,11 +2780,19 @@ fn stop_agent_handler(
         // start. Without this the agent record lingers in the hub
         // catalogue after stop (with lease cancelled it would not age
         // out on its own). ISS-002.
-        if let Some(advertiser) = advertiser.as_ref() {
+        if let (Some(advertiser), Some(generation)) = (advertiser.as_ref(), revoke_generation) {
             let outcome = advertiser.revoke_hosted_agent(
                 crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest {
                     agent_ura: agent_ura.clone(),
-                    reason: "agent.stop".to_string(),
+                    generation,
+                    reason: operation.to_string(),
+                    purge_transaction_id: purge_journal
+                        .as_deref()
+                        .map(|journal| journal.transaction_id.clone()),
+                    authority_ura: host_device_ura.clone(),
+                    protocol_version:
+                        crate::daemon::persistence::federation_revoke::REVOKE_PROTOCOL_VERSION,
+                    delivery_fence: 1,
                 },
             );
             hub_revoke_state = if outcome.state() == HotAgentAdvertiseState::Succeeded {
@@ -1105,6 +2835,21 @@ fn stop_agent_handler(
 /// daemon-hosted replacement for the old CLI-side
 /// runtime refresh sweep.
 fn refresh_agents_handler(
+    args: Value,
+    hot_registrar: &SharedHotRegistrarCell,
+) -> anyhow::Result<Value> {
+    let response = {
+        let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
+            anyhow::anyhow!("agent.refresh: acquire lifecycle transaction: {error:#}")
+        })?;
+        recover_pending_purge_local_locked(hot_registrar)?;
+        refresh_agents_locked(args, hot_registrar)?
+    };
+    drain_scheduled_purge_publications(hot_registrar)?;
+    Ok(response)
+}
+
+fn refresh_agents_locked(
     args: Value,
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<Value> {
@@ -1260,7 +3005,7 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> anyhow::Result<Boots
     })
 }
 
-fn stop_agent_name_from_args(args: &Value) -> anyhow::Result<String> {
+fn agent_name_from_lifecycle_args(args: &Value, operation: &'static str) -> anyhow::Result<String> {
     let name = args
         .get("name")
         .and_then(Value::as_str)
@@ -1271,27 +3016,27 @@ fn stop_agent_name_from_args(args: &Value) -> anyhow::Result<String> {
         .filter(|s| !s.is_empty());
     match (name, agent_ura) {
         (Some(name), None) => Ok(name.to_string()),
-        (None, Some(ura)) => agent_name_from_ura(ura),
+        (None, Some(ura)) => agent_name_from_ura(ura, operation),
         (Some(name), Some(ura)) => {
-            let from_ura = agent_name_from_ura(ura)?;
+            let from_ura = agent_name_from_ura(ura, operation)?;
             if from_ura != name {
                 anyhow::bail!(
-                    "agent.stop: `name` ({name}) does not match `agent_ura` ({from_ura})"
+                    "{operation}: `name` ({name}) does not match `agent_ura` ({from_ura})"
                 );
             }
             Ok(name.to_string())
         }
         (None, None) => {
-            anyhow::bail!("agent.stop: either `name` or `agent_ura` is required")
+            anyhow::bail!("{operation}: either `name` or `agent_ura` is required")
         }
     }
 }
 
-fn agent_name_from_ura(ura: &str) -> anyhow::Result<String> {
+fn agent_name_from_ura(ura: &str, operation: &'static str) -> anyhow::Result<String> {
     let parsed = crate::core::ura::parse_ura(ura)
-        .map_err(|err| anyhow::anyhow!("agent.stop: invalid `agent_ura`: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("{operation}: invalid `agent_ura`: {err}"))?;
     if parsed.kind != crate::core::ura::URAKind::Agent {
-        anyhow::bail!("agent.stop: `agent_ura` must be an Agent URA");
+        anyhow::bail!("{operation}: `agent_ura` must be an Agent URA");
     }
     // DEC-F048: device-sponsored System Agents are not hosted user
     // agents — they cannot be registered here (see the agent.start
@@ -1299,13 +3044,13 @@ fn agent_name_from_ura(ura: &str) -> anyhow::Result<String> {
     // not a missing-agent case.
     if parsed.device_agent_ids().is_some() {
         anyhow::bail!(
-            "agent.stop: {ura} is a device-sponsored System Agent \
+            "{operation}: {ura} is a device-sponsored System Agent \
              (RFC-005 §3.1.2, DEC-F048); System Agents are not \
              lifecycle-managed as hosted agents on this surface"
         );
     }
     let identities = crate::daemon::persistence::local_agents::load()
-        .map_err(|error| anyhow::anyhow!("agent.stop: load hosted-Agent identities: {error:#}"))?;
+        .map_err(|error| anyhow::anyhow!("{operation}: load hosted-Agent identities: {error:#}"))?;
     if let Some(entry) = identities
         .hosted_agents
         .into_iter()
@@ -1401,8 +3146,38 @@ pub fn stop_agent_input_schema() -> Value {
 
 pub fn stop_agent_description() -> &'static str {
     "Remove an LLM sub-agent registry row by name or Agent URA. \
-     Idempotent: ack=false when the row didn't exist. Workspace files \
-     are deliberately NOT deleted — use `easynet agent remove --purge` for that."
+     Idempotent: ack=false when the row didn't exist. The registered root \
+     directory is always preserved."
+}
+
+pub fn purge_agent_input_schema() -> Value {
+    stop_agent_input_schema()
+}
+
+pub fn purge_agent_description() -> &'static str {
+    "Destructively remove an LLM sub-agent and the exact canonical root_path \
+     stored in its registry row. Requires Manage authority. The daemon commits \
+     local state and identity-bound deletion before handing external Hub \
+     publication to a durable retry outbox."
+}
+
+pub fn purge_reconcile_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["transaction_id", "command_id"],
+        "properties": {
+            "transaction_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+            "command_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+            "action": { "type": "string", "enum": ["retry"] }
+        },
+        "additionalProperties": false,
+    })
+}
+
+pub fn purge_reconcile_description() -> &'static str {
+    "Authorize and audit an idempotent retry of one dead-lettered Agent purge \
+     publication transaction. The operation retains the identity fence and \
+     terminal failure evidence."
 }
 
 pub fn refresh_agents_input_schema() -> Value {
@@ -1445,7 +3220,10 @@ mod tests {
     }
 
     fn ready_hot_registrar() -> SharedHotRegistrarCell {
-        ready_hot_registrar_fixture(None, "localhost").cell
+        let advertiser: Arc<
+            dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+        > = Arc::new(RecordingHotAdvertiser::default());
+        ready_hot_registrar_fixture(Some(advertiser), "localhost").cell
     }
 
     fn seed_joined_credentials() {
@@ -1466,6 +3244,11 @@ mod tests {
     #[derive(Default)]
     struct RecordingHotAdvertiser {
         requests: std::sync::Mutex<Vec<String>>,
+        ability_payloads: std::sync::Mutex<Vec<Vec<u8>>>,
+        revokes: std::sync::Mutex<Vec<String>>,
+        revoke_transactions: std::sync::Mutex<Vec<Option<String>>>,
+        hub_projection_fence: std::sync::Mutex<std::collections::BTreeMap<String, (u64, String)>>,
+        idempotent_projection_replays: std::sync::atomic::AtomicUsize,
     }
 
     impl crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser
@@ -1476,6 +3259,80 @@ mod tests {
             request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest,
         ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
             self.requests.lock().unwrap().push(request.agent_ura);
+            if let Some(payload) = request.abilities_payload {
+                let value: serde_json::Value = match serde_json::from_slice(&payload) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                            format!("Hub rejected malformed owner projection: {error}"),
+                        );
+                    }
+                };
+                let owner = value["owner_ura"].as_str().unwrap_or_default().to_string();
+                let revision = value["projection_revision"].as_u64().unwrap_or_default();
+                let digest = value["projection_digest"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let mut fence = self.hub_projection_fence.lock().unwrap();
+                if let Some((current_revision, current_digest)) = fence.get(&owner) {
+                    if revision < *current_revision
+                        || (revision == *current_revision && digest != *current_digest)
+                    {
+                        return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                            format!(
+                                "Hub revision fence rejected owner={owner} incoming=({revision}, {digest}) current=({current_revision}, {current_digest})"
+                            ),
+                        );
+                    }
+                    if revision == *current_revision {
+                        self.idempotent_projection_replays
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                fence.insert(owner, (revision, digest));
+                drop(fence);
+                self.ability_payloads.lock().unwrap().push(payload);
+            }
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
+        }
+
+        fn publish_owner_projection(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            let payload = request.abilities_payload;
+            let value: serde_json::Value = match serde_json::from_slice(&payload) {
+                Ok(value) => value,
+                Err(error) => {
+                    return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                        format!("Hub rejected malformed owner projection: {error}"),
+                    );
+                }
+            };
+            let owner = value["owner_ura"].as_str().unwrap_or_default().to_string();
+            let revision = value["projection_revision"].as_u64().unwrap_or_default();
+            let digest = value["projection_digest"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let mut fence = self.hub_projection_fence.lock().unwrap();
+            if let Some((current_revision, current_digest)) = fence.get(&owner) {
+                if revision < *current_revision
+                    || (revision == *current_revision && digest != *current_digest)
+                {
+                    return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                        "Hub projection fence rejected tombstone",
+                    );
+                }
+                if revision == *current_revision {
+                    self.idempotent_projection_replays
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            fence.insert(owner, (revision, digest));
+            drop(fence);
+            self.ability_payloads.lock().unwrap().push(payload);
             crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
         }
 
@@ -1483,9 +3340,194 @@ mod tests {
             &self,
             request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest,
         ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
-            self.requests.lock().unwrap().push(request.agent_ura);
+            self.revoke_transactions
+                .lock()
+                .unwrap()
+                .push(request.purge_transaction_id.clone());
+            self.revokes.lock().unwrap().push(request.agent_ura);
             crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::succeeded()
         }
+    }
+
+    #[derive(Default)]
+    struct SelectiveFailureHotAdvertiser {
+        recording: RecordingHotAdvertiser,
+        tombstone_failures: std::sync::Mutex<std::collections::BTreeSet<String>>,
+        revoke_failures: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    }
+
+    struct BlockingHotAdvertiser {
+        recording: RecordingHotAdvertiser,
+        fail_tombstone: std::sync::atomic::AtomicBool,
+        block_next_tombstone: std::sync::atomic::AtomicBool,
+        started: std::sync::mpsc::Sender<()>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser for BlockingHotAdvertiser {
+        fn advertise_hosted_agent(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            if request.abilities_payload.is_some()
+                && self
+                    .fail_tombstone
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                    "hold publication in the outbox",
+                );
+            }
+            if request.abilities_payload.is_some()
+                && self
+                    .block_next_tombstone
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.started.send(()).unwrap();
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv()
+                    .expect("test releases blocked publication");
+            }
+            self.recording.advertise_hosted_agent(request)
+        }
+
+        fn publish_owner_projection(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            if self
+                .fail_tombstone
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                    "hold publication in the outbox",
+                );
+            }
+            if self
+                .block_next_tombstone
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                self.started.send(()).unwrap();
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv()
+                    .expect("test releases blocked publication");
+            }
+            self.recording.publish_owner_projection(request)
+        }
+
+        fn revoke_hosted_agent(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            self.recording.revoke_hosted_agent(request)
+        }
+    }
+
+    impl SelectiveFailureHotAdvertiser {
+        fn fail_tombstone_for(&self, agent_ura: &str) {
+            self.tombstone_failures
+                .lock()
+                .unwrap()
+                .insert(agent_ura.to_string());
+        }
+
+        fn allow_tombstone_for(&self, agent_ura: &str) {
+            self.tombstone_failures.lock().unwrap().remove(agent_ura);
+        }
+
+        fn fail_revoke_for(&self, agent_ura: &str) {
+            self.revoke_failures
+                .lock()
+                .unwrap()
+                .insert(agent_ura.to_string());
+        }
+    }
+
+    impl crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser
+        for SelectiveFailureHotAdvertiser
+    {
+        fn advertise_hosted_agent(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            if self
+                .tombstone_failures
+                .lock()
+                .unwrap()
+                .contains(&request.agent_ura)
+            {
+                return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                    format!("poisoned tombstone for {}", request.agent_ura),
+                );
+            }
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser::advertise_hosted_agent(
+                &self.recording,
+                request,
+            )
+        }
+
+        fn publish_owner_projection(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentProjectionRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            if self
+                .tombstone_failures
+                .lock()
+                .unwrap()
+                .contains(&request.agent_ura)
+            {
+                return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                    format!("poisoned tombstone for {}", request.agent_ura),
+                );
+            }
+            self.recording.publish_owner_projection(request)
+        }
+
+        fn revoke_hosted_agent(
+            &self,
+            request: crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRevokeRequest,
+        ) -> crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome {
+            if self
+                .revoke_failures
+                .lock()
+                .unwrap()
+                .contains(&request.agent_ura)
+            {
+                return crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiseOutcome::failed(
+                    format!("poisoned revoke for {}", request.agent_ura),
+                );
+            }
+            crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser::revoke_hosted_agent(
+                &self.recording,
+                request,
+            )
+        }
+    }
+
+    fn expire_publication_claim(transaction_id: &str) {
+        lifecycle_store::update_publication_outbox(|outbox| {
+            {
+                let entry = outbox
+                    .entries
+                    .iter()
+                    .find(|entry| entry.transaction_id == transaction_id)
+                    .expect("publication entry exists while expiring test claim");
+                assert!(
+                    matches!(
+                        entry.retry.state,
+                        lifecycle_store::AgentPurgePublicationRetryState::Claimed { .. }
+                    ),
+                    "publication entry must hold a claim"
+                );
+            }
+            outbox.begin_drain_epoch()?;
+            Ok(())
+        })
+        .unwrap();
     }
 
     fn hot_registrar_with_advertiser(
@@ -1516,10 +3558,10 @@ mod tests {
                 Arc::new(Vec::new()),
                 Arc::clone(&dispatch_handle),
                 Arc::new(
-                    crate::daemon::ability::builtins::agents::discover::BridgeDiscoverFederationResolver,
+                    crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver,
                 ),
             );
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
         registrar
             .set_runtime(Arc::clone(&runtime))
             .expect("test runtime wired once");
@@ -1563,14 +3605,48 @@ mod tests {
         register(&mut reg, Arc::new(ready_hot_registrar()));
         assert!(reg.get_rpc(ABILITY_START_AGENT).is_some());
         assert!(reg.get_rpc(ABILITY_STOP_AGENT).is_some());
+        assert!(reg.get_rpc(ABILITY_PURGE_AGENT).is_some());
         assert!(reg.get_rpc(ABILITY_REFRESH_AGENTS).is_some());
+    }
+
+    #[test]
+    fn lifecycle_transaction_rejects_skipped_and_backward_transitions() {
+        let mut start = AgentLifecycleTransaction::for_start(
+            "agent.start",
+            AgentRegistry::default(),
+            local_agents::LocalAgentsFile::default(),
+        );
+        assert!(start.commit().is_err(), "start cannot commit from Prepared");
+        start
+            .transition(AgentLifecycleState::DurablePersisted)
+            .unwrap();
+        assert!(start.transition(AgentLifecycleState::Materialized).is_err());
+
+        let mut stop = AgentLifecycleTransaction::for_stop(
+            "agent.stop",
+            AgentRegistry::default(),
+            local_agents::LocalAgentsFile::default(),
+        );
+        assert!(stop
+            .transition(AgentLifecycleState::DurablePersisted)
+            .is_err());
+        stop.transition(AgentLifecycleState::RuntimeSynchronized)
+            .unwrap();
+        stop.transition(AgentLifecycleState::DurablePersisted)
+            .unwrap();
+        stop.transition(AgentLifecycleState::IdentityPersisted)
+            .unwrap();
+        assert!(stop.commit().is_err(), "authority state is required");
     }
 
     #[test]
     fn stop_agent_rejects_device_sponsored_system_agent_ura() {
         with_isolated_home(|| {
-            let err = agent_name_from_ura("easynet:///r/localhost/agent/device.dev-1.terminal")
-                .expect_err("System Agent URA must be refused on the lifecycle surface");
+            let err = agent_name_from_ura(
+                "easynet:///r/localhost/agent/device.dev-1.terminal",
+                "agent.stop",
+            )
+            .expect_err("System Agent URA must be refused on the lifecycle surface");
             let msg = err.to_string();
             assert!(
                 msg.contains("RFC-005 §3.1.2"),
@@ -2083,6 +4159,1293 @@ mod tests {
     }
 
     #[test]
+    fn purge_agent_deletes_only_the_registered_agent_root() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let response = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            assert!(root.join("agent.toml").exists());
+
+            let response = purge_agent_handler(json!({"name": "claude"}), &registrar).unwrap();
+
+            assert_eq!(response["ack"], true);
+            assert_eq!(response["purge_state"], "purged");
+            assert_eq!(response["purged_path"], root.to_string_lossy().as_ref());
+            assert!(!root.exists());
+            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+        });
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn unsupported_platform_rejects_purge_before_journal_or_registry_mutation() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let response = start_agent_handler(
+                json!({
+                    "name": "platform-gate",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+
+            let error = purge_agent_handler(json!({"name": "platform-gate"}), &registrar)
+                .expect_err("unsupported targets must reject before quarantine");
+            assert!(error.downcast_ref::<PurgePlatformUnsupported>().is_some());
+            assert!(root.exists());
+            assert!(agents::load_agents()
+                .unwrap()
+                .agents
+                .contains_key("platform-gate"));
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn restart_replays_identical_tombstone_after_publication_window_crash() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let advertiser = Arc::new(RecordingHotAdvertiser::default());
+            let first = hot_registrar_with_advertiser(Arc::clone(&advertiser));
+            let response = start_agent_handler(
+                json!({
+                    "name": "restartable",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &first,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            let identity_advertisements = advertiser.requests.lock().unwrap().len();
+
+            PURGE_AFTER_TOMBSTONE_PUBLISH_CRASH.with(|slot| slot.set(true));
+            let error = purge_agent_handler(json!({"name": "restartable"}), &first)
+                .expect_err("publication-window crash must leave committed journal");
+            PURGE_AFTER_TOMBSTONE_PUBLISH_CRASH.with(|slot| slot.set(false));
+            assert!(error
+                .to_string()
+                .contains("after Hub tombstone publication"));
+
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+            let outbox = lifecycle_store::load_publication_outbox().unwrap();
+            let pending = outbox
+                .entries
+                .first()
+                .expect("publication crash leaves a durable outbox row")
+                .clone();
+            assert_eq!(pending.stage, AgentPurgePublicationStage::TombstonePending);
+            let publication = &pending.publication;
+            let cursor_file = crate::daemon::persistence::owner_projections::load().unwrap();
+            let cursor = cursor_file.cursor_for(&pending.agent_ura).unwrap();
+            assert_eq!(cursor.projection_revision, publication.projection_revision);
+            assert_eq!(cursor.projection_digest, publication.projection_digest);
+            assert!(!root.exists());
+            drop(outbox);
+            expire_publication_claim(&pending.transaction_id);
+
+            drop(first);
+            let advertiser_trait: Arc<
+                dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+            > = advertiser.clone();
+            let restarted = ready_hot_registrar_fixture(Some(advertiser_trait), "localhost");
+            assert!(recover_pending_purge_on_boot(&restarted.cell).unwrap());
+
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+            assert!(lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .is_empty());
+            let cursor_file = crate::daemon::persistence::owner_projections::load().unwrap();
+            let retired = cursor_file.cursor_for(&pending.agent_ura).unwrap();
+            assert_eq!(
+                retired.lifecycle,
+                crate::daemon::persistence::owner_projections::OwnerProjectionCursorLifecycle::Retired
+            );
+            assert!(cursor_file.active_cursor_for(&pending.agent_ura).is_none());
+            let payloads = advertiser.ability_payloads.lock().unwrap();
+            assert!(payloads.len() >= 3, "start + two tombstone publications");
+            let first: serde_json::Value =
+                serde_json::from_slice(&payloads[payloads.len() - 2]).unwrap();
+            let replay: serde_json::Value =
+                serde_json::from_slice(&payloads[payloads.len() - 1]).unwrap();
+            assert_eq!(first["projection_revision"], replay["projection_revision"]);
+            assert_eq!(first["projection_digest"], replay["projection_digest"]);
+            assert!(
+                replay["purge_delivery"]["delivery_fence"].as_u64().unwrap()
+                    > first["purge_delivery"]["delivery_fence"].as_u64().unwrap(),
+                "recovery keeps projection identity but advances the transport fence"
+            );
+            assert_eq!(
+                advertiser
+                    .idempotent_projection_replays
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "the Hub revision fence must classify exact replay as idempotent"
+            );
+            assert_eq!(advertiser.revokes.lock().unwrap().len(), 1);
+            assert_eq!(
+                advertiser.requests.lock().unwrap().len(),
+                identity_advertisements,
+                "purge tombstone replay must use projection-only publication"
+            );
+        });
+    }
+
+    #[test]
+    fn restart_replays_revoke_with_the_same_purge_transaction_after_success_window_crash() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let advertiser = Arc::new(RecordingHotAdvertiser::default());
+            let fixture = hot_registrar_with_advertiser(Arc::clone(&advertiser));
+            start_agent_handler(
+                json!({
+                    "name": "revoke-crash",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture,
+            )
+            .unwrap();
+
+            PURGE_AFTER_REVOKE_PUBLISH_CRASH.with(|slot| slot.set(true));
+            let error = purge_agent_handler(json!({"name": "revoke-crash"}), &fixture)
+                .expect_err("remote revoke success before local deletion is crash-replayable");
+            PURGE_AFTER_REVOKE_PUBLISH_CRASH.with(|slot| slot.set(false));
+            assert!(error.to_string().contains("after Hub revoke publication"));
+
+            let outbox = lifecycle_store::load_publication_outbox().unwrap();
+            let pending = outbox.entries.first().unwrap().clone();
+            assert_eq!(pending.stage, AgentPurgePublicationStage::RevokePending);
+            assert_eq!(
+                advertiser.revoke_transactions.lock().unwrap().as_slice(),
+                &[Some(pending.transaction_id.clone())]
+            );
+            drop(outbox);
+            expire_publication_claim(&pending.transaction_id);
+
+            assert!(recover_pending_purge_on_boot(&fixture).unwrap());
+            assert_eq!(
+                advertiser.revoke_transactions.lock().unwrap().as_slice(),
+                &[
+                    Some(pending.transaction_id.clone()),
+                    Some(pending.transaction_id.clone())
+                ],
+                "replay carries the same Hub deduplication key"
+            );
+            assert!(lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn unavailable_publisher_leaves_only_a_durable_outbox_without_quarantine_deadlock() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let fixture = ready_hot_registrar_fixture(None, "localhost");
+            let response = start_agent_handler(
+                json!({
+                    "name": "publisher-wait",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture.cell,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+
+            let response =
+                purge_agent_handler(json!({"name": "publisher-wait"}), &fixture.cell).unwrap();
+            assert_eq!(response["purge_state"], "purged");
+            assert_eq!(response["publication_state"], "pending");
+            assert!(!root.exists());
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+            let outbox = lifecycle_store::load_publication_outbox().unwrap();
+            assert_eq!(outbox.entries.len(), 1);
+            assert_eq!(
+                outbox.entries[0].stage,
+                AgentPurgePublicationStage::TombstonePending
+            );
+
+            assert!(!recover_pending_purge_on_boot(&fixture.cell).unwrap());
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+            let reuse_error = start_agent_handler(
+                json!({"name": "publisher-wait", "agent_type": "codex"}),
+                &fixture.cell,
+            )
+            .expect_err("the same logical identity must wait for ordered publication");
+            assert!(reuse_error.to_string().contains("identity reuse is fenced"));
+
+            let second = start_agent_handler(
+                json!({"name": "independent", "agent_type": "codex", "materialize_directory": true}),
+                &fixture.cell,
+            )
+            .expect("an unrelated lifecycle mutation must not be blocked by publication retry");
+            let second_root = std::path::PathBuf::from(second["root_path"].as_str().unwrap());
+            let second_purge =
+                purge_agent_handler(json!({"name": "independent"}), &fixture.cell).unwrap();
+            assert_eq!(second_purge["purge_state"], "purged");
+            assert!(!second_root.exists());
+        });
+    }
+
+    #[test]
+    fn backed_off_revoke_poison_does_not_block_later_purge_publication() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let advertiser = Arc::new(SelectiveFailureHotAdvertiser::default());
+            let advertiser_trait: Arc<
+                dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+            > = advertiser.clone();
+            let fixture = ready_hot_registrar_fixture(Some(advertiser_trait), "localhost");
+            for name in ["poison-first", "healthy-later"] {
+                start_agent_handler(
+                    json!({
+                        "name": name,
+                        "agent_type": "claude-code",
+                        "materialize_directory": true,
+                    }),
+                    &fixture.cell,
+                )
+                .unwrap();
+            }
+            let identities = local_agents::load().unwrap();
+            let poison_ura = hosted_agent_ura_from_file(&identities, "poison-first").unwrap();
+            let healthy_ura = hosted_agent_ura_from_file(&identities, "healthy-later").unwrap();
+            advertiser.fail_revoke_for(&poison_ura);
+
+            let poison = purge_agent_handler(json!({"name": "poison-first"}), &fixture.cell)
+                .expect("local purge commits before publication");
+            assert_eq!(poison["publication_state"], "pending");
+            assert!(poison["publication_error"]
+                .as_str()
+                .unwrap()
+                .contains("poisoned revoke"));
+            let healthy = purge_agent_handler(json!({"name": "healthy-later"}), &fixture.cell)
+                .expect("later transaction must publish independently");
+            assert_eq!(healthy["publication_state"], "published");
+
+            let outbox = lifecycle_store::load_publication_outbox().unwrap();
+            assert_eq!(outbox.entries.len(), 1);
+            let poison = &outbox.entries[0];
+            assert_eq!(poison.agent_ura, poison_ura);
+            assert_eq!(poison.retry.attempts, 1);
+            let evidence = poison.retry.last_failure.as_ref().unwrap();
+            assert_eq!(evidence.stage, AgentPurgePublicationStage::RevokePending);
+            assert!(evidence.error.contains("poisoned revoke"));
+            assert_eq!(
+                advertiser.recording.revokes.lock().unwrap().as_slice(),
+                &[healthy_ura],
+                "only the independently healthy transaction reaches revoke"
+            );
+        });
+    }
+
+    #[test]
+    fn restart_redrive_isolates_poisoned_transactions_and_preserves_retry_evidence() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let advertiser = Arc::new(SelectiveFailureHotAdvertiser::default());
+            let advertiser_trait: Arc<
+                dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+            > = advertiser.clone();
+            let first_runtime = ready_hot_registrar_fixture(Some(advertiser_trait), "localhost");
+            for name in ["restart-poison", "restart-healthy"] {
+                start_agent_handler(
+                    json!({
+                        "name": name,
+                        "agent_type": "claude-code",
+                        "materialize_directory": true,
+                    }),
+                    &first_runtime.cell,
+                )
+                .unwrap();
+            }
+            let identities = local_agents::load().unwrap();
+            let poison_ura = hosted_agent_ura_from_file(&identities, "restart-poison").unwrap();
+            let healthy_ura = hosted_agent_ura_from_file(&identities, "restart-healthy").unwrap();
+            advertiser.fail_tombstone_for(&poison_ura);
+            advertiser.fail_tombstone_for(&healthy_ura);
+
+            purge_agent_handler(json!({"name": "restart-poison"}), &first_runtime.cell).unwrap();
+            purge_agent_handler(json!({"name": "restart-healthy"}), &first_runtime.cell).unwrap();
+            assert_eq!(
+                lifecycle_store::load_publication_outbox()
+                    .unwrap()
+                    .entries
+                    .len(),
+                2
+            );
+
+            advertiser.allow_tombstone_for(&healthy_ura);
+            drop(first_runtime);
+            let advertiser_trait: Arc<
+                dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+            > = advertiser.clone();
+            let restarted = ready_hot_registrar_fixture(Some(advertiser_trait), "localhost");
+            assert!(
+                !recover_pending_purge_on_boot(&restarted.cell).unwrap(),
+                "the poisoned transaction remains durable after restart"
+            );
+
+            let outbox = lifecycle_store::load_publication_outbox().unwrap();
+            assert_eq!(outbox.entries.len(), 1);
+            let poison = &outbox.entries[0];
+            assert_eq!(poison.agent_ura, poison_ura);
+            assert_eq!(poison.retry.attempts, 2);
+            let evidence = poison.retry.last_failure.as_ref().unwrap();
+            assert_eq!(evidence.attempt, 2);
+            assert!(evidence.error.contains("poisoned tombstone"));
+            assert!(advertiser
+                .recording
+                .revokes
+                .lock()
+                .unwrap()
+                .contains(&healthy_ura));
+
+            advertiser.allow_tombstone_for(&poison_ura);
+            assert!(recover_pending_purge_on_boot(&restarted.cell).unwrap());
+            assert!(lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn exhausted_publication_is_not_automatically_retried_and_retains_identity_fence() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let advertiser = Arc::new(SelectiveFailureHotAdvertiser::default());
+            let advertiser_trait: Arc<
+                dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+            > = advertiser.clone();
+            let fixture = ready_hot_registrar_fixture(Some(advertiser_trait), "localhost");
+            start_agent_handler(
+                json!({
+                    "name": "dead-letter",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture.cell,
+            )
+            .unwrap();
+            let identity =
+                hosted_agent_ura_from_file(&local_agents::load().unwrap(), "dead-letter").unwrap();
+            advertiser.fail_tombstone_for(&identity);
+
+            purge_agent_handler(json!({"name": "dead-letter"}), &fixture.cell).unwrap();
+            for _ in 1..lifecycle_store::PUBLICATION_MAX_ATTEMPTS_PER_STAGE {
+                assert!(!recover_pending_purge_on_boot(&fixture.cell).unwrap());
+            }
+
+            let outbox = lifecycle_store::load_publication_outbox().unwrap();
+            let dead_letter = outbox.entries.first().unwrap();
+            let transaction_id = dead_letter.transaction_id.clone();
+            assert!(matches!(
+                dead_letter.retry.state,
+                lifecycle_store::AgentPurgePublicationRetryState::ReconciliationRequired { .. }
+            ));
+            assert_eq!(
+                dead_letter.retry.attempts,
+                lifecycle_store::PUBLICATION_MAX_ATTEMPTS_PER_STAGE
+            );
+            assert_eq!(dead_letter.agent_ura, identity);
+            let calls_at_dead_letter = advertiser.recording.ability_payloads.lock().unwrap().len();
+            drop(outbox);
+
+            assert!(matches!(
+                publication_recovery_status(&fixture.cell, PurgePublicationRetryTrigger::Scheduled)
+                    .unwrap(),
+                PurgeRecoveryStatus::PublicationPending(_)
+            ));
+            assert!(!recover_pending_purge_on_boot(&fixture.cell).unwrap());
+            assert_eq!(
+                advertiser.recording.ability_payloads.lock().unwrap().len(),
+                calls_at_dead_letter,
+                "connectivity-ready drains must not retry reconciliation-required work"
+            );
+            let reuse_error = start_agent_handler(
+                json!({"name": "dead-letter", "agent_type": "codex"}),
+                &fixture.cell,
+            )
+            .expect_err("dead-lettered publication retains the logical identity fence");
+            assert!(reuse_error.to_string().contains("identity reuse is fenced"));
+
+            let command = lifecycle_store::AgentPurgeReconciliationCommand {
+                command_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                transaction_id: transaction_id.clone(),
+                actor_ura: "easynet:///r/test/device/dev-1".to_string(),
+                action: lifecycle_store::AgentPurgePublicationReconciliation::Retry,
+            };
+            let authorization = lifecycle_store::AuthorizedPurgeReconciliation::from_admission(
+                command.actor_ura.clone(),
+                "test-authority",
+            )
+            .unwrap();
+            let retried =
+                lifecycle_store::reconcile_publication(&command, &authorization, 1_000_000)
+                    .unwrap();
+            assert_eq!(
+                retried.entry.retry.state,
+                lifecycle_store::AgentPurgePublicationRetryState::Ready
+            );
+            assert!(retried.entry.retry.last_reconciliation.is_some());
+            assert!(!retried.replayed);
+            let replay =
+                lifecycle_store::reconcile_publication(&command, &authorization, 1_000_001)
+                    .unwrap();
+            assert!(replay.replayed);
+            let audited = lifecycle_store::load_publication_outbox().unwrap();
+            assert_eq!(audited.reconciliation_audit.len(), 1);
+            assert_eq!(
+                audited.reconciliation_audit[0].command.command_id,
+                command.command_id
+            );
+            drop(audited);
+            advertiser.allow_tombstone_for(&identity);
+            assert!(recover_pending_purge_on_boot(&fixture.cell).unwrap());
+            assert!(lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn concurrent_drains_do_not_duplicate_a_live_publication_claim() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let advertiser = Arc::new(BlockingHotAdvertiser {
+                recording: RecordingHotAdvertiser::default(),
+                fail_tombstone: std::sync::atomic::AtomicBool::new(false),
+                block_next_tombstone: std::sync::atomic::AtomicBool::new(false),
+                started: started_tx,
+                release: std::sync::Mutex::new(release_rx),
+            });
+            let advertiser_trait: Arc<
+                dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+            > = advertiser.clone();
+            let fixture = Arc::new(ready_hot_registrar_fixture(
+                Some(advertiser_trait),
+                "localhost",
+            ));
+            start_agent_handler(
+                json!({
+                    "name": "concurrent-drain",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture.cell,
+            )
+            .unwrap();
+            advertiser
+                .fail_tombstone
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            purge_agent_handler(json!({"name": "concurrent-drain"}), &fixture.cell).unwrap();
+            advertiser
+                .fail_tombstone
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            advertiser
+                .block_next_tombstone
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let published_before_race = advertiser.recording.ability_payloads.lock().unwrap().len();
+
+            let first_fixture = Arc::clone(&fixture);
+            let first =
+                std::thread::spawn(move || recover_pending_purge_on_boot(&first_fixture.cell));
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("first drain reaches the provider");
+
+            assert!(
+                !recover_pending_purge_on_boot(&fixture.cell).unwrap(),
+                "second drain observes the durable live claim"
+            );
+            assert_eq!(
+                advertiser.recording.ability_payloads.lock().unwrap().len(),
+                published_before_race,
+                "the second drain must not duplicate the in-flight tombstone"
+            );
+
+            release_tx.send(()).unwrap();
+            assert!(first.join().unwrap().unwrap());
+            assert!(lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .is_empty());
+            assert_eq!(
+                advertiser.recording.ability_payloads.lock().unwrap().len(),
+                published_before_race + 1,
+                "exactly one tombstone is published by the racing drains"
+            );
+        });
+    }
+
+    #[test]
+    fn no_active_projection_is_persisted_as_explicit_no_publication_fact() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let fixture = ready_hot_registrar_fixture(None, "localhost");
+            start_agent_handler(
+                json!({
+                    "name": "never-published",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture.cell,
+            )
+            .unwrap();
+            crate::daemon::persistence::owner_projections::replace(
+                &crate::daemon::persistence::owner_projections::OwnerProjectionCursorFile::default(
+                ),
+            )
+            .unwrap();
+            PURGE_CRASH_STAGE.with(|slot| slot.set(Some(AgentPurgeStage::TombstonePrepared)));
+            let error = purge_agent_handler(json!({"name": "never-published"}), &fixture.cell)
+                .expect_err("failpoint preserves the no-publication decision");
+            PURGE_CRASH_STAGE.with(|slot| slot.set(None));
+            assert!(error.to_string().contains("injected Agent purge crash"));
+
+            let journal = lifecycle_store::load_purge_journal().unwrap().unwrap();
+            assert_eq!(journal.stage, AgentPurgeStage::TombstonePrepared);
+            assert_eq!(
+                journal.publication_plan,
+                AgentPurgePublicationPlan::NotRequired {
+                    reason: AgentPurgeNoPublicationReason::NoActiveOwnerProjection,
+                }
+            );
+            assert!(
+                recover_pending_purge_on_boot(&fixture.cell).unwrap(),
+                "an explicit no-publication fact does not require a publisher"
+            );
+        });
+    }
+
+    #[test]
+    fn corrupt_credentials_do_not_block_local_purge_or_publication_replay() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let advertiser = Arc::new(RecordingHotAdvertiser::default());
+            let fixture = hot_registrar_with_advertiser(Arc::clone(&advertiser));
+            start_agent_handler(
+                json!({
+                    "name": "credential-wait",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture,
+            )
+            .unwrap();
+            let initial_payloads = advertiser.ability_payloads.lock().unwrap().len();
+            std::fs::write(config::state_dir().join("credentials.json"), b"{")
+                .expect("corrupt credentials for recovery test");
+
+            let response = purge_agent_handler(json!({"name": "credential-wait"}), &fixture)
+                .expect("cursor-owned host identity makes purge independent of credentials");
+            assert_eq!(response["purge_state"], "purged");
+            assert_eq!(response["publication_state"], "published");
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+            assert!(lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .is_empty());
+            assert!(advertiser.ability_payloads.lock().unwrap().len() > initial_payloads);
+            assert_eq!(advertiser.revokes.lock().unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn pre_replay_recovery_finishes_committed_quarantine_with_corrupt_credentials() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let fixture = ready_hot_registrar_fixture(None, "localhost");
+            let response = start_agent_handler(
+                json!({
+                    "name": "boot-credential-independent",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &fixture.cell,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+
+            PURGE_CRASH_STAGE.with(|slot| slot.set(Some(AgentPurgeStage::Committed)));
+            purge_agent_handler(
+                json!({"name": "boot-credential-independent"}),
+                &fixture.cell,
+            )
+            .expect_err("commit failpoint simulates process loss before local finalization");
+            PURGE_CRASH_STAGE.with(|slot| slot.set(None));
+            let journal = lifecycle_store::load_purge_journal().unwrap().unwrap();
+            assert!(journal.quarantine_path.exists());
+            std::fs::write(config::state_dir().join("credentials.json"), b"{")
+                .expect("corrupt credentials before pre-replay recovery");
+
+            assert!(recover_pending_purge_before_agent_replay(&fixture.cell).unwrap());
+            assert!(!root.exists());
+            assert!(!journal.quarantine_path.exists());
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+            assert_eq!(
+                lifecycle_store::load_publication_outbox()
+                    .unwrap()
+                    .entries
+                    .len(),
+                1
+            );
+        });
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn outbox_ready_hook_redrives_publisher_waiting_purge() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_joined_credentials();
+        let fixture = ready_hot_registrar_fixture(None, "localhost");
+        start_agent_handler(
+            json!({
+                "name": "outbox-wait",
+                "agent_type": "claude-code",
+                "materialize_directory": true,
+            }),
+            &fixture.cell,
+        )
+        .unwrap();
+        let response = purge_agent_handler(json!({"name": "outbox-wait"}), &fixture.cell)
+            .expect("local purge completes while publication waits");
+        assert_eq!(response["publication_state"], "pending");
+
+        let advertiser: Arc<
+            dyn crate::daemon::axon_bridge::hot_agent_registrar::HotAgentAdvertiser,
+        > = Arc::new(RecordingHotAdvertiser::default());
+        fixture
+            .cell
+            .get()
+            .unwrap()
+            .set_hot_agent_advertiser(advertiser)
+            .unwrap();
+        let cell = Arc::new(fixture.cell);
+        let outbox =
+            crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox::new();
+        crate::daemon::boot::invocation::register_purge_recovery_on_outbox_ready(
+            &outbox,
+            Arc::clone(&cell),
+        );
+        assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+        assert!(!lifecycle_store::load_publication_outbox()
+            .unwrap()
+            .entries
+            .is_empty());
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        outbox.set(crate::daemon::invocation::bidi::session_initiator::SessionUpSender::new(tx));
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !lifecycle_store::load_publication_outbox()
+            .unwrap()
+            .entries
+            .is_empty()
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            lifecycle_store::load_publication_outbox()
+                .unwrap()
+                .entries
+                .is_empty(),
+            "session-ready hook must drain the durable publication outbox"
+        );
+    }
+
+    const PURGE_CRASH_CHILD_ENV: &str = "EASYNET_PURGE_REAL_CRASH_CHILD";
+    const PURGE_CRASH_CHILD_NAME_ENV: &str = "EASYNET_PURGE_REAL_CRASH_NAME";
+
+    #[test]
+    fn purge_real_crash_child_process() {
+        if std::env::var_os(PURGE_CRASH_CHILD_ENV).is_none() {
+            return;
+        }
+        let name = std::env::var(PURGE_CRASH_CHILD_NAME_ENV).unwrap();
+        let registrar = ready_hot_registrar();
+        refresh_agents_handler(json!({"name": name}), &registrar).unwrap();
+        PURGE_CRASH_STAGE.with(|slot| slot.set(Some(AgentPurgeStage::Committed)));
+        let error = purge_agent_handler(json!({"name": name}), &registrar)
+            .expect_err("child failpoint must persist Committed before abort");
+        assert!(error.to_string().contains("injected Agent purge crash"));
+        std::process::abort();
+    }
+
+    #[test]
+    fn real_process_crash_and_restart_rolls_committed_purge_forward() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let name = "process-crash";
+            let response = start_agent_handler(
+                json!({
+                    "name": name,
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &ready_hot_registrar(),
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg("daemon::ability::builtins::agents::lifecycle::tests::purge_real_crash_child_process")
+                .arg("--nocapture")
+                .env(PURGE_CRASH_CHILD_ENV, "1")
+                .env(PURGE_CRASH_CHILD_NAME_ENV, name)
+                .env("HOME", config::home_dir())
+                .status()
+                .expect("spawn real purge crash child");
+            assert!(!status.success(), "child must terminate abnormally");
+
+            let journal = lifecycle_store::load_purge_journal().unwrap().unwrap();
+            assert_eq!(journal.stage, AgentPurgeStage::Committed);
+            assert!(!root.exists());
+            assert!(journal.quarantine_path.exists());
+
+            let restarted = ready_hot_registrar();
+            assert!(recover_pending_purge_on_boot(&restarted).unwrap());
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+            assert!(!journal.quarantine_path.exists());
+        });
+    }
+
+    #[test]
+    fn purge_agent_without_registered_root_fails_closed() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                }),
+                &registrar,
+            )
+            .unwrap();
+
+            let error = purge_agent_handler(json!({"name": "claude"}), &registrar)
+                .expect_err("purge must not infer agents_root/name");
+
+            assert!(error
+                .to_string()
+                .contains("has no `root_path`; refusing to infer"));
+            assert!(agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(local_agents::lookup_hosted_ura(
+                &local_agents::load().unwrap(),
+                "llm",
+                "claude"
+            )
+            .is_some());
+        });
+    }
+
+    #[test]
+    fn purge_agent_accepts_registered_root_with_custom_basename() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let custom_root = config::home_dir()
+                .join("project")
+                .join("agent-runtime-directory");
+            let response = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "root_path": custom_root,
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let registered_root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            assert_ne!(registered_root.file_name().unwrap(), "claude");
+
+            let purged = purge_agent_handler(json!({"name": "claude"}), &registrar).unwrap();
+
+            assert_eq!(purged["purge_state"], "purged");
+            assert!(!registered_root.exists());
+            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+        });
+    }
+
+    #[test]
+    fn stop_agent_rejects_destructive_parameter_and_preserves_root() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let response = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            let error = stop_agent_handler(json!({"name": "claude", "purge": true}), &registrar)
+                .expect_err("agent.stop must never accept destructive authority");
+
+            assert!(error.to_string().contains("invoke `agent.purge`"));
+            assert!(root.join("agent.toml").exists());
+            assert!(agents::load_agents().unwrap().agents.contains_key("claude"));
+        });
+    }
+
+    #[test]
+    fn purge_post_rename_identity_mismatch_restores_swapped_root_atomically() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let response = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            let parent = root.parent().unwrap().to_path_buf();
+            let original_backup = parent.join("claude-original");
+            let replacement = parent.join("claude-replacement");
+            AgentDirectory::create(
+                &Location::Local {
+                    root: replacement.clone(),
+                },
+                AgentSpec::new("claude", RuntimeKind::ClaudeCode),
+            )
+            .unwrap();
+
+            let registry = agents::load_agents().unwrap();
+            let identities = local_agents::load().unwrap();
+            let transaction_id = "toctou".to_string();
+            let quarantine = parent.join(".claude.easynet-purge-toctou");
+            let mut journal = AgentPurgeJournal::new(
+                transaction_id,
+                "claude".to_string(),
+                hosted_agent_ura_from_file(&identities, "claude").unwrap(),
+                root.clone(),
+                quarantine.clone(),
+                registry.agents["claude"].clone(),
+                registry,
+                identities,
+            );
+            let backup_for_hook = original_backup.clone();
+            let replacement_for_hook = replacement.clone();
+            PURGE_PRE_RENAME_HOOK.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move |registered_root| {
+                    std::fs::rename(registered_root, &backup_for_hook).unwrap();
+                    std::fs::rename(&replacement_for_hook, registered_root).unwrap();
+                }));
+            });
+
+            let error = quarantine_registered_root(&mut journal)
+                .expect_err("swapped inode must fail post-rename validation");
+
+            assert!(error.to_string().contains("root restored"));
+            assert!(root.join("agent.toml").exists());
+            assert!(original_backup.join("agent.toml").exists());
+            assert!(!quarantine.exists());
+            lifecycle_store::clear_purge_journal().unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_purge_finalize_failure_reports_discoverable_residual_path() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let response = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            let parent = root.parent().unwrap().to_path_buf();
+            let mut registry = agents::load_agents().unwrap();
+            let removed_entry = registry.agents["claude"].clone();
+            let mut identities = local_agents::load().unwrap();
+            let quarantine = parent.join(".claude.easynet-purge-finalize-failure");
+            let mut journal = AgentPurgeJournal::new(
+                "finalize-failure".to_string(),
+                "claude".to_string(),
+                hosted_agent_ura_from_file(&identities, "claude").unwrap(),
+                root,
+                quarantine.clone(),
+                removed_entry,
+                registry.clone(),
+                identities.clone(),
+            );
+            quarantine_registered_root(&mut journal).unwrap();
+            registry.agents.remove("claude");
+            agents::save_agents(&registry).unwrap();
+            identities
+                .hosted_agents
+                .retain(|entry| !(entry.profile == "llm" && entry.name == "claude"));
+            local_agents::save(&identities).unwrap();
+            journal.stage = AgentPurgeStage::Committed;
+
+            let original_mode = std::fs::metadata(&parent).unwrap().permissions().mode();
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let result = finalize_committed_purge(&journal);
+            std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(original_mode))
+                .unwrap();
+            let error = result.expect_err("read-only parent must prevent quarantine removal");
+
+            assert!(error.to_string().contains("residual_path="));
+            assert!(error
+                .to_string()
+                .contains(&quarantine.display().to_string()));
+            assert!(quarantine.exists());
+            finalize_committed_purge(&journal)
+                .expect("committed finalize must resume after partial directory deletion");
+            assert!(!quarantine.exists());
+            lifecycle_store::clear_purge_journal().unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_finalize_does_not_follow_quarantine_inode_swap() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let response = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            let parent = root.parent().unwrap().to_path_buf();
+            let mut registry = agents::load_agents().unwrap();
+            let removed_entry = registry.agents["claude"].clone();
+            let mut identities = local_agents::load().unwrap();
+            let quarantine = parent.join(".claude.easynet-purge-finalize-swap");
+            let moved_claim = parent.join(".claude.easynet-purge-open-inode");
+            let mut journal = AgentPurgeJournal::new(
+                "finalize-swap".to_string(),
+                "claude".to_string(),
+                hosted_agent_ura_from_file(&identities, "claude").unwrap(),
+                root,
+                quarantine.clone(),
+                removed_entry,
+                registry.clone(),
+                identities.clone(),
+            );
+            quarantine_registered_root(&mut journal).unwrap();
+            registry.agents.remove("claude");
+            agents::save_agents(&registry).unwrap();
+            identities
+                .hosted_agents
+                .retain(|entry| !(entry.profile == "llm" && entry.name == "claude"));
+            local_agents::save(&identities).unwrap();
+
+            let moved_for_hook = moved_claim.clone();
+            PURGE_PRE_FINALIZE_HOOK.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move |claimed_path| {
+                    std::fs::rename(claimed_path, &moved_for_hook).unwrap();
+                    std::fs::create_dir(claimed_path).unwrap();
+                    std::fs::write(claimed_path.join("must-survive"), b"replacement").unwrap();
+                }));
+            });
+
+            let error = finalize_committed_purge(&journal)
+                .expect_err("path replacement must fail identity-bound unlink");
+
+            assert!(error.to_string().contains("identity changed"), "{error:#}");
+            assert_eq!(
+                std::fs::read(quarantine.join("must-survive")).unwrap(),
+                b"replacement",
+                "replacement directory must not be traversed or deleted"
+            );
+            assert!(moved_claim.exists(), "opened inode remains discoverable");
+            std::fs::remove_dir_all(&quarantine).unwrap();
+            std::fs::remove_dir_all(&moved_claim).unwrap();
+            lifecycle_store::clear_purge_journal().unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_finalize_detects_child_inode_swap_before_unlinkat() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let response = start_agent_handler(
+                json!({
+                    "name": "child-swap",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                &registrar,
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+            let victim_dir = root.join("runs");
+            std::fs::create_dir_all(&victim_dir).unwrap();
+            std::fs::write(victim_dir.join("victim"), b"original").unwrap();
+
+            PURGE_CHILD_ENTRY_HOOK.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move |name| {
+                    if name != std::ffi::OsStr::new("victim") {
+                        return false;
+                    }
+                    let journal = lifecycle_store::load_purge_journal()
+                        .unwrap()
+                        .expect("purge journal visible during child deletion");
+                    let target = journal.quarantine_path.join("runs").join("victim");
+                    let moved = journal.quarantine_path.join("runs").join("victim-original");
+                    std::fs::rename(&target, &moved).unwrap();
+                    std::fs::write(&target, b"replacement-must-survive").unwrap();
+                    true
+                }));
+            });
+
+            let error = purge_agent_handler(json!({"name": "child-swap"}), &registrar)
+                .expect_err("child inode replacement must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("changed identity before unlinkat"),
+                "{error:#}"
+            );
+            let journal = lifecycle_store::load_purge_journal().unwrap().unwrap();
+            let replacement = journal.quarantine_path.join("runs").join("victim");
+            assert_eq!(
+                std::fs::read(&replacement).unwrap(),
+                b"replacement-must-survive"
+            );
+            assert_eq!(journal.stage, AgentPurgeStage::Committed);
+        });
+    }
+
+    #[test]
+    fn lifecycle_lock_prevents_cross_agent_stale_snapshot_lost_update() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = Arc::new(ready_hot_registrar());
+            start_agent_handler(
+                json!({"name": "old", "agent_type": "claude-code"}),
+                registrar.as_ref(),
+            )
+            .unwrap();
+
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+            let start_registrar = Arc::clone(&registrar);
+            let start_barrier = Arc::clone(&barrier);
+            let start = std::thread::spawn(move || {
+                start_barrier.wait();
+                start_agent_handler(
+                    json!({"name": "new", "agent_type": "codex"}),
+                    start_registrar.as_ref(),
+                )
+            });
+            let stop_registrar = Arc::clone(&registrar);
+            let stop_barrier = Arc::clone(&barrier);
+            let stop = std::thread::spawn(move || {
+                stop_barrier.wait();
+                stop_agent_handler(json!({"name": "old"}), stop_registrar.as_ref())
+            });
+            barrier.wait();
+            start.join().unwrap().unwrap();
+            stop.join().unwrap().unwrap();
+
+            let registry = agents::load_agents().unwrap();
+            assert!(registry.agents.contains_key("new"));
+            assert!(!registry.agents.contains_key("old"));
+            let identities = local_agents::load().unwrap();
+            assert!(local_agents::lookup_hosted_ura(&identities, "llm", "new").is_some());
+            assert!(local_agents::lookup_hosted_ura(&identities, "llm", "old").is_none());
+        });
+    }
+
+    #[test]
+    fn concurrent_start_and_stop_of_one_agent_leave_registry_and_identity_consistent() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = Arc::new(ready_hot_registrar());
+            start_agent_handler(
+                json!({"name": "same", "agent_type": "claude-code"}),
+                registrar.as_ref(),
+            )
+            .unwrap();
+
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+            let start_registrar = Arc::clone(&registrar);
+            let start_barrier = Arc::clone(&barrier);
+            let start = std::thread::spawn(move || {
+                start_barrier.wait();
+                start_agent_handler(
+                    json!({"name": "same", "agent_type": "codex"}),
+                    start_registrar.as_ref(),
+                )
+            });
+            let stop_registrar = Arc::clone(&registrar);
+            let stop_barrier = Arc::clone(&barrier);
+            let stop = std::thread::spawn(move || {
+                stop_barrier.wait();
+                stop_agent_handler(json!({"name": "same"}), stop_registrar.as_ref())
+            });
+            barrier.wait();
+            start.join().unwrap().unwrap();
+            stop.join().unwrap().unwrap();
+
+            let registered = agents::load_agents().unwrap().agents.contains_key("same");
+            let mapped =
+                local_agents::lookup_hosted_ura(&local_agents::load().unwrap(), "llm", "same")
+                    .is_some();
+            assert_eq!(registered, mapped);
+        });
+    }
+
+    #[test]
+    fn lifecycle_lock_serializes_two_purges_of_the_same_agent() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = Arc::new(ready_hot_registrar());
+            let response = start_agent_handler(
+                json!({
+                    "name": "claude",
+                    "agent_type": "claude-code",
+                    "materialize_directory": true,
+                }),
+                registrar.as_ref(),
+            )
+            .unwrap();
+            let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+            let mut workers = Vec::new();
+            for _ in 0..2 {
+                let worker_registrar = Arc::clone(&registrar);
+                let worker_barrier = Arc::clone(&barrier);
+                workers.push(std::thread::spawn(move || {
+                    worker_barrier.wait();
+                    purge_agent_handler(json!({"name": "claude"}), worker_registrar.as_ref())
+                }));
+            }
+            barrier.wait();
+            let mut acknowledgements = workers
+                .into_iter()
+                .map(|worker| worker.join().unwrap().unwrap()["ack"].as_bool().unwrap())
+                .collect::<Vec<_>>();
+            acknowledgements.sort_unstable();
+
+            assert_eq!(acknowledgements, vec![false, true]);
+            assert!(!root.exists());
+            assert!(!agents::load_agents().unwrap().agents.contains_key("claude"));
+            assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn every_durable_purge_stage_recovers_to_a_deterministic_state() {
+        with_isolated_home(|| {
+            seed_joined_credentials();
+            let registrar = ready_hot_registrar();
+            let stages = [
+                AgentPurgeStage::Prepared,
+                AgentPurgeStage::Quarantined,
+                AgentPurgeStage::RuntimeSynchronized,
+                AgentPurgeStage::RegistryPersisted,
+                AgentPurgeStage::IdentityPersisted,
+                AgentPurgeStage::AuthorityCommitted,
+                AgentPurgeStage::Committed,
+                AgentPurgeStage::Finalized,
+                AgentPurgeStage::TombstonePrepared,
+                AgentPurgeStage::OutboxEnqueued,
+            ];
+
+            for (index, stage) in stages.into_iter().enumerate() {
+                let name = format!("recovery-{index}");
+                let response = start_agent_handler(
+                    json!({
+                        "name": name,
+                        "agent_type": "claude-code",
+                        "materialize_directory": true,
+                    }),
+                    &registrar,
+                )
+                .unwrap();
+                let root = std::path::PathBuf::from(response["root_path"].as_str().unwrap());
+                PURGE_CRASH_STAGE.with(|slot| slot.set(Some(stage)));
+                let error = purge_agent_handler(json!({"name": name}), &registrar)
+                    .expect_err("stage failpoint must interrupt purge");
+                PURGE_CRASH_STAGE.with(|slot| slot.set(None));
+                assert!(error.to_string().contains("injected Agent purge crash"));
+
+                let journal = lifecycle_store::load_purge_journal()
+                    .unwrap()
+                    .expect("interrupted purge must remain discoverable");
+                assert_eq!(journal.stage, stage);
+                assert_eq!(journal.name, name);
+                if stage == AgentPurgeStage::Prepared {
+                    assert!(root.exists());
+                    assert!(!journal.quarantine_path.exists());
+                } else if matches!(
+                    stage,
+                    AgentPurgeStage::Finalized
+                        | AgentPurgeStage::TombstonePrepared
+                        | AgentPurgeStage::OutboxEnqueued
+                ) {
+                    assert!(!root.exists());
+                    assert!(!journal.quarantine_path.exists());
+                } else {
+                    assert!(!root.exists());
+                    assert!(journal.quarantine_path.exists());
+                }
+
+                refresh_agents_handler(json!({}), &registrar).unwrap();
+                assert!(lifecycle_store::load_purge_journal().unwrap().is_none());
+                assert!(!journal.quarantine_path.exists());
+                let registered = agents::load_agents().unwrap().agents.contains_key(&name);
+                if stage.is_committed() {
+                    assert!(!registered);
+                    assert!(!root.exists());
+                } else {
+                    assert!(registered);
+                    assert!(root.join("agent.toml").exists());
+                }
+            }
+        });
+    }
+
+    #[test]
     fn stop_agent_by_ura_removes_joined_hosted_mapping() {
         with_isolated_home(|| {
             seed_joined_credentials();
@@ -2186,7 +5549,14 @@ mod tests {
             .any(|shape| shape["required"][0] == "agent_ura"));
         assert!(s["properties"].get("name").is_some());
         assert!(s["properties"].get("agent_ura").is_some());
+        assert!(s["properties"].get("purge").is_none());
         assert_eq!(s["additionalProperties"], false);
+
+        let purge = purge_agent_input_schema();
+        assert_eq!(purge, s);
+        assert!(stop_agent_description().contains("always preserved"));
+        assert!(purge_agent_description().contains("Destructively remove"));
+        assert_ne!(ABILITY_STOP_AGENT, ABILITY_PURGE_AGENT);
         assert!(refresh_agents_description().contains("re-reads"));
     }
 }

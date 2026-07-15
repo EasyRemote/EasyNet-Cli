@@ -9,18 +9,12 @@
 # daemon::invocation, daemon::boot::kernel, and Axon's LocalRuntime.
 # The old daemon::kernel root must not return.
 #
-# Rule 1 (syntactic unity)
-# ------------------------
-# GatewayApi method signatures must not speak raw invocation payload
-# fragments. Dispatch payloads are owned by daemon::invocation; the
-# gateway trait stays lifecycle/discovery only.
-#
-# Rule 2 (retired kernel root)
+# Rule 1 (retired kernel root)
 # --------------------------
 # No final daemon code may import the old daemon::kernel namespace.
 # The supported kernel home is daemon::boot::kernel.
 #
-# Rule 3 (execution cannot bypass daemon invocation)
+# Rule 2 (execution cannot bypass daemon invocation)
 # -------------------------------------------------
 # schedule/runner.rs, loop_instance/runner.rs, permission/broker.rs
 # must not call run_mission_inproc / Session::subscribe / dispatch
@@ -39,19 +33,7 @@ cd "$ROOT"
 echo "== check-invocation-unity.sh =="
 violations=0
 
-# -- Rule 1: forbid raw invocation fragments in gateway traits ------
-for f in src/daemon/federation/gateway_api.rs; do
-    [ -f "$f" ] || continue
-    bad=$(grep -nE 'args_json|payload: *(serde_json::)?Value|args: *(serde_json::)?Value' "$f" || true)
-    if [ -n "$bad" ]; then
-        echo "ERROR: trait definition at $f uses raw JSON payload fragments:"
-        echo "$bad"
-        echo "  Use Invocation or a typed domain object (see src/core/domain.rs)."
-        violations=$((violations + 1))
-    fi
-done
-
-# -- Rule 2: retired daemon kernel root must not return --------------
+# -- Rule 1: retired daemon kernel root must not return --------------
 if [ -d "src/daemon" ]; then
     bad=$(grep -rnE 'crate::daemon::kernel\b' src/daemon \
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
@@ -63,7 +45,7 @@ if [ -d "src/daemon" ]; then
     fi
 fi
 
-# -- Rule 3: sub-services may not bypass daemon invocation ----------
+# -- Rule 2: sub-services may not bypass daemon invocation ----------
 #
 #   * execution/schedule/    — must not call `run_mission_inproc`
 #                              (the tick runner builds an

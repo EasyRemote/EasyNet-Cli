@@ -81,36 +81,48 @@ func (t *RuntimeSigningTransport) SubmitSigned(ctx context.Context, signedJSON [
 	return next.SubmitSigned(ctx, signedJSON)
 }
 
-func (t *RuntimeSigningTransport) AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error) {
+func (t *RuntimeSigningTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	next, err := t.nextTransport()
 	if err != nil {
 		return nil, err
 	}
-	return next.AwaitHandle(ctx, handleID)
+	return next.AwaitHandle(ctx, control)
 }
 
-func (t *RuntimeSigningTransport) CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
+func (t *RuntimeSigningTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
 	next, err := t.nextTransport()
 	if err != nil {
 		return nil, err
 	}
-	return next.CancelHandle(ctx, handleID, reason)
+	return next.CancelHandle(ctx, control, reason)
 }
 
-func (t *RuntimeSigningTransport) HandleEvents(ctx context.Context, handleID uint64) ([]byte, error) {
+func (t *RuntimeSigningTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	next, err := t.nextTransport()
 	if err != nil {
 		return nil, err
 	}
-	return next.HandleEvents(ctx, handleID)
+	return next.HandleEvents(ctx, control)
 }
 
-func (t *RuntimeSigningTransport) FreeHandle(ctx context.Context, handleID uint64) error {
+func (t *RuntimeSigningTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
 	next, err := t.nextTransport()
 	if err != nil {
 		return err
 	}
-	return next.FreeHandle(ctx, handleID)
+	return next.FreeHandle(ctx, control)
+}
+
+func (t *RuntimeSigningTransport) ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	next, err := t.nextTransport()
+	if err != nil {
+		return nil, err
+	}
+	resolver, ok := next.(DescriptorResolverTransport)
+	if !ok {
+		return nil, invalidRuntimeClient("runtime transport does not expose descriptor resolution")
+	}
+	return resolver.ResolveDescriptorRef(ctx, requestJSON)
 }
 
 func (t *RuntimeSigningTransport) Close(ctx context.Context) error {

@@ -16,6 +16,8 @@ pub enum DaemonError {
     EmptyNodeId,
     #[error("daemon binary path must not be empty")]
     EmptyBinaryPath,
+    #[error("daemon working directory must not be empty")]
+    EmptyWorkingDir,
     #[error("failed to create daemon log directory {path}: {source}")]
     CreateLogDir {
         path: PathBuf,

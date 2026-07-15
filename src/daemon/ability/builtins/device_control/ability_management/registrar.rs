@@ -406,6 +406,8 @@ impl DeviceRuntimeBinding {
         let options = options.with_mode_descriptor_proof(
             axon_call_mode,
             record.descriptor().version.as_str(),
+            record.descriptor().admission_action().as_str(),
+            record.descriptor().descriptor_hash_bytes(),
             record.descriptor().schema_hash_bytes(),
             record.implementation().impl_hash(),
         );
@@ -1375,6 +1377,8 @@ mod tests {
             "stream gen",
             serde_json::json!({"type": "object"}),
         )
+        .unwrap()
+        .with_admission_action("stream")
         .unwrap()
         .with_exec(AbilityExec::HostStream(HostStreamExec {
             host_socket: socket.to_string(),

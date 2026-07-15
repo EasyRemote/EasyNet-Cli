@@ -169,8 +169,8 @@ fn relative_age(ts: &str) -> String {
 pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Validate through the daemon's Axon ability surface so the CLI
     // does not own a parallel registry read path.
-    let daemon_client = required_local_daemon_agent_client()?;
-    let _row = daemon_agent_row(&daemon_client, &args.name)?;
+    let gateway = agent_command_gateway();
+    let _row = daemon_agent_row(gateway.as_ref(), &args.name)?;
 
     // `--resume` is picker-only — single job, no prompt allowed.
     // Validate this BEFORE resolving the session id so we don't
@@ -336,7 +336,7 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Token line: read the nested agent run dir's meta.json. The mission
     // run dir contains the agent run dir as a sibling artefact (the
     // dispatch layer creates it independently under
-    // ~/.easynet/workspaces/<agent>/runs/). We surface the most recent
+    // ~/.easynet/agents/<agent>/runs/). We surface the most recent
     // one for this agent — for a one-step `agent send` it is unambiguous.
     //
     // TODO(token-meta-aggregation): this token aggregation logic is a
@@ -447,12 +447,10 @@ pub(super) fn eal_string_literal(s: &str) -> anyhow::Result<String> {
 fn read_latest_agent_usage(agent_name: &str) -> Option<AgentUsageReader> {
     use std::fs;
 
-    // Source of truth for the per-agent root directory is
-    // `agents_root()`: it returns the new `~/.easynet/agents/`
-    // layout when present and falls back to the legacy
-    // `workspaces/` path otherwise. A direct join on `state_dir()`
-    // here would break reads against agents created under the new
-    // layout.
+    // Source of truth for the per-agent root directory is the canonical
+    // `~/.easynet/agents/` layout. Startup commits the one-time directory
+    // migration before command execution, so runtime readers never select an
+    // alternate root.
     let runs_root = crate::daemon::persistence::config::agents_root()
         .join(agent_name)
         .join("runs");

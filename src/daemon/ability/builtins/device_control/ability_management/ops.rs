@@ -37,6 +37,9 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::builtins::agents::discover::{
+    DiscoverFederationResolver, SharedDiscoverFederationResolver,
+};
 use crate::daemon::ability::builtins::device_control::ability_management::registrar::{
     DeviceAbilityInstall, DeviceAbilityRegistrar, DeviceAbilityUninstall,
 };
@@ -83,7 +86,13 @@ impl DeviceOpsClock for SystemDeviceOpsClock {
 
 /// Register every device operation handler on `reg`. Called once
 /// at daemon boot from `daemon::ability::catalog::build_registry_with_services`.
-pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDeviceRegistrarCell>) {
+pub fn register(
+    reg: &mut AxonAbilityCatalog,
+    device_registrar: Arc<SharedDeviceRegistrarCell>,
+    local_catalog: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    resolver: SharedDiscoverFederationResolver,
+) {
+    let list_resolver = Arc::clone(&resolver);
     reg.register_rpc_with_spec(
         ABILITY_LIST_NODES,
         OwnerKind::Device,
@@ -92,8 +101,10 @@ pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDevice
             list_nodes_description(),
             list_nodes_input_schema(),
         ),
-        Arc::new(list_nodes_handler),
+        Arc::new(move |args| list_nodes_handler(args, list_resolver.as_ref())),
     );
+    let describe_resolver = Arc::clone(&resolver);
+    let describe_catalog = Arc::clone(&local_catalog);
     reg.register_rpc_with_spec(
         ABILITY_DESCRIBE_NODE,
         OwnerKind::Device,
@@ -102,7 +113,9 @@ pub fn register(reg: &mut AxonAbilityCatalog, device_registrar: Arc<SharedDevice
             describe_node_description(),
             describe_node_input_schema(),
         ),
-        Arc::new(describe_node_handler),
+        Arc::new(move |args| {
+            describe_node_handler(args, describe_resolver.as_ref(), &describe_catalog)
+        }),
     );
     reg.register_rpc_with_spec(
         ABILITY_REMOVE_NODE,
@@ -211,8 +224,11 @@ fn federation_not_wired(action: &str) -> anyhow::Error {
 /// node (federation peer enumeration depends on the dead bridge
 /// `list_nodes`; will be re-wired through a federation Invoke
 /// helper when one ships, at which point this handler fan-outs).
-fn list_nodes_handler(_args: Value) -> anyhow::Result<Value> {
-    let view = federation_probe::collect_device_view();
+fn list_nodes_handler(
+    _args: Value,
+    resolver: &dyn DiscoverFederationResolver,
+) -> anyhow::Result<Value> {
+    let view = federation_probe::collect_device_view(resolver);
     let nodes: Vec<Value> = view
         .nodes
         .iter()
@@ -228,7 +244,11 @@ fn list_nodes_handler(_args: Value) -> anyhow::Result<Value> {
 
 // ── node.describe ──────────────────────────────────────────
 
-fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
+fn describe_node_handler(
+    args: Value,
+    resolver: &dyn DiscoverFederationResolver,
+    local_catalog: &OnceLock<Arc<AxonAbilityCatalog>>,
+) -> anyhow::Result<Value> {
     let node_id = args
         .get("node_id")
         .and_then(Value::as_str)
@@ -239,21 +259,24 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
     }
     let (local_id, _tenant, _hub, paired) = local_identity();
     if is_local_target(node_id, &local_id) {
-        if let Some(record) = federation_probe::local_device_record() {
+        let catalog = local_catalog.get().ok_or_else(|| {
+            anyhow::anyhow!("node.describe: live ability catalog is not attached")
+        })?;
+        if let Some(record) = federation_probe::local_device_record(catalog.as_ref()) {
             return Ok(node_json_with_abilities(
                 &record.node,
                 record.ability_summaries,
             ));
         }
         if paired {
-            if let Some(record) = federation_probe::resolve_device_record(&local_id)? {
+            if let Some(record) = federation_probe::resolve_device_record(resolver, &local_id)? {
                 return Ok(node_json_with_abilities(
                     &record.node,
                     record.ability_summaries,
                 ));
             }
         }
-        let view = federation_probe::collect_device_view();
+        let view = federation_probe::collect_device_view(resolver);
         let node = view
             .nodes
             .iter()
@@ -261,14 +284,14 @@ fn describe_node_handler(args: Value) -> anyhow::Result<Value> {
             .ok_or_else(|| anyhow::anyhow!("node.describe: local node is unavailable"))?;
         return Ok(federation_probe::node_to_json(node));
     }
-    if let Some(record) = federation_probe::resolve_device_record(node_id)? {
+    if let Some(record) = federation_probe::resolve_device_record(resolver, node_id)? {
         return Ok(node_json_with_abilities(
             &record.node,
             record.ability_summaries,
         ));
     }
 
-    let view = federation_probe::collect_device_view();
+    let view = federation_probe::collect_device_view(resolver);
     let suffix = view
         .federation_view_reason
         .as_deref()
@@ -703,7 +726,8 @@ mod tests {
 
     #[test]
     fn list_nodes_returns_at_least_self() {
-        let resp = list_nodes_handler(json!({})).unwrap();
+        let resolver = detached_resolver();
+        let resp = list_nodes_handler(json!({}), resolver.as_ref()).unwrap();
         let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
         assert!(
             nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
@@ -715,7 +739,12 @@ mod tests {
     #[test]
     fn registration_publishes_device_ops_manifests() {
         let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg, Arc::new(empty_device_cell()));
+        register(
+            &mut reg,
+            Arc::new(empty_device_cell()),
+            Arc::new(populated_catalog_cell()),
+            detached_resolver(),
+        );
 
         for ability in [
             ABILITY_LIST_NODES,
@@ -747,7 +776,10 @@ mod tests {
         // The paired arm goes through federation_probe::resolve_device_record
         // which dials the local runtime bridge — absent in unit tests.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let resp = describe_node_handler(json!({"node_id": "local"})).unwrap();
+        let resolver = detached_resolver();
+        let catalog = populated_catalog_cell();
+        let resp = describe_node_handler(json!({"node_id": "local"}), resolver.as_ref(), &catalog)
+            .unwrap();
         assert_eq!(resp.get("is_self"), Some(&json!(true)));
     }
 
@@ -756,7 +788,14 @@ mod tests {
         // Same HomeGuard isolation: unpaired fallback bails
         // "node X not found" without reaching the runtime bridge.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let err = describe_node_handler(json!({"node_id": "some-remote"})).unwrap_err();
+        let resolver = detached_resolver();
+        let catalog = populated_catalog_cell();
+        let err = describe_node_handler(
+            json!({"node_id": "some-remote"}),
+            resolver.as_ref(),
+            &catalog,
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("not found"));
     }
 
@@ -776,6 +815,19 @@ mod tests {
     /// negative-test matrix with a wired runtime.
     fn empty_device_cell() -> SharedDeviceRegistrarCell {
         std::sync::OnceLock::new()
+    }
+
+    fn populated_catalog_cell() -> OnceLock<Arc<AxonAbilityCatalog>> {
+        let cell = OnceLock::new();
+        cell.set(Arc::new(AxonAbilityCatalog::new()))
+            .expect("test catalog cell has one writer");
+        cell
+    }
+
+    fn detached_resolver() -> SharedDiscoverFederationResolver {
+        Arc::new(
+            crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver,
+        )
     }
 
     fn local_device_env() -> EnvelopeContext {
@@ -901,7 +953,7 @@ mod tests {
         std::fs::write(
             dir.path().join("ability.json"),
             r#"{"name":"weather","namespace":"er","description":"w",
-                "input_schema":{"type":"object"},
+                "admission_action":"stream","input_schema":{"type":"object"},
                 "exec":{"kind":"host_stream","host_socket":"/tmp/er-host.sock","function":"er.weather"}}"#,
         )
         .unwrap();

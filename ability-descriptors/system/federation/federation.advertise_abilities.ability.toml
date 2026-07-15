@@ -1,0 +1,34 @@
+schema_version = "2"
+name = "federation.advertise_abilities"
+descriptor_version = "1.0.0"
+description = "Publish governed ability descriptors for an already-advertised Agent projection."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["owner_ura", "abilities"]
+additionalProperties = true
+
+[input_schema.properties.abilities]
+type = "array"
+items = { type = "object" }
+description = "AbilityDescriptor rows to publish."
+
+[input_schema.properties.generation]
+type = "integer"
+description = "Monotonic generation for the descriptor projection."
+
+[input_schema.properties.owner_ura]
+type = "string"
+description = "Agent or Hub URA that owns the advertised descriptors."

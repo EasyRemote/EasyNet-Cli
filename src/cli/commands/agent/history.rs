@@ -10,8 +10,8 @@ use super::*;
 pub(super) fn run_sessions(args: ChatHistoryArgs) -> anyhow::Result<()> {
     // Validate the agent exists. Lets us emit "no such agent"
     // rather than "no sessions" for a typo'd name.
-    let daemon_client = required_local_daemon_agent_client()?;
-    let _row = daemon_agent_row(&daemon_client, &args.name)?;
+    let gateway = agent_command_gateway();
+    let _row = daemon_agent_row(gateway.as_ref(), &args.name)?;
     match args.action {
         ChatHistoryAction::List(a) => run_sessions_list(&args.name, a),
         ChatHistoryAction::Show(a) => run_sessions_show(&args.name, a),

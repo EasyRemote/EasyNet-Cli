@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+import subprocess
+import sys
 import unittest
 
 import easynet_sdk
@@ -86,6 +89,30 @@ class ImportBoundaryTests(unittest.TestCase):
             self.assertIn(name, exported)
             self.assertTrue(hasattr(easynet_sdk, name), name)
 
+    def test_python_sdk_root_namespace_matches_public_exports(self) -> None:
+        script = """
+import json
+import easynet_sdk
+exported = set(getattr(easynet_sdk, "__all__", ()))
+allowed_metadata = {"annotations"}
+leaked = sorted(
+    name
+    for name in dir(easynet_sdk)
+    if not name.startswith("_")
+    and name not in exported
+    and name not in allowed_metadata
+)
+print(json.dumps(leaked))
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        leaked = json.loads(completed.stdout)
+        self.assertEqual(leaked, [])
+
     def test_python_sdk_lifecycle_helper_uses_runtime_capability_terms(self) -> None:
         root = Path(__file__).resolve().parents[1] / "easynet_sdk"
         body = (root / "_lifecycle.py").read_text()
@@ -95,10 +122,10 @@ class ImportBoundaryTests(unittest.TestCase):
 
     def test_python_sdk_root_does_not_export_direct_runtime_internals(self) -> None:
         exported = set(getattr(easynet_sdk, "__all__", ()))
-        self.assertNotIn("DirectDaemonRuntimeConnector", exported)
-        self.assertNotIn("DirectDaemonRuntimeTransport", exported)
-        self.assertFalse(hasattr(easynet_sdk, "DirectDaemonRuntimeConnector"))
-        self.assertFalse(hasattr(easynet_sdk, "DirectDaemonRuntimeTransport"))
+        self.assertNotIn("DirectRuntimeConnector", exported)
+        self.assertNotIn("DirectRuntimeTransport", exported)
+        self.assertFalse(hasattr(easynet_sdk, "DirectRuntimeConnector"))
+        self.assertFalse(hasattr(easynet_sdk, "DirectRuntimeTransport"))
 
     def test_direct_runtime_does_not_export_axon_protobuf_modules(self) -> None:
         self.assertFalse(hasattr(direct_runtime, "invoke_pb2"))

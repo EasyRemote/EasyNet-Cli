@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Guard daemon request DTOs against legacy input alias compatibility paths.
+# Guard daemon request DTOs and lifecycle against retired compatibility paths.
 
 set -euo pipefail
 
@@ -23,14 +23,29 @@ if [[ -n "$bad" ]]; then
 $bad"
 fi
 
-runtime_dispatch_fallback="$(
-    rg -n 'default_mode|mode_omitted_defaults_to_rpc|backwards compat|backwards-compat|stale runtime|stale axon-runtime|legacy single-line|no-mode request' \
-        src/daemon/control/runtime_dispatch.rs 2>/dev/null || true
-)"
+for retired_path in \
+    src/daemon/control/runtime_dispatch.rs \
+    src/daemon/control/runtime_dispatch_adapter.rs
+do
+    if [[ -e "$retired_path" ]]; then
+        fail "retired daemon callback surface exists: $retired_path"
+    fi
+done
 
-if [[ -n "$runtime_dispatch_fallback" ]]; then
-    fail "runtime-dispatch must require the latest explicit mode field:
-$runtime_dispatch_fallback"
+retired_lifecycle="$({
+    rg -n 'runtime[_-]dispatch|runtime\.register_local_tool' \
+        src/bin/easynet-daemon.rs \
+        src/daemon/control/mod.rs 2>/dev/null || true
+    rg -n 'heartbeat_pid|heartbeat\.pid|legacy-heartbeat|LegacyCleanupFailed|legacy_cleanup_failed' \
+        src/cli/commands/stop.rs \
+        src/daemon/boot/lifecycle \
+        src/daemon/persistence/config.rs \
+        src/daemon/persistence/mod.rs 2>/dev/null || true
+})"
+
+if [[ -n "$retired_lifecycle" ]]; then
+    fail "retired daemon lifecycle branch is still reachable:
+$retired_lifecycle"
 fi
 
 resolver_fallback="$(

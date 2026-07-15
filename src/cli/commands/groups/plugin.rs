@@ -371,15 +371,16 @@ fn companion_field(row: &PluginPackageSurfaceRecord, field: &str) -> String {
 }
 
 fn print_companion_status(status: &serde_json::Value) {
-    let mut rows: Vec<(&str, String)> = Vec::new();
-    rows.push(("Package", string_json(status, "package_id")));
-    rows.push(("Version", string_json(status, "package_version")));
-    rows.push(("Display", string_json(status, "display_name")));
-    rows.push(("Platform", string_json(status, "platform")));
-    rows.push(("State", string_json(status, "projected_state")));
-    rows.push(("Desired", string_json(status, "desired_state")));
-    rows.push(("Supervisor", string_json(status, "supervisor_state")));
-    rows.push(("Observed", string_json(status, "observed_state")));
+    let rows: Vec<(&str, String)> = vec![
+        ("Package", string_json(status, "package_id")),
+        ("Version", string_json(status, "package_version")),
+        ("Display", string_json(status, "display_name")),
+        ("Platform", string_json(status, "platform")),
+        ("State", string_json(status, "projected_state")),
+        ("Desired", string_json(status, "desired_state")),
+        ("Supervisor", string_json(status, "supervisor_state")),
+        ("Observed", string_json(status, "observed_state")),
+    ];
     let kv = rows
         .iter()
         .map(|(key, value)| (*key, value.as_str()))

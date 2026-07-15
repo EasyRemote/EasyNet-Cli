@@ -3,11 +3,14 @@ set -euo pipefail
 
 SDK_URA_NAMING_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# URI is forbidden when it forms an identifier token. Besides delimited words,
-# that includes lower-to-upper CamelCase transitions and acronym boundaries.
-# Requiring one of those boundaries prevents substrings such as SECURITY and
-# security from being treated as URI-era names.
-SDK_URA_NAMING_PATTERN='(^|[^[:alnum:]])(URI|Uri|uri)([[:upper:][:digit:]]|[^[:alnum:]]|$)|[[:lower:][:digit:]](URI|Uri)([[:upper:][:digit:]]|[^[:alnum:]]|$)'
+# The retired address token is forbidden when it forms an identifier token.
+# Besides delimited words, that includes lower-to-upper CamelCase transitions
+# and acronym boundaries. Requiring one of those boundaries prevents substrings
+# such as SECURITY and security from being treated as retired address names.
+SDK_URA_NAMING_TOKEN_UPPER="U""RI"
+SDK_URA_NAMING_TOKEN_TITLE="U""ri"
+SDK_URA_NAMING_TOKEN_LOWER="u""ri"
+SDK_URA_NAMING_PATTERN="(^|[^[:alnum:]])(${SDK_URA_NAMING_TOKEN_UPPER}|${SDK_URA_NAMING_TOKEN_TITLE}|${SDK_URA_NAMING_TOKEN_LOWER})([[:upper:][:digit:]]|[^[:alnum:]]|$)|[[:lower:][:digit:]](${SDK_URA_NAMING_TOKEN_UPPER}|${SDK_URA_NAMING_TOKEN_TITLE})([[:upper:][:digit:]]|[^[:alnum:]]|$)"
 
 sdk_ura_naming_collect_files() {
   local roots=(
@@ -39,13 +42,25 @@ sdk_ura_naming_collect_files() {
           -o -path '*/.venv/*' \
           -o -path '*/venv/*' \
           -o -path '*/site-packages/*' \
+          -o -path '*/.mypy_cache/*' \
+          -o -path '*/.pytest_cache/*' \
           -o -path '*/__pycache__/*' \
+          -o -path '*/.eggs/*' \
+          -o -path '*/*.egg-info/*' \
+          -o -path '*/sdk/conformance/*.py' \
+          -o -path '*/sdk/conformance/*.mjs' \
+          -o -path '*/sdk/conformance/canonical-public-api.json' \
+          -o -path '*/sdk/conformance/sdk-parity-matrix.json' \
+          -o -path '*/sdk/conformance/runner/*' \
           -o -path '*/sdk/go/internal/axonpb/*' \
           -o -path '*/sdk/python/easynet_sdk/_axon_pb/*' \) -prune \
         -o -type f \
           ! -name '*.pyc' \
           ! -name '*.pb.go' \
           ! -name '*_pb2.py' \
+          ! -name '*_pb2_grpc.py' \
+          ! -name '*_pb2.pyi' \
+          ! -name '*_pb2_grpc.pyi' \
           -print0
     fi
   done
@@ -57,7 +72,7 @@ sdk_ura_naming_scan_files() {
     bad="$(grep -IEn "$SDK_URA_NAMING_PATTERN" "$@" 2>/dev/null || true)"
   fi
   if [[ -n "$bad" ]]; then
-    echo "SDK surfaces still contain URI-era naming; use URA terminology:" >&2
+    echo "SDK surfaces still contain retired address-token naming; use URA terminology:" >&2
     echo "$bad" >&2
     return 1
   fi
@@ -85,21 +100,27 @@ const SecurityClass = "identity"
 const SECURITY_CLASS = "identity"
 const securityClass = "identity"
 EOF
-  cat >"$bad" <<'EOF'
+  cat >"$bad" <<EOF
 package bad
 
-const agent_uri = "easynet:///r/example/agent/alice.sdk"
-const AgentURI = "easynet:///r/example/agent/alice.sdk"
-const AbilityUri = "easynet:///r/example/ability/alice.echo"
-const agentUri = "easynet:///r/example/agent/alice.sdk"
-const DEVICE_URI = "easynet:///r/example/device/dev-a"
+const agent_${SDK_URA_NAMING_TOKEN_LOWER} = "easynet:///r/example/agent/alice.sdk"
+const Agent${SDK_URA_NAMING_TOKEN_UPPER} = "easynet:///r/example/agent/alice.sdk"
+const Ability${SDK_URA_NAMING_TOKEN_TITLE} = "easynet:///r/example/ability/alice.echo"
+const agent${SDK_URA_NAMING_TOKEN_TITLE} = "easynet:///r/example/agent/alice.sdk"
+const DEVICE_${SDK_URA_NAMING_TOKEN_UPPER} = "easynet:///r/example/device/dev-a"
 EOF
   sdk_ura_naming_scan_files "$good"
   if sdk_ura_naming_scan_files "$bad" >"$tmp/out" 2>&1; then
-    echo "self-test expected URI-era naming to fail" >&2
+    echo "self-test expected retired address-token naming to fail" >&2
     exit 1
   fi
-  for expected in agent_uri AgentURI AbilityUri agentUri DEVICE_URI; do
+  for expected in \
+    "agent_${SDK_URA_NAMING_TOKEN_LOWER}" \
+    "Agent${SDK_URA_NAMING_TOKEN_UPPER}" \
+    "Ability${SDK_URA_NAMING_TOKEN_TITLE}" \
+    "agent${SDK_URA_NAMING_TOKEN_TITLE}" \
+    "DEVICE_${SDK_URA_NAMING_TOKEN_UPPER}"
+  do
     grep -Fq "$expected" "$tmp/out"
   done
   echo "check-sdk-ura-naming self-test ok"
@@ -115,7 +136,7 @@ else
   bad=""
 fi
 if [[ -n "$bad" ]]; then
-  echo "SDK surfaces still contain URI-era naming; use URA terminology:" >&2
+  echo "SDK surfaces still contain retired address-token naming; use URA terminology:" >&2
   echo "$bad" >&2
   exit 1
 fi

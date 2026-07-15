@@ -70,6 +70,19 @@ impl AccessAction {
     }
 }
 
+impl From<crate::daemon::ability::descriptors::AdmissionAction> for AccessAction {
+    fn from(action: crate::daemon::ability::descriptors::AdmissionAction) -> Self {
+        use crate::daemon::ability::descriptors::AdmissionAction;
+        match action {
+            AdmissionAction::Read => Self::Read,
+            AdmissionAction::Invoke => Self::Invoke,
+            AdmissionAction::Stream => Self::Stream,
+            AdmissionAction::Manage => Self::Manage,
+            AdmissionAction::Grant => Self::Grant,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerSource {
@@ -295,9 +308,11 @@ pub enum PermissionLifetime {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PermissionRequest {
     pub request_id: String,
+    #[serde(default)]
     pub owner_user_id: String,
     pub caller_ura: String,
     pub principal_kind: PrincipalKind,
+    #[serde(default)]
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,

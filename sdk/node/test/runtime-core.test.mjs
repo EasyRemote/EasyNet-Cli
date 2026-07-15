@@ -181,7 +181,6 @@ test("health keeps API liveness separate from runtime readiness", async () => {
     runtimeHealth: () =>
       JSON.stringify({
         api_ready: true,
-        daemon_ready: true,
         invocation_ready: false,
         directory_ready: false,
         trust_ready: true,
@@ -226,7 +225,7 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
         ok: true,
         terminal_state: "Completed",
         output: { ok: true },
-        receipt: { receipt_ref: "opaque-receipt-ref", receipt_hash: "opaque-hash" },
+        terminal_receipt: { receipt_ref: "opaque-receipt-ref", receipt_hash: "opaque-hash" },
       });
     },
     prepare: (draftJSON, optionsJSON) => {
@@ -240,19 +239,21 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
       calls.push(["submit", signed]);
       return JSON.stringify({ handle_id: 7, state: "Running", terminal: false, events: [], result: null });
     },
-    awaitHandle: (handleId) => {
-      calls.push(["await", handleId]);
+    awaitHandle: (control) => {
+      calls.push(["await", control._adapterHandleId()]);
       return JSON.stringify({
         ok: true,
         terminal_state: "Completed",
-        receipt: { receipt_ref: "opaque-receipt-ref" },
+        terminal_receipt: { receipt_ref: "opaque-receipt-ref" },
       });
     },
-    cancelHandle: (handleId, reason) => {
+    cancelHandle: (control, reason) => {
+      const handleId = control._adapterHandleId();
       calls.push(["cancel", handleId, reason]);
-      return JSON.stringify({ handle_id: handleId, cancelled: true, state: "Cancelled", terminal: true });
+      return JSON.stringify({ handle_id: handleId, request_accepted: true, deduplicated: false, cancelled: true, state: "Cancelled", terminal: true });
     },
-    handleEvents: (handleId) => {
+    handleEvents: (control) => {
+      const handleId = control._adapterHandleId();
       calls.push(["events", handleId]);
       return JSON.stringify({
         handle_id: handleId,
@@ -262,14 +263,16 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
         result: { ok: true },
       });
     },
-    freeHandle: (handleId) => {
-      calls.push(["free", handleId]);
+    freeHandle: (control) => {
+      calls.push(["free", control._adapterHandleId()]);
     },
   });
 
   const draft = completeDraft();
   const invoked = await runtime.invoke(draft);
-  assert.equal(invoked.receipt.receipt_ref, "opaque-receipt-ref");
+  assert.equal(invoked.terminalReceipt.receipt_ref, "opaque-receipt-ref");
+  assert.equal(Object.hasOwn(invoked, "receipt"), false);
+  assert.equal(Object.hasOwn(invoked, "terminal_receipt"), false);
   const prepared = await runtime.prepare(draft, { deadline_ms: 1000 });
   assert.equal(prepared.submitReady(), false);
   assert.equal(prepared.tuple.callerURA, caller);
@@ -280,9 +283,12 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
     key_id_hint: "caller-key-1",
   });
   const handle = await signed.submit();
-  assert.equal(handle.handleId, 7);
+  assert.equal(handle.controlCapability._adapterHandleId(), 7);
   assert.equal(calls.find(([name]) => name === "submit")[1].signer_id, "caller-key-1");
-  assert.equal((await handle.awaitResult()).receipt.receipt_ref, "opaque-receipt-ref");
+  const awaited = await handle.awaitResult();
+  assert.equal(awaited.terminalReceipt.receipt_ref, "opaque-receipt-ref");
+  assert.equal(Object.hasOwn(awaited, "receipt"), false);
+  assert.equal(Object.hasOwn(awaited, "terminal_receipt"), false);
   assert.equal((await handle.cancel("done")).terminal, true);
   assert.equal((await handle.refreshEvents()).events[0].kind, "completed");
   await handle.close();
@@ -293,6 +299,116 @@ test("prepare, caller-sign, submit, and handle lifecycle preserve generic invoca
     (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.INVALID_ARGUMENT,
   );
   await runtime.close();
+});
+
+test("invocation results expose terminalReceipt without legacy receipt fallback", async () => {
+  const runtime = new sdk.RuntimeClient({
+    invoke: () => JSON.stringify({
+      ok: true,
+      terminal_state: "Completed",
+      terminal_receipt: { receipt_ref: "canonical-terminal" },
+      receipt: { receipt_ref: "legacy-only" },
+    }),
+    prepare: (draftJSON) => preparedJSON(JSON.parse(Buffer.from(draftJSON).toString("utf8"))),
+    submitSigned: () =>
+      JSON.stringify({ handle_id: 7, state: "Running", terminal: false, events: [], result: null }),
+    awaitHandle: () => JSON.stringify({
+      ok: true,
+      terminal_state: "Completed",
+      receipt: { receipt_ref: "legacy-only" },
+    }),
+  });
+
+  const invoked = await runtime.invoke(completeDraft());
+  assert.equal(invoked.terminalReceipt.receipt_ref, "canonical-terminal");
+  assert.equal(Object.hasOwn(invoked, "receipt"), false);
+  assert.equal(Object.hasOwn(invoked, "terminal_receipt"), false);
+
+  const prepared = await runtime.prepare(completeDraft());
+  const handle = await prepared
+    .signWithCallerSignature({
+      algorithm: "ed25519",
+      signature_base64: Buffer.from("signature").toString("base64"),
+      key_id_hint: "caller-key-1",
+    })
+    .submit();
+  const legacyOnly = await handle.awaitResult();
+  assert.equal(Object.hasOwn(legacyOnly, "terminalReceipt"), false);
+  assert.equal(Object.hasOwn(legacyOnly, "receipt"), false);
+
+  await runtime.close();
+});
+
+test("public invocation handle JSON is observation-only", async () => {
+  let reachedTransport = false;
+  const runtime = new sdk.RuntimeClient({
+    invoke: () => "{}",
+    awaitHandle: () => {
+      reachedTransport = true;
+      return "{}";
+    },
+    cancelHandle: () => {
+      reachedTransport = true;
+      return "{}";
+    },
+    handleEvents: () => {
+      reachedTransport = true;
+      return "{}";
+    },
+    freeHandle: () => {
+      reachedTransport = true;
+    },
+  });
+  const handle = sdk.InvocationHandle.fromJSON(
+    JSON.stringify({ handle_id: 7, state: "Submitted", terminal: false, events: [], result: null }),
+  );
+  assert.equal(handle.state, "Submitted");
+  assert.equal(handle.toJSON().handle_id, 7);
+  handle.bindRuntime(runtime);
+  assert.throws(
+    () => handle.controlCapability.constructor.fromHandleId(7)._adapterHandleId(),
+    (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.INVALID_ARGUMENT,
+  );
+  assert.throws(
+    () => new handle.controlCapability.constructor({ handle_id: 7, runtime_bound: true })._adapterHandleId(),
+    (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.INVALID_ARGUMENT,
+  );
+
+  for (const action of [
+    () => runtime.awaitResult(handle),
+    () => runtime.cancel(handle, "done"),
+    () => runtime.events(handle),
+    () => runtime.closeHandle(handle),
+    () => handle.awaitResult(),
+  ]) {
+    await assert.rejects(
+      action,
+      (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.INVALID_ARGUMENT,
+    );
+  }
+  assert.equal(reachedTransport, false);
+});
+
+test("runtime events reject mismatched returned handle id", async () => {
+  const runtime = new sdk.RuntimeClient({
+    invoke: () => "{}",
+    submitSigned: () =>
+      JSON.stringify({ handle_id: 7, state: "Running", terminal: false, events: [], result: null }),
+    handleEvents: () =>
+      JSON.stringify({ handle_id: 8, state: "Running", terminal: false, events: [], result: null }),
+  });
+  const prepared = sdk.PreparedInvocation.fromJSON(preparedJSON(completeDraft().toJSON()));
+  const signed = prepared.signWithCallerSignature({
+    algorithm: "ed25519",
+    signature_base64: Buffer.from("signature").toString("base64"),
+    key_id_hint: "caller-key-1",
+  }).bindRuntime(runtime);
+  const handle = await signed.submit();
+
+  await assert.rejects(
+    () => runtime.events(handle),
+    (error) => error instanceof sdk.SDKError && error.code === sdk.ErrorCode.INVALID_ARGUMENT,
+  );
 });
 
 test("authority metadata is typed, delegated, and mutually exclusive", async () => {
@@ -414,7 +530,7 @@ test("typed errors preserve stable categories and source refs", () => {
   );
   assert.equal(
     new sdk.SDKError({ code: sdk.ErrorCode.ROUTE_UNAVAILABLE, stage: "routing", message: "missing" }).errorClass(),
-    sdk.ErrorClass.ROUTING,
+    sdk.ErrorClass.AVAILABILITY,
   );
   assert.deepEqual(sdk.profileErrorDetails("health", { check: "runtime" }), {
     check: "runtime",

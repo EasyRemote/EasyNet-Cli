@@ -1,0 +1,34 @@
+schema_version = "2"
+name = "federation.proxy_list_user_devices"
+descriptor_version = "1.0.0"
+description = "Fan out user-device listing to selected peer hubs and merge their typed responses."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = []
+additionalProperties = false
+
+[input_schema.properties.peers]
+type = "array"
+items = { type = "string" }
+description = "Optional peer hubs selected for proxy fanout."
+
+[input_schema.properties.realm]
+type = "string"
+description = "Optional realm filter."
+
+[input_schema.properties.user_ura]
+type = "string"
+description = "User URA whose live devices should be listed."

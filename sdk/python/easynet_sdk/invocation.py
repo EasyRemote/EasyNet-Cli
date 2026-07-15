@@ -7,7 +7,14 @@ import binascii
 import json
 import os
 from dataclasses import dataclass, field, replace
-from typing import Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional, cast
+
+if TYPE_CHECKING:
+    from .bidi import BidiSession, BidiStreamDescriptor
+    from .runtime import InvocationResult, RuntimeClient
+    from .runtime import PrepareOptions
+    from .signing import PreparedInvocation, SigningMaterial
+    from .stream import StreamHandle
 
 from .authority import AuthorityMetadata, validate_authority_metadata
 from .errors import ErrorCode, RetryHint, SDKError
@@ -125,7 +132,9 @@ class InvocationDraft:
     def to_json(self) -> str:
         return json.dumps(self.to_json_dict(), separators=(",", ":"), sort_keys=True)
 
-    def prepare(self, options: object | None = None):
+    def prepare(
+        self, options: "PrepareOptions | None" = None
+    ) -> tuple["PreparedInvocation", "SigningMaterial"]:
         """Prepare this draft through its bound RuntimeClient."""
 
         runtime = _require_runtime(self._runtime)
@@ -133,17 +142,19 @@ class InvocationDraft:
             return runtime.prepare(self)
         return runtime.prepare(self, options)
 
-    def invoke(self):
+    def invoke(self) -> "InvocationResult":
         """Submit this draft as one unary Invocation through its bound RuntimeClient."""
 
         return _require_runtime(self._runtime).invoke(self)
 
-    def open_stream(self):
+    def open_stream(self) -> "StreamHandle":
         """Open this draft as one server-stream Invocation."""
 
         return _require_runtime(self._runtime).invoke_stream(self)
 
-    def open_bidi(self, streams: tuple[object, ...] = ()):
+    def open_bidi(
+        self, streams: tuple["BidiStreamDescriptor", ...] = ()
+    ) -> "BidiSession":
         """Open this draft as one bidirectional Invocation."""
 
         return _require_runtime(self._runtime).open_bidi(self, streams)
@@ -236,7 +247,9 @@ class InvocationBuilder:
 
         return self._inspect_draft()
 
-    def prepare(self, options: object | None = None):
+    def prepare(
+        self, options: "PrepareOptions | None" = None
+    ) -> tuple["PreparedInvocation", "SigningMaterial"]:
         """Prepare this builder through its bound RuntimeClient."""
 
         runtime = _require_runtime(self._runtime)
@@ -244,7 +257,7 @@ class InvocationBuilder:
             return runtime.prepare_builder(self)
         return runtime.prepare_builder(self, options)
 
-    def invoke(self):
+    def invoke(self) -> "InvocationResult":
         """Submit this builder as one unary Invocation through its bound RuntimeClient."""
 
         return _require_runtime(self._runtime).invoke_builder(self)
@@ -367,7 +380,7 @@ def _reject_unknown_fields(decoded: Mapping[str, object]) -> None:
             raise _invalid_invocation(f"{name} is not an invocation field")
 
 
-def _require_runtime(runtime: object | None):
+def _require_runtime(runtime: object | None) -> "RuntimeClient":
     if runtime is None:
         raise SDKError(
             code=ErrorCode.INVALID_HANDLE,
@@ -376,7 +389,7 @@ def _require_runtime(runtime: object | None):
             retryable=False,
             message="invocation is not bound to a RuntimeClient",
         )
-    return runtime
+    return cast("RuntimeClient", runtime)
 
 
 def _invalid_invocation(

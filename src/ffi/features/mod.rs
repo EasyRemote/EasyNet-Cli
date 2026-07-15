@@ -10,8 +10,11 @@ use super::EASYNET_ABI_VERSION;
 
 pub const PROFILES: &[(&str, &str)] = &[("runtime_core", "provider-backed")];
 
-pub const ALWAYS_ON_SYMBOLS: &[&str] =
-    &["daemon_lifecycle", "generic_invocation", "typed_error_json"];
+pub const ALWAYS_ON_SYMBOLS: &[&str] = &[
+    "runtime_lifecycle",
+    "generic_invocation",
+    "typed_error_json",
+];
 
 pub const AXON_PB_SYMBOLS: &[&str] = &[
     "invocation_builder_handles",

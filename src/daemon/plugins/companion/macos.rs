@@ -14,6 +14,7 @@ use super::status::{
 };
 use super::{CompanionActionReport, DesktopCompanionSupervisor};
 
+#[derive(Default)]
 pub struct MacosDesktopCompanionSupervisor;
 
 impl MacosDesktopCompanionSupervisor {

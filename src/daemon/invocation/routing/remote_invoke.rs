@@ -33,6 +33,9 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Value};
 
+use crate::daemon::invocation::dispatch::forwarded_finalization::{
+    ForwardedFinalizedInvocation, ForwardedInvocationBinding,
+};
 use crate::daemon::invocation::ProtoEnvelope;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::{InvocationState as WireInvocationState, InvokeResponse};
@@ -147,21 +150,24 @@ impl RemoteAbilityInvocationTarget {
         let trimmed = ability_ura.trim();
         let selector = crate::core::ura::AbilitySelector::parse(trimmed)?;
         validate_remote_execution_target(execution_target_ura, &selector)?;
-        let default_subject_ura = default_subject_ura_for_selector(&selector);
         let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
                 selector.owner_ura(),
                 selector.public_name(),
-                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
-            )?;
-        Ok(Self {
-            execution_target_ura: execution_target_ura.trim().to_string(),
-            ability_ura: trimmed.to_string(),
-            callee_ura: selector.owner_ura().to_string(),
-            public_ability: selector.public_name().to_string(),
-            default_subject_ura,
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .map_err(|err| {
+                anyhow!(
+                    "ability URA `{trimmed}` is not descriptor-bound and no local system catalog \
+                     descriptor can prove it: {err}. Pass an explicit descriptor-bound Ability ref."
+                )
+            })?;
+        Ok(Self::from_validated_selector(
+            execution_target_ura,
+            trimmed,
+            &selector,
             descriptor_ref,
-        })
+        ))
     }
 
     /// Accept a descriptor-bound Ability ref and preserve the version for
@@ -177,9 +183,31 @@ impl RemoteAbilityInvocationTarget {
                 .map_err(|err| {
                     anyhow!("descriptor-bound Ability ref is missing ability URA: {err}")
                 })?;
-        let mut target = Self::from_ability_ura(execution_target_ura, &ability_ura)?;
-        target.descriptor_ref = canonical;
-        Ok(target)
+        validate_remote_target_ura(execution_target_ura)?;
+        let selector = crate::core::ura::AbilitySelector::parse(&ability_ura)?;
+        validate_remote_execution_target(execution_target_ura, &selector)?;
+        Ok(Self::from_validated_selector(
+            execution_target_ura,
+            &ability_ura,
+            &selector,
+            canonical,
+        ))
+    }
+
+    fn from_validated_selector(
+        execution_target_ura: &str,
+        ability_ura: &str,
+        selector: &crate::core::ura::AbilitySelector,
+        descriptor_ref: String,
+    ) -> Self {
+        Self {
+            execution_target_ura: execution_target_ura.trim().to_string(),
+            ability_ura: ability_ura.trim().to_string(),
+            callee_ura: selector.owner_ura().to_string(),
+            public_ability: selector.public_name().to_string(),
+            default_subject_ura: default_subject_ura_for_selector(selector),
+            descriptor_ref,
+        }
     }
 
     /// Borrow the canonical URA for the transport helper.
@@ -293,6 +321,14 @@ pub(crate) fn invoke_remote_target_with_timeout(
             ..easynet_axon::pb::axon::v1::ContentEnvelope::default()
         });
         request.timeout_seconds = timeout_seconds;
+        let response_binding =
+            ForwardedInvocationBinding::from_request(&request).map_err(|status| {
+                anyhow!(
+                    "remote Invoke request is not receipt-verifiable (code={:?}): {}",
+                    status.code(),
+                    status.message(),
+                )
+            })?;
 
         let channel = crate::support::platform::local_daemon_grpc::connect_channel(
             socket_path.clone(),
@@ -314,8 +350,9 @@ pub(crate) fn invoke_remote_target_with_timeout(
             )
         })?;
         let body = response.into_inner();
-        ensure_completed_invoke_response("remote Invoke", &body)?;
-        decode_invoke_result_bytes(&body.result)
+        let finalized =
+            verify_completed_remote_invoke_response("remote Invoke", &response_binding, body)?;
+        decode_invoke_result_bytes(&finalized.output)
     })
 }
 
@@ -419,6 +456,56 @@ pub(crate) fn ensure_completed_invoke_response(
         },
         if message.is_empty() {
             "InvokeResponse did not carry an error message"
+        } else {
+            message.as_str()
+        },
+    )
+}
+
+fn verify_completed_remote_invoke_response(
+    surface: &str,
+    binding: &ForwardedInvocationBinding,
+    body: InvokeResponse,
+) -> anyhow::Result<ForwardedFinalizedInvocation> {
+    let resolver =
+        crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new();
+    let finalized = ForwardedFinalizedInvocation::verify_response(binding, body, &resolver)
+        .map_err(|status| {
+            anyhow!(
+                "{surface} receipt finalization failed (code={:?}): {}",
+                status.code(),
+                status.message(),
+            )
+        })?;
+    if finalized.terminal_state == easynet_axon::invocation::InvocationState::Completed {
+        return Ok(finalized);
+    }
+
+    let (code, message) = finalized
+        .failure
+        .as_ref()
+        .map(|error| {
+            (
+                error.code.trim().to_string(),
+                error.message.trim().to_string(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                "INVOKE_NOT_COMPLETED".to_string(),
+                "verified terminal receipt did not carry a structured failure".to_string(),
+            )
+        });
+    bail!(
+        "{surface} did not complete: state={} code={} message={}",
+        finalized.terminal_state.as_str(),
+        if code.is_empty() {
+            "INVOKE_NOT_COMPLETED"
+        } else {
+            code.as_str()
+        },
+        if message.is_empty() {
+            "verified terminal receipt did not carry an error message"
         } else {
             message.as_str()
         },
@@ -704,16 +791,16 @@ mod tests {
     }
 
     #[test]
-    fn plain_remote_ability_is_bound_to_explicit_default_descriptor() {
+    fn plain_remote_system_ability_is_bound_to_catalog_descriptor() {
         let target = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/realm/device/node-a",
-            "easynet:///r/realm/ability/device.node-a.echo",
+            "easynet:///r/realm/ability/device.node-a.fs.read",
         )
         .expect("target");
-        let expected = crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        let expected = crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
             "easynet:///r/realm/device/node-a",
-            "echo",
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            "fs.read",
+            crate::daemon::ability::CallMode::Rpc,
         )
         .expect("descriptor");
         assert_eq!(target.descriptor_ref(), expected);
@@ -721,7 +808,7 @@ mod tests {
 
     #[test]
     fn explicit_descriptor_version_is_preserved() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0";
+        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
             descriptor,

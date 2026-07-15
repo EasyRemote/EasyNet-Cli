@@ -219,7 +219,7 @@ pub fn invoke_exec(prompt: &str, opts: CodexOptions) -> anyhow::Result<(String, 
     // a TOML literal, hence the quoted strings and JSON-style array.
     //
     // We derive the launching agent name from the cwd path
-    // (`~/.easynet/workspaces/<agent>`). If the cwd is not set or doesn't
+    // (`~/.easynet/agents/<agent>`). If the cwd is not set or doesn't
     // follow that shape, fall back to "codex" as a generic label — the
     // audit line will still be useful even with a non-specific name.
     let agent_name = opts

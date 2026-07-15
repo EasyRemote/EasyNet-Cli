@@ -36,9 +36,13 @@ const (
 	ResourceNamespaceHTTP    ResourceNamespace = "http"
 )
 
-type Ura struct {
+type URA struct {
 	raw string
 }
+
+// Ura is retained as a source-compatible alias for callers that imported the
+// pre-canonical Go casing. New canonical SDK inventories use URA.
+type Ura = URA
 
 type ParsedURA struct {
 	Raw               string
@@ -81,27 +85,27 @@ func IsResourceNamespace(namespace string) bool {
 	return axonsdk.IsResourceNamespace(namespace)
 }
 
-func ParseURA(raw string) (Ura, error) {
+func ParseURA(raw string) (URA, error) {
 	parsed, err := axonsdk.ParseURA(raw)
 	if err != nil {
-		return Ura{}, err
+		return URA{}, err
 	}
-	return Ura{raw: parsed.String()}, nil
+	return URA{raw: parsed.String()}, nil
 }
 
-func (u Ura) String() string { return u.raw }
+func (u URA) String() string { return u.raw }
 
-func (u Ura) Parts() ParsedURA {
+func (u URA) Parts() ParsedURA {
 	parts, err := ParseURAParts(u.raw)
 	if err != nil {
-		panic("Ura stores only validated canonical addresses")
+		panic("URA stores only validated canonical addresses")
 	}
 	return parts
 }
 
-func (u Ura) Kind() URAKind { return u.Parts().Kind }
+func (u URA) Kind() URAKind { return u.Parts().Kind }
 
-func (u Ura) AbilityName() string {
+func (u URA) AbilityName() string {
 	parts := u.Parts()
 	if parts.Kind != URAKindAbility {
 		return ""
@@ -109,7 +113,7 @@ func (u Ura) AbilityName() string {
 	return parts.AbilityID
 }
 
-func (u Ura) PublicAbilityName(registeredName string) string {
+func (u URA) PublicAbilityName(registeredName string) string {
 	registeredName = strings.TrimSpace(registeredName)
 	if registeredName == "" {
 		return ""
@@ -117,7 +121,7 @@ func (u Ura) PublicAbilityName(registeredName string) string {
 	return registeredName
 }
 
-func (u Ura) PublicAbilityNameForOwner(ownerURA string) string {
+func (u URA) PublicAbilityNameForOwner(ownerURA string) string {
 	name, ok := PublicAbilityNameFromAbilityURA(ownerURA, u.raw)
 	if !ok {
 		return ""
@@ -177,24 +181,14 @@ func ResourceURA(realm, userID, namespace, path string) string {
 	return axonsdk.ResourceURA(realm, userID, namespace, path)
 }
 
-func FilesResourceURA(realm, username, sha256Hex string) string {
-	return axonsdk.FilesResourceURA(realm, username, sha256Hex)
-}
-
-func APIKeyResourceURA(realm, token string) string {
-	return axonsdk.APIKeyResourceURA(realm, token)
-}
-
-func PagesResourceURA(realm, username, project, path string) string {
-	return axonsdk.PagesResourceURA(realm, username, project, path)
-}
-
-func AgentSkillResourceURA(realm, username, agentID, skillName string) string {
-	return axonsdk.AgentSkillResourceURA(realm, username, agentID, skillName)
-}
-
-func AgentSkillFileResourceURA(realm, username, agentID, skillName, relPath string) string {
-	return axonsdk.AgentSkillFileResourceURA(realm, username, agentID, skillName, relPath)
+// RuntimeResourceURA builds a resource rooted at a runtime-owned identifier.
+// ownerID and resourceID form the opaque dot-owner token interpreted by Axon.
+func RuntimeResourceURA(realm, ownerID, resourceID, path string) string {
+	owner := ownerID + "." + resourceID
+	if path == "/" {
+		return axonsdk.ResourceDotURA(realm, owner, "") + "/"
+	}
+	return axonsdk.ResourceDotURA(realm, owner, path)
 }
 
 func RealmUserPrefix(realm string) string {

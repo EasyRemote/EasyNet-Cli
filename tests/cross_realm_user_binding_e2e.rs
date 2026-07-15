@@ -35,8 +35,9 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::io::Read;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -49,9 +50,13 @@ use easynet_cli::daemon::keyring::abilities::{
 use easynet_cli::daemon::keyring::federated_bindings::FederatedBindingsStore;
 use easynet_cli::daemon::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
 
+static TEST_KEY_SERVICE_SERIAL: Mutex<()> = Mutex::new(());
+const KEY_SERVICE_START_TIMEOUT: Duration = Duration::from_secs(15);
+
 struct TestKeyService {
     child: Child,
     _home: tempfile::TempDir,
+    _serial: MutexGuard<'static, ()>,
 }
 
 impl Drop for TestKeyService {
@@ -62,26 +67,67 @@ impl Drop for TestKeyService {
 }
 
 fn start_test_key_service() -> (Arc<dyn ManagedSigningProvider>, TestKeyService) {
+    // The production KDF is deliberately expensive. Running four debug
+    // key-service initialisations in parallel makes readiness depend on host
+    // CPU scheduling rather than the behavior this suite verifies, so each
+    // test retains an isolated service while process startup is serialized.
+    let serial = TEST_KEY_SERVICE_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = tempfile::tempdir().expect("test key service home");
     let socket_path = home.path().join("key-service.sock");
-    let child = Command::new(env!("CARGO_BIN_EXE_easynet-keyring"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_easynet-keyring"))
         .env("HOME", home.path())
         .env("EASYNET_KEYRING_SOCKET_PATH", &socket_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn test key service");
-    let client = KeyringClient::new(&socket_path);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while client.health().is_err() {
-        assert!(
-            Instant::now() < deadline,
-            "test key service did not become ready"
-        );
+    let health_client = KeyringClient::new(&socket_path).with_timeout(Duration::from_millis(500));
+    let deadline = Instant::now() + KEY_SERVICE_START_TIMEOUT;
+    loop {
+        if health_client.health().is_ok() {
+            break;
+        }
+        if let Some(status) = child.try_wait().expect("poll test key service") {
+            panic!(
+                "test key service exited before readiness: status={status}, stderr={}",
+                child_stderr(&mut child)
+            );
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let status = child.wait().expect("reap timed-out test key service");
+            panic!(
+                "test key service did not become ready within {KEY_SERVICE_START_TIMEOUT:?}: \
+                 status={status}, stderr={}",
+                child_stderr(&mut child)
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
-    (Arc::new(client), TestKeyService { child, _home: home })
+    (
+        Arc::new(KeyringClient::new(&socket_path)),
+        TestKeyService {
+            child,
+            _home: home,
+            _serial: serial,
+        },
+    )
+}
+
+fn child_stderr(child: &mut Child) -> String {
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        "<empty>".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Stand up realm A's daemon: keyring + agent_signing entry +

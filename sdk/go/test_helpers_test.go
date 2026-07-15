@@ -1,11 +1,14 @@
 package easynet
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +42,31 @@ func assertJSONEquivalent(t *testing.T, actual, expected []byte) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("JSON mismatch\nactual: %s\nexpected: %s", actual, expected)
+	}
+}
+
+func testResolveDescriptorRef(t *testing.T) func(context.Context, []byte) ([]byte, error) {
+	t.Helper()
+	return func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+		var request RuntimeDescriptorRefRequest
+		if err := json.Unmarshal(requestJSON, &request); err != nil {
+			return nil, err
+		}
+		ability, err := NewCanonicalAddressing().OwnerAbilityURA(ctx, request.CalleeURA, request.Ability)
+		if err != nil {
+			return nil, err
+		}
+		action := "read"
+		if strings.TrimSpace(request.CallMode) == "stream" {
+			action = "stream"
+		}
+		return json.Marshal(map[string]any{
+			"descriptor_ref": fmt.Sprintf(
+				"%s@1.0.0#%s!%s",
+				ability,
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				action,
+			),
+		})
 	}
 }

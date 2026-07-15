@@ -57,8 +57,10 @@ pub enum PermissionGrantState {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PermissionGrant {
     pub grant_id: String,
+    #[serde(default)]
     pub owner_user_id: String,
     pub principal_kind: PrincipalKind,
+    #[serde(default)]
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
@@ -401,9 +403,11 @@ mod tests {
         };
         let matcher = PermissionGrantMatcher::new(&grants);
 
-        assert!(matcher
-            .find_active(&input, PermissionEffect::Allow)
-            .is_none());
+        assert!(
+            matcher
+                .find_active(&input, PermissionEffect::Allow)
+                .is_none()
+        );
         assert_eq!(
             matcher
                 .find_reconfirmation_required(&input)

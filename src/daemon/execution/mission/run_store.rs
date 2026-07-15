@@ -7,7 +7,7 @@
 //              workspace containing prompt, response, and metadata.
 //
 // Layout:
-//   ~/.easynet/workspaces/<agent>/runs/<YYYY-MM-DD_HHMMSS>/
+//   ~/.easynet/agents/<agent>/runs/<YYYY-MM-DD_HHMMSS>/
 //     ├── prompt.txt     — composed prompt (incl. context) sent to the agent
 //     ├── response.md    — final agent reply, as markdown
 //     └── meta.json      — timing, token counts, cost, model, exit status, invocation_id

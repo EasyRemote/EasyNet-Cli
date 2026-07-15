@@ -4,8 +4,8 @@
 // File: src/daemon/ability/builtins/resources/files_store/mod.rs
 // Description: registration entry point for the user-rooted files
 //              namespace, complement to Pages (RFC-006-B v0.6).
-//              Registers `<user>.files.<verb>` directly into the
-//              daemon-hosted Axon LocalRuntime.
+//              Registers owner-local `files.<verb>` abilities under the
+//              daemon-native `<user>.files` executor root.
 //
 // What this is for:
 //   `/v1/chat/completions` accepts OpenAI-shape multimodal messages
@@ -31,11 +31,11 @@
 //   Content-addressed. Same bytes → same hash → same on-disk path.
 //
 // Three abilities registered:
-//   <user>.files.put    — write {filename, bytes_b64, content_type?}
+//   files.put           — write {filename, bytes_b64, content_type?}
 //                         → {ura, sha256, size, content_type}
-//   <user>.files.get    — read {sha256} or {path: "<sha256>"}
+//   files.get           — read {sha256} or {path: "<sha256>"}
 //                         → {bytes_b64, content_type, sha256}
-//   <user>.files.list   — read {} → {items: [{sha256, size, ...}]}
+//   files.list          — read {} → {items: [{sha256, size, ...}]}
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -46,7 +46,13 @@ pub mod state;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
+use crate::daemon::ability::descriptors::AdmissionAction;
+use crate::daemon::ability::dispatch::{
+    AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
+};
+use crate::daemon::ability::manifest::AbilityManifest;
+use crate::daemon::ability::AuthorityScope;
+use serde_json::json;
 
 /// Installation parameters for the Files reference system. Mirror
 /// of `PagesConfig`; the daemon's user identity is the only field
@@ -58,6 +64,56 @@ use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, Owne
 pub struct FilesConfig {
     pub user: String,
     pub realm: String,
+}
+
+fn files_manifest(
+    manifest_name: &str,
+    description: &str,
+    admission_action: AdmissionAction,
+) -> AbilityManifest {
+    AbilityManifest::new(
+        manifest_name,
+        description,
+        json!({
+            "type": "object",
+            "additionalProperties": true,
+        }),
+    )
+    .and_then(|manifest| manifest.with_admission_action(admission_action.as_str()))
+    .expect("files_store ability manifest must be valid")
+}
+
+fn files_authority_scope(realm: &str, user: &str) -> AuthorityScope {
+    AuthorityScope::new(format!("user:{user}"), management_agent_ura(realm, user))
+        .expect("Files authority scope is well-formed")
+}
+
+/// Execution host for the user-owned content-addressed Files family.
+///
+/// The user remains the accountable owner projection. This Agent URA only names
+/// the daemon-native executor that serves `files.put/get/list`, matching the
+/// Pages management split.
+pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
+    crate::core::ura::agent_ura(realm, user, "files")
+}
+
+fn register_files_rpc(
+    reg: &mut AxonAbilityCatalog,
+    ability: &'static str,
+    owner: OwnerKind,
+    authority_scope: AuthorityScope,
+    manifest: AbilityManifest,
+    handler: LocalRpcHandler,
+) {
+    reg.register_rpc_with_spec_impl_and_authority_scope(
+        ability,
+        owner,
+        authority_scope,
+        manifest,
+        handler,
+        ControlPlaneImplementation::native_daemon(),
+    )
+    .expect("files_store authority scope must be declared before registration")
 }
 
 /// Wire the Files reference system into the registry. Called
@@ -77,24 +133,39 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
         }
     };
     let owner = OwnerKind::User(config.user.clone());
+    let authority_scope = files_authority_scope(&config.realm, &config.user);
 
     let user = config.user.clone();
     let realm = config.realm.clone();
     let root_for_put = Arc::clone(&root);
     let put_handler: LocalRpcHandler =
         Arc::new(move |args| handlers::handle_put(&user, &realm, &root_for_put, args));
-    reg.register_rpc_with_owner(
-        format!("{}.files.put", config.user),
+    register_files_rpc(
+        reg,
+        "files.put",
         owner.clone(),
+        authority_scope.clone(),
+        files_manifest(
+            "put",
+            "Write a content-addressed file blob for the user account.",
+            AdmissionAction::Manage,
+        ),
         put_handler,
     );
 
     let root_for_get = Arc::clone(&root);
     let get_handler: LocalRpcHandler =
         Arc::new(move |args| handlers::handle_get(&root_for_get, args));
-    reg.register_rpc_with_owner(
-        format!("{}.files.get", config.user),
+    register_files_rpc(
+        reg,
+        "files.get",
         owner.clone(),
+        authority_scope.clone(),
+        files_manifest(
+            "get",
+            "Read a content-addressed file blob for the user account.",
+            AdmissionAction::Read,
+        ),
         get_handler,
     );
 
@@ -103,5 +174,16 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
     let root_for_list = Arc::clone(&root);
     let list_handler: LocalRpcHandler =
         Arc::new(move |args| handlers::handle_list(&user, &realm, &root_for_list, args));
-    reg.register_rpc_with_owner(format!("{}.files.list", config.user), owner, list_handler);
+    register_files_rpc(
+        reg,
+        "files.list",
+        owner,
+        authority_scope,
+        files_manifest(
+            "list",
+            "List content-addressed file blobs for the user account.",
+            AdmissionAction::Read,
+        ),
+        list_handler,
+    );
 }

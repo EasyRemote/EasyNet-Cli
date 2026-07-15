@@ -1,3 +1,4 @@
+pub mod authoring;
 pub mod chat;
 pub mod chat_history;
 pub mod discover;

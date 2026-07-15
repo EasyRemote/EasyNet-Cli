@@ -103,7 +103,7 @@ pub unsafe extern "C" fn easynet_feature_discovery(out_features_json: *mut *mut 
         return ERR_NULL_POINTER;
     }
     unsafe { *out_features_json = std::ptr::null_mut() };
-    let ptr = alloc_output_cstring(&features::feature_discovery_json());
+    let ptr = alloc_output_cstring(features::feature_discovery_json());
     if ptr.is_null() {
         set_last_error_code(
             ERR_GENERIC,
@@ -220,16 +220,30 @@ pub unsafe extern "C" fn easynet_init(
 /// dereference any pointers.
 #[no_mangle]
 pub extern "C" fn easynet_shutdown(handle: EasynetHandle) -> i32 {
-    if get(handle).is_none() {
-        set_last_error_code(
-            ERR_INVALID_HANDLE,
-            format!("easynet_shutdown: handle {handle} is not registered (already shut down?)"),
-        );
-        return ERR_INVALID_HANDLE;
-    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            set_last_error_code(
+                ERR_INVALID_HANDLE,
+                format!("easynet_shutdown: handle {handle} is not registered (already shut down?)"),
+            );
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let binding = match session.begin_closing(handle) {
+        Ok(binding) => binding,
+        Err(_) => {
+            set_last_error_code(
+                ERR_INVALID_HANDLE,
+                format!("easynet_shutdown: handle {handle} is already closing or released"),
+            );
+            return ERR_INVALID_HANDLE;
+        }
+    };
 
-    invocation::cancel_invocations_for_handle(handle);
+    invocation::cancel_invocations_for_binding(binding);
     let _ = release(handle);
+    session.mark_released();
     clear_last_error();
     EASYNET_OK
 }
@@ -317,7 +331,7 @@ mod tests {
         let error = read_last_error_json();
         assert_eq!(error["code"], "INVALID_HANDLE");
         assert_eq!(error["details"]["abi_code"], ERR_INVALID_HANDLE);
-        assert_eq!(error["details"]["legacy_untyped"], false);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_INVALID_HANDLE");
     }
 
     #[test]

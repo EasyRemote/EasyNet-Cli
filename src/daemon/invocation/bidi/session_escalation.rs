@@ -73,17 +73,27 @@ pub const ESCALATION_QUEUE_CAPACITY: usize = 256;
 pub struct EscalationRequest {
     pub call_id: [u8; 16],
     pub invocation: EscalationInvocation,
-    pub reply: oneshot::Sender<RequestOutcome>,
+    pub reply: oneshot::Sender<EscalationReply>,
 }
 
 /// Payload carried by a reverse session request.
 ///
-/// Product invocations use `Canonical` exclusively. `LegacyControl` remains
-/// scoped to daemon-owned bootstrap/publication control messages and must not
-/// be used by CLI or user-ability adapters.
+/// Product invocations use `Canonical` exclusively. `DaemonControl` is a
+/// separate control-plane protocol used only for bootstrap, publication, and
+/// trust synchronization; it is not an Invocation compatibility path.
 pub enum EscalationInvocation {
-    Canonical(easynet_axon::pb::axon::v1::InvokeRequest),
-    LegacyControl { ability_ura: String, args: Vec<u8> },
+    Canonical(Box<easynet_axon::pb::axon::v1::InvokeRequest>),
+    DaemonControl { ability_ura: String, args: Vec<u8> },
+}
+
+/// Internal correlation result. Canonical product invocations retain the
+/// complete InvokeResponse (including both signed finalization checkpoints),
+/// while daemon-owned control requests keep their separate JSON outcome.
+#[derive(Debug, Clone)]
+pub enum EscalationReply {
+    Canonical(easynet_axon::pb::axon::v1::InvokeResponse),
+    Control(RequestOutcome),
+    Error(SessionRequestError),
 }
 
 /// Stable handle the dispatch handler clones to submit Requests.
@@ -102,12 +112,20 @@ impl SessionEscalationHandle {
     pub async fn escalate_invoke(
         &self,
         request: easynet_axon::pb::axon::v1::InvokeRequest,
-    ) -> RequestOutcome {
-        self.escalate_invocation(
-            EscalationInvocation::Canonical(request),
-            DEFAULT_ESCALATION_TIMEOUT,
-        )
-        .await
+    ) -> Result<easynet_axon::pb::axon::v1::InvokeResponse, SessionRequestError> {
+        match self
+            .escalate_invocation(
+                EscalationInvocation::Canonical(Box::new(request)),
+                DEFAULT_ESCALATION_TIMEOUT,
+            )
+            .await
+        {
+            EscalationReply::Canonical(response) => Ok(response),
+            EscalationReply::Error(error) => Err(error),
+            EscalationReply::Control(_) => Err(SessionRequestError::UpstreamFailure {
+                reason: "canonical escalation received a daemon-control reply".to_string(),
+            }),
+        }
     }
 
     /// Submit a Request for a hub-owned public wrapper ability and
@@ -133,18 +151,29 @@ impl SessionEscalationHandle {
         timeout: Duration,
     ) -> RequestOutcome {
         let ability_ura = crate::core::ura::hub_ability_ura(&self.session_realm, ability.trim());
-        self.escalate_invocation(
-            EscalationInvocation::LegacyControl { ability_ura, args },
-            timeout,
-        )
-        .await
+        match self
+            .escalate_invocation(
+                EscalationInvocation::DaemonControl { ability_ura, args },
+                timeout,
+            )
+            .await
+        {
+            EscalationReply::Control(outcome) => outcome,
+            EscalationReply::Error(error) => RequestOutcome::Err { error },
+            EscalationReply::Canonical(_) => RequestOutcome::Err {
+                error: SessionRequestError::UpstreamFailure {
+                    reason: "daemon-control escalation received a canonical Invocation reply"
+                        .to_string(),
+                },
+            },
+        }
     }
 
     async fn escalate_invocation(
         &self,
         invocation: EscalationInvocation,
         timeout: Duration,
-    ) -> RequestOutcome {
+    ) -> EscalationReply {
         use rand::RngCore as _;
         let mut call_id = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut call_id);
@@ -177,26 +206,19 @@ impl SessionEscalationHandle {
             // the daemon is shutting down. Surface a typed
             // upstream-failure outcome so the dispatch handler
             // doesn't pretend the call succeeded.
-            return RequestOutcome::Err {
-                error: SessionRequestError::UpstreamFailure {
-                    reason: "session escalation consumer task is gone (daemon shutdown?)"
-                        .to_string(),
-                },
-            };
+            return EscalationReply::Error(SessionRequestError::UpstreamFailure {
+                reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+            });
         }
 
         match tokio::time::timeout(timeout, reply_rx).await {
             Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => RequestOutcome::Err {
-                error: SessionRequestError::UpstreamFailure {
-                    reason: "session escalation reply channel dropped without answer".to_string(),
-                },
-            },
+            Ok(Err(_)) => EscalationReply::Error(SessionRequestError::UpstreamFailure {
+                reason: "session escalation reply channel dropped without answer".to_string(),
+            }),
             Err(_elapsed) => {
                 self.correlation.cancel(call_id);
-                RequestOutcome::Err {
-                    error: SessionRequestError::UpstreamTimeout,
-                }
+                EscalationReply::Error(SessionRequestError::UpstreamTimeout)
             }
         }
     }
@@ -210,7 +232,7 @@ impl SessionEscalationHandle {
 /// (exactly one register, exactly one complete).
 #[derive(Debug, Default)]
 pub struct EscalationCorrelation {
-    inner: Mutex<HashMap<[u8; 16], oneshot::Sender<RequestOutcome>>>,
+    inner: Mutex<HashMap<[u8; 16], oneshot::Sender<EscalationReply>>>,
 }
 
 impl EscalationCorrelation {
@@ -227,7 +249,7 @@ impl EscalationCorrelation {
     /// surfaces on the original `reply_rx` as a closed-without-
     /// answer condition the `escalate_with_timeout` arm reports
     /// as `UpstreamFailure`.
-    pub fn register(&self, call_id: [u8; 16], reply: oneshot::Sender<RequestOutcome>) {
+    pub fn register(&self, call_id: [u8; 16], reply: oneshot::Sender<EscalationReply>) {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -239,7 +261,7 @@ impl EscalationCorrelation {
     /// matching entry was present; `false` is the silent no-op
     /// the spec calls for when a `RequestResult` arrives after
     /// the dispatch handler timed out and dropped its receiver.
-    pub fn complete(&self, call_id: [u8; 16], outcome: RequestOutcome) -> bool {
+    pub fn complete(&self, call_id: [u8; 16], outcome: EscalationReply) -> bool {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -285,9 +307,19 @@ impl EscalationCorrelation {
 /// each instead of three handles. The two have independent
 /// lifetimes (consumer drains forever; outbox publishes per
 /// reconnect; correlation accumulates and drains per Request).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct SharedSessionOutbox {
     inner: Arc<Mutex<Option<SessionUpSender>>>,
+    ready_hooks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
+}
+
+impl std::fmt::Debug for SharedSessionOutbox {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SharedSessionOutbox")
+            .field("ready", &self.snapshot().is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SharedSessionOutbox {
@@ -307,11 +339,37 @@ impl SharedSessionOutbox {
     /// the previous sender; in-flight escalations holding the
     /// old sender clone keep working until that channel closes.
     pub fn set(&self, sender: SessionUpSender) {
-        let mut guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
+        {
+            let mut guard = match self.inner.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *guard = Some(sender);
+        }
+        let hooks = match self.ready_hooks.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
         };
-        *guard = Some(sender);
+        for hook in hooks {
+            hook();
+        }
+    }
+
+    /// Register work that must be re-driven whenever a new live session
+    /// sender is published. The hook runs after the sender is visible and
+    /// outside all outbox locks. Registering against an already-ready outbox
+    /// invokes the hook immediately.
+    pub fn register_ready_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        {
+            let mut hooks = match self.ready_hooks.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            hooks.push(Arc::clone(&hook));
+        }
+        if self.snapshot().is_some() {
+            hook();
+        }
     }
 
     /// Drop the current sender. Called by `dial_and_run_session`
@@ -372,14 +430,14 @@ pub fn spawn_escalation_consumer_with_outbox(
                 // No live session — surface a typed upstream-failure
                 // outcome so the CLI sees a fast structured error
                 // instead of waiting for a hub reconnect.
-                let _ = reply.send(RequestOutcome::Err {
-                    error: SessionRequestError::UpstreamFailure {
+                let _ = reply.send(EscalationReply::Error(
+                    SessionRequestError::UpstreamFailure {
                         reason: "no live session.open bidi to escalate canonical_invoke up; \
                                  device-mode daemon's session supervisor has not (yet) \
                                  reconnected"
                             .to_string(),
                     },
-                });
+                ));
                 continue;
             };
 
@@ -391,13 +449,13 @@ pub fn spawn_escalation_consumer_with_outbox(
                     Err(poisoned) => poisoned.into_inner(),
                 };
                 if let Some(sender) = guard.remove(&call_id) {
-                    let _ = sender.send(RequestOutcome::Err {
-                        error: SessionRequestError::UpstreamFailure {
+                    let _ = sender.send(EscalationReply::Error(
+                        SessionRequestError::UpstreamFailure {
                             reason: format!(
                                 "session up-channel closed mid-push (mid-reconnect?): {err}"
                             ),
                         },
-                    });
+                    ));
                 }
             }
         }
@@ -448,11 +506,11 @@ pub fn spawn_escalation_consumer(
                     Err(poisoned) => poisoned.into_inner(),
                 };
                 if let Some(sender) = guard.remove(&call_id) {
-                    let _ = sender.send(RequestOutcome::Err {
-                        error: SessionRequestError::UpstreamFailure {
+                    let _ = sender.send(EscalationReply::Error(
+                        SessionRequestError::UpstreamFailure {
                             reason: format!("session up-channel closed: {err}"),
                         },
-                    });
+                    ));
                 }
             }
         }
@@ -473,12 +531,12 @@ async fn send_escalation_request(
             up_tx
                 .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
                     call_id: call_id.to_vec(),
-                    request: Some(request),
+                    request: Some(*request),
                 }))
                 .await
                 .map_err(|err| err.to_string())
         }
-        EscalationInvocation::LegacyControl { ability_ura, args } => {
+        EscalationInvocation::DaemonControl { ability_ura, args } => {
             let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
             up_tx
                 .send_binary_chunk(frame)
@@ -554,9 +612,9 @@ mod tests {
                 {
                     correlation_for_hub.complete(
                         call_id,
-                        RequestOutcome::Ok {
+                        EscalationReply::Control(RequestOutcome::Ok {
                             result_bytes: b"hub-resolved".to_vec(),
-                        },
+                        }),
                     );
                 }
             }
@@ -641,9 +699,9 @@ mod tests {
         let stale_id = [0xff; 16];
         let completed = correlation.complete(
             stale_id,
-            RequestOutcome::Ok {
+            EscalationReply::Control(RequestOutcome::Ok {
                 result_bytes: vec![],
-            },
+            }),
         );
         assert!(
             !completed,
@@ -741,9 +799,9 @@ mod tests {
                 {
                     correlation_for_hub.complete(
                         call_id,
-                        RequestOutcome::Ok {
+                        EscalationReply::Control(RequestOutcome::Ok {
                             result_bytes: b"hub-via-outbox".to_vec(),
-                        },
+                        }),
                     );
                 }
             }

@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::AuthorityScope;
 
 use super::mime::mime_from_path;
 use super::sandbox::{open_beneath, validate_regular};
@@ -90,6 +91,23 @@ pub(crate) fn fetch_ability_name(user: &str, project_id: &str) -> String {
     format!("{user}.{project_id}.page.fetch")
 }
 
+fn fetch_ability_manifest() -> crate::daemon::ability::manifest::AbilityManifest {
+    crate::daemon::ability::manifest::AbilityManifest::new(
+        "fetch",
+        "Fetch a published Pages project asset by sandboxed path.",
+        json!({
+            "type": "object",
+            "required": ["path"],
+            "properties": {
+                "path": {"type": "string"}
+            },
+            "additionalProperties": false
+        }),
+    )
+    .and_then(|manifest| manifest.with_admission_action("read"))
+    .expect("dynamic Pages fetch manifest is well-formed")
+}
+
 /// Register `<user>.<project_id>.page.fetch` into the daemon-hosted
 /// Axon runtime. Called by `publish.rs` at publish time and by
 /// `pages::register` after restart restore.
@@ -97,14 +115,17 @@ pub fn register_fetch_ability(
     registry: &AxonAbilityCatalog,
     user: &str,
     project_id: &str,
+    authority_scope: AuthorityScope,
 ) -> anyhow::Result<()> {
     let ability = fetch_ability_name(user, project_id);
     let owner = OwnerKind::User(user.to_string());
     let user = user.to_string();
     let project_id = project_id.to_string();
-    registry.hot_register_rpc(
+    registry.hot_register_rpc_with_spec_and_authority_scope(
         ability,
         owner,
+        authority_scope,
+        fetch_ability_manifest(),
         Arc::new(move |args| handle_fetch(&user, &project_id, args)),
     )
 }

@@ -8,53 +8,53 @@ import (
 
 // SdkEnvironmentOptions are process-level SDK defaults.
 type SdkEnvironmentOptions struct {
-	ExpectedABIVersion uint32          `json:"expected_abi_version,omitempty"`
-	Discover           DiscoverOptions `json:"discover,omitempty"`
-	Connect            ConnectOptions  `json:"connect,omitempty"`
+	ExpectedABIVersion uint32                     `json:"expected_abi_version,omitempty"`
+	Discover           RuntimeHostDiscoverOptions `json:"discover,omitempty"`
+	Connect            ConnectOptions             `json:"connect,omitempty"`
 }
 
 // SdkEnvironment is the process-level Go SDK root.
 //
-// It owns feature discovery, ABI checks, default daemon discovery/connect
+// It owns feature discovery, ABI checks, default runtime discovery/connect
 // options, and global SDK cleanup. It never owns Invocation tuple data,
-// signing material, daemon process ownership, or receipt verification facts.
+// signing material, runtime process ownership, or receipt verification facts.
 type SdkEnvironment struct {
-	mu      sync.Mutex
-	client  *Client
-	control *DaemonControl
-	daemon  DaemonTransport
-	options SdkEnvironmentOptions
-	closed  bool
+	mu        sync.Mutex
+	client    *Client
+	host      *RuntimeHost
+	lifecycle RuntimeLifecycleTransport
+	options   SdkEnvironmentOptions
+	closed    bool
 }
 
 // NewSdkEnvironment creates a process-level SDK root over public SDK
 // transports. Product code receives SDK facades; concrete transports remain
 // behind this boundary.
-func NewSdkEnvironment(discovery DiscoveryTransport, daemon DaemonTransport, opts SdkEnvironmentOptions) (*SdkEnvironment, error) {
+func NewSdkEnvironment(discovery DiscoveryTransport, lifecycle RuntimeLifecycleTransport, opts SdkEnvironmentOptions) (*SdkEnvironment, error) {
 	if discovery == nil {
 		return nil, invalidRuntimeClient("feature discovery transport is required")
 	}
-	if daemon == nil {
-		return nil, invalidRuntimeClient("daemon transport is required")
+	if lifecycle == nil {
+		return nil, invalidRuntimeClient("runtime lifecycle transport is required")
 	}
 	client, err := NewClient(discovery)
 	if err != nil {
 		return nil, err
 	}
-	control, err := NewDaemonControl(daemon)
+	host, err := NewRuntimeHost(lifecycle)
 	if err != nil {
 		_ = client.Close(context.Background())
 		return nil, err
 	}
 	return &SdkEnvironment{
-		client:  client,
-		control: control,
-		daemon:  daemon,
-		options: opts,
+		client:    client,
+		host:      host,
+		lifecycle: lifecycle,
+		options:   opts,
 	}, nil
 }
 
-func (e *SdkEnvironment) requireOpen(ctx context.Context) (*Client, *DaemonControl, error) {
+func (e *SdkEnvironment) requireOpen(ctx context.Context) (*Client, *RuntimeHost, error) {
 	if e == nil {
 		return nil, nil, invalidRuntimeClient("sdk environment is not initialized")
 	}
@@ -66,13 +66,13 @@ func (e *SdkEnvironment) requireOpen(ctx context.Context) (*Client, *DaemonContr
 	if e.closed {
 		return nil, nil, invalidRuntimeClient("sdk environment is closed")
 	}
-	if e.client == nil || e.control == nil {
+	if e.client == nil || e.host == nil {
 		return nil, nil, invalidRuntimeClient("sdk environment is not initialized")
 	}
-	return e.client, e.control, nil
+	return e.client, e.host, nil
 }
 
-// FeatureDiscovery reads daemon SDK feature facts through the environment root.
+// FeatureDiscovery reads SDK feature facts through the environment root.
 func (e *SdkEnvironment) FeatureDiscovery(ctx context.Context) (FeatureSet, error) {
 	client, _, err := e.requireOpen(ctx)
 	if err != nil {
@@ -94,33 +94,44 @@ func (e *SdkEnvironment) RequireABI(ctx context.Context) (FeatureSet, error) {
 	return client.RequireABI(ctx, expected)
 }
 
-// DaemonControl returns the explicit daemon lifecycle facade.
-func (e *SdkEnvironment) DaemonControl(ctx context.Context) (*DaemonControl, error) {
-	_, control, err := e.requireOpen(ctx)
+// RuntimeHost returns the explicit runtime lifecycle facade.
+func (e *SdkEnvironment) RuntimeHost(ctx context.Context) (*RuntimeHost, error) {
+	_, host, err := e.requireOpen(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return control, nil
+	return host, nil
+}
+
+// DaemonControl returns the explicit daemon lifecycle facade.
+func (e *SdkEnvironment) DaemonControl(ctx context.Context) (*DaemonControl, error) {
+	return e.RuntimeHost(ctx)
+}
+
+// DiscoverRuntime discovers runtime endpoints using environment defaults plus
+// per-call overrides.
+func (e *SdkEnvironment) DiscoverRuntime(ctx context.Context, opts RuntimeHostDiscoverOptions) (RuntimeHostEndpoints, error) {
+	_, host, err := e.requireOpen(ctx)
+	if err != nil {
+		return RuntimeHostEndpoints{}, err
+	}
+	return host.Discover(ctx, mergeDiscoverOptions(e.options.Discover, opts))
 }
 
 // DiscoverDaemon discovers daemon endpoints using environment defaults plus
 // per-call overrides.
 func (e *SdkEnvironment) DiscoverDaemon(ctx context.Context, opts DiscoverOptions) (Endpoints, error) {
-	_, control, err := e.requireOpen(ctx)
-	if err != nil {
-		return Endpoints{}, err
-	}
-	return control.Discover(ctx, mergeDiscoverOptions(e.options.Discover, opts))
+	return e.DiscoverRuntime(ctx, opts)
 }
 
-// ConnectLocal opens a RuntimeClient through the explicit daemon lifecycle
-// facade. It does not start the daemon.
+// ConnectLocal opens a RuntimeClient through the explicit runtime lifecycle
+// facade. It does not start the runtime host.
 func (e *SdkEnvironment) ConnectLocal(ctx context.Context, opts ConnectOptions) (*RuntimeClient, error) {
-	_, control, err := e.requireOpen(ctx)
+	_, host, err := e.requireOpen(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return control.ConnectLocal(ctx, mergeConnectOptions(e.options.Connect, opts))
+	return host.ConnectLocal(ctx, mergeConnectOptions(e.options.Connect, opts))
 }
 
 // Defaults returns the immutable process-level defaults configured on the root.
@@ -133,7 +144,7 @@ func (e *SdkEnvironment) Defaults() SdkEnvironmentOptions {
 	return e.options
 }
 
-// Close releases SDK-owned resources without stopping the daemon.
+// Close releases SDK-owned resources without stopping the runtime host.
 func (e *SdkEnvironment) Close(ctx context.Context) error {
 	if e == nil {
 		return invalidRuntimeClient("sdk environment is not initialized")
@@ -147,10 +158,10 @@ func (e *SdkEnvironment) Close(ctx context.Context) error {
 		return nil
 	}
 	client := e.client
-	daemon := e.daemon
+	lifecycle := e.lifecycle
 	e.client = nil
-	e.control = nil
-	e.daemon = nil
+	e.host = nil
+	e.lifecycle = nil
 	e.closed = true
 	e.mu.Unlock()
 
@@ -158,13 +169,13 @@ func (e *SdkEnvironment) Close(ctx context.Context) error {
 	if client != nil {
 		closeErr = errors.Join(closeErr, client.Close(ctx))
 	}
-	if closer, ok := daemon.(interface{ Close(context.Context) error }); ok {
+	if closer, ok := lifecycle.(interface{ Close(context.Context) error }); ok {
 		closeErr = errors.Join(closeErr, closer.Close(ctx))
 	}
 	return closeErr
 }
 
-func mergeDiscoverOptions(base DiscoverOptions, override DiscoverOptions) DiscoverOptions {
+func mergeDiscoverOptions(base RuntimeHostDiscoverOptions, override RuntimeHostDiscoverOptions) RuntimeHostDiscoverOptions {
 	if override.ControlEndpoint != "" {
 		base.ControlEndpoint = override.ControlEndpoint
 	}

@@ -5,7 +5,6 @@ use serde_json::Value;
 use std::time::Duration;
 
 use crate::daemon::execution::mission::directory::AgentDirectory;
-use crate::daemon::persistence::config;
 use crate::support::platform::output;
 
 use super::*;
@@ -25,7 +24,6 @@ pub(super) fn run_mcp(args: McpArgs) -> anyhow::Result<()> {
 ///   3. validate the user's `--tool` selection against the plan
 ///   4. materialise / dry-run the plans + render the operator summary
 pub(crate) fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
-    let dir = open_registered_agent(&args.name)?;
     let config_path = args
         .config
         .clone()
@@ -49,8 +47,30 @@ pub(crate) fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let outcome = write_mcp_additions(&dir, &plan.planned, args.overwrite, args.dry_run)?;
-    report_write_outcome(&args.name, &dir, &plan, &outcome, args.dry_run);
+    let manifests = plan
+        .planned
+        .iter()
+        .map(mcp_manifest_for)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let outcome = if args.dry_run {
+        let directory =
+            crate::cli::commands::agent_new_ability::preview_agent_directory(&args.name)?;
+        preview_mcp_additions(&directory, &manifests, args.overwrite)?
+    } else {
+        let committed = crate::cli::commands::agent_new_ability::commit_ability_manifests(
+            &args.name,
+            manifests,
+            args.overwrite,
+            crate::cli::commands::agent_new_ability::AbilityConflictPolicy::RetainSameBinding,
+        )?;
+        McpAdditionOutcome {
+            written: committed.written.len(),
+            skipped: committed.skipped.len(),
+            abilities_dir: committed.root_path.join("abilities"),
+            live_publication_count: committed.publication.len(),
+        }
+    };
+    report_write_outcome(&args.name, &plan, &outcome, args.dry_run);
     Ok(())
 }
 
@@ -69,6 +89,8 @@ struct McpAdditionPlan {
 struct McpAdditionOutcome {
     written: usize,
     skipped: usize,
+    abilities_dir: std::path::PathBuf,
+    live_publication_count: usize,
 }
 
 /// Build the manifest plan for one `easynet agent mcp add` invocation.
@@ -197,28 +219,18 @@ pub(super) fn assert_tools_filter_satisfied(
     Ok(())
 }
 
-/// Phase (4): turn each plan into a manifest TOML and either print
-/// it (dry-run) or atomically write it to the agent's abilities
-/// directory. Returns the materialisation outcome so the caller can
-/// render the operator summary.
-fn write_mcp_additions(
+/// Read-only dry-run projection. The daemon remains the sole writer; this
+/// helper only preserves the existing preview/conflict UX.
+fn preview_mcp_additions(
     dir: &AgentDirectory,
-    planned: &[McpAbilityPlan],
+    manifests: &[crate::daemon::ability::manifest::AbilityManifest],
     overwrite: bool,
-    dry_run: bool,
 ) -> anyhow::Result<McpAdditionOutcome> {
-    if !dry_run {
-        std::fs::create_dir_all(dir.abilities_dir()).map_err(|e| {
-            anyhow::anyhow!(
-                "create abilities directory {}: {e}",
-                dir.abilities_dir().display()
-            )
-        })?;
-    }
-
-    let mut outcome = McpAdditionOutcome::default();
-    for plan in planned {
-        let manifest = mcp_manifest_for(plan)?;
+    let mut outcome = McpAdditionOutcome {
+        abilities_dir: dir.abilities_dir(),
+        ..Default::default()
+    };
+    for manifest in manifests {
         let body = manifest.to_toml_string()?;
         let path = dir
             .abilities_dir()
@@ -227,7 +239,7 @@ fn write_mcp_additions(
         if path.exists() && !overwrite {
             let existing = std::fs::read_to_string(&path).ok();
             if existing.as_deref().and_then(existing_mcp_binding).as_ref()
-                == Some(&(plan.server.clone(), plan.tool.clone()))
+                == proposed_mcp_binding(manifest).as_ref()
             {
                 outcome.skipped += 1;
                 continue;
@@ -238,14 +250,9 @@ fn write_mcp_additions(
             );
         }
 
-        if dry_run {
-            println!("--- {}", path.display());
-            print!("{body}");
-        } else {
-            config::atomic_write(&path, body.as_bytes())
-                .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
-            outcome.written += 1;
-        }
+        println!("--- {}", path.display());
+        print!("{body}");
+        outcome.written += 1;
     }
     Ok(outcome)
 }
@@ -269,7 +276,6 @@ fn report_empty_plan(list_failures: &[String]) {
 /// detail lines + trailing warnings for partial failures).
 fn report_write_outcome(
     agent_name: &str,
-    dir: &AgentDirectory,
     plan: &McpAdditionPlan,
     outcome: &McpAdditionOutcome,
     dry_run: bool,
@@ -291,10 +297,15 @@ fn report_write_outcome(
                 &format!("{} existing identical binding(s)", outcome.skipped),
             );
         }
-        output::detail("root", &dir.abilities_dir().display().to_string());
-        output::info(
-            "A running daemon can invoke these through the dynamic agent fallback immediately; restart or refresh catalogue surfaces if a UI needs to list them.",
+        output::detail("root", &outcome.abilities_dir.display().to_string());
+        output::detail(
+            "live",
+            &format!(
+                "{} committed Agent ability descriptor(s)",
+                outcome.live_publication_count
+            ),
         );
+        output::info("The daemon committed the MCP bindings to the live capability catalog.");
     }
     for failure in &plan.list_failures {
         output::warn(failure);
@@ -456,6 +467,16 @@ pub(super) fn mcp_manifest_for(
 pub(super) fn existing_mcp_binding(body: &str) -> Option<(String, String)> {
     use crate::daemon::ability::manifest::AbilityExec;
     let manifest = crate::daemon::ability::manifest::AbilityManifest::from_toml_str(body).ok()?;
+    match manifest.exec()? {
+        AbilityExec::Mcp(exec) => Some((exec.server.clone(), exec.tool.clone())),
+        _ => None,
+    }
+}
+
+fn proposed_mcp_binding(
+    manifest: &crate::daemon::ability::manifest::AbilityManifest,
+) -> Option<(String, String)> {
+    use crate::daemon::ability::manifest::AbilityExec;
     match manifest.exec()? {
         AbilityExec::Mcp(exec) => Some((exec.server.clone(), exec.tool.clone())),
         _ => None,

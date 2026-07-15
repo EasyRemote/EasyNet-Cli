@@ -549,7 +549,9 @@ mod tests {
         let mut file = ResourcesFile::default();
         let ura = seed_mic(&mut file, "h-mic-e2e");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -621,7 +623,9 @@ mod tests {
             },
         );
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -640,7 +644,9 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -664,7 +670,9 @@ mod tests {
             .expect("create state dir");
         std::fs::write(&path, b"{not-json").expect("write corrupt resources table");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {

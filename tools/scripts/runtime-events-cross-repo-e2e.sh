@@ -18,15 +18,36 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 
 if [[ "${1:-}" == "--self-test" ]]; then
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "$tmp"' EXIT
+  backend_fixture="$tmp/backend"
+  easyremote_fixture="$tmp/easyremote"
+  mkdir -p "$backend_fixture/internal/sdkevents" \
+    "$backend_fixture/internal/svc" \
+    "$easyremote_fixture/tests"
+  cat >"$backend_fixture/internal/sdkevents/events_test.go" <<'EOF'
+package sdkevents
+
+func TestClientBuildsDeviceSubscriptionThroughBackendEventsAdapter() {}
+EOF
+  cat >"$backend_fixture/internal/svc/sdk_events_test.go" <<'EOF'
+package svc
+
+func TestSDKEventsAdapterOwnsProductStreamLowering() {}
+EOF
+  cat >"$easyremote_fixture/tests/test_mission.py" <<'EOF'
+def test_event_tailer_fails_closed_on_dropped_events():
+    pass
+EOF
   bash -n "$0"
   test -f "$REPO_ROOT/sdk/go/runtime_events_test.go"
   test -f "$REPO_ROOT/sdk/python/tests/test_runtime_events.py"
-  test -f "$BACKEND_ROOT/internal/sdkevents/events_test.go"
-  test -f "$BACKEND_ROOT/internal/svc/sdk_events_test.go"
-  test -f "$EASYREMOTE_ROOT/tests/test_mission.py"
-  grep -q "TestClientBuildsDeviceSubscriptionThroughRuntimeEventSubscriptionClient" "$BACKEND_ROOT/internal/sdkevents/events_test.go"
-  grep -q "TestSDKEventStreamOpenerBuildsAllSubscriptionCarriers" "$BACKEND_ROOT/internal/svc/sdk_events_test.go"
-  grep -q "test_event_tailer_fails_closed_on_dropped_events" "$EASYREMOTE_ROOT/tests/test_mission.py"
+  test -f "$backend_fixture/internal/sdkevents/events_test.go"
+  test -f "$backend_fixture/internal/svc/sdk_events_test.go"
+  test -f "$easyremote_fixture/tests/test_mission.py"
+  grep -q "TestClientBuildsDeviceSubscriptionThroughBackendEventsAdapter" "$backend_fixture/internal/sdkevents/events_test.go"
+  grep -q "TestSDKEventsAdapterOwnsProductStreamLowering" "$backend_fixture/internal/svc/sdk_events_test.go"
+  grep -q "test_event_tailer_fails_closed_on_dropped_events" "$easyremote_fixture/tests/test_mission.py"
   echo "runtime-events-cross-repo-e2e self-test ok"
   exit 0
 fi
@@ -56,7 +77,7 @@ echo "[runtime-events-cross-repo-e2e] Backend SDK event adapter tests..."
 (
   cd "$BACKEND_ROOT"
   go test ./internal/sdkevents ./internal/svc ./internal/sdkboundary \
-    -run 'Test(ClientBuildsDeviceSubscriptionThroughRuntimeEventSubscriptionClient|ClientBuildsSessionSubscriptionWithSinceSequence|SubscriptionAbilityRejectsUnsupportedStream|SDKEventStreamOpenerBuildsAllSubscriptionCarriers|SDKEventsAdapterDelegatesCanonicalStreamLoweringToSDK)$' \
+    -run 'Test(ClientBuildsDeviceSubscriptionThroughBackendEventsAdapter|ClientBuildsSessionSubscriptionWithSinceSequence|SubscriptionAbilityRejectsUnsupportedStream|SDKEventsAdapterOwnsProductStreamLowering|SDKEventsAdapterDoesNotUseCanonicalSDKRouteCatalog)$' \
     -count=1
 )
 

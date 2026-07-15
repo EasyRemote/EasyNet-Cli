@@ -9,12 +9,12 @@ from typing import Mapping
 from .connection import ConnectOptions
 from .daemon import (
     AttachOptions,
-    DaemonControl,
-    DaemonHandle,
-    DaemonLifecycleState,
-    DaemonStatus,
     DiscoverOptions,
     Endpoints,
+    RuntimeHandle,
+    RuntimeLifecycle,
+    RuntimeLifecycleState,
+    RuntimeStatus,
     StartConfig,
     StopOptions,
 )
@@ -46,7 +46,7 @@ class RuntimeAdminCommand(StrEnum):
 class RuntimeReadiness:
     """Runtime lifecycle and health readiness projection."""
 
-    lifecycle_state: DaemonLifecycleState
+    lifecycle_state: RuntimeLifecycleState
     endpoints: Endpoints
     health: RuntimeHealth
     diagnostics: DiagnosticsReport | None
@@ -56,7 +56,7 @@ class RuntimeReadiness:
 
 @dataclass(frozen=True)
 class RuntimeSessionListRequest:
-    """Runtime administration request for daemon session listing."""
+    """Runtime administration request for runtime session listing."""
 
     call: RuntimeCallContext
     include_terminated: bool | None = None
@@ -64,7 +64,7 @@ class RuntimeSessionListRequest:
 
 @dataclass(frozen=True)
 class RuntimeSession:
-    """One daemon runtime session projection."""
+    """One runtime session projection."""
 
     kind: str = ""
     session_id: str = ""
@@ -79,7 +79,7 @@ class RuntimeSession:
 
 @dataclass(frozen=True)
 class RuntimeSessionPage:
-    """Daemon runtime session page."""
+    """Runtime session page."""
 
     system_ability: str = ""
     state: str = ""
@@ -110,49 +110,49 @@ class RuntimeDeviceRevokeResult:
 
 
 class RuntimeAdminClient:
-    """Generic daemon/runtime administration facade."""
+    """Generic runtime administration facade."""
 
     def __init__(
-        self, control: DaemonControl, health: HealthClient | None = None
+        self, lifecycle: RuntimeLifecycle, health: HealthClient | None = None
     ) -> None:
-        if control is None:
-            raise _invalid_admin("daemon control is required")
-        self._control = control
+        if lifecycle is None:
+            raise _invalid_admin("runtime lifecycle is required")
+        self._lifecycle = lifecycle
         self._health = health
 
     def discover(self, options: DiscoverOptions = DiscoverOptions()) -> Endpoints:
-        return self._control.discover(options)
+        return self._lifecycle.discover(options)
 
-    def start(self, config: StartConfig) -> DaemonHandle:
-        return self._control.start(config)
+    def start(self, config: StartConfig) -> RuntimeHandle:
+        return self._lifecycle.start(config)
 
-    def attach(self, options: AttachOptions = AttachOptions()) -> DaemonHandle:
-        return self._control.attach(options)
+    def attach(self, options: AttachOptions = AttachOptions()) -> RuntimeHandle:
+        return self._lifecycle.attach(options)
 
-    def status(self, handle: DaemonHandle) -> DaemonStatus:
+    def status(self, handle: RuntimeHandle) -> RuntimeStatus:
         if handle is None:
-            raise _invalid_admin("daemon handle is required")
+            raise _invalid_admin("runtime handle is required")
         return handle.status()
 
     def open_runtime(
         self,
-        handle: DaemonHandle,
+        handle: RuntimeHandle,
         options: ConnectOptions = ConnectOptions(),
     ) -> RuntimeClient:
         if handle is None:
-            raise _invalid_admin("daemon handle is required")
+            raise _invalid_admin("runtime handle is required")
         return handle.open_runtime(options)
 
     def stop(
-        self, handle: DaemonHandle, options: StopOptions = StopOptions()
+        self, handle: RuntimeHandle, options: StopOptions = StopOptions()
     ) -> None:
         if handle is None:
-            raise _invalid_admin("daemon handle is required")
+            raise _invalid_admin("runtime handle is required")
         handle.stop(options)
 
-    def detach(self, handle: DaemonHandle) -> None:
+    def detach(self, handle: RuntimeHandle) -> None:
         if handle is None:
-            raise _invalid_admin("daemon handle is required")
+            raise _invalid_admin("runtime handle is required")
         handle.detach()
 
     def health(self) -> RuntimeHealth:
@@ -165,7 +165,7 @@ class RuntimeAdminClient:
             raise _invalid_admin("health client is required")
         return self._health.diagnostics()
 
-    def readiness(self, handle: DaemonHandle) -> RuntimeReadiness:
+    def readiness(self, handle: RuntimeHandle) -> RuntimeReadiness:
         status = self.status(handle)
         health = self.health()
         diagnostics: DiagnosticsReport | None = None
@@ -233,10 +233,10 @@ class RuntimeAdminAbilityClient:
         )
 
 
-def _runtime_ready(state: DaemonLifecycleState) -> bool:
+def _runtime_ready(state: RuntimeLifecycleState) -> bool:
     return state in {
-        DaemonLifecycleState.INVOCATION_READY,
-        DaemonLifecycleState.RUNNING,
+        RuntimeLifecycleState.INVOCATION_READY,
+        RuntimeLifecycleState.RUNNING,
     }
 
 
@@ -266,6 +266,7 @@ def _runtime_session_page(output: Mapping[str, object]) -> RuntimeSessionPage:
     for row in rows:
         if not isinstance(row, Mapping):
             continue
+        raw_metadata = row.get("metadata")
         sessions.append(
             RuntimeSession(
                 kind=_admin_string(row.get("kind")),
@@ -276,8 +277,8 @@ def _runtime_session_page(output: Mapping[str, object]) -> RuntimeSessionPage:
                 session_kind=_admin_string(row.get("session_kind")),
                 created_unix_ms=_admin_int(row.get("created_unix_ms")),
                 expires_unix_ms=_admin_int(row.get("expires_unix_ms")),
-                metadata=dict(row.get("metadata"))
-                if isinstance(row.get("metadata"), Mapping)
+                metadata=dict(raw_metadata)
+                if isinstance(raw_metadata, Mapping)
                 else {},
             )
         )

@@ -7,7 +7,9 @@ import (
 )
 
 func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
-	runtime, err := NewRuntimeClient(RuntimeTransportFunc{})
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}
@@ -23,7 +25,7 @@ func TestRuntimeAbilityClientBuildsCompleteCanonicalDraft(t *testing.T) {
 	if draft.CallerURA() != call.CallerURA || draft.CalleeURA() != call.CalleeURA || draft.NonceBase64() != call.NonceBase64 {
 		t.Fatalf("call context changed: %#v", draft)
 	}
-	if draft.DescriptorRef() != "easynet:///r/example/ability/hub.namespace.resolve@1.0.0" {
+	if draft.DescriptorRef() != "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
 		t.Fatalf("descriptor_ref = %q", draft.DescriptorRef())
 	}
 	if draft.SubjectURA() == call.SubjectURA {
@@ -42,7 +44,7 @@ func TestRuntimeAbilityClientInvokesObjectResult(t *testing.T) {
 			return nil, err
 		}
 		return runtimeAbilityResultJSON(true, `{"answer_kind":"positive"}`, "", false), nil
-	}}
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, err := NewRuntimeClient(transport)
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
@@ -61,7 +63,9 @@ func TestRuntimeAbilityClientInvokesObjectResult(t *testing.T) {
 }
 
 func TestRuntimeAbilityClientFailsClosedOnIncompleteContext(t *testing.T) {
-	runtime, _ := NewRuntimeClient(RuntimeTransportFunc{})
+	runtime, _ := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
 	client, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	call := runtimeAbilityTestContext()
 	call.CausalContext = nil
@@ -90,7 +94,7 @@ func runtimeAbilityResultJSON(ok bool, outputJSON string, message string, retrya
 }
 
 func runtimeAbilityDraftJSON() string {
-	return `{"caller_ura":"easynet:///r/example/agent/alice.client","callee_ura":"easynet:///r/example/hub","descriptor_ref":"easynet:///r/example/ability/hub.namespace.resolve@1.0.0","subject_ura":"easynet:///r/example/resource/user.alice/invoke/namespace.resolve","nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==","causal_context":{"form":"none"},"args":{},"content_type":"application/json","metadata":{}}`
+	return `{"caller_ura":"easynet:///r/example/agent/alice.client","callee_ura":"easynet:///r/example/hub","descriptor_ref":"easynet:///r/example/ability/hub.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read","subject_ura":"easynet:///r/example/resource/user.alice/invoke/namespace.resolve","nonce_base64":"AQIDBAUGBwgJCgsMDQ4PEA==","causal_context":{"form":"none"},"args":{},"content_type":"application/json","metadata":{}}`
 }
 
 func mustJSON(value any) []byte {

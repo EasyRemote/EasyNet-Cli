@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "chat.history.get"
+descriptor_version = "1.0.0"
 description = "Read one chat session's transcript turns (the session_meta line plus every recorded turn: prompt, reply, tool_calls, usage), verbatim."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

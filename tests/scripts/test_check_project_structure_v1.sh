@@ -24,9 +24,7 @@ mkfinal() {
     "$dir/src/bin/easynet-daemon.rs" \
     "$dir/src/bin/easynet-keyring.rs" \
     "$dir/src/bin/gen-ability-tomls.rs" \
-    "$dir/src/bin/sdk-conformance-runner.rs" \
-    "$dir/src/bin/real-user-smoke.rs" \
-    "$dir/src/bin/real-publish-smoke.rs"
+    "$dir/src/bin/real-user-smoke.rs"
 
   mkdir -p \
     "$dir/src/core/agent" \

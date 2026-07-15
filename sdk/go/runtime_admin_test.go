@@ -17,7 +17,7 @@ func TestRuntimeAdminReadinessComposesLifecycleAndHealth(t *testing.T) {
 		t.Fatalf("NewDaemonControl: %v", err)
 	}
 	health, err := NewHealthClient(staticHealthTransport{
-		health:      []byte(`{"api_ready":true,"daemon_ready":true,"invocation_ready":true,"directory_ready":true,"trust_ready":true,"runtime_ready":true,"diagnostics":["health-ok"]}`),
+		health:      []byte(`{"api_ready":true,"invocation_ready":true,"directory_ready":true,"trust_ready":true,"runtime_ready":true,"diagnostics":["health-ok"]}`),
 		diagnostics: []byte(`{"profile":"health","kind":"diagnostics_report","state":"Running","ready":true,"version":"0.91.30","abi_version":5,"control_endpoint":"unix:///tmp/control.sock","invocation_endpoint":"unix:///tmp/daemon.sock","checks":[{"name":"runtime","ready":true,"message":null}],"diagnostics":[]}`),
 	})
 	if err != nil {
@@ -92,7 +92,7 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 	if len(page.Sessions) != 1 || page.Sessions[0].SessionID != "session-a" {
 		t.Fatalf("unexpected session page: %#v", page)
 	}
-	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/hub.session.list@1.0.0"; got != want {
+	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/hub.session.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"; got != want {
 		t.Fatalf("descriptor_ref = %#v, want %q", got, want)
 	}
 	args := capture.args(t)
@@ -120,7 +120,7 @@ func TestRuntimeAdminAbilityClientRevokesDevice(t *testing.T) {
 	if result.Ack || !result.RuntimeNotReady || result.DeviceURA != "easynet:///r/example/device/laptop" {
 		t.Fatalf("unexpected revoke result: %#v", result)
 	}
-	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/hub.federation.revoke@1.0.0"; got != want {
+	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/hub.federation.revoke@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"; got != want {
 		t.Fatalf("descriptor_ref = %#v, want %q", got, want)
 	}
 	args := capture.args(t)
@@ -188,7 +188,10 @@ func (c *runtimeAdminInvokeCapture) metadata(t *testing.T) map[string]any {
 
 func newRuntimeAdminAbilityTestClient(t *testing.T, capture *runtimeAdminInvokeCapture) *RuntimeAdminAbilityClient {
 	t.Helper()
-	runtimeClient, err := NewRuntimeClient(RuntimeTransportFunc{InvokeFunc: capture.Invoke})
+	runtimeClient, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc:               capture.Invoke,
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
 	}

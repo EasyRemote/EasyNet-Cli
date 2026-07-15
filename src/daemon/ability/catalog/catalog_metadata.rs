@@ -5,12 +5,17 @@
 // descriptor paths, descriptions, input schemas, RFC-006 rows.
 // Catalog metadata owner for daemon-owned system abilities.
 
-use super::{build_registry, build_system_registry};
+use std::collections::BTreeMap;
 
+use super::{build_registry, build_system_registry, daemon_invocation_contracts};
+
+#[cfg(feature = "axon-pb")]
+use crate::daemon::ability::builtins::governance::invocation_cancel as invocation_cancel_ability;
 use crate::daemon::ability::builtins::{
     agents::{
-        chat_history as chat_history_ability, discover as discover_ability,
-        lifecycle as agent_lifecycle_ability, list as agent_list_ability,
+        authoring as agent_authoring_ability, chat_history as chat_history_ability,
+        discover as discover_ability, lifecycle as agent_lifecycle_ability,
+        list as agent_list_ability,
     },
     automation::{
         discuss as discuss_ability, loop_ability, mission as mission_ability,
@@ -53,6 +58,30 @@ use crate::daemon::ability::names::{
     integrations as integration_names, resources as resource_names,
 };
 use crate::daemon::ability::CallMode as DescriptorCallMode;
+
+/// Descriptor-generation inventory entry.
+///
+/// Operational entries originate from the deterministic live registry.
+/// Contract-only entries originate from capability-state evidence. This type
+/// is intentionally separate from live publication so Seam/Unsupported
+/// contracts can retain generated TOMLs without becoming callable rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SystemAbilityContract {
+    pub name: String,
+    pub descriptor_version: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+    pub output_receipt_schema: serde_json::Value,
+    pub call_mode: DescriptorCallMode,
+    pub admission_action: crate::daemon::ability::descriptors::AdmissionAction,
+    pub receipt_semantics: crate::daemon::ability::descriptors::ReceiptSemantics,
+    pub visibility: crate::daemon::ability::descriptors::Visibility,
+    pub scope_subjects: crate::daemon::ability::descriptors::ScopeRule,
+    pub scope_agents: crate::daemon::ability::descriptors::ScopeRule,
+    pub denied_agents: Vec<String>,
+    pub hints: AbilityHints,
+    pub capability_state: crate::daemon::ability::conformance::CapabilityState,
+}
 
 /// Public list of every v1 system-ability *name*. Used by
 /// `registry::a2a_labels` to populate the top-level
@@ -110,13 +139,8 @@ pub fn is_local_runtime_routable_catalog_name(name: &str) -> bool {
 /// Every published system ability descriptor, in deterministic
 /// order `published_ability_names()` returns.
 ///
-/// `<agent>.chat` is **excluded** even when the live registry would
-/// include it: those entries are already published to the
-/// axon-runtime via `daemon::federation::publish::republish_abilities_via_advertise`
-/// off the on-disk `chat.ability.toml` manifest, and re-publishing
-/// them through the system path would double-register with a
-/// different (synthesised) schema. Filter is by suffix because the
-/// agent name varies per install.
+/// Dynamic hosted-Agent rows are excluded from this deterministic metadata
+/// helper. Daemon publication captures them from the live control plane.
 pub fn published_abilities() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let registry = build_registry();
     published_abilities_from_registry(&registry)
@@ -132,6 +156,136 @@ pub fn published_abilities() -> Vec<crate::daemon::ability::descriptors::Ability
 pub fn published_system_abilities() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let registry = build_system_registry();
     published_abilities_from_registry(&registry)
+}
+
+/// Every daemon-owned static descriptor contract, including non-operational
+/// provider seams that must remain on disk but absent from live publication.
+pub fn system_ability_contract_inventory() -> Vec<SystemAbilityContract> {
+    system_ability_contract_inventory_for_voice_assembly(
+        crate::daemon::ability::conformance::VoiceAssemblyEvidence::default(),
+    )
+}
+
+pub fn system_ability_contract_inventory_for_voice_assembly(
+    voice_assembly: crate::daemon::ability::conformance::VoiceAssemblyEvidence,
+) -> Vec<SystemAbilityContract> {
+    use crate::daemon::ability::conformance::CapabilityState;
+
+    let mut contracts = BTreeMap::new();
+    let voice_contracts = voice_ability_contract_inventory(voice_assembly)
+        .into_iter()
+        .map(|contract| (contract.name.clone(), contract))
+        .collect::<BTreeMap<_, _>>();
+    for path in super::iter_system_ability_descriptor_paths() {
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(contract) = super::ability_toml::parse_ability_contract_toml(&body) else {
+            continue;
+        };
+        let Ok(expected_path) = super::try_system_ability_descriptor_path(&contract.name) else {
+            continue;
+        };
+        if path == expected_path {
+            // Voice capability state is an assembly fact. Its canonical
+            // contract is parsed from this same TOML and projected once by
+            // `voice_ability_contract_inventory`; do not collide that
+            // projection with the file's unassembled Seam baseline.
+            if voice_contracts.contains_key(&contract.name) {
+                continue;
+            }
+            insert_canonical_contract(&mut contracts, contract);
+        }
+    }
+    for descriptor in published_system_abilities() {
+        let name = descriptor.name.clone();
+        let input_schema = descriptor.input_schema().clone();
+        let call_mode = descriptor.call_mode();
+        let contract = SystemAbilityContract {
+            name: name.clone(),
+            descriptor_version: descriptor.version.clone(),
+            description: descriptor.description.clone(),
+            input_schema,
+            output_receipt_schema: match descriptor.output_receipt_schema() {
+                serde_json::Value::Null => serde_json::json!({}),
+                schema => schema.clone(),
+            },
+            call_mode,
+            admission_action: descriptor.admission_action(),
+            receipt_semantics: descriptor.receipt_semantics().clone(),
+            visibility: descriptor.visibility,
+            scope_subjects: descriptor.scope_subjects.clone(),
+            scope_agents: descriptor.scope_agents.clone(),
+            denied_agents: descriptor.denied_agents().to_vec(),
+            hints: descriptor.hints.clone(),
+            capability_state: CapabilityState::CutoverReady,
+        };
+        insert_canonical_contract(&mut contracts, contract);
+    }
+
+    for contract in voice_contracts.into_values() {
+        insert_canonical_contract(&mut contracts, contract);
+    }
+
+    contracts.into_values().collect()
+}
+
+/// Voice static contracts derived only from typed capability-state evidence.
+/// This path deliberately does not construct the operational registry, so
+/// conformance gates cannot accidentally require unrelated runtime services.
+pub fn voice_ability_contract_inventory(
+    voice_assembly: crate::daemon::ability::conformance::VoiceAssemblyEvidence,
+) -> Vec<SystemAbilityContract> {
+    use crate::daemon::ability::conformance::voice_capability_state_evidence;
+
+    voice_capability_state_evidence(voice_assembly)
+        .into_iter()
+        .map(|evidence| {
+            let path = system_ability_descriptor_path(evidence.name);
+            let body = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!("read canonical Voice contract {}: {error}", path.display())
+            });
+            let mut contract = super::ability_toml::parse_ability_contract_toml(&body)
+                .unwrap_or_else(|error| panic!("parse Voice contract {}: {error}", path.display()));
+            assert_eq!(contract.name, evidence.name);
+            assert_eq!(contract.call_mode, evidence.call_mode);
+            contract.capability_state = evidence.state;
+            if let Some(schema) =
+                crate::daemon::ability::builtins::resources::voice::output_receipt_schema_for(
+                    evidence.name,
+                )
+            {
+                contract.output_receipt_schema = schema;
+            } else if evidence.state
+                != crate::daemon::ability::conformance::CapabilityState::Unsupported
+                && contract.output_receipt_schema.is_null()
+            {
+                panic!(
+                    "operational Voice contract {:?} has no receipt schema",
+                    evidence.name
+                );
+            }
+            contract
+        })
+        .collect()
+}
+
+fn insert_canonical_contract(
+    contracts: &mut BTreeMap<String, SystemAbilityContract>,
+    contract: SystemAbilityContract,
+) {
+    use std::collections::btree_map::Entry;
+    match contracts.entry(contract.name.clone()) {
+        Entry::Vacant(entry) => {
+            entry.insert(contract);
+        }
+        Entry::Occupied(entry) => assert_eq!(
+            entry.get(),
+            &contract,
+            "authority-scoped rows disagree on canonical descriptor contract {:?}",
+            contract.name
+        ),
+    }
 }
 
 /// Published system abilities whose authority/projection class was declared as
@@ -176,10 +330,20 @@ fn published_abilities_from_registry_for_owner(
     registry: &AxonAbilityCatalog,
     owner: Option<&crate::daemon::ability::dispatch::OwnerKind>,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
+    let contract_only_names =
+        crate::daemon::ability::conformance::HubBaseline::required_abilities()
+            .iter()
+            .filter(|ability| {
+                ability.surface
+                    != crate::daemon::ability::conformance::BaselineSurface::LocalRegistry
+            })
+            .map(|ability| ability.name)
+            .collect::<std::collections::BTreeSet<_>>();
     registry
         .authority_ability_catalog_snapshot()
         .into_iter()
         .filter(|row| is_publishable_catalog_name(&row.name))
+        .filter(|row| !contract_only_names.contains(row.name.as_str()))
         .filter(|row| owner.map(|expected| &row.owner == expected).unwrap_or(true))
         .filter(|row| !row.name.ends_with(".chat"))
         // RFC-002 §3.3 keyring abilities are owner-namespaced under
@@ -215,137 +379,6 @@ pub(crate) fn discovery_hints_for(registry: &AxonAbilityCatalog, name: &str) -> 
         .unwrap_or_default()
 }
 
-pub(crate) fn registered_descriptor_for_name(
-    name: &str,
-) -> Option<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    let registry = build_registry();
-    registry
-        .canonical_descriptor_for_ability(name)
-        .ok()
-        .flatten()
-}
-
-/// RFC-014 hub-linked-token safe-read projection.
-///
-/// `read_only` and `idempotent` remain the descriptor/catalog source of
-/// truth for purity. Safe-read is narrower: the output must also be a
-/// descriptor-safe public metadata projection that does not expose private
-/// content, topology, reusable handles, route facts, key/proof material, or
-/// session authority. This function is deliberately catalog-owned so
-/// admission and diagnostics do not maintain a parallel allowlist.
-pub(crate) fn safe_read_eligible_for_name(name: &str) -> bool {
-    registered_descriptor_for_name(name).is_some_and(|descriptor| {
-        descriptor.hints.read_only
-            && descriptor.hints.idempotent
-            && descriptor.call_mode() == DescriptorCallMode::Rpc
-            && exposure_class_for_name(name) == AbilityExposureClass::DescriptorSafeMetadata
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AbilityExposureClass {
-    DescriptorSafeMetadata,
-    PrivateRead,
-    SessionOrCarrier,
-    ManagementOrExecution,
-}
-
-pub(crate) fn exposure_class_for_name(name: &str) -> AbilityExposureClass {
-    use AbilityExposureClass::{
-        DescriptorSafeMetadata, ManagementOrExecution, PrivateRead, SessionOrCarrier,
-    };
-
-    if name.ends_with(".chat") {
-        return ManagementOrExecution;
-    }
-
-    match name {
-        // Descriptor-safe, bounded metadata/readiness projections.
-        governance_names::OBSERVE_HEALTH
-        | governance_names::OBSERVE_NETWORK_HEALTH
-        | governance_names::ADMIN_STATUS
-        | governance_names::META_DESCRIBE
-        | governance_names::META_LIST_ABILITIES
-        | federation_names::STATUS
-        | resource_names::META_LIST_RESOURCES
-        | "plugin.status"
-        | "plugin.companion_status" => DescriptorSafeMetadata,
-
-        // RFC-014 governance diagnostics and policy records are private by
-        // default; callers need owner/default authority or explicit grants.
-        governance_names::AUTHORITY_BINDING_LIST
-        | governance_names::AUTHORITY_BINDING_CHECK
-        | governance_names::POLICY_REQUEST_LIST
-        | governance_names::ADMISSION_EXPLAIN
-        | governance_names::CONSENT_LIST_PENDING
-        | governance_names::INVOCATION_HISTORY_LIST
-        | governance_names::INVOCATION_HISTORY_GET
-        | governance_names::INVOCATION_TRACE_GET
-        | governance_names::INVOCATION_HISTORY_PATH
-        | device_names::SESSION_LIST
-        | device_names::TERMINAL_LIST
-        | agent_names::AGENT_LIST
-        | agent_names::CHAT_HISTORY_LIST
-        | agent_names::CHAT_HISTORY_GET
-        | automation_names::MISSION_TRACK
-        | automation_names::DISCUSS_LIST_TURNS
-        | automation_names::SCHEDULE_LIST
-        | automation_names::LOOP_STATUS
-        | resource_names::SKILL_LIST
-        | resource_names::SKILL_TREE
-        | resource_names::SKILL_READ_FILE
-        | resource_names::CONTEXT_CLIPBOARD_LIST
-        | resource_names::CONTEXT_CLIPBOARD_GET
-        | resource_names::CONTEXT_FOLDERS_LIST
-        | resource_names::CONTEXT_FS_LIST
-        | resource_names::CONTEXT_FAVORITES_LIST
-        | resource_names::CONTEXT_CAPTURES_LIST
-        | resource_names::CONTEXT_CAPTURES_GET
-        | device_names::FS_READ
-        | device_names::FS_STAT
-        | device_names::FS_LIST
-        | federation_names::RESOLVE
-        | federation_names::DISCOVER
-        | federation_names::NAMESPACE_RESOLVE
-        | federation_names::RESOLVE_KEY
-        | federation_names::IDENTITY_LIST_USER_PUBKEYS
-        | federation_names::NODE_LIST
-        | federation_names::NODE_DESCRIBE
-        | integration_names::OPENAI_LIST_MODELS
-        | integration_names::OPENAI_FILES_RETRIEVE
-        | resource_names::VOICE_SHOW_CALL
-        | resource_names::VOICE_WATCH_CALL
-        | resource_names::VOICE_REPORT_METRICS
-        | resource_names::VOICE_LIST_CALLS => PrivateRead,
-
-        // Carriers and long-lived/session-style surfaces are never hub
-        // default safe-read, even when a specific frame is idempotent.
-        device_names::SESSION_OPEN
-        | device_names::SESSION_ATTACH
-        | device_names::TERMINAL_CREATE
-        | device_names::TERMINAL_ATTACH
-        | device_names::TERMINAL_INPUT
-        | device_names::TERMINAL_READ
-        | device_names::TERMINAL_RESIZE
-        | device_names::BROWSER_OPEN_SESSION
-        | device_names::BROWSER_ATTACH_SESSION
-        | device_names::BROWSER_SEND_INPUT
-        | device_names::BROWSER_CAPTURE_VIEWPORT
-        | resource_names::MEDIA_MIC_SUBSCRIBE
-        | resource_names::MEDIA_CAMERA_SUBSCRIBE
-        | resource_names::MEDIA_CAMERA_SNAPSHOT
-        | resource_names::MEDIA_CAMERA_RECORD_START
-        | resource_names::MEDIA_CAMERA_RECORD_STOP
-        | resource_names::MEDIA_SCREEN_SUBSCRIBE
-        | resource_names::MEDIA_SCREEN_SNAPSHOT
-        | resource_names::MEDIA_SPEAKER_PUBLISH
-        | resource_names::VOICE_SUBSCRIBE
-        | resource_names::VOICE_TRANSCRIBE => SessionOrCarrier,
-
-        _ => ManagementOrExecution,
-    }
-}
-
 /// Normalize semantic-layer purity and one exact registered transport into
 /// descriptor hints at the registration boundary.
 ///
@@ -364,9 +397,9 @@ pub(crate) fn registration_hints(
     // not a business read). Operational verbs change the world (neither).
     // These hints ride meta.list_abilities into the catalog, so the
     // frontend coalesces pure-read invokes from the catalog instead of
-    // re-classifying ability names locally. `destructive` stays a
-    // conservative false: the layer model does not assert destructiveness,
-    // and the hint is advisory only (RFC §1.6).
+    // re-classifying ability names locally. Destructiveness is named only for
+    // operations whose public contract explicitly authorizes irreversible
+    // deletion; it is never inferred from the broad Operational layer.
     let public_name = crate::core::ura::descriptor_public_ability_name(owner_ura, registry_name);
     let (read_only, idempotent) = match classify_ability(&public_name) {
         Some(AbilityLayer::Introspection) | Some(AbilityLayer::Observation) => (true, true),
@@ -375,6 +408,7 @@ pub(crate) fn registration_hints(
     };
     AbilityHints {
         read_only,
+        destructive: public_name == agent_names::AGENT_PURGE,
         idempotent,
         streaming_only: call_mode == DescriptorCallMode::Stream,
         bidi_only: call_mode == DescriptorCallMode::Bidi,
@@ -393,6 +427,9 @@ pub(crate) fn registration_hints(
 /// filter strips them, but other callers may not).
 pub fn description_for(name: &str) -> &'static str {
     if let Some(description) = crate::daemon::plugins::description_for(name) {
+        return description;
+    }
+    if let Some(description) = daemon_invocation_contracts::description_for(name) {
         return description;
     }
 
@@ -466,6 +503,8 @@ pub fn description_for(name: &str) -> &'static str {
         governance_names::INVOCATION_HISTORY_PATH => {
             invocation_history_ability::get_path_description()
         }
+        #[cfg(feature = "axon-pb")]
+        governance_names::INVOCATION_CANCEL => invocation_cancel_ability::description(),
         governance_names::AUTHORITY_BINDING_GRANT
         | governance_names::AUTHORITY_BINDING_REVOKE
         | governance_names::AUTHORITY_BINDING_LIST
@@ -484,7 +523,12 @@ pub fn description_for(name: &str) -> &'static str {
         device_names::FS_TRANSFER => file_transfer_ability::description(),
         agent_names::AGENT_START => agent_lifecycle_ability::start_agent_description(),
         agent_names::AGENT_STOP => agent_lifecycle_ability::stop_agent_description(),
+        agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_description(),
+        agent_names::AGENT_PURGE_RECONCILE => {
+            agent_lifecycle_ability::purge_reconcile_description()
+        }
         agent_names::AGENT_REFRESH => agent_lifecycle_ability::refresh_agents_description(),
+        agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => agent_authoring_ability::DESCRIPTION,
         federation_names::NODE_LIST => device_ops_ability::list_nodes_description(),
         federation_names::NODE_DESCRIBE => device_ops_ability::describe_node_description(),
         federation_names::NODE_REMOVE => device_ops_ability::remove_node_description(),
@@ -619,6 +663,9 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
     if let Some(schema) = crate::daemon::plugins::input_schema_for(name) {
         return schema;
     }
+    if let Some(schema) = daemon_invocation_contracts::input_schema_for(name) {
+        return schema;
+    }
 
     match name {
         governance_names::OBSERVE_HEALTH => ping::input_schema(),
@@ -689,6 +736,8 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         governance_names::INVOCATION_HISTORY_PATH => {
             invocation_history_ability::get_path_input_schema()
         }
+        #[cfg(feature = "axon-pb")]
+        governance_names::INVOCATION_CANCEL => invocation_cancel_ability::input_schema(),
         governance_names::AUTHORITY_BINDING_GRANT
         | governance_names::AUTHORITY_BINDING_REVOKE
         | governance_names::AUTHORITY_BINDING_LIST
@@ -707,7 +756,14 @@ pub fn input_schema_for(name: &str) -> serde_json::Value {
         device_names::FS_TRANSFER => file_transfer_ability::input_schema(),
         agent_names::AGENT_START => agent_lifecycle_ability::start_agent_input_schema(),
         agent_names::AGENT_STOP => agent_lifecycle_ability::stop_agent_input_schema(),
+        agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_input_schema(),
+        agent_names::AGENT_PURGE_RECONCILE => {
+            agent_lifecycle_ability::purge_reconcile_input_schema()
+        }
         agent_names::AGENT_REFRESH => agent_lifecycle_ability::refresh_agents_input_schema(),
+        agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY => {
+            agent_authoring_ability::input_schema()
+        }
         federation_names::NODE_LIST => device_ops_ability::list_nodes_input_schema(),
         federation_names::NODE_DESCRIBE => device_ops_ability::describe_node_input_schema(),
         federation_names::NODE_REMOVE => device_ops_ability::remove_node_input_schema(),
@@ -953,6 +1009,19 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
             crate::daemon::plugins::PluginAbilityLayer::Operational => AbilityLayer::Operational,
         });
     }
+    if let Some(layer) = daemon_invocation_contracts::contract_layer(name) {
+        return Some(match layer {
+            daemon_invocation_contracts::DaemonInvocationContractLayer::Introspection => {
+                AbilityLayer::Introspection
+            }
+            daemon_invocation_contracts::DaemonInvocationContractLayer::Control => {
+                AbilityLayer::Control
+            }
+            daemon_invocation_contracts::DaemonInvocationContractLayer::Operational => {
+                AbilityLayer::Operational
+            }
+        });
+    }
 
     match name {
         // ── Introspection ───────────────────────────────────
@@ -1011,13 +1080,19 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // all pure reads of device-local context state.
         | "context.clipboard.list"
         | "context.clipboard.get"
+        | "context.catalog"
         | "context.folders.list"
         | "context.fs.list"
         | "context.favorites.list"
         | "context.captures.list"
-        | "context.captures.get" => Some(AbilityLayer::Introspection),
+        | "context.captures.get"
+        | resource_names::VOICE_SHOW_CALL
+        | resource_names::VOICE_WATCH_CALL
+        | resource_names::VOICE_LIST_CALLS => Some(AbilityLayer::Introspection),
         // ── Control / decision ──────────────────────────────
         governance_names::CONSENT_DECIDE
+        | governance_names::INVOCATION_CANCEL
+        | agent_names::AGENT_PURGE_RECONCILE
         | governance_names::AUTHORITY_BINDING_GRANT
         | governance_names::AUTHORITY_BINDING_REVOKE
         | governance_names::POLICY_REQUEST_CREATE
@@ -1041,7 +1116,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         device_names::SESSION_ATTACH
         | agent_names::AGENT_START
         | agent_names::AGENT_STOP
+        | agent_names::AGENT_PURGE
         | agent_names::AGENT_REFRESH
+        | agent_authoring_ability::ABILITY_PUT_AGENT_ABILITY
         | resource_names::SKILL_INSTALL
         | resource_names::SKILL_REMOVE
         | resource_names::SKILL_UPGRADE
@@ -1081,19 +1158,14 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // (running an N-cycle reflective loop with two
         // independent chat sessions).
         | automation_names::MISSION_THINK
-        // voice.* call signaling abilities. State-mutating
-        // (create / join / leave / end / report_metrics) and
-        // state-reading (show / watch) — Operational by intent
-        // because the call IS the work. Same shape as
-        // discuss.subscribe / loop.subscribe sit here.
+        // Voice call mutations are operational. Read-only call inspection is
+        // classified above so its descriptor receives Read while metrics
+        // remains an explicit mutation despite using RPC geometry.
         | resource_names::VOICE_CREATE_CALL
-        | resource_names::VOICE_SHOW_CALL
         | resource_names::VOICE_JOIN_CALL
         | resource_names::VOICE_LEAVE_CALL
         | resource_names::VOICE_END_CALL
-        | resource_names::VOICE_WATCH_CALL
         | resource_names::VOICE_REPORT_METRICS
-        | resource_names::VOICE_LIST_CALLS
         // mcp.bridge.call_tool / a2a.bridge.send_task — both
         // dispatch into another local ability; the side effects
         // come from that dispatch, not the bridge itself. Sit
@@ -1220,5 +1292,90 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
             Some(AbilityLayer::Operational)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod canonical_contract_tests {
+    use super::*;
+    use crate::daemon::ability::conformance::CapabilityState;
+    use crate::daemon::ability::descriptors::{
+        AdmissionAction, ReceiptSemantics, ScopeRule, StateTransition, TransitionClass, Visibility,
+    };
+
+    #[test]
+    fn authority_rows_reject_every_canonical_contract_difference() {
+        let baseline = system_ability_contract_inventory()
+            .into_iter()
+            .find(|contract| contract.name == "voice.report_metrics")
+            .expect("voice report metrics contract");
+        let variants: Vec<SystemAbilityContract> = vec![
+            SystemAbilityContract {
+                descriptor_version: "9.9.9".to_string(),
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                input_schema: serde_json::json!({"type":"array"}),
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                call_mode: DescriptorCallMode::Stream,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                admission_action: AdmissionAction::Read,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                output_receipt_schema: serde_json::json!({"type":"object"}),
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                receipt_semantics: ReceiptSemantics::StateTransition(
+                    StateTransition::new("voice.report_metrics@v1", TransitionClass::Canonical)
+                        .expect("valid test transition"),
+                ),
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                visibility: Visibility::Public,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                scope_subjects: ScopeRule::None,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                scope_agents: ScopeRule::None,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                denied_agents: vec!["easynet:///r/test/agent/denied".to_string()],
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                hints: AbilityHints {
+                    destructive: !baseline.hints.destructive,
+                    ..baseline.hints.clone()
+                },
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                capability_state: CapabilityState::Unsupported,
+                ..baseline.clone()
+            },
+        ];
+
+        for variant in variants {
+            let mut contracts = BTreeMap::new();
+            insert_canonical_contract(&mut contracts, baseline.clone());
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    insert_canonical_contract(&mut contracts, variant)
+                }))
+                .is_err(),
+                "canonical conflict must fail closed"
+            );
+        }
     }
 }

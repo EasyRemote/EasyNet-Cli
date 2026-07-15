@@ -602,13 +602,7 @@ func accessControlGrantArgs(request AccessControlGrantRequest) (AccessControlGra
 		return AccessControlGrantRequest{}, nil, err
 	}
 	request.Grant = grant
-	ownerUserID, _ := accessControlUserIDFromURA(grant.OwnerURA, "owner_ura")
-	principalID, err := accessControlPrincipalID(grant.PrincipalKind, grant.PrincipalURA, grant.PrincipalID)
-	if err != nil {
-		return AccessControlGrantRequest{}, nil, err
-	}
-	wireGrant := accessControlGrantWire(grant, ownerUserID, principalID)
-	args := map[string]any{"grant": wireGrant, "owner_ura": grant.OwnerURA}
+	args := map[string]any{"grant": accessControlGrantWire(grant), "owner_ura": grant.OwnerURA}
 	if grant.PrincipalURA != "" {
 		args["principal_ura"] = grant.PrincipalURA
 	}
@@ -623,8 +617,7 @@ func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlR
 	if ownerURA == "" {
 		return AccessControlRevokeRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
 	}
-	ownerUserID, err := accessControlUserIDFromURA(ownerURA, "owner_ura")
-	if err != nil {
+	if _, err := accessControlUserIDFromURA(ownerURA, "owner_ura"); err != nil {
 		return AccessControlRevokeRequest{}, nil, err
 	}
 	grantID := strings.TrimSpace(request.GrantID)
@@ -632,7 +625,7 @@ func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlR
 		return AccessControlRevokeRequest{}, nil, invalidAccessControl("grant_id is required", nil)
 	}
 	request.OwnerURA = ownerURA
-	args := map[string]any{"owner_ura": ownerURA, "owner_user_id": ownerUserID, "grant_id": grantID}
+	args := map[string]any{"owner_ura": ownerURA, "grant_id": grantID}
 	if actor := strings.TrimSpace(request.ActorURA); actor != "" {
 		args["actor_ura"] = actor
 	}
@@ -647,20 +640,15 @@ func accessControlListArgs(request AccessControlListRequest) (AccessControlListR
 	if ownerURA == "" {
 		return AccessControlListRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
 	}
-	ownerUserID, err := accessControlUserIDFromURA(ownerURA, "owner_ura")
-	if err != nil {
+	if _, err := accessControlUserIDFromURA(ownerURA, "owner_ura"); err != nil {
 		return AccessControlListRequest{}, nil, err
 	}
-	principalID, err := accessControlPrincipalID(request.PrincipalKind, request.PrincipalURA, request.PrincipalID)
-	if err != nil {
+	if _, err := accessControlPrincipalID(request.PrincipalKind, request.PrincipalURA, request.PrincipalID); err != nil {
 		return AccessControlListRequest{}, nil, err
 	}
-	args := map[string]any{"owner_ura": ownerURA, "owner_user_id": ownerUserID}
+	args := map[string]any{"owner_ura": ownerURA}
 	if request.PrincipalKind != "" {
 		args["principal_kind"] = string(request.PrincipalKind)
-	}
-	if principalID != "" {
-		args["principal_id"] = principalID
 	}
 	if principalURA := strings.TrimSpace(request.PrincipalURA); principalURA != "" {
 		args["principal_ura"] = principalURA
@@ -691,8 +679,7 @@ func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlChe
 	if ownerURA == "" {
 		return AccessControlCheckRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
 	}
-	ownerUserID, err := accessControlUserIDFromURA(ownerURA, "owner_ura")
-	if err != nil {
+	if _, err := accessControlUserIDFromURA(ownerURA, "owner_ura"); err != nil {
 		return AccessControlCheckRequest{}, nil, err
 	}
 	principalID, err := accessControlPrincipalID(request.PrincipalKind, request.PrincipalURA, "")
@@ -714,9 +701,7 @@ func accessControlCheckArgs(request AccessControlCheckRequest) (AccessControlChe
 	}
 	args := map[string]any{
 		"owner_ura":                     ownerURA,
-		"owner_user_id":                 ownerUserID,
 		"principal_kind":                string(request.PrincipalKind),
-		"principal_id":                  principalID,
 		"principal_ura":                 strings.TrimSpace(request.PrincipalURA),
 		"callee_ura":                    strings.TrimSpace(request.CalleeURA),
 		"subject_ura":                   strings.TrimSpace(request.SubjectURA),
@@ -745,13 +730,8 @@ func accessControlPermissionRequestCreateArgs(request AccessControlPermissionReq
 	request.Request = projected
 	request.OwnerURA = projected.OwnerURA
 	request.PrincipalURA = projected.PrincipalURA
-	ownerUserID, _ := accessControlUserIDFromURA(projected.OwnerURA, "owner_ura")
-	principalID, err := accessControlPrincipalID(projected.PrincipalKind, projected.PrincipalURA, projected.PrincipalID)
-	if err != nil {
-		return AccessControlPermissionRequestCreateRequest{}, nil, err
-	}
 	args := map[string]any{
-		"request":   accessControlPermissionRequestWire(projected, ownerUserID, principalID),
+		"request":   accessControlPermissionRequestWire(projected),
 		"owner_ura": projected.OwnerURA,
 	}
 	if projected.PrincipalURA != "" {
@@ -769,13 +749,8 @@ func accessControlPermissionRequestResolveArgs(request AccessControlPermissionRe
 	request.Request = projected
 	request.OwnerURA = projected.OwnerURA
 	request.PrincipalURA = projected.PrincipalURA
-	ownerUserID, _ := accessControlUserIDFromURA(projected.OwnerURA, "owner_ura")
-	principalID, err := accessControlPrincipalID(projected.PrincipalKind, projected.PrincipalURA, projected.PrincipalID)
-	if err != nil {
-		return AccessControlPermissionRequestResolveRequest{}, nil, err
-	}
 	args := map[string]any{
-		"request":   accessControlPermissionRequestWire(projected, ownerUserID, principalID),
+		"request":   accessControlPermissionRequestWire(projected),
 		"owner_ura": projected.OwnerURA,
 	}
 	if projected.PrincipalURA != "" {
@@ -788,10 +763,10 @@ func accessControlPermissionRequestResolveArgs(request AccessControlPermissionRe
 			return AccessControlPermissionRequestResolveRequest{}, nil, err
 		}
 		request.CreatedGrant = &grant
-		args["created_grant"] = accessControlGrantWire(grant, ownerUserID, principalID)
+		args["created_grant"] = accessControlGrantWire(grant)
 	}
 	if request.AuthorityProof != nil {
-		args["authority_proof"] = accessControlAuthorityProofWire(*request.AuthorityProof, ownerUserID, principalID)
+		args["authority_proof"] = accessControlAuthorityProofWire(*request.AuthorityProof, projected.PrincipalID)
 	}
 	return request, args, nil
 }
@@ -801,20 +776,15 @@ func accessControlPermissionRequestListArgs(request AccessControlPermissionReque
 	if ownerURA == "" {
 		return AccessControlPermissionRequestListRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
 	}
-	ownerUserID, err := accessControlUserIDFromURA(ownerURA, "owner_ura")
-	if err != nil {
+	if _, err := accessControlUserIDFromURA(ownerURA, "owner_ura"); err != nil {
 		return AccessControlPermissionRequestListRequest{}, nil, err
 	}
-	principalID, err := accessControlPrincipalID(request.PrincipalKind, request.PrincipalURA, request.PrincipalID)
-	if err != nil {
+	if _, err := accessControlPrincipalID(request.PrincipalKind, request.PrincipalURA, request.PrincipalID); err != nil {
 		return AccessControlPermissionRequestListRequest{}, nil, err
 	}
-	args := map[string]any{"owner_ura": ownerURA, "owner_user_id": ownerUserID}
+	args := map[string]any{"owner_ura": ownerURA}
 	if request.PrincipalKind != "" {
 		args["principal_kind"] = string(request.PrincipalKind)
-	}
-	if principalID != "" {
-		args["principal_id"] = principalID
 	}
 	optionalStringArg(args, "principal_ura", request.PrincipalURA)
 	optionalStringArg(args, "token_id", request.TokenID)
@@ -872,13 +842,11 @@ func normalizeAccessControlGrant(grant AccessControlGrant, ownerURA string, prin
 	return grant, nil
 }
 
-func accessControlGrantWire(grant AccessControlGrant, ownerUserID string, principalID string) map[string]any {
+func accessControlGrantWire(grant AccessControlGrant) map[string]any {
 	wire := map[string]any{
 		"grant_id":       strings.TrimSpace(grant.GrantID),
-		"owner_user_id":  ownerUserID,
 		"owner_ura":      strings.TrimSpace(grant.OwnerURA),
 		"principal_kind": string(grant.PrincipalKind),
-		"principal_id":   principalID,
 		"principal_ura":  strings.TrimSpace(grant.PrincipalURA),
 		"actions":        grant.Actions,
 		"effect":         string(grant.Effect),
@@ -943,13 +911,11 @@ func normalizeAccessControlPermissionRequest(request AccessControlPermissionRequ
 	return request, nil
 }
 
-func accessControlPermissionRequestWire(request AccessControlPermissionRequest, ownerUserID string, principalID string) map[string]any {
+func accessControlPermissionRequestWire(request AccessControlPermissionRequest) map[string]any {
 	wire := map[string]any{
 		"request_id":     strings.TrimSpace(request.RequestID),
-		"owner_user_id":  ownerUserID,
 		"owner_ura":      strings.TrimSpace(request.OwnerURA),
 		"principal_kind": string(request.PrincipalKind),
-		"principal_id":   principalID,
 		"principal_ura":  strings.TrimSpace(request.PrincipalURA),
 		"callee_ura":     strings.TrimSpace(request.CalleeURA),
 		"subject_ura":    strings.TrimSpace(request.SubjectURA),
@@ -976,7 +942,8 @@ func accessControlPermissionRequestWire(request AccessControlPermissionRequest, 
 	return wire
 }
 
-func accessControlAuthorityProofWire(proof AccessControlAuthorityProof, ownerUserID string, principalID string) map[string]any {
+func accessControlAuthorityProofWire(proof AccessControlAuthorityProof, principalID string) map[string]any {
+	ownerUserID, _ := accessControlUserIDFromURA(proof.OwnerURA, "authority_proof.owner_ura")
 	wire := map[string]any{
 		"proof_id":       strings.TrimSpace(proof.ProofID),
 		"owner_user_id":  ownerUserID,

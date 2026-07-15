@@ -56,6 +56,7 @@ use crate::daemon::federation::read_model::owner_projection::AbilityProjectionSu
 pub(crate) struct OwnerAbilityProjectionRow {
     owner_ura: String,
     host_device_ura: String,
+    generation: u64,
     projection_revision: u64,
     projection_digest: String,
     lease_expires_unix_ms: i64,
@@ -67,6 +68,7 @@ impl OwnerAbilityProjectionRow {
     pub(crate) fn new(
         owner_ura: String,
         host_device_ura: String,
+        generation: u64,
         projection_revision: u64,
         projection_digest: String,
         lease_expires_unix_ms: i64,
@@ -75,6 +77,7 @@ impl OwnerAbilityProjectionRow {
         Self {
             owner_ura,
             host_device_ura,
+            generation,
             projection_revision,
             projection_digest,
             lease_expires_unix_ms,
@@ -181,8 +184,17 @@ impl AbilityCatalogStore {
             }
             Entry::Occupied(mut entry) => {
                 let current = entry.get();
-                if row.projection_revision < current.projection_revision {
+                if row.generation < current.generation {
                     return ProjectionUpsertOutcome::IgnoredStale;
+                }
+                if row.generation == current.generation
+                    && row.projection_revision < current.projection_revision
+                {
+                    return ProjectionUpsertOutcome::IgnoredStale;
+                }
+                if row.generation > current.generation {
+                    entry.insert(row);
+                    return ProjectionUpsertOutcome::Updated;
                 }
                 if row.projection_revision == current.projection_revision {
                     if row.projection_digest == current.projection_digest {
@@ -201,6 +213,13 @@ impl AbilityCatalogStore {
                 ProjectionUpsertOutcome::Updated
             }
         }
+    }
+
+    /// Remove only the projection belonging to the revoked incarnation.
+    pub(crate) fn remove_generation(&self, owner_ura: &str, generation: u64) -> bool {
+        self.inner
+            .remove_if(owner_ura, |_owner, row| row.generation == generation)
+            .is_some()
     }
 
     /// Return namespace-safe ability summaries for an owner, or `None`
@@ -423,6 +442,7 @@ mod tests {
                 "ura".to_string(),
                 crate::core::ura::device_ura("easynet.run", "abc"),
                 1,
+                1,
                 "sha256:digest".to_string(),
                 1_000,
                 vec![summary("read")],
@@ -467,6 +487,7 @@ mod tests {
         OwnerAbilityProjectionRow::new(
             owner_ura.to_string(),
             crate::core::ura::device_ura("easynet.run", "abc"),
+            1,
             revision,
             digest.to_string(),
             lease_expires_unix_ms,

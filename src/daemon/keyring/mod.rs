@@ -923,15 +923,13 @@ impl Vault {
             })
             .unwrap_or(0);
         let mut keys = Vec::with_capacity(limit);
-        let mut inspected = 0usize;
         let mut last_inspected = None;
         let mut has_unexamined = false;
-        for key in self.managed_signing.keys.iter().skip(start) {
+        for (inspected, key) in self.managed_signing.keys.iter().skip(start).enumerate() {
             if inspected == MAX_MANAGED_SIGNING_PAGE_SCAN || keys.len() > limit {
                 has_unexamined = true;
                 break;
             }
-            inspected += 1;
             last_inspected = Some(key.key_id.as_str());
             if purpose
                 .as_deref()
@@ -2274,7 +2272,7 @@ mod tests {
         };
 
         write_encrypted_shape(
-            br#"{"entries":[{"primary_self":"easynet:///r/example/device/host","role_overlays":["easynet:///r/example/device/host","easynet:///r/example/hub"],"seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
+            br#"{"entries":[{"primary_self":"easynet:///r/example/device/host","seed_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#,
             1,
         );
         let error = Vault::open(&path, &source).expect_err("legacy v1 vaults are not supported");

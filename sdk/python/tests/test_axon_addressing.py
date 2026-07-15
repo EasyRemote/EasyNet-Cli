@@ -135,6 +135,38 @@ class AxonAddressingProviderTests(unittest.TestCase):
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         environment.close()
 
+    def test_project_ability_ura_returns_canonical_projection(self) -> None:
+        environment = SdkEnvironment()
+        addressing = environment.addressing_client()
+
+        projection = addressing.project_ability_ura(
+            "easynet:///r/example/ability/device.dev-a.observe.health"
+        )
+
+        self.assertEqual(projection.kind, "ability")
+        self.assertEqual(
+            projection.ura,
+            "easynet:///r/example/ability/device.dev-a.observe.health",
+        )
+        self.assertEqual(
+            projection.owner_ura,
+            "easynet:///r/example/device/dev-a",
+        )
+        self.assertEqual(projection.public_name, "observe.health")
+        environment.close()
+
+    def test_project_ability_ura_rejects_other_ura_kinds(self) -> None:
+        environment = SdkEnvironment()
+        addressing = environment.addressing_client()
+
+        with self.assertRaises(SDKError) as caught:
+            addressing.project_ability_ura(
+                "easynet:///r/example/device/dev-a"
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        environment.close()
+
     def test_provider_rejects_noncanonical_identity_tails(self) -> None:
         environment = SdkEnvironment()
         addressing = environment.addressing_client()

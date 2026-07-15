@@ -921,6 +921,12 @@ mod tests {
         register_with_backend(reg, Arc::new(SyntheticScreenBackend));
     }
 
+    fn executable_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        )
+    }
+
     #[test]
     fn registration_publishes_screen_descriptors_to_catalog_snapshot() {
         let mut reg = AxonAbilityCatalog::new();
@@ -968,7 +974,7 @@ mod tests {
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "h-display-e2e");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1005,7 +1011,7 @@ mod tests {
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "h-display-stream");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1047,7 +1053,7 @@ mod tests {
     #[test]
     fn handler_rejects_missing_subject_with_subject_required_reason() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1080,7 +1086,7 @@ mod tests {
             },
         );
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1100,7 +1106,7 @@ mod tests {
     fn handler_rejects_unknown_subject_with_resource_not_found_reason() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         resources::save(&ResourcesFile::default()).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1119,7 +1125,7 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {

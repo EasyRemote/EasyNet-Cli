@@ -13,6 +13,8 @@
 //   * `context.clipboard.track`  — enable/disable capture (persisted;
 //                                  the tracker thread re-reads per tick)
 //   * `context.clipboard.remove` — delete one clip (and its PNG)
+//   * `context.catalog`          — unified newest-first context picker
+//                                  projection for the Frontend composer
 //   * `context.folders.list`     — mapped project folders
 //   * `context.fs.list`          — browse one level inside a mapping
 //                                  (containment-checked)
@@ -45,6 +47,7 @@ pub const ABILITY_CLIPBOARD_TRACK: &str =
     crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_TRACK;
 pub const ABILITY_CLIPBOARD_REMOVE: &str =
     crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_REMOVE;
+pub const ABILITY_CATALOG: &str = crate::daemon::ability::names::resources::CONTEXT_CATALOG;
 pub const ABILITY_FOLDERS_LIST: &str =
     crate::daemon::ability::names::resources::CONTEXT_FOLDERS_LIST;
 pub const ABILITY_FS_LIST: &str = crate::daemon::ability::names::resources::CONTEXT_FS_LIST;
@@ -81,6 +84,11 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         ABILITY_CLIPBOARD_REMOVE,
         OwnerKind::Device,
         std::sync::Arc::new(clipboard_remove_handler),
+    );
+    reg.register_rpc_with_owner(
+        ABILITY_CATALOG,
+        OwnerKind::Device,
+        std::sync::Arc::new(catalog_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_FOLDERS_LIST,
@@ -200,6 +208,101 @@ fn clipboard_remove_handler(args: Value) -> anyhow::Result<Value> {
     Ok(serde_json::to_value(removed)?)
 }
 
+fn catalog_handler(args: Value) -> anyhow::Result<Value> {
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(50)
+        .clamp(1, 200) as usize;
+    let mut items = Vec::new();
+
+    for favorite in context_store::list_favorites() {
+        items.push(json!({
+            "id": format!("favorite:{}", favorite.id),
+            "kind": "favorite",
+            "label": favorite.label,
+            "detail": favorite.kind,
+            "reference": favorite.reference,
+            "at": favorite.added_at,
+            "source": {
+                "favorite_id": favorite.id,
+                "kind": favorite.kind,
+            },
+        }));
+    }
+    for clip in context_store::list_clip_summaries(limit) {
+        items.push(json!({
+            "id": format!("clipboard:{}", clip.entry.id),
+            "kind": "clipboard",
+            "label": if clip.entry.preview.trim().is_empty() {
+                format!("{} clipboard entry", clip.entry.kind)
+            } else {
+                clip.entry.preview.clone()
+            },
+            "detail": clip.entry.kind,
+            "reference": context_reference(
+                "context.clipboard.get",
+                json!({"id": clip.entry.id}),
+            ),
+            "at": clip.entry.timestamp,
+            "source": {
+                "device": clip.entry.device,
+                "occurrence_count": clip.occurrence_count,
+                "duplicate_count": clip.duplicate_count,
+            },
+        }));
+    }
+    for capture in context_store::list_captures(None, limit) {
+        items.push(json!({
+            "id": format!("capture:{}", capture.id),
+            "kind": "capture",
+            "label": if capture.preview.trim().is_empty() {
+                capture.file.clone()
+            } else {
+                capture.preview.clone()
+            },
+            "detail": format!("{} · {}", capture.ability, capture.content_type),
+            "reference": context_reference(
+                "context.captures.get",
+                json!({"id": capture.id}),
+            ),
+            "at": capture.timestamp,
+            "source": {
+                "device": capture.device,
+                "ability": capture.ability,
+                "file": capture.file,
+                "byte_size": capture.byte_size,
+            },
+        }));
+    }
+    for folder in context_store::list_folders() {
+        let exists = std::path::Path::new(&folder.path).is_dir();
+        items.push(json!({
+            "id": format!("folder:{}", folder.name),
+            "kind": "folder",
+            "label": folder.name,
+            "detail": if exists {
+                folder.path.clone()
+            } else {
+                format!("{} · missing", folder.path)
+            },
+            "reference": context_reference(
+                "context.fs.list",
+                json!({"folder": folder.name, "path": ""}),
+            ),
+            "at": folder.added_at,
+            "source": {
+                "path": folder.path,
+                "exists": exists,
+            },
+        }));
+    }
+
+    items.sort_by(compare_catalog_items);
+    items.truncate(limit);
+    Ok(json!({ "items": items }))
+}
+
 fn folders_list_handler(_args: Value) -> anyhow::Result<Value> {
     let folders: Vec<Value> = context_store::list_folders()
         .iter()
@@ -255,6 +358,25 @@ fn require_str(args: &Value, key: &str, ability: &str) -> anyhow::Result<String>
         .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` required"))
 }
 
+fn context_reference(action: &str, args: Value) -> String {
+    format!(
+        "easynet-context://{}?args={}",
+        action,
+        urlencoding::encode(&args.to_string())
+    )
+}
+
+fn compare_catalog_items(left: &Value, right: &Value) -> std::cmp::Ordering {
+    let left_at = left.get("at").and_then(Value::as_str).unwrap_or("");
+    let right_at = right.get("at").and_then(Value::as_str).unwrap_or("");
+    right_at.cmp(left_at).then_with(|| {
+        left.get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .cmp(right.get("id").and_then(Value::as_str).unwrap_or(""))
+    })
+}
+
 // ── descriptions + schemas (wired in agents/mod.rs) ─────────────────
 
 pub fn description_for(name: &str) -> Option<&'static str> {
@@ -265,6 +387,9 @@ pub fn description_for(name: &str) -> Option<&'static str> {
         ABILITY_CLIPBOARD_GET => "Read one clipboard entry; image entries include base64 PNG data.",
         ABILITY_CLIPBOARD_TRACK => "Enable or disable clipboard history tracking on this device.",
         ABILITY_CLIPBOARD_REMOVE => "Delete one clipboard entry (and its stored image, if any).",
+        ABILITY_CATALOG => {
+            "List a unified newest-first context catalog for the Frontend composer picker."
+        }
         ABILITY_FOLDERS_LIST => "List the project folders mapped via `easynet context add`.",
         ABILITY_FS_LIST => "Browse one directory level inside a mapped project folder.",
         ABILITY_FAVORITES_LIST => "List favorites (starred clips, files, folders).",
@@ -312,6 +437,13 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
                 "id": {"type": "string", "description": "Clip id from context.clipboard.list."}
             },
             "required": ["id"],
+            "additionalProperties": false,
+        }),
+        ABILITY_CATALOG => json!({
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max unified context items to return (default 50, cap 200)."}
+            },
             "additionalProperties": false,
         }),
         ABILITY_CAPTURES_LIST => json!({
@@ -373,16 +505,19 @@ pub fn input_schema_for(name: &str) -> Option<Value> {
 }
 
 /// Every context ability name, for registration loops/tests.
-pub const ALL: [&str; 9] = [
+pub const ALL: [&str; 12] = [
     ABILITY_CLIPBOARD_LIST,
     ABILITY_CLIPBOARD_GET,
     ABILITY_CLIPBOARD_TRACK,
     ABILITY_CLIPBOARD_REMOVE,
+    ABILITY_CATALOG,
     ABILITY_FOLDERS_LIST,
     ABILITY_FS_LIST,
     ABILITY_FAVORITES_LIST,
     ABILITY_FAVORITES_ADD,
     ABILITY_FAVORITES_REMOVE,
+    ABILITY_CAPTURES_LIST,
+    ABILITY_CAPTURES_GET,
 ];
 
 #[cfg(test)]
@@ -503,5 +638,41 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[test]
+    fn catalog_merges_context_sources_for_frontend_picker() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        context_store::append_clip(&context_store::ClipEntry {
+            id: "clip-1".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            device: "easynet:///r/localhost/device/d1".into(),
+            kind: "text".into(),
+            text: Some("hello".into()),
+            image_file: None,
+            preview: "hello".into(),
+        })
+        .unwrap();
+        let favorite = favorites_add_handler(
+            json!({"kind": "clipboard", "label": "snippet", "reference": "clip-1"}),
+        )
+        .unwrap();
+
+        let out = catalog_handler(json!({"limit": 10})).unwrap();
+        let items = out["items"].as_array().unwrap();
+        assert!(items.iter().any(|item| item["id"] == "clipboard:clip-1"));
+        assert!(items
+            .iter()
+            .any(|item| item["id"] == format!("favorite:{}", favorite["id"].as_str().unwrap())));
+        let clip = items
+            .iter()
+            .find(|item| item["id"] == "clipboard:clip-1")
+            .unwrap();
+        assert_eq!(clip["kind"], "clipboard");
+        assert_eq!(clip["label"], "hello");
+        assert!(clip["reference"]
+            .as_str()
+            .unwrap()
+            .starts_with("easynet-context://context.clipboard.get?args="));
     }
 }

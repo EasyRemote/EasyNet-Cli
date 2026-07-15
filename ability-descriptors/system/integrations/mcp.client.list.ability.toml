@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "mcp.client.list"
+descriptor_version = "1.0.0"
 description = "Aggregate tools/list across every configured upstream MCP server (~/.easynet/mcp_clients.json). Returns one server entry per configured upstream; an entry with `error` set indicates that specific upstream failed without taking the others down."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

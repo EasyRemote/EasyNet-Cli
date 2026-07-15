@@ -3,27 +3,58 @@ package run.easynet.daemon;
 import java.util.Map;
 
 public final class InvocationHandle {
-  private final long handleId;
+  private final InvocationControlCapability control;
   private final String state;
   private final boolean terminal;
   private RuntimeClient runtime;
 
-  public InvocationHandle(long handleId, String state, boolean terminal) {
-    if (handleId <= 0) {
-      throw SDKError.validation("invocation_handle", "handle_id must be positive");
+  InvocationHandle(long handleId, String state, boolean terminal) {
+    this(InvocationControlCapability.runtimeBound(handleId), state, terminal);
+  }
+
+  InvocationHandle(InvocationControlCapability control, String state, boolean terminal) {
+    if (control == null) {
+      throw SDKError.validation("invocation_handle", "control capability is required");
     }
     if (state == null || state.isBlank()) {
       throw SDKError.validation("invocation_handle", "state is required");
     }
-    this.handleId = handleId;
+    this.control = control;
     this.state = state;
     this.terminal = terminal;
   }
 
   public static InvocationHandle fromJSON(byte[] raw) {
+    return fromJSON(raw, null, false);
+  }
+
+  static InvocationHandle fromRuntimeJSON(byte[] raw) {
+    return fromJSON(raw, null, true);
+  }
+
+  static InvocationHandle fromJSONWithControl(byte[] raw, InvocationControlCapability control) {
+    return fromJSON(raw, control, false);
+  }
+
+  private static InvocationHandle fromJSON(
+      byte[] raw, InvocationControlCapability expectedControl, boolean runtimeBound) {
     Map<String, Object> fields = JsonValueReader.object(raw, "invocation handle");
     rejectUnknown(fields, "handle_id", "state", "terminal", "events", "result");
-    return new InvocationHandle(positiveLong(fields, "handle_id"), string(fields, "state"), bool(fields, "terminal"));
+    long handleId = positiveLong(fields, "handle_id");
+    InvocationControlCapability control;
+    if (expectedControl != null) {
+      if (expectedControl.rawHandleId() != handleId) {
+        throw SDKError.validation(
+            "invocation_handle", "handle_id does not match invocation control capability");
+      }
+      control = expectedControl;
+    } else if (runtimeBound) {
+      control = InvocationControlCapability.runtimeBound(handleId);
+    } else {
+      control = InvocationControlCapability.snapshot(handleId);
+    }
+    return new InvocationHandle(
+        control, string(fields, "state"), bool(fields, "terminal"));
   }
 
   InvocationHandle bindRuntime(RuntimeClient runtime) {
@@ -31,8 +62,9 @@ public final class InvocationHandle {
     return this;
   }
 
-  public long handleId() {
-    return handleId;
+  public InvocationControlCapability controlCapability() {
+    control.adapterHandleId();
+    return control;
   }
 
   public String state() {
@@ -56,7 +88,7 @@ public final class InvocationHandle {
     }
   }
 
-  private static long positiveLong(Map<String, Object> fields, String field) {
+  static long positiveLong(Map<String, Object> fields, String field) {
     Object value = fields.get(field);
     long number;
     if (value instanceof Long longValue) {
@@ -72,7 +104,7 @@ public final class InvocationHandle {
     return number;
   }
 
-  private static String string(Map<String, Object> fields, String field) {
+  static String string(Map<String, Object> fields, String field) {
     Object value = fields.get(field);
     if (!(value instanceof String string) || string.isBlank()) {
       throw SDKError.validation("invocation_handle", field + " is required");
@@ -80,7 +112,7 @@ public final class InvocationHandle {
     return string;
   }
 
-  private static boolean bool(Map<String, Object> fields, String field) {
+  static boolean bool(Map<String, Object> fields, String field) {
     Object value = fields.get(field);
     if (!(value instanceof Boolean bool)) {
       throw SDKError.validation("invocation_handle", field + " must be a boolean");

@@ -22,9 +22,6 @@
 //! stages, but the lifecycle module decides what kind of runtime must
 //! be stopped from the authoritative status report.
 
-use crate::daemon::persistence::config;
-use crate::support::platform::net;
-
 use super::RuntimeStatusReport;
 
 /// Runtime shape selected for stop.
@@ -34,8 +31,6 @@ pub enum RuntimeStopShape {
     Stateless,
     /// Modern product daemon shape.
     DaemonOnly,
-    /// Historical raw Axon bridge projection.
-    LegacyAxonRuntime { endpoint: String, pid: Option<u32> },
 }
 
 /// Side-effect-free stop plan.
@@ -63,18 +58,7 @@ impl RuntimeStopPlan {
         let shape = match state {
             None if report.daemon().has_daemon_fact() => RuntimeStopShape::DaemonOnly,
             None => RuntimeStopShape::Stateless,
-            Some(s) if matches!(s.runtime_kind, config::RuntimeKind::DaemonOnly) => {
-                RuntimeStopShape::DaemonOnly
-            }
-            Some(s) => {
-                let pid = s
-                    .pid
-                    .or_else(|| net::discover_pid_from_endpoint(&s.endpoint));
-                RuntimeStopShape::LegacyAxonRuntime {
-                    endpoint: s.endpoint.clone(),
-                    pid,
-                }
-            }
+            Some(_) => RuntimeStopShape::DaemonOnly,
         };
         Self {
             shape,
@@ -110,6 +94,7 @@ mod tests {
     use crate::daemon::lifecycle::{
         DaemonDiscoverySnapshot, RuntimeSessionProjection, RuntimeStatusReport,
     };
+    use crate::daemon::persistence::config;
 
     use super::*;
 
@@ -138,14 +123,14 @@ mod tests {
     }
 
     #[test]
-    fn stop_plan_preserves_legacy_axon_runtime_shape_from_projection() {
+    fn stop_plan_maps_runtime_projection_to_daemon_only() {
         let projection = RuntimeSessionProjection::from_state(config::RuntimeState {
-            endpoint: "127.0.0.1:50111".to_string(),
-            runtime_kind: config::RuntimeKind::AxonBridge,
+            endpoint: "/tmp/easynet-stop-daemon.sock".to_string(),
+            runtime_kind: config::RuntimeKind::DaemonOnly,
             pid: Some(12_345),
             hub: None,
-            tenant: None,
-            label: None,
+            tenant: Some("tenant-test".to_string()),
+            label: Some("node-test".to_string()),
             started_at: None,
             credential_verified: None,
         });
@@ -155,13 +140,7 @@ mod tests {
 
         let plan = RuntimeStopPlan::from_report(&report);
 
-        assert!(matches!(
-            plan.shape(),
-            RuntimeStopShape::LegacyAxonRuntime {
-                endpoint,
-                pid: Some(12_345),
-            } if endpoint == "127.0.0.1:50111"
-        ));
+        assert!(matches!(plan.shape(), RuntimeStopShape::DaemonOnly));
         assert!(plan.should_cleanup_runtime_projection());
     }
 }

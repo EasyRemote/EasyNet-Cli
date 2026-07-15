@@ -116,19 +116,24 @@ impl RuntimeBoundAbility {
             )));
         }
         let proof_binding = self.options.proof_for_mode(mode);
-        let descriptor_version = proof_binding.descriptor_version.trim();
-        if descriptor_version.is_empty() {
-            return Err(Status::failed_precondition(format!(
-                "{surface}: {} does not bind a descriptor version for {}",
-                route_context(route_ura, &self.runtime_ability_ura),
-                call_mode_label(mode)
-            )));
-        }
+        let descriptor_binding =
+            crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
+                &proof_binding.descriptor_version,
+                proof_binding.descriptor_hash,
+                &proof_binding.admission_action,
+            )
+            .map_err(|err| {
+                Status::failed_precondition(format!(
+                    "{surface}: {} does not bind a complete descriptor proof for {}: {err}",
+                    route_context(route_ura, &self.runtime_ability_ura),
+                    call_mode_label(mode)
+                ))
+            })?;
         let descriptor_ref =
             crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 callee_ura,
                 &self.runtime_ability_ura,
-                descriptor_version,
+                &descriptor_binding,
             )
             .map_err(|err| {
                 Status::failed_precondition(format!(
@@ -284,7 +289,7 @@ mod tests {
     #[test]
     fn signed_descriptor_ref_metadata_preserves_caller_signed_version() {
         let ref_ = format!(
-            "{}@2.3.0",
+            "{}@2.3.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
             crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
         );
         let mut metadata = HashMap::new();
@@ -306,7 +311,7 @@ mod tests {
     #[test]
     fn signed_descriptor_ref_metadata_must_match_selected_route() {
         let ref_ = format!(
-            "{}@1.0.0",
+            "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
             crate::core::ura::owner_ability_ura(CALLEE, "skill.list").unwrap()
         );
         let mut metadata = HashMap::new();

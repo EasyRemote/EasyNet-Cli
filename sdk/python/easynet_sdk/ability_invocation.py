@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol, cast
 
 from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
@@ -142,22 +142,22 @@ class AbilityChildContext:
             caller_signature=caller_signature,
         )
 
-    def build_target_invocation(self, **kwargs: object) -> InvocationDraft:
+    def build_target_invocation(self, **kwargs: Any) -> InvocationDraft:
         return self.invoker.build_target_invocation(self.target_request(**kwargs))
 
-    def invoke_target(self, **kwargs: object) -> InvocationResult:
+    def invoke_target(self, **kwargs: Any) -> InvocationResult:
         return self.invoker.invoke_target(self.target_request(**kwargs))
 
-    def stream_target(self, **kwargs: object) -> StreamHandle:
+    def stream_target(self, **kwargs: Any) -> StreamHandle:
         return self.invoker.stream_target(self.target_request(**kwargs))
 
-    def build_invocation(self, **kwargs: object) -> InvocationDraft:
+    def build_invocation(self, **kwargs: Any) -> InvocationDraft:
         return self.invoker.build_invocation(self.call_request(**kwargs))
 
-    def invoke(self, **kwargs: object) -> InvocationResult:
+    def invoke(self, **kwargs: Any) -> InvocationResult:
         return self.invoker.invoke(self.call_request(**kwargs))
 
-    def stream(self, **kwargs: object) -> StreamHandle:
+    def stream(self, **kwargs: Any) -> StreamHandle:
         return self.invoker.stream(self.call_request(**kwargs))
 
 
@@ -196,12 +196,12 @@ class AbilityInvocationClient:
             )
         else:
             raise _invalid_ability_invocation("unknown ability target selector")
-        address = self.addressing.ability_address(ability_ura)
-        subject_ura = request.subject_ura or address.subject_ura
+        projection = self.addressing.project_ability_ura(ability_ura)
+        subject_ura = request.subject_ura or projection.ura
         return ResolvedAbilityTarget(
             ability_ura=ability_ura,
             descriptor_ref=descriptor_ref,
-            callee_ura=address.owner_ura,
+            callee_ura=projection.owner_ura,
             subject_ura=_required_string(subject_ura, "subject_ura"),
             descriptor_version=version,
         )
@@ -292,7 +292,7 @@ class AbilityInvocationClient:
         """Create a child-call context from a parent Invocation receipt."""
 
         self._require_open()
-        receipt = parent.receipt_summary
+        receipt = parent.terminal_receipt_summary
         if receipt is None or not receipt.has_causal_anchor():
             raise _invalid_ability_invocation("parent result is missing a causal receipt anchor")
         causal_context = {
@@ -631,8 +631,11 @@ def _object_ability_request(
         descriptor_version=_required_string(descriptor_version, "descriptor_version"),
         metadata=dict(metadata or {}),
         caller_signature=_coerce_invocation_signature(caller_signature),
-        **selector_kwargs,
-        **argument_kwargs,
+        descriptor_ref=selector_kwargs.get("descriptor_ref", ""),
+        ability_ura=selector_kwargs.get("ability_ura", ""),
+        args=argument_kwargs.get("args", {}),
+        arguments_base64=cast(str | None, argument_kwargs.get("arguments_base64")),
+        content_type=cast(str, argument_kwargs.get("content_type", "application/json")),
     )
 
 
@@ -881,10 +884,14 @@ def _stream_descriptor_dict(
     return result
 
 
+class _WireValue(Protocol):
+    def to_wire(self) -> Mapping[str, object]: ...
+
+
 def _object_wire_dict(value: object) -> dict[str, object]:
     if not _has_callable(value, "to_wire"):
         raise _invalid_ability_invocation("object does not expose to_wire")
-    wire = value.to_wire()
+    wire = cast(_WireValue, value).to_wire()
     if not isinstance(wire, Mapping):
         raise _invalid_ability_invocation("to_wire must return a mapping")
     return dict(wire)

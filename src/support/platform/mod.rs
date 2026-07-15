@@ -1,7 +1,6 @@
 //! Low-level platform, transport, terminal, and process helpers.
 
 pub(crate) mod errors;
-pub(crate) mod invocation_receipt_projection;
 pub(crate) mod local_daemon_grpc;
 pub(crate) mod local_invoke;
 pub mod named_pipe;

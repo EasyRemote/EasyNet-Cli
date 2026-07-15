@@ -137,9 +137,6 @@ pub(crate) fn preflight_start(
                 },
             );
         }
-        RuntimeLifecycleStatus::LegacyAxonBridge => {
-            return Err(RuntimeLifecycleError::StartRefusedLegacyAxonBridge);
-        }
         RuntimeLifecycleStatus::IdentityMismatch => {
             return Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
                 field: "identity",
@@ -150,8 +147,7 @@ pub(crate) fn preflight_start(
             });
         }
         RuntimeLifecycleStatus::StartProjectionCommitFailed
-        | RuntimeLifecycleStatus::StopTimedOut
-        | RuntimeLifecycleStatus::LegacyCleanupFailed => {
+        | RuntimeLifecycleStatus::StopTimedOut => {
             return Err(RuntimeLifecycleError::StartRefusedMissingDaemonIdentity);
         }
     };

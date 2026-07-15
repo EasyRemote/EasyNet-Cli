@@ -92,9 +92,6 @@ func NewRuntimeIdentityProjectionFromJSON(raw []byte) (RuntimeIdentityProjection
 		Username:    runtimeEnvironmentString(decoded, "username"),
 		HubEndpoint: runtimeEnvironmentString(decoded, "hub_endpoint"),
 	}
-	if projection.DeviceID == "" {
-		projection.DeviceID = runtimeEnvironmentString(decoded, "node_id")
-	}
 	if projection.Realm == "" {
 		return RuntimeIdentityProjection{}, invalidRuntimeEnvironment("runtime identity projection missing realm", nil)
 	}

@@ -7,7 +7,7 @@
 //
 // Permission model:
 //   - `--permission-mode acceptEdits` auto-approves file edits within the
-//     agent's cwd (which is an isolated workspace under ~/.easynet/workspaces).
+//     agent's cwd (which is an isolated workspace under ~/.easynet/agents).
 //   - `--allowedTools` additionally whitelists Bash operations that agents
 //     commonly need (opening generated files, listing the workspace, etc.)
 //     so they run without interactive prompts.

@@ -74,6 +74,14 @@ pub(super) async fn run_session_preludes(
     } = request;
     let caller_ura = signer.owner_ura().to_string();
     let ability_descriptors = inputs.ability_descriptors;
+    let owner_descriptors = committed_owner_ability_descriptors(
+        ability_descriptors,
+        &caller_ura,
+        crate::core::ura::parse_ura(&caller_ura)
+            .ok()
+            .and_then(|parsed| parsed.device_id().map(str::to_string))
+            .as_deref(),
+    );
     let hub_published_abilities = inputs.hub_published_abilities;
 
     run_join_prelude(
@@ -91,7 +99,7 @@ pub(super) async fn run_session_preludes(
         hub_endpoint,
         &caller_ura,
         signer.as_ref(),
-        ability_descriptors,
+        &owner_descriptors,
     )
     .await?;
 
@@ -113,7 +121,14 @@ pub(super) async fn run_session_preludes(
         Arc::clone(&hub_published_abilities),
     );
 
-    run_hosted_agent_advertise_prelude(client, phase, hub_endpoint, signer.as_ref()).await?;
+    run_hosted_agent_advertise_prelude(
+        client,
+        phase,
+        hub_endpoint,
+        signer.as_ref(),
+        ability_descriptors,
+    )
+    .await?;
 
     Ok(SessionPreludeGuards {
         _user_trust_resync: user_trust_resync,
@@ -258,6 +273,7 @@ async fn run_hosted_agent_advertise_prelude(
     phase: &mut SessionPhaseTracker,
     hub_endpoint: &str,
     signer: &dyn CanonicalSigner,
+    ability_descriptors: &[AbilityDescriptor],
 ) -> Result<(), SessionError> {
     let caller_ura = signer.owner_ura();
     let realm = crate::core::ura::parse_ura(caller_ura)
@@ -320,21 +336,12 @@ async fn run_hosted_agent_advertise_prelude(
         labels = labels_display,
     );
 
-    let agent_registry =
-        crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
-            SessionError::HostedAgentPreludeFailed {
-                endpoint: hub_endpoint.to_string(),
-                reason: format!("load hosted-agent registry: {error}"),
-            }
-        })?;
-    let live_registry = crate::daemon::ability::catalog::build_registry();
     for entry in &entries {
         advertise_hosted_agent_entry(
             client,
             caller_ura,
             &caller_node_id,
-            &agent_registry,
-            &live_registry,
+            ability_descriptors,
             entry,
             signer,
         )
@@ -357,7 +364,6 @@ async fn run_hosted_agent_advertise_prelude(
 struct AdvertiseEntry {
     agent_ura: String,
     short_label: String,
-    hosted_agent_name: Option<String>,
 }
 
 fn collect_advertise_entries(
@@ -386,7 +392,6 @@ fn collect_advertise_entries(
         entries.push(AdvertiseEntry {
             agent_ura: hosted.agent_ura.clone(),
             short_label,
-            hosted_agent_name: (hosted.profile == "llm").then(|| hosted.name.clone()),
         });
     }
 
@@ -397,7 +402,6 @@ fn collect_advertise_entries(
                 entries.push(AdvertiseEntry {
                     agent_ura: ura,
                     short_label: format!("{user_segment}.{synthetic}"),
-                    hosted_agent_name: None,
                 });
             }
         }
@@ -410,16 +414,10 @@ async fn advertise_hosted_agent_entry(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
     caller_node_id: &Option<String>,
-    agent_registry: &crate::daemon::persistence::agent_registry::AgentRegistry,
-    live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
+    ability_descriptors: &[AbilityDescriptor],
     entry: &AdvertiseEntry,
     signer: &dyn CanonicalSigner,
 ) -> Result<(), String> {
-    let agent_id = crate::core::ura::parse_ura(&entry.agent_ura)
-        .ok()
-        .filter(|p| p.kind == crate::core::ura::URAKind::Agent)
-        .and_then(|p| p.agent_ids().map(|(_, agent_id)| agent_id.to_string()))
-        .unwrap_or_default();
     let host_for_advertise = caller_node_id.as_deref();
     send_advertise_agent_prelude(client, &entry.agent_ura, host_for_advertise, signer)
         .await
@@ -435,47 +433,29 @@ async fn advertise_hosted_agent_entry(
         client,
         caller_ura,
         caller_node_id: caller_node_id.as_deref(),
-        agent_registry,
-        live_registry,
+        ability_descriptors,
         signer,
     };
-    advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &agent_id).await
+    advertise_hosted_agent_abilities(&mut advertise_ctx, entry).await
 }
 
 struct HostedAgentAbilityAdvertiseContext<'a> {
     client: &'a mut InvocationClient<Channel>,
     caller_ura: &'a str,
     caller_node_id: Option<&'a str>,
-    agent_registry: &'a crate::daemon::persistence::agent_registry::AgentRegistry,
-    live_registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog,
+    ability_descriptors: &'a [AbilityDescriptor],
     signer: &'a dyn CanonicalSigner,
 }
 
 async fn advertise_hosted_agent_abilities(
     ctx: &mut HostedAgentAbilityAdvertiseContext<'_>,
     entry: &AdvertiseEntry,
-    agent_id: &str,
 ) -> Result<(), String> {
-    let descriptors = match entry.hosted_agent_name.as_deref() {
-        Some(agent_name) => {
-            let agent_config = ctx.agent_registry.agents.get(agent_name).ok_or_else(|| {
-                format!(
-                    "hosted agent `{agent_name}` is published in local-agents.json but absent from agents registry"
-                )
-            })?;
-            build_hosted_agent_ability_descriptors(
-                &entry.agent_ura,
-                agent_name,
-                agent_config,
-                ctx.caller_node_id,
-                ctx.live_registry,
-            )?
-        }
-        None if agent_id == "pages" => {
-            build_synthetic_pages_ability_descriptors(&entry.agent_ura, ctx.caller_node_id)
-        }
-        None => return Ok(()),
-    };
+    let descriptors = committed_owner_ability_descriptors(
+        ctx.ability_descriptors,
+        &entry.agent_ura,
+        ctx.caller_node_id,
+    );
     if descriptors.is_empty() {
         return Ok(());
     }
@@ -704,19 +684,14 @@ async fn sign_descriptor_bound_prelude_request(
         .filter(|ura| !ura.is_empty())
         .ok_or_else(|| Status::internal(format!("{function_name} prelude missing callee URA")))?;
     // `function_name` is a bare ability name (`federation.advertise_abilities`),
-    // NOT a `<ability-ura>@<version>` descriptor ref. Build the canonical ref
-    // from (callee hub URA, ability name, default descriptor version) — the hub
-    // ingress treats `federation.*` as descriptor-bound on the wire and rejects
-    // a bare name with `ability_descriptor_ref_malformed`. `require_*` only
-    // VALIDATES an already-formed ref; the prelude must CONSTRUCT one. (Commit
-    // 22187b3f tightened ingress + removed the old resolver but left this egress
-    // site passing the bare name — the egress/ingress asymmetry that wedged
-    // session.open into an advertise_abilities reconnect loop.)
+    // NOT a descriptor ref. Build the canonical ref from the system catalog
+    // descriptor rebound to the callee hub URA; default-version-only signing
+    // would omit the descriptor digest and admission action Axon now verifies.
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
             callee_ura,
             function_name,
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::CallMode::Rpc,
         )
         .map_err(|err| {
             Status::internal(format!(
@@ -1205,65 +1180,18 @@ pub(super) async fn invoke_prelude_unary(
     Ok(response)
 }
 
-fn build_hosted_agent_ability_descriptors(
-    owner_ura: &str,
-    agent_name: &str,
-    entry: &crate::daemon::persistence::agent_registry::AgentEntry,
-    host_node_id: Option<&str>,
-    live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
-) -> Result<Vec<AbilityDescriptor>, String> {
-    let mut descriptors = Vec::new();
-    for spec in crate::daemon::execution::mission::agent_ability_specs::abilities_for_publication(
-        agent_name, entry,
-    ) {
-        let mut descriptor =
-            crate::daemon::ability::catalog::profiles::llm::descriptor_for_agent_spec(
-                live_registry,
-                owner_ura,
-                agent_name,
-                &spec,
-            )?
-            .with_metadata_entry("runtime", entry.agent_type.to_string())
-            .with_metadata_entry("agent_type", entry.agent_type.to_string())
-            .with_metadata_entry("base_runtime", entry.agent_type.to_string());
-        if let Some(node_id) = host_node_id {
-            descriptor = descriptor.with_metadata_entry("host_node_id", node_id.to_string());
-        }
-        if let Some(model) = entry.model.as_ref() {
-            descriptor = descriptor
-                .with_metadata_entry("model", model.clone())
-                .with_metadata_entry("base_model", model.clone());
-        }
-        descriptors.push(descriptor);
-    }
-    Ok(descriptors)
-}
-
-pub(super) fn build_synthetic_pages_ability_descriptors(
+pub(super) fn committed_owner_ability_descriptors(
+    descriptors: &[AbilityDescriptor],
     owner_ura: &str,
     host_node_id: Option<&str>,
 ) -> Vec<AbilityDescriptor> {
-    crate::daemon::ability::builtins::resources::pages::management_ability_specs()
-        .into_iter()
-        .filter_map(|spec| {
-            let descriptor_name = format!("pages.{}", spec.relative_name);
-            AbilityDescriptor::new(
-                descriptor_name,
-                owner_ura,
-                crate::daemon::ability::descriptors::Visibility::Scoped,
-            )
-            .ok()
-            .map(|descriptor| {
-                let mut descriptor = descriptor
-                    .with_description(spec.description)
-                    .with_input_schema(spec.input_schema)
-                    .with_source("synthetic:pages");
-                if let Some(node_id) = host_node_id {
-                    descriptor =
-                        descriptor.with_metadata_entry("host_node_id", node_id.to_string());
-                }
-                descriptor
-            })
+    descriptors
+        .iter()
+        .filter(|descriptor| descriptor.owner_ura == owner_ura)
+        .cloned()
+        .map(|descriptor| match host_node_id {
+            Some(node_id) => descriptor.with_metadata_entry("host_node_id", node_id.to_string()),
+            None => descriptor,
         })
         .collect()
 }

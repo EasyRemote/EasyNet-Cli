@@ -173,6 +173,7 @@ NAMESPACE_RESOLVE_CARRIER_PREFIXES = (
     "internal/axontest/",
     "internal/federation/",
     "internal/catalog/",
+    "internal/runtimecontract/",
     "internal/svc/",
     "internal/logic/ability/",
     "internal/logic/agent/",

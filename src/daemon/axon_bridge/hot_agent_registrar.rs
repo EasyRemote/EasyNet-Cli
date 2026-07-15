@@ -326,6 +326,7 @@ impl HotAgentUnregistration {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotAgentAdvertiseRequest {
     pub agent_ura: String,
+    pub generation: u64,
     /// Pre-encoded `federation.advertise_abilities` args (built from the
     /// just-persisted owner projection via
     /// `advertise::advertise_abilities_payload`). `None` skips the
@@ -333,6 +334,17 @@ pub struct HotAgentAdvertiseRequest {
     /// hub federation surface by ability name, so no resource URA is
     /// carried here.
     pub abilities_payload: Option<Vec<u8>>,
+}
+
+/// Projection-only publication. Purge tombstones must use this surface so an
+/// empty ability set can never re-advertise an identity being deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotAgentProjectionRequest {
+    pub agent_ura: String,
+    pub generation: u64,
+    pub transaction_id: String,
+    pub delivery_fence: u64,
+    pub abilities_payload: Vec<u8>,
 }
 
 /// Outcome for best-effort hub advertisement after hot agent add.
@@ -391,7 +403,12 @@ impl HotAgentAdvertiseOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotAgentRevokeRequest {
     pub agent_ura: String,
+    pub generation: u64,
     pub reason: String,
+    pub purge_transaction_id: Option<String>,
+    pub authority_ura: String,
+    pub protocol_version: u32,
+    pub delivery_fence: u64,
 }
 
 /// Narrow abstraction over the transport used to notify the hub
@@ -405,10 +422,26 @@ pub trait HotAgentAdvertiser: Send + Sync {
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
         -> HotAgentAdvertiseOutcome;
 
+    fn publish_owner_projection(
+        &self,
+        request: HotAgentProjectionRequest,
+    ) -> HotAgentAdvertiseOutcome;
+
     /// Revoke a hot-removed hosted agent's identity from the hub directory.
     /// Implementations must report success or failure; a default no-op would
     /// turn "not implemented" into fake success.
     fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest) -> HotAgentAdvertiseOutcome;
+}
+
+fn ensure_admission_action(
+    manifest: crate::daemon::ability::manifest::AbilityManifest,
+    default_action: crate::daemon::ability::descriptors::AdmissionAction,
+) -> anyhow::Result<crate::daemon::ability::manifest::AbilityManifest> {
+    if manifest.admission_action().is_some() {
+        Ok(manifest)
+    } else {
+        manifest.with_admission_action(default_action.as_str())
+    }
 }
 
 impl HotAgentRegistrar {
@@ -479,6 +512,24 @@ impl HotAgentRegistrar {
         } else {
             Err(HotAgentRegistrarError::NotReady { readiness })
         }
+    }
+
+    pub(crate) fn publication_snapshot(
+        &self,
+    ) -> Result<
+        crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot,
+        HotAgentRegistrarError,
+    > {
+        self.require_ready()?;
+        let catalog = self
+            .dispatch_handle
+            .get()
+            .expect("Ready registrar must own AxonAbilityCatalog");
+        Ok(
+            crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(
+                catalog.as_ref(),
+            ),
+        )
     }
 
     /// Register the canonical `<agent>.chat / discover / invoke`
@@ -597,6 +648,7 @@ impl HotAgentRegistrar {
                 &chat_ability,
                 owner.clone(),
                 crate::daemon::ability::manifest::default_chat_manifest(),
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                 chat_handler,
             )
             .await
@@ -614,6 +666,7 @@ impl HotAgentRegistrar {
                 &chat_ability,
                 owner.clone(),
                 crate::daemon::ability::manifest::default_chat_manifest(),
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                 chat_stream_handler,
             )
             .await
@@ -633,6 +686,7 @@ impl HotAgentRegistrar {
                 &discover_ability,
                 owner.clone(),
                 crate::daemon::ability::builtins::agents::discover::manifest(),
+                crate::daemon::ability::descriptors::AdmissionAction::Read,
                 discover_handler,
             )
             .await
@@ -649,6 +703,7 @@ impl HotAgentRegistrar {
                 &invoke_ability,
                 owner.clone(),
                 crate::daemon::ability::builtins::agents::invoke::manifest(),
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                 invoke_handler,
             )
             .await
@@ -688,6 +743,7 @@ impl HotAgentRegistrar {
                             &ability_name,
                             owner.clone(),
                             manifest.clone(),
+                            crate::daemon::ability::descriptors::AdmissionAction::Stream,
                             h,
                         )
                         .await
@@ -707,6 +763,7 @@ impl HotAgentRegistrar {
                             &ability_name,
                             owner.clone(),
                             manifest.clone(),
+                            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                             h,
                         )
                         .await
@@ -946,6 +1003,7 @@ impl HotAgentRegistrar {
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::daemon::ability::manifest::AbilityManifest,
+        default_action: crate::daemon::ability::descriptors::AdmissionAction,
         handler: crate::daemon::ability::dispatch::LocalRpcHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -959,6 +1017,13 @@ impl HotAgentRegistrar {
             }
             None => {
                 Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
+                return false;
+            }
+        };
+        let manifest = match ensure_admission_action(manifest, default_action) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
                 return false;
             }
         };
@@ -989,6 +1054,7 @@ impl HotAgentRegistrar {
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::daemon::ability::manifest::AbilityManifest,
+        default_action: crate::daemon::ability::descriptors::AdmissionAction,
         handler: crate::daemon::ability::dispatch::LocalStreamHandler,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -1002,6 +1068,13 @@ impl HotAgentRegistrar {
             }
             None => {
                 Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
+                return false;
+            }
+        };
+        let manifest = match ensure_admission_action(manifest, default_action) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
                 return false;
             }
         };
@@ -1034,6 +1107,7 @@ impl HotAgentRegistrar {
         ability_name: &str,
         owner: OwnerKind,
         manifest: crate::daemon::ability::manifest::AbilityManifest,
+        default_action: crate::daemon::ability::descriptors::AdmissionAction,
         handler: crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope,
     ) -> bool {
         let was_present = match ctx.binding.runtime_ability_ura(ability_name) {
@@ -1047,6 +1121,13 @@ impl HotAgentRegistrar {
             }
             None => {
                 Self::record_bad_runtime_key(ctx.binding, ability_name, ctx.outcome, ctx.failures);
+                return false;
+            }
+        };
+        let manifest = match ensure_admission_action(manifest, default_action) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                Self::record_registration_error(ability_name, error, ctx.outcome, ctx.failures);
                 return false;
             }
         };
@@ -1184,7 +1265,7 @@ mod tests {
         HotAgentRegistrar::new_pending(
             Arc::new(Vec::new()),
             Arc::new(OnceLock::new()),
-            Arc::new(crate::daemon::ability::builtins::agents::discover::BridgeDiscoverFederationResolver),
+            Arc::new(crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver),
         )
     }
 
@@ -1287,7 +1368,9 @@ mod tests {
                 "liangbing.ghost_op",
                 OwnerKind::Agent("liangbing".to_string()),
                 ghost_authority,
-                crate::daemon::ability::manifest::default_chat_manifest(),
+                crate::daemon::ability::manifest::default_chat_manifest()
+                    .with_admission_action("invoke")
+                    .unwrap(),
                 Arc::new(|_args| Ok(serde_json::Value::Null)),
             )
             .expect("seed dynamic ghost ability");

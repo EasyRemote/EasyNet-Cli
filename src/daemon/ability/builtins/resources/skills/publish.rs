@@ -61,6 +61,7 @@ use serde_json::{json, Value};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::persistence::agent_registry as agents;
 
+use super::list;
 use crate::daemon::ability::dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
 pub const ABILITY_PUBLISH: &str = crate::daemon::ability::names::resources::SKILL_PUBLISH;
@@ -88,7 +89,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         OwnerKind::Device,
         Arc::new(unpublish_handler),
     );
-    reg.register_rpc_with_owner("skill.list", OwnerKind::Device, Arc::new(list_handler));
+    reg.register_rpc_with_owner("skill.list", OwnerKind::Device, Arc::new(list::handle));
     reg.register_rpc_with_owner("skill.tree", OwnerKind::Device, Arc::new(tree_handler));
     reg.register_rpc_with_owner(
         "skill.read_file",
@@ -284,19 +285,6 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
         "removed_dir": skill_dir.display().to_string(),
         "content_hash": logged_hash,
     }))
-}
-
-/// `skill.list` — installed skill inventory.
-///
-/// Args:
-/// ```json
-/// { "owner_agent_id": "<agent name>"? }
-/// ```
-/// (When absent, all agents' skills are listed.)
-///
-/// Returns: `{ "items": [InstalledSkill, ...] }`.
-fn list_handler(args: Value) -> anyhow::Result<Value> {
-    crate::daemon::ability::builtins::resources::skills::list::list_handler_for_args(args)
 }
 
 /// `skill.tree` — list files inside one installed skill package.
@@ -1221,7 +1209,7 @@ mod tests {
             "skill_md": "content",
         }))
         .unwrap();
-        let res = list_handler(json!({"owner_agent_id": name})).expect("list ok");
+        let res = list::handle(json!({"owner_agent_id": name})).expect("list ok");
         let items = res["items"].as_array().expect("items array");
         let found = items.iter().any(|item| item["name"] == "found-me");
         assert!(
@@ -1255,7 +1243,7 @@ mod tests {
         }))
         .unwrap();
 
-        let by_agent = list_handler(json!({ "agent_ura": first_ura })).expect("list by agent_ura");
+        let by_agent = list::handle(json!({ "agent_ura": first_ura })).expect("list by agent_ura");
         let items = by_agent["items"].as_array().unwrap();
         assert_eq!(
             items.len(),
@@ -1279,7 +1267,7 @@ mod tests {
             "skill/first-skill",
         );
         let by_subject =
-            list_handler(json!({ "subject_ura": skill_subject })).expect("list by subject_ura");
+            list::handle(json!({ "subject_ura": skill_subject })).expect("list by subject_ura");
         let items = by_subject["items"].as_array().unwrap();
         assert_eq!(
             items.len(),
@@ -1288,7 +1276,7 @@ mod tests {
         );
         assert_eq!(items[0]["name"], "first-skill");
 
-        let err = list_handler(json!({
+        let err = list::handle(json!({
             "agent_ura": second_ura,
             "subject_ura": crate::core::ura::resource_dot_ura(
                 "localhost",
@@ -1373,7 +1361,7 @@ mod tests {
         )
         .unwrap();
 
-        let listed = list_handler(json!({"owner_agent_id": name})).expect("list ok");
+        let listed = list::handle(json!({"owner_agent_id": name})).expect("list ok");
         assert!(
             listed["items"]
                 .as_array()

@@ -54,13 +54,12 @@
 // substantive behaviours land in subsequent PRs:
 //
 //   * skills loading: `skills_loaded` enumerates the agent's other
-//     abilities (filtered by mode/include/exclude). Those abilities
-//     are ALREADY callable by the LLM — the workspace's .mcp.json
-//     points at the EasyNet MCP server with `--enable-agent-dispatch`
-//     so the AgentDispatchAdapter advertises every <agent>.chat tool.
-//     The skills filter is currently advisory: we report what we
-//     would expose; per-call enforcement of the include/exclude
-//     filter against claude-code's tool-discovery wire is a follow-up.
+//     abilities (filtered by mode/include/exclude). The workspace MCP
+//     projection exposes callable abilities by geometry; cross-agent
+//     execution remains owned by the mission runtime. The skills filter is
+//     currently advisory: we report what we would expose; per-call
+//     enforcement of the include/exclude filter against the driver's
+//     tool-discovery wire is a follow-up.
 //   * context loaders: the trait seam exists; v1 ships ScheduleLoader
 //     / MemoryLoader / UserProfileLoader. `context_used` reports
 //     which loaders contributed and how many bytes each.
@@ -203,7 +202,11 @@ pub fn register_for_agent(
     reg.register_rpc_with_spec(
         &ability,
         owner.clone(),
-        crate::daemon::ability::manifest::default_chat_manifest(),
+        crate::daemon::ability::manifest::default_chat_manifest()
+            .with_admission_action(
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
+            )
+            .expect("chat manifest accepts invoke admission_action"),
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
@@ -241,7 +244,18 @@ pub fn register_for_agent(
         match exec {
             crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
                 let h = build_host_stream_handler(stream_spec.clone());
-                reg.register_stream_with_envelope_and_owner(&ability_name, owner.clone(), h);
+                let manifest = manifest
+                    .clone()
+                    .with_admission_action(
+                        crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+                    )
+                    .expect("agent host_stream manifest accepts stream admission_action");
+                reg.register_stream_with_envelope_and_spec(
+                    &ability_name,
+                    owner.clone(),
+                    manifest,
+                    h,
+                );
             }
             _ => {
                 let h = build_agent_ability_handler(
@@ -250,7 +264,13 @@ pub fn register_for_agent(
                     Arc::clone(&loaders),
                     bare_ability,
                 );
-                reg.register_rpc_with_owner(&ability_name, owner.clone(), h);
+                let manifest = manifest
+                    .clone()
+                    .with_admission_action(
+                        crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
+                    )
+                    .expect("agent executor manifest accepts invoke admission_action");
+                reg.register_rpc_with_spec(&ability_name, owner.clone(), manifest, h);
             }
         }
     }
@@ -263,14 +283,18 @@ pub fn register_for_agent(
     reg.register_stream_with_spec(
         &ability,
         owner,
-        crate::daemon::ability::manifest::default_chat_manifest(),
+        crate::daemon::ability::manifest::default_chat_manifest()
+            .with_admission_action(
+                crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+            )
+            .expect("chat manifest accepts stream admission_action"),
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }
 
 /// Build the envelope-aware stream handler for a `host_stream` ability.
 ///
-/// Registered via `register_stream_with_envelope_and_owner` so the
+/// Registered via `register_stream_with_envelope_and_spec` so the
 /// ability is stream-mode (`modes.stream = true`) and so the handler
 /// sees the AXIOM seven-tuple: the runtime invocation id becomes the
 /// wire `call_id` correlating the request to the external host. The
@@ -2397,13 +2421,12 @@ mod tests {
     fn kernel_invoke_routes_chat_through_registered_handler() {
         use crate::daemon::boot::kernel::api::KernelApi;
         use crate::daemon::boot::kernel::Kernel;
-        use crate::daemon::federation::gateway::NoopGateway;
         use crate::daemon::invocation::receipts::runtime_record::{
             RuntimeCausalContext, RuntimeInvocation,
         };
         use easynet_axon::invocation::{
             make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes, AxonError,
-            KeyResolver, LocalRuntime,
+            KeyResolver,
         };
         use ed25519_dalek::VerifyingKey;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2421,11 +2444,13 @@ mod tests {
         // can prove the registered handler is the one that fired.
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_for_handler = Arc::clone(&counter);
-        let rt = LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
         let chat_options = easynet_axon::invocation::AbilityOptions::default()
             .with_modes(easynet_axon::invocation::AbilityCallModes::RPC)
             .with_descriptor_proof(
                 crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                "invoke",
+                [0x33; 32],
                 [0x11; 32],
                 [0x22; 32],
             );
@@ -2459,7 +2484,7 @@ mod tests {
         let signing_key = signing_key_from_bytes(&[0x42; 32]);
         rt.set_admission_key_resolver(Arc::new(FixedKey(signing_key.verifying_key())));
 
-        let kernel = Kernel::new(Arc::new(NoopGateway));
+        let kernel = Kernel::new();
         kernel.set_local_runtime(Arc::clone(&rt));
 
         let device_ura = crate::core::ura::device_ura("localhost", "a");
@@ -2473,18 +2498,26 @@ mod tests {
             args: json!({"prompt": "hi"}),
             caller_signature: None,
         };
-        let (envelope, _) = inv
-            .axon_descriptor_bound_envelope(
+        let descriptor_binding =
+            crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
                 crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [0x33; 32],
+                "invoke",
             )
+            .expect("test descriptor binding");
+        let (envelope, _) = inv
+            .axon_descriptor_bound_envelope(&descriptor_binding)
             .expect("descriptor-bound envelope");
         let signature = sign_descriptor_bound_invocation(&signing_key, &envelope, "test-key");
         inv.caller_signature = Some(signature.signature);
         let receipt = kernel.invoke(inv).expect("invoke ok");
-        assert!(matches!(
-            receipt.terminal,
-            crate::daemon::invocation::receipts::runtime_record::TerminalState::Succeeded
-        ));
+        assert!(
+            matches!(
+                receipt.terminal,
+                crate::daemon::invocation::receipts::runtime_record::TerminalState::Succeeded
+            ),
+            "unexpected terminal receipt: {receipt:?}"
+        );
         assert_eq!(
             counter.load(Ordering::SeqCst),
             1,

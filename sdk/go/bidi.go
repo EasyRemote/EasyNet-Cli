@@ -17,6 +17,7 @@ const (
 	BidiCreated          BidiState = "Created"
 	BidiOpening          BidiState = "Opening"
 	BidiOpen             BidiState = "Open"
+	BidiCancelRequested  BidiState = "CancelRequested"
 	BidiHalfClosedLocal  BidiState = "HalfClosedLocal"
 	BidiHalfClosedRemote BidiState = "HalfClosedRemote"
 	BidiTerminal         BidiState = "Terminal"
@@ -101,24 +102,27 @@ type BidiSession struct {
 
 // BidiFrame is an SDK bidi frame projection.
 type BidiFrame struct {
-	sequence           uint64
-	kind               string
-	streamID           uint64
-	terminal           bool
-	payloadContentType string
-	payloadBase64      string
-	payloadJSON        json.RawMessage
-	errorJSON          json.RawMessage
+	sequence             uint64
+	kind                 string
+	streamID             uint64
+	terminal             bool
+	transportTerminal    bool
+	payloadContentType   string
+	payloadBase64        string
+	payloadJSON          json.RawMessage
+	errorJSON            json.RawMessage
+	admissionReceiptJSON json.RawMessage
+	terminalReceiptJSON  json.RawMessage
 }
 
 // BidiTerminalFrame is the schema-shaped Runtime Core bidi terminal projection.
 type BidiTerminalFrame struct {
-	sessionID string
-	frameType string
-	seq       uint64
-	payload   json.RawMessage
-	errorJSON json.RawMessage
-	receipt   json.RawMessage
+	sessionID       string
+	frameType       string
+	seq             uint64
+	payload         json.RawMessage
+	errorJSON       json.RawMessage
+	terminalReceipt json.RawMessage
 }
 
 // BidiOutcome is a close-send/cancel/terminal outcome projection.
@@ -427,6 +431,8 @@ func (s *BidiSession) applyReceivedState(frame BidiFrame) error {
 		}
 		s.terminalFrame = &terminal
 		s.state = BidiTerminal
+	case frame.transportTerminal:
+		s.state = BidiFailed
 	case frame.kind == "remote_close_send":
 		if s.state == BidiHalfClosedLocal {
 			s.state = BidiTerminal
@@ -460,10 +466,13 @@ func (f BidiFrame) MarshalJSON() ([]byte, error) {
 		"kind":                 f.kind,
 		"stream_id":            f.streamID,
 		"terminal":             f.terminal,
+		"transport_terminal":   f.transportTerminal,
 		"payload_content_type": f.payloadContentType,
 		"payload_base64":       f.payloadBase64,
 		"payload_json":         f.payloadJSON,
 		"error":                f.errorJSON,
+		"admission_receipt":    f.admissionReceiptJSON,
+		"terminal_receipt":     f.terminalReceiptJSON,
 	})
 }
 
@@ -483,6 +492,10 @@ func (f BidiFrame) Terminal() bool {
 	return f.terminal
 }
 
+func (f BidiFrame) TransportTerminal() bool {
+	return f.transportTerminal
+}
+
 func (f BidiFrame) PayloadContentType() string {
 	return f.payloadContentType
 }
@@ -499,6 +512,14 @@ func (f BidiFrame) ErrorJSON() json.RawMessage {
 	return append(json.RawMessage(nil), f.errorJSON...)
 }
 
+func (f BidiFrame) AdmissionReceiptJSON() json.RawMessage {
+	return append(json.RawMessage(nil), f.admissionReceiptJSON...)
+}
+
+func (f BidiFrame) TerminalReceiptJSON() json.RawMessage {
+	return append(json.RawMessage(nil), f.terminalReceiptJSON...)
+}
+
 // NewBidiTerminalFrame projects a terminal bidi frame into bidi-frame.schema.json shape.
 func NewBidiTerminalFrame(sessionID string, frame BidiFrame) (BidiTerminalFrame, error) {
 	if sessionID == "" {
@@ -508,12 +529,12 @@ func NewBidiTerminalFrame(sessionID string, frame BidiFrame) (BidiTerminalFrame,
 		return BidiTerminalFrame{}, invalidRuntimePayload("bidi frame is not terminal", nil)
 	}
 	return BidiTerminalFrame{
-		sessionID: sessionID,
-		frameType: bidiTerminalFrameType(frame),
-		seq:       frame.sequence,
-		payload:   append(json.RawMessage(nil), frame.payloadJSON...),
-		errorJSON: append(json.RawMessage(nil), frame.errorJSON...),
-		receipt:   receiptFromPayload(frame.payloadJSON),
+		sessionID:       sessionID,
+		frameType:       bidiTerminalFrameType(frame),
+		seq:             frame.sequence,
+		payload:         append(json.RawMessage(nil), frame.payloadJSON...),
+		errorJSON:       append(json.RawMessage(nil), frame.errorJSON...),
+		terminalReceipt: frame.TerminalReceiptJSON(),
 	}, nil
 }
 
@@ -529,8 +550,8 @@ func (f BidiTerminalFrame) MarshalJSON() ([]byte, error) {
 	if len(f.errorJSON) != 0 {
 		value["error"] = json.RawMessage(f.errorJSON)
 	}
-	if len(f.receipt) != 0 {
-		value["receipt"] = json.RawMessage(f.receipt)
+	if len(f.terminalReceipt) != 0 {
+		value["terminal_receipt"] = json.RawMessage(f.terminalReceipt)
 	}
 	return json.Marshal(value)
 }
@@ -555,8 +576,8 @@ func (f BidiTerminalFrame) ErrorJSON() json.RawMessage {
 	return append(json.RawMessage(nil), f.errorJSON...)
 }
 
-func (f BidiTerminalFrame) ReceiptJSON() json.RawMessage {
-	return append(json.RawMessage(nil), f.receipt...)
+func (f BidiTerminalFrame) TerminalReceiptJSON() json.RawMessage {
+	return append(json.RawMessage(nil), f.terminalReceipt...)
 }
 
 // NewBidiBinaryFrame creates an outbound binary data frame.
@@ -604,10 +625,13 @@ func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
 		Event              string          `json:"event"`
 		StreamID           uint64          `json:"stream_id"`
 		Terminal           bool            `json:"terminal"`
+		TransportTerminal  bool            `json:"transport_terminal"`
 		PayloadContentType string          `json:"payload_content_type"`
 		PayloadBase64      string          `json:"payload_base64"`
 		PayloadJSON        json.RawMessage `json:"payload_json"`
 		Error              json.RawMessage `json:"error"`
+		AdmissionReceipt   json.RawMessage `json:"admission_receipt"`
+		TerminalReceipt    json.RawMessage `json:"terminal_receipt"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return BidiFrame{}, invalidRuntimePayload(fmt.Sprintf("decode bidi frame JSON: %v", err), err)
@@ -623,14 +647,17 @@ func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
 		return BidiFrame{}, invalidRuntimePayload("bidi frame sequence is required", nil)
 	}
 	return BidiFrame{
-		sequence:           dto.Sequence,
-		kind:               kind,
-		streamID:           dto.StreamID,
-		terminal:           dto.Terminal,
-		payloadContentType: dto.PayloadContentType,
-		payloadBase64:      dto.PayloadBase64,
-		payloadJSON:        append(json.RawMessage(nil), dto.PayloadJSON...),
-		errorJSON:          append(json.RawMessage(nil), dto.Error...),
+		sequence:             dto.Sequence,
+		kind:                 kind,
+		streamID:             dto.StreamID,
+		terminal:             dto.Terminal,
+		transportTerminal:    dto.TransportTerminal,
+		payloadContentType:   dto.PayloadContentType,
+		payloadBase64:        dto.PayloadBase64,
+		payloadJSON:          append(json.RawMessage(nil), dto.PayloadJSON...),
+		errorJSON:            append(json.RawMessage(nil), dto.Error...),
+		admissionReceiptJSON: append(json.RawMessage(nil), dto.AdmissionReceipt...),
+		terminalReceiptJSON:  append(json.RawMessage(nil), dto.TerminalReceipt...),
 	}, nil
 }
 
@@ -662,8 +689,11 @@ func NewBidiOutcomeFromJSON(raw []byte) (BidiOutcome, error) {
 		return BidiOutcome{}, invalidRuntimePayload("state is required", nil)
 	}
 	state := BidiState(dto.State)
-	if state != BidiHalfClosedLocal && state != BidiHalfClosedRemote && state != BidiTerminal && state != BidiCancelled && state != BidiClosed && state != BidiFailed {
+	if state != BidiCancelRequested && state != BidiHalfClosedLocal && state != BidiHalfClosedRemote && state != BidiTerminal && state != BidiCancelled && state != BidiClosed && state != BidiFailed {
 		return BidiOutcome{}, invalidRuntimePayload("invalid bidi outcome state", nil)
+	}
+	if state == BidiCancelRequested && dto.Terminal {
+		return BidiOutcome{}, invalidRuntimePayload("bidi cancel request must not be terminal", nil)
 	}
 	if (state == BidiTerminal || state == BidiCancelled || state == BidiClosed || state == BidiFailed) && !dto.Terminal {
 		return BidiOutcome{}, invalidRuntimePayload("terminal bidi outcome must set terminal", nil)

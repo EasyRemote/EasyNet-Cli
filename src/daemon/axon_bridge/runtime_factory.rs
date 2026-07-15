@@ -14,14 +14,37 @@
 //! reachable from the dispatch service.
 
 use std::sync::Arc;
+#[cfg(test)]
+use std::{collections::HashMap, sync::Mutex};
 
+#[cfg(test)]
 use easynet_axon::invocation::{
-    AxiomBinding, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
+    sha256, AgentIdentity, Ed25519ReceiptSigningAuthority, ReceiptSigningAuthority,
+    ReceiptSigningAuthorityProvider,
+};
+use easynet_axon::invocation::{
+    AxiomBinding, AxonError, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
 };
 
 use crate::daemon::identity::local_invocation::LocalSystemKeyResolver;
+use crate::daemon::identity::receipt_signing::load_runtime_signing_authority_providers;
+pub use crate::daemon::identity::receipt_signing::ProductionReceiptAuthorityConfig;
 
-/// Construct an `Arc<LocalRuntime>` wired with:
+/// Build the daemon production runtime from persistent owner-bound key-service
+/// capabilities. No private key enters the CLI process.
+pub fn build_production_local_runtime(
+    config: ProductionReceiptAuthorityConfig,
+) -> Result<Arc<LocalRuntime>, AxonError> {
+    let providers = load_runtime_signing_authority_providers(config)?;
+    Ok(LocalRuntime::new_with_signing_authority_providers(
+        Some(providers.invocation),
+        providers.receipt,
+    ))
+}
+
+/// Construct an explicit local-fast `Arc<LocalRuntime>` for daemon tests.
+///
+/// Test wiring includes:
 ///
 /// - the caller-key resolver supplied by the services layer, wrapped with the
 ///   daemon-local `_system.local` resolver branch, so external signed calls
@@ -30,18 +53,76 @@ use crate::daemon::identity::local_invocation::LocalSystemKeyResolver;
 ///   terminal invocation persists into `<ledger_dir>/invocations.redb`
 ///   without the dispatch arm needing to manually build a record).
 ///
-/// `ledger` is optional: device-mode daemons that never opened a
-/// ledger (e.g. failed to create `ledger_dir`) just skip the sink
-/// — the invocation still flows, only the persistent audit trail
-/// is missing for that boot.
+/// Production boot must use [`build_production_local_runtime`].
+#[cfg(test)]
 #[must_use]
 pub fn build_local_runtime(
     key_resolver: Option<Arc<dyn KeyResolver>>,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> Arc<LocalRuntime> {
-    let runtime = LocalRuntime::new();
+    let runtime = build_ephemeral_test_runtime();
     configure_local_runtime(&runtime, key_resolver, ledger);
     runtime
+}
+
+#[cfg(test)]
+#[must_use]
+pub(crate) fn build_ephemeral_test_runtime() -> Arc<LocalRuntime> {
+    LocalRuntime::new_with_receipt_signing_authority_provider(
+        ephemeral_test_receipt_signing_authority_provider(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn ephemeral_test_receipt_signing_authority_provider(
+) -> Arc<dyn ReceiptSigningAuthorityProvider> {
+    Arc::new(EphemeralTestReceiptSigningAuthorityProvider::default())
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct EphemeralTestReceiptSigningAuthorityProvider {
+    authorities: Mutex<HashMap<AgentIdentity, Arc<dyn ReceiptSigningAuthority>>>,
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl ReceiptSigningAuthorityProvider for EphemeralTestReceiptSigningAuthorityProvider {
+    async fn resolve(
+        &self,
+        callee: &AgentIdentity,
+    ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+        let mut authorities = self
+            .authorities
+            .lock()
+            .map_err(|_| AxonError::internal("ephemeral_test_receipt_authority_lock_poisoned"))?;
+        if let Some(authority) = authorities.get(callee) {
+            return Ok(Arc::clone(authority));
+        }
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&sha256(callee.ura.as_bytes()));
+        let authority: Arc<dyn ReceiptSigningAuthority> =
+            Arc::new(Ed25519ReceiptSigningAuthority::self_signed(
+                callee.clone(),
+                signing_key,
+                "cli-test-runtime",
+            ));
+        authorities.insert(callee.clone(), Arc::clone(&authority));
+        Ok(authority)
+    }
+
+    fn resolve_signer_key(
+        &self,
+        signer_ura: &str,
+    ) -> Result<Option<ed25519_dalek::VerifyingKey>, AxonError> {
+        let authorities = self
+            .authorities
+            .lock()
+            .map_err(|_| AxonError::internal("ephemeral_test_receipt_authority_lock_poisoned"))?;
+        Ok(authorities
+            .values()
+            .find(|authority| authority.signer_identity().ura == signer_ura)
+            .map(|authority| authority.verifying_key()))
+    }
 }
 
 /// Install daemon-specific admission and ledger adapters onto an
@@ -53,7 +134,10 @@ pub fn configure_local_runtime(
     key_resolver: Option<Arc<dyn KeyResolver>>,
     ledger: Option<Arc<InvocationLedger>>,
 ) {
-    runtime.set_admission_key_resolver(Arc::new(LocalSystemKeyResolver::new(key_resolver)));
+    runtime.set_admission_key_resolver(Arc::new(
+        LocalSystemKeyResolver::new(key_resolver)
+            .with_receipt_signing_runtime(Arc::downgrade(runtime)),
+    ));
     if let Some(ledger) = ledger {
         runtime.set_ledger_sink(
             LedgerSink::new(ledger)

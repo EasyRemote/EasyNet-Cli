@@ -84,7 +84,7 @@ pub struct ScreenCaptureKitStream {
 }
 
 /// A resolved ScreenCaptureKit target. It owns the platform content filter and
-/// exposes the native dimensions that should be used when Axon requests
+/// exposes the native dimensions that should be used when the ability requests
 /// `resolution=native`.
 pub struct ScreenCaptureKitTarget {
     filter: Retained<SCContentFilter>,

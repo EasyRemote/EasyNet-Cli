@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "mcp.bridge.call_tool"
+descriptor_version = "1.0.0"
 description = "Invoke a tool advertised by mcp.bridge.list_tools. Mirrors the MCP tools/call shape: returns {content:[{type:\"text\",text}], isError}. Visibility is re-checked against the live descriptor catalogue on each call, so a stale list_tools cache cannot bypass the bridge filter."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

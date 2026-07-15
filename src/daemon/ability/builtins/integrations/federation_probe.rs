@@ -28,8 +28,8 @@ use std::time::Instant;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::builtins::agents::discover::DiscoverFederationResolver;
 use crate::daemon::ability::names::{federation, governance};
-use crate::daemon::federation::advertise::{self, BridgeAbilityInvoker};
 use crate::daemon::federation::client::ability_contract::ResolvedAgent;
 use crate::daemon::persistence::config;
 
@@ -78,24 +78,17 @@ pub(crate) struct ResolvedDeviceRecord {
 /// Build the local device record from the daemon's canonical catalog. This
 /// path is deliberately independent of the optional federation bridge: the
 /// daemon owns its local identity and descriptors even in daemon-only mode.
-pub(crate) fn local_device_record() -> Option<ResolvedDeviceRecord> {
+pub(crate) fn local_device_record(
+    catalog: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
+) -> Option<ResolvedDeviceRecord> {
     let local = local_identity();
     if !local.paired {
         return None;
     }
-    let abilities = crate::daemon::ability::catalog::published_abilities()
-        .into_iter()
-        .map(|descriptor| {
-            let input_schema = descriptor.input_schema().clone();
-            json!({
-                "name": descriptor.name,
-                "description": descriptor.description,
-                "input_schema": input_schema,
-                "read_only": descriptor.hints.read_only,
-                "idempotent": descriptor.hints.idempotent,
-            })
-        })
-        .collect();
+    let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
+    let abilities =
+        crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog)
+            .owner_projection_values(&owner_ura);
     Some(ResolvedDeviceRecord {
         node: DeviceNodeSnapshot {
             node_id: local.node_id.clone(),
@@ -168,7 +161,7 @@ pub(crate) fn local_identity() -> LocalIdentity {
     }
 }
 
-pub(crate) fn collect_device_view() -> DeviceNetworkView {
+pub(crate) fn collect_device_view(resolver: &dyn DiscoverFederationResolver) -> DeviceNetworkView {
     let local = local_identity();
     let mut nodes = vec![DeviceNodeSnapshot {
         node_id: local.node_id.clone(),
@@ -217,30 +210,10 @@ pub(crate) fn collect_device_view() -> DeviceNetworkView {
             };
         }
     };
-    let (bridge, _state) = match config::load_and_connect() {
-        Ok(pair) => pair,
-        Err(e) => {
-            return DeviceNetworkView {
-                nodes,
-                federation_view: "local_only".to_string(),
-                federation_view_reason: Some(format!("local runtime bridge is unavailable: {e}")),
-                resolve_latency_ms: None,
-            };
-        }
-    };
-
     let caller_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
-    let invoker = BridgeAbilityInvoker::with_caller_ura(&bridge, caller_ura);
 
     let resolve_started = Instant::now();
-    let resolved = match advertise::resolve_agents_with_filter(
-        &invoker,
-        &creds.realm,
-        &creds.realm,
-        "",
-        true,
-        None,
-    ) {
+    let resolved = match resolver.resolve_agents(&creds.realm, &creds.realm, caller_ura, None) {
         Ok(r) => r,
         Err(e) => {
             return DeviceNetworkView {
@@ -329,7 +302,10 @@ pub(crate) fn collect_device_view() -> DeviceNetworkView {
 /// tenant first, then fall back to the cross-tenant catalogue (`*`)
 /// so `node.describe` can locate cross-hub peers by the UUID
 /// operators already have in hand.
-pub(crate) fn resolve_device_record(node_id: &str) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
+pub(crate) fn resolve_device_record(
+    resolver: &dyn DiscoverFederationResolver,
+    node_id: &str,
+) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
     let local = local_identity();
     if !local.paired {
         return Ok(None);
@@ -337,37 +313,42 @@ pub(crate) fn resolve_device_record(node_id: &str) -> anyhow::Result<Option<Reso
 
     let creds = config::load_credentials()
         .map_err(|e| anyhow::anyhow!("device credentials are unavailable: {e}"))?;
-    let (bridge, _state) = config::load_and_connect()
-        .map_err(|e| anyhow::anyhow!("local runtime bridge is unavailable: {e}"))?;
     let caller_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
-    let invoker = BridgeAbilityInvoker::with_caller_ura(&bridge, caller_ura);
 
-    if let Some(record) = resolve_device_record_with_filter(&invoker, &creds, node_id, None)? {
+    if let Some(record) =
+        resolve_device_record_with_filter(resolver, &creds, &caller_ura, node_id, None)?
+    {
         return Ok(Some(record));
     }
-    resolve_device_record_with_filter(&invoker, &creds, node_id, Some("*".to_string()))
+    resolve_device_record_with_filter(
+        resolver,
+        &creds,
+        &caller_ura,
+        node_id,
+        Some("*".to_string()),
+    )
 }
 
 fn resolve_device_record_with_filter(
-    invoker: &BridgeAbilityInvoker<'_>,
+    resolver: &dyn DiscoverFederationResolver,
     creds: &config::Credentials,
+    caller_ura: &str,
     node_id: &str,
     tenant_filter: Option<String>,
 ) -> anyhow::Result<Option<ResolvedDeviceRecord>> {
-    let resolved = advertise::resolve_agents_with_filter(
-        invoker,
-        &creds.realm,
-        &creds.realm,
-        "",
-        true,
-        tenant_filter,
-    )
-    .map_err(|e| {
-        anyhow::anyhow!(
-            "federation.resolve failed against realm {:?}: {e}",
-            creds.realm
+    let resolved = resolver
+        .resolve_agents(
+            &creds.realm,
+            &creds.realm,
+            caller_ura.to_string(),
+            tenant_filter,
         )
-    })?;
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "federation.resolve failed against realm {:?}: {e}",
+                creds.realm
+            )
+        })?;
 
     for agent in resolved {
         if agent.status != "active" || !is_device_profile_agent(&agent) {

@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// NativeRuntimeOptions configures the SDK-owned native daemon Runtime provider.
+// NativeRuntimeOptions configures the SDK-owned native runtime provider.
 // The Go facade keeps native library and handle details private; callers see
 // only Runtime Core lifecycle concepts.
 type NativeRuntimeOptions struct {
@@ -20,17 +20,17 @@ type NativeRuntimeOptions struct {
 	// SubmitSigned remain unchanged because their signatures are user/browser
 	// supplied by design.
 	Signer *Signer
-	// StartConfig requests an explicit daemon lifecycle start/adopt operation
+	// StartConfig requests an explicit runtime lifecycle start/adopt operation
 	// before opening the runtime. When nil, OpenNativeRuntime only discovers
 	// and attaches to an existing daemon.
 	StartConfig *StartConfig
 	// StopDaemonOnClose stops the lifecycle handle opened from StartConfig when
-	// the native runtime handle is closed. When false, the daemon is detached
+	// the native runtime handle is closed. When false, the runtime host is detached
 	// after the runtime transport opens and keeps running.
 	StopDaemonOnClose bool
 }
 
-// NativeRuntimeHandle owns SDK facades opened from one native daemon provider.
+// NativeRuntimeHandle owns SDK facades opened from one native runtime provider.
 type NativeRuntimeHandle struct {
 	mu         sync.Mutex
 	client     *RuntimeClient

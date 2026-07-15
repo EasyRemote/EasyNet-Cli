@@ -130,7 +130,7 @@ pub fn handle_publish(
     // Register per-project fetch/API abilities into the live
     // daemon-hosted Axon runtime so Hub remote/session dispatch
     // can find them without any legacy resolver path.
-    super::register_project_abilities(registry.as_ref(), user, project_id)
+    super::register_project_abilities(registry.as_ref(), realm, user, project_id)
         .context("register pages project abilities")?;
 
     let project_ura =

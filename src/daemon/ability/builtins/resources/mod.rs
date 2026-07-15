@@ -11,3 +11,4 @@ pub mod media;
 pub mod pages;
 pub mod skills;
 pub mod voice;
+pub mod voice_contract;

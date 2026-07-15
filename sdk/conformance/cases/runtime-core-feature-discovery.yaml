@@ -23,7 +23,7 @@ expect:
   runtime_core_profile: provider-backed
   authority_profile: absent
   receipt_profile: absent
-  daemon_lifecycle_symbol: true
+  runtime_lifecycle_symbol: true
   typed_error_json_symbol: true
   runtime_health_symbol: true
   prepare_sign_submit_symbol: true

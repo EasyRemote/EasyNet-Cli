@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "skill.install"
+descriptor_version = "1.0.0"
 description = "Install a skill from a marketplace source into an agent's skills/ directory. v1 supports github: sources. Returns the InstallRecord (name, agent_id, source, skill_tree_hash, size_bytes, installed_at)."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

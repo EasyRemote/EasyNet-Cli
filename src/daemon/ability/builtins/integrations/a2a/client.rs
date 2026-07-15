@@ -54,6 +54,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::builtins::agents::discover::{
+    DiscoverFederationResolveError, DiscoverFederationResolver, SharedDiscoverFederationResolver,
+};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -64,7 +67,10 @@ pub const ABILITY_SEND_TASK: &str =
 /// every call submits a signed request to the local daemon's
 /// `Invocation::Invoke` service — the same wire path the rest of the CLI's
 /// cross-device dispatch takes after the joint-plan unification.
-pub fn register(reg: &mut AxonAbilityCatalog) {
+pub fn register(
+    reg: &mut AxonAbilityCatalog,
+    federation_resolver: SharedDiscoverFederationResolver,
+) {
     // Registered envelope-aware so the handler can read the inbound
     // invocation's causal context and chain it onto the forward hop
     // (refactor SPEC §15.1-1, bug-1 Slice B). The plain args-only
@@ -75,7 +81,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
         OwnerKind::Device,
         Arc::new(
             move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
-                send_task_handler(args, &env)
+                send_task_handler(args, &env, federation_resolver.as_ref())
             },
         ),
     );
@@ -115,8 +121,7 @@ fn causal_parents_from_env(env: &crate::daemon::ability::dispatch::EnvelopeConte
 /// `easynet ability invoke --node <URA>` and EAL
 /// `IrTarget::Device` use after the joint-plan cut over. Pre-cut
 /// this handler tried to drive the dispatcher's now-deleted
-/// `TargetScope::Remote` branch, which only ever reached
-/// `NoopGateway` and bailed "no Axon bridge connected".
+/// `TargetScope::Remote` branch, which had no network implementation.
 ///
 /// Returns: `{ ok, result?, error? }` — same envelope shape
 /// `a2a.bridge.send_task` (the inbound side) returns, so a planner
@@ -124,6 +129,7 @@ fn causal_parents_from_env(env: &crate::daemon::ability::dispatch::EnvelopeConte
 fn send_task_handler(
     args: Value,
     env: &crate::daemon::ability::dispatch::EnvelopeContext,
+    federation_resolver: &dyn DiscoverFederationResolver,
 ) -> anyhow::Result<Value> {
     let target_node = match target_node_field(&args) {
         Ok(s) => s,
@@ -138,8 +144,6 @@ fn send_task_handler(
         Err(msg) => return Ok(error_response(&msg)),
     };
     let task_args = args.get("args").cloned().unwrap_or(Value::Null);
-
-    let ability = format!("{agent_name}.{skill_name}");
 
     #[cfg(feature = "axon-pb")]
     {
@@ -170,14 +174,20 @@ fn send_task_handler(
             .ok()
             .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
             .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let target_call =
-            match crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-                &target_ura,
-                &ability,
-            ) {
-                Ok(target_call) => target_call,
-                Err(e) => return Ok(error_response(&format!("{e}"))),
-            };
+        if let Some(message) = local_daemon_transport_error() {
+            return Ok(error_response(&message));
+        }
+        let resolve_caller = caller_ura.as_deref().unwrap_or_else(|| env.caller());
+        let target_call = match resolve_a2a_target(
+            &target_ura,
+            &agent_name,
+            &skill_name,
+            federation_resolver,
+            resolve_caller,
+        ) {
+            Ok(target_call) => target_call,
+            Err(e) => return Ok(error_response(&format!("{e}"))),
+        };
         // Chain the inbound invocation's causal parents onto the forward
         // hop so an A2A relay preserves the receipt DAG instead of re-rooting
         // it (SPEC §15.1-1, bug-1 Slice B). Root invocations yield no parents.
@@ -194,7 +204,13 @@ fn send_task_handler(
     }
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = (ability, task_args, target_node);
+        let _ = (
+            agent_name,
+            skill_name,
+            task_args,
+            target_node,
+            federation_resolver,
+        );
         Ok(error_response(
             "a2a.client.send_task requires the `axon-pb` feature; \
              rebuild with `--features axon-pb` (production builds always do).",
@@ -217,6 +233,133 @@ fn required_nonempty_string(args: &Value, key: &str) -> Result<String, String> {
 
 fn error_response(message: &str) -> Value {
     json!({ "ok": false, "error": message })
+}
+
+#[cfg(feature = "axon-pb")]
+fn local_daemon_transport_error() -> Option<String> {
+    let socket_path = crate::support::platform::local_daemon_grpc::resolve_socket_path();
+    if crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
+        return None;
+    }
+    Some(format!(
+        "daemon not running (local gRPC listener unreachable at {}). Start it with `easynet runtime start`.",
+        socket_path.display()
+    ))
+}
+
+#[cfg(feature = "axon-pb")]
+fn resolve_a2a_target(
+    execution_target_ura: &str,
+    agent_name: &str,
+    skill_name: &str,
+    federation_resolver: &dyn DiscoverFederationResolver,
+    caller_ura: &str,
+) -> anyhow::Result<crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget>
+{
+    let target = crate::core::ura::parse_ura(execution_target_ura)
+        .map_err(|err| anyhow::anyhow!("parse target_node_ura: {err}"))?;
+    let realm = target.realm.clone();
+    let agents = federation_resolver
+        .resolve_agents(&realm, &realm, caller_ura.to_string(), Some(realm.clone()))
+        .map_err(|err| match err {
+            DiscoverFederationResolveError::NotJoined(message) => {
+                anyhow::anyhow!("federation directory is not joined: {message}")
+            }
+            DiscoverFederationResolveError::Unavailable(message) => {
+                anyhow::anyhow!("federation directory is unavailable: {message}")
+            }
+        })?;
+    let agent = select_a2a_agent(&agents, &target, execution_target_ura, agent_name)?;
+    let descriptor_ref = descriptor_ref_for_a2a_skill(agent, skill_name)?;
+    crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::from_descriptor_ref(
+        execution_target_ura,
+        &descriptor_ref,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn select_a2a_agent<'a>(
+    agents: &'a [crate::daemon::federation::client::ability_contract::ResolvedAgent],
+    target: &easynet_axon::ura::ParsedURA,
+    execution_target_ura: &str,
+    agent_name: &str,
+) -> anyhow::Result<&'a crate::daemon::federation::client::ability_contract::ResolvedAgent> {
+    let mut matches = agents
+        .iter()
+        .filter(|agent| a2a_agent_matches_target(agent, target, agent_name));
+    let selected = matches.next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "federation directory has no hosted Agent {agent_name:?} on target {execution_target_ura}"
+        )
+    })?;
+    if matches.next().is_some() {
+        anyhow::bail!(
+            "federation directory returned multiple hosted Agents named {agent_name:?} on target {execution_target_ura}"
+        );
+    }
+    Ok(selected)
+}
+
+#[cfg(feature = "axon-pb")]
+fn a2a_agent_matches_target(
+    agent: &crate::daemon::federation::client::ability_contract::ResolvedAgent,
+    target: &easynet_axon::ura::ParsedURA,
+    agent_name: &str,
+) -> bool {
+    let Ok(agent_ura) = crate::core::ura::parse_ura(&agent.ura) else {
+        return false;
+    };
+    if agent_ura.kind != crate::core::ura::URAKind::Agent {
+        return false;
+    }
+    let Some((_owner, advertised_agent_id)) = agent_ura
+        .agent_ids()
+        .or_else(|| agent_ura.device_agent_ids())
+    else {
+        return false;
+    };
+    if advertised_agent_id != agent_name {
+        return false;
+    }
+    match target.kind {
+        crate::core::ura::URAKind::Device => target
+            .device_id()
+            .is_some_and(|target_node_id| agent.host_node_id.as_deref() == Some(target_node_id)),
+        crate::core::ura::URAKind::Hub => agent_ura.realm == target.realm,
+        _ => false,
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_ref_for_a2a_skill(
+    agent: &crate::daemon::federation::client::ability_contract::ResolvedAgent,
+    skill_name: &str,
+) -> anyhow::Result<String> {
+    let mut matches = agent
+        .ability_summaries
+        .iter()
+        .filter_map(crate::daemon::federation::read_model::owner_projection::summary_from_value)
+        .filter(|summary| {
+            crate::daemon::federation::read_model::owner_projection::summary_public_name(summary)
+                .as_deref()
+                == Some(skill_name)
+        });
+    let summary = matches.next().ok_or_else(|| {
+        anyhow::anyhow!(
+            "federation catalog for Agent `{}` has no RPC ability {skill_name:?}",
+            agent.ura
+        )
+    })?;
+    if matches.next().is_some() {
+        anyhow::bail!(
+            "federation catalog for Agent `{}` returned multiple ability summaries named {skill_name:?}",
+            agent.ura
+        );
+    }
+    crate::daemon::federation::read_model::owner_projection::descriptor_ref_for_summary_call_mode(
+        &summary,
+        crate::daemon::ability::descriptors::CallMode::Rpc,
+    )
 }
 
 // ── Discovery surfaces ────────────────────────────────────────
@@ -258,8 +401,17 @@ mod tests {
     /// exercised by daemon/axon integration tests.
     fn fresh_registry() -> Arc<AxonAbilityCatalog> {
         let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg);
+        register(
+            &mut reg,
+            Arc::new(crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver),
+        );
         Arc::new(reg)
+    }
+
+    fn detached_resolver(
+    ) -> crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver
+    {
+        crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver
     }
 
     /// A root (parent-less) inbound envelope. `send_task_handler` reads the
@@ -334,6 +486,7 @@ mod tests {
                 "skill_name": "chat",
             }),
             &root_env(),
+            &detached_resolver(),
         )
         .unwrap();
         assert_eq!(resp["ok"], false);
@@ -352,6 +505,7 @@ mod tests {
                 "skill_name": "chat",
             }),
             &root_env(),
+            &detached_resolver(),
         )
         .unwrap();
         assert_eq!(resp["ok"], false);
@@ -366,6 +520,7 @@ mod tests {
                 "agent_name": "claude",
             }),
             &root_env(),
+            &detached_resolver(),
         )
         .unwrap();
         assert_eq!(resp["ok"], false);
@@ -381,6 +536,7 @@ mod tests {
                 "skill_name": "chat",
             }),
             &root_env(),
+            &detached_resolver(),
         )
         .unwrap();
         assert_eq!(resp["ok"], false);
@@ -403,6 +559,7 @@ mod tests {
                 "skill_name": "chat",
             }),
             &root_env(),
+            &detached_resolver(),
         )
         .unwrap();
         assert_eq!(resp["ok"], false);
@@ -426,6 +583,7 @@ mod tests {
                 "skill_name": "chat",
             }),
             &root_env(),
+            &detached_resolver(),
         )
         .unwrap();
         assert_eq!(resp["ok"], false);

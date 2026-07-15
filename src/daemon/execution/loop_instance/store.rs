@@ -44,6 +44,12 @@ impl LoopStore {
         Ok(Self { dir })
     }
 
+    #[cfg(test)]
+    fn open_at(dir: PathBuf) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self { dir })
+    }
+
     pub fn load_all(&self) -> anyhow::Result<Vec<LoopInstance>> {
         let mut out = Vec::new();
         let entries = match std::fs::read_dir(&self.dir) {
@@ -104,10 +110,6 @@ mod tests {
     use super::*;
     use crate::core::domain::{AgentId, LoopState};
 
-    fn temp_tenant() -> TenantId {
-        TenantId::new(format!("test-loop-{}", uuid::Uuid::new_v4()))
-    }
-
     fn instance(id: &str) -> LoopInstance {
         LoopInstance {
             id: LoopId::new(id),
@@ -125,8 +127,8 @@ mod tests {
 
     #[test]
     fn save_then_load_round_trips_instance() {
-        let tenant = temp_tenant();
-        let store = LoopStore::open(&tenant).unwrap();
+        let home = tempfile::tempdir().expect("loop store test directory");
+        let store = LoopStore::open_at(home.path().join("loops")).unwrap();
         store.save(&instance("rt-1")).unwrap();
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 1);

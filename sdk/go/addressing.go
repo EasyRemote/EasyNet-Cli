@@ -135,7 +135,9 @@ func (a *CanonicalAddressing) BuildURA(ctx context.Context, req CanonicalURABuil
 	case "agent":
 		ownerKind := strings.TrimSpace(req.OwnerKind)
 		switch ownerKind {
-		case "", "user":
+		case "":
+			return AddressingProjection{}, invalidProfilePayload(addressingProfile, "agent owner_kind is required", nil)
+		case "user":
 			raw = AgentURA(req.Realm, req.UserID, req.AgentID)
 		case "device":
 			raw = DeviceAgentURA(req.Realm, req.DeviceID, req.AgentID)

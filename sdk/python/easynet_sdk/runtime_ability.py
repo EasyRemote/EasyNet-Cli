@@ -111,7 +111,7 @@ def _required_text(value: object, field_name: str) -> str:
 
 
 def _invocation_failure(result: InvocationResult) -> SDKError:
-    failure = result.failure
+    failure = result.error
     code = ErrorCode.EXECUTION_FAILED
     if failure and failure.code:
         try:

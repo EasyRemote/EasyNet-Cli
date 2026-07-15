@@ -121,7 +121,7 @@ func (d *directRuntimeFakeDaemon) InvokeBidi(stream grpc.BidiStreamingServer[axo
 	})
 }
 
-func TestDirectDaemonRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
+func TestDirectRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
 
@@ -153,7 +153,7 @@ func TestDirectDaemonRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	}
 }
 
-func TestDirectDaemonRuntimeTransportStringifiesTypedMetadata(t *testing.T) {
+func TestDirectRuntimeTransportStringifiesTypedMetadata(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
 
@@ -198,8 +198,8 @@ func TestDirectRuntimeDialTargetClassifiesEndpointTransport(t *testing.T) {
 		endpoint string
 		target   string
 	}{
-		{name: "uds path", endpoint: "/tmp/easynet-daemon.sock", target: "passthrough:///easynet-daemon"},
-		{name: "uds scheme", endpoint: "unix:///tmp/easynet-daemon.sock", target: "passthrough:///easynet-daemon"},
+		{name: "uds path", endpoint: "/tmp/runtime.sock", target: "passthrough:///runtime-invocation"},
+		{name: "uds scheme", endpoint: "unix:///tmp/runtime.sock", target: "passthrough:///runtime-invocation"},
 		{name: "bare tcp", endpoint: "127.0.0.1:50051", target: "127.0.0.1:50051"},
 		{name: "plain grpc tcp", endpoint: "grpc://127.0.0.1:50051", target: "127.0.0.1:50051"},
 		{name: "tls grpc tcp", endpoint: "grpcs://hub:50443", target: "hub:50443"},
@@ -243,7 +243,7 @@ func TestDirectRuntimeGRPCErrorClassifiesHTTP2ProtocolReset(t *testing.T) {
 	}
 }
 
-func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughAddressing(t *testing.T) {
+func TestDirectRuntimeTransportProjectsDescriptorRefThroughAddressing(t *testing.T) {
 	addressing := NewCanonicalAddressing()
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS: 3000,
@@ -263,7 +263,7 @@ func TestDirectDaemonRuntimeTransportProjectsDescriptorRefThroughAddressing(t *t
 	}
 }
 
-func TestDirectDaemonRuntimeTransportPrepareProjectsSignedUserSubject(t *testing.T) {
+func TestDirectRuntimeTransportPrepareProjectsSignedUserSubject(t *testing.T) {
 	identity := directRuntimeUserSubjectIdentity(t)
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS: 3000,
@@ -295,7 +295,7 @@ func TestDirectDaemonRuntimeTransportPrepareProjectsSignedUserSubject(t *testing
 	}
 }
 
-func TestDirectDaemonRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubject(t *testing.T) {
+func TestDirectRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubject(t *testing.T) {
 	identity := directRuntimeUserSubjectIdentity(t)
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS: 3000,
@@ -375,7 +375,7 @@ func TestDirectDaemonRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubj
 	}
 }
 
-func TestDirectDaemonRuntimeTransportRejectsDescriptorProjectionWithoutIdentity(t *testing.T) {
+func TestDirectRuntimeTransportRejectsDescriptorProjectionWithoutIdentity(t *testing.T) {
 	_, err := directLocalAbilityName(context.Background(), nil, directRuntimeDraft(t))
 	if err == nil {
 		t.Fatalf("directLocalAbilityName accepted descriptor_ref without identity projection")
@@ -385,7 +385,7 @@ func TestDirectDaemonRuntimeTransportRejectsDescriptorProjectionWithoutIdentity(
 	}
 }
 
-func TestDirectDaemonRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
+func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
 
@@ -419,7 +419,7 @@ func TestDirectDaemonRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	}
 }
 
-func TestDirectDaemonRuntimeTransportBidiOverUnixSocket(t *testing.T) {
+func TestDirectRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransport(t)
 	defer cleanup()
 
@@ -459,8 +459,8 @@ func TestDirectDaemonRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	var receipt struct {
 		Payload map[string]string `json:"payload"`
 	}
-	if err := json.Unmarshal(terminalFrame.ReceiptJSON(), &receipt); err != nil {
-		t.Fatalf("decode terminal receipt: %v; raw=%s", err, terminalFrame.ReceiptJSON())
+	if err := json.Unmarshal(terminalFrame.TerminalReceiptJSON(), &receipt); err != nil {
+		t.Fatalf("decode terminal receipt: %v; raw=%s", err, terminalFrame.TerminalReceiptJSON())
 	}
 	if receipt.Payload["sha256"] != "bidi-sha" {
 		t.Fatalf("terminal receipt payload = %#v", receipt.Payload)
@@ -476,7 +476,7 @@ func TestDirectDaemonRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	}
 }
 
-func TestDirectDaemonRuntimeTransportDelegatesHandleOperations(t *testing.T) {
+func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
 		DialTimeoutMS:        3000,
@@ -500,16 +500,20 @@ func TestDirectDaemonRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 		handle.submitCalls != 1 {
 		t.Fatalf("submit delegation = calls %d payload %s", handle.submitCalls, submitted)
 	}
-	if _, err := transport.AwaitHandle(context.Background(), 7); err != nil {
+	control, err := newRuntimeInvocationControlCapability(7)
+	if err != nil {
+		t.Fatalf("control capability: %v", err)
+	}
+	if _, err := transport.AwaitHandle(context.Background(), control); err != nil {
 		t.Fatalf("AwaitHandle: %v", err)
 	}
-	if _, err := transport.CancelHandle(context.Background(), 7, "client stop"); err != nil {
+	if _, err := transport.CancelHandle(context.Background(), control, "client stop"); err != nil {
 		t.Fatalf("CancelHandle: %v", err)
 	}
-	if _, err := transport.HandleEvents(context.Background(), 7); err != nil {
+	if _, err := transport.HandleEvents(context.Background(), control); err != nil {
 		t.Fatalf("HandleEvents: %v", err)
 	}
-	if err := transport.FreeHandle(context.Background(), 7); err != nil {
+	if err := transport.FreeHandle(context.Background(), control); err != nil {
 		t.Fatalf("FreeHandle: %v", err)
 	}
 	if handle.awaitCalls != 1 || handle.cancelCalls != 1 || handle.eventsCalls != 1 || handle.freeCalls != 1 {
@@ -524,7 +528,7 @@ func TestDirectDaemonRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	}
 }
 
-func TestDirectDaemonRuntimeTransportProvidesHandleOperationsWithoutDelegate(t *testing.T) {
+func TestDirectRuntimeTransportProvidesHandleOperationsWithoutDelegate(t *testing.T) {
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
 	defer cleanup()
 
@@ -552,14 +556,15 @@ func TestDirectDaemonRuntimeTransportProvidesHandleOperationsWithoutDelegate(t *
 	if err != nil {
 		t.Fatalf("SubmitSigned: %v", err)
 	}
-	handle, err := NewInvocationHandleFromJSON(handleJSON)
+	handle, err := newRuntimeInvocationHandleFromJSON(handleJSON)
 	if err != nil {
-		t.Fatalf("NewInvocationHandleFromJSON: %v", err)
+		t.Fatalf("newRuntimeInvocationHandleFromJSON: %v", err)
 	}
-	if handle.HandleID() == 0 || !handle.Terminal() || daemon.seenInvoke.GetEnvelope().GetCallerSignature() == nil {
+	if !handle.ControlCapability().valid() || !handle.Terminal() || daemon.seenInvoke.GetEnvelope().GetCallerSignature() == nil {
 		t.Fatalf("direct handle submit did not invoke signed request: handle=%#v request=%#v", handle, daemon.seenInvoke)
 	}
-	resultJSON, err := transport.AwaitHandle(context.Background(), handle.HandleID())
+	control := handle.ControlCapability()
+	resultJSON, err := transport.AwaitHandle(context.Background(), control)
 	if err != nil {
 		t.Fatalf("AwaitHandle: %v", err)
 	}
@@ -570,7 +575,7 @@ func TestDirectDaemonRuntimeTransportProvidesHandleOperationsWithoutDelegate(t *
 	if !result.OK() {
 		t.Fatalf("await result not ok: %#v", result.Failure())
 	}
-	eventsJSON, err := transport.HandleEvents(context.Background(), handle.HandleID())
+	eventsJSON, err := transport.HandleEvents(context.Background(), control)
 	if err != nil {
 		t.Fatalf("HandleEvents: %v", err)
 	}
@@ -581,21 +586,21 @@ func TestDirectDaemonRuntimeTransportProvidesHandleOperationsWithoutDelegate(t *
 	if len(events.Events()) != 1 {
 		t.Fatalf("events = %#v", events.Events())
 	}
-	if err := transport.FreeHandle(context.Background(), handle.HandleID()); err != nil {
+	if err := transport.FreeHandle(context.Background(), control); err != nil {
 		t.Fatalf("FreeHandle: %v", err)
 	}
-	if _, err := transport.AwaitHandle(context.Background(), handle.HandleID()); !IsCode(err, ErrNotFound) {
+	if _, err := transport.AwaitHandle(context.Background(), control); !IsCode(err, ErrNotFound) {
 		t.Fatalf("AwaitHandle after free = %v, want %s", err, ErrNotFound)
 	}
 }
 
-func TestDirectDaemonRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
+func TestDirectRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
 	defer cleanup()
 	endpoint := transport.endpoint
 
-	connector := NewDirectDaemonRuntimeConnectorWithOptions(DirectDaemonRuntimeConnectorOptions{
+	connector := NewDirectRuntimeConnectorWithOptions(DirectRuntimeConnectorOptions{
 		Reader: ControlDiscoveryReaderFunc(func(context.Context, string) (ControlDiscovery, error) {
 			return ControlDiscovery{InvocationEndpoint: endpoint}, nil
 		}),
@@ -622,11 +627,11 @@ func TestDirectDaemonRuntimeConnectorProjectsHandleCapabilities(t *testing.T) {
 	}
 }
 
-func TestDirectDaemonRuntimeConnectorResolvesControlDiscovery(t *testing.T) {
+func TestDirectRuntimeConnectorResolvesControlDiscovery(t *testing.T) {
 	reader := ControlDiscoveryReaderFunc(func(ctx context.Context, controlPath string) (ControlDiscovery, error) {
 		return ControlDiscovery{InvocationEndpoint: "/tmp/direct.sock"}, nil
 	})
-	connector := NewDirectDaemonRuntimeConnector("/tmp/control.json", reader)
+	connector := NewDirectRuntimeConnector("/tmp/control.json", reader)
 	raw, err := connector.Resolve(context.Background(), []byte(`{
 		"dial_timeout_ms": 123,
 		"invoke_timeout_ms": 456,
@@ -651,11 +656,11 @@ func TestDirectDaemonRuntimeConnectorResolvesControlDiscovery(t *testing.T) {
 	}
 }
 
-func openDirectRuntimeTestTransport(t *testing.T) (*DirectDaemonRuntimeTransport, *directRuntimeFakeDaemon, func()) {
+func openDirectRuntimeTestTransport(t *testing.T) (*DirectRuntimeTransport, *directRuntimeFakeDaemon, func()) {
 	return openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
 }
 
-func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRuntimeOptions) (*DirectDaemonRuntimeTransport, *directRuntimeFakeDaemon, func()) {
+func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRuntimeOptions) (*DirectRuntimeTransport, *directRuntimeFakeDaemon, func()) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "easynet-go-direct-*")
 	if err != nil {
@@ -681,12 +686,12 @@ func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRunti
 	if options.Addressing == nil {
 		options.Addressing = directRuntimeIdentityClient(t)
 	}
-	transport, err := OpenDirectDaemonRuntimeTransport(context.Background(), socket, options)
+	transport, err := OpenDirectRuntimeTransport(context.Background(), socket, options)
 	if err != nil {
 		server.Stop()
 		<-done
 		_ = os.RemoveAll(dir)
-		t.Fatalf("OpenDirectDaemonRuntimeTransport: %v", err)
+		t.Fatalf("OpenDirectRuntimeTransport: %v", err)
 	}
 	cleanup := func() {
 		_ = transport.Close(context.Background())
@@ -729,22 +734,22 @@ func (f *directRuntimeFakeHandleTransport) SubmitSigned(context.Context, []byte)
 	return []byte(`{"handle_id":7,"state":"Submitted","terminal":false,"events":[],"result":null}`), nil
 }
 
-func (f *directRuntimeFakeHandleTransport) AwaitHandle(context.Context, uint64) ([]byte, error) {
+func (f *directRuntimeFakeHandleTransport) AwaitHandle(context.Context, InvocationControlCapability) ([]byte, error) {
 	f.awaitCalls++
 	return []byte(`{"ok":true,"state":"Completed","terminal_state":"Completed","output_json":{"done":true}}`), nil
 }
 
-func (f *directRuntimeFakeHandleTransport) CancelHandle(context.Context, uint64, string) ([]byte, error) {
+func (f *directRuntimeFakeHandleTransport) CancelHandle(context.Context, InvocationControlCapability, string) ([]byte, error) {
 	f.cancelCalls++
-	return []byte(`{"handle_id":7,"cancelled":true,"state":"Cancelled","terminal":true}`), nil
+	return []byte(`{"handle_id":7,"request_accepted":true,"deduplicated":false,"cancelled":false,"state":"CancelRequested","terminal":false}`), nil
 }
 
-func (f *directRuntimeFakeHandleTransport) HandleEvents(context.Context, uint64) ([]byte, error) {
+func (f *directRuntimeFakeHandleTransport) HandleEvents(context.Context, InvocationControlCapability) ([]byte, error) {
 	f.eventsCalls++
 	return []byte(`{"handle_id":7,"state":"Submitted","terminal":false,"events":[],"result":null}`), nil
 }
 
-func (f *directRuntimeFakeHandleTransport) FreeHandle(context.Context, uint64) error {
+func (f *directRuntimeFakeHandleTransport) FreeHandle(context.Context, InvocationControlCapability) error {
 	f.freeCalls++
 	return nil
 }

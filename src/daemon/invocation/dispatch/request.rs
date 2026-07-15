@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use rand::RngCore;
+
 use crate::daemon::{DaemonError, Result};
 
 /// Complete unary Invocation submitted through `DaemonClient`.
@@ -457,7 +459,7 @@ impl InvocationDraft {
         };
         Ok(PreparedInvocation {
             draft: self.clone(),
-            request_id: canonical_hash_hex.clone(),
+            request_id: fresh_prepare_request_id(),
             descriptor_ref: self.invocation.descriptor_ref.clone(),
             descriptor_hash_hex: hex::encode(easynet_axon::invocation::sha256(
                 self.invocation.descriptor_ref.as_bytes(),
@@ -486,6 +488,13 @@ impl InvocationDraft {
     pub(crate) fn into_daemon_invocation(self) -> DaemonInvocation {
         self.invocation
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn fresh_prepare_request_id() -> String {
+    let mut bytes = [0_u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    format!("prep-{}", hex::encode(bytes))
 }
 
 /// Public tuple projection for SDK bindings.
@@ -647,6 +656,35 @@ impl PreparedInvocation {
         }
         let signature = signer.sign_local_daemon_invocation(&self)?;
         self.sign_with_caller_signature(signature)
+    }
+
+    pub async fn sign_with_canonical_signer(
+        self,
+        signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+    ) -> Result<SignedInvocation> {
+        let caller_ura = self.tuple().caller_ura;
+        if signer.owner_ura() != caller_ura {
+            return Err(DaemonError::InvalidInvocation(format!(
+                "canonical signer owner `{}` does not match invocation caller `{caller_ura}`",
+                signer.owner_ura()
+            )));
+        }
+        let signature =
+            crate::daemon::invocation::caller_signature::sign_canonical_caller_signature(
+                signer,
+                self.signing_material().canonical_bytes(),
+            )
+            .await
+            .map_err(|error| {
+                DaemonError::InvalidInvocation(format!(
+                    "canonical invocation signing failed: {error}"
+                ))
+            })?;
+        self.sign_with_caller_signature(CallerSignatureMaterial::new(
+            signature.algorithm,
+            signature.signature,
+            signature.key_id_hint,
+        ))
     }
 }
 
@@ -924,6 +962,38 @@ impl SignedInvocation {
         invocation.caller_signature = Some(self.signature.into_wire());
         invocation
     }
+
+    pub(crate) fn prepare_cancel_command(&self, reason: String) -> Result<PreparedInvocation> {
+        let target = self.prepared.tuple();
+        let command =
+            crate::daemon::invocation::dispatch::cancellation::InvocationCancelCommand::new(
+                self.prepared.canonical_hash_hex(),
+                None,
+                reason,
+            )
+            .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let descriptor_ref =
+            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+                &target.callee_ura,
+                crate::daemon::invocation::dispatch::cancellation::ABILITY_INVOCATION_CANCEL,
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        DaemonInvocation::builder(
+            &target.caller_ura,
+            &target.callee_ura,
+            descriptor_ref,
+            &target.subject_ura,
+        )?
+        .args_json(&serde_json::to_value(command).map_err(DaemonError::EncodeArguments)?)?
+        .build_draft()?
+        .prepare(PrepareOptions {
+            expires_in: Duration::from_secs(60),
+            signer_id: Some(target.caller_ura),
+            policy_ref: Some("invocation.cancel.caller".to_string()),
+            local_daemon_signing: false,
+        })
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1156,9 +1226,10 @@ mod tests {
 
     fn descriptor_ref(owner_ura: &str, public_name: &str, version: &str) -> String {
         format!(
-            "{}@{}",
+            "{}@{}#{}!invoke",
             crate::core::ura::owner_ability_ura(owner_ura, public_name).unwrap(),
-            version
+            version,
+            "aa".repeat(32)
         )
     }
 
@@ -1482,6 +1553,50 @@ mod tests {
         assert_eq!(signature.algorithm, "ed25519");
         assert_eq!(signature.signature, vec![0x7a; 64]);
         assert_eq!(signature.key_id_hint, "caller-key");
+    }
+
+    #[test]
+    fn cancel_command_is_a_new_descriptor_bound_invocation() {
+        let authority = crate::core::ura::hub_ura("acme");
+        let target_ref = descriptor_ref(&authority, "observe.health", "2.4.0");
+        let prepared = DaemonInvocation::builder(
+            "easynet:///r/acme/device/dev-a",
+            &authority,
+            &target_ref,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .unwrap()
+        .nonce([0x12; 16])
+        .args_json(&serde_json::json!({"probe": true}))
+        .unwrap()
+        .build_draft()
+        .unwrap()
+        .prepare(PrepareOptions::default())
+        .unwrap();
+        let target_hash = prepared.canonical_hash_hex().to_string();
+        let target_nonce = prepared.draft().invocation.nonce();
+        let signed = prepared
+            .sign_with_caller_signature(CallerSignatureMaterial::new(
+                "ed25519",
+                vec![0x7a; 64],
+                "caller-key",
+            ))
+            .unwrap();
+
+        let cancel = signed
+            .prepare_cancel_command("operator stop".to_string())
+            .expect("prepare independent cancel command");
+        let tuple = cancel.tuple();
+        assert_eq!(tuple.caller_ura, "easynet:///r/acme/device/dev-a");
+        assert_eq!(tuple.callee_ura, authority);
+        assert_ne!(cancel.draft().invocation.nonce(), target_nonce);
+        assert!(cancel.descriptor_ref().contains(
+            crate::daemon::invocation::dispatch::cancellation::ABILITY_INVOCATION_CANCEL
+        ));
+        let command: crate::daemon::invocation::dispatch::cancellation::InvocationCancelCommand =
+            serde_json::from_slice(cancel.draft().invocation.args()).expect("cancel command args");
+        assert_eq!(command.target_lifecycle_hash, target_hash);
+        assert_eq!(command.reason, "operator stop");
     }
 
     #[test]

@@ -23,7 +23,6 @@ func TestRuntimeHealthDecodesReadyFixture(t *testing.T) {
 	client, err := NewHealthClient(HealthTransportFunc(func(ctx context.Context) ([]byte, error) {
 		return []byte(`{
 			"api_ready": true,
-			"daemon_ready": true,
 			"invocation_ready": true,
 			"directory_ready": true,
 			"trust_ready": true,
@@ -58,7 +57,6 @@ func TestRuntimeDiagnosticsDecodesReportFixture(t *testing.T) {
 	client, err := NewHealthClient(staticHealthTransport{
 		health: []byte(`{
 			"api_ready": true,
-			"daemon_ready": true,
 			"invocation_ready": true,
 			"directory_ready": true,
 			"trust_ready": true,
@@ -96,7 +94,6 @@ func TestRuntimeDiagnosticsRequiresTransportCapability(t *testing.T) {
 	client, err := NewHealthClient(HealthTransportFunc(func(ctx context.Context) ([]byte, error) {
 		return []byte(`{
 			"api_ready": true,
-			"daemon_ready": true,
 			"invocation_ready": true,
 			"directory_ready": true,
 			"trust_ready": true,
@@ -121,7 +118,6 @@ func TestRuntimeHealthExposesControlOnlyState(t *testing.T) {
 	client, err := NewHealthClient(HealthTransportFunc(func(ctx context.Context) ([]byte, error) {
 		return []byte(`{
 			"api_ready": true,
-			"daemon_ready": true,
 			"invocation_ready": false,
 			"directory_ready": true,
 			"trust_ready": true,

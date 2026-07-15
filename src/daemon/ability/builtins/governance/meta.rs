@@ -588,15 +588,23 @@ pub fn list_abilities_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, ScopeRule, Visibility};
+    use crate::daemon::ability::descriptors::{
+        AbilityDescriptor, AdmissionAction, ScopeRule, Visibility,
+    };
 
     fn d(name: &str) -> AbilityDescriptor {
-        AbilityDescriptor::new(name, "easynet:///r/test/device/01DEV", Visibility::Public)
-            .expect("test descriptor")
+        AbilityDescriptor::new(
+            name,
+            "easynet:///r/test/device/01DEV",
+            Visibility::Public,
+            AdmissionAction::Invoke,
+        )
+        .expect("test descriptor")
     }
 
     fn d_for_owner(name: &str, owner_ura: &str) -> AbilityDescriptor {
-        AbilityDescriptor::new(name, owner_ura, Visibility::Scoped).expect("test descriptor")
+        AbilityDescriptor::new(name, owner_ura, Visibility::Scoped, AdmissionAction::Invoke)
+            .expect("test descriptor")
     }
 
     #[test]
@@ -711,10 +719,15 @@ mod tests {
         [ABILITY_DESCRIBE, ABILITY_LIST_ABILITIES]
             .into_iter()
             .map(|name| {
-                AbilityDescriptor::new(name, FIXTURE_OWNER, Visibility::Scoped)
-                    .expect("canonical descriptor fixture")
-                    .with_scope_subjects(ScopeRule::OnlyMatching(vec![FIXTURE_OWNER.to_string()]))
-                    .with_scope_agents(ScopeRule::OnlyMatching(vec![FIXTURE_OWNER.to_string()]))
+                AbilityDescriptor::new(
+                    name,
+                    FIXTURE_OWNER,
+                    Visibility::Scoped,
+                    AdmissionAction::Invoke,
+                )
+                .expect("canonical descriptor fixture")
+                .with_scope_subjects(ScopeRule::OnlyMatching(vec![FIXTURE_OWNER.to_string()]))
+                .with_scope_agents(ScopeRule::OnlyMatching(vec![FIXTURE_OWNER.to_string()]))
             })
             .collect()
     }
@@ -725,7 +738,7 @@ mod tests {
     ) -> Arc<AxonAbilityCatalog> {
         let handle = Arc::new(std::sync::OnceLock::new());
         let mut registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
             authority_context,
         );
         super::register(
@@ -740,6 +753,22 @@ mod tests {
             .set(Arc::clone(&registry))
             .expect("publish authority-bound meta registry");
         registry
+    }
+
+    fn registry_with_hosted_agent_authorities(
+        device_ura: &str,
+        hosted_agent_uras: impl IntoIterator<Item = &'static str>,
+    ) -> AxonAbilityCatalog {
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+                device_ura,
+                hosted_agent_uras.into_iter().map(str::to_string),
+            )
+            .expect("explicit hosted-Agent test authorities must be canonical");
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            authority_context,
+        )
     }
 
     #[test]
@@ -834,7 +863,8 @@ mod tests {
             .all(|row| row["source"] == "daemon:control-plane"));
         assert!(rows.iter().all(|row| {
             row["ability_ura"].as_str().is_some_and(|ability_ura| {
-                ability_ura.starts_with("easynet:///r/hub-no-provider/ability/hub.")
+                crate::core::ura::AbilitySelector::parse(ability_ura)
+                    .is_ok_and(|selector| selector.owner_ura() == hub_ura)
             })
         }));
 
@@ -1169,9 +1199,16 @@ mod tests {
                 ))
             }),
         );
-        live_reg.register_stream_with_owner(
+        live_reg.register_stream_with_spec(
             "alice.subscribe",
             OwnerKind::Agent("alice".to_string()),
+            crate::daemon::ability::manifest::AbilityManifest::new(
+                "subscribe",
+                "Subscribe to test Agent events.",
+                json!({"type": "object"}),
+            )
+            .and_then(|manifest| manifest.with_admission_action("stream"))
+            .expect("test stream manifest carries admission action"),
             Arc::new(|_args| {
                 Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
                     Vec::new(),
@@ -1180,9 +1217,10 @@ mod tests {
         );
         // A schema-less static registration imports the pure system catalog
         // metadata before commit; discovery still performs no overlay.
-        live_reg.register_rpc_with_owner(
+        live_reg.register_rpc_with_owner_and_action(
             "alice.legacy",
             OwnerKind::Agent("alice".to_string()),
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             Arc::new(|_args| Ok(json!({}))),
         );
         live_reg
@@ -1200,6 +1238,7 @@ mod tests {
                         "required": ["query"]
                     }),
                 )
+                .and_then(|manifest| manifest.with_admission_action("stream"))
                 .expect("valid MCP manifest"),
                 Arc::new(|_args| {
                     Ok(crate::daemon::ability::dispatch::StreamSource::Snapshot(
@@ -1306,9 +1345,10 @@ mod tests {
             AbilityAuthorityContext::for_device_authority_root(device_ura)
                 .expect("fixed Device authority context"),
         );
-        live_reg.register_rpc_with_owner(
+        live_reg.register_rpc_with_owner_and_action(
             "device.unowned.test",
             OwnerKind::Device,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             Arc::new(|_args| Ok(json!({}))),
         );
         live_reg.clear_owner_for_test("device.unowned.test");
@@ -1360,6 +1400,7 @@ mod tests {
                 }
             }),
         )
+        .and_then(|manifest| manifest.with_admission_action("invoke"))
         .expect("valid manifest");
         live_reg
             .hot_register_rpc_with_spec(
@@ -1490,7 +1531,13 @@ mod tests {
         // The live control plane, not local-agents.json, is the discovery
         // source. The persisted identity exists only to resolve each Agent's
         // canonical authority root while the registrar commits its rows.
-        let live_registry = AxonAbilityCatalog::new();
+        let live_registry = registry_with_hosted_agent_authorities(
+            "easynet:///r/test-realm/device/dev-1",
+            [
+                "easynet:///r/test-realm/agent/user-1.alice",
+                "easynet:///r/test-realm/agent/user-1.bob",
+            ],
+        );
         for agent_name in ["alice", "bob"] {
             live_registry
                 .hot_register_rpc_with_spec(
@@ -1570,7 +1617,13 @@ mod tests {
         );
         save(&local).expect("seed local-agents.json");
 
-        let live_registry = AxonAbilityCatalog::new();
+        let live_registry = registry_with_hosted_agent_authorities(
+            "easynet:///r/test-realm/device/dev-1",
+            [
+                "easynet:///r/test-realm/agent/user-1.anthropic",
+                "easynet:///r/test-realm/agent/user-1.backend-engineer",
+            ],
+        );
         for agent_name in ["anthropic", "backend-engineer"] {
             live_registry
                 .hot_register_rpc_with_spec(

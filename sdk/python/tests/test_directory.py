@@ -4,46 +4,54 @@ import json
 
 import pytest
 
-from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
+import easynet_sdk.directory as directory_module
 from easynet_sdk.directory import (
+    DirectoryClient,
     DirectoryCursor,
     DirectoryListRequest,
+    DirectoryPage,
     DirectoryResolveKind,
     DirectoryResolveRequest,
+    DirectoryResolution,
     DirectorySubscribeRequest,
     DirectorySubscription,
     DirectorySubscriptionState,
-    RuntimeDirectoryProvider,
 )
 from easynet_sdk.errors import SDKError
-from easynet_sdk.runtime import RuntimeClient
-from easynet_sdk.runtime_ability import RuntimeAbilityClient
 from easynet_sdk.stream import StreamHandle
 
-from test_runtime_ability import RuntimeTransportFake, _call
+from test_runtime_ability import _call
 
 
-def _provider() -> tuple[RuntimeDirectoryProvider, RuntimeTransportFake]:
-    transport = RuntimeTransportFake()
-    ability = RuntimeAbilityClient(
-        RuntimeClient(transport),  # type: ignore[arg-type]
-        AddressingClient(AxonAddressingTransport()),
-    )
-    return RuntimeDirectoryProvider(ability), transport
+class FakeDirectoryProvider:
+    def __init__(self) -> None:
+        self.resolve_request: DirectoryResolveRequest | None = None
+        self.list_request: DirectoryListRequest | None = None
+        self.subscribe_request: DirectorySubscribeRequest | None = None
+        self.resolution = DirectoryResolution(
+            answer_kind="RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+            canonical_ura="easynet:///r/example/user/alice",
+            records=(),
+        )
+
+    def resolve(self, request: DirectoryResolveRequest) -> DirectoryResolution:
+        self.resolve_request = request
+        return self.resolution
+
+    def list(self, request: DirectoryListRequest) -> DirectoryPage:
+        self.list_request = request
+        return DirectoryPage(records=(), limit=request.limit)
+
+    def subscribe(self, request: DirectorySubscribeRequest) -> DirectorySubscription:
+        self.subscribe_request = request
+        return DirectorySubscription(_stream([]))
 
 
-def test_runtime_directory_resolves_through_canonical_ability() -> None:
-    provider, transport = _provider()
-    transport.output_json = {
-        "answer": {
-            "answer_kind": "positive",
-            "next_hop": {"node_id": "node-1"},
-            "selected_route": {"route_ura": "easynet:///r/example/device/node-1"},
-            "route_candidates": [{"node_id": "node-1"}],
-            "records": [],
-        }
-    }
-    resolution = provider.resolve(
+def test_directory_client_delegates_resolve_to_injected_provider() -> None:
+    provider = FakeDirectoryProvider()
+    client = DirectoryClient(provider)
+
+    resolution = client.resolve(
         DirectoryResolveRequest(
             call=_call(),
             query_ura="easynet:///r/example/user/alice",
@@ -51,89 +59,54 @@ def test_runtime_directory_resolves_through_canonical_ability() -> None:
             include_abilities=False,
         )
     )
+
+    assert resolution.canonical_ura == "easynet:///r/example/user/alice"
+    assert provider.resolve_request is not None
+    assert provider.resolve_request.query_ura == "easynet:///r/example/user/alice"
+    assert provider.resolve_request.kind == DirectoryResolveKind.CANONICAL_IDENTITY
+    assert provider.resolve_request.include_abilities is False
+
+
+def test_project_directory_resolution_preserves_resolver_facts() -> None:
+    resolution = directory_module._project_resolution(
+        {
+            "answer": {
+                "answer_kind": "positive",
+                "next_hop": {"node_id": "node-1"},
+                "selected_route": {"route_ura": "easynet:///r/example/device/node-1"},
+                "route_candidates": [{"node_id": "node-1"}],
+                "records": [
+                    {
+                        "kind": "ID",
+                        "ura": "easynet:///r/example/user/alice",
+                    }
+                ],
+            }
+        }
+    )
+
     assert resolution.answer_kind == "positive"
     assert resolution.next_hop == {"node_id": "node-1"}
     assert resolution.route_candidates == ({"node_id": "node-1"},)
-    assert transport.seen["args"] == {
-        "query_name": "easynet:///r/example/user/alice",
-        "qtype": "RESOLVE_TYPE_CANONICAL_IDENTITY",
-        "include_abilities": False,
-    }
+    assert len(resolution.records) == 1
 
 
-def test_runtime_directory_list_forwards_and_validates_cursor() -> None:
-    provider, transport = _provider()
-    transport.output_json = {
-        "answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
-        "canonical_name": "easynet:///r/example/user/alice",
-        "records": [
-            {
-                "name": "easynet:///r/example/user/alice",
-                "record_type": "RECORD_TYPE_ID",
-                "value": {"id": {"ura": "easynet:///r/example/user/alice"}},
-            }
-        ],
-        "next_cursor": "directory:v1:cursor-2",
-    }
-    page = provider.list(
-        DirectoryListRequest(
-            call=_call(),
-            ura_prefix="easynet:///r/example/user/alice",
-            limit=1,
-            cursor=" directory:v1:cursor-1 ",
-            include_abilities=False,
+def test_directory_helpers_reject_unbounded_cursor_and_surface_negative_detail() -> None:
+    with pytest.raises(SDKError, match="cursor exceeds"):
+        directory_module._directory_cursor("x" * 4097)
+    with pytest.raises(SDKError, match="limit exceeds"):
+        directory_module._directory_limit(501)
+    detail = directory_module._negative_detail(
+        DirectoryResolution(
+            answer_kind="RESOLVE_ANSWER_KIND_NEGATIVE",
+            records=(),
+            negative={
+                "reason": "NEGATIVE_REASON_REFUSED",
+                "detail": "Directory cursor does not match the current query",
+            },
         )
     )
-    assert len(page.records) == 1
-    assert page.next_cursor == "directory:v1:cursor-2"
-    assert transport.seen["args"] == {
-        "qtype": "RESOLVE_TYPE_DIRECTORY_LISTING",
-        "query_name": "easynet:///r/example/user/alice",
-        "limit": 1,
-        "cursor": "directory:v1:cursor-1",
-        "include_abilities": False,
-    }
-
-    transport.output_json = {
-        "answer_kind": "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
-        "records": [],
-        "next_cursor": "directory:v1:cursor-1",
-    }
-    with pytest.raises(SDKError, match="repeated cursor"):
-        provider.list(DirectoryListRequest(call=_call(), ura_prefix="", cursor="directory:v1:cursor-1"))
-
-    with pytest.raises(SDKError, match="cursor exceeds"):
-        provider.list(DirectoryListRequest(call=_call(), ura_prefix="", cursor="x" * 4097))
-
-
-def test_runtime_directory_list_rejects_negative_listing_answer() -> None:
-    provider, transport = _provider()
-    transport.output_json = {
-        "answer_kind": "RESOLVE_ANSWER_KIND_NEGATIVE",
-        "records": [],
-        "negative": {
-            "reason": "NEGATIVE_REASON_REFUSED",
-            "detail": "namespace.resolve Directory cursor does not match the current query",
-        },
-    }
-    with pytest.raises(SDKError, match="cursor does not match"):
-        provider.list(DirectoryListRequest(call=_call(), ura_prefix=""))
-
-
-def test_runtime_directory_forwards_subscription_resume_cursor() -> None:
-    transport = RuntimeDirectoryStreamTransportFake()
-    ability = RuntimeAbilityClient(
-        RuntimeClient(transport),  # type: ignore[arg-type]
-        AddressingClient(AxonAddressingTransport()),
-    )
-    provider = RuntimeDirectoryProvider(ability)
-    provider.subscribe(
-        DirectorySubscribeRequest(call=_call(), resume_cursor=DirectoryCursor.at(4))
-    )
-    assert transport.seen["args"] == {
-        "resume_sequence": 4,
-        "resume_token": "directory:4",
-    }
+    assert "cursor does not match" in detail
 
 
 class DirectoryStreamTransport:
@@ -151,15 +124,6 @@ class DirectoryStreamTransport:
 
     def close(self) -> None:
         self.closed = True
-
-
-class RuntimeDirectoryStreamTransportFake(RuntimeTransportFake):
-    def open_stream(self, draft_json: bytes):
-        self.seen = json.loads(draft_json)
-        return (
-            DirectoryStreamTransport([]),
-            b'{"stream_id":"directory-1","state":"Opening","max_buffered_events":8}',
-        )
 
 
 def _stream(events: list[dict[str, object]]) -> StreamHandle:

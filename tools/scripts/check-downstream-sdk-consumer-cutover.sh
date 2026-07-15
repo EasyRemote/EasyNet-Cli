@@ -62,7 +62,6 @@ def check_backend() -> None:
 
     directory = require_file(backend, "internal/sdkdirectory/directory.go", "backend:directory")
     for required in [
-        "easynetsdk.NewRuntimeDirectoryProvider",
         "easynetsdk.NewDirectoryClient",
         "easynetsdk.NewRuntimeAbilityDescriptorProvider",
         "easynetsdk.NewAbilityDescriptorClient",
@@ -72,6 +71,7 @@ def check_backend() -> None:
         '"easynet-backend/internal/runtimeprofile"',
         'ability := "namespace.resolve"',
         "easynetsdk.NewInvocationBuilder",
+        "easynetsdk.NewRuntimeDirectoryProvider",
     ]:
         forbid_contains(directory, forbidden, "backend:directory")
 
@@ -113,8 +113,6 @@ def check_backend() -> None:
 
     events = require_file(backend, "internal/sdkevents/events.go", "backend:events")
     for required in [
-        "easynetsdk.NewRuntimeAbilityEventSubscriptionProvider",
-        "easynetsdk.NewRuntimeEventSubscriptionClient",
         "c.events.Build",
         'metadata["backend_adapter"] = "sdkevents"',
     ]:
@@ -123,6 +121,11 @@ def check_backend() -> None:
         '"easynet-backend/internal/runtimeprofile"',
         "easynetsdk.NewInvocationBuilder",
         "OwnerAbilityDescriptorRef",
+        "NewRuntimeAbilityEventSubscriptionProvider",
+        "NewRuntimeEventSubscriptionClient",
+        "easynetsdk.NewRuntimeAbilityEventProvider",
+        "easynetsdk.NewRuntimeEventDraftClient",
+        "easynetprovider.RuntimeEventRoutes",
     ]:
         forbid_contains(events, forbidden, "backend:events")
 
@@ -429,7 +432,6 @@ if [[ "${1:-}" == "--self-test" ]]; then
 package sdkdirectory
 
 var _ = []string{
-  "easynetsdk.NewRuntimeDirectoryProvider",
   "easynetsdk.NewDirectoryClient",
   "easynetsdk.NewRuntimeAbilityDescriptorProvider",
   "easynetsdk.NewAbilityDescriptorClient",
@@ -462,7 +464,7 @@ EOF
 package sdkevents
 
 // metadata["backend_adapter"] = "sdkevents"
-var _ = []string{"easynetsdk.NewRuntimeAbilityEventSubscriptionProvider", "easynetsdk.NewRuntimeEventSubscriptionClient", "c.events.Build", "metadata[\"backend_adapter\"] = \"sdkevents\""}
+var _ = []string{"c.events.Build", "metadata[\"backend_adapter\"] = \"sdkevents\""}
 EOF
   cat >"$good_backend/internal/sdkadmin/admin.go" <<'EOF'
 package sdkadmin

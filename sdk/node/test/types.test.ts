@@ -10,7 +10,7 @@ import {
 import { AdminClient } from "../index.js";
 
 const transport: RuntimeTransport = {
-  invoke: async () => JSON.stringify({ ok: true, receipt: { receipt_ref: "opaque" } }),
+  invoke: async () => JSON.stringify({ ok: true, terminal_receipt: { receipt_ref: "opaque" } }),
   prepare: async (draftJSON) => JSON.stringify({
     prepared_id: "prepared-1",
     tuple: JSON.parse(new TextDecoder().decode(draftJSON)),

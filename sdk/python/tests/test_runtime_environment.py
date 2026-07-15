@@ -5,13 +5,13 @@ import pytest
 import easynet_sdk
 
 
-def test_runtime_identity_projection_accepts_node_id_credentials(tmp_path):
+def test_runtime_identity_projection_reads_credentials(tmp_path):
     credentials = tmp_path / "credentials.json"
     credentials.write_text(
         json.dumps(
             {
                 "realm": "acme",
-                "node_id": "dev-a",
+                "device_id": "dev-a",
                 "username": "alice",
                 "hub_endpoint": "hub:443",
             }
@@ -24,6 +24,15 @@ def test_runtime_identity_projection_accepts_node_id_credentials(tmp_path):
     assert projection.device_id == "dev-a"
     assert projection.username == "alice"
     assert projection.hub_endpoint == "hub:443"
+
+
+def test_runtime_identity_projection_rejects_node_id_alias():
+    with pytest.raises(easynet_sdk.SDKError) as exc_info:
+        easynet_sdk.runtime_identity_projection_from_json(
+            '{"realm":"acme","node_id":"dev-a"}'
+        )
+    assert exc_info.value.code == easynet_sdk.ErrorCode.INVALID_ARGUMENT
+    assert exc_info.value.stage == "runtime_environment"
 
 
 def test_runtime_credentials_path_derives_from_control_path(tmp_path):

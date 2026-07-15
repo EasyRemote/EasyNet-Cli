@@ -142,7 +142,6 @@ mod tests {
                     | super::super::status::RuntimeLifecycleStatus::ProjectionMissingProcessRunning
                     | super::super::status::RuntimeLifecycleStatus::ProjectionPresentProcessMissing
                     | super::super::status::RuntimeLifecycleStatus::ControlOnlyInvocationDown
-                    | super::super::status::RuntimeLifecycleStatus::LegacyAxonBridge
             ),
             "Invariant 1: status observation must classify every host state"
         );

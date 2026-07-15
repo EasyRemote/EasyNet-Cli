@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "terminal.resize"
+descriptor_version = "1.0.0"
 description = "Resize a PTY session's cols × rows. Returns ack=false on unknown session_id so a caller polling SIGWINCH on a closed session can stop without special-casing."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

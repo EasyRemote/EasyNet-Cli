@@ -3,11 +3,13 @@ profile: conformance
 required_for:
   - go
   - python
-description: Runtime SDK production exports contain only generic runtime concepts and no product profiles, product ability literals, retired domain ABI symbols, or compatibility aliases.
+description: Provider-neutral runtime cores contain only generic concepts; EasyNet provider/source-compatibility exports are explicitly classified outside the canonical inventory.
 steps:
   - action: run_sdk_product_neutrality_guard
 expect:
   result: product_neutral_runtime_sdk
   product_profiles: 0
   retired_domain_symbols: 0
-  compatibility_aliases: 0
+  canonical_core_product_literals: 0
+  provider_abi_exports_classified_non_canonical: true
+  source_compatibility_aliases_classified_non_canonical: true

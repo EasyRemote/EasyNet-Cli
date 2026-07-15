@@ -118,7 +118,7 @@ func TestNativeRuntimeHandleRequiresHealthFacade(t *testing.T) {
 func nativeRuntimeTestHealth(t *testing.T) *HealthClient {
 	t.Helper()
 	health, err := NewHealthClient(HealthTransportFunc(func(context.Context) ([]byte, error) {
-		return []byte(`{"api_ready":true,"daemon_ready":true,"invocation_ready":true,"directory_ready":true,"trust_ready":true,"runtime_ready":true,"diagnostics":[]}`), nil
+		return []byte(`{"api_ready":true,"invocation_ready":true,"directory_ready":true,"trust_ready":true,"runtime_ready":true,"diagnostics":[]}`), nil
 	}))
 	if err != nil {
 		t.Fatalf("NewHealthClient: %v", err)

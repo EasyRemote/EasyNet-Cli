@@ -49,7 +49,7 @@ fn mime_from_filename(filename: &str) -> &'static str {
     }
 }
 
-/// `<user>.files.put` — write client-supplied bytes to the
+/// `files.put` — write client-supplied bytes to the
 /// content-addressed store.
 ///
 /// args: { filename: string, bytes_b64: string, content_type?: string }
@@ -100,7 +100,7 @@ pub fn handle_put(user: &str, realm: &str, root: &Path, args: Value) -> anyhow::
     }))
 }
 
-/// `<user>.files.get` — read a blob.
+/// `files.get` — read a blob.
 ///
 /// args (one of):
 ///   { sha256: "<hex>" }
@@ -141,7 +141,7 @@ pub fn handle_get(root: &Path, args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-/// `<user>.files.list` — enumerate blobs in the store.
+/// `files.list` — enumerate blobs in the store.
 pub fn handle_list(user: &str, realm: &str, root: &Path, _args: Value) -> anyhow::Result<Value> {
     state::ensure_root(root).ok();
     let mut items = Vec::new();

@@ -533,6 +533,7 @@ struct DaemonStartConfigJson {
     device_id: Option<String>,
     realm: Option<String>,
     daemon_bin: Option<String>,
+    working_dir: Option<String>,
     log_path: Option<String>,
     detached: Option<bool>,
     env: std::collections::BTreeMap<String, String>,
@@ -549,6 +550,7 @@ impl DaemonStartConfigJson {
             device_id: optional_string(obj, "device_id")?,
             realm: optional_string(obj, "realm")?,
             daemon_bin: optional_string(obj, "daemon_bin")?,
+            working_dir: optional_string(obj, "working_dir")?,
             log_path: optional_string(obj, "log_path")?,
             detached: optional_bool(obj, "detached")?,
             env: parse_env(obj)?,
@@ -570,6 +572,9 @@ impl DaemonStartConfigJson {
         }
         if let Some(path) = self.daemon_bin {
             config = config.with_daemon_bin(path)?;
+        }
+        if let Some(path) = self.working_dir {
+            config = config.with_working_dir(path)?;
         }
         if let Some(path) = self.log_path {
             config = config.with_log_path(path);
@@ -806,7 +811,7 @@ mod tests {
         let error = read_last_error_json();
         assert_eq!(error["code"], "INVALID_HANDLE");
         assert_eq!(error["details"]["abi_code"], ERR_INVALID_HANDLE);
-        assert_eq!(error["details"]["legacy_untyped"], false);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_INVALID_HANDLE");
     }
 
     #[test]

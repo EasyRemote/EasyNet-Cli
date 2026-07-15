@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from typing import Any, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Mapping, Optional, Protocol, cast, runtime_checkable
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
@@ -29,15 +29,24 @@ class RuntimeTransport(Protocol):
 
     def submit_signed(self, signed_json: bytes) -> bytes: ...
 
-    def await_handle(self, handle_id: int) -> bytes: ...
+    def await_handle(self, control: "InvocationControlCapability") -> bytes: ...
 
-    def cancel_handle(self, handle_id: int, reason: str) -> bytes: ...
+    def cancel_handle(
+        self, control: "InvocationControlCapability", reason: str
+    ) -> bytes: ...
 
-    def handle_events(self, handle_id: int) -> bytes: ...
+    def handle_events(self, control: "InvocationControlCapability") -> bytes: ...
 
-    def free_handle(self, handle_id: int) -> None: ...
+    def free_handle(self, control: "InvocationControlCapability") -> None: ...
 
     def close(self) -> None: ...
+
+
+@runtime_checkable
+class DescriptorResolverTransport(Protocol):
+    """Optional provider seam for runtime-bound descriptor resolution."""
+
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes: ...
 
 
 @dataclass(frozen=True)
@@ -69,6 +78,36 @@ class PrepareOptions:
 
 
 @dataclass(frozen=True)
+class InvocationControlCapability:
+    """Opaque authority for submitted invocation lifecycle control."""
+
+    _handle_id: int = field(repr=False)
+    _runtime_bound: bool = field(default=False, repr=False)
+
+    @classmethod
+    def _from_handle_id(cls, handle_id: int) -> "InvocationControlCapability":
+        return cls._from_runtime_handle_id(handle_id)
+
+    @classmethod
+    def _from_runtime_handle_id(cls, handle_id: int) -> "InvocationControlCapability":
+        if handle_id <= 0:
+            raise _invalid_runtime("invocation control capability is required")
+        return cls(_handle_id=handle_id, _runtime_bound=True)
+
+    @classmethod
+    def _from_snapshot_handle_id(cls, handle_id: int) -> "InvocationControlCapability":
+        if handle_id <= 0:
+            raise _invalid_runtime("handle_id is required")
+        return cls(_handle_id=handle_id, _runtime_bound=False)
+
+    def _adapter_handle_id(self) -> int:
+        return self._handle_id
+
+    def _is_runtime_bound(self) -> bool:
+        return self._handle_id > 0 and self._runtime_bound
+
+
+@dataclass(frozen=True)
 class InvocationHandleEvent:
     """Submitted invocation event projection."""
 
@@ -84,7 +123,7 @@ class InvocationHandleEvent:
 class InvocationHandle:
     """Submitted invocation observation handle projection."""
 
-    handle_id: int
+    control: InvocationControlCapability
     state: str
     terminal: bool
     events: tuple[InvocationHandleEvent, ...] = field(default_factory=tuple)
@@ -93,31 +132,17 @@ class InvocationHandle:
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "InvocationHandle":
-        try:
-            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            decoded = json.loads(text)
-        except Exception as exc:
-            raise _invalid_runtime(
-                f"decode invocation handle JSON: {exc}", exc
-            ) from exc
-        if not isinstance(decoded, dict):
-            raise _invalid_runtime("invocation handle JSON must be an object")
+        return _invocation_handle_from_json(raw)
 
-        handle_id = _required_positive_int(decoded, "handle_id")
-        state = _required_string(decoded, "state")
-        terminal = _required_bool(decoded, "terminal")
-        raw_events = decoded.get("events", [])
-        if not isinstance(raw_events, list):
-            raise _invalid_runtime("events must be an array")
-        events = tuple(_handle_event(item) for item in raw_events)
-        result = _optional_mapping(decoded.get("result"), "result")
-        return cls(
-            handle_id=handle_id,
-            state=state,
-            terminal=terminal,
-            events=events,
-            result=result,
-        )
+    @classmethod
+    def _from_runtime_json(cls, raw: bytes | str) -> "InvocationHandle":
+        return _invocation_handle_from_json(raw, runtime_bound=True)
+
+    @classmethod
+    def _from_json_with_control(
+        cls, raw: bytes | str, control: InvocationControlCapability
+    ) -> "InvocationHandle":
+        return _invocation_handle_from_json(raw, expected_control=control)
 
     def await_result(self) -> "InvocationResult":
         """Await this submitted Invocation through its bound RuntimeClient."""
@@ -142,6 +167,54 @@ class InvocationHandle:
     def _bind_runtime(self, runtime: object) -> "InvocationHandle":
         return replace(self, _runtime=runtime)
 
+    def control_capability(self) -> InvocationControlCapability:
+        if not self.control._is_runtime_bound():
+            raise _invalid_runtime("runtime-bound invocation control capability is required")
+        return self.control
+
+
+def _invocation_handle_from_json(
+    raw: bytes | str,
+    *,
+    expected_control: Optional[InvocationControlCapability] = None,
+    runtime_bound: bool = False,
+) -> InvocationHandle:
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        decoded = json.loads(text)
+    except Exception as exc:
+        raise _invalid_runtime(
+            f"decode invocation handle JSON: {exc}", exc
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise _invalid_runtime("invocation handle JSON must be an object")
+
+    handle_id = _required_positive_int(decoded, "handle_id")
+    if expected_control is not None:
+        if expected_control._adapter_handle_id() != handle_id:
+            raise _invalid_runtime(
+                "handle_id does not match invocation control capability"
+            )
+        control = expected_control
+    elif runtime_bound:
+        control = InvocationControlCapability._from_runtime_handle_id(handle_id)
+    else:
+        control = InvocationControlCapability._from_snapshot_handle_id(handle_id)
+    state = _required_string(decoded, "state")
+    terminal = _required_bool(decoded, "terminal")
+    raw_events = decoded.get("events", [])
+    if not isinstance(raw_events, list):
+        raise _invalid_runtime("events must be an array")
+    events = tuple(_handle_event(item) for item in raw_events)
+    result = _optional_mapping(decoded.get("result"), "result")
+    return InvocationHandle(
+        control=control,
+        state=state,
+        terminal=terminal,
+        events=events,
+        result=result,
+    )
+
 
 @dataclass(frozen=True)
 class InvocationFailure:
@@ -151,6 +224,66 @@ class InvocationFailure:
     stage: str
     message: str = ""
     retryable: bool = False
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptAgentBinding:
+    ura: str = ""
+    profile: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptSubjectBinding:
+    ura: str = ""
+    profile: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptEntityRef:
+    kind: int = 0
+    ura: str = ""
+    profile: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptSignature:
+    algorithm: str = ""
+    signature_base64: str = ""
+    key_id_hint: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptFailure:
+    code: str = ""
+    message: str = ""
+    retryable: bool = False
+    stage: int = 0
+    security_class: int = 0
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptUsage:
+    tokens_in: int = 0
+    tokens_out: int = 0
+    duration_ms: int = 0
+    external_calls: int = 0
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptRef:
+    receipt_hash_hex: str = ""
+    receipt_ura: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeReceiptAuthorityProof:
+    proof_type: str = ""
+    binding_kind: str = ""
+    proof_payload_base64: str = ""
+    proof_hash_hex: str = ""
+    issuer: Optional[RuntimeReceiptAgentBinding] = None
+    signature: Optional[RuntimeReceiptSignature] = None
+    admission_hook: str = ""
 
 
 @dataclass(frozen=True)
@@ -170,6 +303,30 @@ class RuntimeReceipt:
     cleanup_complete: Optional[bool] = None
     reason: str = ""
     child_invocation_id: str = ""
+    payload_base64: str = ""
+    caller_binding: Optional[RuntimeReceiptAgentBinding] = None
+    callee_binding: Optional[RuntimeReceiptAgentBinding] = None
+    subject_binding: Optional[RuntimeReceiptSubjectBinding] = None
+    invocation_nonce_base64: str = ""
+    causal_binding_kind: str = ""
+    causal_binding: Optional[Mapping[str, object]] = None
+    callee_signature: Optional[RuntimeReceiptSignature] = None
+    signer_binding: Optional[RuntimeReceiptAgentBinding] = None
+    host_attestation_base64: str = ""
+    authority_binding_kind: str = ""
+    authority_binding: Optional[Mapping[str, object]] = None
+    ability_binding: str = ""
+    failure: Optional[RuntimeReceiptFailure] = None
+    usage: Optional[RuntimeReceiptUsage] = None
+    subject_ref: Optional[RuntimeReceiptEntityRef] = None
+    descriptor_version: str = ""
+    schema_hash_hex: str = ""
+    impl_hash_hex: str = ""
+    runtime_env: str = ""
+    authority_proof: Optional[RuntimeReceiptAuthorityProof] = None
+    input_hash_hex: str = ""
+    output_hash_hex: str = ""
+    parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_mapping(cls, decoded: Mapping[str, object]) -> "RuntimeReceipt":
@@ -207,6 +364,80 @@ class RuntimeReceipt:
                 decoded.get("child_invocation_id"), "child_invocation_id"
             )
             or "",
+            payload_base64=_optional_string(
+                decoded.get("payload_base64"), "payload_base64"
+            )
+            or "",
+            caller_binding=_receipt_agent_binding(
+                decoded.get("caller_binding"), "caller_binding"
+            ),
+            callee_binding=_receipt_agent_binding(
+                decoded.get("callee_binding"), "callee_binding"
+            ),
+            subject_binding=_receipt_subject_binding(
+                decoded.get("subject_binding"), "subject_binding"
+            ),
+            invocation_nonce_base64=_optional_string(
+                decoded.get("invocation_nonce_base64"), "invocation_nonce_base64"
+            )
+            or "",
+            causal_binding_kind=_optional_string(
+                decoded.get("causal_binding_kind"), "causal_binding_kind"
+            )
+            or "",
+            causal_binding=_optional_mapping(
+                decoded.get("causal_binding"), "causal_binding"
+            ),
+            callee_signature=_receipt_signature(
+                decoded.get("callee_signature"), "callee_signature"
+            ),
+            signer_binding=_receipt_agent_binding(
+                decoded.get("signer_binding"), "signer_binding"
+            ),
+            host_attestation_base64=_optional_string(
+                decoded.get("host_attestation_base64"), "host_attestation_base64"
+            )
+            or "",
+            authority_binding_kind=_optional_string(
+                decoded.get("authority_binding_kind"), "authority_binding_kind"
+            )
+            or "",
+            authority_binding=_optional_mapping(
+                decoded.get("authority_binding"), "authority_binding"
+            ),
+            ability_binding=_optional_string(
+                decoded.get("ability_binding"), "ability_binding"
+            )
+            or "",
+            failure=_receipt_failure(decoded.get("failure"), "failure"),
+            usage=_receipt_usage(decoded.get("usage"), "usage"),
+            subject_ref=_receipt_entity_ref(decoded.get("subject_ref"), "subject_ref"),
+            descriptor_version=_optional_string(
+                decoded.get("descriptor_version"), "descriptor_version"
+            )
+            or "",
+            schema_hash_hex=_optional_string(
+                decoded.get("schema_hash_hex"), "schema_hash_hex"
+            )
+            or "",
+            impl_hash_hex=_optional_string(
+                decoded.get("impl_hash_hex"), "impl_hash_hex"
+            )
+            or "",
+            runtime_env=_optional_string(decoded.get("runtime_env"), "runtime_env")
+            or "",
+            authority_proof=_receipt_authority_proof(
+                decoded.get("authority_proof"), "authority_proof"
+            ),
+            input_hash_hex=_optional_string(
+                decoded.get("input_hash_hex"), "input_hash_hex"
+            )
+            or "",
+            output_hash_hex=_optional_string(
+                decoded.get("output_hash_hex"), "output_hash_hex"
+            )
+            or "",
+            parent_receipts=_receipt_refs(decoded.get("parent_receipts")),
         )
 
     @classmethod
@@ -232,7 +463,9 @@ class RuntimeReceipt:
     def prev_receipt_hash(self) -> bytes:
         """Return the validated previous receipt hash bytes."""
 
-        return _runtime_receipt_hash(self.prev_receipt_hash_hex, "prev_receipt_hash_hex")
+        return _runtime_receipt_hash(
+            self.prev_receipt_hash_hex, "prev_receipt_hash_hex"
+        )
 
     def self_receipt_hash(self) -> bytes:
         """Return the validated self receipt hash bytes."""
@@ -256,8 +489,6 @@ class InvocationResult:
     selected_node_id: str = ""
     scheduling_reason: str = ""
     elapsed_ms: int = 0
-    receipt: Optional[Mapping[str, object]] = None
-    receipt_summary: Optional[RuntimeReceipt] = None
     error: Optional[InvocationFailure] = None
     admission_receipt: Optional[Mapping[str, object]] = None
     admission_receipt_summary: Optional[RuntimeReceipt] = None
@@ -285,24 +516,12 @@ class InvocationResult:
             raise _invalid_runtime("ok result must not include error")
         if not ok and failure is None:
             raise _invalid_runtime("failed result must include error")
-        receipt = _optional_mapping(decoded.get("receipt"), "receipt")
         admission_receipt = _optional_mapping(
             decoded.get("admission_receipt"), "admission_receipt"
         )
         terminal_receipt = _optional_mapping(
             decoded.get("terminal_receipt"), "terminal_receipt"
         )
-        if terminal_receipt is None:
-            terminal_receipt = receipt
-        if receipt is None:
-            receipt = terminal_receipt
-        if (
-            receipt is not None
-            and terminal_receipt is not None
-            and receipt != terminal_receipt
-        ):
-            raise _invalid_runtime("receipt must equal terminal_receipt")
-        receipt_summary = RuntimeReceipt.from_mapping(receipt) if receipt else None
         admission_receipt_summary = (
             RuntimeReceipt.from_mapping(admission_receipt)
             if admission_receipt
@@ -333,13 +552,11 @@ class InvocationResult:
             )
             or "",
             elapsed_ms=elapsed_ms,
-            receipt=receipt,
-            receipt_summary=receipt_summary,
+            error=failure,
             admission_receipt=admission_receipt,
             admission_receipt_summary=admission_receipt_summary,
             terminal_receipt=terminal_receipt,
             terminal_receipt_summary=terminal_receipt_summary,
-            error=failure,
         )
 
 
@@ -347,28 +564,53 @@ class InvocationResult:
 class InvocationCancel:
     """Daemon cancellation outcome for a submitted handle."""
 
-    handle_id: int
+    control: InvocationControlCapability
+    request_accepted: bool
+    deduplicated: bool
     cancelled: bool
     state: str
     terminal: bool
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "InvocationCancel":
-        try:
-            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            decoded = json.loads(text)
-        except Exception as exc:
-            raise _invalid_runtime(
-                f"decode invocation cancel JSON: {exc}", exc
-            ) from exc
-        if not isinstance(decoded, dict):
-            raise _invalid_runtime("invocation cancel JSON must be an object")
-        return cls(
-            handle_id=_required_positive_int(decoded, "handle_id"),
-            cancelled=_required_bool(decoded, "cancelled"),
-            state=_required_string(decoded, "state"),
-            terminal=_required_bool(decoded, "terminal"),
-        )
+        return _invocation_cancel_from_json(raw)
+
+    @classmethod
+    def _from_json_with_control(
+        cls, raw: bytes | str, control: InvocationControlCapability
+    ) -> "InvocationCancel":
+        return _invocation_cancel_from_json(raw, expected_control=control)
+
+
+def _invocation_cancel_from_json(
+    raw: bytes | str,
+    *,
+    expected_control: Optional[InvocationControlCapability] = None,
+) -> InvocationCancel:
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        decoded = json.loads(text)
+    except Exception as exc:
+        raise _invalid_runtime(
+            f"decode invocation cancel JSON: {exc}", exc
+        ) from exc
+    if not isinstance(decoded, dict):
+        raise _invalid_runtime("invocation cancel JSON must be an object")
+    handle_id = _required_positive_int(decoded, "handle_id")
+    if expected_control is not None:
+        if expected_control._adapter_handle_id() != handle_id:
+            raise _invalid_runtime("handle_id does not match invocation control capability")
+        control = expected_control
+    else:
+        control = InvocationControlCapability._from_snapshot_handle_id(handle_id)
+    return InvocationCancel(
+        control=control,
+        request_accepted=_required_bool(decoded, "request_accepted"),
+        deduplicated=_required_bool(decoded, "deduplicated"),
+        cancelled=_required_bool(decoded, "cancelled"),
+        state=_required_string(decoded, "state"),
+        terminal=_required_bool(decoded, "terminal"),
+    )
 
 
 class RuntimeClient:
@@ -385,6 +627,46 @@ class RuntimeClient:
 
         self._require_open()
         return InvocationBuilder()._bind_runtime(self)
+
+    def resolve_descriptor_ref(
+        self,
+        *,
+        callee_ura: str,
+        ability: str,
+        call_mode: str = "rpc",
+        caller_ura: str = "",
+        subject_ura: str = "",
+    ) -> str:
+        """Resolve a runtime-governed AbilityDescriptorRef through the provider."""
+
+        transport = self._require_open()
+        if not isinstance(transport, DescriptorResolverTransport):
+            raise _invalid_runtime_client(
+                "runtime transport does not expose descriptor resolution"
+            )
+        request = {
+            "callee_ura": callee_ura,
+            "ability": ability,
+            "call_mode": call_mode,
+        }
+        if caller_ura:
+            request["caller_ura"] = caller_ura
+        if subject_ura:
+            request["subject_ura"] = subject_ura
+        try:
+            raw = transport.resolve_descriptor_ref(
+                json.dumps(request, separators=(",", ":"), sort_keys=True).encode(
+                    "utf-8"
+                )
+            )
+            decoded = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("resolve descriptor_ref transport failed", exc) from exc
+        if not isinstance(decoded, Mapping):
+            raise _invalid_runtime("descriptor_ref resolution must return an object")
+        return _required_string(decoded, "descriptor_ref")
 
     def invoke(self, draft: InvocationDraft) -> InvocationResult:
         transport = self._require_open()
@@ -469,12 +751,16 @@ class RuntimeClient:
         try:
             raw = transport.prepare(
                 draft.to_json().encode("utf-8"),
-                json.dumps(options_json, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+                json.dumps(options_json, separators=(",", ":"), sort_keys=True).encode(
+                    "utf-8"
+                ),
             )
         except SDKError:
             raise
         except Exception as exc:
-            raise _transport_error("prepare signing material transport failed", exc) from exc
+            raise _transport_error(
+                "prepare signing material transport failed", exc
+            ) from exc
         # The daemon-owned prepared identifier is opaque here. The transport
         # contract guarantees that no native prepared handle was retained.
         return PreparedInvocation.from_json(raw).signing_material
@@ -516,13 +802,13 @@ class RuntimeClient:
             raise
         except Exception as exc:
             raise _transport_error("submit signed transport failed", exc) from exc
-        return InvocationHandle.from_json(raw)._bind_runtime(self)
+        return InvocationHandle._from_runtime_json(raw)._bind_runtime(self)
 
     def await_result(self, handle: InvocationHandle) -> InvocationResult:
         transport = self._require_open()
         _require_handle(handle)
         try:
-            raw = transport.await_handle(handle.handle_id)
+            raw = transport.await_handle(handle.control_capability())
         except SDKError:
             raise
         except Exception as exc:
@@ -532,30 +818,32 @@ class RuntimeClient:
     def cancel(self, handle: InvocationHandle, reason: str = "") -> InvocationCancel:
         transport = self._require_open()
         _require_handle(handle)
+        control = handle.control_capability()
         try:
-            raw = transport.cancel_handle(handle.handle_id, reason)
+            raw = transport.cancel_handle(control, reason)
         except SDKError:
             raise
         except Exception as exc:
             raise _transport_error("cancel handle transport failed", exc) from exc
-        return InvocationCancel.from_json(raw)
+        return InvocationCancel._from_json_with_control(raw, control)
 
     def events(self, handle: InvocationHandle) -> InvocationHandle:
         transport = self._require_open()
         _require_handle(handle)
+        control = handle.control_capability()
         try:
-            raw = transport.handle_events(handle.handle_id)
+            raw = transport.handle_events(control)
         except SDKError:
             raise
         except Exception as exc:
             raise _transport_error("handle events transport failed", exc) from exc
-        return InvocationHandle.from_json(raw)._bind_runtime(self)
+        return InvocationHandle._from_json_with_control(raw, control)._bind_runtime(self)
 
     def close_handle(self, handle: InvocationHandle) -> None:
         transport = self._require_open()
         _require_handle(handle)
         try:
-            transport.free_handle(handle.handle_id)
+            transport.free_handle(handle.control_capability())
         except SDKError:
             raise
         except Exception as exc:
@@ -579,8 +867,7 @@ class RuntimeClient:
 
 
 def _require_handle(handle: InvocationHandle) -> None:
-    if handle.handle_id <= 0:
-        raise _invalid_runtime("handle_id is required")
+    handle.control_capability()
 
 
 def _handle_event(value: object) -> InvocationHandleEvent:
@@ -693,6 +980,169 @@ def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, o
     return dict(value)
 
 
+def _receipt_mapping(value: object, field_name: str) -> Optional[Mapping[str, object]]:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise _invalid_runtime(f"{field_name} must be an object or null")
+    return value
+
+
+def _receipt_agent_binding(
+    value: object, field_name: str
+) -> Optional[RuntimeReceiptAgentBinding]:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        return None
+    return RuntimeReceiptAgentBinding(
+        ura=_optional_string(decoded.get("ura"), f"{field_name}.ura") or "",
+        profile=_optional_string(decoded.get("profile"), f"{field_name}.profile") or "",
+    )
+
+
+def _receipt_subject_binding(
+    value: object, field_name: str
+) -> Optional[RuntimeReceiptSubjectBinding]:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        return None
+    return RuntimeReceiptSubjectBinding(
+        ura=_optional_string(decoded.get("ura"), f"{field_name}.ura") or "",
+        profile=_optional_string(decoded.get("profile"), f"{field_name}.profile") or "",
+    )
+
+
+def _receipt_entity_ref(
+    value: object, field_name: str
+) -> Optional[RuntimeReceiptEntityRef]:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        return None
+    return RuntimeReceiptEntityRef(
+        kind=_optional_non_negative_int(decoded.get("kind"), f"{field_name}.kind"),
+        ura=_optional_string(decoded.get("ura"), f"{field_name}.ura") or "",
+        profile=_optional_string(decoded.get("profile"), f"{field_name}.profile") or "",
+    )
+
+
+def _receipt_signature(
+    value: object, field_name: str
+) -> Optional[RuntimeReceiptSignature]:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        return None
+    return RuntimeReceiptSignature(
+        algorithm=_optional_string(decoded.get("algorithm"), f"{field_name}.algorithm")
+        or "",
+        signature_base64=_optional_string(
+            decoded.get("signature_base64"), f"{field_name}.signature_base64"
+        )
+        or "",
+        key_id_hint=_optional_string(
+            decoded.get("key_id_hint"), f"{field_name}.key_id_hint"
+        )
+        or "",
+    )
+
+
+def _receipt_failure(value: object, field_name: str) -> Optional[RuntimeReceiptFailure]:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        return None
+    return RuntimeReceiptFailure(
+        code=_optional_string(decoded.get("code"), f"{field_name}.code") or "",
+        message=_optional_string(decoded.get("message"), f"{field_name}.message") or "",
+        retryable=_optional_bool(decoded.get("retryable"), f"{field_name}.retryable")
+        or False,
+        stage=_optional_non_negative_int(decoded.get("stage"), f"{field_name}.stage"),
+        security_class=_optional_non_negative_int(
+            decoded.get("security_class"), f"{field_name}.security_class"
+        ),
+    )
+
+
+def _receipt_usage(value: object, field_name: str) -> Optional[RuntimeReceiptUsage]:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        return None
+    return RuntimeReceiptUsage(
+        tokens_in=_optional_non_negative_int(
+            decoded.get("tokens_in"), f"{field_name}.tokens_in"
+        ),
+        tokens_out=_optional_non_negative_int(
+            decoded.get("tokens_out"), f"{field_name}.tokens_out"
+        ),
+        duration_ms=_optional_non_negative_int(
+            decoded.get("duration_ms"), f"{field_name}.duration_ms"
+        ),
+        external_calls=_optional_non_negative_int(
+            decoded.get("external_calls"), f"{field_name}.external_calls"
+        ),
+    )
+
+
+def _receipt_ref(value: object, field_name: str) -> RuntimeReceiptRef:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        raise _invalid_runtime(f"{field_name} must be an object")
+    return RuntimeReceiptRef(
+        receipt_hash_hex=_optional_string(
+            decoded.get("receipt_hash_hex"), f"{field_name}.receipt_hash_hex"
+        )
+        or "",
+        receipt_ura=_optional_string(
+            decoded.get("receipt_ura"), f"{field_name}.receipt_ura"
+        )
+        or "",
+    )
+
+
+def _receipt_refs(value: object) -> tuple[RuntimeReceiptRef, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise _invalid_runtime("parent_receipts must be an array or null")
+    return tuple(
+        _receipt_ref(item, f"parent_receipts[{index}]")
+        for index, item in enumerate(value)
+    )
+
+
+def _receipt_authority_proof(
+    value: object, field_name: str
+) -> Optional[RuntimeReceiptAuthorityProof]:
+    decoded = _receipt_mapping(value, field_name)
+    if decoded is None:
+        return None
+    return RuntimeReceiptAuthorityProof(
+        proof_type=_optional_string(
+            decoded.get("proof_type"), f"{field_name}.proof_type"
+        )
+        or "",
+        binding_kind=_optional_string(
+            decoded.get("binding_kind"), f"{field_name}.binding_kind"
+        )
+        or "",
+        proof_payload_base64=_optional_string(
+            decoded.get("proof_payload_base64"),
+            f"{field_name}.proof_payload_base64",
+        )
+        or "",
+        proof_hash_hex=_optional_string(
+            decoded.get("proof_hash_hex"), f"{field_name}.proof_hash_hex"
+        )
+        or "",
+        issuer=_receipt_agent_binding(decoded.get("issuer"), f"{field_name}.issuer"),
+        signature=_receipt_signature(
+            decoded.get("signature"), f"{field_name}.signature"
+        ),
+        admission_hook=_optional_string(
+            decoded.get("admission_hook"), f"{field_name}.admission_hook"
+        )
+        or "",
+    )
+
+
 def _invalid_runtime_client(message: str) -> SDKError:
     return SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
@@ -725,7 +1175,7 @@ def _transport_error(message: str, cause: BaseException) -> SDKError:
     )
 
 
-def _require_runtime(runtime: object | None):
+def _require_runtime(runtime: object | None) -> RuntimeClient:
     if runtime is None:
         raise SDKError(
             code=ErrorCode.INVALID_HANDLE,
@@ -734,4 +1184,4 @@ def _require_runtime(runtime: object | None):
             retryable=False,
             message="invocation handle is not bound to a RuntimeClient",
         )
-    return runtime
+    return cast(RuntimeClient, runtime)

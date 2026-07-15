@@ -55,48 +55,53 @@ impl SelectedChildRoute {
         execution_host_ura: Option<String>,
         public_ability: impl Into<String>,
         dispatch_key: impl Into<String>,
-        descriptor_version: impl Into<String>,
+        selected_descriptor_ref: impl Into<String>,
     ) -> Result<Self, ChildInvocationBuildFailure> {
         let route_ref = route_ref.into();
         let selected_callee_ura = selected_callee_ura.into();
         let public_ability = public_ability.into();
-        let descriptor_version = descriptor_version.into();
+        let dispatch_key = dispatch_key.into();
+        let selected_descriptor_ref = selected_descriptor_ref.into();
+        let descriptor_version =
+            crate::daemon::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref(
+                &selected_descriptor_ref,
+            )
+            .map_err(|err| {
+                let provisional = Self {
+                    route_ref: route_ref.clone(),
+                    selected_callee_ura: selected_callee_ura.clone(),
+                    execution_host_ura: execution_host_ura.clone(),
+                    public_ability: public_ability.clone(),
+                    dispatch_key: dispatch_key.clone(),
+                    descriptor_version: String::new(),
+                    selected_descriptor_ref: selected_descriptor_ref.clone(),
+                };
+                failure(
+                    &provisional,
+                    TraceStage::SignatureDenied,
+                    ChildInvocationBuildFailureCode::SignedDescriptorRefMismatch,
+                    format!("selected route descriptor ref is invalid: {err}"),
+                    Some(SignatureDecisionReason::SignedDescriptorRefMismatch),
+                    None,
+                )
+            })?;
         let provisional = Self {
             route_ref,
             selected_callee_ura,
             execution_host_ura,
             public_ability,
-            dispatch_key: dispatch_key.into(),
+            dispatch_key,
             descriptor_version,
-            selected_descriptor_ref: String::new(),
-        };
-        let selected_descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-                &provisional.selected_callee_ura,
-                &provisional.public_ability,
-                &provisional.descriptor_version,
-            )
-            .map_err(|err| {
-                failure(
-                    &provisional,
-                    TraceStage::SignatureDenied,
-                    ChildInvocationBuildFailureCode::SignedDescriptorRefMismatch,
-                    format!("selected route cannot form descriptor-bound ability ref: {err}"),
-                    Some(SignatureDecisionReason::SignedDescriptorRefMismatch),
-                    None,
-                )
-            })?;
-        Ok(Self {
             selected_descriptor_ref,
-            ..provisional
-        })
+        };
+        Ok(provisional)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChildInvocationAuthority {
     ExternallySigned(ExternallySignedChildInvocation),
-    AuthorityProof(AuthorityProof),
+    AuthorityProof(Box<AuthorityProof>),
     DaemonInternalSystem,
 }
 
@@ -185,7 +190,7 @@ impl ChildInvocationBuilder {
     pub fn build(
         input: ChildInvocationBuildInput,
     ) -> Result<BuiltChildInvocation, ChildInvocationBuildFailure> {
-        validate_route(&input.route)?;
+        validate_route_shape(&input.route)?;
         if input.child_subject_ura.trim().is_empty() {
             return Err(failure(
                 &input.route,
@@ -197,28 +202,30 @@ impl ChildInvocationBuilder {
             ));
         }
 
+        if let ChildInvocationAuthority::ExternallySigned(signed) = &input.authority {
+            validate_externally_signed(&input.route, &input.child_subject_ura, signed)?;
+        }
+
+        validate_route_descriptor_binding(&input.route)?;
         let ability_ura = ability_ura(&input.route)?;
         let args_hash = format!("sha256:{}", hex::encode(Sha256::digest(&input.args)));
 
         match input.authority {
-            ChildInvocationAuthority::ExternallySigned(signed) => {
-                validate_externally_signed(&input.route, &input.child_subject_ura, &signed)?;
-                Ok(BuiltChildInvocation {
-                    caller_ura: signed.caller_ura,
-                    callee_ura: input.route.selected_callee_ura,
-                    subject_ura: input.child_subject_ura,
-                    ability_ura,
-                    descriptor_ref: input.route.selected_descriptor_ref,
-                    descriptor_version: input.route.descriptor_version,
-                    dispatch_key: input.route.dispatch_key,
-                    route_ref: input.route.route_ref,
-                    execution_host_ura: input.route.execution_host_ura,
-                    args_hash,
-                    authority_shape: ChildAuthorityShape::ExternallySigned,
-                    canonical_hash: Some(signed.canonical_hash),
-                    authority_proof_id: None,
-                })
-            }
+            ChildInvocationAuthority::ExternallySigned(signed) => Ok(BuiltChildInvocation {
+                caller_ura: signed.caller_ura,
+                callee_ura: input.route.selected_callee_ura,
+                subject_ura: input.child_subject_ura,
+                ability_ura,
+                descriptor_ref: input.route.selected_descriptor_ref,
+                descriptor_version: input.route.descriptor_version,
+                dispatch_key: input.route.dispatch_key,
+                route_ref: input.route.route_ref,
+                execution_host_ura: input.route.execution_host_ura,
+                args_hash,
+                authority_shape: ChildAuthorityShape::ExternallySigned,
+                canonical_hash: Some(signed.canonical_hash),
+                authority_proof_id: None,
+            }),
             ChildInvocationAuthority::AuthorityProof(proof) => {
                 validate_authority_proof_binding(&input.route, &input.child_subject_ura, &proof)?;
                 Ok(BuiltChildInvocation {
@@ -257,7 +264,7 @@ impl ChildInvocationBuilder {
     }
 }
 
-fn validate_route(route: &SelectedChildRoute) -> Result<(), ChildInvocationBuildFailure> {
+fn validate_route_shape(route: &SelectedChildRoute) -> Result<(), ChildInvocationBuildFailure> {
     if route.selected_callee_ura.trim().is_empty()
         || route.public_ability.trim().is_empty()
         || route.dispatch_key.trim().is_empty()
@@ -273,10 +280,15 @@ fn validate_route(route: &SelectedChildRoute) -> Result<(), ChildInvocationBuild
             None,
         ));
     }
-    let expected = crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+    Ok(())
+}
+
+fn validate_route_descriptor_binding(
+    route: &SelectedChildRoute,
+) -> Result<(), ChildInvocationBuildFailure> {
+    let expected = crate::daemon::axon_bridge::descriptor_ref::require_descriptor_ref_for_wire(
         &route.selected_callee_ura,
-        &route.public_ability,
-        &route.descriptor_version,
+        &route.selected_descriptor_ref,
     )
     .map_err(|err| {
         failure(
@@ -293,7 +305,7 @@ fn validate_route(route: &SelectedChildRoute) -> Result<(), ChildInvocationBuild
             route,
             TraceStage::SignatureDenied,
             ChildInvocationBuildFailureCode::SignedDescriptorRefMismatch,
-            "selected descriptor ref does not match route callee, ability, and descriptor version",
+            "selected descriptor ref does not match route callee",
             Some(SignatureDecisionReason::SignedDescriptorRefMismatch),
             None,
         ));
@@ -398,25 +410,29 @@ fn failure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
     use crate::daemon::invocation::admission::decision::{AccessAction, PrincipalKind};
 
     fn route() -> SelectedChildRoute {
         let callee = "easynet:///r/test/device/dev-a".to_string();
         let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
                 &callee,
                 "meta.list_resources",
-                DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                crate::daemon::ability::CallMode::Rpc,
             )
             .expect("descriptor");
+        let descriptor_version =
+            crate::daemon::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref(
+                &descriptor_ref,
+            )
+            .expect("descriptor version");
         SelectedChildRoute {
             route_ref: "route-ref::test".to_string(),
             selected_callee_ura: callee,
             execution_host_ura: Some("easynet:///r/test/device/dev-a".to_string()),
             public_ability: "meta.list_resources".to_string(),
             dispatch_key: "meta.list_resources".to_string(),
-            descriptor_version: DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string(),
+            descriptor_version,
             selected_descriptor_ref: descriptor_ref,
         }
     }
@@ -449,12 +465,67 @@ mod tests {
     }
 
     #[test]
+    fn externally_signed_route_mutation_precedes_descriptor_owner_binding_failure() {
+        let mut selected = route();
+        let signed_descriptor_ref = selected.selected_descriptor_ref.clone();
+        selected.selected_callee_ura = "easynet:///r/test/device/other".to_string();
+        selected.execution_host_ura = Some(selected.selected_callee_ura.clone());
+
+        let err = ChildInvocationBuilder::build(ChildInvocationBuildInput {
+            route: selected,
+            child_subject_ura: "easynet:///r/test/device/dev-a".to_string(),
+            args: b"{}".to_vec(),
+            authority: ChildInvocationAuthority::ExternallySigned(
+                ExternallySignedChildInvocation {
+                    caller_ura: "easynet:///r/test/user/alice".to_string(),
+                    signed_callee_ura: "easynet:///r/test/device/dev-a".to_string(),
+                    signed_descriptor_ref,
+                    signed_subject_ura: "easynet:///r/test/device/dev-a".to_string(),
+                    canonical_hash: "sha256:abc".to_string(),
+                },
+            ),
+        })
+        .expect_err("route mutation must fail before descriptor binding");
+        assert_eq!(
+            err.code,
+            ChildInvocationBuildFailureCode::SignedEnvelopeRouteMutation
+        );
+        assert_eq!(
+            err.signature_reason,
+            Some(SignatureDecisionReason::SignedEnvelopeRouteMutation)
+        );
+    }
+
+    #[test]
+    fn internal_child_rejects_descriptor_owner_binding_mismatch() {
+        let mut selected = route();
+        selected.selected_callee_ura = "easynet:///r/test/device/other".to_string();
+        selected.execution_host_ura = Some(selected.selected_callee_ura.clone());
+
+        let err = ChildInvocationBuilder::build(ChildInvocationBuildInput {
+            route: selected,
+            child_subject_ura: "easynet:///r/test/device/other".to_string(),
+            args: b"{}".to_vec(),
+            authority: ChildInvocationAuthority::DaemonInternalSystem,
+        })
+        .expect_err("descriptor owner mismatch must fail closed");
+        assert_eq!(
+            err.code,
+            ChildInvocationBuildFailureCode::SignedDescriptorRefMismatch
+        );
+        assert_eq!(
+            err.signature_reason,
+            Some(SignatureDecisionReason::SignedDescriptorRefMismatch)
+        );
+    }
+
+    #[test]
     fn authority_proof_child_binds_selected_route() {
         let built = ChildInvocationBuilder::build(ChildInvocationBuildInput {
             route: route(),
             child_subject_ura: "easynet:///r/test/device/dev-a".to_string(),
             args: br#"{"limit":10}"#.to_vec(),
-            authority: ChildInvocationAuthority::AuthorityProof(AuthorityProof {
+            authority: ChildInvocationAuthority::AuthorityProof(Box::new(AuthorityProof {
                 proof_id: "proof-1".to_string(),
                 grant_id: Some("grant-1".to_string()),
                 permission_request_id: None,
@@ -481,7 +552,7 @@ mod tests {
                 issuer_ura: "easynet:///r/test/user/alice".to_string(),
                 audience_ura: "easynet:///r/test/device/dev-a".to_string(),
                 signature: "ed25519:test".to_string(),
-            }),
+            })),
         })
         .expect("authority proof child");
         assert_eq!(built.authority_shape, ChildAuthorityShape::AuthorityProof);

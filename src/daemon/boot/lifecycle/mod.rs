@@ -41,7 +41,7 @@ pub mod stop;
 pub use discovery::{DaemonDiscoveryObserver, DaemonDiscoverySnapshot};
 pub use errors::RuntimeLifecycleError;
 pub use presence::{ProductPresenceObserver, ProductPresenceSnapshot, ProductPresenceStatus};
-pub use projection::{RuntimeProcessKind, RuntimeProjectionStore, RuntimeSessionProjection};
+pub use projection::{RuntimeProjectionStore, RuntimeSessionProjection};
 pub use service::RuntimeLifecycleService;
 pub use start::{RuntimeStartPreflightAction, RuntimeStartPreflightReport, RuntimeStartRequest};
 pub use status::{RuntimeLifecycleStatus, RuntimeStatusReport};

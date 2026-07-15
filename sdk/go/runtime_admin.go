@@ -20,12 +20,12 @@ const (
 )
 
 type RuntimeReadiness struct {
-	LifecycleState DaemonLifecycleState `json:"lifecycle_state"`
-	Endpoints      Endpoints            `json:"endpoints"`
-	Health         RuntimeHealth        `json:"health"`
-	Diagnostics    *DiagnosticsReport   `json:"diagnostics,omitempty"`
-	Ready          bool                 `json:"ready"`
-	Messages       []string             `json:"messages,omitempty"`
+	LifecycleState RuntimeLifecycleState `json:"lifecycle_state"`
+	Endpoints      RuntimeHostEndpoints  `json:"endpoints"`
+	Health         RuntimeHealth         `json:"health"`
+	Diagnostics    *DiagnosticsReport    `json:"diagnostics,omitempty"`
+	Ready          bool                  `json:"ready"`
+	Messages       []string              `json:"messages,omitempty"`
 }
 
 const (
@@ -128,26 +128,26 @@ func (c *RuntimeAdminAbilityClient) RevokeDevice(ctx context.Context, request Ru
 }
 
 type RuntimeAdminClient struct {
-	control *DaemonControl
-	health  *HealthClient
+	host   *RuntimeHost
+	health *HealthClient
 }
 
-func NewRuntimeAdminClient(control *DaemonControl, health *HealthClient) (*RuntimeAdminClient, error) {
-	if control == nil {
-		return nil, invalidRuntimeClient("daemon control is required")
+func NewRuntimeAdminClient(host *RuntimeHost, health *HealthClient) (*RuntimeAdminClient, error) {
+	if host == nil {
+		return nil, invalidRuntimeClient("runtime host control is required")
 	}
-	return &RuntimeAdminClient{control: control, health: health}, nil
+	return &RuntimeAdminClient{host: host, health: health}, nil
 }
 
-func (c *RuntimeAdminClient) Discover(ctx context.Context, opts DiscoverOptions) (Endpoints, error) {
+func (c *RuntimeAdminClient) Discover(ctx context.Context, opts RuntimeHostDiscoverOptions) (RuntimeHostEndpoints, error) {
 	control, err := c.requireControl(ctx)
 	if err != nil {
-		return Endpoints{}, err
+		return RuntimeHostEndpoints{}, err
 	}
 	return control.Discover(ctx, opts)
 }
 
-func (c *RuntimeAdminClient) Start(ctx context.Context, cfg StartConfig) (*DaemonHandle, error) {
+func (c *RuntimeAdminClient) Start(ctx context.Context, cfg RuntimeHostStartConfig) (*RuntimeHandle, error) {
 	control, err := c.requireControl(ctx)
 	if err != nil {
 		return nil, err
@@ -155,7 +155,7 @@ func (c *RuntimeAdminClient) Start(ctx context.Context, cfg StartConfig) (*Daemo
 	return control.Start(ctx, cfg)
 }
 
-func (c *RuntimeAdminClient) Attach(ctx context.Context, opts AttachOptions) (*DaemonHandle, error) {
+func (c *RuntimeAdminClient) Attach(ctx context.Context, opts RuntimeHostAttachOptions) (*RuntimeHandle, error) {
 	control, err := c.requireControl(ctx)
 	if err != nil {
 		return nil, err
@@ -163,42 +163,42 @@ func (c *RuntimeAdminClient) Attach(ctx context.Context, opts AttachOptions) (*D
 	return control.Attach(ctx, opts)
 }
 
-func (c *RuntimeAdminClient) Status(ctx context.Context, handle *DaemonHandle) (DaemonStatus, error) {
+func (c *RuntimeAdminClient) Status(ctx context.Context, handle *RuntimeHandle) (RuntimeHostStatus, error) {
 	if _, err := c.requireControl(ctx); err != nil {
-		return DaemonStatus{}, err
+		return RuntimeHostStatus{}, err
 	}
 	if handle == nil {
-		return DaemonStatus{}, invalidRuntimeClient("daemon handle is required")
+		return RuntimeHostStatus{}, invalidRuntimeClient("runtime handle is required")
 	}
 	return handle.Status(ctx)
 }
 
-func (c *RuntimeAdminClient) OpenRuntime(ctx context.Context, handle *DaemonHandle, opts ConnectOptions) (*RuntimeClient, error) {
+func (c *RuntimeAdminClient) OpenRuntime(ctx context.Context, handle *RuntimeHandle, opts ConnectOptions) (*RuntimeClient, error) {
 	if _, err := c.requireControl(ctx); err != nil {
 		return nil, err
 	}
 	if handle == nil {
-		return nil, invalidRuntimeClient("daemon handle is required")
+		return nil, invalidRuntimeClient("runtime handle is required")
 	}
 	return handle.OpenRuntime(ctx, opts)
 }
 
-func (c *RuntimeAdminClient) Stop(ctx context.Context, handle *DaemonHandle, opts StopOptions) error {
+func (c *RuntimeAdminClient) Stop(ctx context.Context, handle *RuntimeHandle, opts RuntimeHostStopOptions) error {
 	if _, err := c.requireControl(ctx); err != nil {
 		return err
 	}
 	if handle == nil {
-		return invalidRuntimeClient("daemon handle is required")
+		return invalidRuntimeClient("runtime handle is required")
 	}
 	return handle.Stop(ctx, opts)
 }
 
-func (c *RuntimeAdminClient) Detach(ctx context.Context, handle *DaemonHandle) error {
+func (c *RuntimeAdminClient) Detach(ctx context.Context, handle *RuntimeHandle) error {
 	if _, err := c.requireControl(ctx); err != nil {
 		return err
 	}
 	if handle == nil {
-		return invalidRuntimeClient("daemon handle is required")
+		return invalidRuntimeClient("runtime handle is required")
 	}
 	return handle.Detach(ctx)
 }
@@ -223,7 +223,7 @@ func (c *RuntimeAdminClient) Diagnostics(ctx context.Context) (DiagnosticsReport
 	return c.health.Diagnostics(ctx)
 }
 
-func (c *RuntimeAdminClient) Readiness(ctx context.Context, handle *DaemonHandle) (RuntimeReadiness, error) {
+func (c *RuntimeAdminClient) Readiness(ctx context.Context, handle *RuntimeHandle) (RuntimeReadiness, error) {
 	status, err := c.Status(ctx, handle)
 	if err != nil {
 		return RuntimeReadiness{}, err
@@ -244,19 +244,19 @@ func (c *RuntimeAdminClient) Readiness(ctx context.Context, handle *DaemonHandle
 		Endpoints:      status.Endpoints,
 		Health:         health,
 		Diagnostics:    diagnostics,
-		Ready:          daemonRuntimeReady(status.State) && health.Ready(),
+		Ready:          runtimeLifecycleReady(status.State) && health.Ready(),
 		Messages:       messages,
 	}, nil
 }
 
-func (c *RuntimeAdminClient) requireControl(ctx context.Context) (*DaemonControl, error) {
-	if c == nil || c.control == nil {
+func (c *RuntimeAdminClient) requireControl(ctx context.Context) (*RuntimeHost, error) {
+	if c == nil || c.host == nil {
 		return nil, invalidRuntimeClient("runtime admin client is not initialized")
 	}
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
-	return c.control, nil
+	return c.host, nil
 }
 
 func runtimeAdminCall(call RuntimeCallContext, ability string) RuntimeCallContext {

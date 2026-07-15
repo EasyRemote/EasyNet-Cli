@@ -96,9 +96,7 @@ impl ProductPresenceSnapshot {
     /// Build from a persisted join/session snapshot.
     pub fn from_join_snapshot(snapshot: JoinConnectionSnapshot) -> Option<Self> {
         let device_ura = non_empty(&snapshot.device_ura);
-        if device_ura.is_none() {
-            return None;
-        }
+        device_ura.as_ref()?;
         let directory_status = status_from_join_snapshot(&snapshot);
         Some(Self {
             device_ura,

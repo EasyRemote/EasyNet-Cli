@@ -6,18 +6,24 @@ from easynet_sdk import (
     ConnectOptions,
     DaemonControl,
     ErrorCode,
+    BidiState,
+    BidiStreamDescriptor,
+    RuntimeHostRole,
+    RuntimeLifecycle,
     RuntimeClient,
     SDKError,
     StartConfig,
     DaemonMode,
-    is_code,
+    StreamState,
 )
 from easynet_sdk._cabi import (
     CABIDaemonTransport,
-    CABIDiscoveryTransport,
+    CABIRuntimeLifecycleTransport,
     CABIRuntimeTransport,
     CLILibrary,
     EXPECTED_ABI_VERSION,
+    _platform_library_candidates,
+    _project_cabi_ordered_event,
 )
 
 from test_runtime import complete_draft
@@ -31,6 +37,55 @@ class FakeSymbol:
 
     def __call__(self, *args):
         return self.func(*args)
+
+
+class CABIEventProjectionTests(unittest.TestCase):
+    def test_error_frame_projects_string_fields(self) -> None:
+        projected = _project_cabi_ordered_event(
+            b'{"code":"REMOTE_FAILED","message":"dispatch failed"}',
+            lambda observed: observed or 7,
+            use_observed_sequence=True,
+        )
+
+        self.assertEqual(
+            json.loads(projected),
+            {
+                "code": "REMOTE_FAILED",
+                "error": {
+                    "code": "REMOTE_FAILED",
+                    "message": "dispatch failed",
+                },
+                "message": "dispatch failed",
+                "sequence": 7,
+            },
+        )
+
+    def test_bidi_event_projection_sets_canonical_kind(self) -> None:
+        projected = _project_cabi_ordered_event(
+            b'{"event":"binary_chunk","data_base64":"aGVsbG8="}',
+            lambda observed: observed or 1,
+            use_observed_sequence=True,
+        )
+
+        self.assertEqual(
+            json.loads(projected),
+            {
+                "data_base64": "aGVsbG8=",
+                "event": "binary_chunk",
+                "kind": "data",
+                "payload_base64": "aGVsbG8=",
+                "sequence": 1,
+            },
+        )
+
+    def test_error_frame_rejects_non_string_fields_without_crashing(self) -> None:
+        projected = _project_cabi_ordered_event(
+            b'{"code":500,"message":null}',
+            lambda observed: observed or 1,
+            use_observed_sequence=True,
+        )
+
+        self.assertEqual(json.loads(projected)["error"], {"code": "", "message": ""})
 
 
 class FakeRawCABI:
@@ -59,6 +114,7 @@ class FakeRawCABI:
         self.daemon_detaches: list[int] = []
         self.daemon_open_clients: list[int] = []
         self.daemon_invocation_endpoint_calls: list[int] = []
+        self.next_prepared_id = 1001
 
         self.easynet_abi_version = FakeSymbol(lambda: EXPECTED_ABI_VERSION)
         self.easynet_feature_discovery = FakeSymbol(self._feature_discovery)
@@ -226,8 +282,7 @@ class FakeRawCABI:
         self.runtime_requests.append(("health", int(handle.value)))
         return self._write(
             out_ptr,
-            b'{"api_ready":true,"daemon_ready":true,'
-            b'"invocation_ready":true,"directory_ready":true,'
+            b'{"api_ready":true,"invocation_ready":true,"directory_ready":true,'
             b'"trust_ready":true,"runtime_ready":true,"diagnostics":[]}',
         )
 
@@ -260,12 +315,37 @@ class FakeRawCABI:
     def _invocation_prepare(
         self, handle, invocation_json, options_json, out_id, out_ptr
     ) -> int:
-        _ = handle, invocation_json, options_json
-        out_id._obj.value = 1001
+        _ = handle, invocation_json
+        options = json.loads(options_json.value.decode("utf-8"))
+        if options.get("material_only") is True:
+            out_id._obj.value = 0
+            return self._write(
+                out_ptr,
+                json.dumps(
+                    {
+                        "signing_material": {
+                            "canonical_bytes_base64": "e30=",
+                            "canonical_hash_hex": "00",
+                        }
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+            )
+
+        prepared_id = self.next_prepared_id
+        self.next_prepared_id += 1
+        out_id._obj.value = prepared_id
         return self._write(
             out_ptr,
-            b'{"prepared_id":"prep-1","request_id":"req-1",'
-            b'"canonical_bytes_base64":"e30=","canonical_hash_hex":"00"}',
+            json.dumps(
+                {
+                    "prepared_id": str(prepared_id),
+                    "request_id": "same-request-id",
+                    "canonical_bytes_base64": "e30=",
+                    "canonical_hash_hex": "00",
+                },
+                separators=(",", ":"),
+            ).encode("utf-8"),
         )
 
     def _invocation_sign_prepared(
@@ -392,6 +472,12 @@ _DAEMON_STATUS = (
 
 
 class CABITransportTests(unittest.TestCase):
+    def test_default_library_candidates_never_probe_repository_targets(self) -> None:
+        candidates = _platform_library_candidates()
+
+        self.assertEqual(len(candidates), 1)
+        self.assertFalse(any("target/" in candidate for candidate in candidates))
+
     def test_library_binds_only_generic_v5_symbols(self) -> None:
         raw = FakeRawCABI()
         library = CLILibrary(raw)
@@ -405,9 +491,9 @@ class CABITransportTests(unittest.TestCase):
 
     def test_daemon_runtime_uses_generic_invocation(self) -> None:
         raw = FakeRawCABI()
-        daemon = CABIDaemonTransport(CLILibrary(raw))
-        handle = DaemonControl(daemon).start(
-            StartConfig(mode=DaemonMode.DEVICE, device_id="dev-a")
+        lifecycle = CABIRuntimeLifecycleTransport(CLILibrary(raw))
+        handle = RuntimeLifecycle(lifecycle).start(
+            StartConfig(mode=RuntimeHostRole.DEVICE, device_id="dev-a")
         )
         runtime = handle.open_runtime(ConnectOptions())
 
@@ -426,6 +512,11 @@ class CABITransportTests(unittest.TestCase):
 
         self.assertFalse(hasattr(handle, "identity"))
 
+    def test_daemon_transport_name_is_source_compatible_alias(self) -> None:
+        self.assertIs(CABIDaemonTransport, CABIRuntimeLifecycleTransport)
+        self.assertIs(DaemonControl, RuntimeLifecycle)
+        self.assertIs(DaemonMode, RuntimeHostRole)
+
     def test_runtime_transport_closes_owned_handle_once(self) -> None:
         raw = FakeRawCABI()
         transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=True)
@@ -435,6 +526,96 @@ class CABITransportTests(unittest.TestCase):
         runtime.close()
 
         self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_prepare_uses_opaque_c_handle_when_request_id_repeats(self) -> None:
+        raw = FakeRawCABI()
+        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+
+        first = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
+        second = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
+
+        self.assertEqual(first["request_id"], second["request_id"])
+        self.assertNotEqual(first["prepared_id"], second["prepared_id"])
+        self.assertEqual(transport._prepared_handles.keys(), {"1001", "1002"})
+
+    def test_prepare_rejects_duplicate_prepared_handle_id(self) -> None:
+        raw = FakeRawCABI()
+        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+
+        first = json.loads(transport.prepare(b"{}", b"{}").decode("utf-8"))
+        raw.next_prepared_id = int(first["prepared_id"])
+
+        with self.assertRaises(SDKError) as caught:
+            transport.prepare(b"{}", b"{}")
+
+        self.assertEqual(caught.exception.code, ErrorCode.PROTOCOL)
+        self.assertIn("duplicate prepared handle id", caught.exception.message)
+        self.assertEqual(raw.prepared_frees, [int(first["prepared_id"])])
+        self.assertEqual(transport._prepared_handles.keys(), {first["prepared_id"]})
+
+    def test_prepare_material_only_does_not_retain_prepared_handle(self) -> None:
+        raw = FakeRawCABI()
+        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+
+        material = json.loads(
+            transport.prepare(b"{}", b'{"material_only":true}').decode("utf-8")
+        )
+
+        self.assertEqual(
+            material["signing_material"]["canonical_bytes_base64"],
+            "e30=",
+        )
+        self.assertEqual(transport._prepared_handles.keys(), set())
+        self.assertEqual(raw.prepared_frees, [])
+
+    def test_submit_signed_rejects_request_id_only_prepared_reference(self) -> None:
+        raw = FakeRawCABI()
+        transport = CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False)
+        transport.prepare(b"{}", b"{}")
+
+        with self.assertRaises(SDKError) as caught:
+            transport.submit_signed(
+                b'{"prepared":{"request_id":"same-request-id"},'
+                b'"signature":{"algorithm":"ed25519","signature_base64":"abc"}}'
+            )
+
+        self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+    def test_cabi_stream_and_bidi_cancel_are_non_terminal_requests(self) -> None:
+        raw = FakeRawCABI()
+        runtime = RuntimeClient(CABIRuntimeTransport(CLILibrary(raw), 42, owns_handle=False))
+
+        stream = runtime.invoke_stream(complete_draft())
+        stream_cancel = stream.cancel("client stop")
+
+        self.assertEqual(stream_cancel.state, StreamState.CANCEL_REQUESTED)
+        self.assertFalse(stream_cancel.cancelled)
+        self.assertFalse(stream_cancel.terminal)
+        self.assertEqual(stream.state, StreamState.CANCEL_REQUESTED)
+        stream_terminal = stream.next()
+        self.assertTrue(stream_terminal.terminal)
+        self.assertEqual(stream.state, StreamState.TERMINAL_FRAME_SEEN)
+        self.assertEqual(raw.stream_cancels, [4001])
+        self.assertEqual(raw.stream_closes, [])
+
+        session = runtime.open_bidi(
+            complete_draft(),
+            (
+                BidiStreamDescriptor(
+                    stream_id=1, content_type="application/json", ordering="STRICT"
+                ),
+            ),
+        )
+        bidi_cancel = session.cancel("client stop")
+
+        self.assertEqual(bidi_cancel.state, BidiState.CANCEL_REQUESTED)
+        self.assertFalse(bidi_cancel.terminal)
+        self.assertEqual(session.state, BidiState.CANCEL_REQUESTED)
+        bidi_terminal = session.receive()
+        self.assertTrue(bidi_terminal.terminal)
+        self.assertEqual(session.state, BidiState.TERMINAL)
+        self.assertEqual(raw.bidi_cancels, [5001])
+        self.assertEqual(raw.bidi_closes, [])
 
 
 if __name__ == "__main__":

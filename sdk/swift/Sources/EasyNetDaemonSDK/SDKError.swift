@@ -3,7 +3,6 @@ import Foundation
 public enum SDKErrorCode: String, Sendable {
     case invalidArgument = "INVALID_ARGUMENT"
     case invalidHandle = "INVALID_HANDLE"
-    case daemonOffline = "DAEMON_OFFLINE"
     case permissionDenied = "PERMISSION_DENIED"
     case admissionDenied = "ADMISSION_DENIED"
     case httpAuthDenied = "HTTP_AUTH_DENIED"
@@ -95,7 +94,7 @@ public struct SDKError: Error, Sendable, CustomStringConvertible {
             return .validation
         case .invalidHandle:
             return .handle
-        case .daemonOffline, .routeUnavailable, .transport:
+        case .routeUnavailable, .transport:
             return .availability
         case .permissionDenied, .httpAuthDenied:
             return .permission

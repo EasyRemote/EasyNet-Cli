@@ -49,6 +49,7 @@ use serde_json::Value;
 /// the tuple fields needed to construct one descriptor-bound local invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalAbilityTarget {
+    ability_ura: String,
     dispatch_name: String,
     callee_ura: String,
     default_subject_ura: String,
@@ -70,6 +71,7 @@ impl LocalAbilityTarget {
             selector.owner_ura()
         };
         Self {
+            ability_ura: selector.ability_ura().to_string(),
             dispatch_name: selector.local_registry_ability().to_string(),
             callee_ura: selector.owner_ura().to_string(),
             default_subject_ura: default_subject_ura.to_string(),
@@ -94,11 +96,25 @@ impl LocalAbilityTarget {
         if default_subject_ura.trim().is_empty() {
             anyhow::bail!("local ability target default_subject_ura must not be empty");
         }
+        let public_name = crate::core::ura::owner_local_ability_name(&callee_ura, &dispatch_name);
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, &public_name)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "local ability target cannot derive Ability URA for callee `{callee_ura}` and dispatch `{dispatch_name}`"
+                )
+            })?;
         Ok(Self {
+            ability_ura,
             dispatch_name,
             callee_ura,
             default_subject_ura,
         })
+    }
+
+    /// Canonical Ability URA selected by the descriptor/control-plane route.
+    #[must_use]
+    pub fn ability_ura(&self) -> &str {
+        &self.ability_ura
     }
 
     /// Daemon `AxonAbilityCatalog` key used for local dispatch.
@@ -212,8 +228,8 @@ impl InvocationTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetScope {
-    /// Ability runs in-process on this daemon. The executor calls
-    /// the local AbilityToolAdapter handler.
+    /// Ability runs through the daemon's local Axon runtime after canonical
+    /// route selection and admission.
     Local,
     /// Ability runs on a remote node via Axon `send_a2a_task`.
     Remote { node: NodeId },
@@ -338,8 +354,8 @@ mod tests {
     #[test]
     fn resolver_hint_different_from_local_means_remote() {
         // The cross-machine case: Client named a peer. Resolver
-        // surfaces a Remote scope; the executor will dispatch via
-        // GatewayApi.
+        // surfaces a Remote scope; daemon Invocation routing owns the
+        // cross-device dispatch.
         let r = LocalNodeResolver::new(NodeId::new("alpha"));
         let t = r.resolve(plan(Some("beta"))).unwrap();
         assert_eq!(

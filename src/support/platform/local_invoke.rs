@@ -88,6 +88,85 @@ pub enum LocalInvokeFailure {
     /// executor is legitimate — nothing ran.
     #[error("{0}")]
     DaemonOffline(String),
+    /// The daemon accepted the transport connection and rejected or failed the
+    /// invocation with a protocol status. The code remains structured so
+    /// callers never infer control flow from daemon message wording.
+    #[error("daemon error invoking {ability} through Axon (code={code}): {message}")]
+    DaemonStatus {
+        ability: String,
+        code: LocalInvokeStatusCode,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalInvokeStatusCode {
+    Ok,
+    Cancelled,
+    Unknown,
+    InvalidArgument,
+    DeadlineExceeded,
+    NotFound,
+    AlreadyExists,
+    PermissionDenied,
+    ResourceExhausted,
+    FailedPrecondition,
+    Aborted,
+    OutOfRange,
+    Unimplemented,
+    Internal,
+    Unavailable,
+    DataLoss,
+    Unauthenticated,
+}
+
+impl std::fmt::Display for LocalInvokeStatusCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Ok => "Ok",
+            Self::Cancelled => "Cancelled",
+            Self::Unknown => "Unknown",
+            Self::InvalidArgument => "InvalidArgument",
+            Self::DeadlineExceeded => "DeadlineExceeded",
+            Self::NotFound => "NotFound",
+            Self::AlreadyExists => "AlreadyExists",
+            Self::PermissionDenied => "PermissionDenied",
+            Self::ResourceExhausted => "ResourceExhausted",
+            Self::FailedPrecondition => "FailedPrecondition",
+            Self::Aborted => "Aborted",
+            Self::OutOfRange => "OutOfRange",
+            Self::Unimplemented => "Unimplemented",
+            Self::Internal => "Internal",
+            Self::Unavailable => "Unavailable",
+            Self::DataLoss => "DataLoss",
+            Self::Unauthenticated => "Unauthenticated",
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl From<tonic::Code> for LocalInvokeStatusCode {
+    fn from(code: tonic::Code) -> Self {
+        match code {
+            tonic::Code::Ok => Self::Ok,
+            tonic::Code::Cancelled => Self::Cancelled,
+            tonic::Code::Unknown => Self::Unknown,
+            tonic::Code::InvalidArgument => Self::InvalidArgument,
+            tonic::Code::DeadlineExceeded => Self::DeadlineExceeded,
+            tonic::Code::NotFound => Self::NotFound,
+            tonic::Code::AlreadyExists => Self::AlreadyExists,
+            tonic::Code::PermissionDenied => Self::PermissionDenied,
+            tonic::Code::ResourceExhausted => Self::ResourceExhausted,
+            tonic::Code::FailedPrecondition => Self::FailedPrecondition,
+            tonic::Code::Aborted => Self::Aborted,
+            tonic::Code::OutOfRange => Self::OutOfRange,
+            tonic::Code::Unimplemented => Self::Unimplemented,
+            tonic::Code::Internal => Self::Internal,
+            tonic::Code::Unavailable => Self::Unavailable,
+            tonic::Code::DataLoss => Self::DataLoss,
+            tonic::Code::Unauthenticated => Self::Unauthenticated,
+        }
+    }
 }
 
 /// Consumer-facing classification of a local-invoke error.
@@ -103,33 +182,21 @@ pub enum LocalInvokeErrorKind {
 
 /// Classify a local-invoke error for fallback decisions.
 ///
-/// Prefers the typed [`LocalInvokeFailure`] payload (walks the anyhow
-/// chain). The string table below is the TRANSITIONAL fallback for
-/// error paths that cannot mint typed payloads yet — daemon-side
-/// status codes have no typed surface (RFC gap: flagged, not
-/// extrapolated). It is the single permitted sniffing point in the
-/// crate; consumers must not grow their own.
+/// Walks the anyhow chain for the transport-owned typed failure. Untyped
+/// errors are real execution/projection failures and therefore never grant a
+/// fallback executor permission to run the request again.
 pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind {
     for cause in err.chain() {
         if let Some(f) = cause.downcast_ref::<LocalInvokeFailure>() {
             return match f {
                 LocalInvokeFailure::DaemonOffline(_) => LocalInvokeErrorKind::DaemonOffline,
+                LocalInvokeFailure::DaemonStatus {
+                    code: LocalInvokeStatusCode::NotFound,
+                    ..
+                } => LocalInvokeErrorKind::AbilityUnregistered,
+                LocalInvokeFailure::DaemonStatus { .. } => LocalInvokeErrorKind::Failed,
             };
         }
-    }
-    let lower = format!("{err:#}").to_ascii_lowercase();
-    if lower.contains("daemon not running")
-        || lower.contains("listener unreachable")
-        || lower.contains("connect to local axon daemon")
-        || lower.contains("requires the `axon-pb` feature")
-    {
-        return LocalInvokeErrorKind::DaemonOffline;
-    }
-    if lower.contains("unknown_ability")
-        || lower.contains("not_found")
-        || lower.contains("no local handler registered")
-    {
-        return LocalInvokeErrorKind::AbilityUnregistered;
     }
     LocalInvokeErrorKind::Failed
 }
@@ -257,14 +324,16 @@ pub fn invoke_local_ability_target_bidi_json_frames_with_subject(
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalBidiFrame>> {
     crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
-        target.dispatch_name(),
-        args,
-        target.callee_ura(),
-        target.default_subject_ura(),
-        subject,
-        timeout,
-        input_frames,
-        max_frames,
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedBidiRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            default_subject_ura: target.default_subject_ura(),
+            subject,
+            timeout,
+            input_frames,
+            max_frames,
+        },
     )
 }
 
@@ -275,12 +344,12 @@ pub fn invoke_local_ability_target_bidi_json_frames_with_subject(
 /// step becomes one complete seven-tuple Axon invocation. The
 /// returned metadata value carries the envelope echo (caller /
 /// callee / ability / subject / nonce / causal_context) plus the
-/// ledger-assigned `invocation_ura`, `trace_id`, and receipt-chain
-/// anchors — the material a downstream step needs to name THIS step
+/// receipt-bound `invocation_ura`, `trace_id`, and verified finalization
+/// anchor — the material a downstream step needs to name THIS step
 /// as its causal parent. `causal_parents` entries are
 /// `{node, invocation_ura, receipt_ura, receipt_hash}` objects from
-/// prior steps' metadata; they are encoded into the envelope's
-/// `causal_context` (explicit `Empty` for a root step, `ReceiptRef`
+/// prior verified projections in this process; they are encoded into the
+/// envelope's `causal_context` (explicit `Empty` for a root step, `ReceiptRef`
 /// scalar for one parent, ordered `ReceiptList` for a join).
 /// `trace_id` is the mission run's id; it is stamped on the
 /// envelope's operational-metadata `trace_id` field so the daemon
@@ -303,6 +372,50 @@ pub fn invoke_local_ability_with_invocation_meta(
         trace_id,
         callee_agent,
     )
+}
+
+/// Metadata produced only after Axon has verified the admission and terminal
+/// receipt checkpoints against the trusted local key service.
+///
+/// The constructor remains private to this module. Consumers may inspect or
+/// serialize the compatibility JSON projection, but cannot label arbitrary
+/// JSON as verified metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedLocalInvocationMeta(Value);
+
+impl VerifiedLocalInvocationMeta {
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+}
+
+/// Invoke a canonical local Ability target and return cryptographically
+/// verified invocation metadata with the result.
+///
+/// Unlike the mission-compatibility helper above, this entry point never
+/// resolves an agent display name and never substitutes the local device as
+/// descriptor owner. The wire callee and default subject come directly from
+/// [`LocalAbilityTarget`], which is constructed from the canonical Ability
+/// URA advertised by discovery/tools-list.
+pub fn invoke_local_ability_target_with_invocation_meta(
+    target: &LocalAbilityTarget,
+    args: Value,
+    subject: Option<String>,
+    causal_parents: &[Value],
+    step_timeout: Option<std::time::Duration>,
+    trace_id: Option<&str>,
+) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
+    let (value, metadata) = crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta(
+        target.dispatch_name(),
+        args,
+        target.callee_ura(),
+        target.default_subject_ura(),
+        subject,
+        causal_parents,
+        step_timeout,
+        trace_id,
+    )?;
+    Ok((value, VerifiedLocalInvocationMeta(metadata)))
 }
 
 /// Same as [`invoke_local_ability_with_invocation_meta`], but annotates the
@@ -393,6 +506,38 @@ mod tests {
         assert_eq!(
             target.default_subject_ura(),
             "easynet:///r/acme/ability/hub.federation.resolve"
+        );
+    }
+
+    #[test]
+    fn classification_uses_typed_daemon_status_not_message_text() {
+        let not_found = anyhow::Error::new(LocalInvokeFailure::DaemonStatus {
+            ability: "skill.list".to_string(),
+            code: LocalInvokeStatusCode::NotFound,
+            message: "wording may change".to_string(),
+        });
+        assert_eq!(
+            classify_invoke_error(&not_found),
+            LocalInvokeErrorKind::AbilityUnregistered
+        );
+
+        let untyped = anyhow::anyhow!("unknown_ability and daemon not running are only text");
+        assert_eq!(
+            classify_invoke_error(&untyped),
+            LocalInvokeErrorKind::Failed
+        );
+    }
+
+    #[test]
+    fn non_not_found_daemon_status_cannot_authorize_fallback_execution() {
+        let unavailable = anyhow::Error::new(LocalInvokeFailure::DaemonStatus {
+            ability: "agent.start".to_string(),
+            code: LocalInvokeStatusCode::Unavailable,
+            message: "daemon reported a runtime failure".to_string(),
+        });
+        assert_eq!(
+            classify_invoke_error(&unavailable),
+            LocalInvokeErrorKind::Failed
         );
     }
 

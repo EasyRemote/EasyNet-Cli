@@ -9,18 +9,11 @@
 //
 // Why "skill list" is an ability, not a separate gRPC RPC
 // -------------------------------------------------------
-// Architecturally, every discoverable resource on a node should
-// flow through the same channel:
-//
-//   ListMCPTools (federation discovery) → CallMCPTool (execution)
-//
-// MCP tools, sessions (`session.list`), schedules
-// (`schedule.list`), discuss rooms (`discuss.create`),
-// permission requests (`consent.subscribe`), and now
-// skills all use this single pattern. A fresh RPC per resource type
-// would force the proto, the FFI bridge, the SDK, and the backend to
-// each grow a parallel parser; routing through abilities reuses the
-// machinery once.
+// Architecturally, every discoverable resource on a node enters through the
+// daemon's canonical Invocation face. `skill.list` is registered in the live
+// local ability catalog, published into the resolver snapshot, and dispatched
+// by the selected route. MCP and CLI surfaces are callers of that same ability;
+// neither owns a parallel skill-list transport or registry.
 //
 // Wire shape
 // ----------
@@ -41,11 +34,6 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::daemon::persistence::agent_registry as agents;
-
-/// Crate-internal entry for the `skill.list` walk.
-pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
-    list_handler(args)
-}
 
 /// Skill inventory handler.
 ///
@@ -72,7 +60,7 @@ pub(crate) fn list_handler_for_args(args: Value) -> anyhow::Result<Value> {
 /// agent id, while unscoped global-pool rows carry `global:<pool>` so
 /// the list stays one row per global skill rather than multiplying by
 /// the number of agents that can consume the pool.
-fn list_handler(args: Value) -> anyhow::Result<Value> {
+pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
     let registry = agents::load_agents()?;
     let local_agents = crate::daemon::persistence::local_agents::load().ok();
     let scope = SkillListScope::from_args(&args, local_agents.as_ref())?;
@@ -535,7 +523,7 @@ mod tests {
 
     #[test]
     fn registration_makes_list_dispatchable() {
-        let res = list_handler_for_args(json!({})).expect("list helper ok");
+        let res = handle(json!({})).expect("list handler ok");
         assert!(res.get("items").and_then(Value::as_array).is_some());
     }
 
@@ -658,7 +646,7 @@ mod tests {
         );
         crate::daemon::persistence::agent_registry::save_agents(&registry).expect("save registry");
 
-        let unscoped = list_handler_for_args(json!({})).expect("unscoped list");
+        let unscoped = handle(json!({})).expect("unscoped list");
         let unscoped_items = unscoped["items"].as_array().expect("items");
         let global_rows: Vec<_> = unscoped_items
             .iter()
@@ -671,8 +659,7 @@ mod tests {
         );
         assert_eq!(global_rows[0]["agent_id"], "global:claude-global");
 
-        let scoped =
-            list_handler_for_args(json!({"owner_agent_id": "alice"})).expect("scoped list");
+        let scoped = handle(json!({"owner_agent_id": "alice"})).expect("scoped list");
         let scoped_items = scoped["items"].as_array().expect("items");
         let scoped_rows: Vec<_> = scoped_items
             .iter()
@@ -694,7 +681,7 @@ mod tests {
         )
         .expect("skill md");
 
-        let filtered = list_handler_for_args(json!({"owner_agent_id": "global:claude-global"}))
+        let filtered = handle(json!({"owner_agent_id": "global:claude-global"}))
             .expect("global-pool scoped list");
         let items = filtered["items"].as_array().expect("items");
         assert_eq!(items.len(), 1);

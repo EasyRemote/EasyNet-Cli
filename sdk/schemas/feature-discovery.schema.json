@@ -20,7 +20,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "daemon_lifecycle",
+        "runtime_lifecycle",
         "generic_invocation",
         "typed_error_json",
         "invocation_builder_handles",
@@ -31,7 +31,7 @@
         "prepare_sign_submit"
       ],
       "properties": {
-        "daemon_lifecycle": {"type": "boolean"},
+        "runtime_lifecycle": {"type": "boolean"},
         "generic_invocation": {"type": "boolean"},
         "typed_error_json": {"type": "boolean"},
         "invocation_builder_handles": {"type": "boolean"},

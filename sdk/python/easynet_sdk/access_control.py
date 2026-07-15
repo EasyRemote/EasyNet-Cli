@@ -539,11 +539,8 @@ def _grant_args(
     request: AccessControlGrantRequest,
 ) -> tuple[AccessControlGrantRequest, dict[str, object]]:
     grant = _normalize_grant(request.grant, request.owner_ura, request.principal_ura)
-    owner_user_id = _user_id_from_user_ura(grant.owner_ura, "owner_ura")
-    principal_id = _principal_id(grant.principal_kind, grant.principal_ura, grant.principal_id)
-    wire_grant = _grant_wire(grant, owner_user_id, principal_id)
     args: dict[str, object] = {
-        "grant": wire_grant,
+        "grant": _grant_wire(grant),
         "owner_ura": grant.owner_ura,
     }
     if grant.principal_ura:
@@ -566,11 +563,10 @@ def _revoke_args(
     request: AccessControlRevokeRequest,
 ) -> tuple[AccessControlRevokeRequest, dict[str, object]]:
     owner_ura = _required_text(request.owner_ura, "owner_ura")
-    owner_user_id = _user_id_from_user_ura(owner_ura, "owner_ura")
+    _user_id_from_user_ura(owner_ura, "owner_ura")
     grant_id = _required_text(request.grant_id, "grant_id")
     args: dict[str, object] = {
         "owner_ura": owner_ura,
-        "owner_user_id": owner_user_id,
         "grant_id": grant_id,
     }
     _optional(args, "actor_ura", request.actor_ura)
@@ -582,13 +578,11 @@ def _list_args(
     request: AccessControlListRequest,
 ) -> tuple[AccessControlListRequest, dict[str, object]]:
     owner_ura = _required_text(request.owner_ura, "owner_ura")
-    owner_user_id = _user_id_from_user_ura(owner_ura, "owner_ura")
-    principal_id = _principal_id(request.principal_kind, request.principal_ura, request.principal_id)
-    args: dict[str, object] = {"owner_ura": owner_ura, "owner_user_id": owner_user_id}
+    _user_id_from_user_ura(owner_ura, "owner_ura")
+    _principal_id(request.principal_kind, request.principal_ura, request.principal_id)
+    args: dict[str, object] = {"owner_ura": owner_ura}
     if request.principal_kind is not None:
         args["principal_kind"] = request.principal_kind.value
-    if principal_id:
-        args["principal_id"] = principal_id
     _optional(args, "principal_ura", request.principal_ura)
     _optional(args, "token_id", request.token_id)
     _optional(args, "callee_ura", request.callee_ura)
@@ -611,22 +605,20 @@ def _check_args(
     request: AccessControlCheckRequest,
 ) -> tuple[AccessControlCheckRequest, dict[str, object]]:
     owner_ura = _required_text(request.owner_ura, "owner_ura")
-    owner_user_id = _user_id_from_user_ura(owner_ura, "owner_ura")
+    _user_id_from_user_ura(owner_ura, "owner_ura")
     principal_id = _principal_id(request.principal_kind, request.principal_ura, "")
     if not principal_id:
         raise _invalid("principal_ura is required")
-    for field, value in {
+    for field_name, value in {
         "callee_ura": request.callee_ura,
         "subject_ura": request.subject_ura,
         "ability_ura": request.ability_ura,
         "action": request.action,
     }.items():
-        _required_text(value, field)
+        _required_text(value, field_name)
     args: dict[str, object] = {
         "owner_ura": owner_ura,
-        "owner_user_id": owner_user_id,
         "principal_kind": request.principal_kind.value,
-        "principal_id": principal_id,
         "principal_ura": request.principal_ura.strip(),
         "callee_ura": request.callee_ura.strip(),
         "subject_ura": request.subject_ura.strip(),
@@ -652,12 +644,8 @@ def _permission_request_create_args(
     projected = _normalize_permission_request(
         request.request, request.owner_ura, request.principal_ura
     )
-    owner_user_id = _user_id_from_user_ura(projected.owner_ura, "owner_ura")
-    principal_id = _principal_id(
-        projected.principal_kind, projected.principal_ura, projected.principal_id
-    )
     args: dict[str, object] = {
-        "request": _permission_request_wire(projected, owner_user_id, principal_id),
+        "request": _permission_request_wire(projected),
         "owner_ura": projected.owner_ura,
     }
     _optional(args, "principal_ura", projected.principal_ura)
@@ -680,12 +668,8 @@ def _permission_request_resolve_args(
     projected = _normalize_permission_request(
         request.request, request.owner_ura, request.principal_ura
     )
-    owner_user_id = _user_id_from_user_ura(projected.owner_ura, "owner_ura")
-    principal_id = _principal_id(
-        projected.principal_kind, projected.principal_ura, projected.principal_id
-    )
     args: dict[str, object] = {
-        "request": _permission_request_wire(projected, owner_user_id, principal_id),
+        "request": _permission_request_wire(projected),
         "owner_ura": projected.owner_ura,
     }
     _optional(args, "principal_ura", projected.principal_ura)
@@ -695,10 +679,10 @@ def _permission_request_resolve_args(
         created_grant = _normalize_grant(
             request.created_grant, projected.owner_ura, projected.principal_ura
         )
-        args["created_grant"] = _grant_wire(created_grant, owner_user_id, principal_id)
+        args["created_grant"] = _grant_wire(created_grant)
     if request.authority_proof is not None:
         args["authority_proof"] = _authority_proof_wire(
-            request.authority_proof, owner_user_id, principal_id
+            request.authority_proof, projected.principal_id
         )
     return (
         AccessControlPermissionRequestResolveRequest(
@@ -718,15 +702,11 @@ def _permission_request_list_args(
     request: AccessControlPermissionRequestListRequest,
 ) -> tuple[AccessControlPermissionRequestListRequest, dict[str, object]]:
     owner_ura = _required_text(request.owner_ura, "owner_ura")
-    owner_user_id = _user_id_from_user_ura(owner_ura, "owner_ura")
-    principal_id = _principal_id(
-        request.principal_kind, request.principal_ura, request.principal_id
-    )
-    args: dict[str, object] = {"owner_ura": owner_ura, "owner_user_id": owner_user_id}
+    _user_id_from_user_ura(owner_ura, "owner_ura")
+    _principal_id(request.principal_kind, request.principal_ura, request.principal_id)
+    args: dict[str, object] = {"owner_ura": owner_ura}
     if request.principal_kind is not None:
         args["principal_kind"] = request.principal_kind.value
-    if principal_id:
-        args["principal_id"] = principal_id
     _optional(args, "principal_ura", request.principal_ura)
     _optional(args, "token_id", request.token_id)
     _optional(args, "status", request.status)
@@ -802,15 +782,11 @@ def _normalize_grant(
     )
 
 
-def _grant_wire(
-    grant: AccessControlGrant, owner_user_id: str, principal_id: str
-) -> dict[str, object]:
+def _grant_wire(grant: AccessControlGrant) -> dict[str, object]:
     wire: dict[str, object] = {
         "grant_id": grant.grant_id,
-        "owner_user_id": owner_user_id,
         "owner_ura": grant.owner_ura,
         "principal_kind": grant.principal_kind.value,
-        "principal_id": principal_id,
         "principal_ura": grant.principal_ura,
         "actions": list(grant.actions),
         "effect": grant.effect.value,
@@ -856,13 +832,13 @@ def _normalize_permission_request(
     )
     if not request.request_id.strip():
         raise _invalid("request_id is required")
-    for field, value in {
+    for field_name, value in {
         "callee_ura": request.callee_ura,
         "subject_ura": request.subject_ura,
         "ability_ura": request.ability_ura,
         "action": request.action,
     }.items():
-        _required_text(value, field)
+        _required_text(value, field_name)
     return AccessControlPermissionRequest(
         request_id=request.request_id.strip(),
         owner_ura=effective_owner,
@@ -891,15 +867,11 @@ def _normalize_permission_request(
     )
 
 
-def _permission_request_wire(
-    request: AccessControlPermissionRequest, owner_user_id: str, principal_id: str
-) -> dict[str, object]:
+def _permission_request_wire(request: AccessControlPermissionRequest) -> dict[str, object]:
     wire: dict[str, object] = {
         "request_id": request.request_id,
-        "owner_user_id": owner_user_id,
         "owner_ura": request.owner_ura,
         "principal_kind": (request.principal_kind or AccessControlPrincipalKind.USER).value,
-        "principal_id": principal_id,
         "principal_ura": request.principal_ura,
         "callee_ura": request.callee_ura,
         "subject_ura": request.subject_ura,
@@ -929,8 +901,9 @@ def _permission_request_wire(
 
 
 def _authority_proof_wire(
-    proof: AccessControlAuthorityProof, owner_user_id: str, principal_id: str
+    proof: AccessControlAuthorityProof, principal_id: str
 ) -> dict[str, object]:
+    owner_user_id = _user_id_from_user_ura(proof.owner_ura.strip(), "authority_proof.owner_ura")
     wire: dict[str, object] = {
         "proof_id": proof.proof_id.strip(),
         "owner_user_id": owner_user_id,

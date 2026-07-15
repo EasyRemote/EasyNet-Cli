@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "node.list"
+descriptor_version = "1.0.0"
 description = "List device nodes visible from this daemon. The handler resolves the realm directory through federation.resolve and then directly probes each discovered device-profile Agent with observe.health, so callers can distinguish a local-only view, a directory-only view, and a directly reachable peer."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

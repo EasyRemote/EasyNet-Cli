@@ -725,12 +725,15 @@ def _validate_canonical_bytes(value: object) -> None:
         )
 
 
-_PageItem = TypeVar("_PageItem")
+_PageItem = TypeVar("_PageItem", covariant=True)
 
 
 class _Page(Protocol[_PageItem]):
-    items: tuple[_PageItem, ...]
-    next_cursor: str | None
+    @property
+    def items(self) -> tuple[_PageItem, ...]: ...
+
+    @property
+    def next_cursor(self) -> str | None: ...
 
 
 def _collect_pages(
@@ -842,14 +845,6 @@ def _positive_projection_i64(raw: Mapping[str, object], field: str) -> int:
     if value <= 0:
         raise invalid_key_service_payload(f"managed signing {field} must be positive")
     return value
-
-
-def _optional_positive_projection_i64(
-    raw: Mapping[str, object], field: str
-) -> int | None:
-    if raw.get(field) is None:
-        return None
-    return _positive_projection_i64(raw, field)
 
 
 def _optional_positive_projection_i64(

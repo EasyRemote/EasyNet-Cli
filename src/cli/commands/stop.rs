@@ -31,12 +31,7 @@
 //                        whose pidfile was lost
 //   5. cleanup-discovery
 //                     — remove stale control.json after daemon exit
-//   6. legacy-heartbeat-cleanup
-//                     — stale retired heartbeat pidfile cleanup only
-//   7. legacy-axon-cleanup
-//                     — non-DaemonOnly only: SIGTERM the axon
-//                        runtime PID (or lsof-discovered one)
-//   8. cleanup-state   — remove runtime.json when it existed
+//   6. cleanup-state   — remove runtime.json when it existed
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -103,8 +98,6 @@ impl StopPlan {
         self.stage_stop_discovered_daemon();
         self.stage_sweep_daemons();
         let discovery_cleanup = self.stage_cleanup_discovery();
-        self.stage_legacy_heartbeat_cleanup();
-        self.stage_legacy_axon_cleanup();
         let cleanup = self.stage_cleanup_state();
         self.stage_desktop_companions();
         self.renderer.finish();
@@ -179,34 +172,6 @@ impl StopPlan {
         } else {
             self.renderer
                 .stage_skipped("desktop-companions", &format!("({})", warnings.join("; ")));
-        }
-    }
-
-    /// Legacy janitor for the retired heartbeat helper pidfile.
-    fn stage_legacy_heartbeat_cleanup(&mut self) {
-        self.renderer.set_active("legacy-heartbeat-cleanup");
-        match stop_pidfile_process(&config::heartbeat_pid_path()) {
-            PidfileStopOutcome::Stopped { pid } => self
-                .renderer
-                .stage_ok(&format!("legacy-heartbeat-cleanup (pid {pid})")),
-            PidfileStopOutcome::NoPidfile => self
-                .renderer
-                .stage_skipped("legacy-heartbeat-cleanup", "(no retired pidfile)"),
-            PidfileStopOutcome::StalePidfile { pid } => self.renderer.stage_skipped(
-                "legacy-heartbeat-cleanup",
-                &format!("(pid {pid} already exited)"),
-            ),
-            PidfileStopOutcome::PidReuseRefused { pid } => self.renderer.stage_skipped(
-                "legacy-heartbeat-cleanup",
-                &format!("(pid {pid} no longer an easynet process)"),
-            ),
-            PidfileStopOutcome::TimedOut { pid } => {
-                self.stop_timed_out = true;
-                self.renderer.stage_failed(
-                    "legacy-heartbeat-cleanup",
-                    &format!("pid {pid} did not exit in time"),
-                );
-            }
         }
     }
 
@@ -314,37 +279,6 @@ impl StopPlan {
                     .stage_failed("cleanup-discovery", &format!("{e}"));
                 Err(e)
             }
-        }
-    }
-
-    /// SIGTERM the legacy axon runtime PID. Skipped for DaemonOnly
-    /// and Stateless shapes — there is no axon process to stop.
-    fn stage_legacy_axon_cleanup(&mut self) {
-        self.renderer.set_active("legacy-axon-cleanup");
-        let (endpoint, pid) = match &self.shape {
-            RuntimeStopShape::LegacyAxonRuntime { endpoint, pid } => (endpoint.clone(), *pid),
-            _ => {
-                self.renderer
-                    .stage_skipped("legacy-axon-cleanup", "(daemon-only runtime)");
-                return;
-            }
-        };
-        let Some(pid) = pid else {
-            self.renderer.stage_failed(
-                "legacy-axon-cleanup",
-                &format!("could not determine pid for endpoint {endpoint}"),
-            );
-            return;
-        };
-        if net::kill_and_wait(pid, std::time::Duration::from_secs(5)) {
-            self.renderer
-                .stage_ok(&format!("legacy-axon-cleanup (pid {pid})"));
-        } else {
-            self.stop_timed_out = true;
-            self.renderer.stage_failed(
-                "legacy-axon-cleanup",
-                &format!("pid {pid} did not exit in time"),
-            );
         }
     }
 

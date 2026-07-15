@@ -7,8 +7,8 @@
 // Protocol Responsibility:
 // - Defines the media backend contract exposed by
 //   remote_desktop.* ability receipts.
-// - Does not own Axon session/signaling semantics; those remain in
-//   the ability and Axon invocation layers.
+// - Owns the product media-backend contract. Generic invocation, admission,
+//   receipt, and URA semantics remain in Axon.
 //
 // Implementation Approach:
 // - Keep backend capability data immutable and serializable.
@@ -22,10 +22,10 @@
 // - Requested fps and effective fps must remain separate values.
 //
 // Architectural Position:
-// - EasyNet-Cli device adapter SDK layer. Axon carries signed
-//   invocations; this module describes local capture/encode plugins.
+// - EasyNet-Cli device adapter SDK layer. This module describes local
+//   capture/encode plugins behind daemon-owned remote desktop abilities.
 
-use easynet_axon::{
+use super::contract::{
     RemoteDesktopBackendStatus, RemoteDesktopMediaBackendContract, RemoteDesktopTransportKind,
 };
 use serde_json::{json, Value};
@@ -109,7 +109,7 @@ impl RemoteDesktopMediaBackendDescriptor {
     }
 
     pub fn is_webrtc_transport(self) -> bool {
-        self.axon_transport() == RemoteDesktopTransportKind::WebRtc
+        self.transport_kind() == RemoteDesktopTransportKind::WebRtc
     }
 
     pub fn unavailable_reason(self) -> Option<&'static str> {
@@ -133,13 +133,15 @@ impl RemoteDesktopMediaBackendDescriptor {
             .max(1)
     }
 
-    pub fn axon_contract(self) -> RemoteDesktopMediaBackendContract {
+    pub(in crate::daemon::plugins::remote_desktop) fn product_contract(
+        self,
+    ) -> RemoteDesktopMediaBackendContract {
         RemoteDesktopMediaBackendContract {
             backend_id: self.backend_id.to_string(),
             sdk_id: self.sdk_id().to_string(),
             kind: self.kind.to_string(),
-            status: self.axon_status(),
-            transport: self.axon_transport(),
+            status: self.backend_status(),
+            transport: self.transport_kind(),
             capture_api: self.capture_api.to_string(),
             encoder: self.encoder.to_string(),
             max_capture_fps: self.max_capture_fps,
@@ -158,20 +160,22 @@ impl RemoteDesktopMediaBackendDescriptor {
         }
     }
 
-    pub fn validate_axon_contract(self) -> Result<(), easynet_axon::RemoteDesktopContractError> {
-        self.axon_contract().validate()
+    pub(in crate::daemon::plugins::remote_desktop) fn validate_product_contract(
+        self,
+    ) -> Result<(), super::contract::RemoteDesktopContractError> {
+        self.product_contract().validate()
     }
 
     pub fn to_json(self) -> Value {
-        debug_assert!(self.validate_axon_contract().is_ok());
-        let mut value = self.axon_contract().to_json();
+        debug_assert!(self.validate_product_contract().is_ok());
+        let mut value = self.product_contract().to_json();
         if let Value::Object(map) = &mut value {
             map.insert("carrier".to_string(), json!(self.carrier));
         }
         value
     }
 
-    fn axon_status(self) -> RemoteDesktopBackendStatus {
+    fn backend_status(self) -> RemoteDesktopBackendStatus {
         match self.status {
             "available" => RemoteDesktopBackendStatus::Available,
             "not_installed" => RemoteDesktopBackendStatus::NotInstalled,
@@ -181,7 +185,7 @@ impl RemoteDesktopMediaBackendDescriptor {
         }
     }
 
-    fn axon_transport(self) -> RemoteDesktopTransportKind {
+    fn transport_kind(self) -> RemoteDesktopTransportKind {
         match self.carrier {
             "webrtc.rtp_srtp" => RemoteDesktopTransportKind::WebRtc,
             "axon.invoke_bidi.annexb_h264" => RemoteDesktopTransportKind::InvokeBidi,
@@ -571,13 +575,13 @@ mod tests {
     }
 
     #[test]
-    fn catalog_entries_validate_against_axon_contract() {
-        XCAP_OPENH264_BACKEND.validate_axon_contract().unwrap();
+    fn catalog_entries_validate_against_product_contract() {
+        XCAP_OPENH264_BACKEND.validate_product_contract().unwrap();
         XCAP_OPENH264_WEBRTC_BACKEND
-            .validate_axon_contract()
+            .validate_product_contract()
             .unwrap();
         MACOS_SCK_VIDEOTOOLBOX_BACKEND
-            .validate_axon_contract()
+            .validate_product_contract()
             .unwrap();
 
         assert_eq!(

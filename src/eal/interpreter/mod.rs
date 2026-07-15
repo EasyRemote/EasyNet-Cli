@@ -131,13 +131,11 @@ pub trait StepDispatcher {
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError>;
 }
 
-/// Successful dispatch outcome: the step's result value plus, when
-/// the step was lowered onto the daemon's Axon Invocation surface,
-/// the seven-tuple invocation record (envelope echo + ledger receipt
-/// anchors). `invocation: None` means the step executed through a
-/// path that emits no Axon invocation (in-process fallback, agent
-/// CLI dispatch) — the trace records that honestly rather than
-/// fabricating a receipt.
+/// Successful dispatch outcome: the step's result value plus the
+/// seven-tuple invocation record (envelope echo + ledger receipt
+/// anchors) when the dispatcher uses the production Axon surface.
+/// Test dispatchers may omit it; production Mission/EAL dispatchers
+/// must not execute through a receipt-less fallback path.
 #[derive(Debug)]
 pub struct StepDispatchOutcome {
     pub value: Value,
@@ -175,7 +173,7 @@ pub fn execute_with_endpoint_for_trace(
 ) -> anyhow::Result<ExecutionReport> {
     let dispatcher = AgentAwareDispatcher::new(
         endpoint,
-        crate::support::platform::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
+        crate::support::platform::timeouts::LOCAL_DAEMON_CONNECT_TIMEOUT_MS,
     );
     execute_with_dispatcher_for_trace(&dispatcher, tenant, ir, trace_id)
 }

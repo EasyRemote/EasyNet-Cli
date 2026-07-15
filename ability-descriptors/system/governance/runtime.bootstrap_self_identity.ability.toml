@@ -1,0 +1,37 @@
+schema_version = "2"
+name = "runtime.bootstrap_self_identity"
+descriptor_version = "1.0.0"
+description = "Bootstrap a daemon runtime identity key into the realm trust set before steady-state signed invocation is available."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["tenant_id", "node_id", "owner_id", "public_key_b64"]
+additionalProperties = false
+
+[input_schema.properties.node_id]
+type = "string"
+description = "Node identifier whose runtime identity is being bootstrapped."
+
+[input_schema.properties.owner_id]
+type = "string"
+description = "Owner identifier associated with the bootstrapped runtime identity."
+
+[input_schema.properties.public_key_b64]
+type = "string"
+description = "Base64-encoded Ed25519 verifying key to bind to the runtime identity."
+
+[input_schema.properties.tenant_id]
+type = "string"
+description = "Compatibility field carrying the realm for the bootstrapping runtime."

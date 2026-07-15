@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "mission.run"
+descriptor_version = "1.0.0"
 description = "Compile and execute an EAL program in-process. Records the run under `~/.easynet/missions/runs/<run_id>` and returns the run id, run dir path, every `let`-bound output, and the run metadata. Use this to drive multi-step or cross-agent orchestration; `easynet.track` polls a long run, `easynet.cancel` aborts one. For a single ability call, prefer `easynet.invoke` — it skips the run-dir bookkeeping."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

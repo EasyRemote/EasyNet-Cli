@@ -25,7 +25,6 @@ class RuntimeHealth:
     """Language-neutral SDK health DTO."""
 
     api_ready: bool
-    daemon_ready: bool
     invocation_ready: bool
     directory_ready: bool
     trust_ready: bool
@@ -39,12 +38,12 @@ class RuntimeHealth:
     def from_json(cls, raw: bytes | str) -> "RuntimeHealth":
         """Decode the shared health.schema.json DTO."""
 
-        return _decode_runtime_health(raw)
+        return _decode_runtime_health(raw.encode("utf-8") if isinstance(raw, str) else raw)
 
     def api_alive(self) -> bool:
         """Return process/API liveness, not full runtime readiness."""
 
-        return self.api_ready and self.daemon_ready
+        return self.api_ready
 
     def ready(self) -> bool:
         """Return full runtime readiness."""
@@ -189,7 +188,6 @@ def _decode_runtime_health(raw: bytes) -> RuntimeHealth:
 
     return RuntimeHealth(
         api_ready=_required_bool(decoded, "api_ready"),
-        daemon_ready=_required_bool(decoded, "daemon_ready"),
         invocation_ready=_required_bool(decoded, "invocation_ready"),
         directory_ready=_required_bool(decoded, "directory_ready"),
         trust_ready=_required_bool(decoded, "trust_ready"),

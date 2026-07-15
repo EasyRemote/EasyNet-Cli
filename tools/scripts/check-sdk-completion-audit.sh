@@ -6,88 +6,68 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 MATRIX="$REPO_ROOT/sdk/conformance/sdk-parity-matrix.json"
 
 validate_matrix_completion() {
-  local matrix_path="$1"
-  python3 - "$matrix_path" <<'PY'
-from __future__ import annotations
-
-import json
-import sys
+  python3 - "$1" <<'PY'
+import json, sys
 from pathlib import Path
-
-matrix = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-status_order = matrix.get("status_order")
-if status_order != ["unsupported", "seam", "provider-backed", "cutover-ready"]:
+matrix = json.loads(Path(sys.argv[1]).read_text())
+if matrix.get("schema_version") != 4:
+    raise SystemExit("completion_audit: invalid_schema")
+if matrix.get("status_order") != ["unsupported", "seam", "provider-backed", "cutover-ready"]:
     raise SystemExit("completion_audit: invalid_status_order")
 if "product_boundary_rules" in matrix:
     raise SystemExit("completion_audit: product_boundary_rows_forbidden")
-
-capabilities = matrix.get("capabilities")
-if not isinstance(capabilities, list) or not capabilities:
-    raise SystemExit("completion_audit: missing_capabilities")
-
-failures: list[str] = []
-for row in capabilities:
-    capability = row.get("capability_id")
-    if not isinstance(capability, str) or not capability:
-        failures.append("invalid_capability")
-        continue
-    go = row.get("go")
-    python = row.get("python")
-    if not isinstance(go, dict) or not isinstance(python, dict):
-        failures.append(f"{capability}:missing_language_state")
-        continue
-    go_status = go.get("status")
-    python_status = python.get("status")
-    if go_status not in status_order or python_status not in status_order:
-        failures.append(f"{capability}:invalid_status")
-        continue
-    if go_status != python_status:
-        failures.append(f"{capability}:language_state_mismatch")
-    if go_status == "unsupported":
-        failures.append(f"{capability}:unsupported_required_capability")
-
-if failures:
-    raise SystemExit("completion_audit: " + "; ".join(failures))
+languages = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
+capabilities = matrix.get("capability_ids")
+cells = matrix.get("cells")
+if matrix.get("languages") != languages or not isinstance(capabilities, list) or not capabilities:
+    raise SystemExit("completion_audit: invalid_universe")
+keys = [(cell.get("capability_id"), cell.get("language")) for cell in cells or []]
+expected = [(capability, language) for capability in capabilities for language in languages]
+if keys != expected or len(keys) != len(set(keys)):
+    raise SystemExit("completion_audit: missing_or_duplicate_cell")
+for cell in cells:
+    status = cell.get("status")
+    evidence = cell.get("evidence_case_ids")
+    shapes = cell.get("shape_evidence")
+    step_shapes = cell.get("step_shape_evidence")
+    proof = cell.get("provider_proof_ref")
+    if status == "unsupported" and (evidence or shapes or step_shapes or proof is not None):
+        raise SystemExit("completion_audit: unsupported_claims_evidence")
+    if status == "seam" and (not shapes or not step_shapes or proof is not None):
+        raise SystemExit("completion_audit: invalid_seam_evidence")
+    if status in {"provider-backed", "cutover-ready"} and (not evidence or not shapes or not step_shapes or not proof):
+        raise SystemExit("completion_audit: provider_proof_missing")
 print("sdk completion matrix ok")
 PY
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
-  mkdir -p "$REPO_ROOT/target"
   tmp="$(mktemp -d "$REPO_ROOT/target/sdk-completion-audit.XXXXXX")"
   trap 'rm -rf "$tmp"' EXIT
-  cp "$MATRIX" "$tmp/good.json"
-  validate_matrix_completion "$tmp/good.json" >/dev/null
-
-  python3 - "$MATRIX" "$tmp/unsupported.json" "$tmp/mismatch.json" "$tmp/product.json" <<'PY'
-import json, sys
+  validate_matrix_completion "$MATRIX" >/dev/null
+  python3 - "$MATRIX" "$tmp/missing.json" "$tmp/provider.json" "$tmp/product.json" <<'PY'
+import copy, json, sys
 from pathlib import Path
 source = json.loads(Path(sys.argv[1]).read_text())
-
-value = json.loads(json.dumps(source))
-value["capabilities"][0]["go"]["status"] = "unsupported"
-value["capabilities"][0]["go"]["evidence"] = []
-value["capabilities"][0]["python"]["status"] = "unsupported"
-value["capabilities"][0]["python"]["evidence"] = []
-Path(sys.argv[2]).write_text(json.dumps(value))
-
-value = json.loads(json.dumps(source))
-value["capabilities"][0]["python"]["status"] = "seam"
-Path(sys.argv[3]).write_text(json.dumps(value))
-
-value = json.loads(json.dumps(source))
-value["product_boundary_rules"] = []
-Path(sys.argv[4]).write_text(json.dumps(value))
+missing = copy.deepcopy(source)
+missing["cells"].pop()
+Path(sys.argv[2]).write_text(json.dumps(missing))
+provider = copy.deepcopy(source)
+cell = next(cell for cell in provider["cells"] if cell["status"] == "seam")
+cell["status"] = "provider-backed"
+Path(sys.argv[3]).write_text(json.dumps(provider))
+product = copy.deepcopy(source)
+product["product_boundary_rules"] = []
+Path(sys.argv[4]).write_text(json.dumps(product))
 PY
-
-  for fixture in unsupported mismatch product; do
+  for fixture in missing provider product; do
     if validate_matrix_completion "$tmp/$fixture.json" >"$tmp/$fixture.out" 2>&1; then
       echo "self-test expected $fixture fixture to fail" >&2
       exit 1
     fi
   done
-  grep -Fq unsupported_required_capability "$tmp/unsupported.out"
-  grep -Fq language_state_mismatch "$tmp/mismatch.out"
+  grep -Fq missing_or_duplicate_cell "$tmp/missing.out"
+  grep -Fq provider_proof_missing "$tmp/provider.out"
   grep -Fq product_boundary_rows_forbidden "$tmp/product.out"
   echo "check-sdk-completion-audit self-test ok"
   exit 0

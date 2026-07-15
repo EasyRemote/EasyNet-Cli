@@ -19,8 +19,8 @@ func TestCABIDiscoveryCandidatesPreferExplicitPath(t *testing.T) {
 
 func TestCABIDiscoveryCandidatesUsePlatformLibraryName(t *testing.T) {
 	candidates := cabiLibraryCandidates("")
-	if len(candidates) == 0 {
-		t.Fatal("empty C ABI candidate list")
+	if len(candidates) != 1 {
+		t.Fatalf("default loading must use only the system library name: %#v", candidates)
 	}
 	want := "libeasynet_cli.so"
 	if runtime.GOOS == "darwin" {
@@ -28,5 +28,8 @@ func TestCABIDiscoveryCandidatesUsePlatformLibraryName(t *testing.T) {
 	}
 	if !strings.Contains(candidates[0], want) {
 		t.Fatalf("first C ABI candidate %q does not contain %q", candidates[0], want)
+	}
+	if strings.Contains(candidates[0], "target/") {
+		t.Fatalf("production SDK must not load repository build artifacts: %#v", candidates)
 	}
 }

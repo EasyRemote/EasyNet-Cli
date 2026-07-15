@@ -20,9 +20,9 @@ use crate::daemon::plugins::remote_desktop::view_transport::RemoteDesktopTranspo
 
 /// Build the public session response without echoing the session token.
 ///
-/// This is a projection of the current device-side session row. It is NOT the
-/// canonical Axon protocol schema; Axon remains the owner of the long-term
-/// remote desktop contract.
+/// This is a projection of the current device-side session row using the
+/// product-owned wire vocabulary. Axon carries the surrounding canonical
+/// invocation and receipt without owning remote desktop lifecycle semantics.
 pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     session: &RemoteDesktopSession,
 ) -> Value {
@@ -34,7 +34,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     json!({
         "session_id": session.session_id(),
         "state": session.state().legacy_label(),
-        "state_proto": session.state().as_proto_name(),
+        "state_proto": session.state().wire_name(),
         "subject_ura": session.subject_ura(),
         "subject_type": session.subject_type().as_str(),
         "subject_display_name": session.subject_display_name(),

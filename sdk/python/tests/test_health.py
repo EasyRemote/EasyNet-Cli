@@ -28,7 +28,6 @@ class HealthClientTests(unittest.TestCase):
             StaticHealthTransport(
                 b"""{
                     "api_ready": true,
-                    "daemon_ready": true,
                     "invocation_ready": true,
                     "directory_ready": true,
                     "trust_ready": true,
@@ -52,7 +51,6 @@ class HealthClientTests(unittest.TestCase):
             StaticHealthTransport(
                 b"""{
                     "api_ready": true,
-                    "daemon_ready": true,
                     "invocation_ready": false,
                     "directory_ready": true,
                     "trust_ready": true,
@@ -73,7 +71,6 @@ class HealthClientTests(unittest.TestCase):
             StaticHealthTransport(
                 b"""{
                     "api_ready": true,
-                    "daemon_ready": true,
                     "invocation_ready": true,
                     "directory_ready": true,
                     "trust_ready": true,
@@ -125,7 +122,6 @@ class HealthClientTests(unittest.TestCase):
             StaticHealthTransport(
                 b"""{
                     "api_ready": true,
-                    "daemon_ready": true,
                     "invocation_ready": true,
                     "directory_ready": true,
                     "trust_ready": true,

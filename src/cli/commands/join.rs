@@ -381,8 +381,8 @@ fn run_ura_join_stages(
     };
 
     let node_id = uuid::Uuid::new_v4().to_string();
-    let membership_ura = crate::core::ura::device_ura(&target.realm, &node_id);
-    let public_key_hex = derive_device_public_key_hex(&target.realm, &node_id)?;
+    let (membership_ura, _, public_key) = ensure_device_runtime_identity(&target.realm, &node_id)?;
+    let public_key_hex = hex::encode(public_key.to_bytes());
 
     renderer.set_active("federation-join");
     let join = match do_federation_join_and_resolve_hub_key(
@@ -489,6 +489,55 @@ struct UraJoinResult {
     hub_public_key_hex: String,
 }
 
+#[cfg(feature = "axon-pb")]
+struct ProvisionalJoinSigner {
+    provisional_ura: String,
+    device_ura: String,
+    public_key: ed25519_dalek::VerifyingKey,
+}
+
+#[cfg(feature = "axon-pb")]
+#[async_trait::async_trait]
+impl crate::daemon::identity::self_identity::CanonicalSigner for ProvisionalJoinSigner {
+    fn owner_ura(&self) -> &str {
+        &self.provisional_ura
+    }
+
+    async fn sign_canonical(
+        &self,
+        canonical_bytes: &[u8],
+    ) -> Result<ed25519_dalek::Signature, crate::daemon::identity::self_identity::SelfIdentityError>
+    {
+        let device_ura = self.device_ura.clone();
+        let public_key = self.public_key;
+        let canonical_bytes = canonical_bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
+            crate::daemon::identity::self_identity::SelfIdentity::sign_bound(
+                &client,
+                &device_ura,
+                &public_key,
+                &canonical_bytes,
+            )
+        })
+        .await
+        .map_err(|error| {
+            crate::daemon::identity::self_identity::SelfIdentityError::Transport(format!(
+                "provisional join signing worker terminated unexpectedly: {error}"
+            ))
+        })?
+    }
+
+    fn signing_public_key(
+        &self,
+    ) -> Result<
+        ed25519_dalek::VerifyingKey,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    > {
+        Ok(self.public_key)
+    }
+}
+
 fn hex_public_key_to_b64(public_key_hex: &str) -> anyhow::Result<String> {
     let raw = hex::decode(public_key_hex.trim()).context("decode public key hex")?;
     if raw.len() != 32 {
@@ -555,6 +604,17 @@ async fn do_federation_join_and_resolve_hub_key_async(
 
     let public_key = hex::decode(public_key_hex).context("decode device public key hex")?;
     let provisional_caller = crate::core::ura::provisional::provisional_ura_for_pubkey(&public_key);
+    let public_key_bytes: [u8; 32] = public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("device public key must be 32 bytes"))?;
+    let public_key =
+        ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes).context("decode device key")?;
+    let provisional_signer = ProvisionalJoinSigner {
+        provisional_ura: provisional_caller.clone(),
+        device_ura: membership_ura.to_string(),
+        public_key,
+    };
     let join_args = crate::daemon::federation::client::ability_contract::JoinArgs {
         realm: target.realm.clone(),
         membership_ura: membership_ura.to_string(),
@@ -562,15 +622,27 @@ async fn do_federation_join_and_resolve_hub_key_async(
         pairing_secret: None,
         principal_enrollment,
     };
+    let join_arguments =
+        crate::daemon::federation::client::ability_contract::args_to_bytes(&join_args);
+    let join_descriptor_ref =
+        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            &target.hub_ura,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .map_err(|err| anyhow::anyhow!("derive federation.join descriptor ref: {err}"))?;
     let join_request = crate::daemon::invocation::ProtoEnvelope::federation_join_genesis(
         provisional_caller,
         target.hub_ura.clone(),
         membership_ura.to_string(),
     )?
-    .invoke_request(
+    .signed_descriptor_ref_invoke_request_with_signer(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
-        crate::daemon::federation::client::ability_contract::args_to_bytes(&join_args),
-    )?;
+        join_descriptor_ref,
+        join_arguments,
+        &provisional_signer,
+    )
+    .await?;
     let join_response = client.invoke(join_request).await.map_err(|status| {
         anyhow::anyhow!(
             "hub rejected federation.join: code={:?} message={}",
@@ -612,10 +684,10 @@ async fn do_federation_join_and_resolve_hub_key_async(
     )
     .ok_or_else(|| anyhow::anyhow!("derive federation.resolve_key subject URA"))?;
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
             &target.hub_ura,
             crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::CallMode::Rpc,
         )
         .map_err(|err| anyhow::anyhow!("derive federation.resolve_key descriptor ref: {err}"))?;
     let resolve_request = crate::daemon::invocation::ProtoEnvelope::targeted(
@@ -884,46 +956,14 @@ fn persist_join_credentials(
     Ok(creds)
 }
 
-/// When the operator paired AFTER starting the local runtime, the
-/// initial boot missed the joined credentials and therefore never ran
-/// the bootstrap/advertise/register sequence that requires realm +
-/// node identity. Refresh that running runtime in place instead of
-/// forcing a restart.
-///
-/// Best-effort by contract:
-/// - no runtime metadata on disk => nothing is running, silently skip
-/// - stale runtime metadata / failed bridge connect => warn, keep join success
-/// - successful connect => reuse the exact same republish helper
-///   `easynet runtime start` already uses so the bootstrap semantics
-///   stay single-sourced
-fn refresh_running_runtime_after_join(creds: &config::Credentials) {
-    let state = match config::load() {
-        Ok(state) => state,
-        Err(_) => return,
-    };
-    if matches!(
-        state.runtime_kind,
-        crate::daemon::persistence::config::RuntimeKind::DaemonOnly
-    ) {
+/// A running daemon loaded identity and authority state before this join.
+/// Restart is the single supported transition into the newly paired state.
+fn refresh_running_runtime_after_join(_creds: &config::Credentials) {
+    if config::load().is_ok() {
         output::warn(
             "paired successfully, but a local easynet-daemon is already running. \
              Restart it with `easynet runtime stop && easynet runtime start` so it picks up the new credentials.",
         );
-        return;
-    }
-    match state.connect_bridge() {
-        Ok(bridge) => {
-            output::detail(
-                "runtime",
-                "running runtime detected; refreshing identity + federation advertisement",
-            );
-            super::start::republish_via_federation_best_effort(&bridge, creds);
-        }
-        Err(e) => output::warn(&format!(
-            "paired successfully, but could not refresh the running runtime at {}: {e}. \
-             Restart it with `easynet runtime start` if cross-hub lookups keep failing.",
-            state.endpoint
-        )),
     }
 }
 

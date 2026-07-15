@@ -51,11 +51,6 @@ pub enum RuntimeLifecycleError {
         actual: String,
     },
 
-    /// Start refused because `runtime.json` describes the retired raw
-    /// Axon bridge runtime. The stop path owns that legacy cleanup.
-    #[error("legacy Axon bridge runtime projection exists; run `easynet runtime stop` before starting the product daemon")]
-    StartRefusedLegacyAxonBridge,
-
     /// Removing a stale runtime projection failed during start preflight.
     #[error("remove stale runtime projection failed: {message}")]
     ProjectionRemoveFailed { message: String },

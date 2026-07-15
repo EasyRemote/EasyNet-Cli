@@ -424,6 +424,7 @@ mod tests {
         let args = serde_json::to_vec(&serde_json::json!({
             "owner_ura": "easynet:///r/test/device/dev-1",
             "host_device_ura": "easynet:///r/test/device/dev-1",
+            "generation": 1,
             "projection_revision": 1,
             "projection_digest": "digest",
             "lease_expires_unix_ms": 0,

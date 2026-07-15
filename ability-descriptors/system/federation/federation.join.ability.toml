@@ -1,0 +1,41 @@
+schema_version = "2"
+name = "federation.join"
+descriptor_version = "1.0.0"
+description = "Admit a device into the realm federation and return its membership receipt."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["membership_ura", "realm", "public_key_hex"]
+additionalProperties = false
+
+[input_schema.properties.membership_ura]
+type = "string"
+description = "Device URA to admit into the realm."
+
+[input_schema.properties.pairing_secret]
+type = "string"
+description = "Optional pairing secret carried by legacy join flows."
+
+[input_schema.properties.principal_enrollment]
+type = "object"
+description = "Optional product-neutral principal enrollment proof."
+
+[input_schema.properties.public_key_hex]
+type = "string"
+description = "Hex-encoded 32-byte Ed25519 verifying key."
+
+[input_schema.properties.realm]
+type = "string"
+description = "Realm the joining device claims."

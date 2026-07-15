@@ -47,11 +47,65 @@ func signedForRuntimeTest(t *testing.T) SignedInvocation {
 
 func submittedHandleForRuntimeTest(t *testing.T) InvocationHandle {
 	t.Helper()
-	handle, err := NewInvocationHandleFromJSON([]byte(`{"handle_id": 7, "state": "Submitted", "terminal": false, "events": [{"sequence": 1, "kind": "submitted", "state": "Submitted", "terminal": false}], "result": null}`))
+	handle, err := newRuntimeInvocationHandleFromJSON([]byte(`{"handle_id": 7, "state": "Submitted", "terminal": false, "events": [{"sequence": 1, "kind": "submitted", "state": "Submitted", "terminal": false}], "result": null}`))
+	if err != nil {
+		t.Fatalf("newRuntimeInvocationHandleFromJSON: %v", err)
+	}
+	return handle
+}
+
+func TestPublicInvocationHandleJSONDoesNotGrantControlAuthority(t *testing.T) {
+	handle, err := NewInvocationHandleFromJSON([]byte(`{"handle_id": 7, "state": "Submitted", "terminal": false, "events": [], "result": null}`))
 	if err != nil {
 		t.Fatalf("NewInvocationHandleFromJSON: %v", err)
 	}
-	return handle
+	if handle.State() != "Submitted" || handle.Terminal() {
+		t.Fatalf("unexpected observation snapshot: %#v", handle)
+	}
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		AwaitHandleFunc: func(context.Context, InvocationControlCapability) ([]byte, error) {
+			t.Fatalf("forged public snapshot reached transport")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	if _, err := client.Await(context.Background(), handle); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Await forged public snapshot = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestInvocationControlCapabilityAdapterHandleID(t *testing.T) {
+	runtimeHandle := submittedHandleForRuntimeTest(t)
+	handleID, err := runtimeHandle.ControlCapability().AdapterHandleID()
+	if err != nil {
+		t.Fatalf("runtime-bound AdapterHandleID: %v", err)
+	}
+	if handleID != 7 {
+		t.Fatalf("runtime-bound AdapterHandleID = %d, want 7", handleID)
+	}
+
+	publicSnapshot, err := NewInvocationHandleFromJSON([]byte(`{"handle_id": 7, "state": "Submitted", "terminal": false, "events": [], "result": null}`))
+	if err != nil {
+		t.Fatalf("NewInvocationHandleFromJSON: %v", err)
+	}
+	if _, err := publicSnapshot.ControlCapability().AdapterHandleID(); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("snapshot AdapterHandleID = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestPublicInvocationCancelJSONDoesNotGrantControlAuthority(t *testing.T) {
+	cancel, err := NewInvocationCancelFromJSON([]byte(`{"handle_id": 7, "request_accepted": false, "deduplicated": true, "cancelled": false, "state": "Completed", "terminal": true}`))
+	if err != nil {
+		t.Fatalf("NewInvocationCancelFromJSON: %v", err)
+	}
+	if cancel.State() != "Completed" || !cancel.Terminal() {
+		t.Fatalf("unexpected cancel snapshot: %#v", cancel)
+	}
+	if cancel.ControlCapability().valid() {
+		t.Fatalf("public cancel snapshot created runtime-bound control")
+	}
 }
 
 func TestRuntimeClientPrepareDelegatesToTransport(t *testing.T) {
@@ -145,7 +199,24 @@ func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
 		"state": "completed",
 		"timestamp_unix_ms": 1700000000000,
 		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
-		"self_hash_hex": "` + strings.Repeat("aa", 32) + `"
+		"self_hash_hex": "` + strings.Repeat("aa", 32) + `",
+		"causal_binding_kind": "scalar",
+		"causal_binding": {
+			"form": "scalar",
+			"receipt": {
+				"receipt_hash_hex": "` + strings.Repeat("bb", 32) + `",
+				"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/root/receipt"
+			}
+		},
+		"authority_binding_kind": "delegation",
+		"authority_binding": {
+			"kind": "delegation",
+			"issuer_ura": "easynet:///r/example/agent/issuer",
+			"subject_ura": "easynet:///r/example/resource/subject",
+			"caller_ura": "easynet:///r/example/agent/alice.sdk",
+			"audience": "runtime",
+			"scopes": ["invoke"]
+		}
 	}`))
 	if err != nil {
 		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
@@ -159,6 +230,12 @@ func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
 	}
 	if !bytes.Equal(selfHash, bytes.Repeat([]byte{0xaa}, 32)) {
 		t.Fatalf("self hash = %x", selfHash)
+	}
+	if receipt.CausalBindingKind != "scalar" || receipt.CausalBinding["form"] != "scalar" {
+		t.Fatalf("causal binding not decoded: %#v", receipt.CausalBinding)
+	}
+	if receipt.AuthorityBindingKind != "delegation" || receipt.AuthorityBinding["kind"] != "delegation" {
+		t.Fatalf("authority binding not decoded: %#v", receipt.AuthorityBinding)
 	}
 }
 
@@ -266,7 +343,7 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitSigned: %v", err)
 	}
-	if handle.HandleID() != 7 || handle.State() != "Submitted" || handle.Terminal() {
+	if !handle.ControlCapability().valid() || handle.State() != "Submitted" || handle.Terminal() {
 		t.Fatalf("unexpected handle: %#v", handle)
 	}
 	if len(handle.Events()) != 1 || handle.Events()[0].Sequence() != 1 {
@@ -354,12 +431,12 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 				"output_content_type": "application/json",
 				"output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
 				"output_json": {"ready": true},
-				"selected_node_id": "node-a",
-				"scheduling_reason": "direct",
-				"elapsed_ms": 12,
-				"receipt": {"receipt_id": "receipt-1"},
-				"error": null
-			}`, draftJSON)), nil
+					"selected_node_id": "node-a",
+					"scheduling_reason": "direct",
+					"elapsed_ms": 12,
+					"terminal_receipt": {"receipt_id": "receipt-1"},
+					"error": null
+				}`, draftJSON)), nil
 		},
 		PrepareFunc: func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 			t.Fatalf("Prepare should not be called")
@@ -401,23 +478,22 @@ func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
 		t.Fatalf("marshal draft: %v", err)
 	}
 	raw := []byte(fmt.Sprintf(`{
-		"ok":true,
-		"tuple":%s,
-		"terminal_state":"Completed",
-		"receipt":{"index":1,"state":"Completed"},
-		"admission_receipt":{"index":0,"state":"Admitted"},
-		"terminal_receipt":{"index":1,"state":"Completed"},
-		"error":null
+			"ok":true,
+			"tuple":%s,
+			"terminal_state":"Completed",
+			"admission_receipt":{"index":0,"state":"Admitted"},
+			"terminal_receipt":{"index":1,"state":"Completed"},
+			"error":null
 	}`, draftJSON))
 	result, err := NewInvocationResultFromJSON(raw)
 	if err != nil {
 		t.Fatalf("NewInvocationResultFromJSON: %v", err)
 	}
-	if string(result.Receipt()) != string(result.TerminalReceipt()) {
-		t.Fatalf("compatibility receipt must project terminal receipt: receipt=%s terminal=%s", result.Receipt(), result.TerminalReceipt())
-	}
 	if !strings.Contains(string(result.AdmissionReceipt()), `"index":0`) {
 		t.Fatalf("admission receipt = %s", result.AdmissionReceipt())
+	}
+	if !strings.Contains(string(result.TerminalReceipt()), `"index":1`) {
+		t.Fatalf("terminal receipt = %s", result.TerminalReceipt())
 	}
 	if summary := result.TerminalReceiptSummary(); summary == nil || summary.Index != 1 || summary.State != "Completed" {
 		t.Fatalf("terminal receipt summary = %#v", summary)
@@ -426,9 +502,13 @@ func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
 		t.Fatalf("admission receipt summary = %#v", summary)
 	}
 
-	mismatched := bytes.Replace(raw, []byte(`"receipt":{"index":1,"state":"Completed"}`), []byte(`"receipt":{"index":0,"state":"Admitted"}`), 1)
-	if _, err := NewInvocationResultFromJSON(mismatched); err == nil || !strings.Contains(err.Error(), "receipt must equal terminal_receipt") {
-		t.Fatalf("mismatched receipt error = %v", err)
+	legacyOnly := bytes.Replace(raw, []byte(`"terminal_receipt":{"index":1,"state":"Completed"}`), []byte(`"receipt":{"index":1,"state":"Completed"}`), 1)
+	legacy, err := NewInvocationResultFromJSON(legacyOnly)
+	if err != nil {
+		t.Fatalf("legacy receipt-only field should be ignored, not decoded as canonical terminal receipt: %v", err)
+	}
+	if len(legacy.TerminalReceipt()) != 0 || legacy.TerminalReceiptSummary() != nil {
+		t.Fatalf("legacy receipt-only field must not populate canonical terminal receipt")
 	}
 }
 
@@ -549,8 +629,8 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 			t.Fatalf("SubmitSigned should not be called")
 			return nil, nil
 		},
-		AwaitHandleFunc: func(ctx context.Context, handleID uint64) ([]byte, error) {
-			seenAwaitID = handleID
+		AwaitHandleFunc: func(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+			seenAwaitID = control.adapterHandleID()
 			return []byte(fmt.Sprintf(`{
 				"ok": true,
 				"tuple": %s,
@@ -563,21 +643,21 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 				"error": null
 			}`, draftJSON)), nil
 		},
-		CancelHandleFunc: func(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
-			if handleID != 7 {
-				t.Fatalf("handleID = %d, want 7", handleID)
+		CancelHandleFunc: func(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
+			if control.adapterHandleID() != 7 {
+				t.Fatalf("control handle = %d, want 7", control.adapterHandleID())
 			}
 			seenCancelReason = reason
-			return []byte(`{"handle_id": 7, "cancelled": true, "state": "Cancelled", "terminal": true}`), nil
+			return []byte(`{"handle_id": 7, "request_accepted": false, "deduplicated": true, "cancelled": false, "state": "Completed", "terminal": true}`), nil
 		},
-		HandleEventsFunc: func(ctx context.Context, handleID uint64) ([]byte, error) {
-			if handleID != 7 {
-				t.Fatalf("handleID = %d, want 7", handleID)
+		HandleEventsFunc: func(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+			if control.adapterHandleID() != 7 {
+				t.Fatalf("control handle = %d, want 7", control.adapterHandleID())
 			}
 			return []byte(`{"handle_id": 7, "state": "Cancelled", "terminal": true, "events": [{"sequence": 1, "kind": "submitted", "state": "Submitted", "terminal": false}, {"sequence": 2, "kind": "cancelled", "state": "Cancelled", "terminal": true, "reason": "client stop"}], "result": null}`), nil
 		},
-		FreeHandleFunc: func(ctx context.Context, handleID uint64) error {
-			seenFreeID = handleID
+		FreeHandleFunc: func(ctx context.Context, control InvocationControlCapability) error {
+			seenFreeID = control.adapterHandleID()
 			return nil
 		},
 	})
@@ -597,8 +677,19 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if !cancelled.Cancelled() || !cancelled.Terminal() || seenCancelReason != "client stop" {
+	if cancelled.RequestAccepted() || !cancelled.Deduplicated() || cancelled.Cancelled() || !cancelled.Terminal() || cancelled.State() != "Completed" || seenCancelReason != "client stop" {
 		t.Fatalf("unexpected cancellation: %#v reason=%q", cancelled, seenCancelReason)
+	}
+	mismatchedCancelClient, err := NewRuntimeClient(RuntimeTransportFunc{
+		CancelHandleFunc: func(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
+			return []byte(`{"handle_id": 8, "request_accepted": true, "deduplicated": false, "cancelled": true, "state": "Cancelled", "terminal": true}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient mismatched cancel: %v", err)
+	}
+	if _, err := mismatchedCancelClient.Cancel(context.Background(), handle, "client stop"); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("Cancel mismatched handle = %v, want %s", err, ErrInvalidArgument)
 	}
 	events, err := client.Events(context.Background(), handle)
 	if err != nil {

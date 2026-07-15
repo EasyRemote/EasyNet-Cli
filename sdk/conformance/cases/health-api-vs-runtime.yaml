@@ -8,7 +8,7 @@ required_for:
   - node
   - java
   - swift
-description: Health distinguishes API liveness from daemon runtime readiness.
+description: Health distinguishes API liveness from full runtime readiness.
 steps:
   - action: read_health
     fixture: health.ready.v4.json

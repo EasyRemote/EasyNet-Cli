@@ -49,7 +49,6 @@ func NewHealthClient(transport HealthTransport) (*HealthClient, error) {
 // RuntimeHealth is the language-neutral SDK health DTO.
 type RuntimeHealth struct {
 	APIReady        bool           `json:"api_ready"`
-	DaemonReady     bool           `json:"daemon_ready"`
 	InvocationReady bool           `json:"invocation_ready"`
 	DirectoryReady  bool           `json:"directory_ready"`
 	TrustReady      bool           `json:"trust_ready"`
@@ -83,7 +82,7 @@ type DiagnosticCheck struct {
 
 // APIAlive reports process/API liveness, not full runtime readiness.
 func (h RuntimeHealth) APIAlive() bool {
-	return h.APIReady && h.DaemonReady
+	return h.APIReady
 }
 
 // Ready reports full runtime readiness.
@@ -195,10 +194,6 @@ func decodeRuntimeHealth(raw []byte) (RuntimeHealth, error) {
 	if err != nil {
 		return RuntimeHealth{}, err
 	}
-	daemonReady, err := requiredHealthBool(fields, "daemon_ready")
-	if err != nil {
-		return RuntimeHealth{}, err
-	}
 	invocationReady, err := requiredHealthBool(fields, "invocation_ready")
 	if err != nil {
 		return RuntimeHealth{}, err
@@ -218,7 +213,6 @@ func decodeRuntimeHealth(raw []byte) (RuntimeHealth, error) {
 
 	health := RuntimeHealth{
 		APIReady:        apiReady,
-		DaemonReady:     daemonReady,
 		InvocationReady: invocationReady,
 		DirectoryReady:  directoryReady,
 		TrustReady:      trustReady,

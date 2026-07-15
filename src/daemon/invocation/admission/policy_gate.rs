@@ -11,7 +11,6 @@ use tonic::Status;
 use easynet_axon::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, AbilityOwner, URAKind};
-use crate::daemon::ability::catalog::catalog_metadata;
 use crate::daemon::invocation::admission::decision::{
     AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PolicyDecisionReason,
     PrincipalKind, TokenClass,
@@ -28,6 +27,7 @@ pub struct AdmissionPolicyContext<'a> {
     pub envelope: &'a Envelope,
     pub ability: &'a str,
     pub action: AccessAction,
+    pub safe_read: bool,
     pub trusted_role: TrustedAgentRole,
     pub daemon_ura: Option<&'a str>,
     pub trust_anchor: &'a RealmTrustAnchor,
@@ -103,7 +103,7 @@ impl AdmissionPolicyGate {
             subject_ura,
             ability_ura,
             action: context.action,
-            safe_read: safe_read(context.ability, context.action),
+            safe_read: context.safe_read,
             interactive_context_available: false,
             canonical_hash: context.canonical_hash,
             signature_key_id: context.signature_key_id,
@@ -344,13 +344,6 @@ pub(crate) fn ability_ura_for(callee_ura: &str, ability: &str) -> Result<String,
     )
 }
 
-pub(crate) fn safe_read(ability: &str, action: AccessAction) -> bool {
-    if action != AccessAction::Read {
-        return false;
-    }
-    catalog_metadata::safe_read_eligible_for_name(ability)
-}
-
 fn agent_ura(
     identity: Option<&easynet_axon::pb::axon::v1::AgentIdentity>,
     role: &str,
@@ -509,6 +502,7 @@ mod tests {
             envelope: &envelope,
             ability: "meta.list_resources",
             action: AccessAction::Read,
+            safe_read: true,
             trusted_role: TrustedAgentRole::User,
             daemon_ura: None,
             trust_anchor: &empty_anchor(),
@@ -537,6 +531,7 @@ mod tests {
             envelope: &envelope,
             ability: "meta.list_resources",
             action: AccessAction::Read,
+            safe_read: true,
             trusted_role: TrustedAgentRole::Hub,
             daemon_ura: None,
             trust_anchor: &empty_anchor(),
@@ -568,6 +563,7 @@ mod tests {
             envelope: &envelope,
             ability: "remote_desktop.attach",
             action: AccessAction::Stream,
+            safe_read: false,
             trusted_role: TrustedAgentRole::Hub,
             daemon_ura: None,
             trust_anchor: &empty_anchor(),
@@ -601,6 +597,7 @@ mod tests {
             envelope: &envelope,
             ability: "shell.run",
             action: AccessAction::Invoke,
+            safe_read: false,
             trusted_role: TrustedAgentRole::Device,
             daemon_ura: Some("easynet:///r/local/hub"),
             trust_anchor: &anchor_with_peer_realm(),
@@ -639,6 +636,7 @@ mod tests {
             envelope: &envelope,
             ability: "shell.run",
             action: AccessAction::Invoke,
+            safe_read: false,
             trusted_role: TrustedAgentRole::Device,
             daemon_ura: Some("easynet:///r/local/hub"),
             trust_anchor: &empty_anchor(),
@@ -659,39 +657,18 @@ mod tests {
     }
 
     #[test]
-    fn private_read_is_not_hub_safe_read_default() {
-        assert!(
-            safe_read("meta.list_resources", AccessAction::Read),
-            "descriptor-safe metadata stays hub safe-read eligible"
-        );
-        assert!(
-            !safe_read("namespace.resolve", AccessAction::Read),
-            "namespace.resolve exposes route facts and requires scoped authority"
-        );
-        assert!(
-            !safe_read("federation.resolve", AccessAction::Read),
-            "federation.resolve exposes directory and route facts"
-        );
-        assert!(
-            !safe_read("terminal.list", AccessAction::Read),
-            "terminal.list exposes session topology and handles"
-        );
-        assert!(
-            !safe_read("context.clipboard.get", AccessAction::Read),
-            "context reads expose private user/device state"
-        );
-        assert!(
-            !safe_read("fs.list", AccessAction::Read),
-            "filesystem topology is private read, not hub safe-read"
-        );
-    }
-
-    #[test]
     fn policy_ability_projection_accepts_descriptor_ref_without_rewrapping() {
         let callee = "easynet:///r/test/hub";
         let ability_ura = crate::core::ura::owner_ability_ura(callee, "identity.register_pubkey")
             .expect("hub ability URA");
-        let descriptor_ref = format!("{ability_ura}@1.0.0");
+        let descriptor_binding =
+            crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [0x44; 32],
+                "manage",
+            )
+            .expect("test descriptor binding");
+        let descriptor_ref = format!("{ability_ura}@{descriptor_binding}");
 
         let projected = ability_ura_for(callee, &descriptor_ref)
             .expect("descriptor ref projects to ability URA");

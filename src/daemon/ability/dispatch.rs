@@ -34,7 +34,9 @@ use crate::daemon::ability::{
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, ReceiptSemantics,
     RuntimeEnv, HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+#[cfg(test)]
+use crate::daemon::invocation::routing::target::TargetScope;
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
 
 /// Module-local sync→async bridge for the ability-dispatch registry
 /// path. These calls sit on catalogue construction and discovery,
@@ -100,9 +102,24 @@ pub struct EnvelopeContext {
     invocation_nonce: Vec<u8>,
     causal_context: Value,
     caller_signature: EnvelopeCallerSignature,
+    runtime_invocation_context: Option<RuntimeInvocationContext>,
     hosted_agent_delegation: Option<HostedAgentDelegationContext>,
     session_authority:
         Option<crate::daemon::invocation::admission::authority_metadata::SessionAuthorityPayload>,
+}
+
+#[derive(Clone)]
+struct RuntimeInvocationContext {
+    context: Arc<AbilityContext>,
+}
+
+impl std::fmt::Debug for RuntimeInvocationContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeInvocationContext")
+            .field("invocation_id", &self.context.invocation_id)
+            .finish_non_exhaustive()
+    }
 }
 
 pub struct EnvelopeContextParts {
@@ -183,9 +200,19 @@ impl EnvelopeContext {
             invocation_nonce,
             causal_context: parts.causal_context,
             caller_signature: parts.caller_signature,
+            runtime_invocation_context: None,
             hosted_agent_delegation: None,
             session_authority: None,
         })
+    }
+
+    /// Attach the runtime-minted invocation context used for canonical child
+    /// dispatch. Only the Axon adapter can construct this capability; handler
+    /// arguments and persisted envelope projections cannot recreate it.
+    #[must_use]
+    fn with_runtime_invocation_context(mut self, context: Arc<AbilityContext>) -> Self {
+        self.runtime_invocation_context = Some(RuntimeInvocationContext { context });
+        self
     }
 
     /// Attach verified hosted-agent delegation metadata to this context.
@@ -303,6 +330,14 @@ impl EnvelopeContext {
         &self.caller_signature
     }
 
+    /// Return the runtime-minted capability for deriving a proven child
+    /// invocation from this admitted parent.
+    pub(crate) fn runtime_invocation_context(&self) -> Option<Arc<AbilityContext>> {
+        self.runtime_invocation_context
+            .as_ref()
+            .map(|capability| Arc::clone(&capability.context))
+    }
+
     #[must_use]
     pub fn hosted_agent_delegation(&self) -> Option<&HostedAgentDelegationContext> {
         self.hosted_agent_delegation.as_ref()
@@ -374,6 +409,7 @@ struct ControlPlaneRegistrationRequest<'a> {
     owner: &'a OwnerKind,
     manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
     call_mode: DescriptorCallMode,
+    admission_action: crate::daemon::ability::descriptors::AdmissionAction,
     receipt_semantics: ReceiptSemantics,
     implementation: ControlPlaneImplementation,
 }
@@ -383,9 +419,22 @@ struct ResolvedControlPlaneRegistration<'a> {
     authority_scope: AuthorityScope,
     manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
     call_mode: DescriptorCallMode,
+    admission_action: crate::daemon::ability::descriptors::AdmissionAction,
     receipt_semantics: ReceiptSemantics,
     implementation: ControlPlaneImplementation,
     owner_label: String,
+}
+
+fn manifest_admission_action(
+    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
+) -> anyhow::Result<crate::daemon::ability::descriptors::AdmissionAction> {
+    let raw = manifest
+        .and_then(crate::daemon::ability::manifest::AbilityManifest::admission_action)
+        .ok_or_else(|| {
+            anyhow::anyhow!("canonical ability registration requires explicit admission_action")
+        })?;
+    serde_json::from_value(serde_json::Value::String(raw.to_string()))
+        .map_err(|error| anyhow::anyhow!("invalid canonical admission_action {raw:?}: {error}"))
 }
 
 pub struct ControlPlaneAuthorityRebind<'a> {
@@ -820,16 +869,12 @@ fn parse_hosted_agent_delegation_context(
 async fn envelope_context_from_axon(
     ctx: &Arc<AbilityContext>,
 ) -> Result<EnvelopeContext, AxonError> {
-    let signed = ctx
-        .runtime
-        .axiom_envelope_of(&ctx.invocation_id)
-        .await
-        .ok_or_else(|| {
-            AxonError::internal(format!(
-                "local_runtime_adapter: missing Axon envelope for invocation {}",
-                ctx.invocation_id
-            ))
-        })?;
+    let signed = ctx.signed_envelope().cloned().ok_or_else(|| {
+        AxonError::internal(format!(
+            "local_runtime_adapter: missing Axon envelope for invocation {}",
+            ctx.invocation_id
+        ))
+    })?;
     let envelope = signed.envelope;
     let caller = envelope.caller.ura;
     let callee = envelope.callee.ura;
@@ -872,6 +917,7 @@ async fn envelope_context_from_axon(
     })
     .map(|context| {
         context
+            .with_runtime_invocation_context(Arc::clone(ctx))
             .with_hosted_agent_delegation(hosted_agent_delegation)
             .with_session_authority(session_authority)
     })
@@ -1282,8 +1328,6 @@ pub(crate) enum HotAgentAuthorityInventoryError {
         authority_root: String,
         reason: String,
     },
-    #[error("load paired Device credentials for hosted Agent {agent:?}: {reason}")]
-    CredentialsUnreadable { agent: String, reason: String },
     #[error(
         "hosted Agent {agent:?} authority root conflicts with enrolled root: enrolled={enrolled:?}, requested={requested:?}"
     )]
@@ -1355,7 +1399,7 @@ impl PersistedHotAgentAuthority {
         };
         let parsed = crate::core::ura::parse_ura(&identity.agent_ura)
             .map_err(|error| invalid(error.to_string()))?;
-        let Some((username, agent_id)) = parsed.agent_ids() else {
+        let Some((_owner_user_id, agent_id)) = parsed.agent_ids() else {
             return Err(invalid(
                 "expected a user-hosted Agent URA, not a device-sponsored System Agent".to_string(),
             ));
@@ -1370,29 +1414,12 @@ impl PersistedHotAgentAuthority {
             )));
         }
 
-        let credentials =
-            crate::daemon::persistence::config::load_credentials().map_err(|error| {
-                HotAgentAuthorityInventoryError::CredentialsUnreadable {
-                    agent: agent.to_string(),
-                    reason: format!("{error:#}"),
-                }
-            })?;
-        let expected_username = credentials.username_slug().map_err(|error| {
-            HotAgentAuthorityInventoryError::CredentialsUnreadable {
-                agent: agent.to_string(),
-                reason: format!("paired credentials are missing username: {error:#}"),
-            }
-        })?;
-        let expected_device_ura =
-            crate::core::ura::device_ura(credentials.realm.trim(), credentials.node_id.trim());
-        let expected_signing_authority = format!("hosted_by:{expected_device_ura}");
-        if credentials.realm.trim() != device.realm
-            || username != expected_username
-            || identities.host_device_agent_ura != expected_device_ura
+        let expected_signing_authority = format!("hosted_by:{}", device.ura);
+        if identities.host_device_agent_ura != device.ura
             || identity.signing_authority != expected_signing_authority
         {
             return Err(invalid(
-                "identity is not bound to the paired Device and username".to_string(),
+                "identity is not bound to the catalog's canonical Device authority".to_string(),
             ));
         }
 
@@ -1411,6 +1438,7 @@ pub(crate) struct HotAgentAuthorityEnrollment {
     agent: String,
     authority_root: String,
     inserted: bool,
+    incarnation: u64,
 }
 
 impl HotAgentAuthorityEnrollment {
@@ -1424,22 +1452,103 @@ impl HotAgentAuthorityEnrollment {
 /// Static boot roots and hot enrollments share this single map, so authority
 /// admission never consults ambient HOME state during a dynamic registration.
 /// The lifecycle proof is checked exactly at the enroll/revoke boundary.
+pub trait HostedAgentAuthorityInventory: Send + Sync {
+    fn resolve_signing_lease(&self, agent_ura: &str) -> Option<HostedAgentAuthorityLease>;
+    fn validate_signing_lease(&self, agent_ura: &str, lease: HostedAgentAuthorityLease) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostedAgentAuthorityLease {
+    generation: u64,
+}
+
+impl HostedAgentAuthorityLease {
+    pub fn for_generation(generation: u64) -> Self {
+        Self { generation }
+    }
+
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Debug)]
+struct HotAgentAuthorityInventoryState {
+    roots: BTreeMap<String, HotAgentAuthorityEntry>,
+    generation: u64,
+    next_incarnation: u64,
+}
+
+#[derive(Debug, Clone)]
+struct HotAgentAuthorityEntry {
+    authority_root: String,
+    incarnation: u64,
+}
+
 #[derive(Debug)]
 struct HotAgentAuthorityInventory {
     device: CanonicalDeviceAuthority,
-    roots: std::sync::RwLock<BTreeMap<String, String>>,
+    state: std::sync::RwLock<HotAgentAuthorityInventoryState>,
+}
+
+impl HostedAgentAuthorityInventory for HotAgentAuthorityInventory {
+    fn resolve_signing_lease(&self, agent_ura: &str) -> Option<HostedAgentAuthorityLease> {
+        let state = self.state.read().ok()?;
+        state
+            .roots
+            .values()
+            .any(|entry| entry.authority_root == agent_ura)
+            .then_some(HostedAgentAuthorityLease::for_generation(state.generation))
+    }
+
+    fn validate_signing_lease(&self, agent_ura: &str, lease: HostedAgentAuthorityLease) -> bool {
+        self.state
+            .read()
+            .map(|state| {
+                state.generation == lease.generation()
+                    && state
+                        .roots
+                        .values()
+                        .any(|entry| entry.authority_root == agent_ura)
+            })
+            .unwrap_or(false)
+    }
 }
 
 impl HotAgentAuthorityInventory {
     fn new(device: CanonicalDeviceAuthority, roots: BTreeMap<String, String>) -> Arc<Self> {
+        let mut next_incarnation = 1_u64;
+        let roots = roots
+            .into_iter()
+            .map(|(agent, authority_root)| {
+                let incarnation = next_incarnation;
+                next_incarnation = next_incarnation.wrapping_add(1);
+                (
+                    agent,
+                    HotAgentAuthorityEntry {
+                        authority_root,
+                        incarnation,
+                    },
+                )
+            })
+            .collect();
         Arc::new(Self {
             device,
-            roots: std::sync::RwLock::new(roots),
+            state: std::sync::RwLock::new(HotAgentAuthorityInventoryState {
+                roots,
+                generation: 1,
+                next_incarnation,
+            }),
         })
     }
 
     fn authority_root(&self, agent: &str) -> Option<String> {
-        self.roots.read().ok()?.get(agent).cloned()
+        self.state
+            .read()
+            .ok()?
+            .roots
+            .get(agent)
+            .map(|entry| entry.authority_root.clone())
     }
 
     fn enroll_persisted(
@@ -1447,30 +1556,42 @@ impl HotAgentAuthorityInventory {
         agent: &str,
     ) -> Result<HotAgentAuthorityEnrollment, HotAgentAuthorityInventoryError> {
         let proof = PersistedHotAgentAuthority::load(&self.device, agent)?;
-        let mut roots =
-            self.roots
+        let mut state =
+            self.state
                 .write()
                 .map_err(|_| HotAgentAuthorityInventoryError::InventoryPoisoned {
                     agent: agent.to_string(),
                 })?;
-        let inserted = match roots.get(agent) {
-            Some(enrolled) if enrolled == &proof.authority_root => false,
+        let (inserted, incarnation) = match state.roots.get(agent) {
+            Some(enrolled) if enrolled.authority_root == proof.authority_root => {
+                (false, enrolled.incarnation)
+            }
             Some(enrolled) => {
                 return Err(HotAgentAuthorityInventoryError::AuthorityConflict {
                     agent: agent.to_string(),
-                    enrolled: enrolled.clone(),
+                    enrolled: enrolled.authority_root.clone(),
                     requested: proof.authority_root,
                 });
             }
             None => {
-                roots.insert(agent.to_string(), proof.authority_root.clone());
-                true
+                let incarnation = state.next_incarnation;
+                state.next_incarnation = state.next_incarnation.wrapping_add(1);
+                state.roots.insert(
+                    agent.to_string(),
+                    HotAgentAuthorityEntry {
+                        authority_root: proof.authority_root.clone(),
+                        incarnation,
+                    },
+                );
+                state.generation = state.generation.wrapping_add(1);
+                (true, incarnation)
             }
         };
         Ok(HotAgentAuthorityEnrollment {
             agent: proof.agent,
             authority_root: proof.authority_root,
             inserted,
+            incarnation,
         })
     }
 
@@ -1481,22 +1602,22 @@ impl HotAgentAuthorityInventory {
         if !enrollment.inserted {
             return Ok(());
         }
-        let mut roots =
-            self.roots
+        let mut state =
+            self.state
                 .write()
                 .map_err(|_| HotAgentAuthorityInventoryError::InventoryPoisoned {
                     agent: enrollment.agent.clone(),
                 })?;
-        match roots.get(&enrollment.agent) {
-            Some(current) if current == &enrollment.authority_root => {
-                roots.remove(&enrollment.agent);
+        match state.roots.get(&enrollment.agent) {
+            Some(current)
+                if current.authority_root == enrollment.authority_root
+                    && current.incarnation == enrollment.incarnation =>
+            {
+                state.roots.remove(&enrollment.agent);
+                state.generation = state.generation.wrapping_add(1);
                 Ok(())
             }
-            Some(current) => Err(HotAgentAuthorityInventoryError::AuthorityConflict {
-                agent: enrollment.agent.clone(),
-                enrolled: current.clone(),
-                requested: enrollment.authority_root.clone(),
-            }),
+            Some(_) => Ok(()),
             None => Ok(()),
         }
     }
@@ -1533,20 +1654,24 @@ impl HotAgentAuthorityInventory {
             });
         }
 
-        let mut roots =
-            self.roots
+        let mut state =
+            self.state
                 .write()
                 .map_err(|_| HotAgentAuthorityInventoryError::InventoryPoisoned {
                     agent: enrollment.agent.clone(),
                 })?;
-        match roots.get(&enrollment.agent) {
-            Some(current) if current == &enrollment.authority_root => {
-                roots.remove(&enrollment.agent);
+        match state.roots.get(&enrollment.agent) {
+            Some(current)
+                if current.authority_root == enrollment.authority_root
+                    && current.incarnation == enrollment.incarnation =>
+            {
+                state.roots.remove(&enrollment.agent);
+                state.generation = state.generation.wrapping_add(1);
                 Ok(())
             }
             Some(current) => Err(HotAgentAuthorityInventoryError::AuthorityConflict {
                 agent: enrollment.agent.clone(),
-                enrolled: current.clone(),
+                enrolled: current.authority_root.clone(),
                 requested: enrollment.authority_root.clone(),
             }),
             None => Err(HotAgentAuthorityInventoryError::AuthorityNotEnrolled {
@@ -1720,6 +1845,7 @@ impl AbilityAuthorityContext {
         }
     }
 
+    #[cfg(not(test))]
     fn for_local_combined_environment() -> Self {
         let device = CanonicalDeviceAuthority::parse(local_device_authority_root())
             .expect("local Device authority helper must return a canonical Device URA");
@@ -1872,6 +1998,10 @@ impl AbilityAuthorityContext {
         self.authorities.device().is_some()
     }
 
+    pub(crate) fn hosts_hub_authority(&self) -> bool {
+        self.authorities.hub().is_some()
+    }
+
     fn hot_agent_authority_inventory(&self) -> Option<Arc<HotAgentAuthorityInventory>> {
         let (_, source) = self.authorities.device()?;
         match source {
@@ -1880,6 +2010,11 @@ impl AbilityAuthorityContext {
             }
             DeviceSubordinateAuthoritySource::DeviceScoped => None,
         }
+    }
+
+    pub fn hosted_agent_signing_inventory(&self) -> Option<Arc<dyn HostedAgentAuthorityInventory>> {
+        self.hot_agent_authority_inventory()
+            .map(|inventory| inventory as Arc<dyn HostedAgentAuthorityInventory>)
     }
 
     fn supports_owner(&self, owner: &OwnerKind) -> bool {
@@ -2172,10 +2307,9 @@ pub struct AxonAbilityCatalog {
     /// During the Axon migration this catalogue remains the metadata
     /// construction API used by the existing `register(...)` modules,
     /// but handler registration is written through to `LocalRuntime`
-    /// immediately. `new()` creates an isolated runtime for tests and
-    /// local fixtures; daemon boot passes the process-wide runtime via
-    /// `new_with_runtime` so no secondary synchronization pass is
-    /// needed.
+    /// immediately when a runtime is explicitly attached. `new()` is a
+    /// metadata-only catalogue; executable callers must use `new_with_runtime`
+    /// with a signer-configured runtime.
     runtime: Option<Arc<LocalRuntime>>,
     // ── Execution index (SPEC §9.1.A) ────────────────────────
     // This is a PURE EXECUTION INDEX, not a metadata store. Canonical owner /
@@ -2662,6 +2796,7 @@ impl StaticRegistrationHandler {
 struct StaticRegistration {
     ability: String,
     owner: OwnerKind,
+    admission_action: Option<crate::daemon::ability::descriptors::AdmissionAction>,
     authority_scope: Option<AuthorityScope>,
     manifest: Option<Arc<crate::daemon::ability::manifest::AbilityManifest>>,
     receipt_semantics: ReceiptSemantics,
@@ -2678,6 +2813,7 @@ impl StaticRegistration {
         Self {
             ability: ability.into(),
             owner,
+            admission_action: None,
             authority_scope: None,
             manifest: None,
             receipt_semantics: ReceiptSemantics::Operational,
@@ -2691,6 +2827,14 @@ impl StaticRegistration {
         manifest: crate::daemon::ability::manifest::AbilityManifest,
     ) -> Self {
         self.manifest = Some(Arc::new(manifest));
+        self
+    }
+
+    fn with_admission_action(
+        mut self,
+        admission_action: crate::daemon::ability::descriptors::AdmissionAction,
+    ) -> Self {
+        self.admission_action = Some(admission_action);
         self
     }
 
@@ -2713,6 +2857,7 @@ impl StaticRegistration {
         let Self {
             ability,
             owner,
+            admission_action,
             authority_scope,
             mut manifest,
             receipt_semantics,
@@ -2730,15 +2875,57 @@ impl StaticRegistration {
         }
         let call_mode = handler.call_mode();
         let target_slot = handler.slot();
-        if manifest.is_none() {
+        if let Some(action) = admission_action {
+            let internal_manifest = match manifest.take() {
+                Some(manifest) => manifest.as_ref().clone(),
+                None => crate::daemon::ability::manifest::AbilityManifest::new(
+                    ability.rsplit('.').next().unwrap_or(&ability),
+                    crate::daemon::ability::catalog::description_for_owned(&ability),
+                    crate::daemon::ability::catalog::input_schema_for(&ability),
+                )?,
+            };
             manifest = Some(Arc::new(
-                crate::daemon::ability::catalog::system_manifest::registration_manifest(&ability)
-                    .with_context(|| {
-                    format!(
+                internal_manifest.with_admission_action(action.as_str())?,
+            ));
+        } else {
+            if crate::daemon::ability::catalog::try_system_ability_descriptor_path(&ability)
+                .is_err()
+            {
+                let provided = manifest.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "non-system ability {ability:?} requires a manifest with explicit admission_action"
+                    )
+                })?;
+                manifest_admission_action(Some(provided.as_ref()))?;
+            } else {
+                let contract = crate::daemon::ability::catalog::system_manifest::canonical_registration_contract(
+                &ability,
+            )?;
+                if contract.call_mode != call_mode {
+                    anyhow::bail!(
+                    "static ability {ability:?} handler mode {call_mode:?} disagrees with canonical descriptor mode {:?}",
+                    contract.call_mode
+                );
+                }
+                let canonical_manifest = match manifest.take() {
+                    Some(manifest) => manifest.as_ref().clone(),
+                    None => {
+                        crate::daemon::ability::catalog::system_manifest::registration_manifest(
+                            &ability,
+                        )
+                        .with_context(|| {
+                            format!(
                         "static ability {ability:?} failed to import canonical catalog metadata"
                     )
-                })?,
-            ));
+                        })?
+                    }
+                };
+                manifest = Some(Arc::new(
+                    canonical_manifest
+                        .with_descriptor_version(contract.descriptor_version)?
+                        .with_admission_action(contract.admission_action.as_str())?,
+                ));
+            }
         }
         let authority_scope = match authority_scope {
             Some(authority_scope) => {
@@ -2803,16 +2990,6 @@ impl DynamicRegistration {
         }
     }
 
-    fn rpc(ability: impl Into<String>, owner: OwnerKind, handler: LocalRpcHandler) -> Self {
-        Self::new(
-            ability,
-            owner,
-            None,
-            ControlPlaneImplementation::native_daemon(),
-            DynamicRegistrationHandler::Rpc(handler),
-        )
-    }
-
     fn rpc_with_spec(
         ability: impl Into<String>,
         owner: OwnerKind,
@@ -2844,20 +3021,6 @@ impl DynamicRegistration {
         )
     }
 
-    fn rpc_with_envelope(
-        ability: impl Into<String>,
-        owner: OwnerKind,
-        handler: LocalRpcHandlerWithEnvelope,
-    ) -> Self {
-        Self::new(
-            ability,
-            owner,
-            None,
-            ControlPlaneImplementation::native_daemon(),
-            DynamicRegistrationHandler::RpcWithEnvelope(handler),
-        )
-    }
-
     fn rpc_with_envelope_and_spec_and_impl(
         ability: impl Into<String>,
         owner: OwnerKind,
@@ -2874,20 +3037,6 @@ impl DynamicRegistration {
         )
     }
 
-    fn stream_with_envelope(
-        ability: impl Into<String>,
-        owner: OwnerKind,
-        handler: LocalStreamHandlerWithEnvelope,
-    ) -> Self {
-        Self::new(
-            ability,
-            owner,
-            None,
-            ControlPlaneImplementation::native_daemon(),
-            DynamicRegistrationHandler::StreamWithEnvelope(handler),
-        )
-    }
-
     fn stream_with_envelope_and_spec_and_impl(
         ability: impl Into<String>,
         owner: OwnerKind,
@@ -2901,20 +3050,6 @@ impl DynamicRegistration {
             Some(Arc::new(manifest)),
             implementation,
             DynamicRegistrationHandler::StreamWithEnvelope(handler),
-        )
-    }
-
-    fn bidi_with_envelope(
-        ability: impl Into<String>,
-        owner: OwnerKind,
-        handler: LocalBidiHandlerWithEnvelope,
-    ) -> Self {
-        Self::new(
-            ability,
-            owner,
-            None,
-            ControlPlaneImplementation::native_daemon(),
-            DynamicRegistrationHandler::BidiWithEnvelope(handler),
         )
     }
 
@@ -3287,7 +3422,27 @@ impl std::fmt::Debug for AxonAbilityCatalog {
 
 impl AxonAbilityCatalog {
     pub fn new() -> Self {
-        Self::new_with_runtime(LocalRuntime::new())
+        #[cfg(test)]
+        let authority_context =
+            AbilityAuthorityContext::for_combined_authority_roots(local_device_authority_root())
+                .expect("test Device authority root must be canonical");
+        #[cfg(not(test))]
+        let authority_context = AbilityAuthorityContext::for_local_combined_environment();
+
+        Self::new_metadata_only_with_authority_context(authority_context)
+    }
+
+    pub(crate) fn new_metadata_only_with_authority_context(
+        authority_context: AbilityAuthorityContext,
+    ) -> Self {
+        Self {
+            runtime: None,
+            execution_index: std::sync::RwLock::new(ExecutionIndex::default()),
+            authority_context,
+            static_authority_exclusions: BTreeMap::new(),
+            control_plane: std::sync::RwLock::new(AbilityControlPlaneRegistry::default()),
+            dynamic_txn: std::sync::Mutex::new(()),
+        }
     }
 
     /// Build a registry whose registration APIs write through to
@@ -3295,6 +3450,15 @@ impl AxonAbilityCatalog {
     /// module-level `register(&mut reg)` call sites intact while
     /// making `LocalRuntime` the live source of truth.
     pub fn new_with_runtime(runtime: Arc<LocalRuntime>) -> Self {
+        #[cfg(test)]
+        {
+            Self::new_with_runtime_and_authority_context(
+                runtime,
+                AbilityAuthorityContext::for_combined_authority_roots(local_device_authority_root())
+                .expect("test Device authority root must be canonical"),
+            )
+        }
+        #[cfg(not(test))]
         Self::new_with_runtime_and_authority_context(
             runtime,
             // Public catalogue constructors historically admitted both Device
@@ -3406,6 +3570,7 @@ impl AxonAbilityCatalog {
             authority_scope,
             manifest: request.manifest,
             call_mode: request.call_mode,
+            admission_action: request.admission_action,
             receipt_semantics: request.receipt_semantics,
             implementation: request.implementation,
             owner_label,
@@ -3420,6 +3585,7 @@ impl AxonAbilityCatalog {
         let mut registration = AbilityControlPlaneRegistration::new(
             request.ability.to_string(),
             request.call_mode,
+            request.admission_action,
             request.manifest,
             request.authority_scope,
             request.implementation.runtime_env,
@@ -3487,6 +3653,7 @@ impl AxonAbilityCatalog {
         receipt_semantics: ReceiptSemantics,
         implementation: &ControlPlaneImplementation,
     ) -> anyhow::Result<ControlPlaneModeKey> {
+        let admission_action = manifest_admission_action(manifest)?;
         let owner_label = format!(
             "{}@{}",
             authority_scope.owner_projection(),
@@ -3497,11 +3664,76 @@ impl AxonAbilityCatalog {
             authority_scope,
             manifest,
             call_mode,
+            admission_action,
             receipt_semantics,
             implementation: implementation.clone(),
             owner_label,
         })?;
         Ok(ControlPlaneModeKey::from_record(&record))
+    }
+
+    /// Register a governed descriptor/authority/implementation record without
+    /// installing an execution handler in this catalog.
+    ///
+    /// Daemon Invocation exact routes are served by
+    /// `DaemonRouteRuntimeAdapter`, not by `AxonAbilityCatalog`'s local handler
+    /// index. They still need the same control-plane proof facts as local
+    /// abilities so descriptor-bound LocalRuntime registration and callers that
+    /// derive signed descriptor refs resolve one canonical contract.
+    pub(crate) fn register_control_plane_descriptor_with_owner(
+        &self,
+        ability: &str,
+        owner: &OwnerKind,
+        manifest: &crate::daemon::ability::manifest::AbilityManifest,
+        call_mode: DescriptorCallMode,
+        receipt_semantics: ReceiptSemantics,
+        implementation: &ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        self.authority_context
+            .ensure_owner_supported(owner)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "control-plane-only ability {ability:?} owner is not hosted by this authority set: {error}"
+                )
+            })?;
+        let authority_scope = self.resolve_authority_scope_for_owner(ability, owner)?;
+        self.register_control_plane_with_scope_and_semantics_result(
+            ability,
+            authority_scope,
+            Some(manifest),
+            call_mode,
+            receipt_semantics,
+            implementation,
+        )
+        .map(|_| ())
+    }
+
+    /// Register a governed descriptor-only control-plane record under an
+    /// explicit authority scope.
+    ///
+    /// Use this only for daemon transport contracts whose descriptor owner is
+    /// not this process's local runtime owner. `session.open` is the motivating
+    /// case: the Hub serves the Bidi route, but the signed descriptor owner is
+    /// the connecting Device, so the catalog needs a Device-scoped template
+    /// without installing any Device product handlers on the Hub.
+    pub(crate) fn register_control_plane_descriptor_with_scope(
+        &self,
+        ability: &str,
+        authority_scope: AuthorityScope,
+        manifest: &crate::daemon::ability::manifest::AbilityManifest,
+        call_mode: DescriptorCallMode,
+        receipt_semantics: ReceiptSemantics,
+        implementation: &ControlPlaneImplementation,
+    ) -> anyhow::Result<()> {
+        self.register_control_plane_with_scope_and_semantics_result(
+            ability,
+            authority_scope,
+            Some(manifest),
+            call_mode,
+            receipt_semantics,
+            implementation,
+        )
+        .map(|_| ())
     }
 
     fn register_dynamic_control_plane_with_scope_and_semantics_result(
@@ -3652,6 +3884,7 @@ impl AxonAbilityCatalog {
             owner,
             manifest,
             call_mode,
+            admission_action: manifest_admission_action(manifest)?,
             receipt_semantics: ReceiptSemantics::Operational,
             implementation: ControlPlaneImplementation::new(impl_source, runtime_env),
         })
@@ -3672,6 +3905,7 @@ impl AxonAbilityCatalog {
             authority_scope: request.authority_scope,
             manifest: request.manifest,
             call_mode: request.call_mode,
+            admission_action: manifest_admission_action(request.manifest)?,
             receipt_semantics: ReceiptSemantics::Operational,
             implementation: request.implementation,
             owner_label,
@@ -3919,23 +4153,6 @@ impl AxonAbilityCatalog {
         Ok(target)
     }
 
-    /// Invoke an RPC ability through Axon's `LocalRuntime` as a local-system
-    /// call. Use `invoke_rpc_target_json` when the caller has an envelope
-    /// subject or causal context; this shorthand is only for daemon-internal
-    /// calls that genuinely have no upstream invocation envelope.
-    pub fn invoke_rpc_json(&self, ability: &str, args: Value) -> anyhow::Result<Value> {
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ability.to_string(),
-            normalized_args: args,
-            call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
-            request_metadata: std::collections::HashMap::new(),
-        };
-        self.invoke_rpc_target_json(target)
-    }
-
     /// Invoke an RPC ability with an explicit resolved target. This is the
     /// required path for in-process forwarders that know the AXIOM subject or
     /// causal context.
@@ -3948,7 +4165,7 @@ impl AxonAbilityCatalog {
         }
         let runtime = self.runtime().ok_or_else(|| {
             anyhow::anyhow!(
-                "AxonAbilityCatalog has no LocalRuntime attached; use new() or new_with_runtime()"
+                "AxonAbilityCatalog has no LocalRuntime attached; use new_with_runtime() with an explicit signing authority"
             )
         })?;
         let target = self
@@ -4188,6 +4405,8 @@ impl AxonAbilityCatalog {
         Ok(options.with_mode_descriptor_proof(
             axon_mode,
             record.descriptor().version.as_str(),
+            record.descriptor().admission_action().as_str(),
+            record.descriptor().descriptor_hash_bytes(),
             record.descriptor().schema_hash_bytes(),
             record.implementation().impl_hash(),
         ))
@@ -4241,6 +4460,23 @@ impl AxonAbilityCatalog {
         ));
     }
 
+    /// Register an intentionally non-canonical local route. Public/canonical
+    /// handlers must use the descriptor-importing registration methods; this
+    /// variant exists for local front doors that are deliberately absent from
+    /// descriptor publication.
+    pub fn register_rpc_with_owner_and_action(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        action: crate::daemon::ability::descriptors::AdmissionAction,
+        handler: LocalRpcHandler,
+    ) {
+        self.register_static_or_panic(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Rpc(handler))
+                .with_admission_action(action),
+        );
+    }
+
     /// Register an RPC handler with explicit owner AND a manifest
     /// carrying the verb's description / input_schema /
     /// output_schema. The manifest flows to
@@ -4266,6 +4502,21 @@ impl AxonAbilityCatalog {
             manifest,
             ReceiptSemantics::Operational,
             handler,
+        );
+    }
+
+    pub fn register_rpc_with_spec_and_action(
+        &mut self,
+        ability: impl Into<String>,
+        owner: OwnerKind,
+        action: crate::daemon::ability::descriptors::AdmissionAction,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
+        handler: LocalRpcHandler,
+    ) {
+        self.register_static_or_panic(
+            StaticRegistration::new(ability, owner, StaticRegistrationHandler::Rpc(handler))
+                .with_admission_action(action)
+                .with_manifest(manifest),
         );
     }
 
@@ -4789,19 +5040,6 @@ impl AxonAbilityCatalog {
             .commit(self)
     }
 
-    /// Hot-register an RPC handler without a manifest. Used by
-    /// the dynamic side when an upstream tool's input schema isn't
-    /// declared (rare but legal — the upstream tool may have only a
-    /// description). Falls back to the name-only discovery stub.
-    pub fn hot_register_rpc(
-        &self,
-        ability: impl Into<String>,
-        owner: OwnerKind,
-        handler: LocalRpcHandler,
-    ) -> anyhow::Result<()> {
-        DynamicRegistration::rpc(ability, owner, handler).commit(self)
-    }
-
     /// Hot-register a STREAM handler with a manifest. The reflective
     /// registry's `register_one_tool` registers MCP tools as stream
     /// handlers so upstream `notifications/progress` frames flow
@@ -4881,18 +5119,6 @@ impl AxonAbilityCatalog {
         .commit(self)
     }
 
-    /// Hot-register an envelope-aware RPC handler in the dynamic execution
-    /// index. Plugin hot-load uses this path so sidecar/declarative handlers
-    /// receive the same AXIOM envelope context as boot-registered handlers.
-    pub fn hot_register_rpc_with_envelope(
-        &self,
-        ability: impl Into<String>,
-        owner: OwnerKind,
-        handler: LocalRpcHandlerWithEnvelope,
-    ) -> anyhow::Result<()> {
-        DynamicRegistration::rpc_with_envelope(ability, owner, handler).commit(self)
-    }
-
     /// Hot-register an envelope-aware RPC handler with explicit owner and
     /// registry manifest in the dynamic execution row.
     pub fn hot_register_rpc_with_envelope_and_spec(
@@ -4927,16 +5153,6 @@ impl AxonAbilityCatalog {
             implementation,
         )
         .commit(self)
-    }
-
-    /// Hot-register an envelope-aware stream handler as a dynamic execution row.
-    pub fn hot_register_stream_with_envelope(
-        &self,
-        ability: impl Into<String>,
-        owner: OwnerKind,
-        handler: LocalStreamHandlerWithEnvelope,
-    ) -> anyhow::Result<()> {
-        DynamicRegistration::stream_with_envelope(ability, owner, handler).commit(self)
     }
 
     /// Hot-register an envelope-aware stream handler with explicit owner and
@@ -4994,16 +5210,6 @@ impl AxonAbilityCatalog {
             implementation,
         )
         .commit(self)
-    }
-
-    /// Hot-register an envelope-aware bidi handler as a dynamic execution row.
-    pub fn hot_register_bidi_with_envelope(
-        &self,
-        ability: impl Into<String>,
-        owner: OwnerKind,
-        handler: LocalBidiHandlerWithEnvelope,
-    ) -> anyhow::Result<()> {
-        DynamicRegistration::bidi_with_envelope(ability, owner, handler).commit(self)
     }
 
     /// Hot-register an envelope-aware bidi handler with explicit owner and
@@ -5686,16 +5892,19 @@ fn runtime_bidi_source(
 mod tests {
     use super::*;
     use crate::core::domain::NodeId;
-    use crate::daemon::federation::gateway_api::PeerInfo;
     use serde_json::json;
 
     fn empty_registry() -> Arc<AxonAbilityCatalog> {
-        Arc::new(AxonAbilityCatalog::new())
+        Arc::new(combined_catalog())
+    }
+
+    fn test_runtime() -> Arc<LocalRuntime> {
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None)
     }
 
     fn combined_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
+            test_runtime(),
             AbilityAuthorityContext::for_combined_authority_roots(
                 "easynet:///r/localhost/device/test-device",
             )
@@ -5713,6 +5922,215 @@ mod tests {
             causal_context: None,
             request_metadata: std::collections::HashMap::new(),
         }
+    }
+
+    fn invoke_test_rpc(
+        catalog: &AxonAbilityCatalog,
+        ability: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
+        catalog.invoke_rpc_target_json(InvocationTarget {
+            scope: TargetScope::Local,
+            ability: ability.to_string(),
+            normalized_args: args,
+            call_mode: CallMode::Rpc,
+            subject: None,
+            causal_context: None,
+            request_metadata: std::collections::HashMap::new(),
+        })
+    }
+
+    fn test_manifest(
+        ability: &str,
+        description: &str,
+        input_schema: serde_json::Value,
+    ) -> crate::daemon::ability::manifest::AbilityManifest {
+        crate::daemon::ability::manifest::AbilityManifest::new(
+            ability.rsplit('.').next().unwrap_or(ability),
+            description,
+            input_schema,
+        )
+        .and_then(|manifest| manifest.with_admission_action("invoke"))
+        .expect("test ability manifest is well-formed")
+    }
+
+    fn hot_register_test_rpc(
+        catalog: &AxonAbilityCatalog,
+        ability: &str,
+        owner: OwnerKind,
+        handler: LocalRpcHandler,
+    ) -> anyhow::Result<()> {
+        catalog.hot_register_rpc_with_spec(
+            ability,
+            owner,
+            test_manifest(
+                ability,
+                "Test dynamic ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            handler,
+        )
+    }
+
+    fn register_test_rpc(
+        catalog: &mut AxonAbilityCatalog,
+        ability: &str,
+        owner: OwnerKind,
+        handler: LocalRpcHandler,
+    ) {
+        catalog.register_rpc_with_spec(
+            ability,
+            owner,
+            test_manifest(
+                ability,
+                "Test static RPC ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            handler,
+        );
+    }
+
+    fn register_test_stream(
+        catalog: &mut AxonAbilityCatalog,
+        ability: &str,
+        owner: OwnerKind,
+        handler: LocalStreamHandler,
+    ) {
+        catalog.register_stream_with_spec(
+            ability,
+            owner,
+            test_manifest(
+                ability,
+                "Test static stream ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            handler,
+        );
+    }
+
+    fn register_test_bidi(
+        catalog: &mut AxonAbilityCatalog,
+        ability: &str,
+        owner: OwnerKind,
+        handler: LocalBidiHandler,
+    ) {
+        catalog.register_bidi_with_spec(
+            ability,
+            owner,
+            test_manifest(
+                ability,
+                "Test static bidi ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            handler,
+        );
+    }
+
+    fn register_test_rpc_env(
+        catalog: &mut AxonAbilityCatalog,
+        ability: &str,
+        owner: OwnerKind,
+        handler: LocalRpcHandlerWithEnvelope,
+    ) {
+        catalog.register_rpc_with_envelope_and_spec(
+            ability,
+            owner,
+            test_manifest(
+                ability,
+                "Test static envelope RPC ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            handler,
+        );
+    }
+
+    fn register_test_stream_env(
+        catalog: &mut AxonAbilityCatalog,
+        ability: &str,
+        owner: OwnerKind,
+        handler: LocalStreamHandlerWithEnvelope,
+    ) {
+        catalog.register_stream_with_envelope_and_spec(
+            ability,
+            owner,
+            test_manifest(
+                ability,
+                "Test static envelope stream ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            handler,
+        );
+    }
+
+    fn register_test_bidi_env(
+        catalog: &mut AxonAbilityCatalog,
+        ability: &str,
+        owner: OwnerKind,
+        handler: LocalBidiHandlerWithEnvelope,
+    ) {
+        catalog.register_bidi_with_envelope_and_spec(
+            ability,
+            owner,
+            test_manifest(
+                ability,
+                "Test static envelope bidi ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            handler,
+        );
+    }
+
+    #[test]
+    fn stale_hot_agent_enrollment_rollback_cannot_remove_reenrolled_incarnation() {
+        let device =
+            CanonicalDeviceAuthority::parse("easynet:///r/acme/device/edge-01".to_string())
+                .expect("canonical device");
+        let inventory = HotAgentAuthorityInventory::new(device, BTreeMap::new());
+        let agent = "alice";
+        let root = "easynet:///r/acme/agent/alice.worker";
+
+        let stale = {
+            let mut state = inventory.state.write().unwrap();
+            let incarnation = state.next_incarnation;
+            state.next_incarnation = state.next_incarnation.wrapping_add(1);
+            state.roots.insert(
+                agent.to_string(),
+                HotAgentAuthorityEntry {
+                    authority_root: root.to_string(),
+                    incarnation,
+                },
+            );
+            HotAgentAuthorityEnrollment {
+                agent: agent.to_string(),
+                authority_root: root.to_string(),
+                inserted: true,
+                incarnation,
+            }
+        };
+
+        let current_incarnation = {
+            let mut state = inventory.state.write().unwrap();
+            state.roots.remove(agent);
+            state.generation = state.generation.wrapping_add(1);
+            let incarnation = state.next_incarnation;
+            state.next_incarnation = state.next_incarnation.wrapping_add(1);
+            state.roots.insert(
+                agent.to_string(),
+                HotAgentAuthorityEntry {
+                    authority_root: root.to_string(),
+                    incarnation,
+                },
+            );
+            incarnation
+        };
+
+        inventory
+            .rollback_enrollment(&stale)
+            .expect("stale rollback is an idempotent no-op");
+        let state = inventory.state.read().unwrap();
+        let current = state.roots.get(agent).expect("E2 remains enrolled");
+        assert_eq!(current.incarnation, current_incarnation);
+        assert_eq!(current.authority_root, root);
     }
 
     #[test]
@@ -5796,15 +6214,20 @@ mod tests {
     #[test]
     fn static_registration_excludes_non_hosted_owner_before_control_plane_and_runtime() {
         let hub_ura = crate::core::ura::hub_ura("hub-only");
-        let runtime = LocalRuntime::new();
+        let runtime = test_runtime();
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&runtime),
             AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
                 .expect("Hub authority context"),
         );
 
-        catalog.register_rpc_with_owner("device.test.only", OwnerKind::Device, ok_handler());
-        catalog.register_rpc_with_owner("meta.hub_only", OwnerKind::Hub, ok_handler());
+        register_test_rpc(
+            &mut catalog,
+            "device.test.only",
+            OwnerKind::Device,
+            ok_handler(),
+        );
+        register_test_rpc(&mut catalog, "meta.hub_only", OwnerKind::Hub, ok_handler());
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 1);
@@ -5830,15 +6253,20 @@ mod tests {
     fn device_registration_excludes_hub_owner_before_control_plane_and_runtime() {
         let device_ura = crate::core::ura::device_ura("device-only", "dev-1");
         let hub_ura = crate::core::ura::hub_ura("device-only");
-        let runtime = LocalRuntime::new();
+        let runtime = test_runtime();
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&runtime),
             AbilityAuthorityContext::for_device_authority_root(&device_ura)
                 .expect("Device authority context"),
         );
 
-        catalog.register_rpc_with_owner("device.test.only", OwnerKind::Device, ok_handler());
-        catalog.register_rpc_with_owner("meta.hub_only", OwnerKind::Hub, ok_handler());
+        register_test_rpc(
+            &mut catalog,
+            "device.test.only",
+            OwnerKind::Device,
+            ok_handler(),
+        );
+        register_test_rpc(&mut catalog, "meta.hub_only", OwnerKind::Hub, ok_handler());
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 1);
@@ -5861,16 +6289,16 @@ mod tests {
     #[test]
     fn dynamic_registration_rejects_non_hosted_owner_without_partial_rows() {
         let hub_ura = crate::core::ura::hub_ura("hub-only");
-        let runtime = LocalRuntime::new();
+        let runtime = test_runtime();
         let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&runtime),
             AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
                 .expect("Hub authority context"),
         );
 
-        let error = catalog
-            .hot_register_rpc("device.dynamic", OwnerKind::Device, ok_handler())
-            .expect_err("Hub authority set must reject dynamic Device owner");
+        let error =
+            hot_register_test_rpc(&catalog, "device.dynamic", OwnerKind::Device, ok_handler())
+                .expect_err("Hub authority set must reject dynamic Device owner");
         assert!(error.to_string().contains("authority set \"hub\""));
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
         assert!(!catalog.has_dynamic("device.dynamic"));
@@ -5884,13 +6312,13 @@ mod tests {
 
         let device_ura = crate::core::ura::device_ura("device-only", "dev-1");
         let device_catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
+            test_runtime(),
             AbilityAuthorityContext::for_device_authority_root(device_ura)
                 .expect("Device authority context"),
         );
-        let error = device_catalog
-            .hot_register_rpc("hub.dynamic", OwnerKind::Hub, ok_handler())
-            .expect_err("Device authority set must reject dynamic Hub owner");
+        let error =
+            hot_register_test_rpc(&device_catalog, "hub.dynamic", OwnerKind::Hub, ok_handler())
+                .expect_err("Device authority set must reject dynamic Hub owner");
         assert!(error.to_string().contains("authority set \"device\""));
         assert!(device_catalog
             .authority_ability_catalog_snapshot()
@@ -5926,9 +6354,19 @@ mod tests {
 
     #[test]
     fn public_catalog_constructor_preserves_device_and_hub_registration() {
-        let mut catalog = AxonAbilityCatalog::new();
-        catalog.register_rpc_with_owner("device.test.constructor", OwnerKind::Device, ok_handler());
-        catalog.register_rpc_with_owner("meta.constructor", OwnerKind::Hub, ok_handler());
+        let mut catalog = combined_catalog();
+        register_test_rpc(
+            &mut catalog,
+            "device.test.constructor",
+            OwnerKind::Device,
+            ok_handler(),
+        );
+        register_test_rpc(
+            &mut catalog,
+            "meta.constructor",
+            OwnerKind::Hub,
+            ok_handler(),
+        );
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert!(rows.iter().any(|row| row.owner == OwnerKind::Device));
@@ -5940,7 +6378,7 @@ mod tests {
     fn static_explicit_scope_rejects_owner_projection_mismatch() {
         let device_ura = crate::core::ura::device_ura("scope-test", "dev-1");
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
+            test_runtime(),
             AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
                 .expect("combined authority context"),
         );
@@ -5953,6 +6391,11 @@ mod tests {
                     OwnerKind::Hub,
                     StaticRegistrationHandler::Rpc(ok_handler()),
                 )
+                .with_manifest(test_manifest(
+                    "meta.scope_mismatch",
+                    "Scope mismatch test ability.",
+                    serde_json::json!({"type": "object"}),
+                ))
                 .with_authority_scope(device_scope),
             )
             .expect_err("Hub owner with Device projection must fail closed");
@@ -5966,17 +6409,26 @@ mod tests {
     fn dynamic_explicit_scope_rejects_correct_owner_with_foreign_root() {
         let hub_ura = crate::core::ura::hub_ura("scope-test");
         let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
+            test_runtime(),
             AbilityAuthorityContext::for_hub_authority_root(&hub_ura)
                 .expect("Hub authority context"),
         );
         let foreign_scope = AuthorityScope::new("hub", crate::core::ura::hub_ura("foreign"))
             .expect("foreign Hub scope is structurally valid");
 
-        let error = DynamicRegistration::rpc("meta.foreign_scope", OwnerKind::Hub, ok_handler())
-            .with_authority_scope(foreign_scope)
-            .commit(&catalog)
-            .expect_err("foreign Hub authority root must fail closed");
+        let error = DynamicRegistration::rpc_with_spec(
+            "meta.foreign_scope",
+            OwnerKind::Hub,
+            test_manifest(
+                "meta.foreign_scope",
+                "Foreign scope test ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            ok_handler(),
+        )
+        .with_authority_scope(foreign_scope)
+        .commit(&catalog)
+        .expect_err("foreign Hub authority root must fail closed");
         assert!(error.to_string().contains("is not hosted by authority set"));
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
         assert!(!catalog.has_dynamic("meta.foreign_scope"));
@@ -6045,19 +6497,26 @@ mod tests {
             .ensure_explicit_scope_supported(&owner, &exact_scope)
             .expect("exact hosted Agent root must be accepted");
 
-        let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
-            context,
-        );
+        let catalog =
+            AxonAbilityCatalog::new_with_runtime_and_authority_context(test_runtime(), context);
         let foreign_user_scope = AuthorityScope::new(
             "agent:worker",
             crate::core::ura::agent_ura("scope-test", "user-b", "worker"),
         )
         .expect("foreign user Agent scope is structurally valid");
-        let error = DynamicRegistration::rpc("worker.chat", owner, ok_handler())
-            .with_authority_scope(foreign_user_scope)
-            .commit(&catalog)
-            .expect_err("same realm/agent id under another user must fail closed");
+        let error = DynamicRegistration::rpc_with_spec(
+            "worker.chat",
+            owner,
+            test_manifest(
+                "worker.chat",
+                "Foreign Agent scope test ability.",
+                serde_json::json!({"type": "object"}),
+            ),
+            ok_handler(),
+        )
+        .with_authority_scope(foreign_user_scope)
+        .commit(&catalog)
+        .expect_err("same realm/agent id under another user must fail closed");
         assert!(error.to_string().contains("is not hosted by authority set"));
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
     }
@@ -6084,7 +6543,7 @@ mod tests {
         let device_ura = crate::core::ura::device_ura("scope-test", "dev-1");
         let hub_ura = crate::core::ura::hub_ura("scope-test");
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
+            test_runtime(),
             AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
                 .expect("combined authority context"),
         );
@@ -6100,6 +6559,11 @@ mod tests {
                         owner,
                         StaticRegistrationHandler::Rpc(ok_handler()),
                     )
+                    .with_manifest(test_manifest(
+                        "meta.exact_scope",
+                        "Exact scope test ability.",
+                        serde_json::json!({"type": "object"}),
+                    ))
                     .with_authority_scope(
                         AuthorityScope::new(projection, authority_root).expect("exact scope"),
                     ),
@@ -6121,16 +6585,16 @@ mod tests {
         let hub_ura = crate::core::ura::hub_ura("realm-b");
         let context = AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
             .expect("combined authority context");
-        let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
-            context,
-        );
-        catalog.register_rpc_with_owner(
+        let mut catalog =
+            AxonAbilityCatalog::new_with_runtime_and_authority_context(test_runtime(), context);
+        register_test_rpc(
+            &mut catalog,
             "meta.describe",
             OwnerKind::Device,
             Arc::new(|_args| Ok(json!({}))),
         );
-        catalog.register_rpc_with_owner(
+        register_test_rpc(
+            &mut catalog,
             "meta.describe",
             OwnerKind::Hub,
             Arc::new(|_args| Ok(json!({}))),
@@ -6193,8 +6657,9 @@ mod tests {
         // Smoke: the dispatcher actually calls the registered
         // handler with the normalised args; the handler's return
         // value is surfaced verbatim.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "observe.health",
             OwnerKind::Device,
             Arc::new(|args: Value| Ok(json!({"echo": args}))),
@@ -6213,8 +6678,9 @@ mod tests {
         // The load-bearing test for INV-SUBJECT-ENVELOPE positive
         // half: handler registered via register_rpc_with_envelope
         // receives target.subject in EnvelopeContext, NOT via args.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_envelope_and_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc_env(
+            &mut reg,
             "media.x.snapshot",
             OwnerKind::Device,
             Arc::new(|env: EnvelopeContext, _args: Value| {
@@ -6246,13 +6712,15 @@ mod tests {
     fn duplicate_rpc_handler_family_fails_at_registration() {
         // A programming error must fail at boot instead of silently
         // choosing whichever handler family the dispatcher checks first.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "x.dual",
             OwnerKind::Device,
             Arc::new(|_args: Value| Ok(json!({"path": "legacy"}))),
         );
-        reg.register_rpc_with_envelope_and_owner(
+        register_test_rpc_env(
+            &mut reg,
             "x.dual",
             OwnerKind::Device,
             Arc::new(|_env: EnvelopeContext, _args: Value| Ok(json!({"path": "envelope"}))),
@@ -6265,8 +6733,9 @@ mod tests {
         // complete AXIOM tuple. The local runtime sets subject=callee for root
         // calls, and envelope-aware handlers must see that value instead of an
         // erased `None`.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_envelope_and_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc_env(
+            &mut reg,
             "x.optional",
             OwnerKind::Device,
             Arc::new(|env: EnvelopeContext, _args: Value| {
@@ -6300,8 +6769,9 @@ mod tests {
         // runs the env-aware handler and surfaces the envelope subject in
         // the frame. Stream stays its own call mode — it is NOT collapsed
         // onto bidi.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_stream_with_envelope_and_owner(
+        let mut reg = combined_catalog();
+        register_test_stream_env(
+            &mut reg,
             "x.subscribe",
             OwnerKind::Device,
             Arc::new(|env: EnvelopeContext, _args: Value| {
@@ -6337,8 +6807,9 @@ mod tests {
         // Discovery must see env-aware handlers — meta.list_abilities
         // and gen-ability-tomls iterate this list, and a handler
         // registered only via register_rpc_with_envelope MUST appear.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_envelope_and_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc_env(
+            &mut reg,
             "x.env_only",
             OwnerKind::Device,
             Arc::new(|_env, _args| Ok(json!({}))),
@@ -6353,8 +6824,7 @@ mod tests {
     #[test]
     fn remote_target_returns_unified_path_redirect() {
         // Joint-plan phase 4: `TargetScope::Remote` no longer
-        // routes through GatewayApi (deleted along with
-        // NoopGateway's invoke_remote_ability stub). Cross-device
+        // routes through a dispatcher-owned network stub. Cross-device
         // dispatch flows through
         // `daemon::invocation::routing::remote_invoke::invoke_remote_target`
         // instead. The dispatcher surfaces a typed error
@@ -6427,14 +6897,25 @@ mod tests {
         // Deterministic iteration order matters because PR-SYS
         // builds the `system_skills[]` label from this list, and
         // the byte-stable golden fixture depends on it.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "observe.health",
             OwnerKind::Device,
             Arc::new(|_| Ok(Value::Null)),
         );
-        reg.register_rpc_with_owner("test.foo", OwnerKind::Device, Arc::new(|_| Ok(Value::Null)));
-        reg.register_rpc_with_owner("test.bar", OwnerKind::Device, Arc::new(|_| Ok(Value::Null)));
+        register_test_rpc(
+            &mut reg,
+            "test.foo",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(Value::Null)),
+        );
+        register_test_rpc(
+            &mut reg,
+            "test.bar",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(Value::Null)),
+        );
         let names = reg.list_abilities();
         // BTreeMap iteration order is alphabetical (test.bar < test.foo,
         // observe.health < test.*).
@@ -6449,8 +6930,8 @@ mod tests {
     /// map-union implementation would still list it.
     #[test]
     fn list_abilities_reads_control_plane_not_handler_maps() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
         assert!(reg.list_abilities().contains(&"fs.read".to_string()));
         // The handler is still installed in the rpc map, but its control-plane
         // record is gone.
@@ -6467,15 +6948,15 @@ mod tests {
 
     #[test]
     fn authority_catalog_snapshot_projects_canonical_descriptors_in_one_pass() {
-        let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
-            "read",
-            "read a local file",
-            json!({"type": "object"}),
-        )
-        .unwrap();
+        let mut reg = combined_catalog();
+        let manifest = test_manifest("read", "read a local file", json!({"type": "object"}));
         reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
-        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
+        register_test_bidi(
+            &mut reg,
+            "terminal.attach",
+            OwnerKind::Device,
+            trivial_bidi_handler(),
+        );
 
         let rows = reg.authority_ability_catalog_snapshot();
         let fs = rows
@@ -6499,7 +6980,7 @@ mod tests {
 
     #[test]
     fn static_catalog_import_preserves_observation_public_visibility() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
         reg.register_rpc_with_owner("observe.health", OwnerKind::Device, ok_handler());
         reg.register_rpc_with_owner("admin.status", OwnerKind::Device, ok_handler());
 
@@ -6550,9 +7031,14 @@ mod tests {
         // registration, a get_bidi lookup must surface the handler.
         // Pin the round-trip so a typo (e.g. inserting into
         // `self.stream` instead of `self.bidi`) trips a test.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
         assert!(reg.get_bidi("terminal.attach").is_none());
-        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
+        register_test_bidi(
+            &mut reg,
+            "terminal.attach",
+            OwnerKind::Device,
+            trivial_bidi_handler(),
+        );
         assert!(reg.get_bidi("terminal.attach").is_some());
         // Negative: not visible on the other call modes.
         assert!(reg.get_rpc("terminal.attach").is_none());
@@ -6565,18 +7051,25 @@ mod tests {
         // meta.list_abilities ability) project this list verbatim,
         // so a missing call mode would silently hide bidi-only
         // abilities from clients.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "observe.health",
             OwnerKind::Device,
             Arc::new(|_| Ok(Value::Null)),
         );
-        reg.register_stream_with_owner(
+        register_test_stream(
+            &mut reg,
             "permission.subscribe",
             OwnerKind::Device,
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
-        reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, trivial_bidi_handler());
+        register_test_bidi(
+            &mut reg,
+            "terminal.attach",
+            OwnerKind::Device,
+            trivial_bidi_handler(),
+        );
         assert_eq!(
             reg.list_abilities(),
             vec!["observe.health", "permission.subscribe", "terminal.attach",],
@@ -6603,11 +7096,12 @@ mod tests {
         // frame from the test (acting as IPC server) to the handler-
         // facing receiver; if the dispatcher returned the wrong
         // half the recv would never arrive.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
 
         // A handler that owns its own loop reading from_client and
         // echoing into to_client. Spawned inside the closure per §D2.
-        reg.register_bidi_with_owner(
+        register_test_bidi(
+            &mut reg,
             "device.test.echo",
             OwnerKind::Device,
             Arc::new(|_args: Value| {
@@ -6693,8 +7187,9 @@ mod tests {
         // type system prevents that — but we do pin that the error
         // message preserves the handler's reason rather than being
         // swallowed by a generic dispatcher message.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_bidi_with_owner(
+        let mut reg = combined_catalog();
+        register_test_bidi(
+            &mut reg,
             "device.test.bad",
             OwnerKind::Device,
             Arc::new(|_| anyhow::bail!("intentional handler failure: precondition foo missing")),
@@ -6745,16 +7240,6 @@ mod tests {
         assert_eq!(BIDI_CHANNEL_BOUND, 256);
     }
 
-    // Smoke for PeerInfo type — keeps the import "live" in tests
-    // that touch GatewayApi-adjacent types.
-    #[allow(dead_code)]
-    fn _peer_info_is_constructible() -> PeerInfo {
-        PeerInfo {
-            node: NodeId::new("x"),
-            labels: BTreeMap::new(),
-        }
-    }
-
     // ── M0 commit 1: OwnerKind round-trip ─────────────────────────
 
     fn ok_handler() -> LocalRpcHandler {
@@ -6763,8 +7248,8 @@ mod tests {
 
     #[test]
     fn register_rpc_writes_control_plane_record() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
 
         let record = reg
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
@@ -6797,14 +7282,21 @@ mod tests {
     #[test]
     fn control_plane_owner_reconstructs_registered_owner_kind() {
         let mut reg = combined_catalog();
-        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
-        reg.register_rpc_with_owner("hub.openai.list_models", OwnerKind::Hub, ok_handler());
-        reg.register_rpc_with_owner(
+        register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
+        register_test_rpc(
+            &mut reg,
+            "hub.openai.list_models",
+            OwnerKind::Hub,
+            ok_handler(),
+        );
+        register_test_rpc(
+            &mut reg,
             "codex.weather",
             OwnerKind::Agent("codex".to_string()),
             ok_handler(),
         );
-        reg.register_rpc_with_owner(
+        register_test_rpc(
+            &mut reg,
             "codex.chat",
             OwnerKind::Agent("codex".to_string()),
             ok_handler(),
@@ -6827,8 +7319,8 @@ mod tests {
 
     #[test]
     fn runtime_registration_binds_control_plane_proof_facts() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
 
         let record = reg
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
@@ -6879,19 +7371,18 @@ mod tests {
 
     #[test]
     fn runtime_registration_binds_manifest_descriptor_version() {
-        let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
-            "read",
-            "read a local file",
+        let mut reg = combined_catalog();
+        let manifest = test_manifest(
+            "versioned",
+            "versioned test ability",
             json!({"type": "object"}),
         )
-        .unwrap()
         .with_descriptor_version("2.0.0")
         .unwrap();
-        reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
+        reg.register_rpc_with_spec("test.versioned", OwnerKind::Device, manifest, ok_handler());
 
         let control_plane_key = reg
-            .handler_control_plane_key("fs.read")
+            .handler_control_plane_key("test.versioned")
             .expect("handler authority key");
         let record = reg
             .control_plane_record_for_authority_mode(
@@ -6915,15 +7406,14 @@ mod tests {
 
     #[test]
     fn control_plane_descriptor_owns_normalized_schema_and_description() {
-        let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let mut reg = combined_catalog();
+        let manifest = test_manifest(
             "read",
             "read a local file",
             json!({"type": "object", "properties": {"path": {"type": "string"}}}),
-        )
-        .unwrap();
+        );
         reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest.clone(), ok_handler());
-        reg.register_rpc_with_owner("admin.status", OwnerKind::Device, ok_handler());
+        register_test_rpc(&mut reg, "admin.status", OwnerKind::Device, ok_handler());
 
         let descriptor = reg
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
@@ -6947,50 +7437,91 @@ mod tests {
     }
 
     #[test]
-    fn control_plane_rebind_without_manifest_replaces_descriptor_schema() {
-        let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+    fn control_plane_rebind_without_manifest_is_rejected() {
+        let mut reg = combined_catalog();
+        let manifest = test_manifest(
             "read",
             "read a local file",
             json!({"type": "object", "properties": {"path": {"type": "string"}}}),
-        )
-        .unwrap();
+        );
         reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
-        assert!(!reg
+        let original_schema_hash = reg
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
             .expect("lookup succeeds")
             .expect("record exists")
             .descriptor()
-            .input_schema()
-            .is_null());
+            .schema_hash_bytes();
+
+        let err = reg
+            .rebind_control_plane_record(
+                "fs.read",
+                &OwnerKind::Device,
+                None,
+                DescriptorCallMode::Rpc,
+                AbilityImplSource::NativeDaemon,
+                RuntimeEnv::daemon_native(),
+            )
+            .expect_err("control-plane rebind without manifest must fail closed");
+        assert!(err.to_string().contains("admission_action"), "{err}");
+
+        let record = reg
+            .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
+            .expect("lookup succeeds")
+            .expect("record exists");
+        assert_eq!(
+            record.descriptor().schema_hash_bytes(),
+            original_schema_hash,
+            "failed rebind must leave the existing descriptor proof intact"
+        );
+    }
+
+    #[test]
+    fn control_plane_rebind_with_manifest_replaces_descriptor_schema() {
+        let mut reg = combined_catalog();
+        let manifest = test_manifest(
+            "read",
+            "read a local file",
+            json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        );
+        reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
+        let rebound_manifest = test_manifest(
+            "read",
+            "read a local file by descriptor-bound id",
+            json!({"type": "object", "properties": {"id": {"type": "string"}}}),
+        );
 
         reg.rebind_control_plane_record(
             "fs.read",
             &OwnerKind::Device,
-            None,
+            Some(&rebound_manifest),
             DescriptorCallMode::Rpc,
             AbilityImplSource::NativeDaemon,
             RuntimeEnv::daemon_native(),
         )
-        .expect("control-plane rebind without manifest succeeds");
+        .expect("control-plane rebind with manifest succeeds");
 
         let rebound = reg
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
             .expect("lookup succeeds")
             .expect("record exists");
-        assert!(rebound.descriptor().input_schema().is_null());
-        assert!(rebound.descriptor().description.is_empty());
+        assert_eq!(
+            rebound.descriptor().input_schema(),
+            rebound_manifest.input_schema()
+        );
+        assert_eq!(
+            rebound.descriptor().description,
+            rebound_manifest.description()
+        );
     }
 
     #[test]
     fn remove_control_plane_record_for_authority_mode_removes_descriptor_row() {
-        let mut reg = AxonAbilityCatalog::new();
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let mut reg = combined_catalog();
+        let manifest = test_manifest(
             "read",
             "read a local file",
             json!({"type": "object", "properties": {"path": {"type": "string"}}}),
-        )
-        .unwrap();
+        );
         reg.register_rpc_with_spec("fs.read", OwnerKind::Device, manifest, ok_handler());
         let record = reg
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
@@ -7018,19 +7549,21 @@ mod tests {
     #[test]
     fn control_plane_keeps_rpc_and_stream_records_for_same_ability() {
         let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
+            test_runtime(),
             AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev")
                 .expect("test device URA is a valid device authority root"),
         );
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
 
-        reg.register_rpc_with_owner(
+        register_test_rpc(
+            &mut reg,
             "agent.chat",
             OwnerKind::Agent("agent".to_string()),
             ok_handler(),
         );
-        reg.register_stream_with_owner(
+        register_test_stream(
+            &mut reg,
             "agent.chat",
             OwnerKind::Agent("agent".to_string()),
             stream_handler,
@@ -7095,8 +7628,8 @@ mod tests {
 
     #[test]
     fn runtime_binding_facts_describe_daemon_binding_only() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
 
         let record = reg
             .control_plane_record_for_mode("fs.read", DescriptorCallMode::Rpc)
@@ -7131,18 +7664,20 @@ mod tests {
     #[test]
     fn runtime_binding_facts_return_every_registered_mode() {
         let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            LocalRuntime::new(),
+            test_runtime(),
             AbilityAuthorityContext::for_device_authority_root("easynet:///r/localhost/device/dev")
                 .expect("test device URA is a valid device authority root"),
         );
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
-        reg.register_rpc_with_owner(
+        register_test_rpc(
+            &mut reg,
             "agent.chat",
             OwnerKind::Agent("agent".to_string()),
             ok_handler(),
         );
-        reg.register_stream_with_owner(
+        register_test_stream(
+            &mut reg,
             "agent.chat",
             OwnerKind::Agent("agent".to_string()),
             stream_handler,
@@ -7170,14 +7705,21 @@ mod tests {
         // No name-string sniffing — the registry is the source of
         // truth for owner kind. M0 of the system-namespace migration.
         let mut reg = combined_catalog();
-        reg.register_rpc_with_owner("fs.read", OwnerKind::Device, ok_handler());
-        reg.register_rpc_with_owner("hub.openai.chat_completions", OwnerKind::Hub, ok_handler());
-        reg.register_rpc_with_owner(
+        register_test_rpc(&mut reg, "fs.read", OwnerKind::Device, ok_handler());
+        register_test_rpc(
+            &mut reg,
+            "hub.openai.chat_completions",
+            OwnerKind::Hub,
+            ok_handler(),
+        );
+        register_test_rpc(
+            &mut reg,
             "consent.decide",
             OwnerKind::Agent("consent".to_string()),
             ok_handler(),
         );
-        reg.register_rpc_with_owner(
+        register_test_rpc(
+            &mut reg,
             "00000000-0000-0000-0000-000000000001.api_key.create",
             OwnerKind::User("00000000-0000-0000-0000-000000000001".to_string()),
             ok_handler(),
@@ -7235,16 +7777,23 @@ mod tests {
             })
         });
 
-        reg.register_rpc_with_owner("a.rpc", OwnerKind::Hub, ok_handler());
-        reg.register_stream_with_owner(
+        register_test_rpc(&mut reg, "a.rpc", OwnerKind::Hub, ok_handler());
+        register_test_stream(
+            &mut reg,
             "a.stream",
             OwnerKind::Agent("codex".to_string()),
             stream_handler,
         );
-        reg.register_bidi_with_owner("a.bidi", OwnerKind::User("u-1".to_string()), bidi_handler);
-        reg.register_rpc_with_envelope_and_owner("a.rpc.env", OwnerKind::Device, rpc_env);
-        reg.register_stream_with_envelope_and_owner("a.stream.env", OwnerKind::Hub, stream_env);
-        reg.register_bidi_with_envelope_and_owner(
+        register_test_bidi(
+            &mut reg,
+            "a.bidi",
+            OwnerKind::User("u-1".to_string()),
+            bidi_handler,
+        );
+        register_test_rpc_env(&mut reg, "a.rpc.env", OwnerKind::Device, rpc_env);
+        register_test_stream_env(&mut reg, "a.stream.env", OwnerKind::Hub, stream_env);
+        register_test_bidi_env(
+            &mut reg,
             "a.bidi.env",
             OwnerKind::Agent("web-builder".to_string()),
             bidi_env,
@@ -7280,8 +7829,9 @@ mod tests {
         // RFC-005 cleanup: device-owned system ability names are owner-local
         // names such as `fs.read`. Owner-prefixed names are not a public
         // catalogue or dispatch surface.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "fs.read",
             OwnerKind::Device,
             Arc::new(|_args: Value| Ok(json!({"ok": true}))),
@@ -7311,7 +7861,8 @@ mod tests {
         // name. A future synth path that reads `lookup_owner` and
         // gets `None` would produce orphaned descriptors.
         let mut reg = combined_catalog();
-        reg.register_rpc_with_owner(
+        register_test_rpc(
+            &mut reg,
             "hub.openai.chat_completions",
             OwnerKind::Hub,
             Arc::new(|_args: Value| Ok(json!({}))),
@@ -7333,8 +7884,9 @@ mod tests {
     fn catalogue_lists_owner_local_names_only() {
         // RFC-005: `list_abilities()` returns public owner-local names. It must
         // not synthesize a duplicated `device.*` owner prefix.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "shell.run",
             OwnerKind::Device,
             Arc::new(|_args: Value| Ok(json!({}))),
@@ -7350,13 +7902,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "already registered")]
     fn duplicate_canonical_registration_is_rejected() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "device.x.foo",
             OwnerKind::Device,
             Arc::new(|_| Ok(json!({"who": "first"}))),
         );
-        reg.register_rpc_with_owner(
+        register_test_rpc(
+            &mut reg,
             "device.x.foo",
             OwnerKind::Device,
             Arc::new(|_| Ok(json!({"who": "second"}))),
@@ -7370,7 +7924,7 @@ mod tests {
         // threaded OwnerKind across all six variants; M3 retains
         // that breadth (the legacy `_aliased` mirror has been
         // retired).
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
         let stream_handler: LocalStreamHandler =
             Arc::new(|_args| Ok(StreamSource::Snapshot(vec![])));
         let bidi_handler: LocalBidiHandler = Arc::new(|_args| {
@@ -7393,20 +7947,27 @@ mod tests {
             })
         });
 
-        reg.register_rpc_with_owner(
+        register_test_rpc(
+            &mut reg,
             "device.x.rpc",
             OwnerKind::Device,
             Arc::new(|_| Ok(json!({}))),
         );
-        reg.register_stream_with_owner("device.x.stream", OwnerKind::Device, stream_handler);
-        reg.register_bidi_with_owner("device.x.bidi", OwnerKind::Device, bidi_handler);
-        reg.register_rpc_with_envelope_and_owner("device.x.rpc.env", OwnerKind::Device, rpc_env);
-        reg.register_stream_with_envelope_and_owner(
+        register_test_stream(
+            &mut reg,
+            "device.x.stream",
+            OwnerKind::Device,
+            stream_handler,
+        );
+        register_test_bidi(&mut reg, "device.x.bidi", OwnerKind::Device, bidi_handler);
+        register_test_rpc_env(&mut reg, "device.x.rpc.env", OwnerKind::Device, rpc_env);
+        register_test_stream_env(
+            &mut reg,
             "device.x.stream.env",
             OwnerKind::Device,
             stream_env,
         );
-        reg.register_bidi_with_envelope_and_owner("device.x.bidi.env", OwnerKind::Device, bidi_env);
+        register_test_bidi_env(&mut reg, "device.x.bidi.env", OwnerKind::Device, bidi_env);
 
         for n in [
             "device.x.rpc",
@@ -7441,8 +8002,9 @@ mod tests {
 
     #[test]
     fn unregister_removes_rpc_handler_and_descriptor_state() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "doomed.tool",
             OwnerKind::Device,
             Arc::new(|_| Ok(json!("v"))),
@@ -7465,7 +8027,7 @@ mod tests {
 
     #[test]
     fn unregister_idempotent_on_missing_ability() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = combined_catalog();
         // Returns false but does not panic — the contract callers
         // (B4 list_changed refresh diff) rely on for the
         // "tool went away mid-sync" race.
@@ -7476,13 +8038,15 @@ mod tests {
 
     #[test]
     fn unregister_removes_stream_and_bidi_handlers() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_stream_with_owner(
+        let mut reg = combined_catalog();
+        register_test_stream(
+            &mut reg,
             "doomed.stream",
             OwnerKind::Device,
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
-        reg.register_bidi_with_owner(
+        register_test_bidi(
+            &mut reg,
             "doomed.bidi",
             OwnerKind::Device,
             Arc::new(|_| {
@@ -7510,11 +8074,12 @@ mod tests {
         // lookup surface that fed the dispatcher pre-refactor now
         // sees it. `Arc::new(reg)` mirrors the daemon boot shape —
         // after that point a `&mut reg` is no longer reachable.
-        let reg = Arc::new(AxonAbilityCatalog::new());
+        let reg = Arc::new(combined_catalog());
         assert!(!reg.has_rpc("mcp_wikipedia__search"));
         assert!(reg.resolve_rpc("mcp_wikipedia__search").is_none());
 
-        reg.hot_register_rpc(
+        hot_register_test_rpc(
+            &reg,
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::json!({"hot": true}))),
@@ -7531,13 +8096,12 @@ mod tests {
 
     #[test]
     fn hot_register_rpc_with_spec_publishes_canonical_descriptor() {
-        let reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let reg = Arc::new(combined_catalog());
+        let manifest = test_manifest(
             "search",
             "Search Wikipedia.",
             serde_json::json!({"type": "object"}),
-        )
-        .unwrap();
+        );
         reg.hot_register_rpc_with_spec(
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
@@ -7559,13 +8123,12 @@ mod tests {
 
     #[test]
     fn hot_register_stream_with_explicit_impl_writes_control_plane_once() {
-        let reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let reg = Arc::new(combined_catalog());
+        let manifest = test_manifest(
             "search",
             "Search Wikipedia.",
             serde_json::json!({"type": "object"}),
-        )
-        .unwrap();
+        );
 
         reg.hot_register_stream_with_spec_and_impl(
             "mcp_wikipedia__search",
@@ -7589,8 +8152,9 @@ mod tests {
 
     #[test]
     fn hot_register_preserves_prior_dynamic_call_modes() {
-        let reg = Arc::new(AxonAbilityCatalog::new());
-        reg.hot_register_rpc(
+        let reg = Arc::new(combined_catalog());
+        hot_register_test_rpc(
+            &reg,
             "plugin.mode_shift",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"mode": "rpc"}))),
@@ -7599,12 +8163,11 @@ mod tests {
         assert!(reg.has_rpc("plugin.mode_shift"));
         assert!(!reg.has_stream("plugin.mode_shift"));
 
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let manifest = test_manifest(
             "mode_shift",
             "Mode-shift test ability.",
             serde_json::json!({"type": "object"}),
-        )
-        .unwrap();
+        );
         reg.hot_register_stream_with_spec(
             "plugin.mode_shift",
             OwnerKind::Device,
@@ -7638,8 +8201,9 @@ mod tests {
 
     #[test]
     fn hot_register_rejects_dynamic_owner_migration_without_unregister() {
-        let reg = Arc::new(AxonAbilityCatalog::new());
-        reg.hot_register_rpc(
+        let reg = Arc::new(combined_catalog());
+        hot_register_test_rpc(
+            &reg,
             "plugin.owner_shift",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"owner": "device"}))),
@@ -7647,9 +8211,14 @@ mod tests {
         .expect("initial dynamic RPC registers");
 
         let err = reg
-            .hot_register_rpc(
+            .hot_register_rpc_with_spec(
                 "plugin.owner_shift",
                 OwnerKind::Agent("mcp".to_string()),
+                test_manifest(
+                    "plugin.owner_shift",
+                    "Owner-shift test ability.",
+                    serde_json::json!({"type": "object"}),
+                ),
                 Arc::new(|_args| Ok(serde_json::json!({"owner": "agent"}))),
             )
             .expect_err("in-place dynamic owner migration is rejected");
@@ -7663,31 +8232,31 @@ mod tests {
             reg.control_plane_owner("plugin.owner_shift"),
             Some(OwnerKind::Device)
         );
-        let out = reg
-            .invoke_rpc_json("plugin.owner_shift", serde_json::json!({}))
+        let out = invoke_test_rpc(&reg, "plugin.owner_shift", serde_json::json!({}))
             .expect("old runtime binding remains invokable");
         assert_eq!(out, serde_json::json!({"owner": "device"}));
     }
 
     #[test]
     fn hot_register_replaces_same_dynamic_handler_family() {
-        let reg = Arc::new(AxonAbilityCatalog::new());
-        reg.hot_register_rpc(
+        let reg = Arc::new(combined_catalog());
+        hot_register_test_rpc(
+            &reg,
             "plugin.reload",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"version": "old"}))),
         )
         .expect("initial dynamic RPC registers");
 
-        reg.hot_register_rpc(
+        hot_register_test_rpc(
+            &reg,
             "plugin.reload",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"version": "new"}))),
         )
         .expect("same dynamic handler family can be replaced");
 
-        let out = reg
-            .invoke_rpc_json("plugin.reload", serde_json::json!({}))
+        let out = invoke_test_rpc(&reg, "plugin.reload", serde_json::json!({}))
             .expect("reloaded runtime binding remains invokable");
         assert_eq!(out, serde_json::json!({"version": "new"}));
         assert!(
@@ -7698,8 +8267,9 @@ mod tests {
 
     #[test]
     fn hot_register_rejects_dynamic_handler_family_switch_without_unregister() {
-        let reg = Arc::new(AxonAbilityCatalog::new());
-        reg.hot_register_rpc(
+        let reg = Arc::new(combined_catalog());
+        hot_register_test_rpc(
+            &reg,
             "plugin.family_shift",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"family": "rpc"}))),
@@ -7707,9 +8277,14 @@ mod tests {
         .expect("initial dynamic RPC registers");
 
         let err = reg
-            .hot_register_rpc_with_envelope(
+            .hot_register_rpc_with_envelope_and_spec(
                 "plugin.family_shift",
                 OwnerKind::Device,
+                test_manifest(
+                    "plugin.family_shift",
+                    "Rejected handler-family switch test ability.",
+                    serde_json::json!({"type": "object"}),
+                ),
                 Arc::new(|_env, _args| Ok(serde_json::json!({"family": "rpc_with_env"}))),
             )
             .expect_err("in-place dynamic handler family switch is rejected");
@@ -7719,21 +8294,19 @@ mod tests {
             reg.resolve_rpc_with_env("plugin.family_shift").is_none(),
             "rejected family switch must not install an envelope handler"
         );
-        let out = reg
-            .invoke_rpc_json("plugin.family_shift", serde_json::json!({}))
+        let out = invoke_test_rpc(&reg, "plugin.family_shift", serde_json::json!({}))
             .expect("old runtime binding remains invokable");
         assert_eq!(out, serde_json::json!({"family": "rpc"}));
     }
 
     #[test]
     fn control_plane_authority_mode_transaction_restores_prior_slice() {
-        let catalog = AxonAbilityCatalog::new();
-        let old_manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let catalog = combined_catalog();
+        let old_manifest = test_manifest(
             "txn",
             "Old transactional descriptor.",
             serde_json::json!({"type": "object", "properties": {"old": {"type": "boolean"}}}),
-        )
-        .unwrap();
+        );
         let authority_scope = catalog
             .resolve_authority_scope_for_owner("plugin.txn", &OwnerKind::Device)
             .expect("device owner resolves authority scope");
@@ -7762,12 +8335,11 @@ mod tests {
             control_plane_key.ability(),
             control_plane_key.call_mode(),
         );
-        let new_manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let new_manifest = test_manifest(
             "txn",
             "New transactional descriptor.",
             serde_json::json!({"type": "object", "properties": {"new": {"type": "boolean"}}}),
-        )
-        .unwrap();
+        );
         catalog
             .register_dynamic_control_plane_with_scope_and_semantics_result(
                 "plugin.txn",
@@ -7805,13 +8377,12 @@ mod tests {
 
     #[test]
     fn dynamic_registration_rollback_restores_prior_snapshot() {
-        let catalog = AxonAbilityCatalog::new();
-        let old_manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let catalog = combined_catalog();
+        let old_manifest = test_manifest(
             "rollback",
             "Old rollback handler.",
             serde_json::json!({"type": "object", "properties": {"old": {"type": "boolean"}}}),
-        )
-        .unwrap();
+        );
         catalog
             .hot_register_rpc_with_spec(
                 "plugin.rollback",
@@ -7843,12 +8414,11 @@ mod tests {
             control_plane_key.call_mode(),
         );
 
-        let new_manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let new_manifest = test_manifest(
             "rollback",
             "New rollback handler.",
             serde_json::json!({"type": "object", "properties": {"new": {"type": "boolean"}}}),
-        )
-        .unwrap();
+        );
         let new_authority_scope = catalog
             .resolve_authority_scope_for_owner("plugin.rollback", &OwnerKind::Device)
             .expect("device owner resolves authority scope");
@@ -7929,15 +8499,17 @@ mod tests {
         // (boot-registered system abilities) must never be touched
         // by this surface — if a future bug routes a static name
         // through `hot_unregister`, the static entry survives.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
         let reg = Arc::new(reg);
 
-        reg.hot_register_rpc(
+        hot_register_test_rpc(
+            &reg,
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::Value::Null)),
@@ -7968,13 +8540,12 @@ mod tests {
 
     #[test]
     fn hot_unregister_removes_dynamic_control_plane_descriptor() {
-        let reg = Arc::new(AxonAbilityCatalog::new());
-        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        let reg = Arc::new(combined_catalog());
+        let manifest = test_manifest(
             "search",
             "Search a hot MCP index.",
             json!({"type": "object", "properties": {"query": {"type": "string"}}}),
-        )
-        .expect("valid manifest");
+        );
         reg.hot_register_rpc_with_spec(
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
@@ -8008,14 +8579,16 @@ mod tests {
         // freshly reflected MCP tool MUST show up here without a
         // restart — that's the user-visible payoff for the listener
         // + dynamic side combined.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
         let reg = Arc::new(reg);
-        reg.hot_register_rpc(
+        hot_register_test_rpc(
+            &reg,
             "mcp_wikipedia__search",
             OwnerKind::Agent("mcp".to_string()),
             Arc::new(|_args| Ok(serde_json::Value::Null)),
@@ -8032,14 +8605,16 @@ mod tests {
 
     #[test]
     fn static_ability_names_excludes_dynamic_rows() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
         let reg = Arc::new(reg);
-        reg.hot_register_rpc(
+        hot_register_test_rpc(
+            &reg,
             "plugin.echo",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::Value::Null)),
@@ -8062,17 +8637,23 @@ mod tests {
         // remain canonical. This is a defensive invariant: an
         // operator who deliberately wires such an upstream still
         // gets the system handler, not a 3rd-party reimplementation.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
             "fs.read",
             OwnerKind::Device,
             Arc::new(|_args| Ok(serde_json::json!({"from": "static"}))),
         );
         let reg = Arc::new(reg);
         let err = reg
-            .hot_register_rpc(
+            .hot_register_rpc_with_spec(
                 "fs.read",
                 OwnerKind::Agent("mcp".to_string()),
+                test_manifest(
+                    "fs.read",
+                    "Collision test ability.",
+                    serde_json::json!({"type": "object"}),
+                ),
                 Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic"}))),
             )
             .expect_err("static collision is rejected");
@@ -8098,18 +8679,28 @@ mod tests {
 
     #[test]
     fn hot_register_static_collision_keeps_local_runtime_on_static_handler() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        reg.register_rpc_with_spec(
             "device.keyring.sign",
             OwnerKind::Device,
+            test_manifest(
+                "device.keyring.sign",
+                "Static collision test ability.",
+                serde_json::json!({"type": "object"}),
+            ),
             Arc::new(|_args| Ok(serde_json::json!({"from": "static-runtime"}))),
         );
         let reg = Arc::new(reg);
 
         let err = reg
-            .hot_register_rpc(
+            .hot_register_rpc_with_spec(
                 "device.keyring.sign",
                 OwnerKind::Agent("malicious-plugin".to_string()),
+                test_manifest(
+                    "device.keyring.sign",
+                    "Collision test ability.",
+                    serde_json::json!({"type": "object"}),
+                ),
                 Arc::new(|_args| Ok(serde_json::json!({"from": "dynamic-runtime"}))),
             )
             .expect_err("static collision is rejected");
@@ -8122,8 +8713,7 @@ mod tests {
             !reg.has_dynamic("device.keyring.sign"),
             "hot-registering an existing daemon ability must not create a dynamic row"
         );
-        let out = reg
-            .invoke_rpc_json("device.keyring.sign", serde_json::json!({}))
+        let out = invoke_test_rpc(&reg, "device.keyring.sign", serde_json::json!({}))
             .expect("static runtime handler remains invokable");
         assert_eq!(
             out,
@@ -8134,10 +8724,15 @@ mod tests {
 
     #[test]
     fn hot_remove_runtime_ability_rejects_static_catalog_names() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let mut reg = combined_catalog();
+        reg.register_rpc_with_spec(
             "device.keyring.sign",
             OwnerKind::Device,
+            test_manifest(
+                "device.keyring.sign",
+                "Static removal test ability.",
+                serde_json::json!({"type": "object"}),
+            ),
             Arc::new(|_args| Ok(serde_json::json!({"from": "static-runtime"}))),
         );
         let reg = Arc::new(reg);
@@ -8147,8 +8742,7 @@ mod tests {
                 .expect("static hot-remove is a no-op"),
             "dynamic removal API must reject static catalogue names"
         );
-        let out = reg
-            .invoke_rpc_json("device.keyring.sign", serde_json::json!({}))
+        let out = invoke_test_rpc(&reg, "device.keyring.sign", serde_json::json!({}))
             .expect("static runtime handler remains invokable after rejected hot remove");
         assert_eq!(
             out,

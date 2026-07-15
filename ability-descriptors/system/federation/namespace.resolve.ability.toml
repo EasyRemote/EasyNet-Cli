@@ -1,0 +1,38 @@
+schema_version = "2"
+name = "namespace.resolve"
+descriptor_version = "1.0.0"
+description = "Resolve an owner or ability URA into a typed Axon route answer."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = []
+additionalProperties = false
+
+[input_schema.properties.ability]
+type = "string"
+description = "Optional owner-local ability name."
+
+[input_schema.properties.caller_ura]
+type = "string"
+description = "Caller URA used for policy-aware resolution."
+
+[input_schema.properties.peers]
+type = "array"
+items = { type = "string" }
+description = "Optional peer hubs selected for proxy resolution."
+
+[input_schema.properties.target_ura]
+type = "string"
+description = "Owner, ability, or subject URA to resolve."

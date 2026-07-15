@@ -13,16 +13,69 @@ public final class RuntimeCoreSeamTest {
   private static final String DESCRIPTOR =
       "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0";
   private static final String NONCE = "AQIDBAUGBwgJCgsMDQ4PEA==";
+  private static final List<String> TEST_SELECTORS =
+      List.of(
+          "productNeutralJarExportsOnlyGenericRuntimeConcepts",
+          "discoveryAndLifecycleAreExplicit",
+          "healthKeepsLivenessSeparateFromReadiness",
+          "invocationPrepareSignSubmitPreservesTheCompleteTuple",
+          "invocationResultUsesTerminalReceipt",
+          "authorityMetadataIsTypedAndMutuallyExclusive",
+          "streamAndBidiLifecyclesAreBounded",
+          "asyncRuntimeDelegatesToTheSameRuntimeStateMachine",
+          "typedErrorsPreserveStableCategories",
+          "abiCompatibleAcceptsExactVersion",
+          "abiIncompatibleRejectsMismatch",
+          "retryHintsPreserveRetryability",
+          "canonicalSigningMaterialComesFromPrepare",
+          "completeTupleRejectsMissingCaller",
+          "preparedInvocationCannotBeSubmitted",
+          "streamAndBidiBackpressureAreBounded",
+          "streamOrderAndTerminalArePreserved");
 
   public static void main(String[] args) throws Exception {
-    productNeutralJarExportsOnlyGenericRuntimeConcepts();
-    discoveryAndLifecycleAreExplicit();
-    healthKeepsLivenessSeparateFromReadiness();
-    invocationPrepareSignSubmitPreservesTheCompleteTuple();
-    authorityMetadataIsTypedAndMutuallyExclusive();
-    streamAndBidiLifecyclesAreBounded();
-    asyncRuntimeDelegatesToTheSameRuntimeStateMachine();
-    typedErrorsPreserveStableCategories();
+    if (args.length == 0) {
+      for (String selector : TEST_SELECTORS) {
+        runSelector(selector);
+      }
+      return;
+    }
+    if (args.length != 1) {
+      throw new IllegalArgumentException("expected one test selector or --list");
+    }
+    if ("--list".equals(args[0])) {
+      TEST_SELECTORS.forEach(System.out::println);
+      return;
+    }
+    runSelector(args[0]);
+  }
+
+  private static void runSelector(String selector) throws Exception {
+    switch (selector) {
+      case "productNeutralJarExportsOnlyGenericRuntimeConcepts" ->
+          productNeutralJarExportsOnlyGenericRuntimeConcepts();
+      case "discoveryAndLifecycleAreExplicit" -> discoveryAndLifecycleAreExplicit();
+      case "healthKeepsLivenessSeparateFromReadiness" ->
+          healthKeepsLivenessSeparateFromReadiness();
+      case "invocationPrepareSignSubmitPreservesTheCompleteTuple" ->
+          invocationPrepareSignSubmitPreservesTheCompleteTuple();
+      case "invocationResultUsesTerminalReceipt" -> invocationResultUsesTerminalReceipt();
+      case "authorityMetadataIsTypedAndMutuallyExclusive" ->
+          authorityMetadataIsTypedAndMutuallyExclusive();
+      case "streamAndBidiLifecyclesAreBounded" -> streamAndBidiLifecyclesAreBounded();
+      case "asyncRuntimeDelegatesToTheSameRuntimeStateMachine" ->
+          asyncRuntimeDelegatesToTheSameRuntimeStateMachine();
+      case "typedErrorsPreserveStableCategories" -> typedErrorsPreserveStableCategories();
+      case "abiCompatibleAcceptsExactVersion" -> abiCompatibleAcceptsExactVersion();
+      case "abiIncompatibleRejectsMismatch" -> abiIncompatibleRejectsMismatch();
+      case "retryHintsPreserveRetryability" -> retryHintsPreserveRetryability();
+      case "canonicalSigningMaterialComesFromPrepare" -> canonicalSigningMaterialComesFromPrepare();
+      case "completeTupleRejectsMissingCaller" -> completeTupleRejectsMissingCaller();
+      case "preparedInvocationCannotBeSubmitted" -> preparedInvocationCannotBeSubmitted();
+      case "streamAndBidiBackpressureAreBounded" -> streamAndBidiBackpressureAreBounded();
+      case "streamOrderAndTerminalArePreserved" -> streamOrderAndTerminalArePreserved();
+      default -> throw new IllegalArgumentException("unknown test selector: " + selector);
+    }
   }
 
   private static void productNeutralJarExportsOnlyGenericRuntimeConcepts() {
@@ -98,8 +151,8 @@ public final class RuntimeCoreSeamTest {
     InvocationResult result = runtime.invoke(draft);
     check(result.ok(), "generic invocation result");
     check(
-        "opaque-receipt-ref".equals(result.receipt().get("receipt_ref")),
-        "opaque receipt facts are preserved");
+        "opaque-receipt-ref".equals(result.terminalReceipt().get("receipt_ref")),
+        "opaque terminal receipt facts are preserved");
 
     PreparedInvocation prepared = runtime.prepare(draft, Map.of("deadline_ms", 1000));
     check(!prepared.submitReady(), "prepared invocation is not submit-ready");
@@ -111,12 +164,62 @@ public final class RuntimeCoreSeamTest {
     SignedInvocation signed = prepared.signWithCallerSignature(signature);
     check(signed.submitReady(), "signed invocation is submit-ready");
     InvocationHandle handle = signed.submit();
-    check(handle.handleId() == 7 && !handle.terminal(), "submitted invocation handle");
+    check(!handle.terminal(), "submitted invocation handle");
+    InvocationResult awaited = runtime.awaitResult(handle);
+    check(awaited.ok(), "awaited invocation result");
+    InvocationCancel cancelled = runtime.cancel(handle, "done");
+    check(cancelled.requestAccepted() && cancelled.terminal(), "cancelled invocation handle");
+    expectSDKError(
+        ErrorCode.INVALID_ARGUMENT,
+        () ->
+            InvocationCancel.fromJSON(
+                "{\"handle_id\":7,\"cancelled\":true,\"state\":\"Cancelled\",\"terminal\":true}"
+                    .getBytes(StandardCharsets.UTF_8)));
+    InvocationHandle events = runtime.events(handle);
+    check(events.terminal(), "invocation events snapshot");
+    runtime.closeHandle(handle);
     check(transport.submittedSigner.equals("caller-key-1"), "caller signer preserved");
+    InvocationHandle forged =
+        InvocationHandle.fromJSON(
+            "{\"handle_id\":7,\"state\":\"Running\",\"terminal\":false}"
+                .getBytes(StandardCharsets.UTF_8));
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> runtime.awaitResult(forged));
+    transport.eventHandleId = 8;
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> runtime.events(handle));
 
     expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> runtime.submitSigned(prepared));
     runtime.close();
     expectSDKError(ErrorCode.INVALID_HANDLE, runtime::newInvocation);
+  }
+
+  private static void invocationResultUsesTerminalReceipt() {
+    InvocationResult canonical =
+        InvocationResult.fromJSON(
+            JsonValueWriter.object(
+                Map.of(
+                    "ok",
+                    true,
+                    "terminal_state",
+                    "Completed",
+                    "terminal_receipt",
+                    Map.of("receipt_ref", "canonical-terminal"))));
+    check(
+        "canonical-terminal".equals(canonical.terminalReceipt().get("receipt_ref")),
+        "terminal_receipt populates terminalReceipt");
+
+    InvocationResult legacyOnly =
+        InvocationResult.fromJSON(
+            JsonValueWriter.object(
+                Map.of(
+                    "ok",
+                    true,
+                    "terminal_state",
+                    "Completed",
+                    "receipt",
+                    Map.of("receipt_ref", "legacy-only"))));
+    check(
+        legacyOnly.terminalReceipt().isEmpty(),
+        "legacy receipt alias must not populate terminalReceipt");
   }
 
   private static void authorityMetadataIsTypedAndMutuallyExclusive() {
@@ -233,6 +336,63 @@ public final class RuntimeCoreSeamTest {
         "route availability class");
   }
 
+  private static void abiCompatibleAcceptsExactVersion() {
+    Client client = discoveryClient();
+    check(client.requireABI(5).abiVersion() == 5, "exact ABI accepted");
+  }
+
+  private static void abiIncompatibleRejectsMismatch() {
+    Client client = discoveryClient();
+    expectSDKError(ErrorCode.VERSION_INCOMPATIBLE, () -> client.requireABI(4));
+  }
+
+  private static void retryHintsPreserveRetryability() {
+    SDKError safe = new SDKError(ErrorCode.TIMEOUT, "execution", RetryHint.SAFE, true, "timeout", "", "", "", Map.of(), null);
+    SDKError never = SDKError.validation("input", "bad");
+    check(safe.retryHint() == RetryHint.SAFE && safe.retryable(), "safe retry hint");
+    check(never.retryHint() == RetryHint.NEVER && !never.retryable(), "never retry hint");
+  }
+
+  private static void canonicalSigningMaterialComesFromPrepare() {
+    RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    PreparedInvocation prepared = runtime.prepare(completeDraft(runtime), Map.of("deadline_ms", 1000));
+    check(prepared.signingMaterial().descriptorRef().equals(DESCRIPTOR), "canonical descriptor binding");
+    check(Base64.getDecoder().decode(prepared.signingMaterial().canonicalBytesBase64()).length > 0, "canonical bytes");
+  }
+
+  private static void completeTupleRejectsMissingCaller() {
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> new InvocationBuilder().callee(CALLEE).descriptor(DESCRIPTOR).subject(CALLEE).nonce(NONCE).causalContext("{\"form\":\"none\"}").argsJson("{}").inspect());
+  }
+
+  private static void preparedInvocationCannotBeSubmitted() {
+    RuntimeClient runtime = new RuntimeClient(new MemoryRuntimeTransport());
+    PreparedInvocation prepared = runtime.prepare(completeDraft(runtime), Map.of("deadline_ms", 1000));
+    expectSDKError(ErrorCode.INVALID_ARGUMENT, () -> runtime.submitSigned(prepared));
+  }
+
+  private static void streamAndBidiBackpressureAreBounded() {
+    StreamHandle stream = new StreamHandle(new CountingStreamSource());
+    for (int index = 0; index <= StreamHandle.MAX_RETAINED_EVENTS; index++) stream.next();
+    check("BackpressureTerminated".equals(stream.terminalEvent().state()), "backpressure terminal");
+    BidiSession bidi = new BidiSession(new CountingBidiSource());
+    for (int index = 0; index <= BidiSession.MAX_RETAINED_FRAMES; index++) bidi.next();
+    check("backpressure_terminated".equals(bidi.terminalFrame().kind()), "bidi backpressure terminal");
+  }
+
+  private static void streamOrderAndTerminalArePreserved() {
+    StreamHandle stream = new StreamHandle(new OrderedTerminalStreamSource());
+    check(stream.next().sequence() == 0, "first stream sequence");
+    check(stream.next().sequence() == 1 && stream.terminalEvent().terminal(), "terminal stream sequence");
+  }
+
+  private static Client discoveryClient() {
+    return new Client(new DiscoveryTransport() {
+      public FeatureSet featureDiscovery() {
+        return new FeatureSet(5, "test", Map.of("runtime_core", "seam"), Map.of("runtime_prepare", true));
+      }
+    });
+  }
+
   private static InvocationDraft completeDraft(RuntimeClient runtime) {
     return complete(runtime.newInvocation());
   }
@@ -345,7 +505,6 @@ public final class RuntimeCoreSeamTest {
           """
           {
             "api_ready": true,
-            "daemon_ready": true,
             "invocation_ready": false,
             "directory_ready": false,
             "trust_ready": true,
@@ -380,6 +539,7 @@ public final class RuntimeCoreSeamTest {
 
   private static final class MemoryRuntimeTransport implements RuntimeTransport {
     private String submittedSigner = "";
+    private long eventHandleId = 7;
 
     @Override
     public InvocationResult invoke(InvocationDraft draft) {
@@ -426,6 +586,47 @@ public final class RuntimeCoreSeamTest {
     }
 
     @Override
+    public byte[] awaitHandle(InvocationControlCapability control) {
+      return JsonValueWriter.object(
+          Map.of(
+              "ok",
+              true,
+              "terminal_state",
+              "Completed",
+              "output_json",
+              Map.of("done", true),
+              "terminal_receipt",
+              Map.of("receipt_ref", "opaque-receipt-ref")));
+    }
+
+    @Override
+    public byte[] cancelHandle(InvocationControlCapability control, String reason) {
+      return JsonValueWriter.object(
+          Map.of(
+              "handle_id",
+              control.adapterHandleId(),
+              "request_accepted",
+              true,
+              "deduplicated",
+              false,
+              "cancelled",
+              true,
+              "state",
+              "Cancelled",
+              "terminal",
+              true));
+    }
+
+    @Override
+    public byte[] handleEvents(InvocationControlCapability control) {
+      return JsonValueWriter.object(
+          Map.of("handle_id", eventHandleId, "state", "Completed", "terminal", true));
+    }
+
+    @Override
+    public void freeHandle(InvocationControlCapability control) {}
+
+    @Override
     public StreamSource openStream(InvocationDraft draft) {
       return new CountingStreamSource();
     }
@@ -469,6 +670,15 @@ public final class RuntimeCoreSeamTest {
     @Override
     public StreamEvent next() {
       return StreamEvent.data(sequence++, "{\"sequence\":" + sequence + "}");
+    }
+  }
+
+  private static final class OrderedTerminalStreamSource implements StreamSource {
+    private long sequence;
+
+    @Override
+    public StreamEvent next() {
+      return sequence++ == 0 ? StreamEvent.data(0, "{}") : StreamEvent.terminal(1, "Completed");
     }
   }
 

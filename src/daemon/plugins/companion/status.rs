@@ -12,17 +12,12 @@ use crate::daemon::plugins::manifest::{
 };
 
 /// Operator desired state remembered by the companion state store.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompanionDesiredState {
     Enabled,
+    #[default]
     Disabled,
-}
-
-impl Default for CompanionDesiredState {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 impl CompanionDesiredState {
@@ -79,9 +74,10 @@ impl CompanionSupervisorState {
 }
 
 /// Process or heartbeat state observed independently of supervisor metadata.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompanionObservedState {
+    #[default]
     Unknown,
     NotRunning,
     Starting,
@@ -192,12 +188,6 @@ pub struct CompanionObservation {
     pub last_seen_unix_ms: Option<u64>,
     pub launch_method: Option<String>,
     pub error: Option<String>,
-}
-
-impl Default for CompanionObservedState {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 pub fn project_state(

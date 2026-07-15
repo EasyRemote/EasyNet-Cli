@@ -77,6 +77,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+pub(crate) mod stdio;
+
 /// Config row for one upstream MCP server. Mirrors the shape of
 /// `~/.claude/mcp_servers.json` so an operator who already runs
 /// MCP can drop their existing config in. Fields:

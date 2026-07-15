@@ -5,8 +5,7 @@
 // Description: Device-side remote desktop control-plane handlers.
 //
 // Protocol Responsibility:
-// - Implements the EasyNet-Cli side of the Axon-owned remote desktop
-//   session contract draft.
+// - Implements the daemon-owned remote desktop session contract.
 // - Requires the acted-on display/window/application resource to be
 //   supplied as Envelope.subject, never as JSON arguments.
 // - Keeps production media transport explicit: this module creates and
@@ -27,8 +26,8 @@
 //   WebRTC endpoint when the local media SDK exposes a transport-ready backend.
 //
 // Architectural Position:
-// - CLI device adapter layer. Axon owns canonical protocol semantics;
-//   this file implements the current device runtime behavior.
+// - CLI device adapter layer. Axon owns generic invocation semantics; this
+//   file owns remote desktop runtime behavior and product state transitions.
 
 use std::sync::Arc;
 

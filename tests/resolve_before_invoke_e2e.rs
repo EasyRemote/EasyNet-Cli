@@ -22,7 +22,7 @@
 //!    uses. No catalog seam is poked directly.
 //! 3. A unary `Invoke` of the device-local ability drives
 //!    `resolve_local_rpc_route` → `DaemonRouteResolver` →
-//!    `LocalDeviceAbility` FINAL_ROUTE → runtime dispatch, and the
+//!    `LocalDeviceAbility` FINAL_ROUTE → canonical local dispatch, and the
 //!    echoed payload round-trips back. The route is proven by the
 //!    live LocalRuntime binding, not by DeviceAgent projection.
 //! 4. A unary `Invoke` of an ability not bound in the same device's

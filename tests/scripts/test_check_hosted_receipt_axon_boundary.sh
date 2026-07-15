@@ -57,4 +57,16 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "retired module import should exit 1 (got $rc)"
 
+mkdir -p "$SB/src/daemon/execution/mission"
+printf 'pub fn receipt_header() {}\n' \
+  > "$SB/src/daemon/execution/mission/dispatch_receipt.rs"
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-hosted-receipt-axon-boundary.sh
+) >/tmp/check-hosted-receipt-boundary.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "legacy mission receipt header path should exit 1 (got $rc)"
+
 echo "test_check_hosted_receipt_axon_boundary.sh: all cases passed"

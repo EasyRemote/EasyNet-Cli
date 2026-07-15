@@ -35,9 +35,9 @@ const (
 	directSignedDescriptorRefMetadata = "x-easynet-signed-descriptor-ref"
 )
 
-// DirectDaemonRuntimeConnector opens a concrete daemon Runtime Core transport
-// over the daemon's Axon Invocation gRPC endpoint.
-type DirectDaemonRuntimeConnector struct {
+// DirectRuntimeConnector opens a concrete Runtime Core transport over an Axon
+// Invocation gRPC endpoint.
+type DirectRuntimeConnector struct {
 	ControlPath string
 	Reader      ControlDiscoveryReader
 
@@ -45,15 +45,15 @@ type DirectDaemonRuntimeConnector struct {
 	handle               RuntimeTransport
 	addressing           Addressing
 	closeHandleTransport bool
-	transports           map[*DirectDaemonRuntimeTransport]struct{}
+	transports           map[*DirectRuntimeTransport]struct{}
 	closed               bool
 }
 
-// DirectDaemonRuntimeConnectorOptions configures a concrete direct runtime
+// DirectRuntimeConnectorOptions configures a concrete direct runtime
 // connector. HandleTransport is the SDK-owned Runtime Core surface for
 // prepare/submit/handle operations; direct gRPC remains the invoke/stream/bidi
 // transport.
-type DirectDaemonRuntimeConnectorOptions struct {
+type DirectRuntimeConnectorOptions struct {
 	ControlPath          string
 	Reader               ControlDiscoveryReader
 	HandleTransport      RuntimeTransport
@@ -61,35 +61,35 @@ type DirectDaemonRuntimeConnectorOptions struct {
 	CloseHandleTransport bool
 }
 
-// NewDirectDaemonRuntimeConnector creates a direct daemon Runtime connector.
-func NewDirectDaemonRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *DirectDaemonRuntimeConnector {
-	return NewDirectDaemonRuntimeConnectorWithOptions(DirectDaemonRuntimeConnectorOptions{
+// NewDirectRuntimeConnector creates a direct Runtime connector.
+func NewDirectRuntimeConnector(controlPath string, reader ControlDiscoveryReader) *DirectRuntimeConnector {
+	return NewDirectRuntimeConnectorWithOptions(DirectRuntimeConnectorOptions{
 		ControlPath: controlPath,
 		Reader:      reader,
 	})
 }
 
-// NewDirectDaemonRuntimeConnectorWithOptions creates a direct daemon Runtime
+// NewDirectRuntimeConnectorWithOptions creates a direct Runtime
 // connector with explicit handle-transport ownership.
-func NewDirectDaemonRuntimeConnectorWithOptions(options DirectDaemonRuntimeConnectorOptions) *DirectDaemonRuntimeConnector {
+func NewDirectRuntimeConnectorWithOptions(options DirectRuntimeConnectorOptions) *DirectRuntimeConnector {
 	reader := options.Reader
 	if reader == nil {
 		reader = FileControlDiscoveryReader{}
 	}
-	return &DirectDaemonRuntimeConnector{
+	return &DirectRuntimeConnector{
 		ControlPath:          options.ControlPath,
 		Reader:               reader,
 		handle:               options.HandleTransport,
 		addressing:           options.Addressing,
 		closeHandleTransport: options.CloseHandleTransport,
-		transports:           map[*DirectDaemonRuntimeTransport]struct{}{},
+		transports:           map[*DirectRuntimeTransport]struct{}{},
 	}
 }
 
 // WithHandleTransport sets the Runtime Core handle transport used for
 // prepare/submit/handle operations. The caller must set closeOnConnectorClose
 // only when this connector owns the handle transport lifecycle.
-func (c *DirectDaemonRuntimeConnector) WithHandleTransport(handle RuntimeTransport, closeOnConnectorClose bool) *DirectDaemonRuntimeConnector {
+func (c *DirectRuntimeConnector) WithHandleTransport(handle RuntimeTransport, closeOnConnectorClose bool) *DirectRuntimeConnector {
 	if c == nil {
 		return c
 	}
@@ -104,8 +104,8 @@ func (c *DirectDaemonRuntimeConnector) WithHandleTransport(handle RuntimeTranspo
 }
 
 // WithAddressing sets the canonical provider used to project DescriptorRef
-// values and descriptor-bound subjects before direct daemon dispatch.
-func (c *DirectDaemonRuntimeConnector) WithAddressing(addressing Addressing) *DirectDaemonRuntimeConnector {
+// values and descriptor-bound subjects before direct runtime dispatch.
+func (c *DirectRuntimeConnector) WithAddressing(addressing Addressing) *DirectRuntimeConnector {
 	if c == nil {
 		return c
 	}
@@ -118,7 +118,7 @@ func (c *DirectDaemonRuntimeConnector) WithAddressing(addressing Addressing) *Di
 	return c
 }
 
-func (c *DirectDaemonRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
+func (c *DirectRuntimeConnector) Resolve(ctx context.Context, optionsJSON []byte) ([]byte, error) {
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (c *DirectDaemonRuntimeConnector) Resolve(ctx context.Context, optionsJSON 
 	}, options)
 }
 
-func (c *DirectDaemonRuntimeConnector) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {
+func (c *DirectRuntimeConnector) Handshake(ctx context.Context, endpointJSON []byte) (RuntimeTransport, []byte, error) {
 	if err := c.requireOpen(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -164,7 +164,7 @@ func (c *DirectDaemonRuntimeConnector) Handshake(ctx context.Context, endpointJS
 		return nil, nil, err
 	}
 	handleTransport, addressing, _ := c.transportConfig(ctx)
-	transport, err := OpenDirectDaemonRuntimeTransport(ctx, endpoint.Endpoint, DirectRuntimeOptions{
+	transport, err := OpenDirectRuntimeTransport(ctx, endpoint.Endpoint, DirectRuntimeOptions{
 		DialTimeoutMS:   options.DialTimeoutMS,
 		InvokeTimeoutMS: options.InvokeTimeoutMS,
 		MaxMessageBytes: options.MaxMessageBytes,
@@ -199,7 +199,7 @@ func (c *DirectDaemonRuntimeConnector) Handshake(ctx context.Context, endpointJS
 	return transport, raw, nil
 }
 
-func (c *DirectDaemonRuntimeConnector) Close(ctx context.Context) error {
+func (c *DirectRuntimeConnector) Close(ctx context.Context) error {
 	if c == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
@@ -216,11 +216,11 @@ func (c *DirectDaemonRuntimeConnector) Close(ctx context.Context) error {
 	c.handle = nil
 	c.addressing = nil
 	c.closeHandleTransport = false
-	transports := make([]*DirectDaemonRuntimeTransport, 0, len(c.transports))
+	transports := make([]*DirectRuntimeTransport, 0, len(c.transports))
 	for transport := range c.transports {
 		transports = append(transports, transport)
 	}
-	c.transports = map[*DirectDaemonRuntimeTransport]struct{}{}
+	c.transports = map[*DirectRuntimeTransport]struct{}{}
 	c.closed = true
 	c.mu.Unlock()
 
@@ -236,7 +236,7 @@ func (c *DirectDaemonRuntimeConnector) Close(ctx context.Context) error {
 	return closeErr
 }
 
-func (c *DirectDaemonRuntimeConnector) requireOpen(ctx context.Context) error {
+func (c *DirectRuntimeConnector) requireOpen(ctx context.Context) error {
 	if c == nil || c.Reader == nil {
 		return invalidRuntimeClient("runtime connector is not initialized")
 	}
@@ -251,7 +251,7 @@ func (c *DirectDaemonRuntimeConnector) requireOpen(ctx context.Context) error {
 	return nil
 }
 
-func (c *DirectDaemonRuntimeConnector) transportConfig(ctx context.Context) (RuntimeTransport, Addressing, bool) {
+func (c *DirectRuntimeConnector) transportConfig(ctx context.Context) (RuntimeTransport, Addressing, bool) {
 	if c == nil || ctx == nil {
 		return nil, nil, false
 	}
@@ -260,7 +260,7 @@ func (c *DirectDaemonRuntimeConnector) transportConfig(ctx context.Context) (Run
 	return c.handle, c.addressing, c.closeHandleTransport
 }
 
-// DirectRuntimeOptions are SDK-internal direct daemon transport knobs.
+// DirectRuntimeOptions are SDK-internal direct runtime transport knobs.
 type DirectRuntimeOptions struct {
 	DialTimeoutMS        int64
 	InvokeTimeoutMS      int64
@@ -270,8 +270,8 @@ type DirectRuntimeOptions struct {
 	CloseHandleTransport bool
 }
 
-// DirectDaemonRuntimeTransport is a concrete RuntimeTransport over Axon gRPC UDS.
-type DirectDaemonRuntimeTransport struct {
+// DirectRuntimeTransport is a concrete RuntimeTransport over Axon gRPC UDS.
+type DirectRuntimeTransport struct {
 	mu                   sync.Mutex
 	conn                 *grpc.ClientConn
 	client               axonpb.InvocationClient
@@ -293,8 +293,8 @@ type directRuntimeHandleSnapshot struct {
 	result   json.RawMessage
 }
 
-// OpenDirectDaemonRuntimeTransport opens a direct daemon Runtime transport.
-func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, options DirectRuntimeOptions) (*DirectDaemonRuntimeTransport, error) {
+// OpenDirectRuntimeTransport opens a direct Runtime transport.
+func OpenDirectRuntimeTransport(ctx context.Context, endpoint string, options DirectRuntimeOptions) (*DirectRuntimeTransport, error) {
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
@@ -325,14 +325,14 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 	conn, err := grpc.DialContext(dialCtx, target, dialOptions...)
 	if err != nil {
 		return nil, directRuntimeError(
-			"daemon invocation endpoint is not ready",
+			"runtime invocation endpoint is not ready",
 			ErrDaemonOffline,
 			RetrySafe,
 			map[string]any{"endpoint": endpoint},
 			err,
 		)
 	}
-	return &DirectDaemonRuntimeTransport{
+	return &DirectRuntimeTransport{
 		conn:                 conn,
 		client:               axonpb.NewInvocationClient(conn),
 		endpoint:             endpoint,
@@ -344,7 +344,7 @@ func OpenDirectDaemonRuntimeTransport(ctx context.Context, endpoint string, opti
 	}, nil
 }
 
-func (t *DirectDaemonRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
+func (t *DirectRuntimeTransport) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
 	client, timeout, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -362,7 +362,7 @@ func (t *DirectDaemonRuntimeTransport) Invoke(ctx context.Context, draftJSON []b
 	return directInvokeResponseJSON(draft, response)
 }
 
-func (t *DirectDaemonRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
+func (t *DirectRuntimeTransport) OpenStream(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error) {
 	client, timeout, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -377,7 +377,7 @@ func (t *DirectDaemonRuntimeTransport) OpenStream(ctx context.Context, draftJSON
 		cancel()
 		return nil, nil, directRuntimeGRPCError(err, t.endpoint)
 	}
-	transport := newDirectDaemonStreamTransport(stream, cancel, t.endpoint)
+	transport := newDirectRuntimeStreamTransport(stream, cancel, t.endpoint)
 	openJSON, err := json.Marshal(map[string]any{
 		"stream_id":           transport.streamID,
 		"state":               "Open",
@@ -390,7 +390,7 @@ func (t *DirectDaemonRuntimeTransport) OpenStream(ctx context.Context, draftJSON
 	return transport, openJSON, nil
 }
 
-func (t *DirectDaemonRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
+func (t *DirectRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error) {
 	client, timeout, err := t.requireOpen(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -413,15 +413,11 @@ func (t *DirectDaemonRuntimeTransport) OpenBidi(ctx context.Context, draftJSON [
 		cancel()
 		return nil, nil, directRuntimeGRPCError(err, t.endpoint)
 	}
-	transport, err := newDirectDaemonBidiTransport(stream, cancel, t.endpoint, openFrame)
+	transport, err := newDirectRuntimeBidiTransport(stream, cancel, t.endpoint, openFrame)
 	if err != nil {
 		return nil, nil, err
 	}
-	openJSON, err := json.Marshal(map[string]any{
-		"session_id":          transport.sessionID,
-		"state":               "Open",
-		"max_buffered_frames": MaxBidiBufferedFrames,
-	})
+	openJSON, err := runtimeBidiOpenJSON(transport.sessionID, MaxBidiBufferedFrames)
 	if err != nil {
 		_ = transport.Close(ctx)
 		return nil, nil, invalidRuntimePayload(fmt.Sprintf("encode direct bidi open JSON: %v", err), err)
@@ -429,7 +425,7 @@ func (t *DirectDaemonRuntimeTransport) OpenBidi(ctx context.Context, draftJSON [
 	return transport, openJSON, nil
 }
 
-func (t *DirectDaemonRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+func (t *DirectRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return nil, err
 	} else if ok {
@@ -438,7 +434,7 @@ func (t *DirectDaemonRuntimeTransport) Prepare(ctx context.Context, draftJSON []
 	return directRuntimePrepare(ctx, t.addressing, draftJSON, optionsJSON)
 }
 
-func (t *DirectDaemonRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
+func (t *DirectRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
 	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return nil, err
 	} else if ok {
@@ -460,12 +456,13 @@ func (t *DirectDaemonRuntimeTransport) SubmitSigned(ctx context.Context, signedJ
 	return directRuntimeHandleSnapshotJSON(snapshot)
 }
 
-func (t *DirectDaemonRuntimeTransport) AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error) {
+func (t *DirectRuntimeTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return nil, err
 	} else if ok {
-		return handle.AwaitHandle(ctx, handleID)
+		return handle.AwaitHandle(ctx, control)
 	}
+	handleID := control.adapterHandleID()
 	snapshot, err := t.directHandleSnapshot(ctx, handleID)
 	if err != nil {
 		return nil, err
@@ -473,12 +470,13 @@ func (t *DirectDaemonRuntimeTransport) AwaitHandle(ctx context.Context, handleID
 	return append([]byte(nil), snapshot.result...), nil
 }
 
-func (t *DirectDaemonRuntimeTransport) CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
+func (t *DirectRuntimeTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
 	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return nil, err
 	} else if ok {
-		return handle.CancelHandle(ctx, handleID, reason)
+		return handle.CancelHandle(ctx, control, reason)
 	}
+	handleID := control.adapterHandleID()
 	snapshot, err := t.directHandleSnapshot(ctx, handleID)
 	if err != nil {
 		return nil, err
@@ -491,12 +489,13 @@ func (t *DirectDaemonRuntimeTransport) CancelHandle(ctx context.Context, handleI
 	})
 }
 
-func (t *DirectDaemonRuntimeTransport) HandleEvents(ctx context.Context, handleID uint64) ([]byte, error) {
+func (t *DirectRuntimeTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return nil, err
 	} else if ok {
-		return handle.HandleEvents(ctx, handleID)
+		return handle.HandleEvents(ctx, control)
 	}
+	handleID := control.adapterHandleID()
 	snapshot, err := t.directHandleSnapshot(ctx, handleID)
 	if err != nil {
 		return nil, err
@@ -504,12 +503,13 @@ func (t *DirectDaemonRuntimeTransport) HandleEvents(ctx context.Context, handleI
 	return directRuntimeHandleSnapshotJSON(snapshot)
 }
 
-func (t *DirectDaemonRuntimeTransport) FreeHandle(ctx context.Context, handleID uint64) error {
+func (t *DirectRuntimeTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
 	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
 		return err
 	} else if ok {
-		return handle.FreeHandle(ctx, handleID)
+		return handle.FreeHandle(ctx, control)
 	}
+	handleID := control.adapterHandleID()
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -680,7 +680,7 @@ func directSignedInvocationDraftJSON(signedJSON []byte) ([]byte, error) {
 	return json.Marshal(signedDraft)
 }
 
-func (t *DirectDaemonRuntimeTransport) storeDirectHandle(state string, terminal bool, result json.RawMessage) directRuntimeHandleSnapshot {
+func (t *DirectRuntimeTransport) storeDirectHandle(state string, terminal bool, result json.RawMessage) directRuntimeHandleSnapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.nextHandleID++
@@ -710,7 +710,7 @@ func (t *DirectDaemonRuntimeTransport) storeDirectHandle(state string, terminal 
 	return snapshot
 }
 
-func (t *DirectDaemonRuntimeTransport) directHandleSnapshot(ctx context.Context, handleID uint64) (directRuntimeHandleSnapshot, error) {
+func (t *DirectRuntimeTransport) directHandleSnapshot(ctx context.Context, handleID uint64) (directRuntimeHandleSnapshot, error) {
 	if ctx == nil {
 		return directRuntimeHandleSnapshot{}, invalidRuntimeClient("context is required")
 	}
@@ -749,7 +749,7 @@ func directRuntimeHandleSnapshotJSON(snapshot directRuntimeHandleSnapshot) ([]by
 	})
 }
 
-func (t *DirectDaemonRuntimeTransport) Close(ctx context.Context) error {
+func (t *DirectRuntimeTransport) Close(ctx context.Context) error {
 	if t == nil {
 		return invalidRuntimeClient("runtime transport is not initialized")
 	}
@@ -786,7 +786,7 @@ func (t *DirectDaemonRuntimeTransport) Close(ctx context.Context) error {
 	return closeErr
 }
 
-func (t *DirectDaemonRuntimeTransport) requireOpen(ctx context.Context) (axonpb.InvocationClient, time.Duration, error) {
+func (t *DirectRuntimeTransport) requireOpen(ctx context.Context) (axonpb.InvocationClient, time.Duration, error) {
 	if t == nil {
 		return nil, 0, invalidRuntimeClient("runtime transport is not initialized")
 	}
@@ -801,7 +801,7 @@ func (t *DirectDaemonRuntimeTransport) requireOpen(ctx context.Context) (axonpb.
 	return t.client, t.invokeTimeout, nil
 }
 
-func (t *DirectDaemonRuntimeTransport) optionalHandleTransport(ctx context.Context) (RuntimeTransport, bool, error) {
+func (t *DirectRuntimeTransport) optionalHandleTransport(ctx context.Context) (RuntimeTransport, bool, error) {
 	if _, _, err := t.requireOpen(ctx); err != nil {
 		return nil, false, err
 	}
@@ -813,7 +813,7 @@ func (t *DirectDaemonRuntimeTransport) optionalHandleTransport(ctx context.Conte
 	return t.handle, true, nil
 }
 
-type directDaemonStreamTransport struct {
+type directRuntimeStreamTransport struct {
 	stream   grpc.ServerStreamingClient[axonpb.InvokeStreamChunk]
 	cancel   context.CancelFunc
 	endpoint string
@@ -823,8 +823,8 @@ type directDaemonStreamTransport struct {
 	closed bool
 }
 
-func newDirectDaemonStreamTransport(stream grpc.ServerStreamingClient[axonpb.InvokeStreamChunk], cancel context.CancelFunc, endpoint string) *directDaemonStreamTransport {
-	return &directDaemonStreamTransport{
+func newDirectRuntimeStreamTransport(stream grpc.ServerStreamingClient[axonpb.InvokeStreamChunk], cancel context.CancelFunc, endpoint string) *directRuntimeStreamTransport {
+	return &directRuntimeStreamTransport{
 		stream:   stream,
 		cancel:   cancel,
 		endpoint: endpoint,
@@ -832,7 +832,7 @@ func newDirectDaemonStreamTransport(stream grpc.ServerStreamingClient[axonpb.Inv
 	}
 }
 
-func (t *directDaemonStreamTransport) Recv(ctx context.Context) ([]byte, error) {
+func (t *directRuntimeStreamTransport) Recv(ctx context.Context) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -840,7 +840,7 @@ func (t *directDaemonStreamTransport) Recv(ctx context.Context) ([]byte, error) 
 	if err != nil {
 		if err == io.EOF {
 			return nil, directRuntimeError(
-				"daemon stream ended without a terminal frame",
+				"runtime stream ended without a terminal frame",
 				ErrProtocol,
 				RetryNever,
 				map[string]any{"endpoint": t.endpoint, "stream_id": t.streamID},
@@ -852,21 +852,22 @@ func (t *directDaemonStreamTransport) Recv(ctx context.Context) ([]byte, error) 
 	return directStreamChunkJSON(chunk)
 }
 
-func (t *directDaemonStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
+func (t *directRuntimeStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
 	t.close()
 	return json.Marshal(map[string]any{
-		"stream_id": t.streamID,
-		"cancelled": true,
-		"state":     "Cancelled",
-		"terminal":  true,
-		"reason":    reason,
+		"stream_id":        t.streamID,
+		"cancel_requested": true,
+		"cancelled":        false,
+		"state":            "CancelRequested",
+		"terminal":         false,
+		"reason":           reason,
 	})
 }
 
-func (t *directDaemonStreamTransport) Close(ctx context.Context) error {
+func (t *directRuntimeStreamTransport) Close(ctx context.Context) error {
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -874,7 +875,7 @@ func (t *directDaemonStreamTransport) Close(ctx context.Context) error {
 	return nil
 }
 
-func (t *directDaemonStreamTransport) close() {
+func (t *directRuntimeStreamTransport) close() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -884,7 +885,7 @@ func (t *directDaemonStreamTransport) close() {
 	t.cancel()
 }
 
-func (t *directDaemonStreamTransport) requireOpen(ctx context.Context) error {
+func (t *directRuntimeStreamTransport) requireOpen(ctx context.Context) error {
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -896,7 +897,7 @@ func (t *directDaemonStreamTransport) requireOpen(ctx context.Context) error {
 	return nil
 }
 
-type directDaemonBidiTransport struct {
+type directRuntimeBidiTransport struct {
 	stream    grpc.BidiStreamingClient[axonpb.InvokeBidiUp, axonpb.InvokeBidiDown]
 	cancel    context.CancelFunc
 	endpoint  string
@@ -908,13 +909,13 @@ type directDaemonBidiTransport struct {
 	lastUpSequence uint64
 }
 
-func newDirectDaemonBidiTransport(
+func newDirectRuntimeBidiTransport(
 	stream grpc.BidiStreamingClient[axonpb.InvokeBidiUp, axonpb.InvokeBidiDown],
 	cancel context.CancelFunc,
 	endpoint string,
 	openFrame *axonpb.InvokeBidiUp,
-) (*directDaemonBidiTransport, error) {
-	transport := &directDaemonBidiTransport{
+) (*directRuntimeBidiTransport, error) {
+	transport := &directRuntimeBidiTransport{
 		stream:    stream,
 		cancel:    cancel,
 		endpoint:  endpoint,
@@ -927,7 +928,7 @@ func newDirectDaemonBidiTransport(
 	return transport, nil
 }
 
-func (t *directDaemonBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
+func (t *directRuntimeBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
 	frame, err := NewBidiFrameFromJSON(frameJSON)
 	if err != nil {
 		return nil, err
@@ -964,7 +965,7 @@ func (t *directDaemonBidiTransport) Send(ctx context.Context, frameJSON []byte) 
 	return frameJSON, nil
 }
 
-func (t *directDaemonBidiTransport) Recv(ctx context.Context) ([]byte, error) {
+func (t *directRuntimeBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -973,7 +974,7 @@ func (t *directDaemonBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			if err == io.EOF {
 				return nil, directRuntimeError(
-					"daemon bidi ended without a terminal frame",
+					"runtime bidi ended without a terminal frame",
 					ErrProtocol,
 					RetryNever,
 					map[string]any{"endpoint": t.endpoint, "session_id": t.sessionID},
@@ -989,7 +990,7 @@ func (t *directDaemonBidiTransport) Recv(ctx context.Context) ([]byte, error) {
 	}
 }
 
-func (t *directDaemonBidiTransport) CloseSend(ctx context.Context) ([]byte, error) {
+func (t *directRuntimeBidiTransport) CloseSend(ctx context.Context) ([]byte, error) {
 	if err := t.requireOpen(ctx); err != nil {
 		return nil, err
 	}
@@ -1024,20 +1025,20 @@ func (t *directDaemonBidiTransport) CloseSend(ctx context.Context) ([]byte, erro
 	})
 }
 
-func (t *directDaemonBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
+func (t *directRuntimeBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
 	if ctx == nil {
 		return nil, invalidRuntimeClient("context is required")
 	}
 	t.close()
 	return json.Marshal(map[string]any{
 		"session_id": t.sessionID,
-		"state":      "Cancelled",
-		"terminal":   true,
+		"state":      "CancelRequested",
+		"terminal":   false,
 		"reason":     reason,
 	})
 }
 
-func (t *directDaemonBidiTransport) Close(ctx context.Context) error {
+func (t *directRuntimeBidiTransport) Close(ctx context.Context) error {
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -1045,7 +1046,7 @@ func (t *directDaemonBidiTransport) Close(ctx context.Context) error {
 	return nil
 }
 
-func (t *directDaemonBidiTransport) close() {
+func (t *directRuntimeBidiTransport) close() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -1056,7 +1057,7 @@ func (t *directDaemonBidiTransport) close() {
 	t.cancel()
 }
 
-func (t *directDaemonBidiTransport) requireOpen(ctx context.Context) error {
+func (t *directRuntimeBidiTransport) requireOpen(ctx context.Context) error {
 	if ctx == nil {
 		return invalidRuntimeClient("context is required")
 	}
@@ -1446,7 +1447,6 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 		"selected_node_id":    response.GetSelectedNodeId(),
 		"scheduling_reason":   response.GetSchedulingReason(),
 		"elapsed_ms":          response.GetElapsedMs(),
-		"receipt":             terminalReceipt,
 		"admission_receipt":   admissionReceipt,
 		"terminal_receipt":    terminalReceipt,
 		"error":               errorValue,
@@ -1479,8 +1479,11 @@ func directStreamChunkJSON(chunk *axonpb.InvokeStreamChunk) ([]byte, error) {
 	if chunk.GetElapsedMs() != 0 {
 		value["elapsed_ms"] = chunk.GetElapsedMs()
 	}
+	if chunk.GetAdmissionReceipt() != nil {
+		value["admission_receipt"] = directReceipt(chunk.GetAdmissionReceipt())
+	}
 	if chunk.GetTerminalReceipt() != nil {
-		value["receipt"] = directReceipt(chunk.GetTerminalReceipt())
+		value["terminal_receipt"] = directReceipt(chunk.GetTerminalReceipt())
 	}
 	return json.Marshal(value)
 }
@@ -1573,7 +1576,11 @@ func directBidiDownJSON(frame *axonpb.InvokeBidiDown) ([]byte, error) {
 		value["payload_json"] = directBidiControlJSON(payload.Control)
 	case *axonpb.InvokeBidiDown_Receipt:
 		receipt := directReceipt(payload.Receipt)
-		value["payload_json"] = map[string]any{"receipt": receipt}
+		if terminal {
+			value["terminal_receipt"] = receipt
+		} else {
+			value["admission_receipt"] = receipt
+		}
 		if failure := payload.Receipt.GetFailure(); failure != nil {
 			value["error"] = directAxonFailure(failure, "direct_runtime.bidi")
 		}
@@ -1585,7 +1592,7 @@ func directBidiDownJSON(frame *axonpb.InvokeBidiDown) ([]byte, error) {
 			"retryable": false,
 		}
 	default:
-		return nil, invalidRuntimePayload("daemon bidi frame did not include a payload", nil)
+		return nil, invalidRuntimePayload("runtime bidi frame did not include a payload", nil)
 	}
 	return json.Marshal(value)
 }
@@ -1688,17 +1695,41 @@ func directReceipt(receipt *axonpb.InvocationReceipt) map[string]any {
 		return nil
 	}
 	value := map[string]any{
-		"index":                 receipt.GetIndex(),
-		"invocation_id":         receipt.GetInvocationId(),
-		"receipt_type":          receipt.GetReceiptType(),
-		"state":                 directStateName(receipt.GetState()),
-		"timestamp_unix_ms":     receipt.GetTimestampUnixMs(),
-		"prev_receipt_hash_hex": hex.EncodeToString(receipt.GetPrevReceiptHash()),
-		"self_hash_hex":         hex.EncodeToString(receipt.GetSelfHash()),
-		"payload_content_type":  receipt.GetPayloadContentType(),
-		"cleanup_complete":      receipt.GetCleanupComplete(),
-		"reason":                receipt.GetReason(),
-		"child_invocation_id":   receipt.GetChildInvocationId(),
+		"index":                   receipt.GetIndex(),
+		"invocation_id":           receipt.GetInvocationId(),
+		"receipt_type":            receipt.GetReceiptType(),
+		"state":                   directStateName(receipt.GetState()),
+		"timestamp_unix_ms":       receipt.GetTimestampUnixMs(),
+		"prev_receipt_hash_hex":   hex.EncodeToString(receipt.GetPrevReceiptHash()),
+		"self_hash_hex":           hex.EncodeToString(receipt.GetSelfHash()),
+		"payload_content_type":    receipt.GetPayloadContentType(),
+		"cleanup_complete":        receipt.GetCleanupComplete(),
+		"reason":                  receipt.GetReason(),
+		"child_invocation_id":     receipt.GetChildInvocationId(),
+		"payload_base64":          base64.StdEncoding.EncodeToString(receipt.GetPayload()),
+		"caller_binding":          directAgentBinding(receipt.GetCallerBinding()),
+		"callee_binding":          directAgentBinding(receipt.GetCalleeBinding()),
+		"subject_binding":         directSubjectBinding(receipt.GetSubjectBinding()),
+		"invocation_nonce_base64": base64.StdEncoding.EncodeToString(receipt.GetInvocationNonce()),
+		"causal_binding_kind":     directCausalBindingKind(receipt.GetCausalBinding()),
+		"causal_binding":          directCausalBinding(receipt.GetCausalBinding()),
+		"callee_signature":        directSignature(receipt.GetCalleeSignature()),
+		"signer_binding":          directAgentBinding(receipt.GetSignerBinding()),
+		"host_attestation_base64": base64.StdEncoding.EncodeToString(receipt.GetHostAttestation()),
+		"authority_binding_kind":  directAuthorityBindingKind(receipt.GetAuthorityBinding()),
+		"authority_binding":       directAuthorityBinding(receipt.GetAuthorityBinding()),
+		"ability_binding":         receipt.GetAbilityBinding(),
+		"failure":                 directReceiptFailure(receipt.GetFailure()),
+		"usage":                   directReceiptUsage(receipt.GetUsage()),
+		"subject_ref":             directEntityRef(receipt.GetSubjectRef()),
+		"descriptor_version":      receipt.GetDescriptorVersion(),
+		"schema_hash_hex":         hex.EncodeToString(receipt.GetSchemaHash()),
+		"impl_hash_hex":           hex.EncodeToString(receipt.GetImplHash()),
+		"runtime_env":             receipt.GetRuntimeEnv(),
+		"authority_proof":         directAuthorityProof(receipt.GetAuthorityProof()),
+		"input_hash_hex":          hex.EncodeToString(receipt.GetInputHash()),
+		"output_hash_hex":         hex.EncodeToString(receipt.GetOutputHash()),
+		"parent_receipts":         directReceiptRefs(receipt.GetParentReceipts()),
 	}
 	if payload := receipt.GetPayload(); len(payload) > 0 {
 		if json.Valid(payload) {
@@ -1713,6 +1744,219 @@ func directReceipt(receipt *axonpb.InvocationReceipt) map[string]any {
 		}
 	}
 	return value
+}
+
+func directAgentBinding(binding *axonpb.AgentIdentity) map[string]any {
+	if binding == nil {
+		return nil
+	}
+	return map[string]any{"ura": binding.GetUra(), "profile": binding.GetProfile()}
+}
+
+func directSubjectBinding(binding *axonpb.SubjectIdentity) map[string]any {
+	if binding == nil {
+		return nil
+	}
+	return map[string]any{"ura": binding.GetUra(), "profile": binding.GetProfile()}
+}
+
+func directEntityRef(reference *axonpb.EntityRef) map[string]any {
+	if reference == nil {
+		return nil
+	}
+	return map[string]any{
+		"kind":    int32(reference.GetKind()),
+		"ura":     reference.GetUra(),
+		"profile": reference.GetProfile(),
+	}
+}
+
+func directSignature(signature *axonpb.CalleeSignature) map[string]any {
+	if signature == nil {
+		return nil
+	}
+	return map[string]any{
+		"algorithm":        signature.GetAlgorithm(),
+		"signature_base64": base64.StdEncoding.EncodeToString(signature.GetSignature()),
+		"key_id_hint":      signature.GetKeyIdHint(),
+	}
+}
+
+func directReceiptFailure(failure *axonpb.Error) map[string]any {
+	if failure == nil {
+		return nil
+	}
+	return map[string]any{
+		"code":           failure.GetCode(),
+		"message":        failure.GetMessage(),
+		"retryable":      failure.GetRetryable(),
+		"stage":          int32(failure.GetStage()),
+		"security_class": int32(failure.GetSecurityClass()),
+	}
+}
+
+func directReceiptUsage(usage *axonpb.InvocationUsage) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	return map[string]any{
+		"tokens_in":      usage.GetTokensIn(),
+		"tokens_out":     usage.GetTokensOut(),
+		"duration_ms":    usage.GetDurationMs(),
+		"external_calls": usage.GetExternalCalls(),
+	}
+}
+
+func directReceiptRefs(receipts []*axonpb.ReceiptRef) []map[string]any {
+	refs := make([]map[string]any, 0, len(receipts))
+	for _, receipt := range receipts {
+		if receipt == nil {
+			continue
+		}
+		refs = append(refs, map[string]any{
+			"receipt_hash_hex": hex.EncodeToString(receipt.GetReceiptHash()),
+			"receipt_ura":      receipt.GetReceiptUra(),
+		})
+	}
+	return refs
+}
+
+func directAuthorityProof(proof *axonpb.InvocationAuthorityProof) map[string]any {
+	if proof == nil {
+		return nil
+	}
+	return map[string]any{
+		"proof_type":           proof.GetProofType(),
+		"binding_kind":         directAuthorityBindingKind(proof.GetBinding()),
+		"binding":              directAuthorityBinding(proof.GetBinding()),
+		"proof_payload_base64": base64.StdEncoding.EncodeToString(proof.GetProofPayload()),
+		"proof_hash_hex":       hex.EncodeToString(proof.GetProofHash()),
+		"issuer":               directAgentBinding(proof.GetIssuer()),
+		"signature":            directSignature(proof.GetSignature()),
+		"admission_hook":       proof.GetAdmissionHook(),
+	}
+}
+
+func directCausalBinding(context *axonpb.CausalContext) map[string]any {
+	switch form := context.GetForm().(type) {
+	case *axonpb.CausalContext_None:
+		return map[string]any{"form": "none"}
+	case *axonpb.CausalContext_Scalar:
+		return map[string]any{"form": "scalar", "receipt": directReceiptRefProjection(form.Scalar)}
+	case *axonpb.CausalContext_List:
+		prior := make([]map[string]any, 0, len(form.List.GetPrior()))
+		for _, receipt := range form.List.GetPrior() {
+			prior = append(prior, directReceiptRefProjection(receipt))
+		}
+		return map[string]any{"form": "list", "prior": prior}
+	case *axonpb.CausalContext_Merkle:
+		return map[string]any{
+			"form":      "merkle",
+			"root_hex":  hex.EncodeToString(form.Merkle.GetRoot()),
+			"proof_ura": form.Merkle.GetProofUra(),
+		}
+	default:
+		return nil
+	}
+}
+
+func directReceiptRefProjection(receipt *axonpb.ReceiptRef) map[string]any {
+	if receipt == nil {
+		return nil
+	}
+	return map[string]any{
+		"receipt_hash_hex": hex.EncodeToString(receipt.GetReceiptHash()),
+		"receipt_ura":      receipt.GetReceiptUra(),
+	}
+}
+
+func directCausalBindingKind(context *axonpb.CausalContext) string {
+	switch context.GetForm().(type) {
+	case *axonpb.CausalContext_None:
+		return "none"
+	case *axonpb.CausalContext_Scalar:
+		return "scalar"
+	case *axonpb.CausalContext_List:
+		return "list"
+	case *axonpb.CausalContext_Merkle:
+		return "merkle"
+	default:
+		return ""
+	}
+}
+
+func directAuthorityBinding(binding *axonpb.AuthorityBinding) map[string]any {
+	switch authority := binding.GetAuthority().(type) {
+	case *axonpb.AuthorityBinding_SelfAuthority:
+		return map[string]any{
+			"kind":          "self",
+			"principal_ura": authority.SelfAuthority.GetPrincipalUra(),
+		}
+	case *axonpb.AuthorityBinding_DelegatedAuthority:
+		value := authority.DelegatedAuthority
+		return map[string]any{
+			"kind":             "delegation",
+			"issuer_ura":       value.GetIssuerUra(),
+			"subject_ura":      value.GetSubjectUra(),
+			"caller_ura":       value.GetCallerUra(),
+			"audience":         value.GetAudience(),
+			"scopes":           append([]string(nil), value.GetScopes()...),
+			"issued_at_ms":     value.GetIssuedAtMs(),
+			"expires_at_ms":    value.GetExpiresAtMs(),
+			"signature_base64": base64.StdEncoding.EncodeToString(value.GetSignature()),
+		}
+	case *axonpb.AuthorityBinding_CapabilityGrant:
+		return map[string]any{
+			"kind":           "capability",
+			"capability_ura": authority.CapabilityGrant.GetCapabilityUra(),
+		}
+	case *axonpb.AuthorityBinding_PolicyGrant:
+		return map[string]any{
+			"kind":       "policy",
+			"policy_ura": authority.PolicyGrant.GetPolicyUra(),
+		}
+	case *axonpb.AuthorityBinding_SessionAuthority:
+		value := authority.SessionAuthority
+		return map[string]any{
+			"kind":             "session",
+			"backend_ura":      value.GetBackendUra(),
+			"user_ura":         value.GetUserUra(),
+			"session_id":       value.GetSessionId(),
+			"scopes":           append([]string(nil), value.GetScopes()...),
+			"audiences":        append([]string(nil), value.GetAudiences()...),
+			"issued_at_ms":     value.GetIssuedAtMs(),
+			"expires_at_ms":    value.GetExpiresAtMs(),
+			"signature_base64": base64.StdEncoding.EncodeToString(value.GetSignature()),
+		}
+	case *axonpb.AuthorityBinding_BootstrapAuthority:
+		return map[string]any{
+			"kind":          "bootstrap",
+			"principal_ura": authority.BootstrapAuthority.GetPrincipalUra(),
+			"realm":         authority.BootstrapAuthority.GetRealm(),
+			"ability":       authority.BootstrapAuthority.GetAbility(),
+		}
+	default:
+		return nil
+	}
+}
+
+func directAuthorityBindingKind(binding *axonpb.AuthorityBinding) string {
+	switch binding.GetAuthority().(type) {
+	case *axonpb.AuthorityBinding_SelfAuthority:
+		return "self"
+	case *axonpb.AuthorityBinding_DelegatedAuthority:
+		return "delegation"
+	case *axonpb.AuthorityBinding_CapabilityGrant:
+		return "capability"
+	case *axonpb.AuthorityBinding_PolicyGrant:
+		return "policy"
+	case *axonpb.AuthorityBinding_SessionAuthority:
+		return "session"
+	case *axonpb.AuthorityBinding_BootstrapAuthority:
+		return "bootstrap"
+	default:
+		return ""
+	}
 }
 
 func directStateName(state axonpb.InvocationState) string {
@@ -1772,7 +2016,7 @@ func directRuntimeGRPCError(err error, endpoint string) error {
 	statusValue, ok := status.FromError(err)
 	if !ok {
 		return directRuntimeError(
-			fmt.Sprintf("daemon invocation endpoint failed: %v", err),
+			fmt.Sprintf("runtime invocation endpoint failed: %v", err),
 			ErrRouteUnavailable,
 			RetryUnknown,
 			map[string]any{"endpoint": endpoint},
@@ -1836,7 +2080,7 @@ func directRuntimeDialTarget(endpoint string) (string, []grpc.DialOption, error)
 	}
 	if directRuntimeEndpointIsUDS(endpoint) {
 		socketPath := strings.TrimPrefix(endpoint, "unix://")
-		return "passthrough:///easynet-daemon", []grpc.DialOption{
+		return "passthrough:///runtime-invocation", []grpc.DialOption{
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 			grpc.WithContextDialer(directRuntimeUDSDialer(socketPath)),
 		}, nil
@@ -1846,12 +2090,12 @@ func directRuntimeDialTarget(endpoint string) (string, []grpc.DialOption, error)
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
-		return "", nil, invalidRuntimePayload(fmt.Sprintf("parse daemon invocation endpoint: %v", err), err)
+		return "", nil, invalidRuntimePayload(fmt.Sprintf("parse runtime invocation endpoint: %v", err), err)
 	}
 	switch parsed.Scheme {
 	case "http", "https":
 		return "", nil, directRuntimeError(
-			"http(s) endpoints are Hub/public endpoints, not direct daemon Invocation endpoints; use unix://, grpc://, grpcs://, axon://, or host:port",
+			"http(s) endpoints are public transport endpoints, not direct runtime Invocation endpoints; use unix://, grpc://, grpcs://, axon://, or host:port",
 			ErrProtocolMismatch,
 			RetryNever,
 			map[string]any{"endpoint": endpoint, "scheme": parsed.Scheme},
@@ -1860,13 +2104,13 @@ func directRuntimeDialTarget(endpoint string) (string, []grpc.DialOption, error)
 	case "grpc":
 		target := parsed.Host
 		if target == "" {
-			return "", nil, invalidRuntimePayload("grpc daemon invocation endpoint requires host", nil)
+			return "", nil, invalidRuntimePayload("grpc runtime invocation endpoint requires host", nil)
 		}
 		return target, []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}, nil
 	case "grpcs", "axon":
 		target := parsed.Host
 		if target == "" {
-			return "", nil, invalidRuntimePayload(parsed.Scheme+" daemon invocation endpoint requires host", nil)
+			return "", nil, invalidRuntimePayload(parsed.Scheme+" runtime invocation endpoint requires host", nil)
 		}
 		// Direct runtime discovery currently does not carry a CA bundle. The
 		// endpoint is read from the local daemon control plane; use TLS for the
@@ -1874,7 +2118,7 @@ func directRuntimeDialTarget(endpoint string) (string, []grpc.DialOption, error)
 		tlsConfig := &tls.Config{ServerName: parsed.Hostname(), InsecureSkipVerify: true}
 		return target, []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))}, nil
 	default:
-		return "", nil, invalidRuntimePayload(fmt.Sprintf("unsupported daemon invocation endpoint scheme %q", parsed.Scheme), nil)
+		return "", nil, invalidRuntimePayload(fmt.Sprintf("unsupported runtime invocation endpoint scheme %q", parsed.Scheme), nil)
 	}
 }
 

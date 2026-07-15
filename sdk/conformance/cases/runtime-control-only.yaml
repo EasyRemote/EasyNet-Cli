@@ -1,0 +1,19 @@
+id: runtime/control_only
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Control socket up with invocation socket down reports degraded runtime readiness, and control IPC remains limited to boot/status observation instead of product ability dispatch.
+steps:
+  - action: attach_runtime_host
+    fixture: health.ready.v4.json
+    override:
+      invocation_ready: false
+  - action: reject_control_socket_product_call
+expect:
+  result: error
+  error_code: ControlOnly
+  boot_status_subscription: system.watch_boot
+  control_socket_product_dispatch: false

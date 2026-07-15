@@ -16,7 +16,10 @@ use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentityError};
 
 use super::{default_socket_path, home_relative};
 
-const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(5);
+// A fresh vault performs the production Argon2id derivation before binding its
+// socket. Debug builds and contended edge devices can legitimately cross five
+// seconds, so readiness must cover that supported startup path.
+const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const PROBE_INTERVAL: Duration = Duration::from_millis(100);
 const STARTUP_LEASE_STALE_AFTER: Duration = Duration::from_secs(30);
 const SUPERVISOR_PROBE_INTERVAL: Duration = Duration::from_secs(1);
@@ -151,12 +154,9 @@ impl KeyServiceManagerState {
             return Ok(());
         };
 
-        match child.try_wait() {
-            Ok(Some(_status)) => {
-                self.child.take();
-                return Ok(());
-            }
-            Ok(None) | Err(_) => {}
+        if let Ok(Some(_status)) = child.try_wait() {
+            self.child.take();
+            return Ok(());
         }
 
         if let Err(kill_error) = child.kill() {
@@ -419,7 +419,9 @@ impl KeyServiceLifecycle {
                     // another process's startup lease never consumes the
                     // spawned process's readiness deadline.
                     let readiness_deadline = Instant::now() + self.ready_timeout;
-                    if let Err(readiness_error) = self.wait_ready(&client, readiness_deadline) {
+                    if let Err(readiness_error) =
+                        self.wait_ready(state, &client, readiness_deadline)
+                    {
                         let cleanup = state.terminate_owned_child().err();
                         return Err(combine_lifecycle_errors(readiness_error, cleanup));
                     }
@@ -495,10 +497,28 @@ impl KeyServiceLifecycle {
             .with_context(|| format!("spawn daemon key service at {}", self.binary_path.display()))
     }
 
-    fn wait_ready(&self, client: &KeyringClient, deadline: Instant) -> anyhow::Result<()> {
+    fn wait_ready(
+        &self,
+        state: &mut KeyServiceManagerState,
+        client: &KeyringClient,
+        deadline: Instant,
+    ) -> anyhow::Result<()> {
         loop {
             if probe_ready(client)? {
                 return Ok(());
+            }
+            let child_status = state
+                .child
+                .as_mut()
+                .context("daemon key service child ownership disappeared before readiness")?
+                .try_wait()
+                .context("inspect daemon key service process during readiness")?;
+            if let Some(status) = child_status {
+                state.child.take();
+                anyhow::bail!(
+                    "daemon key service exited before readiness: status={status} (see {})",
+                    self.log_path.display()
+                );
             }
             if Instant::now() >= deadline {
                 anyhow::bail!(
@@ -601,9 +621,10 @@ fn resolve_key_service_binary() -> PathBuf {
 mod tests {
     use super::{
         supervisor_backoff, KeyServiceLifecycle, KeyServiceLifecycleState, KeyServiceManager,
-        KeyServiceManagerPhase, KeyServiceManagerState, StartupLease, SUPERVISOR_MAX_BACKOFF,
+        KeyServiceManagerPhase, KeyServiceManagerState, KeyringClient, StartupLease,
+        SUPERVISOR_MAX_BACKOFF,
     };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn startup_lease_is_single_writer_and_released_on_drop() {
@@ -789,6 +810,50 @@ mod tests {
         assert!(
             state.child.is_none(),
             "the supervisor may restart only after the unhealthy child is reaped"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn readiness_reports_owned_child_exit_without_waiting_for_timeout() {
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let lifecycle = KeyServiceLifecycle {
+            socket_path: directory.path().join("key-service.sock"),
+            binary_path: PathBuf::from("unused"),
+            log_path: directory.path().join("key-service.log"),
+            lease_path: directory.path().join("key-service.start.lock"),
+            ready_timeout: Duration::from_secs(5),
+        };
+        let child = Command::new("sh")
+            .args(["-c", "exit 7"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn exiting child");
+        let mut state = KeyServiceManagerState {
+            child: Some(child),
+            ..KeyServiceManagerState::default()
+        };
+        let client =
+            KeyringClient::new(&lifecycle.socket_path).with_timeout(Duration::from_millis(100));
+        let started = Instant::now();
+
+        let error = lifecycle
+            .wait_ready(&mut state, &client, started + Duration::from_secs(5))
+            .expect_err("exited child cannot become ready");
+
+        assert!(error.to_string().contains("exited before readiness"));
+        assert!(
+            state.child.is_none(),
+            "exited child must be reaped from state"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "child exit should fail immediately, not at readiness timeout"
         );
     }
 }

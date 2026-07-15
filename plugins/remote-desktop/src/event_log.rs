@@ -4,7 +4,7 @@
 // File: plugins/remote-desktop/src/event_log.rs
 // Description: Bounded event log and live event broadcast for sessions.
 
-use easynet_axon::RemoteDesktopSessionState;
+use super::contract::RemoteDesktopSessionState;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
@@ -86,7 +86,7 @@ impl RemoteDesktopEventLog {
             "event_type": event_type,
             "event_type_proto": event_type_proto_name(event_type),
             "state": state.legacy_label(),
-            "state_proto": state.as_proto_name(),
+            "state_proto": state.wire_name(),
             "terminal": state.is_terminal(),
             "at_ms": now_ms(),
             "payload": payload,

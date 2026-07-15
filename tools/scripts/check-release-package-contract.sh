@@ -77,6 +77,17 @@ if require_file "packaging/release/install.sh"; then
     done
 fi
 
+if require_file "packaging/release/dev-install-local.sh"; then
+    for literal in \
+        "--bin easynet-keyring" \
+        "easynet-keyring" \
+        '$keyring_bin' \
+        '"$install_dir/easynet-keyring"'
+    do
+        require_literal "packaging/release/dev-install-local.sh" "$literal"
+    done
+fi
+
 if require_file "packaging/release/e2e-release-install.sh"; then
     for literal in \
         "easynet-keyring" \

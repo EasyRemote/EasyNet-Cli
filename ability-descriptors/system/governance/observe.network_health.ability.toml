@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "observe.network_health"
+descriptor_version = "1.0.0"
 description = "Report the daemon's live network posture: local daemon reachability, realm-directory reachability, and direct observe.health probe status for each discovered peer device."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "PUBLIC"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

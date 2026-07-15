@@ -6,7 +6,7 @@ import base64
 import binascii
 import json
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 
 from .axon_addressing import parse_ura, user_ura
 from .errors import ErrorCode, RetryHint, SDKError
@@ -299,7 +299,7 @@ class CanonicalAuthorityTransport:
     def __init__(self, signer: CanonicalSigner):
         if signer is None or not callable(getattr(signer, "sign_canonical", None)):
             raise _invalid_authority("canonical authority signer is required")
-        self._signer = signer
+        self._signer: CanonicalSigner | None = signer
         self._closed = False
 
     def mint_delegation_proof(self, request_json: bytes) -> bytes:
@@ -328,7 +328,10 @@ class CanonicalAuthorityTransport:
 
     def _sign(self, payload: bytes) -> bytes:
         try:
-            signature = self._signer.sign_canonical(payload)
+            signer = self._signer
+            if signer is None:
+                raise _invalid_authority("canonical authority transport is closed")
+            signature = signer.sign_canonical(payload)
         except SDKError:
             raise
         except Exception as exc:
@@ -473,14 +476,14 @@ def _decode_delegation_request(raw: bytes) -> DelegationRequest:
     decoded = _decode_authority_request(raw, "delegation")
     try:
         request = DelegationRequest(
-            issuer_ura=decoded["issuer_ura"],
-            subject_ura=decoded["subject_ura"],
-            caller_ura=decoded["caller_ura"],
-            audience=decoded["audience"],
-            scopes=tuple(decoded["scopes"]),
-            issued_at_ms=decoded["issued_at_ms"],
-            expires_at_ms=decoded["expires_at_ms"],
-            metadata=decoded.get("metadata", {}),
+            issuer_ura=cast(str, decoded["issuer_ura"]),
+            subject_ura=cast(str, decoded["subject_ura"]),
+            caller_ura=cast(str, decoded["caller_ura"]),
+            audience=cast(str, decoded["audience"]),
+            scopes=tuple(cast(tuple[str, ...], decoded["scopes"])),
+            issued_at_ms=cast(int, decoded["issued_at_ms"]),
+            expires_at_ms=cast(int, decoded["expires_at_ms"]),
+            metadata=cast(Mapping[str, object], decoded.get("metadata", {})),
         )
         request.to_json()
         return request
@@ -492,21 +495,21 @@ def _decode_session_authority_request(raw: bytes) -> SessionAuthorityRequest:
     decoded = _decode_authority_request(raw, "session authority")
     try:
         request = SessionAuthorityRequest(
-            issuer_ura=decoded["issuer_ura"],
-            session_id=decoded["session_id"],
+            issuer_ura=cast(str, decoded["issuer_ura"]),
+            session_id=cast(str, decoded["session_id"]),
             session_owner_user_id=str(decoded.get("session_owner_user_id", "")),
             creator_principal_id=str(decoded.get("creator_principal_id", "")),
-            callee_ura=decoded["callee_ura"],
-            subject_ura=decoded["subject_ura"],
-            audience=decoded["audience"],
-            scopes=tuple(decoded["scopes"]),
-            allowed_actions=tuple(decoded["allowed_actions"]),
-            allowed_followup_abilities=tuple(decoded["allowed_followup_abilities"]),
-            issued_at_ms=decoded["issued_at_ms"],
-            expires_at_ms=decoded["expires_at_ms"],
+            callee_ura=cast(str, decoded["callee_ura"]),
+            subject_ura=cast(str, decoded["subject_ura"]),
+            audience=cast(str, decoded["audience"]),
+            scopes=tuple(cast(tuple[str, ...], decoded["scopes"])),
+            allowed_actions=tuple(cast(tuple[str, ...], decoded["allowed_actions"])),
+            allowed_followup_abilities=tuple(cast(tuple[str, ...], decoded["allowed_followup_abilities"])),
+            issued_at_ms=cast(int, decoded["issued_at_ms"]),
+            expires_at_ms=cast(int, decoded["expires_at_ms"]),
             session_owner_ura=str(decoded.get("session_owner_ura", "")),
             creator_principal_ura=str(decoded.get("creator_principal_ura", "")),
-            metadata=decoded.get("metadata", {}),
+            metadata=cast(Mapping[str, object], decoded.get("metadata", {})),
         )
         request.to_json()
         return request
@@ -760,7 +763,7 @@ def _user_id_from_user_ura(value: str, field_name: str) -> str:
     return user_id.strip()
 
 
-def _parse_required_ura(value: str, field_name: str):
+def _parse_required_ura(value: str, field_name: str) -> Any:
     try:
         return parse_ura(value.strip())
     except SDKError as exc:

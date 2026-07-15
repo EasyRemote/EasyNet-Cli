@@ -13,12 +13,44 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use tonic::Status;
 
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 
 use easynet_axon::pb::axon::v1::{invoke_bidi_down::Payload as DownPayload, InvokeBidiDown};
 
-use crate::daemon::invocation::bidi::state::presence::DispatchFrame;
+use crate::daemon::invocation::bidi::state::presence::{
+    DispatchFrame, PresenceDispatchSession, PresenceRegistry, CANONICAL_SESSION_CARRIER_VERSION,
+};
+
+pub(crate) const CANONICAL_CARRIER_REQUIRED_CODE: &str = "CANONICAL_CARRIER_REQUIRED";
+
+/// Resolve one live, canonical reverse-dispatch session from an atomic
+/// presence snapshot. Unary, server-stream, and bidi relay all pass this gate.
+pub(crate) fn require_canonical_dispatch_session(
+    presence: &PresenceRegistry,
+    execution_host_ura: &str,
+    route_ura: &str,
+    surface: &str,
+) -> Result<PresenceDispatchSession, Status> {
+    let session = presence
+        .lookup_dispatch_session(execution_host_ura)
+        .ok_or_else(|| {
+            Status::failed_precondition(format!(
+                "RESOLVE_UNAVAILABLE: {surface} selected execution host `{execution_host_ura}` \
+                 for route `{route_ura}` but no live session exists"
+            ))
+        })?;
+    if session.contract_version < CANONICAL_SESSION_CARRIER_VERSION {
+        return Err(Status::failed_precondition(format!(
+            "{CANONICAL_CARRIER_REQUIRED_CODE}: {surface} selected execution host \
+             `{execution_host_ura}` for route `{route_ura}`, but that session negotiated carrier \
+             v{}; canonical Invocation relay requires v{CANONICAL_SESSION_CARRIER_VERSION} or newer",
+            session.contract_version,
+        )));
+    }
+    Ok(session)
+}
 
 /// JSON content descriptor used only by the remaining control and
 /// bidirectional-stream frames. Canonical unary dispatch carries Axon's
@@ -33,7 +65,7 @@ pub struct SessionContentEnvelope {
 }
 
 impl SessionDispatch {
-    /// Single codec for legacy control and streaming session frames.
+    /// Single codec for JSON control and streaming session frames.
     /// Product RPC dispatch must use `DispatchCall`, not this JSON codec.
     pub fn encode_frame(&self) -> serde_json::Result<Vec<u8>> {
         serde_json::to_vec(self)
@@ -241,5 +273,50 @@ mod tests {
         assert_eq!(call.call_id, 42);
         let relayed = call.request.expect("relayed request");
         assert_eq!(relayed.encode_to_vec(), expected_wire);
+    }
+
+    #[test]
+    fn presence_registry_rejects_retired_carrier_versions() {
+        use crate::daemon::invocation::bidi::state::presence::SessionContract;
+
+        let presence = PresenceRegistry::new();
+        let host = "easynet:///r/realm/device/target";
+        let (v0_sender, _v0_receiver) = tokio::sync::mpsc::channel(1);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            presence.insert_negotiated(
+                host.to_string(),
+                v0_sender,
+                SessionContract {
+                    version: 0,
+                    claimant_boot_nonce: vec![1; 16],
+                },
+            );
+        }));
+        assert!(panic.is_err(), "v0 sessions must never enter live presence");
+    }
+
+    #[test]
+    fn canonical_dispatch_session_gate_accepts_every_carrier() {
+        use crate::daemon::invocation::bidi::state::presence::SessionContract;
+
+        let presence = PresenceRegistry::new();
+        let host = "easynet:///r/realm/device/target";
+
+        let (v1_sender, _v1_receiver) = tokio::sync::mpsc::channel(1);
+        let registration = presence.insert_negotiated(
+            host.to_string(),
+            v1_sender,
+            SessionContract {
+                version: CANONICAL_SESSION_CARRIER_VERSION,
+                claimant_boot_nonce: vec![2; 16],
+            },
+        );
+        for surface in ["Invoke", "InvokeStream", "InvokeBidi"] {
+            let session =
+                require_canonical_dispatch_session(&presence, host, "route-ref::test", surface)
+                    .expect("v1 session is canonical for every carrier");
+            assert_eq!(session.session_id, registration.session_id);
+            assert_eq!(session.contract_version, CANONICAL_SESSION_CARRIER_VERSION);
+        }
     }
 }

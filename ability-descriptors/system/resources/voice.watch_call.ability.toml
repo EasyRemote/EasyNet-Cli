@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "voice.watch_call"
+descriptor_version = "1.0.0"
 description = "Read the accumulated event log for a call. v1 returns a snapshot (`view: \"snapshot\"`); the streaming variant lands when `register_stream` for voice.* is wired."
+call_mode = "rpc"
+capability_state = "seam"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{\"additionalProperties\":false,\"properties\":{\"call_id\":{\"type\":\"string\"},\"events\":{\"items\":{\"type\":\"object\"},\"type\":\"array\"},\"view\":{\"enum\":[\"snapshot\"],\"type\":\"string\"}},\"required\":[\"call_id\",\"events\",\"view\"],\"type\":\"object\"}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

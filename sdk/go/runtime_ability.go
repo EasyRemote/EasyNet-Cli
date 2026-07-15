@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-const defaultRuntimeAbilityDescriptorVersion = "1.0.0"
-
 // RuntimeCallContext contains the complete caller-controlled Invocation
 // context needed to address one runtime ability. The SDK never manufactures a
 // caller, nonce or causal context on behalf of a product.
@@ -42,6 +40,10 @@ func NewRuntimeAbilityClient(runtime *RuntimeClient, addressing Addressing) (*Ru
 // Build constructs one complete canonical draft. Ability semantics and
 // argument validation remain with the typed capability provider.
 func (c *RuntimeAbilityClient) Build(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (InvocationDraft, error) {
+	return c.buildWithCallMode(ctx, call, abilityName, args, "rpc")
+}
+
+func (c *RuntimeAbilityClient) buildWithCallMode(ctx context.Context, call RuntimeCallContext, abilityName string, args any, callMode string) (InvocationDraft, error) {
 	if err := c.requireReady(ctx); err != nil {
 		return InvocationDraft{}, err
 	}
@@ -52,11 +54,17 @@ func (c *RuntimeAbilityClient) Build(ctx context.Context, call RuntimeCallContex
 	if abilityName == "" {
 		return InvocationDraft{}, invalidRuntimePayload("ability name is required", nil)
 	}
-	version := strings.TrimSpace(call.DescriptorVersion)
-	if version == "" {
-		version = defaultRuntimeAbilityDescriptorVersion
+	mode := strings.TrimSpace(callMode)
+	if mode == "" {
+		mode = "rpc"
 	}
-	descriptorRef, err := c.addressing.OwnerAbilityDescriptorRef(ctx, call.CalleeURA, abilityName, version)
+	descriptorRef, err := c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
+		CalleeURA:  strings.TrimSpace(call.CalleeURA),
+		Ability:    abilityName,
+		CallMode:   mode,
+		CallerURA:  strings.TrimSpace(call.CallerURA),
+		SubjectURA: strings.TrimSpace(call.SubjectURA),
+	})
 	if err != nil {
 		return InvocationDraft{}, err
 	}
@@ -112,7 +120,7 @@ func (c *RuntimeAbilityClient) Invoke(ctx context.Context, call RuntimeCallConte
 // OpenStream opens one typed provider stream through the same canonical draft
 // lowering path used by unary calls.
 func (c *RuntimeAbilityClient) OpenStream(ctx context.Context, call RuntimeCallContext, abilityName string, args any) (*StreamHandle, error) {
-	draft, err := c.Build(ctx, call, abilityName, args)
+	draft, err := c.buildWithCallMode(ctx, call, abilityName, args, "stream")
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "schedule.add"
+descriptor_version = "1.0.0"
 description = "Register a new cron schedule. Required: target_node, target_agent, cron_expr (5- or 6-field), misfire_policy (skip|fire_once|catch_up_windowed). Returns the assigned schedule_id."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

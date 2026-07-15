@@ -59,6 +59,7 @@ echo "[go-sdk-live-smoke] running Go SDK live daemon smoke..."
   CGO_ENABLED=1 \
   EASYNET_GO_LIVE_SMOKE_LIB="$LIB_PATH" \
   EASYNET_GO_LIVE_SMOKE_DAEMON="$DAEMON_BIN" \
+  EASYNET_GO_LIVE_SMOKE_REPO_ROOT="$REPO_ROOT" \
   EASYNET_GO_LIVE_SMOKE_HOME="$SMOKE_HOME" \
   go test -tags "easynet_cabi easynet_live_smoke" -run '^TestGoSDKLiveDaemonSmoke$' -count=1 -v
 )

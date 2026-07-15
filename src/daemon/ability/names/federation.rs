@@ -17,7 +17,17 @@ pub const RESOLVE: &str = crate::daemon::ability::conformance::ABILITY_FEDERATIO
 pub const DISCOVER: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_DISCOVER;
 pub const STATUS: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_STATUS;
 pub const NAMESPACE_RESOLVE: &str = crate::daemon::ability::conformance::ABILITY_NAMESPACE_RESOLVE;
+pub const NAMESPACE_PROXY_RESOLVE: &str =
+    crate::daemon::ability::conformance::ABILITY_NAMESPACE_PROXY_RESOLVE;
 pub const RESOLVE_KEY: &str = crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY;
+pub const SUBSCRIBE_DIRECTORY: &str =
+    crate::daemon::ability::conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY;
+pub const SUBSCRIBE_DIRECTORY_V2: &str =
+    crate::daemon::ability::conformance::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
+pub const LIST_USER_DEVICES: &str =
+    crate::daemon::ability::conformance::ABILITY_FEDERATION_LIST_USER_DEVICES;
+pub const PROXY_LIST_USER_DEVICES: &str =
+    crate::daemon::ability::conformance::ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES;
 pub const REVOKE: &str = "federation.revoke";
 
 pub const IDENTITY_LIST_USER_PUBKEYS: &str = "identity.list_user_pubkeys";

@@ -508,13 +508,19 @@ mod tests {
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
     };
 
+    fn executable_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        )
+    }
+
     #[test]
     fn plugin_runtime_host_registers_exec_declarative_rpc() {
         let root = tempfile::tempdir().expect("root");
         write_exec_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
 
         manager_from_index(index)
             .register_current_plugins(&mut catalog)
@@ -560,7 +566,7 @@ mod tests {
         write_exec_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
 
         manager_from_index(index)
             .register_current_plugins(&mut catalog)
@@ -613,7 +619,7 @@ mod tests {
         write_sidecar_package(root.path(), "fs.read");
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
         catalog.register_rpc_with_owner(
             "fs.read",
             OwnerKind::Device,
@@ -640,7 +646,15 @@ mod tests {
             "rejected plugin must not leave a dynamic handler behind"
         );
         let out = catalog
-            .invoke_rpc_json("fs.read", json!({}))
+            .invoke_rpc_target_json(InvocationTarget {
+                scope: TargetScope::Local,
+                ability: "fs.read".to_string(),
+                normalized_args: json!({}),
+                call_mode: CallMode::Rpc,
+                subject: None,
+                causal_context: None,
+                request_metadata: std::collections::HashMap::new(),
+            })
             .expect("static system handler remains invokable after rejected reload");
         assert_eq!(out, json!({"from": "static-system"}));
     }
@@ -651,7 +665,7 @@ mod tests {
         write_eal_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
 
         manager_from_index(index)
             .register_current_plugins(&mut catalog)
@@ -685,7 +699,7 @@ mod tests {
         write_mcp_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
 
         manager_from_index(index)
             .register_current_plugins(&mut catalog)
@@ -1010,12 +1024,13 @@ quick_add = true
 
     fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "1"
-name = "{ability}"
-description = "test descriptor for {ability}"
+            r#"schema_version = "2"
+	name = "{ability}"
+	description = "test descriptor for {ability}"
+	admission_action = "invoke"
 
-[input_schema]
-type = "object"
+	[input_schema]
+	type = "object"
 additionalProperties = false
 "#
         )

@@ -7,445 +7,397 @@
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_invocation.py"
+          "ref_path": "sdk/python/tests/test_ability_descriptor.py",
+          "sha256": "01d847a95102f29efc5e1c9b164087e56bf1df3e07ffa51675e77948ba26d3ea"
         }
       ],
-      "message": "Python projects only governed AbilityDescriptor facts and delegates descriptor-reference grammar to Addressing.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "authority/metadata",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_authority.py"
+          "ref_path": "sdk/python/tests/test_authority.py",
+          "sha256": "d87cda03162232e1c44077fd8e45e68ee53bb92044a728107d47438ab70b2ad8"
         }
       ],
-      "message": "Python preserves one typed authority metadata projection and rejects ambiguous authority before preparation.",
-      "profile": "authority",
-      "status": "passed"
+      "profile": "authority"
     },
     {
       "case_id": "environment/process_root",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_environment.py"
+          "ref_path": "sdk/python/tests/test_environment.py",
+          "sha256": "49b7f1f58d74108cc32455b2413461eb7d805d0546b2b16df6bf6b3b38cb0f97"
         }
       ],
-      "message": "Python SdkEnvironment owns process-scoped discovery, daemon and runtime construction.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/terminal_receipt_facts",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_runtime.py"
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "24653e680568c52e5942ba7586e14349829f7a008759abcbee1ecee343fc4501"
         }
       ],
-      "message": "Python InvocationResult preserves opaque terminal receipt facts without a receipt-history profile.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "sdk/product_neutrality",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_import_boundary.py"
+          "ref_path": "sdk/python/tests/test_conformance_gates.py",
+          "sha256": "97e50a3280c5b866669a52e30f885b9e49bb2471b2685eb5001e2e164ee0445b"
         }
       ],
-      "message": "Python SDK exports only generic runtime concepts; the repository guard rejects product profiles and aliases.",
-      "profile": "conformance",
-      "status": "passed"
+      "profile": "conformance"
     },
     {
       "case_id": "runtime_core/canonical_addressing_provider",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_axon_addressing.py"
+          "ref_path": "sdk/python/tests/test_axon_addressing.py",
+          "sha256": "df6e112534268ba220fedd437b8065d00ba8c695e1f0ab2d1d29c24cfc038c0f"
         }
       ],
-      "message": "Python executes the shared Axon-backed canonical Addressing fixture without opening a product Identity profile.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "runtime/ability_lowering",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_runtime_ability.py"
+          "ref_path": "sdk/python/tests/test_runtime_ability.py",
+          "sha256": "98a6ca2ed5084538a37967fee3d1345eb84c0c46df82a3a8bb2c83613f203c2e"
         }
       ],
-      "message": "Python capability providers share one Addressing-backed lowering path that preserves explicit caller, nonce, causal context, metadata, and typed runtime failures.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "access_control/provider",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_access_control.py"
+          "ref_path": "sdk/python/tests/test_access_control.py",
+          "sha256": "35d09415b7506217e1721c5818ecf429a5038c3e878e8b79a07db353e1c7f4cb"
         }
       ],
-      "message": "Python AccessControl lowers canonical owner/principal URAs through the generic runtime ability path without Backend account or product role fields.",
-      "profile": "access_control",
-      "status": "passed"
+      "profile": "access_control"
     },
     {
       "case_id": "authority/mutual_exclusion",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_authority.py"
+          "ref_path": "sdk/python/tests/test_authority.py",
+          "sha256": "d87cda03162232e1c44077fd8e45e68ee53bb92044a728107d47438ab70b2ad8"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "bidi/close_send_not_cancel",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_bidi.py"
+          "ref_path": "sdk/python/tests/test_bidi.py",
+          "sha256": "49d483b28c36269a0d39cc5cc1cea99d268fcf920740e70c8ada779b0414193e"
         }
       ],
-      "message": "Python Runtime Core bidi adapters distinguish close-send from cancellation, keep receive state alive after local half-close, reject post-close-send sends, and release sessions on close.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
-      "case_id": "bidi/frame0_required",
+      "case_id": "runtime/control_only",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_bidi.py"
+          "ref_path": "sdk/python/tests/test_control_ipc.py",
+          "sha256": "81b8ede58e29730c76c9fd99c1a799eb97620f108dabdcd69c62ea4e9fa35d48"
         }
       ],
-      "message": "Python Runtime Core keeps frame0 as an explicit bidi-open input and rejects sessions without caller-visible initial payload.",
-      "profile": "runtime_core",
-      "status": "passed"
-    },
-    {
-      "case_id": "daemon/control_only",
-      "evidence": [
-        {
-          "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_control_ipc.py"
-        }
-      ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "daemon/permission_denied",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_errors.py"
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "b5a89a71de8fe4b6153a308517668a41848f59e5b138b63d143c6597d4ee639c"
         }
       ],
-      "message": "Python SDK maps permission-denied daemon/runtime failures to the canonical permission error class and non-retryable retry hint.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/profile_source_refs",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_errors.py"
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "b5a89a71de8fe4b6153a308517668a41848f59e5b138b63d143c6597d4ee639c"
         }
       ],
-      "message": null,
-      "profile": "errors",
-      "status": "passed"
+      "profile": "errors"
     },
     {
       "case_id": "error/retry_hint",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_errors.py"
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "b5a89a71de8fe4b6153a308517668a41848f59e5b138b63d143c6597d4ee639c"
         }
       ],
-      "message": "Python typed errors project retry hints consistently and reject invalid retry metadata without parsing human messages or legacy error-code aliases.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "error/typed_json",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_errors.py"
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "b5a89a71de8fe4b6153a308517668a41848f59e5b138b63d143c6597d4ee639c"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "health/api_vs_runtime",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_health.py"
+          "ref_path": "sdk/python/tests/test_health.py",
+          "sha256": "8e64873cef01415327617eda00d24b82b4ce137e0239f2db5a924bfc7e4b91de"
         }
       ],
-      "message": null,
-      "profile": "health",
-      "status": "passed"
+      "profile": "health"
     },
     {
       "case_id": "invocation/builder_handle_state",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_invocation.py"
+          "ref_path": "sdk/python/tests/test_invocation.py",
+          "sha256": "6cd217f3a7d3569d4b75eb84eaeae0cde304b3aa65155789a551fdd4d6b11e41"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/canonical_material",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_invocation.py"
+          "ref_path": "sdk/python/tests/test_signing.py",
+          "sha256": "5cd40e95c6b593f1693863475fd257271c2806213948591046fa56eb79bddbc7"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/complete_tuple",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_invocation.py"
+          "ref_path": "sdk/python/tests/test_invocation.py",
+          "sha256": "6cd217f3a7d3569d4b75eb84eaeae0cde304b3aa65155789a551fdd4d6b11e41"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/local_daemon_signing_boundary",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_signing.py"
+          "ref_path": "sdk/python/tests/test_signing.py",
+          "sha256": "5cd40e95c6b593f1693863475fd257271c2806213948591046fa56eb79bddbc7"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "managed_signing/provider_lifecycle",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_managed_signing.py"
+          "ref_path": "sdk/python/tests/test_managed_signing.py",
+          "sha256": "95fe2521662c1a4ec9bd1b95e11343c5de8ece3db2d06b7c2c72e0efa16f8efc"
         }
       ],
-      "message": "Python validates explicit daemon endpoint binding, key-service protocol v2, purpose-bound versioned policy, strict public projections, lifecycle postconditions, immutable peer trust anchors, and verified key-bound signer behavior.",
-      "profile": "managed_signing",
-      "status": "passed"
+      "profile": "managed_signing"
     },
     {
       "case_id": "directory/resolution_provider",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_directory.py"
+          "ref_path": "sdk/python/tests/test_directory.py",
+          "sha256": "23981ccaeb1aa382eceddd345079dddea5df8aa77368af633ae1acab199a2676"
         }
       ],
-      "message": "Python Directory facade resolves, lists with daemon-owned opaque cursors, and subscribes with explicit resume cursors through the generic runtime ability contract without product read-model projection.",
-      "profile": "directory",
-      "status": "passed"
+      "profile": "directory"
     },
     {
       "case_id": "principal/lifecycle_seam",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_principal.py"
+          "ref_path": "sdk/python/tests/test_principal.py",
+          "sha256": "8482afbcd67d4e9c4b23436c23d5371c1e98e034cedb5aa8118b2ee5462236c1"
         }
       ],
-      "message": "Python PrincipalLifecycle exposes the canonical generic transition vocabulary without Backend account or EasyRemote product concepts.",
-      "profile": "principal",
-      "status": "passed"
+      "profile": "principal"
     },
     {
       "case_id": "principal/lifecycle_provider",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_principal.py"
+          "ref_path": "sdk/python/tests/test_principal.py",
+          "sha256": "8482afbcd67d4e9c4b23436c23d5371c1e98e034cedb5aa8118b2ee5462236c1"
         }
       ],
-      "message": "Python RuntimePrincipalProvider lowers product-neutral PrincipalLifecycle transitions through generic runtime abilities without private-key or product account fields.",
-      "profile": "principal",
-      "status": "passed"
+      "profile": "principal"
     },
     {
       "case_id": "receipt/history_provider",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_receipt.py"
+          "ref_path": "sdk/python/tests/test_receipt.py",
+          "sha256": "12d34188462885eae328ebbba04ae8db93bb8cc94783fe5522691856960f1760"
         }
       ],
-      "message": "Python Receipt facade provides daemon-backed bounded list/get/trace reads with opaque cursor forwarding while leaving canonical receipt verification and ledger semantics Axon-owned.",
-      "profile": "receipts",
-      "status": "passed"
+      "profile": "receipts"
     },
     {
       "case_id": "runtime/administration_seam",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_runtime_admin.py"
+          "ref_path": "sdk/python/tests/test_runtime_admin.py",
+          "sha256": "d6d020ea23b3dcc8a97799fac4c134302614974c512e9c83a433474ce3a19b13"
         }
       ],
-      "message": "Python runtime administration remains a generic daemon health/lifecycle surface without product account, page, or workflow policy.",
-      "profile": "runtime_administration",
-      "status": "passed"
+      "profile": "runtime_administration"
     },
     {
       "case_id": "runtime/events_seam",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_runtime_events.py"
+          "ref_path": "sdk/python/tests/test_runtime_events.py",
+          "sha256": "0d95a735aed6ecc6b105d718830c7f3173fd899146bfac30fcae1b2a3fa80afb"
         }
       ],
-      "message": "Python runtime events preserve bounded stream-scoped cursor/resume projection through the generic runtime contract without product event naming.",
-      "profile": "runtime_events",
-      "status": "passed"
+      "profile": "runtime_events"
     },
     {
       "case_id": "invocation/prepared_not_submittable",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_invocation.py"
+          "ref_path": "sdk/python/tests/test_signing.py",
+          "sha256": "5cd40e95c6b593f1693863475fd257271c2806213948591046fa56eb79bddbc7"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/presigned_submit",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_invocation.py"
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "24653e680568c52e5942ba7586e14349829f7a008759abcbee1ecee343fc4501"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "invocation/terminal_monotonicity",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_runtime.py"
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "24653e680568c52e5942ba7586e14349829f7a008759abcbee1ecee343fc4501"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "runtime_core/feature_discovery",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_runtime.py"
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "24653e680568c52e5942ba7586e14349829f7a008759abcbee1ecee343fc4501"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
-      "case_id": "sdk/go_python_parity_matrix",
+      "case_id": "sdk/seven_language_capability_matrix",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_import_boundary.py"
+          "ref_path": "sdk/python/tests/test_conformance_gates.py",
+          "sha256": "97e50a3280c5b866669a52e30f885b9e49bb2471b2685eb5001e2e164ee0445b"
         }
       ],
-      "message": null,
-      "profile": "sdk_parity",
-      "status": "passed"
+      "profile": "sdk_parity"
     },
     {
       "case_id": "stream/backpressure_bound",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_stream.py"
+          "ref_path": "sdk/python/tests/test_conformance_gates.py",
+          "sha256": "97e50a3280c5b866669a52e30f885b9e49bb2471b2685eb5001e2e164ee0445b"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "stream/order_terminal",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_stream.py"
+          "ref_path": "sdk/python/tests/test_stream.py",
+          "sha256": "c4f96743e9586a3fa69b9617cfa99f89eb4302b161d50dfa1dc7293ac05b9be1"
         }
       ],
-      "message": "Python Runtime Core stream adapters preserve ordered frames, project a single terminal event, and close idempotently without product stream policy.",
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_compatible",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_client.py"
+          "ref_path": "sdk/python/tests/test_client.py",
+          "sha256": "e1e6aa4e19d9398eaf16ecc637f15b2f4eee1beca2e0b306f8e5e60fb7898bc8"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     },
     {
       "case_id": "version/abi_incompatible",
       "evidence": [
         {
           "kind": "python_test",
-          "ref_path": "sdk/python/tests/test_client.py"
+          "ref_path": "sdk/python/tests/test_client.py",
+          "sha256": "e1e6aa4e19d9398eaf16ecc637f15b2f4eee1beca2e0b306f8e5e60fb7898bc8"
         }
       ],
-      "message": null,
-      "profile": "runtime_core",
-      "status": "passed"
+      "profile": "runtime_core"
     }
   ],
-  "schema_version": 1
+  "schema_version": 2
 }

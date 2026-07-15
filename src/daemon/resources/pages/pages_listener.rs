@@ -721,10 +721,21 @@ mod tests {
 
     fn openai_http_runtime(
     ) -> crate::daemon::ability::builtins::integrations::openai_compat::OpenAICompatRuntime {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let codex_agent_ura = crate::core::ura::agent_ura("easynet.run", "alice", "codex");
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                "easynet:///r/easynet.run/device/pages-test",
+                vec![codex_agent_ura],
+            )
+            .expect("pages test hosted Agent authority is canonical");
+        let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+            authority_context,
+        );
+        reg.register_rpc_with_owner_and_action(
             "codex.chat",
             OwnerKind::Agent("codex".into()),
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             Arc::new(|_args| Ok(json!({"reply":"ok"}))),
         );
         let reg = Arc::new(reg);

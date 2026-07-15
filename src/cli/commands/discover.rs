@@ -47,21 +47,16 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
-
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 use console::style;
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
     invoke_local_ability, invoke_local_ability_with_invocation_meta,
 };
-
-const REALM_ANCHOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const REALM_ANCHOR_MAX_POLLS: u64 = 10;
 
 /// Narrow re-export so integration tests (and other `pub` consumers
 /// of this module) can name the flag type without opening the whole
@@ -609,12 +604,6 @@ impl DiscoverExecutionState {
         self.invocations.push(meta);
     }
 
-    fn replace_last_invocation(&mut self, meta: Value) {
-        if let Some(last) = self.invocations.last_mut() {
-            *last = meta;
-        }
-    }
-
     fn record_completed_tier(&mut self, scope: &'static str) {
         if !self.tiers_searched.contains(&scope) {
             self.tiers_searched.push(scope);
@@ -730,8 +719,7 @@ impl DiscoverRuntimeService {
             .last()
             .cloned()
             .context("discover tier did not produce parent invocation metadata")?;
-        let mut anchor_resolver = RealmAnchorResolver::production();
-        let anchor = match anchor_resolver.resolve(&parent_invocation_meta)? {
+        let anchor = match resolve_realm_anchor(&parent_invocation_meta) {
             RealmAnchorResolution::Anchored(anchor) => anchor,
             RealmAnchorResolution::Unanchored { reason } => {
                 self.state.record_diagnostic(DiscoverDiagnostic {
@@ -742,9 +730,6 @@ impl DiscoverRuntimeService {
                 return Ok(());
             }
         };
-        if let Some(refreshed) = anchor.refreshed_invocation_meta {
-            self.state.replace_last_invocation(refreshed);
-        }
         let (realm_value, realm_invocation_meta) =
             self.walk_tier_with_trace(scope, &anchor.parents, anchor.trace_id.as_deref())?;
         self.state.record_invocation(realm_invocation_meta);
@@ -795,9 +780,9 @@ impl DiscoverRuntimeService {
 /// Causal-anchor state for the realm tier.
 ///
 /// Local discovery always runs first. Realm discovery may run only when the
-/// local invocation produced a complete receipt anchor. Missing anchors stay
-/// unanchored until the ledger exposes a real receipt; they are never converted
-/// to empty parents.
+/// local invocation produced a complete receipt anchor. The invocation response
+/// is the sole source of that terminal proof; missing anchors are never repaired
+/// by polling a secondary ledger projection or converted to empty parents.
 #[derive(Debug, Clone)]
 enum RealmCausalState {
     Anchored(Vec<Value>),
@@ -814,6 +799,7 @@ impl RealmCausalState {
         }
     }
 
+    #[cfg(test)]
     fn parents(&self) -> Option<&[Value]> {
         match self {
             Self::Anchored(parents) => Some(parents.as_slice()),
@@ -821,6 +807,7 @@ impl RealmCausalState {
         }
     }
 
+    #[cfg(test)]
     fn unanchored_reason(&self) -> Option<&str> {
         match self {
             Self::Anchored(_) => None,
@@ -833,7 +820,6 @@ impl RealmCausalState {
 struct RealmAnchor {
     parents: Vec<Value>,
     trace_id: Option<String>,
-    refreshed_invocation_meta: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -842,148 +828,14 @@ enum RealmAnchorResolution {
     Unanchored { reason: String },
 }
 
-struct RealmAnchorResolver<P>
-where
-    P: FnMut(&str) -> anyhow::Result<Option<Value>>,
-{
-    max_polls: u64,
-    poll_interval: Duration,
-    poll_record: P,
-}
-
-impl RealmAnchorResolver<fn(&str) -> anyhow::Result<Option<Value>>> {
-    fn production() -> Self {
-        Self {
-            max_polls: REALM_ANCHOR_MAX_POLLS,
-            poll_interval: REALM_ANCHOR_POLL_INTERVAL,
-            poll_record: fetch_invocation_record_by_request_id,
-        }
+fn resolve_realm_anchor(meta: &Value) -> RealmAnchorResolution {
+    match RealmCausalState::from_local_invocation(meta) {
+        RealmCausalState::Anchored(parents) => RealmAnchorResolution::Anchored(RealmAnchor {
+            parents,
+            trace_id: trace_id_from_invocation_meta(meta),
+        }),
+        RealmCausalState::Unanchored { reason } => RealmAnchorResolution::Unanchored { reason },
     }
-}
-
-impl<P> RealmAnchorResolver<P>
-where
-    P: FnMut(&str) -> anyhow::Result<Option<Value>>,
-{
-    #[cfg(test)]
-    fn new_for_test(max_polls: u64, poll_record: P) -> Self {
-        Self {
-            max_polls,
-            poll_interval: Duration::from_millis(0),
-            poll_record,
-        }
-    }
-
-    fn resolve(&mut self, local_meta: &Value) -> anyhow::Result<RealmAnchorResolution> {
-        if let Some(anchor) = anchor_from_invocation_meta(local_meta, None) {
-            return Ok(RealmAnchorResolution::Anchored(anchor));
-        }
-
-        let Some(request_id) = request_id_from_invocation_meta(local_meta) else {
-            let reason = RealmCausalState::from_local_invocation(local_meta)
-                .unanchored_reason()
-                .unwrap_or("local invocation metadata is missing request_id")
-                .to_string();
-            return Ok(RealmAnchorResolution::Unanchored { reason });
-        };
-
-        let mut last_reason = RealmCausalState::from_local_invocation(local_meta)
-            .unanchored_reason()
-            .unwrap_or("local receipt anchor is unavailable")
-            .to_string();
-        for poll_idx in 0..self.max_polls {
-            if poll_idx > 0 && !self.poll_interval.is_zero() {
-                std::thread::sleep(self.poll_interval);
-            }
-            let Some(record) = (self.poll_record)(&request_id)? else {
-                last_reason =
-                    format!("ledger did not expose invocation record for request_id {request_id}");
-                continue;
-            };
-            let refreshed = refreshed_invocation_meta_from_record(local_meta, &record);
-            if let Some(anchor) = anchor_from_invocation_meta(&refreshed, Some(refreshed.clone())) {
-                return Ok(RealmAnchorResolution::Anchored(anchor));
-            }
-            last_reason = RealmCausalState::from_local_invocation(&refreshed)
-                .unanchored_reason()
-                .unwrap_or("refreshed local invocation metadata still lacks a receipt anchor")
-                .to_string();
-        }
-
-        Ok(RealmAnchorResolution::Unanchored {
-            reason: format!(
-                "local receipt anchor unavailable after {} ledger polls: {last_reason}",
-                self.max_polls
-            ),
-        })
-    }
-}
-
-fn anchor_from_invocation_meta(
-    meta: &Value,
-    refreshed_invocation_meta: Option<Value>,
-) -> Option<RealmAnchor> {
-    let parents = RealmCausalState::from_local_invocation(meta)
-        .parents()
-        .map(<[Value]>::to_vec)?;
-    Some(RealmAnchor {
-        parents,
-        trace_id: trace_id_from_invocation_meta(meta),
-        refreshed_invocation_meta,
-    })
-}
-
-fn request_id_from_invocation_meta(meta: &Value) -> Option<String> {
-    meta.get("request_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn fetch_invocation_record_by_request_id(request_id: &str) -> anyhow::Result<Option<Value>> {
-    // Read the receipt projection through the daemon's side-effect-free
-    // `invocation.record.get` RPC, not by opening the redb ledger file: redb's
-    // exclusive cross-process lock makes a second-process open fail hard while
-    // the daemon holds it (the common topology). The daemon reads its own
-    // in-process ledger and writes no row, so realm-anchor resolution does not
-    // append a second invocation to the trail it is anchoring against.
-    let response = invoke_local_ability(
-        crate::daemon::ability::builtins::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
-        serde_json::json!({ "request_id": request_id }),
-    )
-    .with_context(|| format!("poll invocation ledger for request_id {request_id}"))?;
-    Ok(response
-        .get("record")
-        .filter(|record| !record.is_null())
-        .cloned())
-}
-
-fn refreshed_invocation_meta_from_record(original: &Value, record: &Value) -> Value {
-    let mut meta = original.clone();
-    meta["trace_id"] = record_field(record, "trace_id");
-    meta["invocation_ura"] = record_field(record, "invocation_ura");
-    meta["caller_ura"] = record_field(record, "caller_ura");
-    meta["callee_ura"] = record_field(record, "callee_ura");
-    meta["subject_ura"] = record_field(record, "subject_ura");
-    meta["ledger_state"] = record_field(record, "state");
-    let receipt =
-        crate::support::platform::invocation_receipt_projection::terminal_receipt_from_ledger_record(record);
-    let receipt_backed = receipt
-        .as_ref()
-        .and_then(|receipt| receipt_parent_from_terminal_receipt(receipt).ok())
-        .is_some();
-    meta["receipt"] = receipt.unwrap_or(Value::Null);
-    meta["metadata_state"] = json!(if receipt_backed {
-        "receipt_backed"
-    } else {
-        "receipt_anchor_pending"
-    });
-    meta
-}
-
-fn record_field(record: &Value, key: &str) -> Value {
-    record.get(key).cloned().unwrap_or(Value::Null)
 }
 
 fn trace_id_from_invocation_meta(meta: &Value) -> Option<String> {
@@ -998,13 +850,6 @@ fn receipt_parent_from_invocation_meta(meta: &Value) -> anyhow::Result<Value> {
     let anchor = meta
         .get("receipt")
         .and_then(|receipt| receipt.get("anchor"))
-        .ok_or_else(|| anyhow::anyhow!("invocation metadata is missing receipt.anchor"))?;
-    receipt_parent_from_anchor(anchor)
-}
-
-fn receipt_parent_from_terminal_receipt(receipt: &Value) -> anyhow::Result<Value> {
-    let anchor = receipt
-        .get("anchor")
         .ok_or_else(|| anyhow::anyhow!("invocation metadata is missing receipt.anchor"))?;
     receipt_parent_from_anchor(anchor)
 }
@@ -1387,47 +1232,23 @@ mod tests {
             .contains("receipt.anchor"));
     }
 
-    fn receipt_backed_ledger_record(request_id: &str) -> Value {
-        let receipt_hash = "11".repeat(32);
-        json!({
-            "request_id": request_id,
-            "trace_id": "trace-1",
-            "invocation_ura": "easynet:///r/acme/invocation/01DISCOVER",
-            "caller_ura": "easynet:///r/acme/agent/user.caller",
-            "callee_ura": "easynet:///r/acme/device/local",
-            "subject_ura": "easynet:///r/acme/device/local",
-            "state": "COMPLETED",
-            "receipt_chain": {
-                "head_receipt_hash": receipt_hash,
-                "anchors": [{
-                    "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/01RECEIPT/receipt",
-                    "receipt_hash": receipt_hash,
-                }],
-            },
-        })
-    }
-
     #[test]
-    fn realm_anchor_resolver_polls_until_receipt_parent_exists() {
+    fn realm_anchor_uses_only_terminal_receipt_from_invocation_response() {
         let local_meta = json!({
             "request_id": "req-1",
-            "metadata_state": "receipt_anchor_pending",
+            "metadata_state": "receipt_backed",
             "trace_id": "trace-1",
-        });
-        let mut calls = 0u8;
-        let mut resolver = RealmAnchorResolver::new_for_test(3, |request_id| {
-            calls += 1;
-            if calls < 2 {
-                return Ok(None);
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/01RECEIPT/receipt",
+                    "receipt_hash": "11".repeat(32),
+                }
             }
-            Ok(Some(receipt_backed_ledger_record(request_id)))
         });
-
-        let resolution = resolver.resolve(&local_meta).expect("resolve realm anchor");
+        let resolution = resolve_realm_anchor(&local_meta);
         let RealmAnchorResolution::Anchored(anchor) = resolution else {
             panic!("expected anchored resolution");
         };
-        assert_eq!(calls, 2);
         assert_eq!(anchor.trace_id.as_deref(), Some("trace-1"));
         assert_eq!(
             anchor.parents,
@@ -1436,37 +1257,22 @@ mod tests {
                 "receipt_hash": "11".repeat(32),
             })]
         );
-        let refreshed = anchor
-            .refreshed_invocation_meta
-            .expect("resolver should return refreshed local invocation metadata");
-        assert_eq!(refreshed["metadata_state"], json!("receipt_backed"));
-        assert_eq!(
-            refreshed["invocation_ura"],
-            json!("easynet:///r/acme/invocation/01DISCOVER")
-        );
     }
 
     #[test]
-    fn realm_anchor_resolver_exhaustion_remains_unanchored() {
+    fn realm_anchor_does_not_poll_or_fabricate_missing_terminal_proof() {
         let local_meta = json!({
             "request_id": "req-2",
             "metadata_state": "receipt_anchor_pending",
             "trace_id": "trace-2",
         });
-        let mut calls = 0u8;
-        let mut resolver = RealmAnchorResolver::new_for_test(2, |_request_id| {
-            calls += 1;
-            Ok(None)
-        });
-
-        let resolution = resolver.resolve(&local_meta).expect("resolve realm anchor");
+        let resolution = resolve_realm_anchor(&local_meta);
         let RealmAnchorResolution::Unanchored { reason } = resolution else {
             panic!("expected unanchored resolution");
         };
-        assert_eq!(calls, 2);
         assert!(
-            reason.contains("after 2 ledger polls"),
-            "exhaustion should be explicit: {reason}"
+            reason.contains("receipt.anchor"),
+            "missing response proof should be explicit: {reason}"
         );
     }
 

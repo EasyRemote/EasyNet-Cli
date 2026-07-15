@@ -319,13 +319,12 @@ impl KeyringClient {
 
         #[cfg(unix)]
         let mut stream = {
-            let stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+            UnixStream::connect(&self.socket_path).map_err(|e| {
                 SelfIdentityError::DaemonOffline {
                     path: self.socket_path.clone(),
                     reason: e.to_string(),
                 }
-            })?;
-            stream
+            })?
         };
 
         #[cfg(windows)]

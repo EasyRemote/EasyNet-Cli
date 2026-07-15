@@ -36,6 +36,23 @@ use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpS
 use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::open_local_stream;
 use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
+fn registry_for_mcp_owner(
+    runtime: Arc<LocalRuntime>,
+    owner_ura: &str,
+) -> easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog {
+    let owner = easynet_cli::core::ura::parse_ura(owner_ura).expect("canonical MCP owner URA");
+    let device_ura = easynet_cli::core::ura::device_ura(&owner.realm, "mcp-test-device");
+    let authority_context = easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+        device_ura,
+        [owner_ura.to_string()],
+    )
+    .expect("MCP owner must be admitted by the test Device authority");
+    easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        runtime,
+        authority_context,
+    )
+}
+
 /// Build the in-process Python echo MCP server fixture used
 /// throughout this round. Same script shape as the `mcp`
 /// unit tests + `reflective_ura_shape` integration test, so the
@@ -129,10 +146,8 @@ async fn reflective_path_directly_through_mcp_service_round_trip() {
     assert_eq!(svc.server_names().await, vec!["echo".to_string()]);
 
     let runtime = LocalRuntime::new();
-    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime(
-        Arc::clone(&runtime),
-    );
     let owner_ura = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
+    let mut reg = registry_for_mcp_owner(Arc::clone(&runtime), &owner_ura);
     let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc, &mut reg, &owner_ura,
     )
@@ -282,11 +297,12 @@ async fn mcp_bench_translation_round_trips_into_live_reflection() {
     let parsed: McpClientsFile = serde_json::from_value(translated).unwrap();
     let svc = Arc::new(McpClientService::from_file(parsed));
 
-    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new();
+    let owner_ura = "easynet:///r/test/agent/u.mcp";
+    let mut reg = registry_for_mcp_owner(LocalRuntime::new(), owner_ura);
     let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
-        "easynet:///r/test/agent/u.mcp",
+        owner_ura,
     )
     .await;
 
@@ -329,11 +345,12 @@ async fn broken_upstream_does_not_block_other_servers() {
         ],
     }));
 
-    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new();
+    let owner_ura = "easynet:///r/test/agent/u.mcp";
+    let mut reg = registry_for_mcp_owner(LocalRuntime::new(), owner_ura);
     let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
-        "easynet:///r/test/agent/u.mcp",
+        owner_ura,
     )
     .await;
 

@@ -10,7 +10,7 @@
 // ----------------
 // This module now contains only infrastructure primitives:
 //
-//   net.rs         — host/port parsing and PID discovery
+//   net.rs         — explicit process lifecycle helpers
 //   node.rs        — `nodes[]` interpretation helpers (online, state)
 //   output.rs      — terminal formatting (tables, colors, JSON/plain)
 //   shutdown.rs    — cooperative shutdown signalling
@@ -23,22 +23,11 @@
 //   agents.rs           → `crate::daemon::persistence::agent_registry`
 //   agent_id.rs         → `crate::core::agent::id`
 //   a2a_labels.rs       → `crate::daemon::federation::read_model::a2a_labels`
-//   connect_bridge()    → `crate::daemon::persistence::config` (needs RuntimeState)
-//   BRIDGE_CONNECT_TIMEOUT_MS
-//                       → `crate::support::platform::timeouts` (centralised tower)
 //
 // Dependency direction invariant
 // ------------------------------
-// `shared` is the leaf layer: it has no dependency on `persistence`
-// or `registry`. Earlier drafts had a `connect_bridge()` helper here
-// that read `RuntimeState` from `persistence::config`, which made
-// `shared` a *consumer* of `persistence` — quietly inverting the
-// intended layering. Any function that needs to read on-disk state
-// before opening a transport belongs in the module that owns that
-// state (`persistence`), leaving `shared` as a pure-plumbing crate
-// that takes values in, not paths. This module enforces that
-// invariant: [`connect_bridge_to`] is the only bridge helper here,
-// and it takes the endpoint as a parameter.
+// `support` is a leaf layer with no dependency on persistence or
+// product registries. Transport ownership stays in daemon Invocation.
 //
 // Why the split
 // -------------
@@ -103,27 +92,3 @@
 pub mod async_bridge;
 pub mod platform;
 pub(crate) mod shellguard;
-
-use anyhow::Context;
-
-/// Open a [`DendriteBridge`] to a given endpoint, using the shared
-/// [`crate::support::platform::timeouts::BRIDGE_CONNECT_TIMEOUT_MS`] budget.
-///
-/// This is the low-level, state-free entry point. Callers that also
-/// want the runtime's on-disk [`RuntimeState`] (tenant, label, PID)
-/// alongside the bridge should use
-/// [`crate::daemon::persistence::config::RuntimeState::connect_bridge`] or
-/// [`crate::daemon::persistence::config::load_and_connect`], both of which
-/// wrap this function after a [`crate::daemon::persistence::config::load`].
-///
-/// [`RuntimeState`]: crate::daemon::persistence::config::RuntimeState
-/// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-pub fn connect_bridge_to(
-    endpoint: &str,
-) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
-    easynet_axon::dendrite_bridge::DendriteBridge::connect(
-        endpoint,
-        platform::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
-    )
-    .with_context(|| format!("bridge connect to {endpoint}"))
-}

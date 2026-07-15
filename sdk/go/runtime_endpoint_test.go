@@ -6,14 +6,14 @@ import (
 	"testing"
 )
 
-func TestResolveLocalRuntimeEndpointPathUsesDefault(t *testing.T) {
+func TestResolveRuntimeEndpointPathUsesDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	got, err := ResolveLocalRuntimeEndpointPath(LocalRuntimeEndpointOptions{
+	got, err := ResolveRuntimeEndpointPath(RuntimeEndpointPathOptions{
 		DefaultPath: "~/runtime/daemon.sock",
 	})
 	if err != nil {
-		t.Fatalf("ResolveLocalRuntimeEndpointPath: %v", err)
+		t.Fatalf("ResolveRuntimeEndpointPath: %v", err)
 	}
 	want := filepath.Join(home, "runtime", "daemon.sock")
 	if got != want {
@@ -21,52 +21,52 @@ func TestResolveLocalRuntimeEndpointPathUsesDefault(t *testing.T) {
 	}
 }
 
-func TestResolveLocalRuntimeEndpointPathPrefersExplicitPath(t *testing.T) {
+func TestResolveRuntimeEndpointPathPrefersExplicitPath(t *testing.T) {
 	dir := t.TempDir()
 	explicit := filepath.Join(dir, "explicit.sock")
 	t.Setenv("RUNTIME_ENDPOINT_PATH", filepath.Join(dir, "env.sock"))
-	got, err := ResolveLocalRuntimeEndpointPath(LocalRuntimeEndpointOptions{
+	got, err := ResolveRuntimeEndpointPath(RuntimeEndpointPathOptions{
 		Path:        explicit,
 		EnvVar:      "RUNTIME_ENDPOINT_PATH",
 		DefaultPath: "~/runtime/default.sock",
 	})
 	if err != nil {
-		t.Fatalf("ResolveLocalRuntimeEndpointPath: %v", err)
+		t.Fatalf("ResolveRuntimeEndpointPath: %v", err)
 	}
 	if got != explicit {
 		t.Fatalf("endpoint path = %q, want %q", got, explicit)
 	}
 }
 
-func TestResolveLocalRuntimeEndpointPathReadsEnvironment(t *testing.T) {
+func TestResolveRuntimeEndpointPathReadsEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	override := filepath.Join(dir, "runtime.sock")
 	t.Setenv("RUNTIME_ENDPOINT_PATH", override)
-	got, err := ResolveLocalRuntimeEndpointPath(LocalRuntimeEndpointOptions{
+	got, err := ResolveRuntimeEndpointPath(RuntimeEndpointPathOptions{
 		EnvVar:      "RUNTIME_ENDPOINT_PATH",
 		DefaultPath: "~/runtime/default.sock",
 	})
 	if err != nil {
-		t.Fatalf("ResolveLocalRuntimeEndpointPath: %v", err)
+		t.Fatalf("ResolveRuntimeEndpointPath: %v", err)
 	}
 	if got != override {
 		t.Fatalf("endpoint path = %q, want %q", got, override)
 	}
 }
 
-func TestResolveLocalRuntimeEndpointPathRequiresConfiguredPath(t *testing.T) {
-	if _, err := ResolveLocalRuntimeEndpointPath(LocalRuntimeEndpointOptions{}); err == nil {
-		t.Fatal("ResolveLocalRuntimeEndpointPath accepted empty options")
+func TestResolveRuntimeEndpointPathRequiresConfiguredPath(t *testing.T) {
+	if _, err := ResolveRuntimeEndpointPath(RuntimeEndpointPathOptions{}); err == nil {
+		t.Fatal("ResolveRuntimeEndpointPath accepted empty options")
 	}
 }
 
-func TestResolveLocalRuntimeEndpointPathRejectsUserHomeForm(t *testing.T) {
-	if _, err := ResolveLocalRuntimeEndpointPath(LocalRuntimeEndpointOptions{Path: "~other/runtime.sock"}); err == nil {
-		t.Fatal("ResolveLocalRuntimeEndpointPath accepted ~user form")
+func TestResolveRuntimeEndpointPathRejectsUserHomeForm(t *testing.T) {
+	if _, err := ResolveRuntimeEndpointPath(RuntimeEndpointPathOptions{Path: "~other/runtime.sock"}); err == nil {
+		t.Fatal("ResolveRuntimeEndpointPath accepted ~user form")
 	}
 }
 
-func TestResolveLocalRuntimeEndpointPathResolvesRelativeAgainstWorkingDirectory(t *testing.T) {
+func TestResolveRuntimeEndpointPathResolvesRelativeAgainstWorkingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -80,9 +80,9 @@ func TestResolveLocalRuntimeEndpointPathResolvesRelativeAgainstWorkingDirectory(
 	if err != nil {
 		t.Fatalf("Getwd after Chdir: %v", err)
 	}
-	got, err := ResolveLocalRuntimeEndpointPath(LocalRuntimeEndpointOptions{Path: "runtime.sock"})
+	got, err := ResolveRuntimeEndpointPath(RuntimeEndpointPathOptions{Path: "runtime.sock"})
 	if err != nil {
-		t.Fatalf("ResolveLocalRuntimeEndpointPath: %v", err)
+		t.Fatalf("ResolveRuntimeEndpointPath: %v", err)
 	}
 	want := filepath.Join(resolvedCwd, "runtime.sock")
 	if got != want {

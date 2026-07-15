@@ -14,11 +14,11 @@
 // services still need an in-process record to carry caller/callee/
 // ability/subject/nonce/args into `Kernel::invoke`.
 //
-// The runtime id for this adapter is derived by converting the record
-// into Axon's `DescriptorBoundEnvelope` and calling Axon's canonical
-// descriptor-bound encoder. That keeps byte layout ownership in Axon
-// while giving daemon-internal Kernel calls the same versioned subject
-// semantics as transport invocations.
+// The runtime id for this adapter is derived from an explicit
+// daemon-local session-key encoding. It deliberately is not Axon's
+// descriptor-bound wire envelope: the session key must be computable
+// before runtime descriptor negotiation and must remain stable across
+// descriptor-version changes.
 //
 // Signature status
 // ----------------
@@ -153,7 +153,7 @@ impl RuntimeInvocation {
     }
 
     /// Encode the record into stable bytes for the daemon-local session
-    /// key (see [`runtime_invocation_id`] and [`SESSION_KEY_DESCRIPTOR_VERSION`]).
+    /// key (see [`runtime_invocation_id`] and [`SESSION_KEY_ENCODING_VERSION`]).
     ///
     /// These bytes are NOT the Axon canonical invocation identity: the key
     /// is version-pinned on purpose so the same logical invocation maps to
@@ -168,9 +168,40 @@ impl RuntimeInvocation {
     /// material to build Axon `ReceiptRef`s, so accepting them would
     /// create a false proof of canonical equivalence.
     fn session_key_bytes(&self) -> Result<Vec<u8>, RuntimeInvocationError> {
-        let (envelope, _args_bytes) =
-            self.axon_descriptor_bound_envelope(SESSION_KEY_DESCRIPTOR_VERSION)?;
-        Ok(envelope.canonical_bytes())
+        self.validate()?;
+        let nonce = decode_nonce_hex(&self.nonce_hex)?;
+        let args_bytes =
+            serde_json::to_vec(&self.args).map_err(RuntimeInvocationError::ArgsJson)?;
+        let causal_tag = match &self.causal_context {
+            RuntimeCausalContext::Null => "none",
+            RuntimeCausalContext::Scalar { .. } => {
+                return Err(RuntimeInvocationError::LegacyCausalContext(
+                    "scalar prior_invocation_id lacks receipt hash and receipt URA",
+                ));
+            }
+            RuntimeCausalContext::List { .. } => {
+                return Err(RuntimeInvocationError::LegacyCausalContext(
+                    "list prior_invocation_ids lack receipt hashes and receipt URAs",
+                ));
+            }
+            RuntimeCausalContext::Merkle { .. } => {
+                return Err(RuntimeInvocationError::LegacyCausalContext(
+                    "merkle_root lacks Axon proof URA",
+                ));
+            }
+        };
+
+        let mut out = Vec::new();
+        out.extend_from_slice(b"easynet.runtime-invocation.session-key\0");
+        push_session_key_field(&mut out, "version", SESSION_KEY_ENCODING_VERSION.as_bytes());
+        push_session_key_field(&mut out, "caller", self.caller.as_bytes());
+        push_session_key_field(&mut out, "callee", self.callee.as_bytes());
+        push_session_key_field(&mut out, "ability", self.ability.as_bytes());
+        push_session_key_field(&mut out, "subject", self.subject.as_bytes());
+        push_session_key_field(&mut out, "nonce", &nonce);
+        push_session_key_field(&mut out, "causal_context", causal_tag.as_bytes());
+        push_session_key_field(&mut out, "args", &args_bytes);
+        Ok(out)
     }
 
     pub fn axon_descriptor_bound_envelope(
@@ -304,25 +335,29 @@ fn decode_nonce_hex(value: &str) -> Result<[u8; 16], RuntimeInvocationError> {
     Ok(nonce)
 }
 
-/// Fixed descriptor version used solely to encode the daemon-local
-/// session key, intentionally independent of the descriptor version the
-/// dispatch path negotiates.
+/// Fixed encoding version used solely to encode the daemon-local session key,
+/// intentionally independent of the descriptor version the dispatch path
+/// negotiates.
 ///
 /// `runtime_invocation_id` must be derivable from a `RuntimeInvocation`
 /// record alone, before any runtime is consulted, and must be stable
 /// across descriptor-version changes so admission replay and session
 /// idempotency keep mapping one logical invocation to one session. The
 /// canonical wire envelope — which IS bound to the registered version —
-/// is built separately on the dispatch path. Reusing the runtime's
-/// descriptor-version default here would couple a local key to an
-/// unrelated negotiation and read as a fabricated wire version, which is
-/// exactly what this named constant avoids.
-const SESSION_KEY_DESCRIPTOR_VERSION: &str = "1.0.0";
+/// is built separately on the dispatch path.
+const SESSION_KEY_ENCODING_VERSION: &str = "runtime-invocation-session-v1";
+
+fn push_session_key_field(out: &mut Vec<u8>, label: &str, bytes: &[u8]) {
+    out.extend_from_slice(label.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
 
 /// Compute `invocation_id = sha256(session_key_bytes(inv))`, hex-encoded.
 ///
 /// This is a daemon-local session/receipt key for the adapter record —
-/// NOT the Axon canonical invocation identity (see [`SESSION_KEY_DESCRIPTOR_VERSION`]).
+/// NOT the Axon canonical invocation identity (see [`SESSION_KEY_ENCODING_VERSION`]).
 /// It is deliberately a pure function of the record so the same logical
 /// invocation always resolves to the same session key.
 pub fn runtime_invocation_id(inv: &RuntimeInvocation) -> Result<String, RuntimeInvocationError> {

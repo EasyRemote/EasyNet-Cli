@@ -27,7 +27,7 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // `voice.*` was previously listed here on the
     // assumption that voice signaling is an LLM-owned ability
     // family (RFC-005 v3.2 A6/A7). The handlers actually run
-    // on the device daemon (`OwnerKind::Device` in the
+    // under the realm Hub authority (`OwnerKind::Hub` in the
     // registry); claiming them in this profile caused the
     // catalogue's `descriptors_for(agent_ura)` to stamp every
     // voice verb with the agent URA, so `easynet ability list`
@@ -35,9 +35,10 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // the KIND column read `agent`. Per the truth-table spec
     // ownership reflects "where does the handler run", not
     // "which surface category it semantically belongs to" —
-    // voice is host-owned (microphone / camera / speaker
-    // hardware lives on the device) and is now described through
-    // registry `OwnerKind::Device`, not through an LLM prefix claim.
+    // microphone / camera / speaker hardware remains Device-owned,
+    // while voice synthesis, transcription, and signaling are now
+    // described through registry `OwnerKind::Hub`, not through an
+    // LLM prefix claim.
     "conversation.",
     "skill.",
 ];
@@ -60,59 +61,6 @@ fn is_llm_dynamic_ability(ability_name: &str) -> bool {
     LLM_DYNAMIC_ABILITY_PREFIXES
         .iter()
         .any(|p| ability_name.starts_with(p))
-}
-
-/// Project one hosted-Agent ability from canonical control-plane truth.
-///
-/// A registered descriptor wins intact and is re-anchored through the typed
-/// owner builder. Only a not-yet-registered import falls back to the spec DTO
-/// plus pure registration hints. Ambiguous live rows fail closed.
-pub(crate) fn descriptor_for_agent_spec(
-    live_registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
-    owner_ura: &str,
-    agent_name: &str,
-    spec: &crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec,
-) -> Result<AbilityDescriptor, String> {
-    let registry_name = spec.name();
-    let owner_local_name =
-        crate::daemon::execution::mission::agent_ability_specs::public_agent_ability_name(
-            owner_ura,
-            agent_name,
-            registry_name,
-        );
-    let descriptor = match live_registry
-        .canonical_descriptor_for_ability(registry_name)
-        .map_err(|error| error.to_string())?
-    {
-        Some(descriptor) => {
-            let descriptor = descriptor
-                .rebind_owner_ura(owner_ura)
-                .map_err(|error| error.to_string())?;
-            if descriptor.name != owner_local_name {
-                return Err(format!(
-                    "canonical descriptor name {:?} does not match hosted-Agent projection {:?}",
-                    descriptor.name, owner_local_name
-                ));
-            }
-            descriptor
-        }
-        None => AbilityDescriptor::new(
-            owner_local_name,
-            owner_ura,
-            crate::daemon::ability::descriptors::Visibility::Scoped,
-        )
-        .map_err(|error| error.to_string())?
-        .with_description(spec.description())
-        .with_input_schema(spec.parameters().clone())
-        .with_hints(crate::daemon::ability::catalog::registration_hints(
-            owner_ura,
-            registry_name,
-            crate::daemon::ability::CallMode::Rpc,
-        )),
-    };
-    Ok(descriptor
-        .with_visibility(crate::daemon::ability::descriptors::Visibility::Scoped)
-        .with_source(format!("agent:{agent_name}")))
 }
 
 /// AbilityDescriptors for every conversation.* / private skill.* in the live
@@ -229,8 +177,7 @@ mod tests {
         assert!(is_llm_dynamic_ability("skill.design"));
         assert!(!is_llm_dynamic_ability("skill.list"));
         assert!(!is_llm_dynamic_ability("skill.tree"));
-        // voice.* is NOT llm-owned post-truth-table fix —
-        // the handlers run on the device daemon.
+        // voice.* is Hub-owned post-truth-table cutover.
         assert!(!is_llm_dynamic_ability("voice.subscribe"));
         // meta.* is NOT llm-owned post-M2.
         assert!(!is_llm_dynamic_ability("meta.describe"));
@@ -299,6 +246,7 @@ mod tests {
                 name,
                 source_owner,
                 crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             )
             .expect("test descriptor")
             .with_description(description)

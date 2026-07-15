@@ -45,6 +45,7 @@ pub enum BaselineDomain {
     HubIdentity,
     HubRuntimeAdmin,
     HubIntrospection,
+    HubMedia,
     DeviceHealth,
     DeviceLifecycle,
     DeviceLocomotion,
@@ -69,6 +70,101 @@ pub struct BaselineAbility {
     pub call_mode: CallMode,
     pub surface: BaselineSurface,
     pub domain: BaselineDomain,
+}
+
+/// Deployment truth for descriptor contracts that are intentionally absent
+/// from the live operational inventory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityState {
+    Unsupported,
+    /// A provider port exists, but production assembly has no qualifying
+    /// realm-scoped implementation.
+    Seam,
+    ProviderBacked,
+    CutoverReady,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VoiceAssemblyEvidence {
+    pub repository_assembled: bool,
+    pub executable_delivery_evidence: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceCapabilityStateEvidence {
+    pub name: &'static str,
+    pub call_mode: CallMode,
+    pub state: CapabilityState,
+    pub authority: &'static str,
+    pub reason: &'static str,
+}
+
+const VOICE_REALM_REPOSITORY_SEAM: &str =
+    "no production realm-shared VoiceCallRepository provider is assembled";
+const VOICE_MEDIA_UNSUPPORTED: &str = "no Hub voice media provider assembly port is available";
+const VOICE_PROVIDER_BACKED: &str = "realm-shared VoiceCallRepository is assembled";
+const VOICE_CUTOVER_READY: &str = "executable delivery evidence covers the assembled provider";
+
+pub const VOICE_SIGNALING_CONTRACTS: &[(&str, CallMode)] = &[
+    ("voice.create_call", CallMode::Rpc),
+    ("voice.show_call", CallMode::Rpc),
+    ("voice.join_call", CallMode::Rpc),
+    ("voice.leave_call", CallMode::Rpc),
+    ("voice.end_call", CallMode::Rpc),
+    ("voice.watch_call", CallMode::Rpc),
+    ("voice.report_metrics", CallMode::Rpc),
+    ("voice.list_calls", CallMode::Rpc),
+];
+
+/// Voice descriptors remain contract artifacts, while this table records why
+/// each route is absent from the live catalog. It must not be interpreted as
+/// registration input.
+pub fn voice_capability_state_evidence(
+    assembly: VoiceAssemblyEvidence,
+) -> Vec<VoiceCapabilityStateEvidence> {
+    assert!(
+        !assembly.executable_delivery_evidence || assembly.repository_assembled,
+        "Voice CutoverReady evidence requires an assembled repository provider"
+    );
+    let signaling_state = if assembly.executable_delivery_evidence {
+        CapabilityState::CutoverReady
+    } else if assembly.repository_assembled {
+        CapabilityState::ProviderBacked
+    } else {
+        CapabilityState::Seam
+    };
+    let signaling_reason = match signaling_state {
+        CapabilityState::Seam => VOICE_REALM_REPOSITORY_SEAM,
+        CapabilityState::ProviderBacked => VOICE_PROVIDER_BACKED,
+        CapabilityState::CutoverReady => VOICE_CUTOVER_READY,
+        CapabilityState::Unsupported => unreachable!("signaling has an assembly seam"),
+    };
+    let mut evidence = VOICE_SIGNALING_CONTRACTS
+        .iter()
+        .map(|(name, call_mode)| VoiceCapabilityStateEvidence {
+            name,
+            call_mode: *call_mode,
+            state: signaling_state,
+            authority: "Hub",
+            reason: signaling_reason,
+        })
+        .collect::<Vec<_>>();
+    evidence.push(VoiceCapabilityStateEvidence {
+        name: "voice.subscribe",
+        call_mode: CallMode::Stream,
+        state: CapabilityState::Unsupported,
+        authority: "Hub",
+        reason: VOICE_MEDIA_UNSUPPORTED,
+    });
+    evidence.push(VoiceCapabilityStateEvidence {
+        name: "voice.transcribe",
+        call_mode: CallMode::Bidi,
+        state: CapabilityState::Unsupported,
+        authority: "Hub",
+        reason: VOICE_MEDIA_UNSUPPORTED,
+    });
+    evidence
 }
 
 impl BaselineAbility {
@@ -304,7 +400,9 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("agent.list", DeviceAgent),
     local_rpc!("agent.start", DeviceAgent),
     local_rpc!("agent.stop", DeviceAgent),
+    local_rpc!("agent.purge", DeviceAgent),
     local_rpc!("agent.refresh", DeviceAgent),
+    local_rpc!("agent.ability.put", DeviceAgent),
     local_rpc!("chat.history.list", DeviceAgent),
     local_rpc!("chat.history.get", DeviceAgent),
     local_rpc!("skill.publish", DeviceSkill),
@@ -344,6 +442,7 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("context.clipboard.get", DeviceContext),
     local_rpc!("context.clipboard.track", DeviceContext),
     local_rpc!("context.clipboard.remove", DeviceContext),
+    local_rpc!("context.catalog", DeviceContext),
     local_rpc!("context.folders.list", DeviceContext),
     local_rpc!("context.fs.list", DeviceContext),
     local_rpc!("context.favorites.list", DeviceContext),
@@ -357,16 +456,6 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_stream!("screen.subscribe", DeviceMedia),
     local_rpc!("screen.snapshot", DeviceMedia),
     local_bidi!("speaker.publish", DeviceMedia),
-    local_stream!("voice.subscribe", DeviceMedia),
-    local_bidi!("voice.transcribe", DeviceMedia),
-    local_rpc!("voice.create_call", DeviceMedia),
-    local_rpc!("voice.show_call", DeviceMedia),
-    local_rpc!("voice.join_call", DeviceMedia),
-    local_rpc!("voice.leave_call", DeviceMedia),
-    local_rpc!("voice.end_call", DeviceMedia),
-    local_rpc!("voice.watch_call", DeviceMedia),
-    local_rpc!("voice.report_metrics", DeviceMedia),
-    local_rpc!("voice.list_calls", DeviceMedia),
     local_rpc!("browser.open_session", DeviceBrowser),
     local_rpc!("browser.send_input", DeviceBrowser),
     local_stream!("browser.capture_viewport", DeviceBrowser),
@@ -633,6 +722,66 @@ mod tests {
     }
 
     #[test]
+    fn voice_capability_state_evidence_is_honest_about_provider_boundaries() {
+        let operational = baseline_names(HubBaseline::required_abilities());
+        let expected = [
+            ("voice.create_call", CallMode::Rpc, CapabilityState::Seam),
+            ("voice.show_call", CallMode::Rpc, CapabilityState::Seam),
+            ("voice.join_call", CallMode::Rpc, CapabilityState::Seam),
+            ("voice.leave_call", CallMode::Rpc, CapabilityState::Seam),
+            ("voice.end_call", CallMode::Rpc, CapabilityState::Seam),
+            ("voice.watch_call", CallMode::Rpc, CapabilityState::Seam),
+            ("voice.report_metrics", CallMode::Rpc, CapabilityState::Seam),
+            ("voice.list_calls", CallMode::Rpc, CapabilityState::Seam),
+            (
+                "voice.subscribe",
+                CallMode::Stream,
+                CapabilityState::Unsupported,
+            ),
+            (
+                "voice.transcribe",
+                CallMode::Bidi,
+                CapabilityState::Unsupported,
+            ),
+        ];
+
+        let evidence = voice_capability_state_evidence(VoiceAssemblyEvidence::default());
+        assert_eq!(evidence.len(), expected.len());
+        for (evidence, (name, mode, state)) in evidence.iter().zip(expected) {
+            assert_eq!(
+                (evidence.name, evidence.call_mode, evidence.state),
+                (name, mode, state)
+            );
+            assert_eq!(evidence.authority, "Hub");
+            assert!(!evidence.reason.is_empty());
+            assert!(
+                !operational.contains(evidence.name),
+                "{} must stay out of the operational Hub baseline",
+                evidence.name
+            );
+        }
+    }
+
+    #[test]
+    fn voice_capability_state_advances_only_with_assembly_evidence() {
+        let provider_backed = voice_capability_state_evidence(VoiceAssemblyEvidence {
+            repository_assembled: true,
+            executable_delivery_evidence: false,
+        });
+        assert!(provider_backed[..VOICE_SIGNALING_CONTRACTS.len()]
+            .iter()
+            .all(|row| row.state == CapabilityState::ProviderBacked));
+
+        let cutover_ready = voice_capability_state_evidence(VoiceAssemblyEvidence {
+            repository_assembled: true,
+            executable_delivery_evidence: true,
+        });
+        assert!(cutover_ready[..VOICE_SIGNALING_CONTRACTS.len()]
+            .iter()
+            .all(|row| row.state == CapabilityState::CutoverReady));
+    }
+
+    #[test]
     fn baseline_lists_do_not_duplicate_ability_names() {
         assert_eq!(
             duplicate_ability_names(HubBaseline::required_abilities()),
@@ -667,7 +816,22 @@ mod tests {
     #[test]
     fn local_registry_satisfies_hub_introspection_slice() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let registry = crate::daemon::ability::catalog::build_registry();
+        let agents = crate::daemon::persistence::agent_registry::AgentRegistry::default();
+        let hub_ura = crate::core::ura::hub_ura("conformance-test");
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+                &hub_ura,
+            )
+            .expect("Hub authority context");
+        let registry = crate::daemon::ability::catalog::build_registry_with_services_result(
+            crate::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(
+                crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+                &agents,
+                authority_context,
+            ),
+        )
+        .expect("build Hub registry")
+        .catalog;
         let report =
             RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
         assert!(report.is_conformant(), "{}", report.panic_message());
@@ -766,14 +930,12 @@ mod tests {
         // ever reclassifies them as `LocalRegistry`, `RegistryConformance`
         // would start asserting a handler that does not exist.
         let hub = HubBaseline::required_abilities();
-        for name in [ABILITY_SESSION_OPEN] {
-            let row = hub
-                .iter()
-                .find(|ability| ability.name == name)
-                .unwrap_or_else(|| panic!("hub baseline must contain {name}"));
-            assert_eq!(row.surface, BaselineSurface::AxonRuntimeAdmin);
-            assert_eq!(row.call_mode, CallMode::Bidi);
-            assert_eq!(row.domain, BaselineDomain::HubRuntimeAdmin);
-        }
+        let row = hub
+            .iter()
+            .find(|ability| ability.name == ABILITY_SESSION_OPEN)
+            .expect("hub baseline must contain ability.session.open");
+        assert_eq!(row.surface, BaselineSurface::AxonRuntimeAdmin);
+        assert_eq!(row.call_mode, CallMode::Bidi);
+        assert_eq!(row.domain, BaselineDomain::HubRuntimeAdmin);
     }
 }

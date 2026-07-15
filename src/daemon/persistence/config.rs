@@ -2,10 +2,8 @@
 // ====================================
 //
 // File: src/daemon/persistence/config.rs
-// Description: Persistence layer for all local device state under
-//              `~/.easynet/`, plus the one-call bridge-opening helper
-//              that composes loaded [`RuntimeState`] with the
-//              state-free connector in `shared`.
+// Description: Persistence layer for local device state under
+//              `~/.easynet/`.
 //
 // Three persistence domains
 // -------------------------
@@ -25,25 +23,6 @@
 //      `easynet config` → save/load  |  consumed by start.rs at boot.
 //      Fields: session_bridge_exec_enabled (default false).
 //
-// Where the bridge helper lives — and why here
-// --------------------------------------------
-//
-// [`load_and_connect`] and [`RuntimeState::connect_bridge`] read the
-// on-disk state and then open a [`DendriteBridge`] to its endpoint.
-// They live in this module — not in `shared` — because the dependency
-// only flows one way: **persistence composes transport**, never the
-// reverse. `shared` remains a pure-plumbing leaf that takes an
-// endpoint string in. An earlier draft had both helpers sitting at
-// the top of `shared/mod.rs`, which made `shared` silently consume
-// `persistence::config::load` — inverting the module layering in a
-// way that only showed up as a paragraph in the doc comment. The
-// placement here makes the layering visible at the use site:
-//
-//     // 1 argument → pure transport
-//     let bridge = support::connect_bridge_to(endpoint)?;
-//     // 0 arguments → reads state, then connects
-//     let (bridge, state) = persistence::config::load_and_connect()?;
-//
 // Implementation notes
 // --------------------
 // - All files share `~/.easynet/` ([`state_dir`]).
@@ -53,10 +32,8 @@
 //
 // Architectural Position
 // ----------------------
-// Foundation layer consumed by every CLI command. No network
-// dependencies on its own — `load_and_connect` sits at the seam
-// where persistence pairs a loaded endpoint with the transport layer
-// from `shared`.
+// Foundation layer consumed by every CLI command. It has no network
+// dependency and does not infer transport state from persisted endpoints.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -287,20 +264,12 @@ pub const DEFAULT_HUB_HOST: &str = "easynet.run";
 pub const DEFAULT_TENANT: &str = "easynet-platform";
 pub const DEFAULT_BIND: &str = "0.0.0.0:50051";
 
-/// Which process shape the persisted runtime state refers to.
-///
-/// Old `runtime.json` files (pre-daemon-only device mode) carried only
-/// an `endpoint` string and therefore deserialize as the historical
-/// default: an Axon bridge endpoint.
+/// Process shape recorded by the runtime session projection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
-    /// Historical local `axon-runtime` process reachable via the
-    /// dendrite bridge (`state.endpoint` is a bridge endpoint).
+    /// Unified EasyNet daemon. `state.endpoint` is the local Invocation UDS.
     #[default]
-    AxonBridge,
-    /// Daemon-only device mode. `state.endpoint` names the daemon's
-    /// local gRPC UDS socket and MUST NOT be treated as a bridge.
     DaemonOnly,
 }
 
@@ -341,64 +310,95 @@ pub fn state_dir() -> PathBuf {
     home_dir().join(".easynet")
 }
 
-/// Resolve the directory that holds per-agent root directories.
+/// Canonical directory that owns all per-agent roots.
 ///
-/// Returns the new convention (`~/.easynet/agents/`) when that path
-/// exists on disk; otherwise returns the legacy path
-/// (`~/.easynet/workspaces/`). Writers should still use the legacy
-/// path until the full `agent.toml` + `AgentDirectory` machinery
-/// lands (planned) — at that point writers flip to the new path and
-/// a one-shot migration moves any remaining legacy-path agents.
-///
-/// Rationale for "read two, write one":
-///
-/// - The on-disk layout of a per-agent root is unchanged (runs/,
-///   CLAUDE.md, AGENTS.md, .mcp.json, .codex/config.toml, .git/,
-///   .agents/skills/). Only the parent directory name changes.
-///   A read-side fallback is cheap and lets users who already have
-///   agents under `workspaces/` keep working across the upgrade
-///   without a flag day.
-/// - Committing the final rename to the writer before the new
-///   AgentDirectory model exists would leave us with the new path
-///   on disk and the old code generating into it — two versions
-///   of the same transition, confusing to debug.
-///
-/// Deprecation window: legacy fallback is kept until 1.9.0 (see
-/// `docs/rfc/eal-control-flow-v1.md` is unrelated — the window
-/// tracked in the top-level plan). A single `eprintln` warning is
-/// emitted the first time a process observes a legacy-only agents
-/// directory so operators know the rename is pending.
+/// Runtime readers and writers never select a legacy directory. Upgrade
+/// compatibility is confined to [`migrate_legacy_agents_directory`], which
+/// commits the parent-directory rename before normal persistence opens.
 pub fn agents_root() -> PathBuf {
-    let new = state_dir().join("agents");
-    if new.exists() {
-        return new;
-    }
-    let legacy = state_dir().join("workspaces");
-    if legacy.exists() {
-        warn_legacy_agents_root_once(&legacy);
-        return legacy;
-    }
-    // Neither exists yet (fresh install, or `easynet start` hasn't
-    // run). Fall through to the legacy path so the first writer
-    // stays byte-compatible with the pre-rename shape. The new
-    // AgentDirectory flip happens when that PR lands.
-    legacy
+    state_dir().join("agents")
 }
 
-/// Print the "workspaces is deprecated" warning at most once per
-/// process. `state_dir()` is read on nearly every CLI invocation,
-/// so a plain `eprintln` would spam the terminal. `OnceCell` gives
-/// us the "once per process" semantic without a mutex.
-fn warn_legacy_agents_root_once(path: &std::path::Path) {
-    use std::sync::OnceLock;
-    static WARNED: OnceLock<()> = OnceLock::new();
-    if WARNED.set(()).is_ok() {
-        eprintln!(
-            "note: {} is deprecated — agents will move to {}/agents/ at 1.9.0",
-            path.display(),
-            state_dir().display(),
+pub(crate) fn legacy_agents_root() -> PathBuf {
+    state_dir().join("workspaces")
+}
+
+/// Execute the one-time `workspaces/` -> `agents/` layout transition.
+///
+/// The rename is atomic because both paths share the same parent filesystem.
+/// A process-wide assumption is insufficient here: CLI and daemon processes
+/// may start concurrently, so a filesystem lock serializes the transition.
+/// Once committed, no runtime path reads the legacy directory again.
+pub fn migrate_legacy_agents_directory() -> anyhow::Result<PathBuf> {
+    use anyhow::Context as _;
+    use fs2::FileExt as _;
+
+    let state = state_dir();
+    fs::create_dir_all(&state)
+        .with_context(|| format!("create EasyNet state directory {}", state.display()))?;
+    let lock_path = state.join(".agents-layout.lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("open agent layout lock {}", lock_path.display()))?;
+    lock.lock_exclusive()
+        .with_context(|| format!("lock agent layout migration {}", lock_path.display()))?;
+
+    let canonical = agents_root();
+    let legacy = legacy_agents_root();
+    validate_agent_root_kind(&canonical, "canonical")?;
+    validate_agent_root_kind(&legacy, "legacy")?;
+
+    match (canonical.exists(), legacy.exists()) {
+        (false, true) => {
+            fs::rename(&legacy, &canonical).with_context(|| {
+                format!(
+                    "atomically migrate agent directory {} -> {}",
+                    legacy.display(),
+                    canonical.display()
+                )
+            })?;
+            sync_directory(&state).context("durably commit agent directory migration")?;
+        }
+        (true, true) => {
+            let mut entries = fs::read_dir(&legacy)
+                .with_context(|| format!("inspect legacy agent directory {}", legacy.display()))?;
+            if entries.next().transpose()?.is_some() {
+                anyhow::bail!(
+                    "agent directory migration conflict: both {} and {} contain runtime state; merge explicitly before starting EasyNet",
+                    canonical.display(),
+                    legacy.display()
+                );
+            }
+            fs::remove_dir(&legacy).with_context(|| {
+                format!("remove empty legacy agent directory {}", legacy.display())
+            })?;
+            sync_directory(&state).context("durably remove empty legacy agent directory")?;
+        }
+        _ => {}
+    }
+
+    Ok(canonical)
+}
+
+fn validate_agent_root_kind(path: &Path, label: &str) -> anyhow::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(anyhow::Error::new(error)
+                .context(format!("inspect {label} agent root {}", path.display())))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        anyhow::bail!(
+            "{label} agent root {} must be a real directory, not a symlink or file",
+            path.display()
         );
     }
+    Ok(())
 }
 
 fn state_path() -> PathBuf {
@@ -433,65 +433,6 @@ impl RuntimeState {
     pub fn tenant_or_default(&self) -> &str {
         self.tenant.as_deref().unwrap_or(DEFAULT_TENANT)
     }
-
-    pub fn uses_bridge(&self) -> bool {
-        matches!(self.runtime_kind, RuntimeKind::AxonBridge)
-    }
-
-    /// Open a [`DendriteBridge`] to this runtime's endpoint, using the
-    /// shared connect-timeout budget.
-    ///
-    /// Thin composition of [`crate::support::connect_bridge_to`] —
-    /// lives here (not on the bridge side) so that consumers who
-    /// already hold a `RuntimeState` can spell the call in a way that
-    /// reads as "use this state to reach its runtime":
-    ///
-    /// ```ignore
-    /// let state = persistence::config::load()?;
-    /// let bridge = state.connect_bridge()?;
-    /// ```
-    ///
-    /// If you don't already have a `RuntimeState`, prefer
-    /// [`load_and_connect`] — it performs both steps in one call and
-    /// the shorter name matches the common case.
-    ///
-    /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-    pub fn connect_bridge(&self) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
-        anyhow::ensure!(
-            self.uses_bridge(),
-            "local runtime is running in daemon-only mode; no axon bridge endpoint is available"
-        );
-        crate::support::connect_bridge_to(&self.endpoint)
-    }
-}
-
-/// Load the persisted [`RuntimeState`] and open a [`DendriteBridge`]
-/// to its endpoint in one call.
-///
-/// Returns `(bridge, state)` so callers can access tenant, label, or
-/// started-at metadata without a second load. This is the canonical
-/// entry point for CLI commands that just need "connect me to
-/// whatever runtime is running here".
-///
-/// # Why this composition lives in `persistence`
-///
-/// The function spans two layers — it reads a file (`persistence`)
-/// and opens a socket (`shared`) — so placing it requires a
-/// convention. We place it in the layer that *consumes* the other:
-/// `persistence::config` imports `support::connect_bridge_to`, and
-/// `shared` imports neither. An earlier draft inverted this and put
-/// the helper in `shared/mod.rs`, which silently made the transport
-/// layer depend on the persistence layer. The doc comment there
-/// admitted the inversion in prose; the fix is to put the helper on
-/// the correct side of the seam. See `src/shared/mod.rs`'s module
-/// doc for the enforcement story.
-///
-/// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-pub fn load_and_connect(
-) -> anyhow::Result<(easynet_axon::dendrite_bridge::DendriteBridge, RuntimeState)> {
-    let state = load()?;
-    let bridge = state.connect_bridge()?;
-    Ok((bridge, state))
 }
 
 // ─── Device Credentials ────────────────────────────────────────────────────
@@ -706,26 +647,11 @@ fn credentials_path() -> PathBuf {
     state_dir().join("credentials.json")
 }
 
-/// Path to the retired heartbeat sidecar PID file.
-/// Current runtime start does not write it; stop reads and removes it
-/// only as legacy janitor state from pre-session-heartbeat builds.
-pub fn heartbeat_pid_path() -> PathBuf {
-    state_dir().join("heartbeat.pid")
-}
-
-/// Path to the easynet-daemon PID file. Same shape and lifecycle as
-/// `heartbeat_pid_path`: start.rs writes it after spawn, stop.rs
-/// reads + signals + removes. Without it, `easynet runtime stop`
-/// could only kill the heartbeat daemon and the axon runtime;
-/// the easynet-daemon child stayed alive across restarts and a
-/// fresh `runtime start` would spawn a SECOND daemon that loses
-/// the runtime-dispatch socket bind to the older one ("another
-/// process already accepts on …/runtime-dispatch.sock — refusing
-/// to overwrite"). The newer daemon's responder exits and from
-/// that point control.sock chat dispatches succeed exactly once
-/// (whichever daemon's tokio runtime gets the connection) before
-/// returning "daemon closed the connection". Pidfile + signal-on-
-/// stop fixes that ghost-daemon class entirely.
+/// Path to the unified EasyNet daemon PID file.
+///
+/// Start writes it after spawning `easynet-daemon`; stop validates,
+/// signals, and removes it. Discovery remains an independent repair
+/// path when this projection is missing or stale.
 pub fn easynet_daemon_pid_path() -> PathBuf {
     state_dir().join("easynet-daemon.pid")
 }
@@ -1018,39 +944,16 @@ mod tests {
     }
 
     #[test]
-    fn runtime_state_defaults_to_axon_bridge_when_kind_missing() {
+    fn runtime_state_defaults_to_daemon_when_kind_missing() {
         let state: RuntimeState = serde_json::from_str(
             r#"{
-                "endpoint": "axon://127.0.0.1:50051",
+                "endpoint": "/tmp/easynet-daemon.sock",
                 "pid": 7,
                 "tenant": "tenant-a"
             }"#,
         )
-        .expect("deserialize legacy runtime state");
-        assert_eq!(state.runtime_kind, RuntimeKind::AxonBridge);
-        assert!(state.uses_bridge());
-    }
-
-    #[test]
-    fn daemon_only_runtime_state_rejects_bridge_connect() {
-        let state = RuntimeState {
-            endpoint: "/tmp/easynet.sock".into(),
-            runtime_kind: RuntimeKind::DaemonOnly,
-            pid: Some(9),
-            hub: None,
-            tenant: Some("tenant-a".into()),
-            label: None,
-            started_at: None,
-            credential_verified: None,
-        };
-        let err = match state.connect_bridge() {
-            Ok(_) => panic!("daemon-only state must not bridge-connect"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string().contains("daemon-only mode"),
-            "unexpected error: {err}"
-        );
+        .expect("deserialize runtime state");
+        assert_eq!(state.runtime_kind, RuntimeKind::DaemonOnly);
     }
 
     #[test]
@@ -1224,107 +1127,87 @@ mod tests {
         );
     }
 
-    // ── agents_root() migration read ─────────────────────────────────────
+    // ── Agent directory layout migration ─────────────────────────────────
 
     // All of these tests use `HomeGuard` so they never touch the
     // developer's real `~/.easynet/` tree. `HomeGuard` serializes
     // concurrent tests via a global mutex, which is load-bearing because
-    // `agents_root()` reads `HOME`.
+    // the layout owner reads `HOME`.
 
     use crate::cli::commands::test_support::HomeGuard;
 
     #[test]
-    fn agents_root_prefers_new_layout_when_only_new_exists() {
+    fn agents_root_is_canonical_even_before_the_directory_exists() {
         let _g = HomeGuard::new();
-        let new_path = state_dir().join("agents");
-        fs::create_dir_all(&new_path).unwrap();
-
-        assert_eq!(agents_root(), new_path);
+        assert_eq!(agents_root(), state_dir().join("agents"));
     }
 
     #[test]
-    fn agents_root_falls_back_to_legacy_when_only_legacy_exists() {
+    fn layout_migration_atomically_renames_legacy_root() {
         let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
+        let legacy = legacy_agents_root();
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("sentinel"), b"preserved").unwrap();
+
+        let canonical = migrate_legacy_agents_directory().unwrap();
+        assert_eq!(canonical, agents_root());
+        assert!(!legacy.exists());
+        assert_eq!(fs::read(canonical.join("sentinel")).unwrap(), b"preserved");
+    }
+
+    #[test]
+    fn layout_migration_is_idempotent_for_canonical_root() {
+        let _g = HomeGuard::new();
+        let canonical = agents_root();
+        fs::create_dir_all(&canonical).unwrap();
+
+        assert_eq!(migrate_legacy_agents_directory().unwrap(), canonical);
+        assert_eq!(migrate_legacy_agents_directory().unwrap(), canonical);
+    }
+
+    #[test]
+    fn layout_migration_removes_empty_legacy_root_beside_canonical_root() {
+        let _g = HomeGuard::new();
+        let canonical = agents_root();
+        let legacy = legacy_agents_root();
+        fs::create_dir_all(&canonical).unwrap();
         fs::create_dir_all(&legacy).unwrap();
 
-        assert_eq!(agents_root(), legacy);
+        migrate_legacy_agents_directory().unwrap();
+        assert!(canonical.exists());
+        assert!(!legacy.exists());
     }
 
     #[test]
-    fn agents_root_prefers_new_when_both_exist() {
-        // Double-presence is a real-world shape: a user who created
-        // agents on an old binary and upgrades to a newer one that has
-        // begun writing to the new path will briefly hold both trees.
-        // The helper must resolve the ambiguity toward the new path so
-        // the rest of the codebase reads a single consistent layout.
+    fn layout_migration_fails_closed_when_both_roots_contain_state() {
         let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        let new_path = state_dir().join("agents");
+        let canonical = agents_root();
+        let legacy = legacy_agents_root();
+        fs::create_dir_all(&canonical).unwrap();
         fs::create_dir_all(&legacy).unwrap();
-        fs::create_dir_all(&new_path).unwrap();
+        fs::write(canonical.join("new"), b"new").unwrap();
+        fs::write(legacy.join("old"), b"old").unwrap();
 
-        assert_eq!(agents_root(), new_path);
-    }
-
-    #[test]
-    fn agents_root_returns_legacy_path_when_neither_exists() {
-        // Fresh install: no layout on disk. The helper returns the
-        // legacy path so the first writer lands under
-        // `~/.easynet/workspaces/`, byte-compatible with every
-        // pre-rename deployment. Flipping this default is reserved
-        // for the PR that introduces AgentDirectory writes.
-        let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        assert_eq!(agents_root(), legacy);
+        let error = migrate_legacy_agents_directory().unwrap_err();
+        assert!(error.to_string().contains("migration conflict"));
+        assert!(canonical.join("new").exists());
+        assert!(legacy.join("old").exists());
     }
 
     #[cfg(unix)]
     #[test]
-    fn agents_root_survives_an_unreadable_legacy_path() {
-        // A legacy `workspaces/` that the user cannot list (e.g.
-        // wrong ownership after a chown) must not panic the resolver
-        // or crash on every CLI call. We verify the helper still
-        // returns a path — either the new layout (preferred) or the
-        // legacy one — without aborting.
-        use std::os::unix::fs::PermissionsExt;
+    fn layout_migration_rejects_symlinked_legacy_root() {
+        use std::os::unix::fs::symlink;
 
         let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        fs::create_dir_all(&legacy).unwrap();
-        fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o000)).unwrap();
+        fs::create_dir_all(state_dir()).unwrap();
+        let outside = state_dir().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        let legacy = legacy_agents_root();
+        symlink(&outside, &legacy).unwrap();
 
-        // The helper uses `Path::exists()` internally, which only
-        // checks metadata reachability — it tolerates unreadable
-        // targets as long as the path resolves. Either return path
-        // is acceptable here; the critical property is "no panic".
-        let got = agents_root();
-
-        // Restore permissions so `HomeGuard::drop` can clean up.
-        fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o700)).unwrap();
-
-        assert!(got.starts_with(state_dir()));
-    }
-
-    #[test]
-    fn agents_root_emits_deprecation_notice_at_most_once() {
-        // The deprecation notice runs through a `OnceLock`, so the
-        // first call that hits the legacy-only branch prints, and
-        // every subsequent call in the same process is silent. We
-        // can't capture stderr directly from an integration-style
-        // test, but we can still verify the helper is idempotent
-        // under repeated calls: the returned path must be stable
-        // and the process must not crash.
-        let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        fs::create_dir_all(&legacy).unwrap();
-
-        let first = agents_root();
-        let second = agents_root();
-        let third = agents_root();
-        assert_eq!(first, legacy);
-        assert_eq!(second, legacy);
-        assert_eq!(third, legacy);
+        let error = migrate_legacy_agents_directory().unwrap_err();
+        assert!(error.to_string().contains("must be a real directory"));
     }
 
     #[test]

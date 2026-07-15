@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "node.describe"
+descriptor_version = "1.0.0"
 description = "Describe one node by id from the same live federation-backed view used by node.list. Accepts `local`, this device's actual node id, or any resolved peer node id."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

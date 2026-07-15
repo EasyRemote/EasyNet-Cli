@@ -24,7 +24,7 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::ability::catalog::system_manifest::registry_manifest;
@@ -55,10 +55,14 @@ pub const POLICY_REQUEST_LIST: &str =
 pub const ADMISSION_EXPLAIN: &str = crate::daemon::ability::names::governance::ADMISSION_EXPLAIN;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    register_with_ledger(reg, None);
+    register_with_ledger(reg, None, Arc::new(OnceLock::new()));
 }
 
-pub fn register_with_ledger(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<InvocationLedger>>) {
+pub fn register_with_ledger(
+    reg: &mut AxonAbilityCatalog,
+    ledger: Option<Arc<InvocationLedger>>,
+    _catalog: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+) {
     let runtime_governance_owners = [OwnerKind::Device, OwnerKind::Hub];
     for ability in [
         AUTHORITY_BINDING_GRANT,
@@ -108,30 +112,21 @@ pub fn register_with_ledger(reg: &mut AxonAbilityCatalog, ledger: Option<Arc<Inv
 fn grant_handler(args: Value) -> anyhow::Result<Value> {
     let request: GrantRequest = serde_json::from_value(args)?;
     let mut grant = request.grant;
-    normalize_grant_boundary(
+    normalize_grant_mutation_boundary(
         &mut grant,
         request.owner_ura.as_deref(),
         request.principal_ura.as_deref(),
     )?;
-    let actor_ura = request
-        .actor_ura
-        .clone()
-        .unwrap_or_else(|| grant.created_by.clone());
+    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
     let mut store = AccessControlStore::open_or_create(grant.owner_user_id.clone())?;
-    let result = store.create_grant(grant, &actor_ura)?;
+    let result = store.create_grant(grant, actor_ura)?;
     Ok(serde_json::to_value(result)?)
 }
 
 fn revoke_handler(args: Value) -> anyhow::Result<Value> {
     let request: RevokeRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(
-        request.owner_ura.as_deref(),
-        request.owner_user_id.as_deref(),
-    )?;
-    let actor_ura = request
-        .actor_ura
-        .as_deref()
-        .unwrap_or(owner_user_id.as_str());
+    let owner_user_id = owner_user_id_from_mutation_boundary(request.owner_ura.as_deref())?;
+    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
     let mut store = AccessControlStore::open_or_create(owner_user_id.clone())?;
     let grant = store.revoke_grant(&request.grant_id, &owner_user_id, actor_ura, request.reason)?;
     Ok(json!({ "grant": grant }))
@@ -139,14 +134,11 @@ fn revoke_handler(args: Value) -> anyhow::Result<Value> {
 
 fn list_grants_handler(args: Value) -> anyhow::Result<Value> {
     let request: ListGrantsRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(
-        request.owner_ura.as_deref(),
-        request.owner_user_id.as_deref(),
-    )?;
+    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
     let principal_id = principal_id_from_boundary(
         request.principal_kind,
         request.principal_ura.as_deref(),
-        request.principal_id.as_deref(),
+        request.token_id.as_deref(),
     )?;
     let store = AccessControlStore::open_or_create(owner_user_id)?;
     let mut grants = store.grants();
@@ -182,17 +174,14 @@ fn list_grants_handler(args: Value) -> anyhow::Result<Value> {
 }
 
 fn check_handler(args: Value) -> anyhow::Result<Value> {
-    let mut request: CheckRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(
-        request.owner_ura.as_deref(),
-        request.owner_user_id.as_deref(),
-    )?;
-    request.principal_id = principal_id_from_boundary(
+    let request: CheckRequest = serde_json::from_value(args)?;
+    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
+    let principal_id = principal_id_from_boundary(
         Some(request.principal_kind),
         request.principal_ura.as_deref(),
-        Some(request.principal_id.as_str()),
+        request.token_id.as_deref(),
     )?
-    .unwrap_or(request.principal_id);
+    .ok_or_else(|| anyhow::anyhow!("principal_ura or token_id is required for policy checks"))?;
     let store = AccessControlStore::open_or_create(owner_user_id.clone())?;
     let owner = OwnerResolution {
         owner_user_id: Some(owner_user_id),
@@ -202,10 +191,10 @@ fn check_handler(args: Value) -> anyhow::Result<Value> {
     };
     let decision = PolicyEngine::check(PolicyInput {
         owner,
-        caller_user_id: request.caller_user_id,
+        caller_user_id: None,
         caller_ura: request.caller_ura,
         principal_kind: request.principal_kind,
-        principal_id: request.principal_id,
+        principal_id,
         token_id: request.token_id,
         token_class: request.token_class,
         callee_ura: request.callee_ura,
@@ -227,37 +216,31 @@ fn check_handler(args: Value) -> anyhow::Result<Value> {
 fn request_create_handler(args: Value) -> anyhow::Result<Value> {
     let request: PermissionRequestEnvelope = serde_json::from_value(args)?;
     let mut permission_request = request.request;
-    normalize_permission_request_boundary(
+    normalize_permission_request_mutation_boundary(
         &mut permission_request,
         request.owner_ura.as_deref(),
         request.principal_ura.as_deref(),
     )?;
-    let actor_ura = request
-        .actor_ura
-        .clone()
-        .unwrap_or_else(|| permission_request.caller_ura.clone());
+    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
     let mut store = AccessControlStore::open_or_create(permission_request.owner_user_id.clone())?;
-    let request = store.upsert_permission_request(permission_request, &actor_ura)?;
+    let request = store.upsert_permission_request(permission_request, actor_ura)?;
     Ok(json!({ "request": request }))
 }
 
 fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
     let request: PermissionRequestResolutionEnvelope = serde_json::from_value(args)?;
     let mut permission_request = request.request;
-    normalize_permission_request_boundary(
+    normalize_permission_request_mutation_boundary(
         &mut permission_request,
         request.owner_ura.as_deref(),
         request.principal_ura.as_deref(),
     )?;
-    let actor_ura = request
-        .actor_ura
-        .clone()
-        .unwrap_or_else(|| permission_request.resolver_ura.clone().unwrap_or_default());
+    let actor_ura = require_actor_ura(request.actor_ura.as_deref())?;
     let mut store = AccessControlStore::open_or_create(permission_request.owner_user_id.clone())?;
     if permission_request.status == PermissionRequestStatus::Approved {
         if let Some(grant) = request.created_grant {
             let mut grant = grant;
-            normalize_grant_boundary(
+            normalize_grant_mutation_boundary(
                 &mut grant,
                 request.owner_ura.as_deref(),
                 request.principal_ura.as_deref(),
@@ -265,7 +248,7 @@ fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
             let result = store.resolve_permission_request_with_grant(
                 permission_request,
                 grant,
-                &actor_ura,
+                actor_ura,
             )?;
             return Ok(serde_json::to_value(result)?);
         }
@@ -273,25 +256,22 @@ fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
             let result = store.resolve_permission_request_with_authority_proof(
                 permission_request,
                 proof,
-                &actor_ura,
+                actor_ura,
             )?;
             return Ok(serde_json::to_value(result)?);
         }
     }
-    let request = store.resolve_permission_request(permission_request, &actor_ura)?;
+    let request = store.resolve_permission_request(permission_request, actor_ura)?;
     Ok(json!({ "request": request }))
 }
 
 fn request_list_handler(args: Value) -> anyhow::Result<Value> {
     let request: ListRequestsRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(
-        request.owner_ura.as_deref(),
-        request.owner_user_id.as_deref(),
-    )?;
+    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_deref())?;
     let principal_id = principal_id_from_boundary(
         request.principal_kind,
         request.principal_ura.as_deref(),
-        request.principal_id.as_deref(),
+        request.token_id.as_deref(),
     )?;
     let created_at = parse_creation_time_filter(request.created_at.as_deref(), "created_at")?;
     let created_at_or_after = parse_creation_time_filter(
@@ -376,51 +356,41 @@ fn creation_time_matches(
     true
 }
 
-fn normalize_grant_boundary(
+fn normalize_grant_mutation_boundary(
     grant: &mut crate::daemon::invocation::admission::grant_matcher::PermissionGrant,
     owner_ura: Option<&str>,
     principal_ura: Option<&str>,
 ) -> anyhow::Result<()> {
-    grant.owner_user_id =
-        owner_user_id_from_boundary(owner_ura, Some(grant.owner_user_id.as_str()))?;
-    if let Some(principal_id) = principal_id_from_boundary(
+    grant.owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
+    if let Some(principal_id) = principal_id_from_mutation_boundary(
         Some(grant.principal_kind),
         principal_ura,
-        Some(grant.principal_id.as_str()),
+        grant.token_id.as_deref(),
     )? {
         grant.principal_id = principal_id;
     }
     Ok(())
 }
 
-fn normalize_permission_request_boundary(
+fn normalize_permission_request_mutation_boundary(
     request: &mut crate::daemon::invocation::admission::decision::PermissionRequest,
     owner_ura: Option<&str>,
     principal_ura: Option<&str>,
 ) -> anyhow::Result<()> {
-    request.owner_user_id =
-        owner_user_id_from_boundary(owner_ura, Some(request.owner_user_id.as_str()))?;
-    if let Some(principal_id) = principal_id_from_boundary(
+    request.owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
+    if let Some(principal_id) = principal_id_from_mutation_boundary(
         Some(request.principal_kind),
         principal_ura,
-        Some(request.principal_id.as_str()),
+        request.token_id.as_deref(),
     )? {
         request.principal_id = principal_id;
     }
     Ok(())
 }
 
-fn owner_user_id_from_boundary(
-    owner_ura: Option<&str>,
-    owner_user_id: Option<&str>,
-) -> anyhow::Result<String> {
-    let legacy = owner_user_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+fn owner_user_id_from_boundary(owner_ura: Option<&str>) -> anyhow::Result<String> {
     let Some(owner_ura) = owner_ura.map(str::trim).filter(|value| !value.is_empty()) else {
-        return legacy
-            .map(str::to_string)
-            .ok_or_else(|| anyhow::anyhow!("owner_ura is required"));
+        anyhow::bail!("owner_ura is required");
     };
     let parsed = parse_ura(owner_ura)
         .map_err(|err| anyhow::anyhow!("owner_ura must be a canonical User URA: {err}"))?;
@@ -430,27 +400,44 @@ fn owner_user_id_from_boundary(
     let derived = parsed
         .user_id()
         .ok_or_else(|| anyhow::anyhow!("owner_ura must include a user id"))?;
-    if let Some(legacy) = legacy {
-        if legacy != derived {
-            anyhow::bail!("owner_user_id must match owner_ura user id");
-        }
-    }
     Ok(derived.to_string())
+}
+
+fn owner_user_id_from_mutation_boundary(owner_ura: Option<&str>) -> anyhow::Result<String> {
+    let owner_ura = owner_ura
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("owner_ura is required for a policy mutation"))?;
+    owner_user_id_from_boundary(Some(owner_ura))
+}
+
+fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
+    let actor_ura = actor_ura
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("actor_ura is required for an audited mutation"))?;
+    parse_ura(actor_ura)
+        .map_err(|err| anyhow::anyhow!("actor_ura must be a canonical URA: {err}"))?;
+    Ok(actor_ura)
 }
 
 fn principal_id_from_boundary(
     kind: Option<crate::daemon::invocation::admission::decision::PrincipalKind>,
     principal_ura: Option<&str>,
-    principal_id: Option<&str>,
+    token_id: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
-    let legacy = principal_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
+    let token_id = token_id.map(str::trim).filter(|value| !value.is_empty());
     let Some(principal_ura) = principal_ura
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(legacy.map(str::to_string));
+        return match kind {
+            Some(crate::daemon::invocation::admission::decision::PrincipalKind::Token) => {
+                Ok(token_id.map(str::to_string))
+            }
+            Some(_) => anyhow::bail!("principal_ura is required for non-token principals"),
+            None => Ok(None),
+        };
     };
     let parsed = parse_ura(principal_ura)
         .map_err(|err| anyhow::anyhow!("principal_ura must be canonical: {err}"))?;
@@ -465,18 +452,31 @@ fn principal_id_from_boundary(
                 .to_string()
         }
         Some(crate::daemon::invocation::admission::decision::PrincipalKind::Token) => {
-            return legacy
+            return token_id
                 .map(|value| Ok(Some(value.to_string())))
-                .unwrap_or_else(|| anyhow::bail!("principal_id is required for token principals"));
+                .unwrap_or_else(|| anyhow::bail!("token_id is required for token principals"));
         }
         _ => principal_ura.to_string(),
     };
-    if let Some(legacy) = legacy {
-        if legacy != canonical {
-            anyhow::bail!("principal_id must match principal_ura");
-        }
-    }
     Ok(Some(canonical))
+}
+
+fn principal_id_from_mutation_boundary(
+    kind: Option<crate::daemon::invocation::admission::decision::PrincipalKind>,
+    principal_ura: Option<&str>,
+    token_id: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    use crate::daemon::invocation::admission::decision::PrincipalKind;
+
+    if kind != Some(PrincipalKind::Token)
+        && principal_ura
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+    {
+        anyhow::bail!("principal_ura is required for a non-token policy mutation");
+    }
+    principal_id_from_boundary(kind, principal_ura, token_id)
 }
 
 struct AdmissionExplainReader {
@@ -494,6 +494,29 @@ impl AdmissionExplainReader {
         let record = ledger
             .fetch_one(InvocationLedgerQuery::new().key(key).limit(1))?
             .ok_or_else(|| anyhow::anyhow!("admission.explain: invocation record not found"))?;
+        let action: crate::daemon::invocation::admission::decision::AccessAction =
+            serde_json::from_value(Value::String(record.admission_action.clone())).map_err(
+                |error| {
+                    anyhow::anyhow!(
+                        "admission.explain: ledger record lacks bound admission action: {error}"
+                    )
+                },
+            )?;
+        let signed_action =
+            easynet_axon::invocation::admission_action_from_descriptor_ref(&record.descriptor_ref)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                "admission.explain: ledger record has an invalid descriptor reference: {error}"
+            )
+                })?;
+        if signed_action != record.admission_action
+            || record.safe_read
+                != (action == crate::daemon::invocation::admission::decision::AccessAction::Read)
+        {
+            anyhow::bail!(
+                "admission.explain: ledger descriptor facts disagree with signed evidence"
+            );
+        }
 
         let observer = request.observer_ura.trim();
         let observer_can_read = observer == record.caller_ura
@@ -519,8 +542,8 @@ impl AdmissionExplainReader {
                 callee_ura: record.callee_ura.clone(),
                 subject_ura: record.subject_ura.clone(),
                 ability_ura: record.ability_ura.clone(),
-                action: access_action_for(record.ability_name.as_str()),
-                route_ref: None,
+                action,
+                route_ref: Some(record.descriptor_ref.clone()),
                 execution_host_ura: None,
                 rejector_ura: failure
                     .as_ref()
@@ -551,7 +574,7 @@ impl AdmissionExplainReader {
                     .as_ref()
                     .and_then(|failure| failure.policy_decision.clone()),
                 authority_reason,
-                route_ref: None,
+                route_ref: Some(record.descriptor_ref.clone()),
                 rejector_ura: failure.and_then(|failure| failure.rejector_ura),
                 redaction_reason: None,
             }
@@ -635,29 +658,6 @@ fn project_failure(
     projection
 }
 
-fn access_action_for(
-    ability: &str,
-) -> crate::daemon::invocation::admission::decision::AccessAction {
-    use crate::daemon::invocation::admission::decision::AccessAction;
-    if ability.starts_with("terminal.")
-        || ability.starts_with("remote_desktop.")
-        || ability.starts_with("camera.")
-        || ability.starts_with("mic.")
-        || ability.starts_with("screen.")
-        || ability.starts_with("voice.")
-    {
-        AccessAction::Stream
-    } else if ability.ends_with(".list")
-        || ability.ends_with(".get")
-        || ability.ends_with(".read")
-        || ability.starts_with("meta.")
-    {
-        AccessAction::Read
-    } else {
-        AccessAction::Invoke
-    }
-}
-
 fn trace_stage_for(state: &str) -> TraceStage {
     if state.eq_ignore_ascii_case("completed") {
         TraceStage::Receipted
@@ -669,6 +669,7 @@ fn trace_stage_for(state: &str) -> TraceStage {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GrantRequest {
     grant: crate::daemon::invocation::admission::grant_matcher::PermissionGrant,
     #[serde(default)]
@@ -680,10 +681,9 @@ struct GrantRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RevokeRequest {
     grant_id: String,
-    #[serde(default)]
-    owner_user_id: Option<String>,
     #[serde(default)]
     owner_ura: Option<String>,
     #[serde(default)]
@@ -693,15 +693,12 @@ struct RevokeRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ListGrantsRequest {
-    #[serde(default)]
-    owner_user_id: Option<String>,
     #[serde(default)]
     owner_ura: Option<String>,
     #[serde(default)]
     principal_kind: Option<crate::daemon::invocation::admission::decision::PrincipalKind>,
-    #[serde(default)]
-    principal_id: Option<String>,
     #[serde(default)]
     principal_ura: Option<String>,
     #[serde(default)]
@@ -721,18 +718,14 @@ struct ListGrantsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CheckRequest {
-    #[serde(default)]
-    owner_user_id: Option<String>,
     #[serde(default)]
     owner_ura: Option<String>,
     #[serde(default)]
     owner_source: Option<OwnerSource>,
-    #[serde(default)]
-    caller_user_id: Option<String>,
     caller_ura: String,
     principal_kind: crate::daemon::invocation::admission::decision::PrincipalKind,
-    principal_id: String,
     #[serde(default)]
     principal_ura: Option<String>,
     #[serde(default)]
@@ -758,6 +751,7 @@ struct CheckRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PermissionRequestEnvelope {
     request: crate::daemon::invocation::admission::decision::PermissionRequest,
     #[serde(default)]
@@ -769,6 +763,7 @@ struct PermissionRequestEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PermissionRequestResolutionEnvelope {
     request: crate::daemon::invocation::admission::decision::PermissionRequest,
     #[serde(default)]
@@ -784,15 +779,12 @@ struct PermissionRequestResolutionEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ListRequestsRequest {
-    #[serde(default)]
-    owner_user_id: Option<String>,
     #[serde(default)]
     owner_ura: Option<String>,
     #[serde(default)]
     principal_kind: Option<crate::daemon::invocation::admission::decision::PrincipalKind>,
-    #[serde(default)]
-    principal_id: Option<String>,
     #[serde(default)]
     principal_ura: Option<String>,
     #[serde(default)]
@@ -873,7 +865,7 @@ pub fn input_schema_for(name: &str) -> Value {
     match name {
         AUTHORITY_BINDING_GRANT => json!({
             "type": "object",
-            "required": ["grant"],
+            "required": ["grant", "owner_ura", "actor_ura"],
             "properties": {
                 "grant": {"type": "object"},
                 "owner_ura": {"type": "string"},
@@ -884,11 +876,10 @@ pub fn input_schema_for(name: &str) -> Value {
         }),
         AUTHORITY_BINDING_REVOKE => json!({
             "type": "object",
-            "required": ["grant_id"],
+            "required": ["grant_id", "owner_ura", "actor_ura"],
             "properties": {
                 "grant_id": {"type": "string"},
                 "owner_ura": {"type": "string"},
-                "owner_user_id": {"type": "string"},
                 "reason": {"type": "string"},
                 "actor_ura": {"type": "string"}
             },
@@ -896,13 +887,11 @@ pub fn input_schema_for(name: &str) -> Value {
         }),
         AUTHORITY_BINDING_LIST => json!({
             "type": "object",
-            "required": [],
+            "required": ["owner_ura"],
             "properties": {
                 "owner_ura": {"type": "string"},
-                "owner_user_id": {"type": "string"},
                 "principal_kind": {"type": "string"},
                 "principal_ura": {"type": "string"},
-                "principal_id": {"type": "string"},
                 "token_id": {"type": "string"},
                 "callee_ura": {"type": "string"},
                 "ability_ura_pattern": {"type": "string"},
@@ -915,16 +904,13 @@ pub fn input_schema_for(name: &str) -> Value {
         }),
         AUTHORITY_BINDING_CHECK => json!({
             "type": "object",
-            "required": ["caller_ura", "principal_kind", "principal_id", "callee_ura", "subject_ura", "ability_ura", "action"],
+            "required": ["owner_ura", "caller_ura", "principal_kind", "callee_ura", "subject_ura", "ability_ura", "action"],
             "properties": {
                 "owner_ura": {"type": "string"},
-                "owner_user_id": {"type": "string"},
                 "owner_source": {"type": "string"},
-                "caller_user_id": {"type": "string"},
                 "caller_ura": {"type": "string"},
                 "principal_kind": {"type": "string"},
                 "principal_ura": {"type": "string"},
-                "principal_id": {"type": "string"},
                 "token_id": {"type": "string"},
                 "token_class": {"type": "string"},
                 "callee_ura": {"type": "string"},
@@ -942,7 +928,7 @@ pub fn input_schema_for(name: &str) -> Value {
         }),
         POLICY_REQUEST_CREATE => json!({
             "type": "object",
-            "required": ["request"],
+            "required": ["request", "owner_ura", "actor_ura"],
             "properties": {
                 "request": {"type": "object"},
                 "owner_ura": {"type": "string"},
@@ -953,7 +939,7 @@ pub fn input_schema_for(name: &str) -> Value {
         }),
         POLICY_REQUEST_RESOLVE => json!({
             "type": "object",
-            "required": ["request"],
+            "required": ["request", "owner_ura", "actor_ura"],
             "properties": {
                 "request": {"type": "object"},
                 "owner_ura": {"type": "string"},
@@ -966,13 +952,11 @@ pub fn input_schema_for(name: &str) -> Value {
         }),
         POLICY_REQUEST_LIST => json!({
             "type": "object",
-            "required": [],
+            "required": ["owner_ura"],
             "properties": {
                 "owner_ura": {"type": "string"},
-                "owner_user_id": {"type": "string"},
                 "principal_kind": {"type": "string"},
                 "principal_ura": {"type": "string"},
-                "principal_id": {"type": "string"},
                 "token_id": {"type": "string"},
                 "status": {"type": "string"},
                 "callee_ura": {"type": "string"},
@@ -1025,7 +1009,114 @@ mod tests {
     }
 
     #[test]
-    fn admission_explain_reads_ledger_and_redacts_unrelated_observers() {
+    fn access_control_schemas_require_canonical_owner_ura() {
+        for ability in [
+            AUTHORITY_BINDING_LIST,
+            AUTHORITY_BINDING_CHECK,
+            POLICY_REQUEST_LIST,
+        ] {
+            let schema = input_schema_for(ability);
+            let required = schema["required"].as_array().expect("required array");
+            assert!(
+                required.iter().any(|item| item == "owner_ura"),
+                "{ability} must require owner_ura"
+            );
+            assert!(
+                schema["properties"].get("owner_user_id").is_none(),
+                "{ability} must not expose owner_user_id as request input"
+            );
+            assert!(
+                schema["properties"].get("principal_id").is_none(),
+                "{ability} must not expose principal_id as request input"
+            );
+            assert!(
+                schema["properties"].get("caller_user_id").is_none(),
+                "{ability} must not expose caller_user_id as request input"
+            );
+            assert!(
+                !required.iter().any(|item| item == "principal_id"),
+                "{ability} must not require principal_id"
+            );
+        }
+    }
+
+    #[test]
+    fn revoke_requires_a_canonical_actor_ura_before_opening_the_store() {
+        let _home = HomeGuard::new();
+        let missing = revoke_handler(json!({
+            "grant_id": "grant-1",
+            "owner_ura": "easynet:///r/test/user/alice"
+        }))
+        .expect_err("an audited revoke cannot infer its actor from owner_user_id");
+        assert!(missing.to_string().contains("actor_ura is required"));
+
+        let invalid = revoke_handler(json!({
+            "grant_id": "grant-1",
+            "owner_ura": "easynet:///r/test/user/alice",
+            "actor_ura": "alice"
+        }))
+        .expect_err("a scalar actor must not be persisted as an actor URA");
+        assert!(invalid
+            .to_string()
+            .contains("actor_ura must be a canonical URA"));
+    }
+
+    #[test]
+    fn policy_mutations_reject_scalar_only_identity_boundaries() {
+        let _home = HomeGuard::new();
+        let missing_owner = grant_handler(json!({
+            "actor_ura": "easynet:///r/example/user/alice",
+            "grant": grant_payload("grant-scalar-owner", "device.files.read", "session-1")
+        }))
+        .expect_err("owner_user_id must not replace owner_ura on a mutation");
+        assert!(missing_owner
+            .to_string()
+            .contains("owner_ura is required for a policy mutation"));
+
+        let missing_principal = grant_handler(json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
+            "grant": user_grant_payload("grant-scalar-principal")
+        }))
+        .expect_err("a non-token mutation must carry principal_ura");
+        assert!(missing_principal
+            .to_string()
+            .contains("principal_ura is required for a non-token policy mutation"));
+    }
+
+    #[test]
+    fn policy_read_boundaries_reject_scalar_only_owner_identity() {
+        let _home = HomeGuard::new();
+        let list_error = list_grants_handler(json!({
+            "owner_user_id": "alice",
+            "token_id": "token-1"
+        }))
+        .expect_err("owner_user_id must not replace owner_ura on grant reads");
+        assert!(list_error.to_string().contains("owner_user_id"));
+
+        let check_error = check_handler(json!({
+            "owner_user_id": "alice",
+            "caller_ura": "easynet:///r/example/hub",
+            "principal_kind": "token",
+            "token_id": "token-1",
+            "callee_ura": "easynet:///r/example/device/dev-a",
+            "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
+            "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+            "action": "stream"
+        }))
+        .expect_err("owner_user_id must not replace owner_ura on policy checks");
+        assert!(check_error.to_string().contains("owner_user_id"));
+
+        let requests_error = request_list_handler(json!({
+            "owner_user_id": "alice",
+            "token_id": "token-1"
+        }))
+        .expect_err("owner_user_id must not replace owner_ura on request reads");
+        assert!(requests_error.to_string().contains("owner_user_id"));
+    }
+
+    #[test]
+    fn admission_explain_is_stable_after_the_live_descriptor_changes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let ledger =
             Arc::new(InvocationLedger::open(dir.path().join("invocations.redb")).expect("ledger"));
@@ -1041,6 +1132,9 @@ mod tests {
                     .subject_ura("easynet:///r/test/user/alice")
                     .ability_ura("easynet:///r/test/ability/device.dev-a.terminal.create")
                     .ability_name("terminal.create")
+                    .descriptor_ref("easynet:///r/test/ability/device.dev-a.terminal.create@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read")
+                    .admission_action("read")
+                    .safe_read(true)
                     .state("failed")
                     .error(easynet_axon::invocation::LedgerErrorRecord {
                         source: "daemon_invocation_service".to_string(),
@@ -1078,6 +1172,28 @@ mod tests {
             )
             .expect("put record");
 
+        let callee_ura = "easynet:///r/test/device/dev-a";
+        let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                callee_ura,
+            )
+            .expect("Device authority context"),
+        );
+        catalog.register_rpc_with_spec(
+            "terminal.create",
+            OwnerKind::Device,
+            registry_manifest(
+                "terminal.create",
+                "Admission explain descriptor fixture.",
+                json!({"type": "object"}),
+            ),
+            Arc::new(|_args| Ok(json!({}))),
+        );
+        let catalog_handle = Arc::new(OnceLock::new());
+        catalog_handle
+            .set(Arc::new(catalog))
+            .expect("set admission explain catalog fixture");
         let reader = AdmissionExplainReader {
             ledger: Some(ledger),
         };
@@ -1095,6 +1211,11 @@ mod tests {
             "TOKEN_SCOPE_DENIED"
         );
         assert_eq!(visible["root_trace"]["authority_proof_id"], "proof-1");
+        assert_eq!(visible["root_trace"]["action"], "read");
+        assert_eq!(
+            visible["route_ref"],
+            "easynet:///r/test/ability/device.dev-a.terminal.create@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        );
         assert_eq!(visible["rejector_ura"], "easynet:///r/test/device/dev-a");
 
         let hidden = reader
@@ -1125,17 +1246,20 @@ mod tests {
     fn authority_binding_list_supports_rfc014_scope_filters() {
         let _home = HomeGuard::new();
         grant_handler(json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
             "grant": grant_payload("grant-target", "device.terminal.attach", "session-target")
         }))
         .expect("target grant");
         grant_handler(json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
             "grant": grant_payload("grant-other", "device.files.read", "session-other")
         }))
         .expect("other grant");
 
         let output = list_grants_handler(json!({
-            "owner_user_id": "alice",
-            "principal_id": "token-principal-1",
+            "owner_ura": "easynet:///r/example/user/alice",
             "token_id": "token-1",
             "callee_ura": "easynet:///r/example/device/dev-a",
             "ability_ura_pattern": "easynet:///r/example/ability/device.dev-a.terminal.attach",
@@ -1157,6 +1281,7 @@ mod tests {
         let output = grant_handler(json!({
             "owner_ura": "easynet:///r/example/user/alice",
             "principal_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
             "grant": user_grant_payload("grant-user")
         }))
         .expect("user grant");
@@ -1176,12 +1301,14 @@ mod tests {
     }
 
     #[test]
-    fn authority_binding_rejects_owner_ura_user_id_mismatch() {
+    fn authority_binding_overwrites_nested_scalar_identity_from_boundary_uras() {
         let _home = HomeGuard::new();
-        let err = grant_handler(json!({
+        let output = grant_handler(json!({
             "owner_ura": "easynet:///r/example/user/alice",
+            "principal_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
             "grant": {
-                "grant_id": "grant-mismatch",
+                "grant_id": "grant-derived",
                 "owner_user_id": "bob",
                 "principal_kind": "user",
                 "principal_id": "bob",
@@ -1193,18 +1320,17 @@ mod tests {
                 "created_at": "2026-07-09T00:00:00Z"
             }
         }))
-        .expect_err("mismatch must reject");
-        assert!(
-            err.to_string()
-                .contains("owner_user_id must match owner_ura user id"),
-            "{err}"
-        );
+        .expect("nested scalar identity is not boundary truth");
+        assert_eq!(output["grant"]["owner_user_id"], "alice");
+        assert_eq!(output["grant"]["principal_id"], "alice");
     }
 
     #[test]
     fn policy_request_list_supports_rfc014_scope_and_creation_filters() {
         let _home = HomeGuard::new();
         request_create_handler(json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
             "request": request_payload(
                 "req-target",
                 "device.terminal.attach",
@@ -1214,6 +1340,8 @@ mod tests {
         }))
         .expect("target request");
         request_create_handler(json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
             "request": request_payload(
                 "req-other",
                 "device.files.read",
@@ -1224,8 +1352,7 @@ mod tests {
         .expect("other request");
 
         let output = request_list_handler(json!({
-            "owner_user_id": "alice",
-            "principal_id": "token-principal-1",
+            "owner_ura": "easynet:///r/example/user/alice",
             "token_id": "token-1",
             "status": "pending",
             "callee_ura": "easynet:///r/example/device/dev-a",
@@ -1244,7 +1371,7 @@ mod tests {
     #[test]
     fn policy_request_list_rejects_invalid_creation_filter_window() {
         let err = request_list_handler(json!({
-            "owner_user_id": "alice",
+            "owner_ura": "easynet:///r/example/user/alice",
             "created_at_or_after": "2026-07-09T00:05:00Z",
             "created_at_or_before": "2026-07-09T00:00:00Z"
         }))
@@ -1269,9 +1396,7 @@ mod tests {
         );
         json!({
             "grant_id": grant_id,
-            "owner_user_id": "alice",
             "principal_kind": "token",
-            "principal_id": "token-principal-1",
             "token_id": "token-1",
             "token_class": "hub_link",
             "callee_ura": "easynet:///r/example/device/dev-a",
@@ -1289,9 +1414,7 @@ mod tests {
     fn user_grant_payload(grant_id: &str) -> Value {
         json!({
             "grant_id": grant_id,
-            "owner_user_id": "",
             "principal_kind": "user",
-            "principal_id": "",
             "callee_ura": "easynet:///r/example/device/dev-a",
             "subject_ura_pattern": "easynet:///r/example/user/alice",
             "ability_ura_pattern": "easynet:///r/example/ability/device.dev-a.agent.list",
@@ -1317,10 +1440,8 @@ mod tests {
         );
         json!({
             "request_id": request_id,
-            "owner_user_id": "alice",
             "caller_ura": "easynet:///r/example/hub",
             "principal_kind": "token",
-            "principal_id": "token-principal-1",
             "token_id": "token-1",
             "token_class": "hub_link",
             "callee_ura": "easynet:///r/example/device/dev-a",

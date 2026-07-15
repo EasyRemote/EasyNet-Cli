@@ -101,7 +101,7 @@ pub fn add_ice_candidate_input_schema() -> Value {
 /// Human-readable contract for `remote_desktop.watch_events`.
 pub fn watch_events_description() -> &'static str {
     "Watch remote desktop control events. v1 returns the bounded current \
-     snapshot through InvokeStream; live fan-out follows the Axon contract."
+     snapshot through InvokeStream; live fan-out follows the canonical invocation contract."
 }
 
 /// JSON input schema for `remote_desktop.watch_events`.

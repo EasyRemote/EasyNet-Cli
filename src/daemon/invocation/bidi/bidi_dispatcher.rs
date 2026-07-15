@@ -23,7 +23,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -37,23 +37,24 @@ use tokio_stream::StreamExt;
 use tonic::{Response, Status, Streaming};
 
 use easynet_axon::pb::axon::v1::{
-    invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload, BidiControl,
-    BinaryChunk, EnvelopeOpen, Error, ErrorStage, InvocationReceipt, InvokeBidiDown, InvokeBidiUp,
-    SecurityClass, StreamDescriptor,
+    bidi_control, invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
+    BidiControl, BidiSessionEstablished, BinaryChunk, EnvelopeOpen, InvokeBidiDown, InvokeBidiUp,
+    StreamDescriptor,
 };
 
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::admission::target_gate::{
-    route_negative_status, route_profile_blocked_status, route_selected_remote_host_status,
-    selected_host_unavailable_message, signed_envelope_for_selected_route, TargetGate,
+    route_negative_status, route_profile_blocked_status, signed_envelope_for_selected_route,
+    TargetGate,
 };
 use crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN;
 use crate::daemon::invocation::bidi::session_wire::{
-    build_carrier_v1_dispatch_frame, call_id_hex, RequestOutcome, SessionContentEnvelope,
-    SessionDispatch, SessionRequestError,
+    build_carrier_v1_dispatch_frame, call_id_hex, require_canonical_dispatch_session,
+    RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,
 };
+use crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION;
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, IdentityPlane, RuntimePlane, SessionPlane,
 };
@@ -62,13 +63,18 @@ use crate::daemon::invocation::dispatch::federation_wrappers;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
 };
+use crate::daemon::invocation::dispatch::forwarded_finalization::{
+    ForwardedFinalizationVerifier, ForwardedInvocationBinding,
+};
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
     SIGNED_DESCRIPTOR_REF_METADATA_KEY,
 };
 use crate::daemon::invocation::dispatch::unary_dispatcher::UnaryDispatcher;
-use crate::daemon::invocation::routing::route_resolver::SelectedInvokeRoute;
-use easynet_axon::invocation::{AbilityFrame, BidiInputFrame};
+use crate::daemon::invocation::routing::route_resolver::{
+    CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
+};
+use easynet_axon::invocation::{AbilityFrame, BidiInputFrame, CallMode};
 
 use crate::daemon::invocation::bidi::state::pending_dispatch::{
     DispatchResult, DispatchStreamEvent, PendingDispatchMap, PendingStreamDispatchMap,
@@ -88,44 +94,6 @@ use crate::daemon::trust::anchor::RealmTrustAnchor;
 /// never claim an `AxonRuntimeAdmin` ability the dispatcher does not
 /// actually install (SPEC §7.1 notes 6/7, §7.3 item 7, §9.1 item 13).
 pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[&str] = &[ABILITY_SESSION_OPEN];
-
-fn local_bidi_wire_kind_for(
-    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
-    ability: &str,
-) -> Option<LocalBidiWireKind> {
-    local_bidi_wire_kind_for_registry_key(registry, ability).or_else(|| {
-        descriptor_ref_local_registry_key(ability)
-            .and_then(|key| local_bidi_wire_kind_for_registry_key(registry, &key))
-    })
-}
-
-fn local_bidi_wire_kind_for_registry_key(
-    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
-    ability: &str,
-) -> Option<LocalBidiWireKind> {
-    registry
-        .bidi_wire_kind_for(ability)
-        .or_else(|| crate::daemon::ability::wire::core_bidi_wire_kind_for(ability))
-}
-
-fn descriptor_ref_local_registry_key(ability: &str) -> Option<String> {
-    let descriptor_ref =
-        easynet_axon::invocation::canonical_ability_descriptor_ref(ability).ok()?;
-    let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
-        &descriptor_ref,
-    )
-    .ok()?;
-    crate::core::ura::AbilitySelector::parse(&ability_ura)
-        .ok()
-        .map(|selector| selector.local_registry_ability().to_string())
-}
-
-fn local_is_bidi_wire_ability(
-    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
-    ability: &str,
-) -> bool {
-    local_bidi_wire_kind_for(registry, ability).is_some()
-}
 
 /// `InvokeBidi` routing surface. Cheap per-call construction: every
 /// plane, the gate, and the composed unary dispatcher are `Arc`-shaped.
@@ -195,65 +163,61 @@ impl BidiDispatcher {
                              (already checked by transport policy gate; this is a defensive check)",
                         )
                     })?;
-                let contract = session_contract_from_ext(envelope_open.session_ext.as_ref());
+                let contract = session_contract_from_ext(envelope_open.session_ext.as_ref())?;
                 self.dispatch_self_session_accept(caller_ura, envelope_open, contract, up)
                     .await
             }
-            other if local_is_bidi_wire_ability(&self.runtime.ability_wire, other) => {
-                if let Some(target_ura) = remote_bidi_target_ura(envelope_open) {
-                    if !self.gate.matches_self_target_ura(&target_ura).await {
-                        // Apply the same resolve-first gate as canonical
-                        // unary dispatch:
-                        // prove the wire ability exists on the target
-                        // and that the selected route is
-                        // authoritative-local-or-better BEFORE bridging
-                        // the bidi stream.
-                        let route_result = self
-                            .gate
-                            .route_resolver()
-                            .await
-                            .resolve_route(&target_ura, other);
-                        return match route_result {
-                            Ok(route) if route.is_authoritative_local_or_better() => {
-                                self.dispatch_remote_bidi(&route, envelope_open, up).await
-                            }
-                            Ok(route) => Err(route_profile_blocked_status(&route)),
-                            Err(failure) => Err(route_negative_status(failure)),
-                        };
-                    }
-                }
-                self.dispatch_local_bidi_selected_route(envelope_open, up)
-                    .await
-            }
             other => {
-                let ability_debug = format!("{other:?}");
-                let ability_hex = other
-                    .as_bytes()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<Vec<_>>()
-                    .join("");
-                let registry_known = self
+                let selection = self.resolve_bidi_route(envelope_open).await?;
+                let call_mode = selection.call_mode();
+                let selected_route = match selection.into_dispatch() {
+                    CanonicalRouteDispatch::Local(route) => route,
+                    CanonicalRouteDispatch::Peer(route) => {
+                        return Err(Status::unimplemented(format!(
+                            "InvokeBidi selected canonical peer route to hub `{}` for `{}`, but \
+                             the generic cross-realm bidi carrier is unsupported",
+                            route.hub_ura, route.query_name,
+                        )));
+                    }
+                };
+                let wire_kind = self
                     .runtime
                     .ability_wire
-                    .bidi_wire_kind_for(other)
-                    .is_some();
-                let core_known =
-                    crate::daemon::ability::wire::core_bidi_wire_kind_for(other).is_some();
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = invoke_bidi_unwired_ability,
-                    ability = other,
-                    ability_debug = ability_debug.as_str(),
-                    ability_hex = ability_hex.as_str(),
-                    registry_known = registry_known.to_string().as_str(),
-                    core_known = core_known.to_string().as_str(),
-                );
-                Err(Status::unimplemented(format!(
-                    "easynet-daemon: InvokeBidi ability `{other}` is not yet wired; \
-                     only built-in PTY/file-transfer or plugin-declared bidi abilities currently have \
-                     daemon gRPC wire adapters"
-                )))
+                    .bidi_wire_kind_for(&selected_route.dispatch_name)
+                    .ok_or_else(|| {
+                        crate::op_event!(
+                            component = daemon_invocation,
+                            kind = invoke_bidi_unwired_ability,
+                            ability = other,
+                            dispatch_ability = selected_route.dispatch_name.as_str(),
+                            route_ura = selected_route.route_ura.as_str(),
+                        );
+                        Status::unimplemented(format!(
+                            "InvokeBidi selected route `{}` for ability `{other}`, but dispatch \
+                             ability `{}` has no daemon bidi wire adapter",
+                            selected_route.route_ura, selected_route.dispatch_name,
+                        ))
+                    })?;
+                let execution_host_is_self = self
+                    .gate
+                    .matches_self_target_ura(&selected_route.execution_host_ura)
+                    .await;
+                if selected_route
+                    .dispatch_target(execution_host_is_self)
+                    .is_local_runtime()
+                {
+                    self.dispatch_local_bidi_selected_route(
+                        envelope_open,
+                        up,
+                        selected_route,
+                        call_mode,
+                        wire_kind,
+                    )
+                    .await
+                } else {
+                    self.dispatch_remote_bidi(&selected_route, envelope_open, up, call_mode)
+                        .await
+                }
             }
         }
     }
@@ -339,7 +303,8 @@ pub(crate) fn failed_dispatch_result(
         )),
         error: Some(reason),
         request_id: None,
-        receipt: None,
+        admission_receipt: None,
+        terminal_receipt: None,
     }
 }
 
@@ -349,6 +314,7 @@ impl BidiDispatcher {
         selected_route: &SelectedInvokeRoute,
         envelope_open: &EnvelopeOpen,
         mut up: Streaming<InvokeBidiUp>,
+        call_mode: CallMode,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
         let pending = self.sessions.pending_stream.as_ref().ok_or_else(|| {
             Status::failed_precondition(format!(
@@ -358,30 +324,25 @@ impl BidiDispatcher {
                 selected_route.dispatch_name
             ))
         })?;
-        let (session_id, sender) = self
-            .directory
-            .presence
-            .lookup_tracked(&selected_route.execution_host_ura)
-            .ok_or_else(|| {
-                Status::failed_precondition(selected_host_unavailable_message(selected_route))
-            })?;
+        let session = require_canonical_dispatch_session(
+            &self.directory.presence,
+            &selected_route.execution_host_ura,
+            &selected_route.route_ura,
+            "InvokeBidi",
+        )?;
+        let session_id = session.session_id;
+        let sender = session.sender;
+        let carrier_version = session.contract_version;
 
         let mut handle = pending.register_lossless_pending_for(&selected_route.execution_host_ura);
         let call_id = handle.call_id();
         let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
 
-        let target_contract_v1 = self
-            .directory
-            .presence
-            .dispatch_contract_version(&selected_route.execution_host_ura)
-            .unwrap_or(0)
-            >= 1;
-        let open_frame = build_remote_bidi_open_frame_for_contract(
-            target_contract_v1,
-            call_id,
-            selected_route,
-            envelope_open,
-        )?;
+        let forwarded_request =
+            remote_bidi_forwarded_request(selected_route, envelope_open, call_mode)?;
+        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
+        let open_frame = build_carrier_v1_dispatch_frame(call_id, forwarded_request, true);
         match sender.try_send(Ok(open_frame)) {
             Ok(()) => {}
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
@@ -410,6 +371,7 @@ impl BidiDispatcher {
             callee_ura = selected_route.callee_ura.as_str(),
             execution_host_ura = selected_route.execution_host_ura.as_str(),
             route_ura = selected_route.route_ura.as_str(),
+            carrier_version = carrier_version,
             call_id = call_id,
         );
 
@@ -417,9 +379,28 @@ impl BidiDispatcher {
 
         let down_tx_for_results = down_tx.clone();
         tokio::spawn(async move {
+            let mut finalization =
+                ForwardedFinalizationVerifier::new(forwarded_binding, receipt_resolver);
             while let Some(event) = handle.recv().await {
                 match event {
+                    DispatchStreamEvent::Admission(receipt) => {
+                        if let Err(status) = finalization.admit(receipt.clone()) {
+                            let _ = down_tx_for_results.send(Err(status)).await;
+                            break;
+                        }
+                        let frame = InvokeBidiDown {
+                            payload: Some(DownPayload::Receipt(receipt)),
+                            ..InvokeBidiDown::default()
+                        };
+                        if down_tx_for_results.send(Ok(frame)).await.is_err() {
+                            break;
+                        }
+                    }
                     DispatchStreamEvent::Chunk(bytes) => {
+                        if let Err(status) = finalization.observe_data() {
+                            let _ = down_tx_for_results.send(Err(status)).await;
+                            break;
+                        }
                         let frame = InvokeBidiDown {
                             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
                                 stream_id: stdout_stream_id,
@@ -434,39 +415,35 @@ impl BidiDispatcher {
                     }
                     DispatchStreamEvent::Terminal(result) => {
                         let DispatchResult {
-                            payload,
+                            payload: _,
                             error,
                             failure,
                             request_id: _,
-                            receipt: _,
+                            admission_receipt,
+                            terminal_receipt,
+                            ..
                         } = *result;
-                        let frame = match error {
-                            Some(reason) => {
-                                build_bidi_terminal_receipt_with_payload_and_failure_code(
-                                    easynet_axon::invocation::InvocationState::Failed,
-                                    failure
-                                        .as_ref()
-                                        .map(|failure| failure.message.as_str())
-                                        .unwrap_or(reason.as_str()),
-                                    if payload.is_empty() {
-                                        None
-                                    } else {
-                                        Some((payload, "application/json"))
-                                    },
-                                    failure.as_ref().map(|failure| failure.code.as_str()),
-                                )
+                        let frame = match terminal_receipt {
+                            Some(terminal_receipt) => finalization
+                                .finalize(admission_receipt, terminal_receipt)
+                                .map(|finalized| InvokeBidiDown {
+                                    payload: Some(DownPayload::Receipt(finalized.terminal_receipt)),
+                                    ..InvokeBidiDown::default()
+                                }),
+                            None => {
+                                let detail = failure
+                                    .as_ref()
+                                    .map(|failure| failure.message.as_str())
+                                    .or(error.as_deref())
+                                    .unwrap_or(
+                                        "remote terminal result omitted its canonical receipt",
+                                    );
+                                Err(Status::failed_precondition(format!(
+                                    "remote bidi transport failed before canonical terminal: {detail}"
+                                )))
                             }
-                            None => build_bidi_terminal_receipt_with_payload(
-                                easynet_axon::invocation::InvocationState::Completed,
-                                String::new(),
-                                if payload.is_empty() {
-                                    None
-                                } else {
-                                    Some((payload, "application/json"))
-                                },
-                            ),
                         };
-                        let _ = down_tx_for_results.send(Ok(frame)).await;
+                        let _ = down_tx_for_results.send(frame).await;
                         break;
                     }
                 }
@@ -650,10 +627,10 @@ impl BidiDispatcher {
     /// down direction. PtyResize control frames map to a JSON
     /// `{"type":"resize","cols":N,"rows":N}` shape the handler
     /// already consumes.
-    async fn resolve_local_bidi_route(
+    async fn resolve_bidi_route(
         &self,
         envelope_open: &EnvelopeOpen,
-    ) -> Result<SelectedInvokeRoute, Status> {
+    ) -> Result<CanonicalRouteSelection, Status> {
         let target_ura = target_ura_from_envelope(envelope_open.envelope.as_ref(), "InvokeBidi")?;
         let ability = envelope_open
             .target
@@ -666,37 +643,28 @@ impl BidiDispatcher {
                 )
             })?;
 
-        let selected_route = self
+        let selection = self
             .gate
             .route_resolver()
             .await
-            .resolve_route(&target_ura, ability)
+            .resolve_canonical_route(&target_ura, ability, CallMode::Bidi)
             .map_err(route_negative_status)?;
-        if !selected_route.is_authoritative_local_or_better() {
-            return Err(route_profile_blocked_status(&selected_route));
+        if let CanonicalRouteDispatch::Local(selected_route) = selection.dispatch() {
+            if !selected_route.is_authoritative_local_or_better() {
+                return Err(route_profile_blocked_status(selected_route));
+            }
         }
-        let execution_host_is_self = self
-            .gate
-            .matches_self_target_ura(&selected_route.execution_host_ura)
-            .await;
-        if !selected_route
-            .dispatch_target(execution_host_is_self)
-            .is_local_runtime()
-        {
-            return Err(route_selected_remote_host_status(
-                "InvokeBidi",
-                &selected_route,
-            ));
-        }
-        Ok(selected_route)
+        Ok(selection)
     }
 
     pub(crate) async fn dispatch_local_bidi_selected_route(
         &self,
         envelope_open: &EnvelopeOpen,
         mut up: Streaming<InvokeBidiUp>,
+        selected_route: SelectedInvokeRoute,
+        call_mode: CallMode,
+        wire_kind: LocalBidiWireKind,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
-        let selected_route = self.resolve_local_bidi_route(envelope_open).await?;
         let dispatch_ability = selected_route.ability_ura.clone();
         crate::op_event!(
             component = daemon_invocation,
@@ -722,7 +690,7 @@ impl BidiDispatcher {
             .descriptor_ref_for_mode(
                 "InvokeBidi",
                 &selected_route.callee_ura,
-                easynet_axon::invocation::CallMode::Bidi,
+                call_mode,
                 Some(&selected_route.route_ura),
             )?
             .into_descriptor_ref();
@@ -772,22 +740,29 @@ impl BidiDispatcher {
             )
         }
         .map_err(|err| status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, *err))?;
-        let wire_kind = local_bidi_wire_kind_for(
-            &self.runtime.ability_wire,
-            &selected_route.dispatch_name,
-        )
-        .ok_or_else(|| {
-            Status::failed_precondition(format!(
-                "InvokeBidi: ability `{}` is registered as local bidi but has no declared wire protocol",
-                selected_route.dispatch_name
-            ))
-        })?;
         let handle =
             crate::daemon::axon_bridge::dispatch_shim::open_bidi_external_signed(runtime, wire)
                 .await
                 .map_err(|err| {
                     status_from_axon_invoke_error("InvokeBidi", &dispatch_ability, err)
                 })?;
+        let admission_receipt = handle.admission_receipt().await.map_err(|err| {
+            Status::failed_precondition(format!(
+                "CANONICAL_ADMISSION_REQUIRED: InvokeBidi `{dispatch_ability}`: {err}"
+            ))
+        })?;
+        let admission_frame = InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(
+                easynet_axon::invocation::wire::receipt_to_wire(&admission_receipt).map_err(
+                    |error| {
+                        Status::failed_precondition(format!(
+                            "CANONICAL_ADMISSION_PROJECTION_FAILED: {error}"
+                        ))
+                    },
+                )?,
+            )),
+            ..InvokeBidiDown::default()
+        };
         let (handler_in_tx, mut handler_out_rx) = handle.split();
         let stdout_stream_id = local_bidi_stdout_stream_id(envelope_open);
 
@@ -801,12 +776,14 @@ impl BidiDispatcher {
                 let frame = match frame_result {
                     Ok(frame) => frame,
                     Err(err) => {
-                        let _ = down_tx_for_handler
-                            .send(Ok(build_bidi_terminal_receipt(
-                                easynet_axon::invocation::InvocationState::Failed,
-                                format!("InvokeBidi local-runtime frame failed: {err}"),
-                            )))
-                            .await;
+                        let projected = project_finalized_bidi_receipt(&handler_out_rx)
+                            .await
+                            .map_err(|status| {
+                                Status::internal(format!(
+                                    "InvokeBidi local-runtime frame failed: {err}; {status}"
+                                ))
+                            });
+                        let _ = down_tx_for_handler.send(projected).await;
                         break;
                     }
                 };
@@ -821,18 +798,18 @@ impl BidiDispatcher {
                             break;
                         }
                     }
-                    LocalBidiHandlerFrame::Terminal(frame) => {
-                        let _ = down_tx_for_handler.send(Ok(frame)).await;
+                    LocalBidiHandlerFrame::Terminal => {
+                        let projected = project_finalized_bidi_receipt(&handler_out_rx).await;
+                        let _ = down_tx_for_handler.send(projected).await;
                         break;
                     }
                     LocalBidiHandlerFrame::Ignore => {}
                     LocalBidiHandlerFrame::ProtocolFailure(reason) => {
-                        let _ = down_tx_for_handler
-                            .send(Ok(build_bidi_terminal_receipt(
-                                easynet_axon::invocation::InvocationState::Failed,
-                                reason,
-                            )))
-                            .await;
+                        let _ = handler_out_rx.cancel(reason.clone()).await;
+                        let projected = project_finalized_bidi_receipt(&handler_out_rx)
+                            .await
+                            .map_err(|status| Status::internal(format!("{reason}; {status}")));
+                        let _ = down_tx_for_handler.send(projected).await;
                         break;
                     }
                 }
@@ -905,7 +882,7 @@ impl BidiDispatcher {
             let _ = handler_in_tx.close_input().await;
         });
 
-        let stream = LocalBidiDownStream::new(down_rx);
+        let stream = LocalBidiDownStream::with_admission(down_rx, admission_frame);
         Ok(Response::new(
             Box::pin(stream) as BoxedDownStream<InvokeBidiDown>
         ))
@@ -932,7 +909,7 @@ impl BidiDispatcher {
         // sender. The PresenceRegistry handles displacement (Offline +
         // Online emission ordering) under the hood; the slot remembers
         // the frame-0 carrier negotiation (DEC-F004).
-        let negotiated_version = contract.version.min(HUB_DISPATCH_CONTRACT_VERSION);
+        let negotiated_version = contract.version.min(CANONICAL_SESSION_CARRIER_VERSION);
         let claimant_nonce = contract.claimant_boot_nonce.clone();
         let trust_context = session_trust_context_from_open(caller_ura.as_str(), envelope_open);
         let registration = self.directory.presence.insert_negotiated_with_trust(
@@ -998,7 +975,7 @@ impl BidiDispatcher {
         // frame to unwrap the newtype.
         let stream = SessionDownStream::new(
             down_rx,
-            build_session_down_admission_receipt(
+            build_session_established_control(
                 negotiated_version,
                 registration.session_id,
                 displaced_prior,
@@ -1021,176 +998,71 @@ fn build_session_down_keepalive_frame() -> DispatchFrame {
     })
 }
 
-/// Build the spec §1.1 admission-accept frame: down frame 0 carries
-/// an `InvocationReceipt` with `state = Admitted`. The receipt is
-/// what tells the device-side caller "your `session.open` open was
-/// accepted". Without it, devices have only HTTP/2 HEADERS as proof
-/// of acceptance, which some intermediaries (and tonic-h2 in some
-/// edge cases) buffer until the first response DATA frame — leaving
-/// the device's `client.invoke_bidi(...).await` parked indefinitely.
-///
-/// Receipt fields kept minimal: only the `state` is load-bearing per
-/// §1.1; the rest of `InvocationReceipt` is informational and the
-/// device's `LocalAxonSessionDispatcher` ignores `Receipt` payloads
-/// outright (handle_down only acts on `BinaryChunk`).
-fn build_bidi_admission_receipt() -> InvokeBidiDown {
-    InvokeBidiDown {
-        sequence: 0,
-        payload: Some(DownPayload::Receipt(InvocationReceipt {
-            state: easynet_axon::invocation::InvocationState::Admitted.to_wire_i32(),
-            ..InvocationReceipt::default()
-        })),
-        ..InvokeBidiDown::default()
-    }
-}
-
-/// Hub's highest supported dispatch contract (DEC-F004). Bump when a
-/// new frame generation lands; negotiation is min(device, hub).
-pub(crate) const HUB_DISPATCH_CONTRACT_VERSION: u32 = 1;
-
-/// Map frame-0's optional SessionOpenExt into negotiation facts.
-/// Absent ext = legacy JSON device (contract v0).
+/// Admit frame-0 carrier negotiation only when the peer can preserve a
+/// complete canonical Invocation. Contract v0 and absent negotiation are
+/// retired; accepting either would create a live session that can only carry
+/// the removed JSON projection.
 pub(crate) fn session_contract_from_ext(
     ext: Option<&easynet_axon::pb::axon::v1::SessionOpenExt>,
-) -> SessionContract {
-    ext.map(|e| SessionContract {
-        version: e.contract_version,
-        claimant_boot_nonce: e.claimant_boot_nonce.clone(),
+) -> Result<SessionContract, Status> {
+    let ext = ext.ok_or_else(|| {
+        Status::failed_precondition(
+            "CANONICAL_CARRIER_REQUIRED: session.open requires SessionOpenExt carrier negotiation",
+        )
+    })?;
+    if ext.contract_version < CANONICAL_SESSION_CARRIER_VERSION {
+        return Err(Status::failed_precondition(format!(
+            "CANONICAL_CARRIER_REQUIRED: session.open negotiated carrier v{}; v{} or newer is required",
+            ext.contract_version, CANONICAL_SESSION_CARRIER_VERSION,
+        )));
+    }
+    Ok(SessionContract {
+        version: ext.contract_version,
+        claimant_boot_nonce: ext.claimant_boot_nonce.clone(),
     })
-    .unwrap_or_else(SessionContract::legacy)
 }
 
-/// Frame-0 down: admission receipt carrying the negotiated session
-/// contract (mini-RFC §2). The device reads `session_contract` to
-/// learn which frame encoding to write and whether it displaced a
-/// prior session (T1.1 skew + displacement become protocol facts,
-/// not inference).
-fn build_session_down_admission_receipt(
+/// Frame-0 down is a typed session-control acknowledgement. Session
+/// negotiation is transport lifecycle, not Invocation admission, so none of
+/// these facts may be encoded in an `SignedInvocationReceipt`.
+fn build_session_established_control(
     negotiated_version: u32,
     hub_session_id: u64,
     displaced_prior: bool,
 ) -> InvokeBidiDown {
-    let payload = serde_json::to_vec(&serde_json::json!({
-        "session_contract": {
-            "version": negotiated_version,
-            "dispatch_encoding": if negotiated_version >= 1 { "proto" } else { "json" },
-            "hub_session_id": hub_session_id.to_string(),
-            "displaced_prior": displaced_prior,
-        }
-    }))
-    .expect("session_contract is statically serializable");
-    let mut frame = build_bidi_admission_receipt();
-    if let Some(DownPayload::Receipt(receipt)) = frame.payload.as_mut() {
-        receipt.payload = payload;
-    }
-    frame
-}
-
-pub(crate) fn build_bidi_terminal_receipt(
-    state: easynet_axon::invocation::InvocationState,
-    reason: impl Into<String>,
-) -> InvokeBidiDown {
-    build_bidi_terminal_receipt_with_payload(state, reason, None)
-}
-
-fn build_bidi_terminal_receipt_with_payload(
-    state: easynet_axon::invocation::InvocationState,
-    reason: impl Into<String>,
-    payload: Option<(Vec<u8>, &'static str)>,
-) -> InvokeBidiDown {
-    build_bidi_terminal_receipt_with_payload_and_failure_code(state, reason, payload, None)
-}
-
-fn build_bidi_terminal_receipt_with_payload_and_failure_code(
-    state: easynet_axon::invocation::InvocationState,
-    reason: impl Into<String>,
-    payload: Option<(Vec<u8>, &'static str)>,
-    failure_code: Option<&str>,
-) -> InvokeBidiDown {
-    let reason = reason.into();
-    let (payload_bytes, payload_content_type) = payload
-        .map(|(bytes, content_type)| (bytes, content_type.to_string()))
-        .unwrap_or_default();
-    let failure = terminal_receipt_failure(state, &reason, failure_code);
     InvokeBidiDown {
-        payload: Some(DownPayload::Receipt(InvocationReceipt {
-            state: state.to_wire_i32(),
-            reason,
-            payload: payload_bytes,
-            payload_content_type,
-            cleanup_complete: true,
-            failure,
-            ..InvocationReceipt::default()
+        payload: Some(DownPayload::Control(BidiControl {
+            control: Some(bidi_control::Control::SessionEstablished(
+                BidiSessionEstablished {
+                    contract_version: negotiated_version,
+                    dispatch_encoding: "proto".to_string(),
+                    session_id: hub_session_id,
+                    displaced_prior,
+                },
+            )),
         })),
         ..InvokeBidiDown::default()
     }
 }
 
-fn terminal_receipt_failure(
-    state: easynet_axon::invocation::InvocationState,
-    reason: &str,
-    explicit_code: Option<&str>,
-) -> Option<Error> {
-    TerminalReceiptFailure::from_terminal_state(state, reason, explicit_code)
-        .map(TerminalReceiptFailure::into_error)
-}
-
-pub(crate) fn terminal_failure_message(reason: &str, fallback_code: &str) -> String {
-    let message = reason.trim();
-    if message.is_empty() {
-        fallback_code.to_string()
-    } else {
-        message.to_string()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TerminalReceiptFailure {
-    code: String,
-    message: String,
-    retryable: bool,
-    stage: ErrorStage,
-    security_class: SecurityClass,
-}
-
-impl TerminalReceiptFailure {
-    fn from_terminal_state(
-        state: easynet_axon::invocation::InvocationState,
-        reason: &str,
-        explicit_code: Option<&str>,
-    ) -> Option<Self> {
-        let (fallback_code, retryable) = match state {
-            easynet_axon::invocation::InvocationState::Failed => ("INVOCATION_FAILED", false),
-            easynet_axon::invocation::InvocationState::TimedOut => ("INVOCATION_TIMED_OUT", true),
-            easynet_axon::invocation::InvocationState::Cancelled => ("INVOCATION_CANCELLED", false),
-            _ => return None,
-        };
-        let code = crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::explicit_or_reason(
-            explicit_code,
-            reason,
-            fallback_code,
-        );
-        let failure_class =
-            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_error_class(&code);
-        Some(Self {
-            code,
-            message: terminal_failure_message(reason, fallback_code),
-            retryable,
-            stage: failure_class.stage.to_axon_pb(),
-            security_class: failure_class.security_class.to_axon_pb(),
-        })
-    }
-
-    fn into_error(self) -> Error {
-        Error {
-            code: self.code,
-            message: self.message,
-            retryable: self.retryable,
-            context: Default::default(),
-            stage: self.stage as i32,
-            security_class: self.security_class as i32,
-        }
-    }
+async fn project_finalized_bidi_receipt(
+    receiver: &easynet_axon::invocation::BidiOutputReceiver,
+) -> Result<InvokeBidiDown, Status> {
+    let finalized = receiver.finalized().await.map_err(|err| {
+        Status::failed_precondition(format!("CANONICAL_FINALIZATION_REQUIRED: {err}"))
+    })?;
+    Ok(InvokeBidiDown {
+        payload: Some(DownPayload::Receipt(
+            easynet_axon::invocation::wire::receipt_to_wire(&finalized.terminal_receipt).map_err(
+                |error| {
+                    Status::failed_precondition(format!(
+                        "CANONICAL_TERMINAL_PROJECTION_FAILED: {error}"
+                    ))
+                },
+            )?,
+        )),
+        ..InvokeBidiDown::default()
+    })
 }
 
 const LOCAL_BIDI_DEFAULT_STREAM_ID: u32 = 1;
@@ -1209,7 +1081,7 @@ fn local_bidi_stdout_stream_id(envelope_open: &EnvelopeOpen) -> u32 {
 #[derive(Debug)]
 pub(crate) enum LocalBidiHandlerFrame {
     Forward(InvokeBidiDown),
-    Terminal(InvokeBidiDown),
+    Terminal,
     Ignore,
     ProtocolFailure(String),
 }
@@ -1292,15 +1164,11 @@ pub(crate) fn map_local_bidi_ability_frame(
     frame: AbilityFrame,
     stdout_stream_id: u32,
 ) -> LocalBidiHandlerFrame {
+    if frame.terminal {
+        return LocalBidiHandlerFrame::Terminal;
+    }
     if frame.payload.is_empty() {
-        return if frame.terminal {
-            LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt(
-                easynet_axon::invocation::InvocationState::Completed,
-                String::new(),
-            ))
-        } else {
-            LocalBidiHandlerFrame::Ignore
-        };
+        return LocalBidiHandlerFrame::Ignore;
     }
     if matches!(wire_kind, LocalBidiWireKind::JsonFrames)
         && !frame.terminal
@@ -1320,6 +1188,25 @@ pub(crate) fn map_local_bidi_ability_frame(
         Ok(value) => map_local_bidi_handler_frame(wire_kind, &value, stdout_stream_id),
         Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
             "InvokeBidi local-runtime: ability frame is not valid JSON: {err}"
+        )),
+    }
+}
+
+fn forward_json_bidi_frame(
+    value: &serde_json::Value,
+    stdout_stream_id: u32,
+) -> LocalBidiHandlerFrame {
+    match serde_json::to_vec(value) {
+        Ok(payload) => LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                stream_id: stdout_stream_id,
+                data: payload,
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        }),
+        Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
+            "InvokeBidi local-runtime: JSON frame re-encode failed: {err}"
         )),
     }
 }
@@ -1356,19 +1243,7 @@ pub(crate) fn map_local_bidi_handler_frame(
                     ..InvokeBidiDown::default()
                 })
             }
-            Some("exit") => {
-                let reason = match value.get("status") {
-                    Some(serde_json::Value::Number(status)) => {
-                        format!("pty exited with status {status}")
-                    }
-                    Some(serde_json::Value::Null) | None => String::new(),
-                    Some(other) => format!("pty exited with non-integer status {other}"),
-                };
-                LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt(
-                    easynet_axon::invocation::InvocationState::Completed,
-                    reason,
-                ))
-            }
+            Some("exit") => forward_json_bidi_frame(value, stdout_stream_id),
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
                     crate::op_event!(
@@ -1408,47 +1283,7 @@ pub(crate) fn map_local_bidi_handler_frame(
                     ..InvokeBidiDown::default()
                 })
             }
-            Some("complete") => match serde_json::to_vec(value) {
-                Ok(payload) => {
-                    LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload(
-                        easynet_axon::invocation::InvocationState::Completed,
-                        String::new(),
-                        Some((payload, "application/json")),
-                    ))
-                }
-                Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
-                    "InvokeBidi local-runtime: encode file_transfer completion receipt payload failed: {err}"
-                )),
-            },
-            Some("error") => {
-                let code = value.get("code").and_then(|field| field.as_str());
-                let reason = match (
-                    code,
-                    value.get("message").and_then(|field| field.as_str()),
-                ) {
-                    (Some(code), Some(message))
-                        if !code.trim().is_empty() && !message.trim().is_empty() =>
-                    {
-                        format!("{code}: {message}")
-                    }
-                    (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
-                    (Some(code), _) if !code.trim().is_empty() => code.to_string(),
-                    _ => "file_transfer handler returned error".to_string(),
-                };
-                match serde_json::to_vec(value) {
-                    Ok(payload) => {
-                        LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload_and_failure_code(
-                            easynet_axon::invocation::InvocationState::Failed,
-                            reason,
-                            Some((payload, "application/json")),
-                            code,
-                        ))
-                    }
-                    Err(err) => LocalBidiHandlerFrame::ProtocolFailure(format!(
-                        "InvokeBidi local-runtime: encode file_transfer error receipt payload failed: {err}"
-                    )),
-                }
-            }
+            Some("complete" | "error") => forward_json_bidi_frame(value, stdout_stream_id),
             Some("warn") => {
                 if let Some(message) = value.get("message").and_then(|field| field.as_str()) {
                     crate::op_event!(
@@ -1462,67 +1297,12 @@ pub(crate) fn map_local_bidi_handler_frame(
             }
             _ => LocalBidiHandlerFrame::Ignore,
         },
-        LocalBidiWireKind::JsonFrames => {
-            let payload = match serde_json::to_vec(value) {
-                Ok(payload) => payload,
-                Err(err) => {
-                    return LocalBidiHandlerFrame::ProtocolFailure(format!(
-                        "InvokeBidi local-runtime: JSON frame re-encode failed: {err}"
-                    ));
-                }
-            };
-            match value.get("type").and_then(|field| field.as_str()) {
-                Some("error") => {
-                    let code = value.get("code").and_then(|field| field.as_str());
-                    LocalBidiHandlerFrame::Terminal(
-                        build_bidi_terminal_receipt_with_payload_and_failure_code(
-                            easynet_axon::invocation::InvocationState::Failed,
-                            json_frame_error_reason(value),
-                            Some((payload, "application/json")),
-                            code,
-                        ),
-                    )
-                }
-                Some("closed") => {
-                    LocalBidiHandlerFrame::Terminal(build_bidi_terminal_receipt_with_payload(
-                        easynet_axon::invocation::InvocationState::Completed,
-                        String::new(),
-                        Some((payload, "application/json")),
-                    ))
-                }
-                _ => LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-                    payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                        stream_id: stdout_stream_id,
-                        data: payload,
-                        ..BinaryChunk::default()
-                    })),
-                    ..InvokeBidiDown::default()
-                }),
-            }
-        }
-    }
-}
-
-fn json_frame_error_reason(value: &serde_json::Value) -> String {
-    match (
-        value.get("code").and_then(|field| field.as_str()),
-        value.get("message").and_then(|field| field.as_str()),
-    ) {
-        (Some(code), Some(message)) if !code.trim().is_empty() && !message.trim().is_empty() => {
-            format!("{code}: {message}")
-        }
-        (_, Some(message)) if !message.trim().is_empty() => message.to_string(),
-        (Some(code), _) if !code.trim().is_empty() => code.to_string(),
-        _ => "JSON-frame bidi handler returned error".to_string(),
+        LocalBidiWireKind::JsonFrames => forward_json_bidi_frame(value, stdout_stream_id),
     }
 }
 
 /// Down-stream wrapper that:
-///   1. Emits a spec §1.1 admission-accept `InvocationReceipt`
-///      (`state = Admitted`) as down frame 0 immediately on the
-///      first poll. This is the missing protocol-required ack that
-///      unblocks the device's `invoke_bidi.await` so it can enter
-///      the down-stream read loop.
+///   1. Emits a typed session-established control as down frame 0.
 ///   2. After frame 0, injects a no-op `BidiControl` heartbeat frame
 ///      whenever no business frame has been queued for
 ///      `SESSION_DOWN_HEARTBEAT_INTERVAL`.
@@ -1539,10 +1319,10 @@ struct SessionDownStream {
     pending_normal_frames: VecDeque<Result<DispatchFrame, Status>>,
     next_heartbeat: Pin<Box<tokio::time::Sleep>>,
     next_sequence: u64,
-    /// Set to `Some(receipt)` at construction; first `poll_next`
+    /// Set to `Some(control)` at construction; first `poll_next`
     /// yields it and clears the slot. Subsequent polls follow the
     /// recv-then-heartbeat path.
-    pending_admission_receipt: Option<InvokeBidiDown>,
+    pending_initial_control: Option<InvokeBidiDown>,
 }
 
 pub(crate) struct LocalBidiDownStream {
@@ -1573,7 +1353,18 @@ impl LocalBidiDownStream {
         Self {
             down_rx,
             next_sequence: 0,
-            pending_admission_receipt: Some(build_bidi_admission_receipt()),
+            pending_admission_receipt: None,
+        }
+    }
+
+    pub(crate) fn with_admission(
+        down_rx: tokio::sync::mpsc::Receiver<Result<InvokeBidiDown, Status>>,
+        admission_receipt: InvokeBidiDown,
+    ) -> Self {
+        Self {
+            down_rx,
+            next_sequence: 0,
+            pending_admission_receipt: Some(admission_receipt),
         }
     }
 
@@ -1602,14 +1393,14 @@ impl Stream for LocalBidiDownStream {
 impl SessionDownStream {
     fn new(
         down_rx: tokio::sync::mpsc::Receiver<Result<DispatchFrame, Status>>,
-        admission_receipt: InvokeBidiDown,
+        initial_control: InvokeBidiDown,
     ) -> Self {
         Self {
             down_rx,
             pending_normal_frames: VecDeque::new(),
             next_heartbeat: Box::pin(tokio::time::sleep(SESSION_DOWN_HEARTBEAT_INTERVAL)),
             next_sequence: 0,
-            pending_admission_receipt: Some(admission_receipt),
+            pending_initial_control: Some(initial_control),
         }
     }
 
@@ -1657,14 +1448,9 @@ impl Stream for SessionDownStream {
     type Item = Result<InvokeBidiDown, Status>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Spec §1.1: down frame 0 MUST be an InvocationReceipt
-        // signalling admission accept. Emit it before anything else
-        // so the client's `invoke_bidi.await` always has a concrete
-        // first DATA frame to flush HTTP/2 HEADERS against, and so
-        // the wire shape matches what RFC-003 readers expect.
-        if let Some(receipt) = self.pending_admission_receipt.take() {
+        if let Some(control) = self.pending_initial_control.take() {
             self.reset_heartbeat();
-            return Poll::Ready(Some(Ok(self.stamp_sequence(receipt))));
+            return Poll::Ready(Some(Ok(self.stamp_sequence(control))));
         }
 
         match self.poll_dispatch_frame(cx) {
@@ -1700,16 +1486,14 @@ impl BidiDispatcher {
     async fn dispatch_canonical_session_invoke(
         &self,
         request: easynet_axon::pb::axon::v1::InvokeRequest,
-    ) -> RequestOutcome {
+    ) -> Result<easynet_axon::pb::axon::v1::InvokeResponse, SessionRequestError> {
         if let Err(status) = self.admission.verify_invoke(&request) {
-            return map_status_to_session_request_error(status);
+            return Err(session_request_error_from_status(status));
         }
         let (result, _) = self.unary.dispatch_local_rpc_selected_route(&request).await;
         match result {
-            Ok(response) => RequestOutcome::Ok {
-                result_bytes: response.into_inner().result,
-            },
-            Err(status) => map_status_to_session_request_error(status),
+            Ok(response) => Ok(response.into_inner()),
+            Err(status) => Err(session_request_error_from_status(status)),
         }
     }
 
@@ -1827,12 +1611,7 @@ impl BidiDispatcher {
                     )),
                 };
                 match result {
-                    Ok(response) => {
-                        let body = response.into_inner();
-                        RequestOutcome::Ok {
-                            result_bytes: body.result,
-                        }
-                    }
+                    Ok(result_bytes) => RequestOutcome::Ok { result_bytes },
                     Err(status) => map_status_to_session_request_error(status),
                 }
             }
@@ -1856,12 +1635,7 @@ impl BidiDispatcher {
                     )),
                 };
                 match result {
-                    Ok(response) => {
-                        let body = response.into_inner();
-                        RequestOutcome::Ok {
-                            result_bytes: body.result,
-                        }
-                    }
+                    Ok(result_bytes) => RequestOutcome::Ok { result_bytes },
                     Err(status) => map_status_to_session_request_error(status),
                 }
             }
@@ -1872,12 +1646,7 @@ impl BidiDispatcher {
             // the same handler the unary Invoke path uses.
             federation_wrappers::ABILITY_FEDERATION_RESOLVE_KEY => {
                 match self.unary.dispatch_federation_resolve_key(args) {
-                    Ok(response) => {
-                        let body = response.into_inner();
-                        RequestOutcome::Ok {
-                            result_bytes: body.result,
-                        }
-                    }
+                    Ok(result_bytes) => RequestOutcome::Ok { result_bytes },
                     Err(status) => map_status_to_session_request_error(status),
                 }
             }
@@ -1929,25 +1698,25 @@ impl BidiDispatcher {
 ///   so an operator grep'ing the device log can still cite the
 ///   exact upstream code + message.
 fn map_status_to_session_request_error(status: Status) -> RequestOutcome {
+    RequestOutcome::Err {
+        error: session_request_error_from_status(status),
+    }
+}
+
+fn session_request_error_from_status(status: Status) -> SessionRequestError {
     let code = status.code();
     let message = status.message().to_string();
     if code == tonic::Code::FailedPrecondition
         && message.trim()
             == crate::daemon::invocation::bidi::state::presence::DISPATCH_TARGET_OFFLINE_REASON
     {
-        return RequestOutcome::Err {
-            error: SessionRequestError::TargetOffline,
-        };
+        return SessionRequestError::TargetOffline;
     }
     if code == tonic::Code::PermissionDenied {
-        return RequestOutcome::Err {
-            error: SessionRequestError::PermissionDenied { reason: message },
-        };
+        return SessionRequestError::PermissionDenied { reason: message };
     }
-    RequestOutcome::Err {
-        error: SessionRequestError::UpstreamFailure {
-            reason: format!("code={code:?} message={message}"),
-        },
+    SessionRequestError::UpstreamFailure {
+        reason: format!("code={code:?} message={message}"),
     }
 }
 
@@ -2061,8 +1830,99 @@ pub(crate) fn pending_result_from_carrier_v1(
             .filter(|m| !m.is_empty()),
         failure: result.failure.as_ref().map(session_failure_from_axon_error),
         request_id: None,
-        receipt: result.receipt.clone(),
+        admission_receipt: result.admission_receipt.clone(),
+        terminal_receipt: result.terminal_receipt.clone(),
     }
+}
+
+#[derive(Debug)]
+enum CarrierDispatchEvent {
+    Admission(easynet_axon::pb::axon::v1::InvocationReceipt),
+    Chunk(Vec<u8>),
+    Terminal(DispatchResult),
+}
+
+fn classify_carrier_v1_result(
+    result: easynet_axon::pb::axon::v1::DispatchResult,
+) -> Result<(u64, CarrierDispatchEvent), (u64, DispatchResult)> {
+    let call_id = result.call_id;
+    let protocol_failure =
+        |reason: &str, code: &str| (call_id, failed_dispatch_result(reason, code, false));
+
+    // Pending unary and stream dispatches intentionally occupy disjoint
+    // session-wide namespaces. The carrier lifecycle therefore has one
+    // unambiguous checkpoint geometry without a mode tag on every result.
+    if call_id & 1 == 0 {
+        if !result.terminal {
+            return Err(protocol_failure(
+                "unary DispatchResult must be terminal",
+                "CARRIER_UNARY_PHASE_INVALID",
+            ));
+        }
+        let has_admission = result.admission_receipt.is_some();
+        let has_terminal = result.terminal_receipt.is_some();
+        if has_admission != has_terminal {
+            return Err(protocol_failure(
+                "unary DispatchResult must carry admission and terminal checkpoints together",
+                "CANONICAL_CHECKPOINT_PAIR_REQUIRED",
+            ));
+        }
+        if result.failure.is_none() && !has_admission {
+            return Err(protocol_failure(
+                "successful unary DispatchResult omitted canonical checkpoints",
+                "CANONICAL_FINALIZATION_REQUIRED",
+            ));
+        }
+        return Ok((
+            call_id,
+            CarrierDispatchEvent::Terminal(pending_result_from_carrier_v1(&result)),
+        ));
+    }
+
+    if result.terminal {
+        if result.admission_receipt.is_some() {
+            return Err(protocol_failure(
+                "stream terminal DispatchResult repeated the admission checkpoint",
+                "CARRIER_STREAM_PHASE_INVALID",
+            ));
+        }
+        if result.failure.is_none() && result.terminal_receipt.is_none() {
+            return Err(protocol_failure(
+                "successful stream terminal omitted its canonical terminal checkpoint",
+                "CANONICAL_TERMINAL_RECEIPT_REQUIRED",
+            ));
+        }
+        return Ok((
+            call_id,
+            CarrierDispatchEvent::Terminal(pending_result_from_carrier_v1(&result)),
+        ));
+    }
+
+    if result.terminal_receipt.is_some() {
+        return Err(protocol_failure(
+            "non-terminal DispatchResult carried a terminal checkpoint",
+            "CARRIER_STREAM_PHASE_INVALID",
+        ));
+    }
+    if let Some(admission) = result.admission_receipt.clone() {
+        if result.failure.is_some() || !result.payload.is_empty() {
+            return Err(protocol_failure(
+                "stream admission DispatchResult must contain only the admission checkpoint",
+                "CARRIER_STREAM_PHASE_INVALID",
+            ));
+        }
+        if admission.state != easynet_axon::invocation::InvocationState::Admitted.to_wire_i32() {
+            return Err(protocol_failure(
+                "stream admission DispatchResult carried a non-admission checkpoint",
+                "CANONICAL_ADMISSION_INVALID",
+            ));
+        }
+        return Ok((call_id, CarrierDispatchEvent::Admission(admission)));
+    }
+    if result.failure.is_some() {
+        return Err((call_id, pending_result_from_carrier_v1(&result)));
+    }
+    Ok((call_id, CarrierDispatchEvent::Chunk(result.payload)))
 }
 
 pub(crate) fn session_failure_from_axon_error(
@@ -2083,12 +1943,33 @@ pub(crate) fn session_failure_from_axon_error(
 /// the single-track typed Error (DEC-F004 point 3).
 pub(crate) fn build_reverse_dispatch_result_frame(
     call_id: [u8; 16],
-    outcome: RequestOutcome,
+    outcome: Result<easynet_axon::pb::axon::v1::InvokeResponse, SessionRequestError>,
 ) -> DispatchFrame {
     use easynet_axon::pb::axon::v1::ReverseDispatchResult;
-    let (payload, failure) = match outcome {
-        RequestOutcome::Ok { result_bytes } => (result_bytes, None),
-        RequestOutcome::Err { error } => {
+    let (payload, failure, admission_receipt, terminal_receipt) = match outcome {
+        Ok(response) => {
+            if response.admission_receipt.is_none() || response.terminal_receipt.is_none() {
+                (
+                    Vec::new(),
+                    Some(easynet_axon::pb::axon::v1::Error {
+                        code: "CANONICAL_FINALIZATION_REQUIRED".to_string(),
+                        message: "hub canonical reverse dispatch completed without both signed finalization checkpoints".to_string(),
+                        retryable: false,
+                        ..easynet_axon::pb::axon::v1::Error::default()
+                    }),
+                    None,
+                    None,
+                )
+            } else {
+                (
+                    response.result,
+                    None,
+                    response.admission_receipt,
+                    response.terminal_receipt,
+                )
+            }
+        }
+        Err(error) => {
             let (code, retryable) = match &error {
                 SessionRequestError::TargetOffline => ("TARGET_OFFLINE", true),
                 SessionRequestError::PermissionDenied { .. } => ("PERMISSION_DENIED", false),
@@ -2109,6 +1990,8 @@ pub(crate) fn build_reverse_dispatch_result_frame(
                     retryable,
                     ..easynet_axon::pb::axon::v1::Error::default()
                 }),
+                None,
+                None,
             )
         }
     };
@@ -2117,8 +2000,9 @@ pub(crate) fn build_reverse_dispatch_result_frame(
             call_id: call_id.to_vec(),
             payload,
             terminal: true,
-            receipt: None,
             failure,
+            admission_receipt,
+            terminal_receipt,
         })),
         ..InvokeBidiDown::default()
     })
@@ -2315,43 +2199,46 @@ async fn drain_session_up_stream(
                 );
                 continue;
             }
-            // Carrier-v1 dual-read (DEC-F004 / T2.1 step 2b): proto
-            // frames settle through the same core as the JSON shapes.
+            // Carrier-v1 has one checkpoint geometry per call mode. The
+            // even/odd pending-call namespaces make mode classification exact.
             Some(UpPayload::DispatchResult(result)) => {
-                if result.terminal && result.receipt.is_none() {
-                    // The contract REQUIRES a callee-signed receipt on
-                    // terminal frames; surface the violation but still
-                    // settle so the caller is not left hanging.
-                    crate::op_event!(
-                        component = session_accept,
-                        kind = carrier_v1_result_missing_receipt,
-                        caller = caller_ura,
-                        call_id = result.call_id,
-                    );
-                }
-                if let Some(receipt) = result.receipt.as_ref() {
-                    // Receipt-chain closure at the hub hop: observable
-                    // now; hub-ledger projection lands in step 2c.
-                    crate::op_event!(
-                        component = session_accept,
-                        kind = carrier_v1_receipt_received,
-                        caller = caller_ura,
-                        call_id = result.call_id,
-                        receipt_state = receipt.state,
-                    );
-                }
-                let terminal = result.terminal;
-                let call_id = result.call_id;
-                let mapped = pending_result_from_carrier_v1(&result);
-                if terminal {
-                    settle_terminal_result(&pending, &pending_stream, &caller_ura, call_id, mapped)
+                match classify_carrier_v1_result(result) {
+                    Ok((call_id, CarrierDispatchEvent::Admission(receipt))) => {
+                        crate::op_event!(
+                            component = session_accept,
+                            kind = carrier_v1_admission_receipt_received,
+                            caller = caller_ura,
+                            call_id = call_id,
+                            receipt_state = receipt.state,
+                        );
+                        if let Some(pending_stream) = pending_stream.as_ref() {
+                            report_chunk_delivery(
+                                pending_stream.deliver_admission(call_id, receipt).await,
+                                &caller_ura,
+                                call_id,
+                            );
+                        }
+                    }
+                    Ok((call_id, CarrierDispatchEvent::Chunk(payload))) => {
+                        if let Some(pending_stream) = pending_stream.as_ref() {
+                            report_chunk_delivery(
+                                pending_stream.deliver_chunk(call_id, payload).await,
+                                &caller_ura,
+                                call_id,
+                            );
+                        }
+                    }
+                    Ok((call_id, CarrierDispatchEvent::Terminal(mapped)))
+                    | Err((call_id, mapped)) => {
+                        settle_terminal_result(
+                            &pending,
+                            &pending_stream,
+                            &caller_ura,
+                            call_id,
+                            mapped,
+                        )
                         .await;
-                } else if let Some(pending_stream) = pending_stream.as_ref() {
-                    report_chunk_delivery(
-                        pending_stream.deliver_chunk(call_id, mapped.payload).await,
-                        &caller_ura,
-                        call_id,
-                    );
+                    }
                 }
                 continue;
             }
@@ -2436,7 +2323,8 @@ async fn drain_session_up_stream(
                         error,
                         failure,
                         request_id,
-                        receipt: None,
+                        admission_receipt: None,
+                        terminal_receipt: None,
                     };
                     settle_terminal_result(
                         &pending,
@@ -2692,84 +2580,50 @@ fn session_trust_context_from_open(
     SessionTrustContext::user_pubkey(presented)
 }
 
-/// step-3b hub arm (DEC-F004): pick the bidi-open carrier by the
-/// execution host's negotiated contract. A v1 host with the caller's
-/// seven-tuple envelope on the open frame receives the canonical
-/// `DispatchCall{open_bidi}` — envelope transplanted verbatim with the
-/// resolver-selected callee, arguments riding as canonical bytes. A v1
-/// host WITHOUT an envelope still gets JSON: a canonical frame minus
-/// its envelope would be hollow (same doctrine as the unary slot
-/// fallback). v0 hosts keep JSON until the deletion window closes it.
-pub(crate) fn build_remote_bidi_open_frame_for_contract(
-    target_contract_v1: bool,
+/// Build the only supported remote bidi-open carrier: a complete canonical
+/// `DispatchCall`. Session contract admission and dispatch lookup already
+/// reject v0 peers, so this constructor has no compatibility branch.
+#[cfg(test)]
+pub(crate) fn build_remote_bidi_open_frame(
     call_id: u64,
     selected_route: &SelectedInvokeRoute,
     envelope_open: &EnvelopeOpen,
+    call_mode: CallMode,
 ) -> Result<DispatchFrame, Status> {
-    let dispatch_ability = selected_route.dispatch_key();
-    match (target_contract_v1, envelope_open.envelope.clone()) {
-        (true, Some(envelope)) => Ok(build_carrier_v1_dispatch_frame(
-            call_id,
-            easynet_axon::pb::axon::v1::InvokeRequest {
-                envelope: Some(signed_envelope_for_selected_route(
-                    envelope,
-                    selected_route,
-                    envelope_open
-                        .metadata
-                        .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
-                        .map(String::as_str),
-                    &envelope_open.initial_args,
-                )?),
-                function_name: selected_route.dispatch_name.clone(),
-                arguments: envelope_open.initial_args.clone(),
-                metadata: envelope_open.metadata.clone(),
-                ..Default::default()
-            },
-            true,
-        )),
-        _ => build_remote_bidi_open_dispatch_frame(
-            call_id,
-            &selected_route.callee_ura,
-            remote_bidi_subject_ura(envelope_open).as_deref(),
-            &dispatch_ability,
-            &envelope_open.initial_args,
-            envelope_open.metadata.clone(),
-        ),
-    }
+    let request = remote_bidi_forwarded_request(selected_route, envelope_open, call_mode)?;
+    Ok(build_carrier_v1_dispatch_frame(call_id, request, true))
 }
 
-pub(crate) fn build_remote_bidi_open_dispatch_frame(
-    call_id: u64,
-    callee_ura: &str,
-    subject_ura: Option<&str>,
-    ability: &str,
-    args: &[u8],
-    metadata: HashMap<String, String>,
-) -> Result<DispatchFrame, Status> {
-    let payload = SessionDispatch::BidiOpen {
-        call_id,
-        callee_ura: Some(callee_ura.to_string()),
-        subject_ura: subject_ura
-            .filter(|subject| !subject.trim().is_empty())
-            .map(ToOwned::to_owned),
-        ability: ability.to_string(),
-        args: args.to_vec(),
-        args_content_envelope: SessionContentEnvelope::plaintext_json(),
-        metadata,
-    };
-    let bytes = serde_json::to_vec(&payload).map_err(|err| {
-        Status::internal(format!(
-            "InvokeBidi remote file_transfer: encode SessionDispatch::BidiOpen: {err}"
-        ))
-    })?;
-    Ok(DispatchFrame::normal(InvokeBidiDown {
-        payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-            stream_id: crate::daemon::invocation::bidi::session_initiator::SESSION_STREAM_ID,
-            data: bytes,
-            ..BinaryChunk::default()
-        })),
-        ..InvokeBidiDown::default()
-    }))
+fn remote_bidi_forwarded_request(
+    selected_route: &SelectedInvokeRoute,
+    envelope_open: &EnvelopeOpen,
+    call_mode: CallMode,
+) -> Result<easynet_axon::pb::axon::v1::InvokeRequest, Status> {
+    if !matches!(call_mode, CallMode::Bidi) {
+        return Err(Status::failed_precondition(format!(
+            "InvokeBidi route `{}` resolved with non-bidi call mode {call_mode:?}",
+            selected_route.route_ura,
+        )));
+    }
+    let envelope = envelope_open
+        .envelope
+        .clone()
+        .ok_or_else(|| Status::invalid_argument("InvokeBidi request missing envelope"))?;
+    Ok(easynet_axon::pb::axon::v1::InvokeRequest {
+        envelope: Some(signed_envelope_for_selected_route(
+            envelope,
+            selected_route,
+            envelope_open
+                .metadata
+                .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
+                .map(String::as_str),
+            &envelope_open.initial_args,
+        )?),
+        function_name: selected_route.dispatch_name.clone(),
+        arguments: envelope_open.initial_args.clone(),
+        metadata: envelope_open.metadata.clone(),
+        ..Default::default()
+    })
 }
 
 fn build_remote_bidi_input_dispatch_frame(
@@ -2824,6 +2678,7 @@ fn build_remote_bidi_input_frame_for_ability(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn remote_bidi_target_ura(envelope_open: &EnvelopeOpen) -> Option<String> {
     envelope_open
         .envelope
@@ -2834,58 +2689,29 @@ pub(crate) fn remote_bidi_target_ura(envelope_open: &EnvelopeOpen) -> Option<Str
         .map(ToOwned::to_owned)
 }
 
-fn remote_bidi_subject_ura(envelope_open: &EnvelopeOpen) -> Option<String> {
-    envelope_open
-        .envelope
-        .as_ref()
-        .and_then(|env| env.subject.as_ref())
-        .map(|subject| subject.ura.trim())
-        .filter(|ura| !ura.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use easynet_axon::pb::axon::v1::SessionOpenExt;
 
     #[test]
-    fn invoke_bidi_gate_recognizes_core_browser_attach_wire() {
-        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
-        let ability =
-            crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
-
-        assert!(local_is_bidi_wire_ability(&registry, ability));
-        assert_eq!(
-            local_bidi_wire_kind_for(&registry, ability),
-            Some(LocalBidiWireKind::JsonFrames)
-        );
+    fn absent_ext_fails_closed_without_canonical_carrier() {
+        let err = session_contract_from_ext(None)
+            .expect_err("missing carrier negotiation must reject session.open");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("CANONICAL_CARRIER_REQUIRED"));
     }
 
     #[test]
-    fn invoke_bidi_gate_recognizes_descriptor_ref_wire_target() {
-        let registry = crate::daemon::ability::wire::AbilityWireRegistry::core();
-        let ability =
-            crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION;
-        let owner_ura = crate::core::ura::device_ura("test-realm", "dev-a");
-        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, ability).unwrap();
-        let descriptor_ref = format!(
-            "{ability_ura}@{}",
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-        );
-
-        assert!(local_is_bidi_wire_ability(&registry, &descriptor_ref));
-        assert_eq!(
-            local_bidi_wire_kind_for(&registry, &descriptor_ref),
-            Some(LocalBidiWireKind::JsonFrames)
-        );
-    }
-
-    #[test]
-    fn absent_ext_negotiates_legacy_json() {
-        let c = session_contract_from_ext(None);
-        assert_eq!(c, SessionContract::legacy());
-        assert_eq!(c.version.min(HUB_DISPATCH_CONTRACT_VERSION), 0);
+    fn v0_ext_fails_closed_without_json_fallback() {
+        let ext = SessionOpenExt {
+            contract_version: 0,
+            claimant_boot_nonce: vec![3; 16],
+        };
+        let err = session_contract_from_ext(Some(&ext))
+            .expect_err("v0 carrier must not register a dispatch session");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("carrier v0"));
     }
 
     #[test]
@@ -2894,8 +2720,11 @@ mod tests {
             contract_version: 7, // future device, older hub
             claimant_boot_nonce: vec![3; 16],
         };
-        let c = session_contract_from_ext(Some(&ext));
-        assert_eq!(c.version.min(HUB_DISPATCH_CONTRACT_VERSION), 1);
+        let c = session_contract_from_ext(Some(&ext)).expect("v1+ carrier negotiates");
+        assert_eq!(
+            c.version.min(CANONICAL_SESSION_CARRIER_VERSION),
+            CANONICAL_SESSION_CARRIER_VERSION
+        );
         assert_eq!(c.claimant_boot_nonce.len(), 16);
     }
 
@@ -2905,13 +2734,13 @@ mod tests {
             call_id: 7,
             payload: b"partial".to_vec(),
             terminal: true,
-            receipt: None,
             failure: Some(easynet_axon::pb::axon::v1::Error {
                 code: "TARGET_OFFLINE".into(),
                 message: "device went away".into(),
                 retryable: true,
                 ..Default::default()
             }),
+            ..Default::default()
         };
         let mapped = pending_result_from_carrier_v1(&pb);
         assert_eq!(mapped.payload, b"partial");
@@ -2923,27 +2752,75 @@ mod tests {
     }
 
     #[test]
-    fn carrier_v1_clean_result_has_no_error_projection() {
+    fn carrier_v1_unary_success_without_checkpoints_is_rejected() {
         let pb = easynet_axon::pb::axon::v1::DispatchResult {
             call_id: 8,
             payload: b"ok".to_vec(),
             terminal: true,
-            receipt: None,
             failure: None,
+            ..Default::default()
         };
-        let mapped = pending_result_from_carrier_v1(&pb);
+        let (_, failure) = classify_carrier_v1_result(pb)
+            .expect_err("successful unary result without checkpoints must fail closed");
+        assert_eq!(
+            failure.failure.as_ref().map(|value| value.code.as_str()),
+            Some("CANONICAL_FINALIZATION_REQUIRED")
+        );
+    }
+
+    #[test]
+    fn carrier_v1_unary_success_requires_both_checkpoints() {
+        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+            call_id: 8,
+            payload: b"ok".to_vec(),
+            terminal: true,
+            admission_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
+                state: easynet_axon::invocation::InvocationState::Admitted.to_wire_i32(),
+                ..Default::default()
+            }),
+            terminal_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
+                state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, CarrierDispatchEvent::Terminal(mapped)) =
+            classify_carrier_v1_result(pb).expect("paired unary checkpoints are accepted")
+        else {
+            panic!("unary result must classify as terminal");
+        };
         assert!(mapped.error.is_none());
-        assert!(mapped.failure.is_none());
+        assert!(mapped.admission_receipt.is_some());
+        assert!(mapped.terminal_receipt.is_some());
+    }
+
+    #[test]
+    fn carrier_v1_stream_terminal_cannot_repeat_admission_checkpoint() {
+        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+            call_id: 9,
+            terminal: true,
+            admission_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
+                state: easynet_axon::invocation::InvocationState::Admitted.to_wire_i32(),
+                ..Default::default()
+            }),
+            terminal_receipt: Some(easynet_axon::pb::axon::v1::InvocationReceipt {
+                state: easynet_axon::invocation::InvocationState::Completed.to_wire_i32(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, failure) = classify_carrier_v1_result(pb)
+            .expect_err("stream admission and terminal checkpoints use distinct frames");
+        assert_eq!(
+            failure.failure.as_ref().map(|value| value.code.as_str()),
+            Some("CARRIER_STREAM_PHASE_INVALID")
+        );
     }
 
     #[test]
     fn reverse_reply_frame_carries_typed_failure_single_track() {
-        let frame = build_reverse_dispatch_result_frame(
-            [9; 16],
-            RequestOutcome::Err {
-                error: SessionRequestError::TargetOffline,
-            },
-        );
+        let frame =
+            build_reverse_dispatch_result_frame([9; 16], Err(SessionRequestError::TargetOffline));
         let Some(DownPayload::ReverseDispatchResult(r)) = frame.frame.payload else {
             panic!("expected ReverseDispatchResult payload");
         };
@@ -2957,13 +2834,12 @@ mod tests {
     #[tokio::test]
     async fn session_down_stream_prioritizes_control_frames_over_normal_backlog() {
         let (tx, rx) = mpsc::channel::<Result<DispatchFrame, Status>>(8);
-        let mut stream =
-            SessionDownStream::new(rx, build_session_down_admission_receipt(1, 7, false));
+        let mut stream = SessionDownStream::new(rx, build_session_established_control(1, 7, false));
 
-        let first = stream.next().await.expect("admission frame").expect("ok");
+        let first = stream.next().await.expect("control frame").expect("ok");
         assert!(
-            matches!(first.payload, Some(DownPayload::Receipt(_))),
-            "frame 0 remains the admission receipt"
+            matches!(first.payload, Some(DownPayload::Control(_))),
+            "frame 0 is typed session control"
         );
 
         tx.send(Ok(DispatchFrame::normal(InvokeBidiDown {
@@ -3014,16 +2890,17 @@ mod tests {
     }
 
     #[test]
-    fn admission_receipt_carries_session_contract_payload() {
-        let frame = build_session_down_admission_receipt(1, 42, true);
-        let Some(DownPayload::Receipt(receipt)) = frame.payload else {
-            panic!("frame 0 down must be a receipt");
+    fn session_established_control_carries_typed_contract() {
+        let frame = build_session_established_control(1, 42, true);
+        let Some(DownPayload::Control(control)) = frame.payload else {
+            panic!("frame 0 down must be typed control");
         };
-        let body: serde_json::Value = serde_json::from_slice(&receipt.payload).unwrap();
-        let sc = &body["session_contract"];
-        assert_eq!(sc["version"], 1);
-        assert_eq!(sc["dispatch_encoding"], "proto");
-        assert_eq!(sc["hub_session_id"], "42");
-        assert_eq!(sc["displaced_prior"], true);
+        let Some(bidi_control::Control::SessionEstablished(contract)) = control.control else {
+            panic!("expected SessionEstablished control");
+        };
+        assert_eq!(contract.contract_version, 1);
+        assert_eq!(contract.dispatch_encoding, "proto");
+        assert_eq!(contract.session_id, 42);
+        assert!(contract.displaced_prior);
     }
 }

@@ -10,6 +10,7 @@ build = "build.rs"
 members = [
     ".",
     "plugins/remote-desktop",
+    "tools/sdk-conformance-runner",
 ]
 
 [features]
@@ -42,6 +43,10 @@ axon-pb = [
 # Demo / e2e scripts pass `--features demo-fixture` to opt in. See
 # `daemon::invocation::boot::presence_seed::maybe_seed_demo_presence`.
 demo-fixture = []
+
+# Explicit opt-in for shipped maintainer probes that need an in-process,
+# ephemeral receipt signer. Production binaries never enable this feature.
+local-fast-probes = ["easynet-axon/local-fast-probes"]
 
 # Compile the in-tree remote desktop plugin package and its media transport
 # stack. This is part of the current product surface: Frontend remote desktop,
@@ -78,11 +83,9 @@ bench = false
 name = "easynet"
 path = "src/bin/easynet.rs"
 
-# Long-running daemon. Owns pair/heartbeat/Axon-node-identity today;
-# follow-up PRs in the v10.5 R1 series (PR-SYS / PR-ATTACH / PR-PERM
-# / PR-DISCUSS / PR-SCHED / PR-LOOP) extend it with the local IPC
-# server, schedule tick, and system.* ability publisher. `easynet
-# self control start/stop/status` supervises this bin's PID.
+# Per-user runtime authority. Owns lifecycle, discovery, canonical
+# Invocation admission/dispatch, live ability publication, and local
+# control IPC. `easynet start/stop/status` supervises this binary.
 [[bin]]
 name = "easynet-daemon"
 path = "src/bin/easynet-daemon.rs"
@@ -113,14 +116,7 @@ path = "src/bin/gen-ability-tomls.rs"
 [[bin]]
 name = "real-user-smoke"
 path = "src/bin/real-user-smoke.rs"
-
-[[bin]]
-name = "real-publish-smoke"
-path = "src/bin/real-publish-smoke.rs"
-
-[[bin]]
-name = "sdk-conformance-runner"
-path = "src/bin/sdk-conformance-runner.rs"
+required-features = ["local-fast-probes"]
 
 [dependencies]
 anyhow = "1"
@@ -137,7 +133,7 @@ dialoguer = { version = "0.11", default-features = false }
 crossbeam-queue = "0.3"
 ctrlc = "3"
 # Concurrent shard-locked map. PresenceRegistry (RFC-003 PR-1 spec §3)
-# uses one DashMap<device_uri, DispatchSender> with shard count
+# uses one DashMap<device_ura, DispatchSender> with shard count
 # tuned via `with_shard_amount(num_cpus * 4)`. The full feature
 # justification — bounded backpressure, shard-locked sub-millisecond
 # lookups across thousands of devices — is documented in
@@ -345,6 +341,7 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
@@ -402,6 +399,7 @@ objc2-video-toolbox = { version = "0.3", features = [
 ], optional = true }
 
 [dev-dependencies]
+easynet-axon = { path = "../EasyNet-Axon/sdk/rust", features = ["local-fast-probes"] }
 # Paused-clock tests (`#[tokio::test(start_paused = true)]`) let the
 # invocation-transport reply-deadline tests fire the 60s timer
 # instantly instead of sleeping it for real. Test builds only.

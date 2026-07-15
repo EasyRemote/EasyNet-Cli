@@ -52,7 +52,7 @@ class MemoryRuntimeTransport:
                 "selected_node_id": "node-a",
                 "scheduling_reason": "direct",
                 "elapsed_ms": 12,
-                "receipt": {"receipt_id": "receipt-1"},
+                "terminal_receipt": {"receipt_id": "receipt-1"},
                 "error": None,
             },
             separators=(",", ":"),
@@ -93,8 +93,8 @@ class MemoryRuntimeTransport:
         self.seen_signed = json.loads(signed_json.decode("utf-8"))
         return self.handle_json
 
-    def await_handle(self, handle_id: int) -> bytes:
-        self.seen_await_id = handle_id
+    def await_handle(self, control) -> bytes:
+        self.seen_await_id = control._adapter_handle_id()
         draft = self.seen_draft or complete_draft().to_json_dict()
         return json.dumps(
             {
@@ -105,20 +105,21 @@ class MemoryRuntimeTransport:
                 "output_base64": "e30=",
                 "output_json": {},
                 "elapsed_ms": 8,
-                "receipt": None,
+                "terminal_receipt": None,
                 "error": None,
             },
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
 
-    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+    def cancel_handle(self, control, reason: str) -> bytes:
         self.seen_cancel_reason = reason
         return (
-            b'{"handle_id":7,"cancelled":true,' b'"state":"Cancelled","terminal":true}'
+            b'{"handle_id":7,"request_accepted":false,"deduplicated":true,'
+            b'"cancelled":false,"state":"Completed","terminal":true}'
         )
 
-    def handle_events(self, handle_id: int) -> bytes:
+    def handle_events(self, control) -> bytes:
         return (
             b'{"handle_id":7,"state":"Cancelled","terminal":true,'
             b'"events":[{"sequence":1,"kind":"submitted",'
@@ -127,8 +128,8 @@ class MemoryRuntimeTransport:
             b'"reason":"client stop"}],"result":null}'
         )
 
-    def free_handle(self, handle_id: int) -> None:
-        self.seen_free_id = handle_id
+    def free_handle(self, control) -> None:
+        self.seen_free_id = control._adapter_handle_id()
 
     def close(self) -> None:
         self.close_calls += 1
@@ -195,7 +196,7 @@ class RuntimeTests(unittest.TestCase):
                     "output_base64": "e30=",
                     "output_json": {},
                     "elapsed_ms": 8,
-                    "receipt": {
+                    "terminal_receipt": {
                         "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/opaque/receipt",
                         "invocation_id": "inv-1",
                         "receipt_type": "terminal",
@@ -216,35 +217,39 @@ class RuntimeTests(unittest.TestCase):
             )
         )
 
-        self.assertIsInstance(result.receipt_summary, RuntimeReceipt)
-        assert result.receipt_summary is not None
-        self.assertEqual(result.receipt_summary.invocation_id, "inv-1")
-        self.assertTrue(result.receipt_summary.has_causal_anchor())
-        self.assertEqual(result.receipt_summary.raw["extra"], {"daemon": "axon"})
-        assert result.receipt is not None
-        self.assertEqual(result.receipt["invocation_id"], "inv-1")
+        self.assertIsInstance(result.terminal_receipt_summary, RuntimeReceipt)
+        assert result.terminal_receipt_summary is not None
+        self.assertEqual(result.terminal_receipt_summary.invocation_id, "inv-1")
+        self.assertTrue(result.terminal_receipt_summary.has_causal_anchor())
+        self.assertEqual(
+            result.terminal_receipt_summary.raw["extra"], {"daemon": "axon"}
+        )
+        assert result.terminal_receipt is not None
+        self.assertEqual(result.terminal_receipt["invocation_id"], "inv-1")
+        self.assertFalse(hasattr(result, "receipt"))
+        self.assertFalse(hasattr(result, "receipt_summary"))
 
     def test_invocation_result_separates_admission_and_terminal_receipts(self) -> None:
         payload = {
             "ok": True,
             "tuple": complete_draft().to_json_dict(),
             "terminal_state": "Completed",
-            "receipt": {"index": 1, "state": "Completed"},
             "admission_receipt": {"index": 0, "state": "Admitted"},
             "terminal_receipt": {"index": 1, "state": "Completed"},
             "error": None,
         }
         result = InvocationResult.from_json(json.dumps(payload))
 
-        self.assertEqual(result.receipt, result.terminal_receipt)
         self.assertEqual(result.admission_receipt, {"index": 0, "state": "Admitted"})
         assert result.terminal_receipt_summary is not None
         self.assertEqual(result.terminal_receipt_summary.index, 1)
+        self.assertEqual(result.terminal_receipt, {"index": 1, "state": "Completed"})
 
-        payload["receipt"] = {"index": 0, "state": "Admitted"}
-        with self.assertRaises(SDKError) as caught:
-            InvocationResult.from_json(json.dumps(payload))
-        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        payload.pop("terminal_receipt")
+        payload["receipt"] = {"index": 1, "state": "Completed"}
+        legacy = InvocationResult.from_json(json.dumps(payload))
+        self.assertIsNone(legacy.terminal_receipt)
+        self.assertIsNone(legacy.terminal_receipt_summary)
 
     def test_invocation_result_preserves_stable_positional_field_prefix(self) -> None:
         self.assertEqual(
@@ -259,9 +264,9 @@ class RuntimeTests(unittest.TestCase):
                 "selected_node_id",
                 "scheduling_reason",
                 "elapsed_ms",
-                "receipt",
-                "receipt_summary",
                 "error",
+                "admission_receipt",
+                "admission_receipt_summary",
             ],
         )
 
@@ -274,7 +279,7 @@ class RuntimeTests(unittest.TestCase):
             "output_base64": "e30=",
             "output_json": {},
             "elapsed_ms": 8,
-            "receipt": {"cleanup_complete": "yes"},
+            "terminal_receipt": {"cleanup_complete": "yes"},
             "error": None,
         }
 
@@ -300,6 +305,119 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(receipt.state, "2")
         self.assertEqual(receipt.prev_receipt_hash(), bytes(32))
         self.assertEqual(receipt.self_receipt_hash(), b"\xaa" * 32)
+
+    def test_runtime_receipt_projects_complete_typed_facts(self) -> None:
+        receipt = RuntimeReceipt.from_mapping(
+            {
+                "payload_base64": "cGF5bG9hZA==",
+                "caller_binding": {"ura": "easynet:///r/local/agent/caller"},
+                "callee_binding": {"ura": "easynet:///r/local/agent/callee"},
+                "subject_binding": {
+                    "ura": "easynet:///r/local/user/owner",
+                    "profile": "owner",
+                },
+                "invocation_nonce_base64": "bm9uY2U=",
+                "causal_binding_kind": "scalar",
+                "causal_binding": {
+                    "form": "scalar",
+                    "receipt": {
+                        "receipt_hash_hex": "77" * 32,
+                        "receipt_ura": "easynet:///r/local/resource/subject/invocation/root/receipt",
+                    },
+                },
+                "callee_signature": {
+                    "algorithm": "ed25519",
+                    "signature_base64": "c2ln",
+                    "key_id_hint": "key-1",
+                },
+                "signer_binding": {"ura": "easynet:///r/local/agent/signer"},
+                "host_attestation_base64": "YXR0ZXN0YXRpb24=",
+                "authority_binding_kind": "delegation",
+                "authority_binding": {
+                    "kind": "delegation",
+                    "issuer_ura": "easynet:///r/local/agent/issuer",
+                    "subject_ura": "easynet:///r/local/user/owner",
+                    "caller_ura": "easynet:///r/local/agent/caller",
+                    "audience": "runtime",
+                    "scopes": ["invoke"],
+                    "issued_at_ms": 1,
+                    "expires_at_ms": 2,
+                    "signature_base64": "ZGVsZWdhdGlvbg==",
+                },
+                "ability_binding": "easynet:///r/local/ability/example.run",
+                "failure": {
+                    "code": "DENIED",
+                    "message": "denied",
+                    "retryable": False,
+                    "stage": 2,
+                    "security_class": 3,
+                },
+                "usage": {
+                    "tokens_in": 10,
+                    "tokens_out": 20,
+                    "duration_ms": 30,
+                    "external_calls": 1,
+                },
+                "subject_ref": {
+                    "kind": 4,
+                    "ura": "easynet:///r/local/resource/subject",
+                },
+                "descriptor_version": "1.0.0",
+                "schema_hash_hex": "11" * 32,
+                "impl_hash_hex": "22" * 32,
+                "runtime_env": "native",
+                "authority_proof": {
+                    "proof_type": "admission",
+                    "binding_kind": "delegated",
+                    "proof_payload_base64": "cHJvb2Y=",
+                    "proof_hash_hex": "33" * 32,
+                    "issuer": {"ura": "easynet:///r/local/agent/issuer"},
+                    "signature": {
+                        "algorithm": "ed25519",
+                        "signature_base64": "cHJvb2ZzaWc=",
+                    },
+                    "admission_hook": "policy.check",
+                },
+                "input_hash_hex": "44" * 32,
+                "output_hash_hex": "55" * 32,
+                "parent_receipts": [
+                    {
+                        "receipt_hash_hex": "66" * 32,
+                        "receipt_ura": (
+                            "easynet:///r/local/resource/subject/"
+                            "invocation/parent/receipt"
+                        ),
+                    }
+                ],
+            }
+        )
+
+        assert receipt.caller_binding is not None
+        assert receipt.subject_binding is not None
+        assert receipt.callee_signature is not None
+        assert receipt.failure is not None
+        assert receipt.usage is not None
+        assert receipt.subject_ref is not None
+        assert receipt.authority_proof is not None
+        assert receipt.authority_proof.issuer is not None
+        self.assertEqual(receipt.caller_binding.ura, "easynet:///r/local/agent/caller")
+        self.assertEqual(receipt.subject_binding.profile, "owner")
+        self.assertEqual(receipt.callee_signature.algorithm, "ed25519")
+        self.assertEqual(receipt.causal_binding_kind, "scalar")
+        assert receipt.causal_binding is not None
+        self.assertEqual(receipt.causal_binding["form"], "scalar")
+        self.assertEqual(receipt.authority_binding_kind, "delegation")
+        assert receipt.authority_binding is not None
+        self.assertEqual(receipt.authority_binding["kind"], "delegation")
+        self.assertEqual(receipt.authority_binding["scopes"], ["invoke"])
+        self.assertEqual(receipt.failure.code, "DENIED")
+        self.assertEqual(receipt.usage.tokens_out, 20)
+        self.assertEqual(receipt.subject_ref.kind, 4)
+        self.assertEqual(
+            receipt.authority_proof.issuer.ura,
+            "easynet:///r/local/agent/issuer",
+        )
+        self.assertEqual(receipt.parent_receipts[0].receipt_hash_hex, "66" * 32)
 
     def test_runtime_receipt_required_summary_rejects_malformed_hash(self) -> None:
         with self.assertRaises(SDKError) as caught:
@@ -421,7 +539,7 @@ class RuntimeTests(unittest.TestCase):
 
         handle = client.submit_signed(signed)
 
-        self.assertEqual(handle.handle_id, 7)
+        self.assertEqual(handle.control_capability()._adapter_handle_id(), 7)
         assert transport.seen_signed is not None
         self.assertEqual(transport.seen_signed["signer_id"], "signer-alice-key-1")
 
@@ -459,9 +577,12 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertTrue(material.canonical_bytes_base64)
         self.assertTrue(signed.submit_ready())
-        self.assertEqual(handle.handle_id, 7)
+        self.assertEqual(handle.control_capability()._adapter_handle_id(), 7)
         self.assertTrue(result.ok)
-        self.assertTrue(cancelled.cancelled)
+        self.assertFalse(cancelled.request_accepted)
+        self.assertTrue(cancelled.deduplicated)
+        self.assertFalse(cancelled.cancelled)
+        self.assertTrue(cancelled.terminal)
         self.assertTrue(refreshed.terminal)
         self.assertEqual(transport.seen_options, {"expires_in_ms": 60000})
         self.assertEqual(transport.seen_await_id, 7)
@@ -595,7 +716,7 @@ class RuntimeTests(unittest.TestCase):
 
         handle = client.submit_signed(signed_fixture())
 
-        self.assertEqual(handle.handle_id, 7)
+        self.assertEqual(handle.control_capability()._adapter_handle_id(), 7)
         self.assertEqual(handle.state, "Submitted")
         self.assertFalse(handle.terminal)
         self.assertEqual(handle.events[0].sequence, 1)
@@ -604,6 +725,20 @@ class RuntimeTests(unittest.TestCase):
             transport.seen_signed["signature"]["signature_base64"],
             "c2lnbmF0dXJl",
         )
+
+    def test_public_handle_json_does_not_grant_control_authority(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        handle = InvocationHandle.from_json(
+            b'{"handle_id":7,"state":"Submitted","terminal":false,'
+            b'"events":[],"result":null}'
+        )
+
+        self.assertEqual(handle.state, "Submitted")
+        with self.assertRaises(SDKError) as caught:
+            client.await_result(handle)
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertEqual(transport.seen_await_id, 0)
 
     def test_handle_observation_delegates_to_transport(self) -> None:
         transport = MemoryRuntimeTransport()
@@ -617,8 +752,11 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(transport.seen_await_id, 7)
-        self.assertTrue(cancelled.cancelled)
+        self.assertFalse(cancelled.request_accepted)
+        self.assertTrue(cancelled.deduplicated)
+        self.assertFalse(cancelled.cancelled)
         self.assertTrue(cancelled.terminal)
+        self.assertEqual(cancelled.state, "Completed")
         self.assertEqual(transport.seen_cancel_reason, "client stop")
         self.assertTrue(events.terminal)
         self.assertEqual(len(events.events), 2)

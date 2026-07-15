@@ -233,8 +233,8 @@ func cabiLibraryCandidates(path string) []string {
 	}
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{"libeasynet_cli.dylib", "target/debug/libeasynet_cli.dylib", "target/release/libeasynet_cli.dylib"}
+		return []string{"libeasynet_cli.dylib"}
 	default:
-		return []string{"libeasynet_cli.so", "target/debug/libeasynet_cli.so", "target/release/libeasynet_cli.so"}
+		return []string{"libeasynet_cli.so"}
 	}
 }

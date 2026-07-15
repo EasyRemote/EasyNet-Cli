@@ -15,7 +15,8 @@ from easynet_axon.federation_directory import (
 )
 
 from .errors import ErrorCode, RetryHint, SDKError
-from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
+from .core.directory import DirectoryResolveKind
+from .runtime_ability import RuntimeCallContext
 from .stream import StreamHandle
 
 __all__ = [
@@ -38,19 +39,11 @@ __all__ = [
     "DirectorySubscribeRequest",
     "DirectorySubscription",
     "DirectorySubscriptionState",
-    "RuntimeDirectoryProvider",
 ]
 
 DEFAULT_DIRECTORY_PAGE_LIMIT = 50
 MAX_DIRECTORY_PAGE_LIMIT = 500
 MAX_DIRECTORY_CURSOR_LENGTH = 4096
-
-
-class DirectoryResolveKind(StrEnum):
-    ROUTE = "RESOLVE_TYPE_ROUTE"
-    DIRECTORY_LISTING = "RESOLVE_TYPE_DIRECTORY_LISTING"
-    CANONICAL_IDENTITY = "RESOLVE_TYPE_CANONICAL_IDENTITY"
-    OWNER = "RESOLVE_TYPE_OWNER"
 
 
 @dataclass(frozen=True)
@@ -159,78 +152,6 @@ class DirectoryClient:
 
     def subscribe(self, request: DirectorySubscribeRequest) -> "DirectorySubscription":
         return self._provider.subscribe(request)
-
-
-class RuntimeDirectoryProvider:
-    """Directory provider composed over the canonical runtime ability kernel."""
-
-    def __init__(self, ability: RuntimeAbilityClient) -> None:
-        if ability is None:
-            raise _invalid("runtime ability client is required")
-        self._ability = ability
-
-    def resolve(self, request: DirectoryResolveRequest) -> DirectoryResolution:
-        query_ura = request.query_ura.strip()
-        realm_hint = request.realm_hint.strip()
-        if not query_ura and not realm_hint:
-            raise _invalid("query_ura or realm_hint is required")
-        arguments: dict[str, object] = {"qtype": request.kind.value}
-        if query_ura:
-            arguments["query_name"] = query_ura
-        if realm_hint:
-            arguments["realm_hint"] = realm_hint
-        if request.ability_name.strip():
-            arguments["ability_name"] = request.ability_name.strip()
-        if request.include_abilities is not None:
-            arguments["include_abilities"] = request.include_abilities
-        output = self._ability.invoke(request.call, "namespace.resolve", arguments)
-        return _project_resolution(output)
-
-    def list(self, request: DirectoryListRequest) -> DirectoryPage:
-        limit = _directory_limit(request.limit)
-        cursor = _directory_cursor(request.cursor)
-        arguments: dict[str, object] = {
-            "qtype": DirectoryResolveKind.DIRECTORY_LISTING.value,
-            "limit": limit,
-        }
-        if request.ura_prefix.strip():
-            arguments["query_name"] = request.ura_prefix.strip()
-        if cursor:
-            arguments["cursor"] = cursor
-        if request.include_abilities is not None:
-            arguments["include_abilities"] = request.include_abilities
-        resolution = _project_resolution(
-            self._ability.invoke(request.call, "namespace.resolve", arguments)
-        )
-        if (
-            resolution.answer_kind == "RESOLVE_ANSWER_KIND_NEGATIVE"
-            or resolution.negative
-        ):
-            raise _invalid(_negative_detail(resolution))
-        if len(resolution.records) > limit:
-            raise _invalid(
-                "runtime Directory listing exceeds the bounded page and has no stable cursor"
-            )
-        next_cursor = _directory_cursor(resolution.next_cursor)
-        if next_cursor and next_cursor == cursor:
-            raise _invalid("runtime Directory listing returned a repeated cursor")
-        return DirectoryPage(
-            records=resolution.records,
-            limit=limit,
-            next_cursor=next_cursor,
-        )
-
-    def subscribe(self, request: DirectorySubscribeRequest) -> "DirectorySubscription":
-        arguments: dict[str, object] = {}
-        if request.resume_cursor is not None:
-            token = _directory_cursor(request.resume_cursor.token)
-            arguments["resume_sequence"] = request.resume_cursor.sequence
-            if token:
-                arguments["resume_token"] = token
-        handle = self._ability.open_stream(
-            request.call, "federation.subscribe_directory_v2", arguments
-        )
-        return DirectorySubscription(handle)
 
 
 class DirectorySubscription:

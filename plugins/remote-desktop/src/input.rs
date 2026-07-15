@@ -5,8 +5,8 @@
 // Description: Device-local input frames carried over the WebRTC data channel.
 //
 // Boundary:
-// - Axon owns the session and input-policy contract.
-// - EasyNet-Cli owns OS-local input injection.
+// - The remote desktop plugin owns its session and input-policy contract.
+// - EasyNet-Cli owns OS-local input injection; Axon owns generic admission.
 // - EasyNet/Hub must never relay high-frequency pointer or keyboard events
 //   through Invocation once a direct media/control channel is negotiated.
 

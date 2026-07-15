@@ -707,8 +707,13 @@ fn seed_hosted_agent_projection(
         "tags": ["class:query", "source:seven-axes-fixture"],
         "callable_summary": callable_summary
     });
-    let projection_digest =
-        fixture_projection_digest(agent_ura, host_device_ura, 1, 0, &[ability_summary.clone()]);
+    let projection_digest = fixture_projection_digest(
+        agent_ura,
+        host_device_ura,
+        1,
+        0,
+        std::slice::from_ref(&ability_summary),
+    );
     let advertise_abilities_descriptor_ref = fixture_descriptor_ref(
         hub_ura,
         "federation.advertise_abilities",
@@ -812,12 +817,13 @@ fn start_daemon_at(
     let ability_catalog = Arc::new(
         easynet_cli::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
     );
+    let local_catalog_cell = Arc::new(std::sync::OnceLock::new());
     let discover_resolver = Arc::new(
         easynet_cli::daemon::ability::builtins::agents::discover::LocalDirectoryDiscoverFederationResolver::new(
             Arc::clone(&presence),
             Arc::clone(&advertised_agents),
             Arc::clone(&ability_catalog),
-            Some(daemon_ura.clone()),
+            Arc::clone(&local_catalog_cell),
         ),
     );
     let services =
@@ -832,6 +838,9 @@ fn start_daemon_at(
     let built_registry =
         build_registry_with_services_result(config).expect("assemble seven-axes fixture catalog");
     let catalog = Arc::clone(&built_registry.catalog);
+    local_catalog_cell
+        .set(Arc::clone(&catalog))
+        .expect("fixture local catalog cell has one writer");
     hot_agent_registrar_cell
         .get()
         .expect("catalog assembly wires hot-Agent registrar")
@@ -855,6 +864,7 @@ fn start_daemon_at(
         AdmissionFacade::with_trust_anchor_cell(shared_trust_anchor.clone(), Some(hub_ura.clone()));
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_directory_read_models(advertised_agents, ability_catalog)
+        .with_local_ability_catalog(Arc::clone(&catalog))
         .with_local_runtime(runtime)
         .with_invocation_ledger(ledger)
         .with_register_pubkey("cli", trust_path, shared_trust_anchor);

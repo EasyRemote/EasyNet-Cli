@@ -53,6 +53,7 @@ use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
 use crate::core::ura::AbilitySelector;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::AuthorityScope;
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 
 /// Process-wide handle to the live ability registry. Set once at
@@ -264,6 +265,20 @@ fn api_ability_name(user: &str, project_id: &str, verb: &str) -> String {
     format!("{user}.{project_id}.api.{verb}")
 }
 
+fn api_ability_manifest(verb: &str) -> crate::daemon::ability::manifest::AbilityManifest {
+    let manifest_name = verb.rsplit('.').next().unwrap_or(verb);
+    crate::daemon::ability::manifest::AbilityManifest::new(
+        manifest_name,
+        "Invoke a published Pages project API endpoint.",
+        json!({
+            "type": "object",
+            "additionalProperties": true
+        }),
+    )
+    .and_then(|manifest| manifest.with_admission_action("invoke"))
+    .expect("dynamic Pages API manifest is well-formed")
+}
+
 fn is_api_ability_verb(verb: &str) -> bool {
     !verb.is_empty()
         && verb
@@ -339,6 +354,7 @@ pub(crate) fn register_api_abilities_for_project(
     registry: &AxonAbilityCatalog,
     user: &str,
     project_id: &str,
+    authority_scope: AuthorityScope,
 ) -> anyhow::Result<usize> {
     let names = api_ability_names_for_project(user, project_id);
     let owner = OwnerKind::User(user.to_string());
@@ -349,9 +365,11 @@ pub(crate) fn register_api_abilities_for_project(
         let user = user.to_string();
         let project_id = project_id.to_string();
         let verb = verb.to_string();
-        registry.hot_register_rpc(
+        registry.hot_register_rpc_with_spec_and_authority_scope(
             name.clone(),
             owner.clone(),
+            authority_scope.clone(),
+            api_ability_manifest(&verb),
             Arc::new(move |args| handle_api(&user, &project_id, &verb, args)),
         )?;
     }
@@ -401,10 +419,21 @@ mod tests {
     fn install_dispatch_registry_once() {
         static INIT: OnceLock<()> = OnceLock::new();
         INIT.get_or_init(|| {
-            let mut reg = AxonAbilityCatalog::new();
-            reg.register_rpc_with_owner(
+            let demo_agent_ura = crate::core::ura::agent_ura("localhost", "dev", "demo");
+            let authority_context =
+                crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                    crate::daemon::identity::local_invocation::local_device_ura(),
+                    vec![demo_agent_ura],
+                )
+                .expect("pages API test hosted Agent authority is canonical");
+            let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+                crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+                authority_context,
+            );
+            reg.register_rpc_with_owner_and_action(
                 "demo.backend",
                 OwnerKind::Agent("demo".into()),
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                 Arc::new(|args| Ok(json!({"ok": true, "echo": args}))),
             );
             let reg = Arc::new(reg);

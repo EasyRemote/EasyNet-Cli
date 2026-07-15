@@ -24,7 +24,8 @@ pub(crate) fn stream_callback_backpressure_event(sequence: u64, queue_capacity: 
         "event": "error",
         "state": "Failed",
         "sequence": sequence,
-        "terminal": true,
+        "terminal": false,
+        "transport_terminal": true,
         "code": BACKPRESSURE_WIRE_CODE,
         "message": "C ABI stream callback queue capacity exceeded",
         "error": runtime_backpressure_error("stream", sequence, queue_capacity),
@@ -37,7 +38,8 @@ pub(crate) fn bidi_callback_backpressure_frame(sequence: u64, queue_capacity: us
         "event": "error",
         "kind": "error",
         "sequence": sequence,
-        "terminal": true,
+        "terminal": false,
+        "transport_terminal": true,
         "code": BACKPRESSURE_WIRE_CODE,
         "message": "C ABI bidi callback queue capacity exceeded",
         "error": runtime_backpressure_error("bidi", sequence, queue_capacity),
@@ -65,14 +67,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stream_backpressure_event_is_terminal_runtime_projection() {
+    fn stream_backpressure_event_is_transport_terminal_not_runtime_terminal() {
         let event = stream_callback_backpressure_event(7, 64);
 
         assert_eq!(event["ok"], false);
         assert_eq!(event["event"], "error");
         assert_eq!(event["state"], "Failed");
         assert_eq!(event["sequence"], 7);
-        assert_eq!(event["terminal"], true);
+        assert_eq!(event["terminal"], false);
+        assert_eq!(event["transport_terminal"], true);
         assert_eq!(event["code"], "RESOURCE_EXHAUSTED");
         assert_eq!(event["error"]["code"], "ADMISSION_DENIED");
         assert_eq!(event["error"]["stage"], "stream");
@@ -85,14 +88,15 @@ mod tests {
     }
 
     #[test]
-    fn bidi_backpressure_frame_is_terminal_runtime_projection() {
+    fn bidi_backpressure_frame_is_transport_terminal_not_runtime_terminal() {
         let frame = bidi_callback_backpressure_frame(3, 32);
 
         assert_eq!(frame["ok"], false);
         assert_eq!(frame["event"], "error");
         assert_eq!(frame["kind"], "error");
         assert_eq!(frame["sequence"], 3);
-        assert_eq!(frame["terminal"], true);
+        assert_eq!(frame["terminal"], false);
+        assert_eq!(frame["transport_terminal"], true);
         assert_eq!(frame["error"]["code"], "ADMISSION_DENIED");
         assert_eq!(frame["error"]["stage"], "bidi");
         assert_eq!(frame["error"]["details"]["dropped_sequence"], 3);

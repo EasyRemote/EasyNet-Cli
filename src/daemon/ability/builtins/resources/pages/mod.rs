@@ -126,7 +126,7 @@ pub fn register(
             );
         }
     }
-    register_restored_project_abilities(reg, &config.user);
+    register_restored_project_abilities(reg, &config.realm, &config.user);
 }
 
 fn register_management_abilities(
@@ -138,7 +138,7 @@ fn register_management_abilities(
     // execution host declared in the daemon authority inventory, not a second
     // product ownership root.
     let owner = OwnerKind::User(config.user.clone());
-    let authority_scope = pages_management_authority_scope(config);
+    let authority_scope = pages_authority_scope(&config.realm, &config.user);
 
     let user = config.user.clone();
     let realm = config.realm.clone();
@@ -220,12 +220,9 @@ fn register_management_abilities(
     );
 }
 
-fn pages_management_authority_scope(config: &PagesConfig) -> AuthorityScope {
-    AuthorityScope::new(
-        format!("user:{}", config.user),
-        management_agent_ura(&config.realm, &config.user),
-    )
-    .expect("static pages management authority scope is well-formed")
+fn pages_authority_scope(realm: &str, user: &str) -> AuthorityScope {
+    AuthorityScope::new(format!("user:{user}"), management_agent_ura(realm, user))
+        .expect("Pages authority scope is well-formed")
 }
 
 /// Execution host for the user-owned Pages management family.
@@ -271,6 +268,15 @@ fn manifest_for_verb(relative_name: &str) -> crate::daemon::ability::manifest::A
         spec.description,
         spec.input_schema,
     )
+    .with_admission_action(pages_admission_action(spec.relative_name))
+    .expect("static pages manifest admission action is well-formed")
+}
+
+fn pages_admission_action(relative_name: &str) -> &'static str {
+    match relative_name {
+        "pages.publish" | "pages.unpublish" => "invoke",
+        _ => "read",
+    }
 }
 
 /// Build an `AbilityManifest` for a pages verb. Panics only on a
@@ -375,11 +381,13 @@ pub(crate) fn pages_verb_tail(relative_name: &str) -> &str {
 
 pub(crate) fn register_project_abilities(
     reg: &AxonAbilityCatalog,
+    realm: &str,
     user: &str,
     project_id: &str,
 ) -> anyhow::Result<usize> {
-    fetch::register_fetch_ability(reg, user, project_id)?;
-    Ok(1 + api::register_api_abilities_for_project(reg, user, project_id)?)
+    let authority_scope = pages_authority_scope(realm, user);
+    fetch::register_fetch_ability(reg, user, project_id, authority_scope.clone())?;
+    Ok(1 + api::register_api_abilities_for_project(reg, user, project_id, authority_scope)?)
 }
 
 pub(crate) fn registered_project_ability_names(
@@ -412,7 +420,7 @@ pub(crate) fn unregister_project_abilities(
     Ok(())
 }
 
-fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
+fn register_restored_project_abilities(reg: &AxonAbilityCatalog, realm: &str, user: &str) {
     let mut project_ids: Vec<String> = state::PUBLISHED_PROJECTS
         .iter()
         .filter_map(|entry| {
@@ -422,7 +430,7 @@ fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
         .collect();
     project_ids.sort();
     for project_id in project_ids {
-        if let Err(error) = register_project_abilities(reg, user, &project_id) {
+        if let Err(error) = register_project_abilities(reg, realm, user, &project_id) {
             let error_message = error.to_string();
             crate::op_event!(
                 component = pages,

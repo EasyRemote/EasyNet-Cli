@@ -59,6 +59,10 @@ pub struct LocalAxonSessionDispatcher {
     /// The hub reuses `BidiInput{eof=true}` as the cancel signal
     /// when a remote stream/SSE consumer disconnects.
     remote_stream_sessions: Arc<Mutex<HashMap<u64, CancellationToken>>>,
+    /// Unary carrier calls use the same explicit cancel-request registry as
+    /// local gRPC calls; terminal state still comes only from Axon finalization.
+    unary_cancellations:
+        crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
     /// Axon runtime that owns ability execution, state transitions, and
     /// receipts for both canonical session dispatch and local bidi opens.
     local_runtime: Option<Arc<easynet_axon::invocation::LocalRuntime>>,
@@ -78,6 +82,70 @@ pub struct LocalAxonSessionDispatcher {
 }
 
 type LocalBidiWireKind = crate::daemon::ability::wire::AbilityBidiWireKind;
+
+fn receipt_to_session_wire(
+    receipt: &easynet_axon::invocation::SignedInvocationReceipt,
+) -> Result<easynet_axon::pb::axon::v1::InvocationReceipt, SessionDispatchError> {
+    easynet_axon::invocation::wire::receipt_to_wire(receipt).map_err(|error| {
+        SessionDispatchError::Other(format!(
+            "canonical receipt projection failed before session relay: {error}"
+        ))
+    })
+}
+
+fn unary_checkpoints_to_session_wire(
+    outcome: &crate::daemon::axon_bridge::dispatch_shim::RpcDispatchOutcome,
+) -> Result<
+    (
+        Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
+        Option<easynet_axon::pb::axon::v1::InvocationReceipt>,
+    ),
+    SessionDispatchError,
+> {
+    match (
+        outcome.admission_receipt.as_ref(),
+        outcome.terminal_receipt.as_ref(),
+    ) {
+        (Some(admission), Some(terminal)) => {
+            if admission.state() != easynet_axon::invocation::InvocationState::Admitted {
+                return Err(SessionDispatchError::Other(
+                    "canonical unary admission checkpoint has a non-admitted state".to_string(),
+                ));
+            }
+            if terminal.state() != outcome.state
+                || !matches!(
+                    terminal.state(),
+                    easynet_axon::invocation::InvocationState::Completed
+                        | easynet_axon::invocation::InvocationState::Failed
+                        | easynet_axon::invocation::InvocationState::TimedOut
+                        | easynet_axon::invocation::InvocationState::Cancelled
+                )
+            {
+                return Err(SessionDispatchError::Other(format!(
+                    "canonical unary terminal checkpoint state mismatch: outcome={}, receipt={}",
+                    outcome.state.as_str(),
+                    terminal.state().as_str(),
+                )));
+            }
+            if admission.invocation_id() != terminal.invocation_id() {
+                return Err(SessionDispatchError::Other(
+                    "canonical unary checkpoints bind different invocations".to_string(),
+                ));
+            }
+            Ok((
+                Some(receipt_to_session_wire(admission)?),
+                Some(receipt_to_session_wire(terminal)?),
+            ))
+        }
+        (None, None) if outcome.error.is_some() => Ok((None, None)),
+        (None, None) => Err(SessionDispatchError::Other(
+            "successful unary carrier result omitted canonical checkpoints".to_string(),
+        )),
+        _ => Err(SessionDispatchError::Other(
+            "unary carrier result requires admission and terminal checkpoints together".to_string(),
+        )),
+    }
+}
 
 fn local_bidi_wire_kind_for(
     registry: &crate::daemon::ability::wire::AbilityWireRegistry,
@@ -109,6 +177,12 @@ struct RemoteBidiOpenRequest {
     args: Vec<u8>,
     args_content_envelope: SessionContentEnvelope,
     metadata: HashMap<String, String>,
+}
+
+#[derive(Clone, Copy)]
+enum BidiReceiptCheckpoint<'a> {
+    Admission(&'a easynet_axon::invocation::SignedInvocationReceipt),
+    Terminal(&'a easynet_axon::invocation::SignedInvocationReceipt),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,40 +232,6 @@ impl LocalAxonSessionDispatcher {
         callee_ura: &str,
     ) -> Result<SessionSelfTargetSubject, String> {
         SessionSelfTargetSubject::from_optional(subject_ura, callee_ura)
-    }
-
-    fn carrier_v1_transport_failure_receipt(
-        code: &str,
-        message: impl Into<String>,
-    ) -> easynet_axon::pb::axon::v1::InvocationReceipt {
-        let message = message.into();
-        easynet_axon::pb::axon::v1::InvocationReceipt {
-            receipt_type: "transport_failed".to_string(),
-            state: easynet_axon::invocation::InvocationState::Failed.to_wire_i32(),
-            reason: message.clone(),
-            cleanup_complete: true,
-            failure: Some(easynet_axon::pb::axon::v1::Error {
-                code: code.to_string(),
-                message,
-                retryable: false,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }
-    }
-
-    async fn carrier_v1_terminal_receipt_or_transport_failure(
-        handle: &easynet_axon::invocation::StreamingInvocationHandle,
-        code: &str,
-        message: impl Into<String>,
-    ) -> easynet_axon::pb::axon::v1::InvocationReceipt {
-        let receipts = handle.receipts().await;
-        receipts
-            .iter()
-            .rev()
-            .find(|receipt| receipt.state.is_terminal())
-            .map(easynet_axon::invocation::wire::receipt_to_wire)
-            .unwrap_or_else(|| Self::carrier_v1_transport_failure_receipt(code, message))
     }
 
     /// Canonical dispatch: the frame already is the invocation, so neither
@@ -293,8 +333,12 @@ impl LocalAxonSessionDispatcher {
                 .await;
         }
 
-        let outcome =
-            crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(&runtime, wire).await;
+        let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
+            &runtime,
+            wire,
+            &self.unary_cancellations,
+        )
+        .await;
 
         let failure = outcome
             .error
@@ -309,15 +353,15 @@ impl LocalAxonSessionDispatcher {
                 retryable: false,
                 ..Default::default()
             });
+        let (admission_receipt, terminal_receipt) = unary_checkpoints_to_session_wire(&outcome)?;
         let reply = PbDispatchResult {
             call_id,
             payload: outcome.payload_bytes,
             terminal: true,
-            receipt: outcome
-                .terminal_receipt
-                .as_ref()
-                .map(easynet_axon::invocation::wire::receipt_to_wire),
+            admission_receipt,
+            terminal_receipt,
             failure,
+            ..PbDispatchResult::default()
         };
         outbound
             .send_payload(UpPayload::DispatchResult(reply))
@@ -354,16 +398,13 @@ impl LocalAxonSessionDispatcher {
                         call_id,
                         payload: Vec::new(),
                         terminal: true,
-                        receipt: Some(Self::carrier_v1_transport_failure_receipt(
-                            "STREAM_OPEN_FAILED",
-                            message.clone(),
-                        )),
                         failure: Some(easynet_axon::pb::axon::v1::Error {
                             code: "STREAM_OPEN_FAILED".to_string(),
                             message,
                             retryable: false,
                             ..Default::default()
                         }),
+                        ..PbDispatchResult::default()
                     };
                     outbound
                         .send_payload(UpPayload::DispatchResult(reply))
@@ -390,7 +431,7 @@ impl LocalAxonSessionDispatcher {
     /// `DispatchResult` chunks (carrier-v1) rather than
     /// `SessionDispatch::Result` (carrier-v0). The terminal frame
     /// carries the callee-signed execution receipt
-    /// (`DispatchResult.receipt` is REQUIRED on terminal frames), pulled
+    /// (`DispatchResult.terminal_receipt` is REQUIRED on terminal frames), pulled
     /// from the streaming handle the same way the unary arm projects
     /// `terminal_receipt`.
     fn spawn_carrier_v1_stream_forwarder(
@@ -412,6 +453,56 @@ impl LocalAxonSessionDispatcher {
         tokio::spawn(async move {
             let mut sent_terminal = false;
             let mut cancelled = false;
+            let admission = match handle.admission_receipt().await {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    let _ = outbound
+                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
+                            call_id,
+                            terminal: true,
+                            failure: Some(easynet_axon::pb::axon::v1::Error {
+                                code: "CANONICAL_ADMISSION_REQUIRED".to_string(),
+                                message: error.to_string(),
+                                retryable: false,
+                                ..Default::default()
+                            }),
+                            ..PbDispatchResult::default()
+                        }))
+                        .await;
+                    return;
+                }
+            };
+            let admission_wire = match receipt_to_session_wire(&admission) {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    let _ = outbound
+                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
+                            call_id,
+                            terminal: true,
+                            failure: Some(easynet_axon::pb::axon::v1::Error {
+                                code: "CANONICAL_ADMISSION_PROJECTION_FAILED".to_string(),
+                                message: error.to_string(),
+                                retryable: false,
+                                ..Default::default()
+                            }),
+                            ..PbDispatchResult::default()
+                        }))
+                        .await;
+                    return;
+                }
+            };
+            if outbound
+                .send_payload(UpPayload::DispatchResult(PbDispatchResult {
+                    call_id,
+                    terminal: false,
+                    admission_receipt: Some(admission_wire),
+                    ..PbDispatchResult::default()
+                }))
+                .await
+                .is_err()
+            {
+                return;
+            }
             loop {
                 let frame_result = tokio::select! {
                     _ = cancel.cancelled() => {
@@ -436,49 +527,120 @@ impl LocalAxonSessionDispatcher {
                             terminal = terminal,
                         );
                         sent_terminal = sent_terminal || terminal;
-                        // The terminal frame MUST carry the callee-signed
-                        // receipt (proto contract). The signed terminal
-                        // receipt is the last receipt on the chain.
-                        let receipt = if terminal {
-                            Some(
-                                Self::carrier_v1_terminal_receipt_or_transport_failure(
-                                    &handle,
-                                    "STREAM_TERMINAL_RECEIPT_MISSING",
-                                    "stream terminal frame did not expose a terminal receipt",
-                                )
-                                .await,
-                            )
+                        let finalized = if terminal {
+                            match handle.finalized().await {
+                                Ok(finalized) => Some(finalized),
+                                Err(error) => {
+                                    let _ = outbound
+                                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
+                                            call_id,
+                                            terminal: true,
+                                            failure: Some(easynet_axon::pb::axon::v1::Error {
+                                                code: "CANONICAL_FINALIZATION_REQUIRED".to_string(),
+                                                message: error.to_string(),
+                                                retryable: false,
+                                                ..Default::default()
+                                            }),
+                                            ..PbDispatchResult::default()
+                                        }))
+                                        .await;
+                                    break;
+                                }
+                            }
                         } else {
                             None
                         };
+                        let terminal_receipt = match finalized.as_ref() {
+                            Some(value) => match receipt_to_session_wire(&value.terminal_receipt) {
+                                Ok(receipt) => Some(receipt),
+                                Err(error) => {
+                                    let _ = outbound
+                                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
+                                            call_id,
+                                            terminal: true,
+                                            failure: Some(easynet_axon::pb::axon::v1::Error {
+                                                code: "CANONICAL_TERMINAL_PROJECTION_FAILED"
+                                                    .to_string(),
+                                                message: error.to_string(),
+                                                retryable: false,
+                                                ..Default::default()
+                                            }),
+                                            ..PbDispatchResult::default()
+                                        }))
+                                        .await;
+                                    break;
+                                }
+                            },
+                            None => None,
+                        };
                         PbDispatchResult {
                             call_id,
-                            payload: frame.payload,
+                            payload: finalized
+                                .as_ref()
+                                .map(|value| value.output().to_vec())
+                                .unwrap_or(frame.payload),
                             terminal,
-                            receipt,
-                            failure: None,
+                            terminal_receipt,
+                            failure: finalized
+                                .as_ref()
+                                .and_then(|value| value.failure.as_ref())
+                                .map(easynet_axon::invocation::wire::error_to_wire),
+                            ..PbDispatchResult::default()
                         }
                     }
                     Err(err) => {
                         sent_terminal = true;
-                        let message = format!("stream frame failed: {err}");
-                        let receipt = Self::carrier_v1_terminal_receipt_or_transport_failure(
-                            &handle,
-                            "INVOCATION_FAILED",
-                            message.clone(),
-                        )
-                        .await;
+                        let finalized = match handle.finalized().await {
+                            Ok(finalized) => finalized,
+                            Err(error) => {
+                                let _ = outbound
+                                    .send_payload(UpPayload::DispatchResult(PbDispatchResult {
+                                        call_id,
+                                        terminal: true,
+                                        failure: Some(easynet_axon::pb::axon::v1::Error {
+                                            code: "CANONICAL_FINALIZATION_REQUIRED".to_string(),
+                                            message: format!(
+                                                "frame_error={err}; finalization_error={error}"
+                                            ),
+                                            retryable: false,
+                                            ..Default::default()
+                                        }),
+                                        ..PbDispatchResult::default()
+                                    }))
+                                    .await;
+                                return;
+                            }
+                        };
+                        let terminal_receipt =
+                            match receipt_to_session_wire(&finalized.terminal_receipt) {
+                                Ok(receipt) => receipt,
+                                Err(error) => {
+                                    let _ = outbound
+                                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
+                                            call_id,
+                                            terminal: true,
+                                            failure: Some(easynet_axon::pb::axon::v1::Error {
+                                                code: "CANONICAL_TERMINAL_PROJECTION_FAILED"
+                                                    .to_string(),
+                                                message: error.to_string(),
+                                                retryable: false,
+                                                ..Default::default()
+                                            }),
+                                            ..PbDispatchResult::default()
+                                        }))
+                                        .await;
+                                    return;
+                                }
+                            };
                         PbDispatchResult {
                             call_id,
                             payload: Vec::new(),
                             terminal: true,
-                            receipt: Some(receipt),
-                            failure: Some(easynet_axon::pb::axon::v1::Error {
-                                code: "INVOCATION_FAILED".to_string(),
-                                message,
-                                retryable: false,
-                                ..Default::default()
-                            }),
+                            terminal_receipt: Some(terminal_receipt),
+                            failure: Some(easynet_axon::invocation::wire::error_to_wire(
+                                finalized.failure.as_ref().unwrap_or(&err),
+                            )),
+                            ..PbDispatchResult::default()
                         }
                     }
                 };
@@ -496,16 +658,13 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: Vec::new(),
                     terminal: true,
-                    receipt: Some(Self::carrier_v1_transport_failure_receipt(
-                        "STREAM_ENDED_WITHOUT_TERMINAL",
-                        message,
-                    )),
                     failure: Some(easynet_axon::pb::axon::v1::Error {
                         code: "STREAM_ENDED_WITHOUT_TERMINAL".to_string(),
                         message: message.to_string(),
                         retryable: false,
                         ..Default::default()
                     }),
+                    ..PbDispatchResult::default()
                 };
                 let _ = outbound
                     .send_payload(UpPayload::DispatchResult(reply))
@@ -580,6 +739,7 @@ impl LocalAxonSessionDispatcher {
             escalation_correlation: None,
             remote_bidi_sessions: Arc::new(Mutex::new(HashMap::new())),
             remote_stream_sessions: Arc::new(Mutex::new(HashMap::new())),
+            unary_cancellations: Default::default(),
             local_runtime: None,
             ability_wire: Arc::new(crate::daemon::ability::wire::AbilityWireRegistry::core()),
             device_trust_sync: None,
@@ -769,7 +929,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(Some(SessionDispatch::Result {
                     call_id,
                     payload,
-                    terminal: true,
+                    terminal: false,
                     failure: None,
                     error: None,
                     request_id: None,
@@ -795,7 +955,7 @@ impl LocalAxonSessionDispatcher {
                 Ok(Some(SessionDispatch::Result {
                     call_id,
                     payload,
-                    terminal: true,
+                    terminal: false,
                     failure: Some(Self::session_failure_from_handler_code(code, &reason)),
                     error: Some(reason),
                     request_id: None,
@@ -833,7 +993,7 @@ impl LocalAxonSessionDispatcher {
             Some("exit") => Ok(Some(SessionDispatch::Result {
                 call_id,
                 payload: Vec::new(),
-                terminal: true,
+                terminal: false,
                 failure: None,
                 error: None,
                 request_id: None,
@@ -867,7 +1027,6 @@ impl LocalAxonSessionDispatcher {
         }
         if Self::is_json_frame_bidi_with(registry, ability) {
             let frame_type = value.get("type").and_then(Value::as_str);
-            let terminal = matches!(frame_type, Some("closed") | Some("error"));
             let payload = serde_json::to_vec(value).map_err(|err| {
                 SessionDispatchError::Other(format!("plugin JSON-frame bidi encode failed: {err}"))
             })?;
@@ -884,7 +1043,7 @@ impl LocalAxonSessionDispatcher {
             return Ok(Some(SessionDispatch::Result {
                 call_id,
                 payload,
-                terminal,
+                terminal: false,
                 failure,
                 error,
                 request_id: None,
@@ -1049,21 +1208,19 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        self.register_remote_bidi(call_id, &ability, handle, outbound);
-        Ok(())
+        self.register_remote_bidi(call_id, &ability, handle, outbound)
+            .await
     }
 
     /// Device → hub bidi stream frame, sent per the session's
     /// negotiated contract: a carrier-v1 session gets the proto
     /// `DispatchResult`, a v0 session the retiring JSON `Result`.
-    /// `terminal_receipt` is the locally-minted execution receipt for
-    /// terminal frames — projected onto the wire so the receipt chain
-    /// closes at the hub hop for streaming calls exactly as it does
-    /// for the unary arm (DEC-F004's headline win).
+    /// Receipt checkpoints are projected into their corresponding wire
+    /// fields; admission is never represented as terminal proof.
     async fn send_bidi_result(
         outbound: &SessionUpSender,
         dispatch: &SessionDispatch,
-        terminal_receipt: Option<&easynet_axon::invocation::InvocationReceipt>,
+        checkpoint: Option<BidiReceiptCheckpoint<'_>>,
     ) -> Result<(), SessionDispatchError> {
         if outbound.carrier_v1() {
             if let SessionDispatch::Result {
@@ -1094,14 +1251,24 @@ impl LocalAxonSessionDispatcher {
                                 ..Default::default()
                             })
                     });
+                let (admission_receipt, terminal_receipt) = match checkpoint {
+                    Some(BidiReceiptCheckpoint::Admission(receipt)) => {
+                        (Some(receipt_to_session_wire(receipt)?), None)
+                    }
+                    Some(BidiReceiptCheckpoint::Terminal(receipt)) => {
+                        (None, Some(receipt_to_session_wire(receipt)?))
+                    }
+                    None => (None, None),
+                };
                 return outbound
                     .send_payload(UpPayload::DispatchResult(PbDispatchResult {
                         call_id: *call_id,
                         payload: payload.clone(),
                         terminal: *terminal,
-                        receipt: terminal_receipt
-                            .map(easynet_axon::invocation::wire::receipt_to_wire),
+                        admission_receipt,
+                        terminal_receipt,
                         failure,
+                        ..PbDispatchResult::default()
                     }))
                     .await
                     .map_err(|_| {
@@ -1198,22 +1365,49 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        self.register_remote_bidi(call_id, ability, handle, outbound);
-        Ok(())
+        self.register_remote_bidi(call_id, ability, handle, outbound)
+            .await
     }
 
-    /// Bind an opened local bidi handle to `call_id`: register its
-    /// input side for `BidiInput` forwarding and pump handler output
-    /// back up the session, every frame sent per the negotiated
-    /// contract. Shared by the JSON and carrier-v1 open arms.
-    fn register_remote_bidi(
+    /// Bind an admitted local bidi handle to `call_id` and enter the Active
+    /// phase. Admission is a barrier: no `BidiInput` can observe the call in
+    /// `remote_bidi_sessions` until its canonical admission proof has been
+    /// published upstream. This preserves the lifecycle order
+    /// `Opening -> Admitted -> Active -> Terminal` even when the peer queues
+    /// input immediately after its open frame.
+    async fn register_remote_bidi(
         &self,
         call_id: u64,
         ability: &str,
         handle: easynet_axon::invocation::BidiInvocationHandle,
         outbound: &SessionUpSender,
-    ) {
+    ) -> Result<(), SessionDispatchError> {
         let (handler_in_tx, mut handler_out_rx) = handle.split();
+
+        let admission = match handler_out_rx.admission_receipt().await {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let dispatch = Self::session_error_result(
+                    call_id,
+                    format!("CANONICAL_ADMISSION_REQUIRED: {error}"),
+                );
+                return Self::send_bidi_result(outbound, &dispatch, None).await;
+            }
+        };
+        let admission_dispatch = SessionDispatch::Result {
+            call_id,
+            payload: Vec::new(),
+            terminal: false,
+            failure: None,
+            error: None,
+            request_id: None,
+        };
+        Self::send_bidi_result(
+            outbound,
+            &admission_dispatch,
+            Some(BidiReceiptCheckpoint::Admission(&admission)),
+        )
+        .await?;
 
         {
             let mut guard = match self.remote_bidi_sessions.lock() {
@@ -1238,17 +1432,89 @@ impl LocalAxonSessionDispatcher {
                 let frame = match frame_result {
                     Ok(frame) => frame,
                     Err(err) => {
-                        let dispatch = LocalAxonSessionDispatcher::file_transfer_terminal_error(
+                        let finalized = match handler_out_rx.finalized().await {
+                            Ok(finalized) => finalized,
+                            Err(error) => {
+                                let dispatch = LocalAxonSessionDispatcher::session_error_result(
+                                    call_id,
+                                    format!(
+                                        "CANONICAL_FINALIZATION_REQUIRED: frame_error={err}; finalization_error={error}"
+                                    ),
+                                );
+                                let _ = LocalAxonSessionDispatcher::send_bidi_result(
+                                    &outbound, &dispatch, None,
+                                )
+                                .await;
+                                break;
+                            }
+                        };
+                        let failure = finalized.failure.as_ref().unwrap_or(&err);
+                        let dispatch = SessionDispatch::Result {
                             call_id,
-                            format!("session.open: remote file_transfer frame failed: {err}"),
-                        );
+                            payload: Vec::new(),
+                            terminal: true,
+                            failure: Some(SessionFailure::from_explicit(
+                                failure.code.as_str(),
+                                if failure.message.is_empty() {
+                                    &failure.reason
+                                } else {
+                                    &failure.message
+                                },
+                                failure.retriable(),
+                            )),
+                            error: None,
+                            request_id: None,
+                        };
                         let _ = LocalAxonSessionDispatcher::send_bidi_result(
-                            &outbound, &dispatch, None,
+                            &outbound,
+                            &dispatch,
+                            Some(BidiReceiptCheckpoint::Terminal(&finalized.terminal_receipt)),
                         )
                         .await;
                         break;
                     }
                 };
+                if frame.terminal {
+                    let finalized = match handler_out_rx.finalized().await {
+                        Ok(finalized) => finalized,
+                        Err(error) => {
+                            let dispatch = LocalAxonSessionDispatcher::session_error_result(
+                                call_id,
+                                format!("CANONICAL_FINALIZATION_REQUIRED: {error}"),
+                            );
+                            let _ = LocalAxonSessionDispatcher::send_bidi_result(
+                                &outbound, &dispatch, None,
+                            )
+                            .await;
+                            break;
+                        }
+                    };
+                    let dispatch = SessionDispatch::Result {
+                        call_id,
+                        payload: finalized.output().to_vec(),
+                        terminal: true,
+                        failure: finalized.failure.as_ref().map(|failure| {
+                            SessionFailure::from_explicit(
+                                failure.code.as_str(),
+                                if failure.message.is_empty() {
+                                    &failure.reason
+                                } else {
+                                    &failure.message
+                                },
+                                failure.retriable(),
+                            )
+                        }),
+                        error: None,
+                        request_id: None,
+                    };
+                    let _ = LocalAxonSessionDispatcher::send_bidi_result(
+                        &outbound,
+                        &dispatch,
+                        Some(BidiReceiptCheckpoint::Terminal(&finalized.terminal_receipt)),
+                    )
+                    .await;
+                    break;
+                }
                 let mapped = if frame.payload.is_empty() {
                     None
                 } else if LocalAxonSessionDispatcher::is_json_frame_bidi_with(
@@ -1292,38 +1558,12 @@ impl LocalAxonSessionDispatcher {
                     }
                 };
                 let Some(mapped) = mapped else {
-                    if frame.terminal {
-                        break;
-                    }
                     continue;
                 };
-                let terminal = matches!(mapped, SessionDispatch::Result { terminal: true, .. });
-                // Terminal frames carry the execution receipt minted by
-                // the local runtime (Completed and Failed alike) so the
-                // hub can ledger it — same chain closure as the unary
-                // arm, fetched from the receiver because the split
-                // consumer half retains the receipt surface.
-                let terminal_receipt = if terminal {
-                    handler_out_rx
-                        .receipts()
-                        .await
-                        .into_iter()
-                        .rev()
-                        .find(|r| r.state.is_terminal())
-                } else {
-                    None
-                };
-                if LocalAxonSessionDispatcher::send_bidi_result(
-                    &outbound,
-                    &mapped,
-                    terminal_receipt.as_ref(),
-                )
-                .await
-                .is_err()
+                if LocalAxonSessionDispatcher::send_bidi_result(&outbound, &mapped, None)
+                    .await
+                    .is_err()
                 {
-                    break;
-                }
-                if terminal || frame.terminal {
                     break;
                 }
             }
@@ -1333,6 +1573,7 @@ impl LocalAxonSessionDispatcher {
             };
             guard.remove(&call_id);
         });
+        Ok(())
     }
 
     async fn forward_remote_bidi_input(
@@ -1463,9 +1704,16 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                 ))
             })?;
             let outcome = match result.failure.as_ref() {
-                None => crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok {
-                    result_bytes: result.payload.clone(),
-                },
+                None => {
+                    crate::daemon::invocation::bidi::session_escalation::EscalationReply::Canonical(
+                        easynet_axon::pb::axon::v1::InvokeResponse {
+                            result: result.payload.clone(),
+                            admission_receipt: result.admission_receipt.clone(),
+                            terminal_receipt: result.terminal_receipt.clone(),
+                            ..easynet_axon::pb::axon::v1::InvokeResponse::default()
+                        },
+                    )
+                }
                 Some(failure) => {
                     let error = match failure.code.as_str() {
                         "TARGET_OFFLINE" => crate::daemon::invocation::bidi::session_wire::SessionRequestError::TargetOffline,
@@ -1477,7 +1725,9 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
                             reason: failure.message.clone(),
                         },
                     };
-                    crate::daemon::invocation::bidi::session_wire::RequestOutcome::Err { error }
+                    crate::daemon::invocation::bidi::session_escalation::EscalationReply::Error(
+                        error,
+                    )
                 }
             };
             if let Some(correlation) = self.escalation_correlation.as_ref() {
@@ -1585,7 +1835,12 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
             SessionDispatch::RequestResult { call_id, outcome } => {
                 if let Some(correlation) = self.escalation_correlation.as_ref() {
                     let id_hex = call_id_hex(&call_id);
-                    let fired = correlation.complete(call_id, outcome);
+                    let fired = correlation.complete(
+                        call_id,
+                        crate::daemon::invocation::bidi::session_escalation::EscalationReply::Control(
+                            outcome,
+                        ),
+                    );
                     if !fired {
                         crate::op_event!(
                             component = local_session_dispatcher,
@@ -1645,12 +1900,90 @@ mod tests {
     const TEST_DESCRIPTOR_VERSION: &str =
         crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION;
     const TEST_DESCRIPTOR_VERSION_V2: &str = "2.0.0";
+    const TEST_DESCRIPTOR_HASH: [u8; 32] = [0x33; 32];
     const TEST_SCHEMA_HASH: [u8; 32] = [0x11; 32];
     const TEST_IMPL_HASH: [u8; 32] = [0x22; 32];
+    const TEST_CALLER_URA: &str = "easynet:///r/t/user/alice";
+
+    struct FixedCarrierKey(ed25519_dalek::VerifyingKey);
+
+    impl easynet_axon::invocation::KeyResolver for FixedCarrierKey {
+        fn resolve(
+            &self,
+            agent_ura: &str,
+        ) -> Result<ed25519_dalek::VerifyingKey, easynet_axon::invocation::AxonError> {
+            if agent_ura == TEST_CALLER_URA {
+                return Ok(self.0);
+            }
+            if agent_ura == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
+                return crate::daemon::identity::local_invocation::system_verifying_key().map_err(
+                    |error| easynet_axon::invocation::AxonError::internal(error.to_string()),
+                );
+            }
+            Err(easynet_axon::invocation::AxonError::invalid_argument(
+                format!("unknown_agent_key:{agent_ura}"),
+            ))
+        }
+    }
+
+    fn carrier_v1_signing_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[0x4Du8; 32])
+    }
 
     fn runtime_ability_for(callee_ura: &str, ability: &str) -> String {
         crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(callee_ura, ability)
             .expect("test ability must resolve to canonical Ability URA")
+    }
+
+    fn descriptor_binding_for_version(descriptor_version: &str) -> String {
+        crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
+            descriptor_version,
+            TEST_DESCRIPTOR_HASH,
+            "invoke",
+        )
+        .expect("test descriptor binding")
+    }
+
+    fn descriptor_ref_for_version(
+        callee_ura: &str,
+        ability: &str,
+        descriptor_version: &str,
+    ) -> String {
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            callee_ura,
+            ability,
+            &descriptor_binding_for_version(descriptor_version),
+        )
+        .expect("test ability must resolve to a descriptor ref")
+    }
+
+    fn catalog_call_mode(
+        mode: easynet_axon::invocation::CallMode,
+    ) -> crate::daemon::ability::CallMode {
+        match mode {
+            easynet_axon::invocation::CallMode::Rpc => crate::daemon::ability::CallMode::Rpc,
+            easynet_axon::invocation::CallMode::Stream => crate::daemon::ability::CallMode::Stream,
+            easynet_axon::invocation::CallMode::Bidi => crate::daemon::ability::CallMode::Bidi,
+        }
+    }
+
+    fn descriptor_ref_for_call_mode(
+        callee_ura: &str,
+        ability: &str,
+        descriptor_version: &str,
+        mode: easynet_axon::invocation::CallMode,
+    ) -> String {
+        if let Ok(descriptor_ref) =
+            easynet_axon::invocation::canonical_ability_descriptor_ref(ability)
+        {
+            return descriptor_ref;
+        }
+        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            callee_ura,
+            ability,
+            catalog_call_mode(mode),
+        )
+        .unwrap_or_else(|_| descriptor_ref_for_version(callee_ura, ability, descriptor_version))
     }
 
     /// Proof-bound RPC options mirroring what the control plane stamps in
@@ -1666,7 +1999,13 @@ mod tests {
         use easynet_axon::invocation::{AbilityCallModes, AbilityOptions};
         AbilityOptions::default()
             .with_modes(AbilityCallModes::RPC)
-            .with_descriptor_proof(descriptor_version, TEST_SCHEMA_HASH, TEST_IMPL_HASH)
+            .with_descriptor_proof(
+                descriptor_version,
+                "invoke",
+                TEST_DESCRIPTOR_HASH,
+                TEST_SCHEMA_HASH,
+                TEST_IMPL_HASH,
+            )
     }
 
     /// Stream-mode twin of [`proof_bound_rpc_options`]: a server-streaming
@@ -1676,6 +2015,8 @@ mod tests {
         AbilityOptions::streaming().with_mode_descriptor_proof(
             CallMode::Stream,
             TEST_DESCRIPTOR_VERSION,
+            "invoke",
+            TEST_DESCRIPTOR_HASH,
             TEST_SCHEMA_HASH,
             TEST_IMPL_HASH,
         )
@@ -1706,6 +2047,14 @@ mod tests {
             .expect("test ability registers under canonical runtime key");
     }
 
+    fn executable_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
+        runtime.set_admission_key_resolver(Arc::new(FixedCarrierKey(
+            carrier_v1_signing_key().verifying_key(),
+        )));
+        runtime
+    }
+
     fn session_frame(dispatch: SessionDispatch) -> InvokeBidiDown {
         let payload = serde_json::to_vec(&dispatch).expect("encode session dispatch");
         InvokeBidiDown {
@@ -1728,24 +2077,39 @@ mod tests {
         signed_ability: &str,
         args: Vec<u8>,
     ) -> InvokeBidiDown {
+        carrier_v1_call_signed_as_with_mode(
+            call_id,
+            request_ability,
+            signed_ability,
+            args,
+            easynet_axon::invocation::CallMode::Rpc,
+        )
+    }
+
+    fn carrier_v1_call_signed_as_with_mode(
+        call_id: u64,
+        request_ability: &str,
+        signed_ability: &str,
+        args: Vec<u8>,
+        mode: easynet_axon::invocation::CallMode,
+    ) -> InvokeBidiDown {
         use easynet_axon::pb::axon::v1::{DispatchCall, InvokeRequest};
         use ed25519_dalek::Signer as _;
 
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x4Du8; 32]);
+        let signing_key = carrier_v1_signing_key();
         let mut envelope = crate::daemon::invocation::ProtoEnvelope::targeted(
-            "easynet:///r/t/user/alice",
+            TEST_CALLER_URA,
             "easynet:///r/t/device/d1",
             "easynet:///r/t/device/d1",
         )
         .expect("valid carrier-v1 envelope")
         .into_inner();
-        let signed_descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
-                TEST_DEVICE_URA,
-                signed_ability,
-                TEST_DESCRIPTOR_VERSION,
-            )
-            .expect("carrier-v1 test signed ability must resolve to a descriptor ref");
+        let signed_descriptor_ref = descriptor_ref_for_call_mode(
+            TEST_DEVICE_URA,
+            signed_ability,
+            TEST_DESCRIPTOR_VERSION,
+            mode,
+        );
         let descriptor_bound =
             crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts(
                 envelope.clone(),
@@ -1784,7 +2148,13 @@ mod tests {
     }
 
     fn carrier_v1_bidi_open(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
-        let mut frame = carrier_v1_call(call_id, ability, args);
+        let mut frame = carrier_v1_call_signed_as_with_mode(
+            call_id,
+            ability,
+            ability,
+            args,
+            easynet_axon::invocation::CallMode::Bidi,
+        );
         if let Some(DownPayload::DispatchCall(call)) = frame.payload.as_mut() {
             call.open_bidi = true;
         }
@@ -1801,7 +2171,7 @@ mod tests {
         let target = tmp.path().join("upload-from-hub-v1.bin");
         let bytes = b"carrier-v1-bidi-over-session";
 
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_ephemeral_test_runtime();
         let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
@@ -1849,6 +2219,40 @@ mod tests {
         .await
         .expect("bidi eof forwards");
 
+        let admission = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("admission reply within 3s")
+            .expect("admission reply produced");
+        let admission = match admission.payload {
+            Some(UpPayload::DispatchResult(result)) => result,
+            other => panic!("expected admission DispatchResult on a v1 session, got: {other:?}"),
+        };
+        assert_eq!(admission.call_id, 77);
+        assert!(
+            !admission.terminal,
+            "first carrier-v1 bidi frame must be admission, got {admission:?}"
+        );
+        assert_eq!(
+            admission
+                .admission_receipt
+                .expect("admission frame carries receipt")
+                .state,
+            easynet_axon::invocation::InvocationState::Admitted.to_wire_i32()
+        );
+
+        let progress = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("progress reply within 3s")
+            .expect("progress reply produced");
+        let progress = match progress.payload {
+            Some(UpPayload::DispatchResult(result)) => result,
+            other => panic!("expected progress DispatchResult on a v1 session, got: {other:?}"),
+        };
+        assert_eq!(progress.call_id, 77);
+        assert!(!progress.terminal);
+        assert!(progress.admission_receipt.is_none());
+        assert!(progress.terminal_receipt.is_none());
+
         let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
             .expect("terminal reply within 3s")
@@ -1865,7 +2269,7 @@ mod tests {
             result.failure
         );
         let receipt = result
-            .receipt
+            .terminal_receipt
             .expect("terminal bidi frame carries the execution receipt (chain closure)");
         assert_eq!(
             receipt.state,
@@ -1883,7 +2287,7 @@ mod tests {
     /// unwired ability on a v1 session replies a typed proto failure.
     #[tokio::test]
     async fn carrier_v1_bidi_open_of_unwired_ability_fails_proto_on_v1_session() {
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
         let session_tx = SessionUpSender::new(tx);
@@ -1918,7 +2322,7 @@ mod tests {
     /// hub.
     #[tokio::test]
     async fn carrier_v1_dispatch_executes_and_replies_proto_on_v1_session() {
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         register_test_rpc(
             &rt,
             "test.echo",
@@ -1949,13 +2353,32 @@ mod tests {
         };
         assert_eq!(result.call_id, 7);
         assert!(result.terminal);
+        assert!(
+            result.failure.is_none(),
+            "carrier-v1 dispatch failed: {:?}",
+            result.failure
+        );
         assert_eq!(result.payload, br#"{"hello":"v1"}"#);
-        assert!(result.failure.is_none());
+        let admission = result
+            .admission_receipt
+            .expect("successful unary carrier reply carries admission checkpoint");
+        let terminal = result
+            .terminal_receipt
+            .expect("successful unary carrier reply carries terminal checkpoint");
+        assert_eq!(
+            admission.state,
+            easynet_axon::invocation::InvocationState::Admitted.to_wire_i32()
+        );
+        assert_eq!(
+            terminal.state,
+            easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
+        );
+        assert_eq!(admission.invocation_id, terminal.invocation_id);
     }
 
     #[tokio::test]
     async fn carrier_v1_dispatch_preserves_non_default_descriptor_version() {
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         register_test_ability_with_options(
             &rt,
             "test.echo",
@@ -1971,7 +2394,7 @@ mod tests {
             crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
                 TEST_DEVICE_URA,
                 "test.echo",
-                TEST_DESCRIPTOR_VERSION_V2,
+                &descriptor_binding_for_version(TEST_DESCRIPTOR_VERSION_V2),
             )
             .expect("versioned carrier-v1 descriptor ref");
 
@@ -1999,8 +2422,12 @@ mod tests {
         };
         assert_eq!(result.call_id, 19);
         assert!(result.terminal);
+        assert!(
+            result.failure.is_none(),
+            "carrier-v1 dispatch failed: {:?}",
+            result.failure
+        );
         assert_eq!(result.payload, br#"{"hello":"v2"}"#);
-        assert!(result.failure.is_none());
     }
 
     /// Quadrant [hub jumped the gun, v0 session]: a DispatchCall on a
@@ -2011,7 +2438,7 @@ mod tests {
     async fn carrier_v1_stream_terminal_frame_carries_receipt() {
         use easynet_axon::invocation::make_ability;
 
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         register_test_ability_with_options(
             &rt,
             "screen.subscribe",
@@ -2038,6 +2465,24 @@ mod tests {
         .await
         .expect("carrier-v1 stream dispatch opens and forwards asynchronously");
 
+        let admission = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .expect("admission reply within 3s")
+            .expect("admission reply produced");
+        let admission = match admission.payload {
+            Some(UpPayload::DispatchResult(result)) => result,
+            other => panic!("expected carrier-v1 admission result, got: {other:?}"),
+        };
+        assert_eq!(admission.call_id, 18);
+        assert!(!admission.terminal);
+        assert_eq!(
+            admission
+                .admission_receipt
+                .expect("admission frame carries receipt")
+                .state,
+            easynet_axon::invocation::InvocationState::Admitted.to_wire_i32()
+        );
+
         let progress = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
             .expect("progress reply within 3s")
@@ -2049,7 +2494,7 @@ mod tests {
         assert_eq!(progress.call_id, 18);
         assert!(!progress.terminal, "first stream frame is progress");
         assert!(
-            progress.receipt.is_none(),
+            progress.admission_receipt.is_none() && progress.terminal_receipt.is_none(),
             "non-terminal progress frames do not close the receipt chain"
         );
 
@@ -2069,7 +2514,7 @@ mod tests {
             terminal.failure
         );
         let receipt = terminal
-            .receipt
+            .terminal_receipt
             .expect("carrier-v1 terminal stream result must carry receipt");
         assert_eq!(
             receipt.state,
@@ -2189,7 +2634,7 @@ mod tests {
         let target = tmp.path().join("hello.txt");
         std::fs::write(&target, "device-B-bytes-from-real-fs-read").expect("seed temp file");
 
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(Arc::clone(&rt));
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(4);
@@ -2245,7 +2690,7 @@ mod tests {
         let target = tmp.path().join("upload-from-hub.bin");
         let bytes = b"remote-file-transfer-over-session";
 
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
@@ -2297,33 +2742,51 @@ mod tests {
         .await
         .expect("bidi eof forwards");
 
-        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
-            .await
-            .expect("terminal reply within 3s")
-            .expect("reply produced");
-        let chunk = match reply.payload {
-            Some(UpPayload::BinaryChunk(c)) => c,
-            other => panic!("expected BinaryChunk reply, got: {other:?}"),
-        };
-        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
-        match parsed {
-            SessionDispatch::Result {
-                call_id,
-                terminal,
-                error,
-                payload,
-                request_id: _,
-                ..
-            } => {
-                assert_eq!(call_id, 77);
-                assert!(terminal, "upload completion must be terminal");
-                assert!(error.is_none(), "upload must succeed, got {error:?}");
-                let value: serde_json::Value =
-                    serde_json::from_slice(&payload).expect("payload decodes as JSON");
-                assert_eq!(value.get("type").and_then(|v| v.as_str()), Some("complete"));
+        let mut saw_complete_data = false;
+        let mut saw_runtime_terminal = false;
+        for _ in 0..4 {
+            let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                .await
+                .expect("reply within 3s")
+                .expect("reply produced");
+            let chunk = match reply.payload {
+                Some(UpPayload::BinaryChunk(c)) => c,
+                other => panic!("expected BinaryChunk reply, got: {other:?}"),
+            };
+            let parsed: SessionDispatch =
+                serde_json::from_slice(&chunk.data).expect("Result decodes");
+            match parsed {
+                SessionDispatch::Result {
+                    call_id,
+                    terminal,
+                    error,
+                    payload,
+                    request_id: _,
+                    ..
+                } => {
+                    assert_eq!(call_id, 77);
+                    assert!(error.is_none(), "upload must succeed, got {error:?}");
+                    if !payload.is_empty() {
+                        let value: serde_json::Value =
+                            serde_json::from_slice(&payload).expect("payload decodes as JSON");
+                        if value.get("type").and_then(Value::as_str) == Some("complete") {
+                            assert!(!terminal, "handler completion is execution data");
+                            saw_complete_data = true;
+                        }
+                    }
+                    if terminal {
+                        saw_runtime_terminal = true;
+                        break;
+                    }
+                }
+                other => panic!("expected SessionDispatch::Result, got: {other:?}"),
             }
-            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
+        assert!(saw_complete_data, "upload must preserve completion data");
+        assert!(
+            saw_runtime_terminal,
+            "Axon runtime must emit the terminal frame"
+        );
 
         let on_disk = std::fs::read(&target).expect("file written on device side");
         assert_eq!(on_disk, bytes);
@@ -2370,7 +2833,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "remote-desktop")]
-    fn remote_desktop_bidi_closed_frame_is_terminal() {
+    fn remote_desktop_bidi_closed_frame_remains_data_until_runtime_terminal() {
         let dispatcher = remote_desktop_wire_dispatcher();
         let mapped = dispatcher
             .map_remote_bidi_output(
@@ -2391,7 +2854,7 @@ mod tests {
                 failure,
                 ..
             } => {
-                assert!(terminal);
+                assert!(!terminal);
                 assert!(error.is_none());
                 assert!(failure.is_none());
             }
@@ -2401,7 +2864,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "remote-desktop")]
-    fn remote_desktop_bidi_error_frame_is_typed_terminal_failure() {
+    fn remote_desktop_bidi_error_frame_is_typed_data_until_runtime_terminal() {
         let dispatcher = remote_desktop_wire_dispatcher();
         let mapped = dispatcher
             .map_remote_bidi_output(
@@ -2424,7 +2887,7 @@ mod tests {
                 payload,
                 ..
             } => {
-                assert!(terminal);
+                assert!(!terminal);
                 assert_eq!(
                     error.as_deref(),
                     Some("permission_denied: screen capture permission denied")
@@ -2459,7 +2922,7 @@ mod tests {
         let bytes = b"remote-download-bytes-from-device";
         std::fs::write(&target, bytes).expect("seed file");
 
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(16);
@@ -2501,8 +2964,9 @@ mod tests {
         .expect("download eof hint forwards");
 
         let mut streamed = Vec::new();
-        let mut saw_terminal = false;
-        for _ in 0..4 {
+        let mut saw_complete_data = false;
+        let mut saw_runtime_terminal = false;
+        for _ in 0..6 {
             let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
                 .await
                 .expect("reply within 3s")
@@ -2525,20 +2989,28 @@ mod tests {
                     assert_eq!(call_id, 88);
                     assert!(error.is_none(), "download must succeed, got {error:?}");
                     if terminal {
-                        saw_terminal = true;
-                        let value: serde_json::Value =
-                            serde_json::from_slice(&payload).expect("payload decodes as JSON");
-                        assert_eq!(value.get("type").and_then(|v| v.as_str()), Some("complete"));
+                        saw_runtime_terminal = true;
                         break;
                     }
-                    streamed.extend_from_slice(&payload);
+                    match serde_json::from_slice::<serde_json::Value>(&payload) {
+                        Ok(value)
+                            if value.get("type").and_then(Value::as_str) == Some("complete") =>
+                        {
+                            saw_complete_data = true;
+                        }
+                        _ => streamed.extend_from_slice(&payload),
+                    }
                 }
                 other => panic!("expected SessionDispatch::Result, got: {other:?}"),
             }
         }
 
         assert_eq!(streamed, bytes);
-        assert!(saw_terminal, "download must emit terminal completion frame");
+        assert!(saw_complete_data, "download must preserve completion data");
+        assert!(
+            saw_runtime_terminal,
+            "Axon runtime must emit the terminal frame"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2546,7 +3018,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let target = tmp.path().join("missing-download.bin");
 
-        let rt = easynet_axon::invocation::LocalRuntime::new();
+        let rt = executable_runtime();
         let _registry = build_real_daemon_registry_with_runtime(Some(Arc::clone(&rt)));
         let disp = LocalAxonSessionDispatcher::new().with_local_runtime(rt);
         let (tx, mut rx) = mpsc::channel::<InvokeBidiUp>(8);
@@ -2576,39 +3048,59 @@ mod tests {
         .await
         .expect("bidi open succeeds");
 
-        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
-            .await
-            .expect("terminal failure within 3s")
-            .expect("reply produced");
-        let chunk = match reply.payload {
-            Some(UpPayload::BinaryChunk(c)) => c,
-            other => panic!("expected BinaryChunk reply, got: {other:?}"),
-        };
-        let parsed: SessionDispatch = serde_json::from_slice(&chunk.data).expect("Result decodes");
-        match parsed {
-            SessionDispatch::Result {
-                call_id,
-                terminal,
-                error,
-                failure,
-                payload,
-                request_id: _,
-            } => {
-                assert_eq!(call_id, 89);
-                assert!(terminal, "download failure must be terminal");
-                let error = error.expect("terminal error string");
-                assert!(
-                    error.contains("not_found"),
-                    "download failure must preserve handler code, got: {error}"
-                );
-                let failure = failure.expect("typed terminal failure");
-                assert_eq!(failure.code, "NOT_FOUND");
-                assert_eq!(failure.message, error);
-                let payload: Value = serde_json::from_slice(&payload).expect("json payload");
-                assert_eq!(payload["type"], "error");
-                assert_eq!(payload["code"], "not_found");
+        let mut saw_handler_failure = false;
+        let mut saw_runtime_terminal = false;
+        for _ in 0..4 {
+            let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                .await
+                .expect("reply within 3s")
+                .expect("reply produced");
+            let chunk = match reply.payload {
+                Some(UpPayload::BinaryChunk(c)) => c,
+                other => panic!("expected BinaryChunk reply, got: {other:?}"),
+            };
+            let parsed: SessionDispatch =
+                serde_json::from_slice(&chunk.data).expect("Result decodes");
+            match parsed {
+                SessionDispatch::Result {
+                    call_id,
+                    terminal,
+                    error,
+                    failure,
+                    payload,
+                    request_id: _,
+                } => {
+                    assert_eq!(call_id, 89);
+                    if let Some(error) = error {
+                        assert!(!terminal, "handler failure is execution data");
+                        assert!(
+                            error.contains("not_found"),
+                            "download failure must preserve handler code, got: {error}"
+                        );
+                        let failure = failure.expect("typed handler failure");
+                        assert_eq!(failure.code, "NOT_FOUND");
+                        assert_eq!(failure.message, error);
+                        let payload: Value =
+                            serde_json::from_slice(&payload).expect("json payload");
+                        assert_eq!(payload["type"], "error");
+                        assert_eq!(payload["code"], "not_found");
+                        saw_handler_failure = true;
+                    }
+                    if terminal {
+                        saw_runtime_terminal = true;
+                        break;
+                    }
+                }
+                other => panic!("expected SessionDispatch::Result, got: {other:?}"),
             }
-            other => panic!("expected SessionDispatch::Result, got: {other:?}"),
         }
+        assert!(
+            saw_handler_failure,
+            "download must preserve typed failure data"
+        );
+        assert!(
+            saw_runtime_terminal,
+            "Axon runtime must emit the terminal frame"
+        );
     }
 }

@@ -13,18 +13,18 @@ import (
 	"testing"
 )
 
-var _ DaemonTransport = (*CABIDaemonTransport)(nil)
+var _ DaemonTransport = (*CABIRuntimeLifecycleTransport)(nil)
 var _ RuntimeTransport = (*CABIRuntimeTransport)(nil)
 var _ HealthTransport = (*CABIRuntimeTransport)(nil)
 
-func TestCABIDaemonTransportReportsMissingLibrary(t *testing.T) {
+func TestCABIRuntimeLifecycleTransportReportsMissingLibrary(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "libeasynet_cli_missing.dylib")
 
-	transport, err := OpenCABIDaemonTransport(missing)
+	transport, err := OpenCABIRuntimeLifecycleTransport(missing)
 
 	if err == nil {
 		_ = transport.Close(context.Background())
-		t.Fatal("OpenCABIDaemonTransport succeeded for missing library")
+		t.Fatal("OpenCABIRuntimeLifecycleTransport succeeded for missing library")
 	}
 	if !IsCode(err, ErrTransport) {
 		t.Fatalf("missing C ABI daemon library error = %v, want %s", err, ErrTransport)
@@ -76,18 +76,19 @@ func TestCABIBidiFrameJSONProjectsSDKFramesToFFIWire(t *testing.T) {
 	}
 }
 
-func TestProjectCABIOrderedEventLiftsBidiReceiptIntoCanonicalFramePayload(t *testing.T) {
+func TestProjectCABIOrderedEventKeepsCanonicalBidiReceipts(t *testing.T) {
 	var next uint64
 	raw := []byte(`{
 		"ok": true,
 		"event": "receipt",
 		"sequence": 17,
 		"terminal": true,
-		"receipt": {
+		"payload_json": {"sha256":"abc123"},
+		"payload_base64": "eyJzaGEyNTYiOiJhYmMxMjMifQ==",
+		"payload_content_type": "application/json",
+		"terminal_receipt": {
 			"state": "Completed",
 			"reason": "",
-			"payload_base64": "eyJzaGEyNTYiOiJhYmMxMjMifQ==",
-			"payload_content_type": "application/json",
 			"cleanup_complete": true
 		}
 	}`)
@@ -102,6 +103,19 @@ func TestProjectCABIOrderedEventLiftsBidiReceiptIntoCanonicalFramePayload(t *tes
 	}, true)
 	if err != nil {
 		t.Fatalf("projectCABIOrderedEvent: %v", err)
+	}
+	var projectedJSON map[string]any
+	if err := json.Unmarshal(projected, &projectedJSON); err != nil {
+		t.Fatalf("decode projected frame: %v", err)
+	}
+	if projectedJSON["kind"] != "receipt" {
+		t.Fatalf("projected kind = %v, want receipt; raw=%s", projectedJSON["kind"], projected)
+	}
+	if _, ok := projectedJSON["receipt"]; ok {
+		t.Fatalf("legacy receipt field projected: %s", projected)
+	}
+	if _, ok := projectedJSON["terminal_receipt"]; !ok {
+		t.Fatalf("terminal_receipt omitted: %s", projected)
 	}
 	frame, err := NewBidiFrameFromJSON(projected)
 	if err != nil {
@@ -121,13 +135,22 @@ func TestProjectCABIOrderedEventLiftsBidiReceiptIntoCanonicalFramePayload(t *tes
 		t.Fatalf("payload = %s", payload)
 	}
 	var meta struct {
-		State string `json:"state"`
+		SHA256 string `json:"sha256"`
 	}
 	if err := json.Unmarshal(frame.PayloadJSON(), &meta); err != nil {
 		t.Fatalf("decode payload_json: %v; raw=%s", err, frame.PayloadJSON())
 	}
-	if meta.State != "Completed" {
-		t.Fatalf("state = %q", meta.State)
+	if meta.SHA256 != "abc123" {
+		t.Fatalf("payload sha256 = %q", meta.SHA256)
+	}
+	var terminalReceipt struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(frame.TerminalReceiptJSON(), &terminalReceipt); err != nil {
+		t.Fatalf("decode terminal receipt: %v; raw=%s", err, frame.TerminalReceiptJSON())
+	}
+	if terminalReceipt.State != "Completed" {
+		t.Fatalf("terminal receipt state = %q", terminalReceipt.State)
 	}
 }
 
@@ -151,6 +174,13 @@ func TestProjectCABIOrderedEventCanonicalizesBidiBinaryChunkAsDataFrame(t *testi
 	if err != nil {
 		t.Fatalf("projectCABIOrderedEvent: %v", err)
 	}
+	var projectedJSON map[string]any
+	if err := json.Unmarshal(projected, &projectedJSON); err != nil {
+		t.Fatalf("decode projected frame: %v", err)
+	}
+	if projectedJSON["kind"] != "data" || projectedJSON["payload_base64"] != "aGVsbG8=" {
+		t.Fatalf("projected canonical data frame mismatch: %#v", projectedJSON)
+	}
 	frame, err := NewBidiFrameFromJSON(projected)
 	if err != nil {
 		t.Fatalf("NewBidiFrameFromJSON: %v; raw=%s", err, projected)
@@ -160,18 +190,37 @@ func TestProjectCABIOrderedEventCanonicalizesBidiBinaryChunkAsDataFrame(t *testi
 	}
 }
 
+func TestProjectCABIOrderedEventIgnoresNonStringLegacyEvent(t *testing.T) {
+	projected, err := projectCABIOrderedEvent(
+		[]byte(`{"event":{"name":"receipt"},"terminal":false}`),
+		func(*uint64) uint64 { return 1 },
+		false,
+	)
+	if err != nil {
+		t.Fatalf("projectCABIOrderedEvent: %v", err)
+	}
+	var projectedJSON map[string]any
+	if err := json.Unmarshal(projected, &projectedJSON); err != nil {
+		t.Fatalf("decode projected frame: %v", err)
+	}
+	if _, hasKind := projectedJSON["kind"]; hasKind {
+		t.Fatalf("non-string legacy event produced kind: %#v", projectedJSON)
+	}
+}
+
 func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
-	raw, err := daemonStartConfigForCABI([]byte(`{
+	raw, err := runtimeHostStartConfigForCABI([]byte(`{
 		"mode":"device",
 		"realm":"lab",
 		"device_id":"device-a",
 		"daemon_bin":"/usr/local/bin/easynet",
+		"working_dir":"/srv/easynet",
 		"log_path":"/tmp/easynet.log",
 		"detached":true,
 		"env":{"EASYNET_LOG":"debug"}
 	}`))
 	if err != nil {
-		t.Fatalf("daemonStartConfigForCABI failed: %v", err)
+		t.Fatalf("runtimeHostStartConfigForCABI failed: %v", err)
 	}
 	var projected map[string]any
 	if err := json.Unmarshal(raw, &projected); err != nil {
@@ -187,20 +236,23 @@ func TestCABIDaemonStartConfigProjectsFacadeShape(t *testing.T) {
 	if projected["detached"] != true {
 		t.Fatalf("detached = %v, want true", projected["detached"])
 	}
+	if projected["working_dir"] != "/srv/easynet" {
+		t.Fatalf("working_dir = %v, want /srv/easynet", projected["working_dir"])
+	}
 	if projected["mode"] != "device" || projected["realm"] != "lab" {
 		t.Fatalf("projected config lost daemon fields: %v", projected)
 	}
 }
 
 func TestCABIDaemonStartConfigRejectsUnsupportedTransportFields(t *testing.T) {
-	_, err := daemonStartConfigForCABI([]byte(`{
+	_, err := runtimeHostStartConfigForCABI([]byte(`{
 		"mode":"hub",
 		"uds_path":"/tmp/easynet.sock",
 		"listen_tcp":"127.0.0.1:9000"
 	}`))
 
 	if err == nil {
-		t.Fatal("daemonStartConfigForCABI accepted unsupported transport fields")
+		t.Fatal("runtimeHostStartConfigForCABI accepted unsupported transport fields")
 	}
 	if !IsCode(err, ErrNotImplemented) {
 		t.Fatalf("unsupported config error = %v, want %s", err, ErrNotImplemented)
@@ -208,7 +260,7 @@ func TestCABIDaemonStartConfigRejectsUnsupportedTransportFields(t *testing.T) {
 }
 
 func TestCABIDaemonStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
-	status, err := daemonStatusFromCABI("42", []byte(`{
+	status, err := runtimeHostStatusFromCABI("42", []byte(`{
 		"control_accepting":true,
 		"pid":123,
 		"version":"1.2.3",
@@ -221,7 +273,7 @@ func TestCABIDaemonStatusProjectionFromFlatAndNestedShapes(t *testing.T) {
 		}
 	}`))
 	if err != nil {
-		t.Fatalf("daemonStatusFromCABI failed: %v", err)
+		t.Fatalf("runtimeHostStatusFromCABI failed: %v", err)
 	}
 
 	if status["handle_id"] != "42" {
@@ -249,14 +301,14 @@ func TestCABIPreparedAndSignedEnvelopeKeys(t *testing.T) {
 	}
 
 	fields, err := signedInvocationCABIFields([]byte(`{
-		"prepared":{"request_id":"req-2"},
+		"prepared":{"prepared_id":"prep-2","request_id":"req-2"},
 		"signature":{"algorithm":"ed25519","signature_base64":"abc"}
 	}`))
 	if err != nil {
 		t.Fatalf("signedInvocationCABIFields failed: %v", err)
 	}
-	if fields.key != "req-2" {
-		t.Fatalf("signed prepared key = %q, want req-2", fields.key)
+	if fields.key != "prep-2" {
+		t.Fatalf("signed prepared key = %q, want prep-2", fields.key)
 	}
 	if string(fields.signatureJSON) != `{"algorithm":"ed25519","signature_base64":"abc"}` {
 		t.Fatalf("signature JSON = %s", fields.signatureJSON)
@@ -266,14 +318,79 @@ func TestCABIPreparedAndSignedEnvelopeKeys(t *testing.T) {
 	}
 
 	localFields, err := signedInvocationCABIFields([]byte(`{
-		"prepared":{"request_id":"req-local"},
+		"prepared":{"prepared_id":"prep-local","request_id":"req-local"},
 		"policy":{"mode":"local_daemon_signing","signer_id":"signer-alice-key-1"}
 	}`))
 	if err != nil {
 		t.Fatalf("signedInvocationCABIFields local failed: %v", err)
 	}
-	if localFields.key != "req-local" || !localFields.localDaemonSigning || len(localFields.signatureJSON) != 0 {
+	if localFields.key != "prep-local" || !localFields.localDaemonSigning || len(localFields.signatureJSON) != 0 {
 		t.Fatalf("local fields = %#v", localFields)
+	}
+
+	if _, err := signedInvocationCABIFields([]byte(`{
+		"prepared":{"request_id":"req-only"},
+		"signature":{"algorithm":"ed25519","signature_base64":"abc"}
+	}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("request_id-only prepared key error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
+func TestCABIPreparedHandleRegistryRejectsDuplicatePreparedID(t *testing.T) {
+	registry := newCABIPreparedHandleRegistry()
+	var freed []uint64
+	free := func(id uint64) error {
+		freed = append(freed, id)
+		return nil
+	}
+
+	if err := registry.register("prep-1", 1001, free); err != nil {
+		t.Fatalf("register first prepared handle failed: %v", err)
+	}
+	err := registry.register("prep-1", 1002, free)
+	if !IsCode(err, ErrProtocol) {
+		t.Fatalf("duplicate prepared handle error = %v, want %s", err, ErrProtocol)
+	}
+	sdkErr, ok := err.(*SDKError)
+	if !ok || sdkErr.Message != "C ABI prepare returned a duplicate prepared handle id" {
+		t.Fatalf("duplicate prepared handle message = %#v", err)
+	}
+	if len(freed) != 1 || freed[0] != 1002 {
+		t.Fatalf("freed duplicate handles = %v, want [1002]", freed)
+	}
+	remaining := registry.drain()
+	if len(remaining) != 1 || remaining[0] != 1001 {
+		t.Fatalf("remaining handles = %v, want [1001]", remaining)
+	}
+}
+
+func TestCABIPreparedHandleRegistryClaimLifecycle(t *testing.T) {
+	registry := newCABIPreparedHandleRegistry()
+	if err := registry.register("prep-1", 1001, func(uint64) error { return nil }); err != nil {
+		t.Fatalf("register prepared handle failed: %v", err)
+	}
+
+	id, err := registry.claimForSigning("prep-1")
+	if err != nil {
+		t.Fatalf("claim prepared handle failed: %v", err)
+	}
+	if id != 1001 {
+		t.Fatalf("claimed id = %d, want 1001", id)
+	}
+	if _, err := registry.claimForSigning("prep-1"); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("duplicate claim error = %v, want %s", err, ErrInvalidHandle)
+	}
+
+	registry.releaseSigningClaim("prep-1", id)
+	if _, err := registry.claimForSigning("prep-1"); err != nil {
+		t.Fatalf("claim after release failed: %v", err)
+	}
+	registry.consumeSigningClaim("prep-1", id)
+	if _, err := registry.claimForSigning("prep-1"); !IsCode(err, ErrInvalidHandle) {
+		t.Fatalf("claim after consume error = %v, want %s", err, ErrInvalidHandle)
+	}
+	if remaining := registry.drain(); len(remaining) != 0 {
+		t.Fatalf("remaining handles after consume = %v, want empty", remaining)
 	}
 }
 
@@ -296,9 +413,9 @@ func TestCABIRuntimeTransportClosedStateRejectsRuntimeCalls(t *testing.T) {
 
 func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
 	libraryPath := buildFakeCABIStreamLibrary(t)
-	transport, err := OpenCABIDaemonTransport(libraryPath)
+	transport, err := OpenCABIRuntimeLifecycleTransport(libraryPath)
 	if err != nil {
-		t.Fatalf("OpenCABIDaemonTransport: %v", err)
+		t.Fatalf("OpenCABIRuntimeLifecycleTransport: %v", err)
 	}
 	defer func() {
 		if err := transport.Close(context.Background()); err != nil {
@@ -326,12 +443,19 @@ func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream first event: %v", err)
 	}
-	terminal, err := stream.Next(context.Background())
-	if err != nil {
-		t.Fatalf("stream terminal event: %v", err)
-	}
 	if first.Sequence() != 1 || first.Terminal() || string(first.PayloadJSON()) != `{"step":1}` {
 		t.Fatalf("unexpected first stream event: %#v payload=%s", first, first.PayloadJSON())
+	}
+	cancel, err := stream.Cancel(context.Background(), "client stop")
+	if err != nil {
+		t.Fatalf("stream cancel: %v", err)
+	}
+	if cancel.State() != StreamCancelRequested || cancel.Terminal() || cancel.Cancelled() || stream.State() != StreamCancelRequested {
+		t.Fatalf("stream cancel must be non-terminal request: outcome=%#v state=%s", cancel, stream.State())
+	}
+	terminal, err := stream.Next(context.Background())
+	if err != nil {
+		t.Fatalf("stream terminal event after cancel request: %v", err)
 	}
 	if !terminal.Terminal() || stream.State() != StreamTerminalFrameSeen {
 		t.Fatalf("terminal stream event not observed: event=%#v state=%s", terminal, stream.State())
@@ -357,12 +481,19 @@ func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bidi send: %v", err)
 	}
-	received, err := session.Receive(context.Background())
-	if err != nil {
-		t.Fatalf("bidi receive: %v", err)
-	}
 	if ack.Sequence() != 1 || ack.Kind() != "data" {
 		t.Fatalf("unexpected bidi send ack: %#v", ack)
+	}
+	bidiCancel, err := session.Cancel(context.Background(), "client stop")
+	if err != nil {
+		t.Fatalf("bidi cancel: %v", err)
+	}
+	if bidiCancel.State() != BidiCancelRequested || bidiCancel.Terminal() || session.State() != BidiCancelRequested {
+		t.Fatalf("bidi cancel must be non-terminal request: outcome=%#v state=%s", bidiCancel, session.State())
+	}
+	received, err := session.Receive(context.Background())
+	if err != nil {
+		t.Fatalf("bidi receive after cancel request: %v", err)
 	}
 	if !received.Terminal() || session.State() != BidiTerminal {
 		t.Fatalf("bidi terminal frame not observed: frame=%#v state=%s", received, session.State())
@@ -465,7 +596,7 @@ int32_t easynet_daemon_open_client(uint64_t daemon_handle, uint64_t *out_handle)
 int32_t easynet_shutdown(uint64_t handle) { (void)handle; return 0; }
 int32_t easynet_runtime_health(uint64_t handle, char **out_health_json) {
 	(void)handle;
-	*out_health_json = dup_json("{\"api_ready\":true,\"daemon_ready\":true,\"invocation_ready\":true,\"directory_ready\":true,\"trust_ready\":true,\"runtime_ready\":true,\"diagnostics\":[]}");
+	*out_health_json = dup_json("{\"api_ready\":true,\"invocation_ready\":true,\"directory_ready\":true,\"trust_ready\":true,\"runtime_ready\":true,\"diagnostics\":[]}");
 	return 0;
 }
 int32_t easynet_runtime_diagnostics(uint64_t handle, char **out_diagnostics_json) {

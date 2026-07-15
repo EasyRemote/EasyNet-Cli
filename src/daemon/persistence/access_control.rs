@@ -1224,8 +1224,8 @@ fn validate_request_transition(
     {
         anyhow::bail!("only approved PermissionRequest records may reference authority source ids");
     }
-    if next.status.is_terminal() {
-        if next
+    if next.status.is_terminal()
+        && (next
             .resolver_ura
             .as_deref()
             .map(str::trim)
@@ -1236,10 +1236,9 @@ fn validate_request_transition(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .is_none()
-        {
-            anyhow::bail!("terminal PermissionRequest requires resolver_ura and resolved_at");
-        }
+                .is_none())
+    {
+        anyhow::bail!("terminal PermissionRequest requires resolver_ura and resolved_at");
     }
     Ok(())
 }
@@ -1260,10 +1259,10 @@ fn validate_request_timestamps(request: &PermissionRequest) -> anyhow::Result<()
 }
 
 fn normalize_terminal_resolution_fields(request: &mut PermissionRequest, actor_ura: &str) {
-    if request.resolver_ura.as_deref().map_or(true, str::is_empty) {
+    if request.resolver_ura.as_deref().is_none_or(str::is_empty) {
         request.resolver_ura = Some(actor_ura.to_string());
     }
-    if request.resolved_at.as_deref().map_or(true, str::is_empty) {
+    if request.resolved_at.as_deref().is_none_or(str::is_empty) {
         request.resolved_at = Some(now_rfc3339());
     }
 }
@@ -1623,8 +1622,10 @@ mod tests {
         let _home = HomeGuard::new();
         let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
             .expect("store");
-        let mut policy = AccessControlCompactionPolicy::default();
-        policy.grant_mutation_audit_retention_days = 364;
+        let policy = AccessControlCompactionPolicy {
+            grant_mutation_audit_retention_days: 364,
+            ..AccessControlCompactionPolicy::default()
+        };
 
         let err = store
             .compact(policy, "easynet:///r/test/user/alice")

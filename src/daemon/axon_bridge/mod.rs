@@ -39,6 +39,7 @@ pub(crate) mod descriptor_ref;
 pub mod dispatch_shim;
 pub mod hot_agent_registrar;
 pub(crate) mod local_runtime_request;
+pub(crate) mod runtime_admin;
 pub mod runtime_factory;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod wire_descriptor;

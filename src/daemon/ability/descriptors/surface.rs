@@ -43,6 +43,30 @@ use std::collections::HashMap;
 
 use super::CallMode;
 
+/// Authorization semantics bound to the exact governed descriptor.
+/// Transport geometry alone cannot distinguish a read RPC from a mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionAction {
+    Read,
+    Invoke,
+    Stream,
+    Manage,
+    Grant,
+}
+
+impl AdmissionAction {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Invoke => "invoke",
+            Self::Stream => "stream",
+            Self::Manage => "manage",
+            Self::Grant => "grant",
+        }
+    }
+}
+
 /// Per RFC §1.6, an Ability has one of three visibility levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
@@ -446,6 +470,7 @@ pub struct AbilityDescriptor {
     /// `streaming_only` / `bidi_only` hints are synchronized presentation
     /// flags, not a second selector.
     call_mode: CallMode,
+    admission_action: AdmissionAction,
     /// Receipt/state-machine classification, independent of transport.
     receipt_semantics: ReceiptSemantics,
     pub visibility: Visibility,
@@ -517,6 +542,7 @@ struct AbilityDescriptorWire {
     #[serde(default)]
     descriptor_hash: String,
     call_mode: CallMode,
+    admission_action: AdmissionAction,
     receipt_semantics: ReceiptSemantics,
     visibility: Visibility,
     scope_subjects: ScopeRule,
@@ -557,6 +583,7 @@ impl AbilityDescriptorWire {
             schema_hash: d.schema_hash_prefixed(),
             descriptor_hash: d.descriptor_hash_prefixed(),
             call_mode: d.call_mode,
+            admission_action: d.admission_action,
             receipt_semantics: d.receipt_semantics.clone(),
             visibility: d.visibility,
             scope_subjects: d.scope_subjects.clone(),
@@ -585,8 +612,13 @@ impl AbilityDescriptorWire {
         self.receipt_semantics
             .validate()
             .map_err(|err| err.to_string())?;
-        AbilityDescriptor::new(&self.name, &self.owner_ura, self.visibility)
-            .map_err(|error| error.to_string())?;
+        AbilityDescriptor::new(
+            &self.name,
+            &self.owner_ura,
+            self.visibility,
+            self.admission_action,
+        )
+        .map_err(|error| error.to_string())?;
         let normalized_denied_agents = normalized_policy_values(self.denied_agents.clone());
         if normalized_denied_agents != self.denied_agents {
             return Err("wire denied_agents must be sorted, deduplicated, and non-empty".into());
@@ -605,6 +637,7 @@ impl AbilityDescriptorWire {
             owner_ura: self.owner_ura,
             version,
             call_mode: self.call_mode,
+            admission_action: self.admission_action,
             receipt_semantics: self.receipt_semantics,
             visibility: self.visibility,
             scope_subjects: self.scope_subjects,
@@ -702,6 +735,7 @@ impl AbilityDescriptor {
         name: impl Into<String>,
         owner_ura: impl Into<String>,
         visibility: Visibility,
+        admission_action: AdmissionAction,
     ) -> Result<Self, DescriptorError> {
         let name = name.into();
         let owner_ura = owner_ura.into();
@@ -724,6 +758,7 @@ impl AbilityDescriptor {
             owner_ura,
             version: default_descriptor_version(),
             call_mode: CallMode::Rpc,
+            admission_action,
             receipt_semantics: ReceiptSemantics::Operational,
             visibility,
             // Sensible defaults for SCOPED's two axes: any caller
@@ -788,6 +823,7 @@ impl AbilityDescriptor {
         registry_ability: impl Into<String>,
         owner_ura: impl Into<String>,
         call_mode: CallMode,
+        admission_action: AdmissionAction,
         manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
     ) -> Result<Self, DescriptorError> {
         let registry_ability = registry_ability.into();
@@ -800,7 +836,8 @@ impl AbilityDescriptor {
             .map(|access| visibility_from_manifest(access.visibility))
             .unwrap_or(Visibility::Scoped);
         let mut descriptor =
-            Self::new(public_name, owner_ura.clone(), visibility)?.with_call_mode(call_mode);
+            Self::new(public_name, owner_ura.clone(), visibility, admission_action)?
+                .with_call_mode(call_mode);
 
         match manifest {
             Some(manifest) => {
@@ -908,7 +945,12 @@ impl AbilityDescriptor {
     ) -> Result<Self, DescriptorError> {
         let owner_ura = owner_ura.into();
         let public_name = self.public_name();
-        Self::new(public_name.clone(), owner_ura.clone(), self.visibility)?;
+        Self::new(
+            public_name.clone(),
+            owner_ura.clone(),
+            self.visibility,
+            self.admission_action,
+        )?;
 
         let previous_owner_ura = std::mem::replace(&mut self.owner_ura, owner_ura.clone());
         self.name = public_name;
@@ -975,6 +1017,10 @@ impl AbilityDescriptor {
             access_policy,
             serde_json::to_value(&self.hints).expect("ability hints serialize"),
             serde_json::to_value(&self.receipt_semantics).expect("receipt semantics serialize"),
+            serde_json::to_value(self.admission_action).expect("admission action serializes"),
+            &self.description,
+            &self.source,
+            serde_json::to_value(&self.metadata).expect("descriptor metadata serializes"),
         )
     }
 
@@ -1030,6 +1076,10 @@ impl AbilityDescriptor {
 
     pub fn call_mode(&self) -> CallMode {
         self.call_mode
+    }
+
+    pub fn admission_action(&self) -> AdmissionAction {
+        self.admission_action
     }
 
     pub fn receipt_semantics(&self) -> &ReceiptSemantics {
@@ -1144,17 +1194,30 @@ mod tests {
     const DEVICE_OWNER: &str = "easynet:///r/acme/device/dev-1";
 
     fn must(name: &str, owner: &str, vis: Visibility) -> AbilityDescriptor {
-        AbilityDescriptor::new(name, owner, vis).expect("descriptor must construct")
+        AbilityDescriptor::new(name, owner, vis, AdmissionAction::Invoke)
+            .expect("descriptor must construct")
     }
 
     #[test]
     fn descriptor_constructor_rejects_empty_name() {
         assert_eq!(
-            AbilityDescriptor::new("", DEVICE_OWNER, Visibility::Public).unwrap_err(),
+            AbilityDescriptor::new(
+                "",
+                DEVICE_OWNER,
+                Visibility::Public,
+                AdmissionAction::Invoke
+            )
+            .unwrap_err(),
             DescriptorError::EmptyName,
         );
         assert_eq!(
-            AbilityDescriptor::new("   ", DEVICE_OWNER, Visibility::Public).unwrap_err(),
+            AbilityDescriptor::new(
+                "   ",
+                DEVICE_OWNER,
+                Visibility::Public,
+                AdmissionAction::Invoke
+            )
+            .unwrap_err(),
             DescriptorError::EmptyName,
         );
     }
@@ -1162,7 +1225,13 @@ mod tests {
     #[test]
     fn descriptor_constructor_rejects_unnamespaced_name() {
         assert_eq!(
-            AbilityDescriptor::new("nodot", DEVICE_OWNER, Visibility::Public).unwrap_err(),
+            AbilityDescriptor::new(
+                "nodot",
+                DEVICE_OWNER,
+                Visibility::Public,
+                AdmissionAction::Invoke,
+            )
+            .unwrap_err(),
             DescriptorError::UnnamespacedName,
         );
     }
@@ -1170,7 +1239,8 @@ mod tests {
     #[test]
     fn descriptor_constructor_rejects_empty_owner() {
         assert_eq!(
-            AbilityDescriptor::new("a.b", "", Visibility::Public).unwrap_err(),
+            AbilityDescriptor::new("a.b", "", Visibility::Public, AdmissionAction::Invoke)
+                .unwrap_err(),
             DescriptorError::EmptyOwner,
         );
     }
@@ -1185,7 +1255,13 @@ mod tests {
             "easynet:///r/acme/resource/device.dev-1/fs/file",
         ] {
             assert_eq!(
-                AbilityDescriptor::new("fs.read", owner_ura, Visibility::Public).unwrap_err(),
+                AbilityDescriptor::new(
+                    "fs.read",
+                    owner_ura,
+                    Visibility::Public,
+                    AdmissionAction::Invoke,
+                )
+                .unwrap_err(),
                 DescriptorError::InvalidOwnerUra {
                     owner_ura: owner_ura.to_string()
                 },
@@ -1338,9 +1414,14 @@ mod tests {
     #[test]
     fn missing_manifest_normalizes_to_owner_only_scope() {
         let owner = "easynet:///r/acme/device/dev-1";
-        let descriptor =
-            AbilityDescriptor::from_registry_manifest("fs.read", owner, CallMode::Rpc, None)
-                .unwrap();
+        let descriptor = AbilityDescriptor::from_registry_manifest(
+            "fs.read",
+            owner,
+            CallMode::Rpc,
+            AdmissionAction::Invoke,
+            None,
+        )
+        .unwrap();
         assert_eq!(descriptor.visibility, Visibility::Scoped);
         assert_eq!(descriptor.call_mode(), CallMode::Rpc);
         assert!(descriptor.is_visible_to(owner, owner));
@@ -1370,6 +1451,7 @@ mod tests {
             "mentor.quote",
             "easynet:///r/acme/agent/alice.mentor",
             CallMode::Stream,
+            AdmissionAction::Invoke,
             Some(&manifest),
         )
         .unwrap();
@@ -1769,6 +1851,39 @@ mod tests {
             scoped.descriptor_hash_prefixed(),
             "descriptor revision must change when governance changes"
         );
+
+        let base = public
+            .clone()
+            .with_description("canonical description")
+            .with_source("kernel:canonical")
+            .with_output_schema(serde_json::json!({"type":"object"}));
+        let digest = base.descriptor_hash_bytes();
+        for changed in [
+            base.clone().with_description("changed description"),
+            base.clone().with_source("changed:source"),
+            base.clone().with_metadata_entry("provider", "changed"),
+            base.clone()
+                .with_output_schema(serde_json::json!({"type":"array"})),
+            base.clone().with_hints(AbilityHints {
+                idempotent: true,
+                ..AbilityHints::default()
+            }),
+        ] {
+            assert_ne!(changed.descriptor_hash_bytes(), digest);
+        }
+
+        let changed_action = AbilityDescriptor::new(
+            "chat",
+            "easynet:///r/acme/agent/alice.claude",
+            Visibility::Public,
+            AdmissionAction::Read,
+        )
+        .unwrap()
+        .with_input_schema(serde_json::json!({"type":"object"}))
+        .with_description("canonical description")
+        .with_source("kernel:canonical")
+        .with_output_schema(serde_json::json!({"type":"object"}));
+        assert_ne!(changed_action.descriptor_hash_bytes(), digest);
     }
 
     #[test]

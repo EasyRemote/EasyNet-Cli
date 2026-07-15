@@ -8,12 +8,13 @@ semantics itself.
 
 from __future__ import annotations
 
-import contextlib
 import base64
 import json
 import queue
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, cast
 
 from .bidi import BidiFrame, BidiOutcome, BidiSession, BidiState, BidiStreamDescriptor
@@ -24,9 +25,49 @@ from .connection import (
 )
 from .errors import ErrorCode, RetryHint, SDKError, canonical_failure_code
 from .invocation import InvocationDraft
-from .runtime import InvocationFailure, InvocationResult, PrepareOptions, RuntimeClient
+from .runtime import (
+    InvocationFailure,
+    InvocationHandle,
+    InvocationResult,
+    PrepareOptions,
+    RuntimeClient,
+    RuntimeReceipt,
+)
 from .signing import Signer
 from .stream import StreamCancel, StreamEvent, StreamHandle
+
+
+class _DaemonTransportState(Enum):
+    OPEN = "open"
+    CLOSING = "closing"
+    CLOSE_RETRYABLE = "close_retryable"
+    CLOSE_FAILED = "close_failed"
+    CLOSED = "closed"
+
+
+class _DaemonUseLease:
+    def __init__(
+        self,
+        runtime: RuntimeClient,
+        release: Callable[[], None],
+    ) -> None:
+        self._runtime = runtime
+        self._release = release
+        self._lock = threading.Lock()
+        self._released = False
+
+    def __enter__(self) -> RuntimeClient:
+        return self._runtime
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.release()
+
+    def release(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        self._release()
 
 
 @dataclass
@@ -36,6 +77,23 @@ class DaemonInvocationTransport:
     runtime: RuntimeClient
     connection: RuntimeConnection | None = None
     _closed: bool = False
+    _state: _DaemonTransportState = field(
+        default=_DaemonTransportState.OPEN,
+        init=False,
+        repr=False,
+    )
+    _lifecycle: threading.Condition = field(
+        default_factory=threading.Condition,
+        init=False,
+        repr=False,
+    )
+    _active_uses: int = field(default=0, init=False, repr=False)
+    _close_error: BaseException | None = field(default=None, init=False, repr=False)
+    _retained_handles: dict[int, InvocationHandle] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     @classmethod
     def from_runtime_client(cls, runtime: RuntimeClient) -> "DaemonInvocationTransport":
@@ -62,7 +120,8 @@ class DaemonInvocationTransport:
                 control_path=control_path,
             )
         )
-        connection.connect(
+        return _open_daemon_transport(
+            connection,
             ConnectOptions(
                 endpoint=options.endpoint,
                 control_path=control_path,
@@ -70,11 +129,7 @@ class DaemonInvocationTransport:
                 invoke_timeout_ms=options.invoke_timeout_ms,
                 max_message_bytes=options.max_message_bytes,
                 reconnect=options.reconnect,
-            )
-        )
-        return cls(
-            runtime=connection.runtime_client(),
-            connection=connection,
+            ),
         )
 
     @classmethod
@@ -86,9 +141,9 @@ class DaemonInvocationTransport:
         options: ConnectOptions = ConnectOptions(),
         identity: Any | None = None,
     ) -> "DaemonInvocationTransport":
-        """Open a direct daemon Axon gRPC-over-UDS Runtime Core session."""
+        """Open a direct Axon gRPC-over-UDS Runtime Core session."""
 
-        from .direct_runtime import DirectDaemonRuntimeConnector
+        from .direct_runtime import DirectRuntimeConnector
 
         control_path = options.control_path or control_path
         if identity is None:
@@ -104,13 +159,14 @@ class DaemonInvocationTransport:
             )
         _ = library_path
         connection = RuntimeConnection(
-            DirectDaemonRuntimeConnector(
+            DirectRuntimeConnector(
                 control_path=control_path,
                 identity=identity,
                 close_identity=False,
             )
         )
-        connection.connect(
+        return _open_daemon_transport(
+            connection,
             ConnectOptions(
                 endpoint=options.endpoint,
                 control_path=control_path,
@@ -118,11 +174,7 @@ class DaemonInvocationTransport:
                 invoke_timeout_ms=options.invoke_timeout_ms,
                 max_message_bytes=options.max_message_bytes,
                 reconnect=options.reconnect,
-            )
-        )
-        return cls(
-            runtime=connection.runtime_client(),
-            connection=connection,
+            ),
         )
 
     def invoke(
@@ -130,7 +182,8 @@ class DaemonInvocationTransport:
     ) -> dict[str, object]:
         """Submit one complete Invocation and return its Runtime result JSON."""
 
-        result = self._require_open().invoke(_coerce_draft(invocation))
+        with self._acquire_runtime_use() as runtime:
+            result = runtime.invoke(_coerce_draft(invocation))
         return _invocation_result_dict(result)
 
     def invoke_signed(
@@ -144,26 +197,31 @@ class DaemonInvocationTransport:
 
         if signer is None:
             raise _missing_required_signer()
-        runtime = self._require_open()
-        signed, _material = runtime.prepare_and_sign(
-            _coerce_draft(invocation),
-            signer,
-            options,
-        )
-        handle = runtime.submit_signed(signed)
-        try:
-            result = runtime.await_result(handle)
+        with self._acquire_runtime_use() as runtime:
+            signed, _material = runtime.prepare_and_sign(
+                _coerce_draft(invocation),
+                signer,
+                options,
+            )
+            handle = runtime.submit_signed(signed)
+            try:
+                result = runtime.await_result(handle)
+            except BaseException as operation_error:
+                try:
+                    self._close_invocation_handle(runtime, handle)
+                except BaseException as cleanup_error:
+                    raise operation_error from cleanup_error
+                raise
+            self._close_invocation_handle(runtime, handle)
             return _invocation_result_dict(result)
-        finally:
-            with contextlib.suppress(Exception):
-                runtime.close_handle(handle)
 
     def stream(
         self, invocation: Mapping[str, object] | InvocationDraft
     ) -> "DaemonFrameStream":
         """Open a server-stream Invocation."""
 
-        handle = self._require_open().invoke_stream(_coerce_draft(invocation))
+        with self._acquire_runtime_use() as runtime:
+            handle = runtime.invoke_stream(_coerce_draft(invocation))
         return DaemonFrameStream(handle)
 
     def bidi(
@@ -173,32 +231,143 @@ class DaemonInvocationTransport:
     ) -> "DaemonBidiChannel":
         """Open a bidirectional Invocation session."""
 
-        session = self._require_open().open_bidi(
-            _coerce_draft(invocation),
-            tuple(_coerce_stream_descriptor(stream) for stream in streams),
-        )
+        with self._acquire_runtime_use() as runtime:
+            session = runtime.open_bidi(
+                _coerce_draft(invocation),
+                tuple(_coerce_stream_descriptor(stream) for stream in streams),
+            )
         return DaemonBidiChannel(session)
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self.connection is not None:
-            self.connection.close()
-            return
-        self.runtime.close()
+        while True:
+            with self._lifecycle:
+                if self._state is _DaemonTransportState.CLOSED:
+                    return
+                if self._state is _DaemonTransportState.CLOSE_FAILED:
+                    assert self._close_error is not None
+                    raise self._close_error
+                if self._state is _DaemonTransportState.CLOSING:
+                    self._lifecycle.wait()
+                    continue
+                self._state = _DaemonTransportState.CLOSING
+                while self._active_uses:
+                    self._lifecycle.wait()
+                break
+
+        try:
+            self._close_retained_handles()
+        except BaseException as exc:
+            self._finish_close_failure(exc, retryable=True)
+            raise
+
+        try:
+            if self.connection is not None:
+                self.connection.close()
+            else:
+                self.runtime.close()
+        except BaseException as exc:
+            # RuntimeClient and RuntimeConnection poison their own close state
+            # before raising. Retain and replay the failure instead of treating
+            # a later delegated no-op as successful ownership release.
+            self._finish_close_failure(exc, retryable=False)
+            raise
+
+        with self._lifecycle:
+            self._state = _DaemonTransportState.CLOSED
+            self._closed = True
+            self._close_error = None
+            self._lifecycle.notify_all()
 
     def __enter__(self) -> "DaemonInvocationTransport":
-        self._require_open()
+        with self._lifecycle:
+            self._require_open_locked()
         return self
 
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
-    def _require_open(self) -> RuntimeClient:
-        if self._closed:
-            raise _closed_transport("daemon invocation transport is closed")
-        return self.runtime
+    def _acquire_runtime_use(self) -> _DaemonUseLease:
+        with self._lifecycle:
+            self._require_open_locked()
+            self._active_uses += 1
+        return _DaemonUseLease(self.runtime, self._release_runtime_use)
+
+    def _release_runtime_use(self) -> None:
+        with self._lifecycle:
+            self._active_uses -= 1
+            self._lifecycle.notify_all()
+
+    def _close_invocation_handle(
+        self,
+        runtime: RuntimeClient,
+        handle: InvocationHandle,
+    ) -> None:
+        try:
+            runtime.close_handle(handle)
+        except BaseException:
+            with self._lifecycle:
+                self._retained_handles[
+                    handle.control_capability()._adapter_handle_id()
+                ] = handle
+            raise
+        with self._lifecycle:
+            self._retained_handles.pop(
+                handle.control_capability()._adapter_handle_id(), None
+            )
+
+    def _close_retained_handles(self) -> None:
+        with self._lifecycle:
+            handles = tuple(self._retained_handles.values())
+        failures: list[BaseException] = []
+        for handle in handles:
+            try:
+                self.runtime.close_handle(handle)
+            except BaseException as exc:
+                failures.append(exc)
+            else:
+                with self._lifecycle:
+                    self._retained_handles.pop(
+                        handle.control_capability()._adapter_handle_id(), None
+                    )
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise BaseExceptionGroup("invocation handle cleanup failed", failures)
+
+    def _finish_close_failure(
+        self,
+        error: BaseException,
+        *,
+        retryable: bool,
+    ) -> None:
+        with self._lifecycle:
+            self._close_error = error
+            self._state = (
+                _DaemonTransportState.CLOSE_RETRYABLE
+                if retryable
+                else _DaemonTransportState.CLOSE_FAILED
+            )
+            self._lifecycle.notify_all()
+
+    def _require_open_locked(self) -> None:
+        if self._state is not _DaemonTransportState.OPEN:
+            raise _closed_transport("daemon invocation transport is closing or closed")
+
+
+def _open_daemon_transport(
+    connection: RuntimeConnection,
+    options: ConnectOptions,
+) -> DaemonInvocationTransport:
+    try:
+        connection.connect(options)
+        runtime = connection.runtime_client()
+    except BaseException as acquisition_error:
+        try:
+            connection.close()
+        except BaseException as cleanup_error:
+            raise acquisition_error from cleanup_error
+        raise
+    return DaemonInvocationTransport(runtime=runtime, connection=connection)
 
 
 @dataclass
@@ -263,7 +432,7 @@ class InvocationResultAdapter:
         self.transport.close()
 
     def __enter__(self) -> "InvocationResultAdapter":
-        self.transport._require_open()
+        self.transport.__enter__()
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -291,14 +460,120 @@ class UnaryInvocationTransport(Protocol):
         """Release the underlying daemon transport."""
 
 
+class _UnaryDispatchState(Enum):
+    QUEUED = "queued"
+    DISPATCHING = "dispatching"
+    COMPLETED = "completed"
+    TIMED_OUT_BEFORE_DISPATCH = "timed_out_before_dispatch"
+    TIMED_OUT_AFTER_DISPATCH = "timed_out_after_dispatch"
+
+
+class _UnaryPoolState(Enum):
+    OPEN = "open"
+    CLOSING = "closing"
+    QUIESCENT = "quiescent"
+    CLOSED = "closed"
+
+
+class _UnaryTimeoutBudget:
+    """One monotonic deadline shared by lock acquisition and result wait."""
+
+    def __init__(self, timeout: float | None) -> None:
+        if timeout is not None and timeout < 0:
+            raise ValueError("'timeout' must be a non-negative number")
+        self._deadline = None if timeout is None else time.monotonic() + timeout
+
+    def acquire(self, lock: Any) -> bool:
+        remaining = self.remaining()
+        if remaining is None:
+            lock.acquire()
+            return True
+        return cast(bool, lock.acquire(timeout=remaining))
+
+    def remaining(self) -> float | None:
+        if self._deadline is None:
+            return None
+        return max(0.0, self._deadline - time.monotonic())
+
+
+@dataclass(frozen=True)
+class _UnaryTimeoutOutcome:
+    state: _UnaryDispatchState
+    transport: UnaryInvocationTransport | None
+
+    @property
+    def execution_started(self) -> bool:
+        return self.state is _UnaryDispatchState.TIMED_OUT_AFTER_DISPATCH
+
+
+class _UnaryDispatchAttempt:
+    """Thread-safe lifecycle for one caller wait and its worker dispatch."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._state = _UnaryDispatchState.QUEUED
+        self._transport: UnaryInvocationTransport | None = None
+
+    def begin(self, transport: UnaryInvocationTransport) -> bool:
+        with self._lock:
+            if self._state is _UnaryDispatchState.TIMED_OUT_BEFORE_DISPATCH:
+                return False
+            if self._state is not _UnaryDispatchState.QUEUED:
+                raise RuntimeError(
+                    f"cannot dispatch unary call from {self._state.value}"
+                )
+            self._transport = transport
+            self._state = _UnaryDispatchState.DISPATCHING
+            return True
+
+    def is_queued(self) -> bool:
+        with self._lock:
+            return self._state is _UnaryDispatchState.QUEUED
+
+    def complete(self) -> None:
+        with self._lock:
+            if self._state is _UnaryDispatchState.DISPATCHING:
+                self._state = _UnaryDispatchState.COMPLETED
+                return
+            if self._state is _UnaryDispatchState.TIMED_OUT_AFTER_DISPATCH:
+                return
+            raise RuntimeError(f"cannot complete unary call from {self._state.value}")
+
+    def timeout(
+        self,
+    ) -> _UnaryTimeoutOutcome:
+        with self._lock:
+            if self._state is _UnaryDispatchState.QUEUED:
+                self._state = _UnaryDispatchState.TIMED_OUT_BEFORE_DISPATCH
+                return _UnaryTimeoutOutcome(self._state, None)
+
+            if self._state not in {
+                _UnaryDispatchState.DISPATCHING,
+                _UnaryDispatchState.COMPLETED,
+            }:
+                raise RuntimeError(
+                    f"cannot time out unary call from {self._state.value}"
+                )
+
+            transport = self._transport
+            if transport is None:
+                raise RuntimeError("dispatched unary call has no transport")
+            self._state = _UnaryDispatchState.TIMED_OUT_AFTER_DISPATCH
+            return _UnaryTimeoutOutcome(self._state, transport)
+
+
+@dataclass
+class _UnaryCloseAttempt:
+    completed: bool = False
+    error: BaseException | None = None
+
+
 class UnaryDispatchPool:
     """SDK-owned single-flight unary wait/retire state machine.
 
-    Product facades may impose a client-side wait budget, but they must not own
-    daemon handle reuse or delayed close rules. This pool keeps one reusable
-    unary transport for owned daemon sessions, retires it after a timed-out
-    caller wait, and closes retired transports only after the active daemon call
-    returns.
+    Callers acquire the flight lease before creating a worker. Owned transports
+    are published through the pool lifecycle, retired after timed-out dispatch,
+    and retained for retry if closing them fails.
     """
 
     def __init__(
@@ -310,9 +585,19 @@ class UnaryDispatchPool:
         self._transport_factory = transport_factory
         self._owned = owned
         self._lock = threading.Lock()
+        self._lifecycle = threading.Condition(self._lock)
         self._flight_lock = threading.Lock()
+        self._state = _UnaryPoolState.OPEN
+        self._generation = 0
+        self._active_invocations = 0
         self._transport: UnaryInvocationTransport | None = None
-        self._retired: set[int] = set()
+        self._pending_factories = 0
+        self._retired: dict[int, UnaryInvocationTransport] = {}
+        self._closing_transports: set[int] = set()
+        self._close_failures: list[BaseException] = []
+        self._cleanup_worker_running = False
+        self._delegated_close: _UnaryCloseAttempt | None = None
+        self._terminal_close_requested = False
 
     @classmethod
     def from_transport(cls, transport: UnaryInvocationTransport) -> "UnaryDispatchPool":
@@ -354,59 +639,69 @@ class UnaryDispatchPool:
         *,
         timeout: float | None,
     ) -> dict[str, object]:
-        result: queue.Queue[tuple[bool, Mapping[str, object] | BaseException]] = (
-            queue.Queue(maxsize=1)
-        )
-        timed_out = threading.Event()
-        active_transport: list[UnaryInvocationTransport | None] = [None]
+        budget = _UnaryTimeoutBudget(timeout)
+        generation = self._admit_invocation()
+        if not budget.acquire(self._flight_lock):
+            self._validate_admission(generation)
+            raise _unary_wait_timeout(timeout, execution_started=False) from None
 
-        def invoke_on_transport() -> None:
-            transport: UnaryInvocationTransport | None = None
-            try:
-                with self._flight_lock:
-                    if timed_out.is_set():
+        invocation_started = False
+        try:
+            self._start_invocation(generation)
+            invocation_started = True
+            result: queue.Queue[tuple[bool, Mapping[str, object] | BaseException]] = (
+                queue.Queue(maxsize=1)
+            )
+            attempt = _UnaryDispatchAttempt()
+
+            def invoke_on_transport() -> None:
+                transport: UnaryInvocationTransport | None = None
+                outcome: tuple[bool, Mapping[str, object] | BaseException] | None = None
+                try:
+                    if not attempt.is_queued():
                         return
                     transport = self._connected()
-                    active_transport[0] = transport
-                    if timed_out.is_set():
-                        self._retire(transport)
+                    if not self._begin_dispatch(attempt, transport):
                         return
-                    result.put((True, operation(transport)))
-            except BaseException as exc:
-                result.put((False, exc))
-            finally:
-                if transport is not None:
-                    active_transport[0] = None
-                    retired = self._take_retired(transport)
-                    if self._owned and (timed_out.is_set() or retired):
-                        with contextlib.suppress(BaseException):
-                            transport.close()
+                    try:
+                        outcome = (
+                            True,
+                            operation(transport),
+                        )
+                    except BaseException as exc:
+                        outcome = (False, exc)
+                    finally:
+                        attempt.complete()
+                except BaseException as exc:
+                    outcome = (False, exc)
+                finally:
+                    try:
+                        if outcome is not None:
+                            result.put(outcome)
+                    finally:
+                        self._finish_invocation()
+                        self._flight_lock.release()
+                    if transport is not None:
+                        self._schedule_cleanup()
 
-        threading.Thread(
-            target=invoke_on_transport,
-            name="easynet-sdk-unary",
-            daemon=True,
-        ).start()
+            worker = threading.Thread(
+                target=invoke_on_transport,
+                name="easynet-sdk-unary",
+                daemon=True,
+            )
+            worker.start()
+        except BaseException:
+            if invocation_started:
+                self._finish_invocation()
+            self._flight_lock.release()
+            raise
+
         try:
-            ok, payload = result.get(timeout=timeout)
+            ok, payload = result.get(timeout=budget.remaining())
         except queue.Empty:
-            timed_out.set()
-            transport = active_transport[0]
-            if transport is not None:
-                self._retire(transport)
-            raise SDKError(
-                code=ErrorCode.TIMEOUT,
-                stage="runtime_transport",
-                retry=RetryHint.SAFE,
-                retryable=True,
-                message=(
-                    f"no response within {timeout}s — the server-side execution "
-                    "is still governed by the ability's timeout_seconds"
-                ),
-                details={
-                    "reason": "client_wait_timeout",
-                    "timeout_seconds": timeout,
-                },
+            timeout_outcome = self._timeout_attempt(attempt)
+            raise _unary_wait_timeout(
+                timeout, timeout_outcome.execution_started
             ) from None
         if not ok:
             assert isinstance(payload, BaseException)
@@ -414,15 +709,61 @@ class UnaryDispatchPool:
         return dict(cast(Mapping[str, object], payload))
 
     def close(self) -> None:
-        if not self._owned:
-            return
-        if self._flight_lock.acquire(blocking=False):
-            try:
-                self._close_idle()
-            finally:
-                self._flight_lock.release()
-            return
-        self._retire_active()
+        """Permanently close the pool without blocking on active work."""
+
+        with self._lifecycle:
+            if self._state is _UnaryPoolState.CLOSED:
+                return
+            self._terminal_close_requested = True
+            if self._state is _UnaryPoolState.QUIESCENT:
+                self._state = _UnaryPoolState.CLOSED
+                return
+        self.quiesce()
+
+    def quiesce(self) -> None:
+        """Release the current generation while keeping the pool reusable.
+
+        Quiesce never waits for an active worker or factory. The bounded cleanup
+        coordinator resolves retired transports; an idle close resolves them
+        synchronously and reports all failures. The next use opens a generation.
+        """
+
+        with self._lifecycle:
+            if self._state is _UnaryPoolState.CLOSED:
+                return
+            if self._state is _UnaryPoolState.OPEN:
+                self._begin_closing_locked()
+            if self._state is _UnaryPoolState.QUIESCENT:
+                return
+            if not self._owned or self._active_invocations != 0:
+                return
+
+            close_attempt = self._delegated_close
+            if close_attempt is not None and not close_attempt.completed:
+                while not close_attempt.completed:
+                    self._lifecycle.wait()
+                delegated_error = close_attempt.error
+                if delegated_error is not None:
+                    raise delegated_error
+                return
+
+            close_attempt = _UnaryCloseAttempt()
+            self._delegated_close = close_attempt
+
+        error: BaseException | None = None
+        try:
+            self._close_all_retired()
+            error = self._take_recorded_close_error()
+        except BaseException as exc:
+            error = exc
+        finally:
+            with self._lifecycle:
+                close_attempt.error = error
+                close_attempt.completed = True
+                self._lifecycle.notify_all()
+
+        if error is not None:
+            raise error
 
     @property
     def current_transport(self) -> UnaryInvocationTransport | None:
@@ -434,44 +775,278 @@ class UnaryDispatchPool:
     def connected_transport(self) -> UnaryInvocationTransport:
         """Return the current reusable transport, opening one if needed."""
 
+        with self._lock:
+            if self._state is _UnaryPoolState.QUIESCENT:
+                self._state = _UnaryPoolState.OPEN
+            self._require_open_locked()
         return self._connected()
 
     def _connected(self) -> UnaryInvocationTransport:
+        with self._lock:
+            self._require_open_locked()
+            if self._owned and self._transport is not None:
+                return self._transport
+            self._pending_factories += 1
+
+        try:
+            candidate = self._transport_factory()
+        except BaseException:
+            with self._lock:
+                self._pending_factories -= 1
+                self._finish_closing_locked()
+            raise
+
+        winner: UnaryInvocationTransport | None = None
+        close_candidate = False
+        with self._lock:
+            self._pending_factories -= 1
+            if self._state is _UnaryPoolState.OPEN:
+                if not self._owned:
+                    winner = candidate
+                elif self._transport is None:
+                    self._transport = candidate
+                    winner = candidate
+                elif self._transport is candidate:
+                    winner = candidate
+                else:
+                    winner = self._transport
+                    self._retire_locked(candidate)
+                    close_candidate = True
+            elif self._owned:
+                self._retire_locked(candidate)
+                close_candidate = True
+            self._finish_closing_locked()
+
+        if close_candidate:
+            self._schedule_cleanup()
+        with self._lock:
+            if winner is not None and self._state is _UnaryPoolState.OPEN:
+                return winner
+        if winner is None:
+            raise _closed_transport("unary dispatch pool is closing")
+        raise _closed_transport("unary dispatch pool cleanup is pending")
+
+    def _begin_dispatch(
+        self,
+        attempt: _UnaryDispatchAttempt,
+        transport: UnaryInvocationTransport,
+    ) -> bool:
+        with self._lock:
+            self._require_open_locked()
+            return attempt.begin(transport)
+
+    def _timeout_attempt(
+        self,
+        attempt: _UnaryDispatchAttempt,
+    ) -> _UnaryTimeoutOutcome:
+        with self._lock:
+            outcome = attempt.timeout()
+            if outcome.execution_started:
+                assert outcome.transport is not None
+                self._retire_locked(outcome.transport)
+            return outcome
+
+    def _retire_locked(self, transport: UnaryInvocationTransport) -> None:
         if not self._owned:
-            return self._transport_factory()
-        with self._lock:
-            if self._transport is None:
-                self._transport = self._transport_factory()
-            return self._transport
-
-    def _close_idle(self) -> None:
-        with self._lock:
-            transport = self._transport
+            return
+        if self._transport is transport:
             self._transport = None
-        if transport is not None:
+        self._retired.setdefault(id(transport), transport)
+
+    def _close_retired(
+        self,
+        transport: UnaryInvocationTransport,
+        *,
+        wait: bool = False,
+    ) -> bool:
+        if not self._owned:
+            return True
+
+        transport_id = id(transport)
+        with self._lifecycle:
+            if transport_id not in self._retired:
+                return True
+            if transport_id in self._closing_transports:
+                if not wait:
+                    return True
+                while transport_id in self._closing_transports:
+                    self._lifecycle.wait()
+                return transport_id not in self._retired
+            self._closing_transports.add(transport_id)
+
+        try:
             transport.close()
+        except BaseException as exc:
+            with self._lifecycle:
+                self._closing_transports.remove(transport_id)
+                self._close_failures.append(exc)
+                self._begin_closing_locked()
+                self._lifecycle.notify_all()
+            return False
 
-    def _retire_active(self) -> None:
-        with self._lock:
-            if self._transport is not None:
-                self._retired.add(id(self._transport))
-                self._transport = None
+        with self._lifecycle:
+            self._closing_transports.remove(transport_id)
+            self._retired.pop(transport_id, None)
+            self._finish_closing_locked()
+            self._lifecycle.notify_all()
+        return True
 
-    def _retire(self, transport: UnaryInvocationTransport) -> None:
+    def _schedule_cleanup(self) -> None:
         if not self._owned:
             return
         with self._lock:
-            if self._transport is transport:
-                self._transport = None
-            self._retired.add(id(transport))
+            if (
+                self._cleanup_worker_running
+                or self._close_failures
+                or not self._retired
+            ):
+                return
+            self._cleanup_worker_running = True
 
-    def _take_retired(self, transport: UnaryInvocationTransport) -> bool:
+        worker = threading.Thread(
+            target=self._cleanup_retired,
+            name="easynet-sdk-unary-cleanup",
+            daemon=True,
+        )
+        try:
+            worker.start()
+        except BaseException as exc:
+            with self._lock:
+                self._cleanup_worker_running = False
+                self._close_failures.append(exc)
+                self._begin_closing_locked()
+
+    def _cleanup_retired(self) -> None:
+        try:
+            while True:
+                with self._lock:
+                    if self._close_failures:
+                        return
+                    transport = next(
+                        (
+                            candidate
+                            for transport_id, candidate in self._retired.items()
+                            if transport_id not in self._closing_transports
+                        ),
+                        None,
+                    )
+                if transport is None or not self._close_retired(transport):
+                    return
+        finally:
+            restart = False
+            with self._lock:
+                self._cleanup_worker_running = False
+                self._finish_closing_locked()
+                restart = not self._close_failures and any(
+                    transport_id not in self._closing_transports
+                    for transport_id in self._retired
+                )
+            if restart:
+                self._schedule_cleanup()
+
+    def _close_all_retired(self) -> None:
         with self._lock:
-            transport_id = id(transport)
-            if transport_id not in self._retired:
-                return False
-            self._retired.remove(transport_id)
-            return True
+            transports = tuple(self._retired.values())
+        for transport in transports:
+            self._close_retired(transport, wait=True)
+
+    def _take_recorded_close_error(self) -> BaseException | None:
+        with self._lock:
+            failures = tuple(self._close_failures)
+            self._close_failures.clear()
+            self._finish_closing_locked()
+        if len(failures) == 1:
+            return failures[0]
+        if failures:
+            return BaseExceptionGroup("unary transport cleanup failed", failures)
+        return None
+
+    def _begin_closing_locked(self) -> None:
+        if self._state is not _UnaryPoolState.OPEN:
+            return
+        self._generation += 1
+        self._state = _UnaryPoolState.CLOSING
+        if self._transport is not None:
+            self._retire_locked(self._transport)
+        self._finish_closing_locked()
+
+    def _finish_closing_locked(self) -> None:
+        if (
+            self._state is _UnaryPoolState.CLOSING
+            and self._active_invocations == 0
+            and self._pending_factories == 0
+            and not self._retired
+            and not self._closing_transports
+            and not self._close_failures
+        ):
+            self._state = (
+                _UnaryPoolState.CLOSED
+                if self._terminal_close_requested
+                else _UnaryPoolState.QUIESCENT
+            )
+
+    def _admit_invocation(self) -> int:
+        with self._lock:
+            if self._state is _UnaryPoolState.QUIESCENT:
+                self._state = _UnaryPoolState.OPEN
+            self._require_open_locked()
+            return self._generation
+
+    def _validate_admission(self, generation: int) -> None:
+        with self._lock:
+            if (
+                self._state is not _UnaryPoolState.OPEN
+                or generation != self._generation
+            ):
+                raise _closed_transport("unary dispatch generation was closed")
+
+    def _start_invocation(self, generation: int) -> None:
+        with self._lock:
+            if generation != self._generation:
+                raise _closed_transport("unary dispatch generation was closed")
+            self._require_open_locked()
+            self._active_invocations += 1
+
+    def _finish_invocation(self) -> None:
+        with self._lock:
+            self._active_invocations -= 1
+            self._finish_closing_locked()
+
+    def _require_open_locked(self) -> None:
+        if self._state is not _UnaryPoolState.OPEN:
+            raise _closed_transport("unary dispatch pool is closing")
+
+
+def _unary_wait_timeout(timeout: float | None, execution_started: bool) -> SDKError:
+    if execution_started:
+        return SDKError(
+            code=ErrorCode.TIMEOUT,
+            stage="runtime_transport",
+            retry=RetryHint.UNKNOWN,
+            retryable=False,
+            message=(
+                f"no response within {timeout}s; the invocation was dispatched, "
+                "so its execution outcome is unknown; server-side timeout_seconds "
+                "still governs completion"
+            ),
+            details={
+                "reason": "client_wait_timeout",
+                "timeout_seconds": timeout,
+                "execution_state": "unknown",
+            },
+        )
+    return SDKError(
+        code=ErrorCode.TIMEOUT,
+        stage="runtime_transport",
+        retry=RetryHint.SAFE,
+        retryable=True,
+        message=f"no response within {timeout}s; the invocation was not dispatched",
+        details={
+            "reason": "client_wait_timeout",
+            "timeout_seconds": timeout,
+            "execution_state": "not_started",
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -701,7 +1276,7 @@ class DaemonFrameStream:
     def close(self) -> None:
         self.handle.close()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[dict[str, object]]:
         while True:
             event = self.recv()
             yield event
@@ -754,7 +1329,7 @@ class DaemonBidiChannel:
 
 
 def _coerce_draft(
-    invocation: Mapping[str, object] | InvocationDraft
+    invocation: Mapping[str, object] | InvocationDraft,
 ) -> InvocationDraft:
     if isinstance(invocation, InvocationDraft):
         return invocation
@@ -800,10 +1375,24 @@ def _invocation_result_dict(result: InvocationResult) -> dict[str, object]:
         "selected_node_id": result.selected_node_id,
         "scheduling_reason": result.scheduling_reason,
         "elapsed_ms": result.elapsed_ms,
-        "receipt": dict(result.receipt) if result.receipt is not None else None,
-        "receipt_summary": (
-            _runtime_receipt_dict(result.receipt_summary)
-            if result.receipt_summary is not None
+        "admission_receipt": (
+            dict(result.admission_receipt)
+            if result.admission_receipt is not None
+            else None
+        ),
+        "admission_receipt_summary": (
+            _runtime_receipt_dict(result.admission_receipt_summary)
+            if result.admission_receipt_summary is not None
+            else None
+        ),
+        "terminal_receipt": (
+            dict(result.terminal_receipt)
+            if result.terminal_receipt is not None
+            else None
+        ),
+        "terminal_receipt_summary": (
+            _runtime_receipt_dict(result.terminal_receipt_summary)
+            if result.terminal_receipt_summary is not None
             else None
         ),
         "error": _failure_dict(result.error) if result.error is not None else None,
@@ -828,7 +1417,8 @@ def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:
             message=message,
             details={"runtime_result": dict(result)},
         )
-    receipt = result.get("receipt")
+    admission_receipt = result.get("admission_receipt")
+    terminal_receipt = result.get("terminal_receipt")
     terminal_state = _terminal_state_name(result.get("terminal_state"))
     response: dict[str, object] = {
         "ok": result.get("ok") is True,
@@ -840,7 +1430,12 @@ def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:
         "selected_node_id": _string_or_empty(result.get("selected_node_id")),
         "scheduling_reason": _string_or_empty(result.get("scheduling_reason")),
         "elapsed_ms": _non_negative_int(result.get("elapsed_ms")),
-        "admission_receipt": dict(receipt) if isinstance(receipt, Mapping) else None,
+        "admission_receipt": (
+            dict(admission_receipt) if isinstance(admission_receipt, Mapping) else None
+        ),
+        "terminal_receipt": (
+            dict(terminal_receipt) if isinstance(terminal_receipt, Mapping) else None
+        ),
         "sdk_runtime_result": dict(result),
     }
     if result.get("error") is not None:
@@ -874,7 +1469,7 @@ def _terminal_state_code(value: str) -> int:
     return _TERMINAL_STATE_CODES.get(normalized, 0)
 
 
-def _runtime_receipt_dict(receipt) -> dict[str, object]:
+def _runtime_receipt_dict(receipt: RuntimeReceipt) -> dict[str, object]:
     return {
         "receipt_id": receipt.receipt_id,
         "receipt_ura": receipt.receipt_ura,
@@ -926,7 +1521,10 @@ def _stream_cancel_dict(cancel: StreamCancel) -> dict[str, object]:
 
 
 def _bidi_frame_dict(frame: BidiFrame) -> dict[str, object]:
-    return json.loads(frame.to_json().decode("utf-8"))
+    decoded = json.loads(frame.to_json().decode("utf-8"))
+    if not isinstance(decoded, dict):
+        raise TypeError("bidi frame projection must be an object")
+    return decoded
 
 
 def _bidi_outcome_dict(outcome: BidiOutcome) -> dict[str, object]:
@@ -977,9 +1575,7 @@ def _remote_wire_error(error: object, *, stage: str = "stream") -> SDKError:
     reason_text = reason if isinstance(reason, str) else ""
     message_text = message if isinstance(message, str) else ""
     code = (
-        _REMOTE_ERROR_CODES.get(kind_text)
-        if kind_text
-        else ErrorCode.PROTOCOL_MISMATCH
+        _REMOTE_ERROR_CODES.get(kind_text) if kind_text else ErrorCode.PROTOCOL_MISMATCH
     )
     if code is None:
         code = canonical_failure_code(kind_text)

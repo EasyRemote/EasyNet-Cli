@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 )
@@ -23,6 +22,10 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 
 	libPath := requireLiveSmokeEnv(t, "EASYNET_GO_LIVE_SMOKE_LIB")
 	daemonBin := requireLiveSmokeEnv(t, "EASYNET_GO_LIVE_SMOKE_DAEMON")
+	repoRoot := os.Getenv("EASYNET_GO_LIVE_SMOKE_REPO_ROOT")
+	if repoRoot == "" {
+		repoRoot = filepath.Dir(filepath.Dir(filepath.Dir(daemonBin)))
+	}
 	home := os.Getenv("EASYNET_GO_LIVE_SMOKE_HOME")
 	if home == "" {
 		home = t.TempDir()
@@ -50,11 +53,12 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	logPath := filepath.Join(home, ".easynet", "go-sdk-smoke-daemon.log")
 	handle, err := control.Start(ctx, StartConfig{
-		Mode:      ModeDevice,
-		Realm:     realm,
-		DeviceID:  deviceID,
-		DaemonBin: daemonBin,
-		LogPath:   logPath,
+		Mode:       ModeDevice,
+		Realm:      realm,
+		DeviceID:   deviceID,
+		DaemonBin:  daemonBin,
+		WorkingDir: repoRoot,
+		LogPath:    logPath,
 		Env: map[string]string{
 			"HOME":                     home,
 			"EASYNET_REALM_TRUST_PATH": trustPath,
@@ -107,7 +111,30 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("runtime health is not ready: %#v", health)
 	}
 
-	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
+	duplicateDraft := goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "duplicate-prepare"}, 2)
+	firstPrepared, _, err := runtime.Prepare(ctx, duplicateDraft, PrepareOptions{})
+	if err != nil {
+		t.Fatalf("first duplicate-draft prepare: %v", err)
+	}
+	secondPrepared, _, err := runtime.Prepare(ctx, duplicateDraft, PrepareOptions{})
+	if err != nil {
+		t.Fatalf("second duplicate-draft prepare: %v", err)
+	}
+	if firstPrepared.PreparedID() == secondPrepared.PreparedID() {
+		t.Fatalf("duplicate draft reused prepared id %q", firstPrepared.PreparedID())
+	}
+	if firstPrepared.RequestID() == secondPrepared.RequestID() {
+		t.Fatalf("duplicate draft reused request id %q", firstPrepared.RequestID())
+	}
+	if firstPrepared.CanonicalHashHex() != secondPrepared.CanonicalHashHex() {
+		t.Fatalf(
+			"duplicate draft changed canonical hash: %q != %q",
+			firstPrepared.CanonicalHashHex(), secondPrepared.CanonicalHashHex(),
+		)
+	}
+	t.Log("duplicate draft allocated independent prepared and request ids")
+
+	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
 	if err != nil {
 		t.Fatalf("RuntimeClient.Invoke: %v", err)
 	}
@@ -123,7 +150,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("unary RuntimeClient.Invoke OK")
 
-	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, deviceURA, "sdk.live_smoke_missing", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
+	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "browser.open_session", map[string]any{}, 65), PrepareOptions{})
 	if err != nil {
 		t.Fatalf("typed terminal failure prepare: %v", err)
 	}
@@ -182,7 +209,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("RuntimeEventClient read live daemon handle events")
 
-	browser, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, deviceURA, "browser.open_session", map[string]any{"url": "https://example.com"}, 17))
+	browser, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "browser.open_session", map[string]any{"url": "https://example.com"}, 17))
 	if err != nil {
 		t.Fatalf("browser.open_session: %v", err)
 	}
@@ -194,7 +221,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	if !ok || sessionURA == "" {
 		t.Fatalf("browser session_ura missing: %#v", browserOutput)
 	}
-	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, deviceURA, "browser.capture_viewport", map[string]any{"session_ura": sessionURA}, 33))
+	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "browser.capture_viewport", map[string]any{"session_ura": sessionURA}, 33, "stream"))
 	if err != nil {
 		t.Fatalf("browser.capture_viewport stream: %v", err)
 	}
@@ -276,14 +303,13 @@ func writeGoLiveSmokeJSON(t *testing.T, path string, value any) {
 	}
 }
 
-func goLiveSmokeDraft(t *testing.T, deviceURA, ability string, args map[string]any, nonceStart byte) InvocationDraft {
+func goLiveSmokeDraft(t *testing.T, runtime *RuntimeClient, deviceURA, ability string, args map[string]any, nonceStart byte, callMode ...string) InvocationDraft {
 	t.Helper()
-	realmAndDevice := strings.TrimPrefix(deviceURA, "easynet:///r/")
-	parts := strings.SplitN(realmAndDevice, "/device/", 2)
-	if len(parts) != 2 {
-		t.Fatalf("invalid live-smoke device URA %q", deviceURA)
+	mode := "rpc"
+	if len(callMode) > 0 {
+		mode = callMode[0]
 	}
-	descriptorRef := "easynet:///r/" + parts[0] + "/ability/device." + parts[1] + "." + ability + "@1.0.0"
+	descriptorRef := goLiveSmokeDescriptorRef(t, runtime, deviceURA, ability, mode)
 	draft, err := NewInvocationBuilder().
 		WithCallerURA(deviceURA).
 		WithCalleeURA(deviceURA).
@@ -298,6 +324,24 @@ func goLiveSmokeDraft(t *testing.T, deviceURA, ability string, args map[string]a
 		t.Fatalf("build draft(%s): %v", ability, err)
 	}
 	return draft
+}
+
+func goLiveSmokeDescriptorRef(t *testing.T, runtime *RuntimeClient, deviceURA, ability, callMode string) string {
+	t.Helper()
+	if runtime == nil {
+		t.Fatalf("live-smoke RuntimeClient missing from test context")
+	}
+	descriptorRef, err := runtime.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA:  deviceURA,
+		CallerURA:  deviceURA,
+		SubjectURA: deviceURA,
+		Ability:    ability,
+		CallMode:   callMode,
+	})
+	if err != nil {
+		t.Fatalf("resolve descriptor_ref(%s): %v", ability, err)
+	}
+	return descriptorRef
 }
 
 func goLiveSmokeNonce(start byte) string {

@@ -2,7 +2,6 @@ import Foundation
 
 public struct RuntimeHealth: Equatable, Sendable {
     public let apiReady: Bool
-    public let daemonReady: Bool
     public let invocationReady: Bool
     public let directoryReady: Bool
     public let trustReady: Bool
@@ -14,7 +13,6 @@ public struct RuntimeHealth: Equatable, Sendable {
 
     public init(
         apiReady: Bool,
-        daemonReady: Bool,
         invocationReady: Bool,
         directoryReady: Bool,
         trustReady: Bool,
@@ -25,7 +23,6 @@ public struct RuntimeHealth: Equatable, Sendable {
         diagnostics: [String] = []
     ) {
         self.apiReady = apiReady
-        self.daemonReady = daemonReady
         self.invocationReady = invocationReady
         self.directoryReady = directoryReady
         self.trustReady = trustReady
@@ -40,7 +37,6 @@ public struct RuntimeHealth: Equatable, Sendable {
         let object = try decodeObject(raw, label: "runtime health JSON")
         return RuntimeHealth(
             apiReady: try requiredBool(object, "api_ready"),
-            daemonReady: try requiredBool(object, "daemon_ready"),
             invocationReady: try requiredBool(object, "invocation_ready"),
             directoryReady: try requiredBool(object, "directory_ready"),
             trustReady: try requiredBool(object, "trust_ready"),
@@ -57,7 +53,7 @@ public struct RuntimeHealth: Equatable, Sendable {
     }
 
     public var apiAlive: Bool {
-        apiReady && daemonReady
+        apiReady
     }
 
     public var ready: Bool {

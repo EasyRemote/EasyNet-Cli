@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "discuss.list_turns"
+descriptor_version = "1.0.0"
 description = "Snapshot every turn in a room from `since_seq` (default 0) onwards as a one-shot RPC. Sibling of `discuss.subscribe` for callers that don't need a long-lived stream — CLI rendering after a sub-turn, EAL programs reading transcripts as data."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

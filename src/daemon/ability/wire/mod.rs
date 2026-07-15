@@ -252,9 +252,10 @@ bidi_wire_kind = "json_frames"
         std::fs::write(
             root.join(format!("abilities/{ability}.ability.toml")),
             format!(
-                r#"schema_version = "1"
+                r#"schema_version = "2"
 name = "{ability}"
 description = "test descriptor for {ability}"
+admission_action = "stream"
 
 [input_schema]
 type = "object"

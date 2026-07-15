@@ -247,8 +247,21 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+    use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use serde_json::json;
+
+    fn pages_registry(realm: &str, user: &str) -> Arc<AxonAbilityCatalog> {
+        let device_ura = crate::core::ura::device_ura(realm, "pages-test-device");
+        let pages_agent = super::super::management_agent_ura(realm, user);
+        let authority_context = AbilityAuthorityContext::for_device_authority_root(device_ura)
+            .expect("Pages test Device authority")
+            .with_declared_agent_authority_root(pages_agent)
+            .expect("Pages test Agent authority");
+        Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            easynet_axon::invocation::LocalRuntime::new(),
+            authority_context,
+        ))
+    }
 
     fn clear_registry_for_user(user: &str) {
         let keys: Vec<_> = PUBLISHED_PROJECTS
@@ -277,7 +290,7 @@ mod tests {
             user,
             8787,
             "easynet.run",
-            Arc::new(AxonAbilityCatalog::new()),
+            pages_registry("easynet.run", user),
             json!({
                 "folder": folder.path().display().to_string(),
                 "project_id": project_id,
@@ -322,7 +335,7 @@ mod tests {
             user,
             8787,
             "easynet.run",
-            Arc::new(AxonAbilityCatalog::new()),
+            pages_registry("easynet.run", user),
             json!({
                 "folder": folder.path().display().to_string(),
                 "project_id": project_id,

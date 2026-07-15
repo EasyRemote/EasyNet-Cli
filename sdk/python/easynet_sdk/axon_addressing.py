@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import NoReturn, Protocol
+from typing import Any, Callable, NoReturn, Protocol, TypeVar, cast
 
 from easynet_axon.addressing import CanonicalAddressing
 from easynet_axon.invocation.axiom import AbilityDescriptorRef
@@ -14,6 +14,7 @@ from easynet_axon.ura import ParsedURA, ParseError, display_id
 from .errors import ErrorCode, RetryHint, SDKError
 
 _PROFILE = "easynet-strict-v2"
+_T = TypeVar("_T")
 
 
 class AddressingTransport(Protocol):
@@ -37,6 +38,14 @@ class AddressingProjection:
     descriptor_ref: str = ""
     ability_ura: str = ""
     descriptor_version: str = ""
+
+    @property
+    def owner_ura(self) -> str:
+        return _component(self.components, "owner_ura")
+
+    @property
+    def public_name(self) -> str:
+        return _component(self.components, "public_name")
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "AddressingProjection":
@@ -71,7 +80,7 @@ class AddressingProjection:
 
 
 @dataclass(frozen=True)
-class AbilityAddress:
+class AbilityURA:
     ability_ura: str
     owner_ura: str
     owner_kind: str
@@ -102,6 +111,13 @@ class AddressingClient:
 
     def parse_ura(self, ura: str) -> AddressingProjection:
         return self._request("project_identity", {"ura": _clean(ura, "ura")})
+
+    def project_ability_ura(self, ability_ura: str) -> AddressingProjection:
+        projection = self.parse_ura(ability_ura)
+        if projection.kind != "ability" or not projection.ura:
+            _invalid_addressing("ability_ura must project to an ability")
+        _ = projection.owner_ura, projection.public_name
+        return projection
 
     def project_descriptor_ref(self, descriptor_ref: str) -> AddressingProjection:
         return self._request("project_descriptor_ref", {"descriptor_ref": _clean(descriptor_ref, "descriptor_ref")})
@@ -161,12 +177,10 @@ class AddressingClient:
             _invalid_addressing("descriptor_ref projection is missing ability_ura")
         return projection.ability_ura
 
-    def ability_address(self, ability_ura: str) -> AbilityAddress:
-        projection = self.parse_ura(ability_ura)
+    def ability_ura(self, ability_ura: str) -> AbilityURA:
+        projection = self.project_ability_ura(ability_ura)
         values = projection.components
-        if projection.kind != "ability":
-            _invalid_addressing("ability_ura must project to an ability")
-        return AbilityAddress(
+        return AbilityURA(
             ability_ura=projection.ura,
             owner_ura=_component(values, "owner_ura"),
             owner_kind=_component(values, "owner_kind"),
@@ -178,6 +192,9 @@ class AddressingClient:
             profile=projection.profile,
             metadata=projection.metadata,
         )
+
+    def ability_address(self, ability_ura: str) -> AbilityURA:  # REQ-PROD-5 compatibility alias
+        return self.ability_ura(ability_ura)
 
     def _build(self, kind: str, **fields: object) -> str:
         projection = self._request("build_ura", {"kind": kind, **fields})
@@ -191,7 +208,10 @@ class AddressingClient:
             self._closed = True
 
 
-def _with_client(operation):
+AbilityAddress = AbilityURA  # REQ-PROD-5 compatibility alias
+
+
+def _with_client(operation: Callable[[AddressingClient], _T]) -> _T:
     client = AddressingClient(AxonAddressingTransport())
     try:
         return operation(client)
@@ -310,46 +330,46 @@ class AxonAddressingTransport:
         self, kind: str, request: Mapping[str, object]
     ) -> str:
         if kind == "user":
-            return self._addressing.user_ura(
+            return cast(str, self._addressing.user_ura(
                 _required_string(request, "realm"),
                 _required_string(request, "user_id"),
-            )
+            ))
         if kind == "device":
-            return self._addressing.device_ura(
+            return cast(str, self._addressing.device_ura(
                 _required_string(request, "realm"),
                 _required_string(request, "device_id"),
-            )
+            ))
         if kind == "agent":
             owner_kind = _required_string(request, "owner_kind")
             realm = _required_string(request, "realm")
             agent_id = _required_string(request, "agent_id")
             if owner_kind == "user":
-                return self._addressing.agent_ura(
+                return cast(str, self._addressing.agent_ura(
                     realm,
                     _required_string(request, "user_id"),
                     agent_id,
-                )
+                ))
             if owner_kind == "device":
-                return self._addressing.device_agent_ura(
+                return cast(str, self._addressing.device_agent_ura(
                     realm,
                     _required_string(request, "device_id"),
                     agent_id,
-                )
+                ))
             raise ParseError(f"unsupported agent owner_kind {owner_kind!r}")
         if kind == "hub":
-            return self._addressing.hub_ura(
+            return cast(str, self._addressing.hub_ura(
                 _required_string(request, "realm")
-            )
+            ))
         if kind == "ability":
-            return self._addressing.owner_ability_ura(
+            return cast(str, self._addressing.owner_ability_ura(
                 _required_string(request, "owner_ura"),
                 _required_string(request, "ability_name"),
-            )
+            ))
         if kind == "resource":
-            return self._addressing.resource_ura(
+            return cast(str, self._addressing.resource_ura(
                 _required_string(request, "owner_ura"),
                 _required_string(request, "path"),
-            )
+            ))
         raise ParseError(f"unsupported URA build kind {kind!r}")
 
     def close(self) -> None:
@@ -439,7 +459,7 @@ def _ura_projection(
     return _json_bytes(projection)
 
 
-def _required_ability(parsed: ParsedURA):
+def _required_ability(parsed: ParsedURA) -> Any:
     if parsed.kind != "ability" or parsed.ability is None:
         raise ParseError("value is not a typed ability URA")
     return parsed.ability
@@ -447,11 +467,11 @@ def _required_ability(parsed: ParsedURA):
 
 def _public_ability_name(parsed: ParsedURA) -> str:
     ability = _required_ability(parsed)
-    return (
+    return cast(str, (
         f"{ability.namespace}.{ability.local_name}"
         if ability.namespace
         else ability.local_name
-    )
+    ))
 
 
 def _request_object(raw: bytes, label: str) -> dict[str, object]:

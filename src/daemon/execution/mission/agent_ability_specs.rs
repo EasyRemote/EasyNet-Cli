@@ -21,24 +21,11 @@
 //
 // Why this module exists
 // ----------------------
-// EasyNet-Axon's SDK distinguishes two paths for "making something
-// callable from the network":
-//
-//   - `DendriteBridge::publish_capability(...)` — for a distributable
-//     *package* (tar.gz, signed) that the runtime will install and
-//     execute on a node. Semantically static: the payload is a
-//     serializable artifact that can be replicated between nodes.
-//
-//   - `AbilityToolAdapter::register(name, handler, spec)` — for a
-//     *live handler* that lives on *this* node only. Incoming RPC
-//     calls against the adapter dispatch directly to a local Rust
-//     closure; the capability is advertised via node labels
-//     (`a2a.agents_json[*].skills`) so discovery finds it.
-//
-// A locally-installed AI agent (Claude Code, Codex, …) is not a
-// distributable package — it is a subprocess binding that only
-// makes sense on the node where the operator installed it. The
-// adapter path is therefore the semantically correct one.
+// A locally-installed AI agent (Claude Code, Codex, ...) is a live
+// subprocess binding on this node, not a distributable capability
+// package. Its committed descriptor is registered in the daemon's
+// canonical control-plane catalogue, bound to daemon Invocation, and
+// published from the same live catalogue snapshot used by discovery.
 //
 // This module is the neutral ground between the registry
 // (`~/.easynet/agents.json`, which records what the operator has
@@ -50,7 +37,8 @@
 // each ability's arguments" — and answers it the same way from all
 // call sites:
 //
-//   1. `registry::a2a_labels::build` — to include in `a2a.agents_json[*].skills`
+//   1. `federation::read_model::a2a_labels::build` — to include in
+//      `a2a.agents_json[*].skills`
 //      so federated peers *discover* the abilities without calling
 //      anything.
 //   2. `daemon::ability::catalog::profiles::mcp` — to project
@@ -85,7 +73,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 
 use crate::daemon::execution::mission::directory::AgentDirectory;
 use crate::daemon::persistence::agent_registry::AgentEntry;
@@ -166,7 +156,7 @@ impl AgentAbilitySpec {
 
     /// The network-visible tool name. Stable; the identity under which
     /// this ability is both advertised (in `a2a.agents_json`) and
-    /// dispatched (by `AbilityToolAdapter`).
+    /// dispatched (through the daemon's committed catalogue binding).
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -182,67 +172,6 @@ impl AgentAbilitySpec {
     pub fn parameters(&self) -> &Value {
         &self.parameters
     }
-
-    /// Serialise into the per-entry JSON object used inside
-    /// `a2a.agents_json[*].skills`.
-    ///
-    /// The shape is the v2 wire contract specified by
-    /// `docs/spec/node-roster-label-v2.md`: every skill carries
-    /// `name`, `description`, `input_schema`, `output_schema`, and
-    /// `timeout_seconds`.
-    ///
-    /// Chat has a deliberately stable public discovery schema
-    /// (`prompt` + optional `context`) rather than the larger internal
-    /// execution manifest schema. The internal schema includes local
-    /// routing controls such as sessions, driver overrides, tool
-    /// exposure, and attachments; those are available through manifest
-    /// and local tool surfaces, but they are not part of the
-    /// cross-stack node roster contract.
-    pub fn to_discovery_json(&self) -> Value {
-        json!({
-            "description": self.discovery_description(),
-            "input_schema": self.discovery_input_schema(),
-            "name": self.name,
-            "output_schema": serde_json::Value::Null,
-            "timeout_seconds": serde_json::Value::Null,
-        })
-    }
-
-    fn discovery_description(&self) -> String {
-        let Some((agent_name, "chat")) = self.name.split_once('.') else {
-            return self.description.clone();
-        };
-        format!(
-            "Send a chat prompt to the locally-installed `{agent_name}` agent. The agent runs \
-             as a subprocess on this node; the response is returned verbatim. Use `context` to \
-             prepend a system-style preamble when the agent supports one."
-        )
-    }
-
-    fn discovery_input_schema(&self) -> Value {
-        if matches!(self.name.split_once('.'), Some((_agent_name, "chat"))) {
-            return chat_discovery_input_schema();
-        }
-        self.parameters.clone()
-    }
-}
-
-fn chat_discovery_input_schema() -> Value {
-    json!({
-        "additionalProperties": false,
-        "properties": {
-            "context": {
-                "description": "Optional system-style preamble prepended before `prompt`.",
-                "type": "string"
-            },
-            "prompt": {
-                "description": "The user prompt sent to the agent.",
-                "type": "string"
-            }
-        },
-        "required": ["prompt"],
-        "type": "object"
-    })
 }
 
 /// Build the ability list for one agent entry.
@@ -264,62 +193,6 @@ fn chat_discovery_input_schema() -> Value {
 /// AgentDirectory.
 pub fn abilities_for(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
     abilities_from_manifests(agent_name, entry)
-}
-
-/// Build the publication/read-model ability list for one hosted agent.
-///
-/// This is deliberately wider than [`abilities_for`]. `abilities_for`
-/// is manifest-only and fails closed when `root_path` is missing; it is
-/// the dispatch source of truth. Publication has one extra rule from
-/// the hosted-agent read model: every registered LLM agent exposes its
-/// default `<agent>.chat` contract even before the AgentDirectory has
-/// been materialized on disk. Manifest-backed chat still wins when it
-/// exists, so operator-edited descriptions and schemas are preserved.
-pub fn abilities_for_publication(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
-    let mut specs = abilities_for(agent_name, entry);
-    let default_chat = crate::daemon::ability::manifest::default_chat_manifest();
-    let qualified_chat = default_chat.qualified_name(agent_name);
-    if specs.iter().any(|spec| spec.name() == qualified_chat) {
-        return specs;
-    }
-    match AgentAbilitySpec::new(
-        qualified_chat,
-        default_chat.description().to_string(),
-        default_chat.input_schema().clone(),
-    ) {
-        Ok(spec) => specs.insert(0, spec),
-        Err(e) => {
-            eprintln!(
-                "abilities_for_publication[{agent_name}]: default chat manifest is malformed: {e}"
-            );
-        }
-    }
-    specs
-}
-
-/// Project a daemon-local agent ability key into the public ability
-/// name owned by `owner_ura`.
-///
-/// The daemon dispatch table stores implementation-qualified keys
-/// such as `anthropic.chat`. RFC-005 owner projections publish
-/// owner-local names such as `chat`. Prefer the URA-owned projection
-/// first; the local registry name is a fallback for transitional rows
-/// where the persisted agent URA's `agent_id` does not exactly match
-/// the local registry key.
-pub fn public_agent_ability_name(
-    owner_ura: &str,
-    local_agent_name: &str,
-    registry_name: &str,
-) -> String {
-    let projected = crate::core::ura::owner_local_ability_name(owner_ura, registry_name);
-    if projected != registry_name {
-        return projected;
-    }
-    registry_name
-        .strip_prefix(local_agent_name)
-        .and_then(|rest| rest.strip_prefix('.'))
-        .unwrap_or(registry_name)
-        .to_string()
 }
 
 /// Like `abilities_for`, but returns the full `AbilityManifest` for
@@ -558,22 +431,6 @@ mod tests {
     }
 
     #[test]
-    fn abilities_for_publication_synthesizes_default_chat_without_root_path() {
-        use crate::cli::commands::test_support::HomeGuard;
-        let _g = HomeGuard::new();
-
-        let entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
-        assert!(entry.root_path.is_none(), "precondition");
-        let abilities = abilities_for_publication("alice", &entry);
-        let names: Vec<&str> = abilities.iter().map(|ability| ability.name()).collect();
-        assert_eq!(
-            names,
-            vec!["alice.chat"],
-            "publication read model keeps hosted-agent default chat visible"
-        );
-    }
-
-    #[test]
     fn abilities_for_returns_exactly_one_chat_spec_per_agent_type() {
         // The current contract is "one ability per agent, named
         // `<agent>.chat`". Pinning the count here is what catches a
@@ -654,60 +511,6 @@ mod tests {
                 .and_then(|p| p.get("type"))
                 .and_then(Value::as_str),
             Some("string"),
-        );
-    }
-
-    #[test]
-    fn to_discovery_json_shape_is_pinned() {
-        // The discovery shape is a wire contract parsed by the EasyNet
-        // backend. It is specified by `docs/spec/node-roster-label-v2.md`.
-        // If this test breaks, the backend's companion parser must be
-        // updated in the same release window and
-        // `tests/fixtures/a2a-v2/golden.json` re-generated.
-        let entry = entry_named("claude", AgentType::ClaudeCode);
-        let spec = abilities_for("claude", &entry).into_iter().next().unwrap();
-        let json = spec.to_discovery_json();
-        let obj = json.as_object().expect("discovery json is an object");
-        assert_eq!(
-            obj.len(),
-            5,
-            "exactly 5 keys: description, input_schema, name, output_schema, timeout_seconds — got {obj:?}"
-        );
-        assert!(obj.contains_key("name"));
-        assert!(obj.contains_key("description"));
-        assert!(obj.contains_key("input_schema"));
-        assert!(obj.contains_key("output_schema"));
-        assert!(obj.contains_key("timeout_seconds"));
-        assert!(obj["output_schema"].is_null());
-        assert!(obj["timeout_seconds"].is_null());
-        assert!(
-            obj.get("has_input_schema").is_none(),
-            "v2 skill entries carry input_schema directly, not has_input_schema"
-        );
-        assert_eq!(
-            obj["description"],
-            "Send a chat prompt to the locally-installed `claude` agent. The agent runs as a subprocess on this node; the response is returned verbatim. Use `context` to prepend a system-style preamble when the agent supports one."
-        );
-        let input = obj["input_schema"]
-            .as_object()
-            .expect("input_schema object");
-        assert_eq!(input.get("type").and_then(Value::as_str), Some("object"));
-        assert_eq!(
-            input
-                .get("required")
-                .and_then(Value::as_array)
-                .expect("required array"),
-            &vec![json!("prompt")]
-        );
-        let props = input
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("properties object");
-        assert!(props.contains_key("prompt"));
-        assert!(props.contains_key("context"));
-        assert!(
-            !props.contains_key("session_id"),
-            "A2A roster uses public prompt/context schema, not the internal execution schema"
         );
     }
 

@@ -66,33 +66,14 @@ struct DaemonAgentListResponse {
 }
 
 pub(crate) fn list_agents() -> anyhow::Result<Vec<DaemonAgentRow>> {
-    let response = match crate::support::platform::local_invoke::invoke_local_ability(
-        "agent.list",
-        serde_json::json!({}),
-    ) {
-        Ok(response) => response,
-        Err(err) => {
-            #[cfg(test)]
-            {
-                if matches!(
-                    crate::support::platform::local_invoke::classify_invoke_error(&err),
-                    crate::support::platform::local_invoke::LocalInvokeErrorKind::DaemonOffline
-                ) {
-                    return list_agents_from_disk_for_tests();
-                }
-            }
-            return Err(err);
-        }
-    };
-    decode_agent_list_response(response)
+    let gateway = crate::cli::daemon_client::agent_gateway::agent_command_gateway();
+    list_agents_with_gateway(gateway.as_ref())
 }
 
-pub(crate) fn list_agents_with_client(
-    client: &crate::support::platform::local_daemon_grpc::LocalDaemonAbilityClient,
+pub(crate) fn list_agents_with_gateway(
+    gateway: &dyn crate::cli::daemon_client::agent_gateway::AgentCommandGateway,
 ) -> anyhow::Result<Vec<DaemonAgentRow>> {
-    let response = client
-        .invoke("agent.list", serde_json::json!({}))
-        .map_err(|err| anyhow::anyhow!("agent.list failed: {err}"))?;
+    let response = gateway.invoke("agent.list", serde_json::json!({}))?;
     decode_agent_list_response(response)
 }
 
@@ -102,34 +83,37 @@ fn decode_agent_list_response(response: serde_json::Value) -> anyhow::Result<Vec
     Ok(decoded.agents)
 }
 
-#[cfg(test)]
-fn list_agents_from_disk_for_tests() -> anyhow::Result<Vec<DaemonAgentRow>> {
-    let registry = crate::daemon::persistence::agent_registry::load_agents()?;
-    Ok(registry
-        .agents
-        .into_iter()
-        .map(|(name, entry)| {
-            let root_exists = entry.root_path.as_ref().map(|path| path.exists());
-            DaemonAgentRow {
-                name,
-                runtime: entry.agent_type.to_string(),
-                model: entry.model,
-                root_path: entry.root_path,
-                timeout_secs: Some(entry.timeout_secs),
-                root_exists,
-            }
-        })
-        .collect())
-}
-
 pub(crate) fn agent_kind(row: &DaemonAgentRow) -> anyhow::Result<AgentRuntimeKind> {
     row.runtime
         .parse()
         .map_err(|err| anyhow::anyhow!("daemon returned invalid runtime {:?}: {err}", row.runtime))
 }
 
-pub(crate) fn agent_root(row: &DaemonAgentRow) -> std::path::PathBuf {
-    row.root_path
-        .clone()
-        .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(&row.name))
+pub(crate) fn agent_root(row: &DaemonAgentRow) -> anyhow::Result<std::path::PathBuf> {
+    row.root_path.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent.list omitted root_path for agent {:?}; daemon agent projection is incomplete",
+            row.name
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{agent_root, DaemonAgentRow};
+
+    #[test]
+    fn missing_root_path_is_a_projection_error_not_a_persistence_fallback() {
+        let row = DaemonAgentRow {
+            name: "alice".to_string(),
+            runtime: "codex".to_string(),
+            model: None,
+            root_path: None,
+            timeout_secs: None,
+            root_exists: None,
+        };
+
+        let error = agent_root(&row).expect_err("missing daemon-owned root_path must fail");
+        assert!(error.to_string().contains("agent.list omitted root_path"));
+    }
 }

@@ -581,7 +581,7 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
         "Hub TCP+TLS deleted-principal recovery must surface daemon terminality, got: {bob_deleted_recovery_error}"
     );
 
-    drop(hub);
+    hub.shutdown_for_restart();
     let mut hub = HubDaemon::spawn(hub_home.path(), port);
 
     let alice_after_restart = easynet_json(
@@ -665,6 +665,7 @@ struct HubDaemon {
     stdout_log: PathBuf,
     stderr_log: PathBuf,
     keyring_log: PathBuf,
+    keyring_socket: PathBuf,
 }
 
 impl HubDaemon {
@@ -674,6 +675,7 @@ impl HubDaemon {
         let stdout_log = log_dir.join("hub-daemon.stdout.log");
         let stderr_log = log_dir.join("hub-daemon.stderr.log");
         let keyring_log = home.join(".easynet/logs/easynet-keyring.log");
+        let keyring_socket = home.join(".easynet/keyring.sock");
         let child = Command::new(env!("CARGO_BIN_EXE_easynet-daemon"))
             .env("HOME", home)
             .env("EASYNET_BOOTSTRAP_MEDIA_RESOURCES", "0")
@@ -694,6 +696,7 @@ impl HubDaemon {
             stdout_log,
             stderr_log,
             keyring_log,
+            keyring_socket,
         };
         daemon.wait_for_tcp_listener(port);
         daemon
@@ -734,12 +737,40 @@ impl HubDaemon {
             read_to_string(&self.keyring_log),
         );
     }
+
+    fn shutdown_for_restart(mut self) {
+        self.stop_child();
+        assert!(
+            self.wait_for_keyring_shutdown(Duration::from_secs(10)),
+            "Hub key service did not release {} after daemon shutdown\nkey-service:\n{}",
+            self.keyring_socket.display(),
+            read_to_string(&self.keyring_log),
+        );
+    }
+
+    fn stop_child(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
+
+    fn wait_for_keyring_shutdown(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while self.keyring_socket.exists() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        true
+    }
 }
 
 impl Drop for HubDaemon {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop_child();
+        let _ = self.wait_for_keyring_shutdown(Duration::from_secs(10));
     }
 }
 

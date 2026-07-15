@@ -132,7 +132,7 @@ fn daemon_invocation_migration_script_contract_holds() {
 fn kernel_boundary_script_contract_holds() {
     // Pins the final project-structure daemon boundary: retired source
     // roots/namespaces cannot return, daemon internals do not depend on
-    // CLI/FFI edges, and execution only sees federation through GatewayApi.
+    // CLI/FFI edges, and execution does not own federation transports.
     run_bash_script("tests/scripts/test_check_kernel_boundary.sh");
 }
 
@@ -229,11 +229,11 @@ fn openai_model_ability_ura_script_contract_holds() {
 }
 
 #[test]
-fn voice_call_axon_contract_script_holds() {
-    // Pins voice call signaling responses to the Axon voice contract:
-    // enum names plus numeric codes, not retired dual compatibility
+fn voice_call_product_contract_script_holds() {
+    // Pins voice call signaling responses to its product-owned contract:
+    // stable wire names plus numeric codes, not retired dual compatibility
     // fields such as state_proto/end_reason_proto.
-    run_bash_script("tests/scripts/test_check_voice_call_axon_contract.sh");
+    run_bash_script("tests/scripts/test_check_voice_call_product_contract.sh");
 }
 
 #[test]

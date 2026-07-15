@@ -371,18 +371,15 @@ mod tests {
 
     #[test]
     fn invoke_ability_ref_preserves_explicit_descriptor_ref() {
-        let parsed =
-            InvokeAbilityRef::parse("easynet:///r/acme/ability/device.node.observe.health@2.1.0")
-                .expect("descriptor ref");
+        let descriptor_ref =
+            "easynet:///r/acme/ability/device.node.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        let parsed = InvokeAbilityRef::parse(descriptor_ref).expect("descriptor ref");
 
         assert_eq!(
             parsed.selector().ability_ura(),
             "easynet:///r/acme/ability/device.node.observe.health"
         );
-        assert_eq!(
-            parsed.descriptor_ref.as_deref(),
-            Some("easynet:///r/acme/ability/device.node.observe.health@2.1.0")
-        );
+        assert_eq!(parsed.descriptor_ref.as_deref(), Some(descriptor_ref));
     }
 
     #[test]

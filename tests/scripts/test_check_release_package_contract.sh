@@ -17,6 +17,7 @@ make_sandbox() {
     cp "$REPO_ROOT/packaging/release/e2e-release-flow.sh" "$sandbox/packaging/release/e2e-release-flow.sh"
     cp "$REPO_ROOT/packaging/release/e2e-release-install.sh" "$sandbox/packaging/release/e2e-release-install.sh"
     cp "$REPO_ROOT/packaging/release/install.sh" "$sandbox/packaging/release/install.sh"
+    cp "$REPO_ROOT/packaging/release/dev-install-local.sh" "$sandbox/packaging/release/dev-install-local.sh"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
     cp "$REPO_ROOT/include/easynet_cli.exports.v5" "$sandbox/include/easynet_cli.exports.v5"
     cp "$REPO_ROOT/docs/spec/ffi-abi-v5.md" "$sandbox/docs/spec/ffi-abi-v5.md"
@@ -38,6 +39,13 @@ rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing keyring build should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/ --bin easynet-keyring//' "$SB/packaging/release/dev-install-local.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "dev installer missing keyring build should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's#include/easynet_cli\.h#include/missing_header.h#g' \

@@ -1,0 +1,21 @@
+schema_version = "2"
+name = "session.open"
+descriptor_version = "1.0.0"
+description = "Open the daemon-owned reverse Bidi carrier that lets a joined device maintain presence and receive routed dispatch frames."
+call_mode = "bidi"
+capability_state = "cutover_ready"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":true}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = []
+additionalProperties = false

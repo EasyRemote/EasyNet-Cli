@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from sdk_public_surface_policy import (
+    DOWNSTREAM_ITEMS,
+    PRODUCT_NEUTRAL_CUTOVER_REF,
+    canonical_quarantine_reason,
+    public_root,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+MODEL = ROOT / "sdk/conformance/canonical-public-api.json"
+MATRIX = ROOT / "sdk/conformance/sdk-parity-matrix.json"
+LANGUAGES = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
+
+# Ordered semantic rules are deliberately narrow. An item matching no rule is an
+# inventory failure, not an implicit public/canonical assumption.
+SEMANTIC_RULES: list[tuple[str, str]] = [
+    (r"(abilitydispatch|abilitypackage|deployability|deploypackage|deploytonode|exportability|uninstallability|buildabilitypackage)", "ability_invocation_facade"),
+    (r"(mcptool|tooladapter|toolhandler|toolspec|progresssink|reportoutcome|^mcp$)", "unary_invoke"),
+    (r"(phasereceipt|receiptphase|newreceipt|deploytrace|phasestatus|^phase$|^receipt$)", "terminal_receipt_facts"),
+    (r"(capturemode|mediacapture)", "stream"),
+    (r"(^modespec$)", "stream"),
+    (r"(canonicalserialise)", "terminal_receipt_facts"),
+    (r"(parsedescriptorfromargs)", "ability_descriptor_projection"),
+    (r"(normalizeid)", "canonical_addressing"),
+    (r"(normalizetags|parsebool|strfromvalue)", "typed_errors"),
+    (r"(randomhex|unixmillis|unixseconds)", "complete_invocation_draft"),
+    (r"(runfromargs|runfromenv)", "runtime_lifecycle"),
+    (r"(^ability$)", "ability_invocation_facade"),
+    (r"(^presets$)", "runtime_connection"),
+    (r"(^utils$)", "typed_errors"),
+    (r"(abilitydescriptor|descriptorref|descriptorprojection|abilityschema)", "ability_descriptor_projection"),
+    (r"(accesscontrol|admission|grantactive|grantrevoked|noncereplay)", "access_control"),
+    (r"(delegation|sessionauthority|authority|proofbinding|hostedattestation|hostattestation|subjectauth|privateagentauth|privatehubauth)", "authority_metadata"),
+    (r"(canonicaladdress|abilityaddress|addressing|abilityura|agentura|entityura|receiptura|\bura\b|urabuilder|easynetaxonura)", "canonical_addressing"),
+    (r"(bidi|duplex)", "bidi"),
+    (r"(stream)", "stream"),
+    (r"(receiptchain|verifyreceipt|verifiedreceipt|unverifiedreceipt|chaincheck|receiptverifier|finalizationcheckpoint|computereceipthash|verifyphase|verifyhostattestation)", "receipt_verification"),
+    (r"(receipthistory|receiptlist|receiptget|receiptquery|receiptanchor|receiptref|tracegraph|traceedge|ledgerrecord|invocationindex|persistentlog|causallink)", "receipt_history"),
+    (r"(terminalreceipt|runtimereceipt|receiptfacts|receiptbody|receipttype|receiptjson|receiptproof|hostedagentreceipt|canonicalreceipt)", "terminal_receipt_facts"),
+    (r"(prepared|invocationprepare|signingmaterial|signedinvocation|signatureprovider|signerhandle|\bsigner\b)", "prepare_sign_submit"),
+    (r"(invocationdraft|invocationtuple|invocationbuilder|causal|agentref|agentidentity|subjectref|subjectidentity|entityref|invocationenvelope|invocationjson|canonicaljson|descriptorbound|freshnonce|privateagentsubject|privatehubsubject|validateenvelope|tojcs)", "complete_invocation_draft"),
+    (r"(managedsign|keyservice)", "managed_signing"),
+    (r"(principal.*recovery|recoverypolicy)", "principal_recovery"),
+    (r"(principal.*enroll|enrollment)", "principal_enrollment"),
+    (r"(publickeybinding|principal.*key|bindprincipal|rotateprincipal|revokeprincipalkey)", "principal_public_key_bindings"),
+    (r"(authorizationgrant|issuegrant|revokegrant)", "principal_authorization_grants"),
+    (r"(principal)", "principal_lifecycle"),
+    (r"(directory|discoverrequest|discoverresponse|resolveagent|resolvekey|resolver|federat|devicejoin|listuserdevices)", "directory_resolution"),
+    (r"(runtimeevent|abilitychangeevent|directoryevent)", "runtime_events"),
+    (r"(runtimeidentity|runtimecredential|selfidentity|identityjson)", "runtime_identity"),
+    (r"(sdkenvironment|processroot|environment)", "runtime_environment"),
+    (r"(runtimehealth|healthclient|healthtransport|diagnostic)", "runtime_health"),
+    (r"(runtimeadmin|administration)", "runtime_administration"),
+    (r"(controlipc|controlframe|controljson|controlendpoint)", "control_ipc"),
+    (r"(nativeruntime|cabiruntime|dendritebridge|nativebridge)", "native_runtime"),
+    (r"(feature|abiversion|sdkversion|requireabi|version$|versioninfo)", "abi_version_discovery"),
+    (r"(runtimeconnection|reconnect|connection|connectoptions)", "runtime_connection"),
+    (r"(runtimehost|serverconfig|serverhandle|startserver|attach|detach|runtimehandle|runtimemode|lifecycle|daemon|processhandle|supervisor|resource(limit|exhausted)|shutdown|easynetinit|stringfree|easynethandle|reaporphans|nowms)", "runtime_lifecycle"),
+    (r"(abilitycall|abilitytarget|childcontext|invocationobjectadapter|wireprojector|makeability)", "ability_invocation_facade"),
+    (r"(invocationhandle|invocationresult|invocationcancel|invocationterminalstate|finalizedinvocation|invocationsnapshot|invocationlimits|invocationusage|runtimeclient|invoke|callmode|localruntime|abilityregistry|abilitycontext|invocationcore|invocationstate|invocationcontrol|invocationevent|invocation.*tool|messageinbox|messageack|inboundmessage|inboxfull|toolschema|emitextras|terminalstates|valideventtypes|newinvocationid|handle$|messaging|easynetaxoninvocation|^invocation$)", "unary_invoke"),
+    (r"(sdkerror|axonerror|errorcode|errorclass|retryhint|failure|errorstage|err[a-z]|mapprotocode)", "typed_errors"),
+    (r"(runtimeability|abilityoptions|abilityregistration|abilityframe|abilityfn|abilityraw|abilitysigned|publishcapability|childinvocation|abilityproof)", "ability_invocation_facade"),
+    (r"(backpressure|credit|tts|phrase|drain|producer|resumepolicy|loopback)", "stream"),
+    (r"(jsonvalue|jsonreader|jsonwriter|serialization)", "complete_invocation_draft"),
+    (r"(default|max|zero|reason|securityclass|result$)", "typed_errors"),
+    (r"(sign|keyresolver|pubkey|sha256)", "prepare_sign_submit"),
+    (r"(ledger|audit|persistence|checkpoint)", "receipt_history"),
+    (r"(axiom|bundle)", "complete_invocation_draft"),
+    (r"(asynciteration|receiveoptions)", "stream"),
+    (r"(profile)", "typed_errors"),
+    (r"(^easynetaxon$)", "runtime_connection"),
+    (r"(runtime|server)", "native_runtime"),
+]
+
+def quarantine_replacement(
+    language: str,
+    item: str,
+    exact: dict[tuple[str, str], str],
+    aliases: dict[str, set[str]],
+) -> list[str]:
+    if public_root(item) in DOWNSTREAM_ITEMS:
+        return ["capability_inventory.principal_authorization_grants"]
+    if "CABI" in item:
+        return ["capability_inventory.native_runtime"]
+    try:
+        capability = classify(language, item, exact, aliases)
+    except ValueError:
+        key = normalize(item)
+        if any(token in key for token in ("runtime", "mode", "startconfig", "lifecycle")):
+            capability = "runtime_lifecycle"
+        elif any(token in key for token in ("directory", "listuser", "hubendpoint")):
+            capability = "directory_resolution"
+        elif any(token in key for token in ("device", "hub", "nodeid", "realm")):
+            capability = "canonical_addressing"
+        else:
+            capability = "typed_errors"
+    return [f"capability_inventory.{capability}"]
+
+
+def normalize(value: str) -> str:
+    value = value.split("#", 1)[0]
+    root = value.split(".", 1)[0]
+    if root[:1].isupper():
+        value = root
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def support_shape_group(item: str, role: str) -> str:
+    base, _, member = item.split("#", 1)[0].partition(".")
+    key = re.sub(r"[^a-z0-9]", "", base.lower())
+    operation = re.sub(r"[^a-z0-9]", "", member.lower())
+    aliases = {
+        "defaultreceipthistorylimit": "defaultreceiptpagelimit",
+        "maxreceipthistorylimit": "maxreceiptpagelimit",
+        "defaultruntimeeventpagelimit": "defaultruntimeeventpagelimit",
+        "maxruntimeeventpagelimit": "maxruntimeeventpagelimit",
+    }
+    for source, target in aliases.items():
+        key = key.replace(source, target)
+    operation = {
+        "marshaljson": "serializejson",
+        "tojson": "serializejson",
+        "todict": "serializejson",
+        "fromjson": "deserializejson",
+    }.get(operation, operation)
+    if operation:
+        key = f"{key}.{operation}"
+    return f"{role}:{key}"
+
+
+def support_parent(item: str, classified: str) -> str:
+    key = re.sub(r"[^a-z0-9]", "", item.lower())
+    for token, capability in (
+        ("receipt", "receipt_history"),
+        ("directory", "directory_resolution"),
+        ("runtimeevent", "runtime_events"),
+        ("bidi", "bidi"),
+        ("stream", "stream"),
+        ("managedsigning", "managed_signing"),
+        ("controlframe", "control_ipc"),
+        ("runtimeidentity", "runtime_identity"),
+    ):
+        if token in key:
+            return capability
+    return classified
+
+
+def owner_maps(model: dict[str, Any]) -> tuple[dict[tuple[str, str], str], dict[str, set[str]]]:
+    exact: dict[tuple[str, str], str] = {}
+    aliases: dict[str, set[str]] = {}
+    for capability, projection in model["capability_inventory"].items():
+        aliases.setdefault(capability, set())
+        for language in ("go", "python"):
+            for section in ("symbols", "members"):
+                for item in projection[capability if False else language][section]:
+                    exact[(language, item)] = capability
+                    aliases[capability].add(normalize(item))
+    return exact, aliases
+
+
+def classify(language: str, item: str, exact: dict[tuple[str, str], str], aliases: dict[str, set[str]]) -> str:
+    if (language, item) in exact:
+        return exact[(language, item)]
+    key = normalize(item)
+    matches = [capability for capability, names in aliases.items() if key in names]
+    if len(matches) == 1:
+        return matches[0]
+    for pattern, capability in SEMANTIC_RULES:
+        if re.search(pattern, key):
+            return capability
+    raise ValueError(f"unclassified public item: {language}:{item}")
+
+
+def inventory(language: str, cache: Path) -> dict[str, Any]:
+    path = cache / f"{language}-api.json"
+    subprocess.run(
+        [sys.executable, str(ROOT / "sdk/conformance/public_api_inventory.py"), language, "--output", str(path)],
+        cwd=ROOT,
+        check=True,
+    )
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if value["symbols"] != sorted(set(value["symbols"])) or value["members"] != sorted(set(value["members"])):
+        raise ValueError(f"inventory is not canonical: {language}")
+    return value
+
+
+def package_manifest() -> dict[str, list[dict[str, str]]]:
+    go_output = subprocess.run(
+        ["go", "list", "-f", "{{.Dir}}", "./..."],
+        cwd=ROOT / "sdk/go", check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    go_categories = {
+        "sdk/go": "public_facade",
+        "sdk/go/directorycore": "provider_neutral_core",
+        "sdk/go/internal/axonpb": "generated_wire",
+        "sdk/go/internal/runtimeevents": "provider_neutral_core",
+        "sdk/go/runtimeevents": "provider_neutral_core",
+    }
+    go_paths = sorted(str(Path(path).resolve().relative_to(ROOT)) for path in go_output)
+    unknown = sorted(set(go_paths) - set(go_categories))
+    if unknown:
+        raise ValueError("unclassified Go package roots: " + ",".join(unknown))
+
+    python_base = ROOT / "sdk/python/easynet_sdk"
+    python_paths = sorted(
+        str(path.relative_to(ROOT))
+        for path in python_base.rglob("*")
+        if path.is_dir() and (path / "__init__.py").is_file()
+    )
+    python_paths.insert(0, "sdk/python/easynet_sdk")
+    python_paths = sorted(set(python_paths))
+    python_categories: dict[str, str] = {}
+    for path in python_paths:
+        if "/providers/easynet" in path:
+            raise ValueError(f"retired EasyNet provider package root: {path}")
+        elif "/providers" in path:
+            category = "provider_registry"
+        elif "/core" in path:
+            category = "provider_neutral_core"
+        elif "/_axon_pb" in path:
+            category = "generated_wire"
+        else:
+            category = "public_facade"
+        python_categories[path] = category
+    return {
+        "rust": [{"path": "../EasyNet-Axon/sdk/rust", "category": "canonical_axon_sdk"}],
+        "c_abi": [{"path": "include/easynet_cli.h", "category": "public_abi"}],
+        "go": [{"path": path, "category": go_categories[path]} for path in go_paths],
+        "python": [{"path": path, "category": python_categories[path]} for path in python_paths],
+        "node": [{"path": "sdk/node/index.d.ts", "category": "public_facade"}],
+        "java": [{"path": "sdk/java/src/main/java/run/easynet/daemon", "category": "public_facade"}],
+        "swift": [{"path": "sdk/swift/Sources/EasyNetDaemonSDK", "category": "public_facade"}],
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cache", type=Path, default=ROOT / "target/sdk-public-api-inventory")
+    parser.add_argument("--write", action="store_true")
+    args = parser.parse_args()
+    args.cache.mkdir(parents=True, exist_ok=True)
+    model = json.loads(MODEL.read_text(encoding="utf-8"))
+    exact, aliases = owner_maps(model)
+    inventories = {language: inventory(language, args.cache) for language in LANGUAGES}
+    axon_revision = inventories["rust"].get("source_revision")
+    if not isinstance(axon_revision, str) or not axon_revision:
+        raise ValueError("rust inventory source revision is required")
+    for language in ("rust", "python"):
+        if inventories[language].get("source_revision") != axon_revision:
+            raise ValueError(
+                f"{language} inventory source revision mismatch: "
+                f"expected={axon_revision}:actual={inventories[language].get('source_revision')}"
+            )
+
+    model["schema_version"] = 4
+    model["inventory_parsers"] = {language: inventories[language]["parser"] for language in LANGUAGES}
+    model["inventory_source_revisions"] = {
+        language: inventories[language].get("source_revision", "current_checkout")
+        for language in LANGUAGES
+    }
+    model["languages"] = {}
+    model["members"] = {}
+    model["non_canonical"] = {
+        "languages": {language: [] for language in LANGUAGES},
+        "members": {language: [] for language in LANGUAGES},
+    }
+    model["legacy_quarantine"] = {
+        "languages": {language: {} for language in LANGUAGES},
+        "members": {language: {} for language in LANGUAGES},
+    }
+    model["shape_sha256"] = {}
+    for language, found in inventories.items():
+        model["languages"][language] = []
+        model["members"][language] = []
+        for section, source_items in (("languages", found["symbols"]), ("members", found["members"])):
+            for item in source_items:
+                reason = canonical_quarantine_reason(item)
+                if reason is None:
+                    model[section][language].append(item)
+                    continue
+                model["non_canonical"][section][language].append(item)
+                model["legacy_quarantine"][section][language][item] = {
+                    "canonical_replacement": quarantine_replacement(language, item, exact, aliases),
+                    "consumer_cutover_ref": PRODUCT_NEUTRAL_CUTOVER_REF,
+                    "removal_phase": "quarantined",
+                    "reason": reason,
+                }
+        model["shape_sha256"][language] = {
+            item: hashlib.sha256(shape.encode()).hexdigest()
+            for item, shape in found["shapes"].items()
+        }
+
+    for capability in model["capabilities"]:
+        model["capability_inventory"][capability] = {
+            language: {"symbols": [], "members": []} for language in LANGUAGES
+        }
+    support_items: list[dict[str, str]] = []
+    support_lookup: dict[tuple[str, str], str] = {}
+    old_support = model.pop("non_capability_classification", None)
+    if old_support is not None:
+        for role, definition in old_support.items():
+            for language in ("go", "python"):
+                for section in ("symbols", "members"):
+                    for item in definition["projection"][language][section]:
+                        support_lookup[(language, item)] = role
+    else:
+        for item in model.get("supporting_items", []):
+            support_lookup[(item["language"], item["item"])] = item["role"]
+
+    for language in LANGUAGES:
+        for section in ("symbols", "members"):
+            for item in model["languages" if section == "symbols" else "members"][language]:
+                capability = classify(language, item, exact, aliases)
+                support_role = support_lookup.get((language, item))
+                if support_role:
+                    capability = support_parent(item, capability)
+                    support_items.append({
+                        "language": language,
+                        "section": section,
+                        "item": item,
+                        "parent_capability": capability,
+                        "role": support_role,
+                        "shape_sha256": model["shape_sha256"][language][item],
+                        "shape_group": support_shape_group(item, support_role),
+                    })
+                else:
+                    model["capability_inventory"][capability][language][section].append(item)
+    for projection in model["capability_inventory"].values():
+        for language in LANGUAGES:
+            projection[language]["symbols"].sort()
+            projection[language]["members"].sort()
+    model["supporting_items"] = sorted(support_items, key=lambda item: (item["language"], item["section"], item["item"]))
+    grouped_support: dict[str, dict[str, Any]] = {}
+    for item in model["supporting_items"]:
+        group = grouped_support.setdefault(item["shape_group"], {
+            "parent_capability": item["parent_capability"],
+            "role": item["role"],
+            "members": [],
+        })
+        if group["parent_capability"] != item["parent_capability"] or group["role"] != item["role"]:
+            raise ValueError(f"support shape group crosses semantic owners: {item['shape_group']}")
+        group["members"].append({
+            "language": item["language"],
+            "section": item["section"],
+            "item": item["item"],
+            "shape_sha256": item["shape_sha256"],
+        })
+    model["support_shape_groups"] = {
+        name: {
+            **group,
+            "members": sorted(group["members"], key=lambda member: (member["language"], member["section"], member["item"])),
+            "present_languages": sorted({member["language"] for member in group["members"]}, key=LANGUAGES.index),
+            "missing_languages": [language for language in LANGUAGES if language not in {member["language"] for member in group["members"]}],
+        }
+        for name, group in sorted(grouped_support.items())
+    }
+    model["canonical_packages"] = package_manifest()
+    model["dependency_revisions"] = {"easynet_axon": axon_revision}
+    revision = model["dependency_revisions"]["easynet_axon"]
+    provider_specs = [
+        ("go", "direct_runtime_provider", "sdk/go/", "sdk/go/direct_runtime.go", "RuntimeConnector", "sdk/go/connection.go", ["native_runtime", "unary_invoke", "stream", "bidi"]),
+        ("python", "direct_runtime_provider", "sdk/python/easynet_sdk/", "sdk/python/easynet_sdk/direct_runtime.py", "RuntimeConnector", "sdk/python/easynet_sdk/connection.py", ["native_runtime", "unary_invoke", "stream", "bidi"]),
+    ]
+    model["provider_implementations"] = []
+    for language, identity, owner_path, path, interface, interface_path, capabilities in provider_specs:
+        source = ROOT / path
+        interface_source = ROOT / interface_path
+        model["provider_implementations"].append({
+            "language": language,
+            "identity": identity,
+            "production_owner": "EasyNet daemon provider",
+            "owner_path": owner_path,
+            "path": path,
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "interface": interface,
+            "interface_path": interface_path,
+            "interface_sha256": hashlib.sha256(interface_source.read_bytes()).hexdigest(),
+            "capability_ids": capabilities,
+            "axon_revision": revision,
+            "proof_state": "behavior_attestation_incomplete",
+            "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality.",
+        })
+    encoded = json.dumps(model, indent=2, sort_keys=False) + "\n"
+    if args.write:
+        MODEL.write_text(encoded, encoding="utf-8")
+        import sdk_matrix
+
+        MATRIX.write_text(
+            json.dumps(sdk_matrix.generate(), indent=2) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        print(encoded, end="")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (OSError, ValueError, subprocess.CalledProcessError, json.JSONDecodeError) as error:
+        print(f"rebuild_public_api_model: {error}", file=sys.stderr)
+        raise SystemExit(1)

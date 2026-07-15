@@ -1,8 +1,8 @@
-"""Direct daemon Runtime Core transport over Axon gRPC UDS.
+"""Direct Runtime Core transport over Axon gRPC UDS.
 
-This module is the Python SDK's concrete daemon Invocation transport. It
-translates SDK JSON DTOs into Axon protobuf requests and delegates all runtime
-semantics to the daemon endpoint.
+This module is the Python SDK's concrete Invocation transport. It translates
+SDK JSON DTOs into Axon protobuf requests and delegates all runtime semantics
+to the configured endpoint.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ from .errors import (
     canonical_terminal_state_code,
 )
 from .invocation import InvocationDraft
-from .axon_addressing import AbilityAddress
-from .runtime import RuntimeTransport
+from .axon_addressing import AddressingProjection
+from .runtime import InvocationControlCapability, RuntimeTransport
 from .bidi import BidiFrame, BidiTransport
 from .stream import StreamTransport
 
@@ -52,7 +52,7 @@ class DirectRuntimeIdentityProjector(Protocol):
     def ability_ura_from_descriptor_ref(self, descriptor_ref: str) -> str:
         ...
 
-    def ability_address(self, ability_ura: str) -> AbilityAddress:
+    def project_ability_ura(self, ability_ura: str) -> AddressingProjection:
         ...
 
     def descriptor_bound_resource_subject_ura(self, owner_ura: str, path: str) -> str:
@@ -60,8 +60,8 @@ class DirectRuntimeIdentityProjector(Protocol):
 
 
 @dataclass
-class DirectDaemonRuntimeConnector:
-    """RuntimeConnector for direct daemon Invocation gRPC over UDS."""
+class DirectRuntimeConnector:
+    """RuntimeConnector for direct Invocation gRPC over UDS."""
 
     control_path: str = ""
     discovery_reader: Any = read_control_discovery
@@ -69,7 +69,7 @@ class DirectDaemonRuntimeConnector:
     identity: DirectRuntimeIdentityProjector | None = None
     close_identity: bool = False
     close_handle_transport: bool = False
-    _transports: list["DirectDaemonRuntimeTransport"] = field(default_factory=list)
+    _transports: list["DirectRuntimeTransport"] = field(default_factory=list)
     _closed: bool = False
 
     def resolve(self, options_json: bytes) -> bytes:
@@ -126,7 +126,7 @@ class DirectDaemonRuntimeConnector:
         max_message_bytes = _optional_non_negative_int(
             endpoint.get("max_message_bytes"), "max_message_bytes"
         )
-        transport = DirectDaemonRuntimeTransport.open(
+        transport = DirectRuntimeTransport.open(
             endpoint_value,
             dial_timeout_seconds=dial_timeout,
             invoke_timeout_seconds=invoke_timeout,
@@ -154,7 +154,7 @@ class DirectDaemonRuntimeConnector:
         handle_transport: RuntimeTransport | None,
         *,
         close_on_connector_close: bool = False,
-    ) -> "DirectDaemonRuntimeConnector":
+    ) -> "DirectRuntimeConnector":
         self._require_open()
         self.handle_transport = handle_transport
         self.close_handle_transport = (
@@ -167,7 +167,7 @@ class DirectDaemonRuntimeConnector:
         identity: DirectRuntimeIdentityProjector | None,
         *,
         close_on_connector_close: bool = False,
-    ) -> "DirectDaemonRuntimeConnector":
+    ) -> "DirectRuntimeConnector":
         self._require_open()
         self.identity = identity
         self.close_identity = close_on_connector_close and identity is not None
@@ -214,8 +214,8 @@ class DirectDaemonRuntimeConnector:
             raise _direct_error("runtime connector is closed", code=ErrorCode.INVALID_HANDLE)
 
 
-class DirectDaemonRuntimeTransport:
-    """Concrete RuntimeTransport using daemon Axon gRPC over UDS."""
+class DirectRuntimeTransport:
+    """Concrete RuntimeTransport using Axon gRPC over UDS."""
 
     def __init__(
         self,
@@ -249,7 +249,7 @@ class DirectDaemonRuntimeTransport:
         handle_transport: RuntimeTransport | None = None,
         identity: DirectRuntimeIdentityProjector | None = None,
         close_handle_transport: bool = False,
-    ) -> "DirectDaemonRuntimeTransport":
+    ) -> "DirectRuntimeTransport":
         if identity is None:
             raise _direct_error(
                 "identity projection facade is required for direct runtime descriptor projection",
@@ -271,7 +271,7 @@ class DirectDaemonRuntimeTransport:
         except grpc.FutureTimeoutError as exc:
             _close_channel(channel)
             raise _direct_error(
-                "daemon invocation endpoint is not ready",
+                "runtime invocation endpoint is not ready",
                 code=ErrorCode.DAEMON_OFFLINE,
                 retry=RetryHint.SAFE,
                 retryable=True,
@@ -281,7 +281,7 @@ class DirectDaemonRuntimeTransport:
         except Exception as exc:
             _close_channel(channel)
             raise _direct_error(
-                f"open daemon invocation endpoint failed: {exc}",
+                f"open runtime invocation endpoint failed: {exc}",
                 code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.SAFE,
                 retryable=True,
@@ -301,7 +301,7 @@ class DirectDaemonRuntimeTransport:
         self._require_open()
         try:
             draft = InvocationDraft.from_json(draft_json)
-            projected_draft, request = _draft_to_invoke_request(draft, self._identity)
+            projected_draft, request = _draft_to_invoke_request(draft, self._require_identity())
             response = self._stub.Invoke(
                 request,
                 timeout=self._invoke_timeout_seconds,
@@ -325,12 +325,12 @@ class DirectDaemonRuntimeTransport:
         self._require_open()
         try:
             draft = InvocationDraft.from_json(draft_json)
-            request = _draft_to_stream_request(draft, self._identity)
+            request = _draft_to_stream_request(draft, self._require_identity())
             iterator = self._stub.InvokeStream(
                 request,
                 timeout=self._invoke_timeout_seconds,
             )
-            transport = DirectDaemonStreamTransport(
+            transport = DirectRuntimeStreamTransport(
                 iterator,
                 endpoint=self._endpoint,
             )
@@ -347,7 +347,7 @@ class DirectDaemonRuntimeTransport:
             raise _grpc_error(exc, endpoint=self._endpoint) from exc
         except Exception as exc:
             raise _direct_error(
-                f"open daemon stream endpoint failed: {exc}",
+                f"open runtime stream endpoint failed: {exc}",
                 code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
@@ -360,8 +360,8 @@ class DirectDaemonRuntimeTransport:
         try:
             draft = InvocationDraft.from_json(draft_json)
             streams = _bidi_stream_descriptors(streams_json)
-            open_frame = _draft_to_bidi_open_frame(draft, streams, self._identity)
-            transport = DirectDaemonBidiTransport(endpoint=self._endpoint)
+            open_frame = _draft_to_bidi_open_frame(draft, streams, self._require_identity())
+            transport = DirectRuntimeBidiTransport(endpoint=self._endpoint)
             transport.start(
                 self._stub,
                 open_frame,
@@ -380,7 +380,7 @@ class DirectDaemonRuntimeTransport:
             raise _grpc_error(exc, endpoint=self._endpoint) from exc
         except Exception as exc:
             raise _direct_error(
-                f"open daemon bidi endpoint failed: {exc}",
+                f"open runtime bidi endpoint failed: {exc}",
                 code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
@@ -391,7 +391,7 @@ class DirectDaemonRuntimeTransport:
     def prepare(self, draft_json: bytes, options_json: bytes) -> bytes:
         handle_transport = self._require_handle_transport()
         draft = InvocationDraft.from_json(draft_json)
-        projected_draft = _direct_executable_draft(draft, self._identity)
+        projected_draft = _direct_executable_draft(draft, self._require_identity())
         return handle_transport.prepare(
             projected_draft.to_json().encode("utf-8"),
             options_json,
@@ -400,17 +400,19 @@ class DirectDaemonRuntimeTransport:
     def submit_signed(self, signed_json: bytes) -> bytes:
         return self._require_handle_transport().submit_signed(signed_json)
 
-    def await_handle(self, handle_id: int) -> bytes:
-        return self._require_handle_transport().await_handle(handle_id)
+    def await_handle(self, control: InvocationControlCapability) -> bytes:
+        return self._require_handle_transport().await_handle(control)
 
-    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
-        return self._require_handle_transport().cancel_handle(handle_id, reason)
+    def cancel_handle(
+        self, control: InvocationControlCapability, reason: str
+    ) -> bytes:
+        return self._require_handle_transport().cancel_handle(control, reason)
 
-    def handle_events(self, handle_id: int) -> bytes:
-        return self._require_handle_transport().handle_events(handle_id)
+    def handle_events(self, control: InvocationControlCapability) -> bytes:
+        return self._require_handle_transport().handle_events(control)
 
-    def free_handle(self, handle_id: int) -> None:
-        self._require_handle_transport().free_handle(handle_id)
+    def free_handle(self, control: InvocationControlCapability) -> None:
+        self._require_handle_transport().free_handle(control)
 
     def close(self) -> None:
         if self._closed:
@@ -428,7 +430,7 @@ class DirectDaemonRuntimeTransport:
             first_error = exc
         except Exception as exc:
             first_error = _direct_error(
-                f"close daemon invocation endpoint failed: {exc}",
+                f"close runtime invocation endpoint failed: {exc}",
                 code=ErrorCode.ROUTE_UNAVAILABLE,
                 retry=RetryHint.UNKNOWN,
                 retryable=False,
@@ -452,11 +454,20 @@ class DirectDaemonRuntimeTransport:
     def _require_handle_transport(self) -> RuntimeTransport:
         self._require_open()
         if self._handle_transport is None:
-            raise _unsupported("direct daemon handle transport is not configured")
+            raise _unsupported("direct runtime handle transport is not configured")
         return self._handle_transport
 
+    def _require_identity(self) -> DirectRuntimeIdentityProjector:
+        self._require_open()
+        if self._identity is None:
+            raise _direct_error(
+                "identity projection facade is not configured",
+                code=ErrorCode.INVALID_HANDLE,
+            )
+        return self._identity
 
-class DirectDaemonStreamTransport:
+
+class DirectRuntimeStreamTransport:
     """Bounded StreamTransport adapter over one Axon InvokeStream iterator."""
 
     def __init__(
@@ -493,7 +504,7 @@ class DirectDaemonStreamTransport:
         try:
             item = self._queue.get(timeout=timeout)
         except queue.Empty as exc:
-            raise TimeoutError("no direct daemon stream frame available") from exc
+            raise TimeoutError("no direct runtime stream frame available") from exc
         if isinstance(item, SDKError):
             raise item
         return item
@@ -503,9 +514,10 @@ class DirectDaemonStreamTransport:
         return _json_bytes(
             {
                 "stream_id": self.stream_id,
-                "cancelled": True,
-                "state": "Cancelled",
-                "terminal": True,
+                "cancel_requested": True,
+                "cancelled": False,
+                "state": "CancelRequested",
+                "terminal": False,
                 "reason": reason,
             }
         )
@@ -529,7 +541,7 @@ class DirectDaemonStreamTransport:
             if not self._closed and not self._terminal_seen:
                 self._put(
                     _direct_error(
-                        "daemon stream ended without a terminal frame",
+                        "runtime stream ended without a terminal frame",
                         code=ErrorCode.PROTOCOL,
                         retry=RetryHint.NEVER,
                         details={"endpoint": self._endpoint, "stream_id": self.stream_id},
@@ -545,7 +557,7 @@ class DirectDaemonStreamTransport:
             if not self._closed:
                 self._put(
                     _direct_error(
-                        f"daemon stream recv failed: {exc}",
+                        f"runtime stream recv failed: {exc}",
                         code=ErrorCode.ROUTE_UNAVAILABLE,
                         retry=RetryHint.UNKNOWN,
                         details={"endpoint": self._endpoint, "stream_id": self.stream_id},
@@ -567,7 +579,7 @@ class DirectDaemonStreamTransport:
             raise _direct_error("stream transport is closed", code=ErrorCode.INVALID_HANDLE)
 
 
-class DirectDaemonBidiTransport:
+class DirectRuntimeBidiTransport:
     """Bounded BidiTransport adapter over one Axon InvokeBidi call."""
 
     def __init__(
@@ -634,7 +646,7 @@ class DirectDaemonBidiTransport:
         try:
             item = self._inbox.get(timeout=timeout)
         except queue.Empty as exc:
-            raise TimeoutError("no direct daemon bidi frame available") from exc
+            raise TimeoutError("no direct runtime bidi frame available") from exc
         if isinstance(item, SDKError):
             raise item
         return item
@@ -665,8 +677,8 @@ class DirectDaemonBidiTransport:
         return _json_bytes(
             {
                 "session_id": self.session_id,
-                "state": "Cancelled",
-                "terminal": True,
+                "state": "CancelRequested",
+                "terminal": False,
                 "reason": reason,
             }
         )
@@ -702,7 +714,7 @@ class DirectDaemonBidiTransport:
             if not self._closed and not self._terminal_seen:
                 self._put_inbound(
                     _direct_error(
-                        "daemon bidi ended without a terminal frame",
+                        "runtime bidi ended without a terminal frame",
                         code=ErrorCode.PROTOCOL,
                         retry=RetryHint.NEVER,
                         details={"endpoint": self._endpoint, "session_id": self.session_id},
@@ -718,7 +730,7 @@ class DirectDaemonBidiTransport:
             if not self._closed:
                 self._put_inbound(
                     _direct_error(
-                        f"daemon bidi recv failed: {exc}",
+                        f"runtime bidi recv failed: {exc}",
                         code=ErrorCode.ROUTE_UNAVAILABLE,
                         retry=RetryHint.UNKNOWN,
                         details={"endpoint": self._endpoint, "session_id": self.session_id},
@@ -885,7 +897,7 @@ def _direct_ability_projection(
 ) -> _DirectAbilityProjection:
     try:
         ability_ura = identity.ability_ura_from_descriptor_ref(draft.descriptor_ref)
-        address = identity.ability_address(ability_ura)
+        projection = identity.project_ability_ura(ability_ura)
     except SDKError:
         raise
     except Exception as exc:
@@ -895,7 +907,7 @@ def _direct_ability_projection(
             retry=RetryHint.NEVER,
             cause=exc,
         ) from exc
-    if address.owner_ura != draft.callee_ura:
+    if projection.owner_ura != draft.callee_ura:
         raise _direct_error(
             "descriptor_ref is not owned by callee",
             code=ErrorCode.INVALID_INVOCATION,
@@ -904,19 +916,12 @@ def _direct_ability_projection(
                 "descriptor_ref": draft.descriptor_ref,
                 "callee_ura": draft.callee_ura,
                 "ability_ura": ability_ura,
-                "owner_ura": address.owner_ura,
+                "owner_ura": projection.owner_ura,
             },
-        )
-    if not address.public_name:
-        raise _direct_error(
-            "descriptor_ref ability projection is missing public_name",
-            code=ErrorCode.INVALID_ARGUMENT,
-            retry=RetryHint.NEVER,
-            details={"descriptor_ref": draft.descriptor_ref},
         )
     return _DirectAbilityProjection(
         ability_ura=ability_ura,
-        public_name=address.public_name,
+        public_name=projection.public_name,
     )
 
 
@@ -1065,7 +1070,6 @@ def _invoke_response_json(
         "selected_node_id": response.selected_node_id,
         "scheduling_reason": response.scheduling_reason,
         "elapsed_ms": response.elapsed_ms,
-        "receipt": terminal_receipt,
         "admission_receipt": admission_receipt,
         "terminal_receipt": terminal_receipt,
         "error": error,
@@ -1095,7 +1099,7 @@ def _stream_chunk_json(chunk: Any) -> bytes:
     if chunk.elapsed_ms:
         event["elapsed_ms"] = chunk.elapsed_ms
     if chunk.HasField("terminal_receipt"):
-        event["receipt"] = _receipt(chunk.terminal_receipt)
+        event["terminal_receipt"] = _receipt(chunk.terminal_receipt)
     return _json_bytes(event)
 
 
@@ -1191,7 +1195,10 @@ def _bidi_down_json(frame: Any) -> bytes:
         event["payload_base64"] = base64.b64encode(chunk.data).decode("ascii")
     elif payload == "receipt":
         receipt = _receipt(frame.receipt)
-        event["payload_json"] = {"receipt": receipt}
+        if _bidi_receipt_terminal(frame.receipt):
+            event["terminal_receipt"] = receipt
+        else:
+            event["admission_receipt"] = receipt
         if frame.receipt.HasField("failure"):
             event["error"] = _axon_failure(frame.receipt.failure, "direct_runtime.bidi")
     elif payload == "control":
@@ -1205,7 +1212,7 @@ def _bidi_down_json(frame: Any) -> bytes:
         }
     else:
         raise _direct_error(
-            "daemon bidi frame did not include a payload",
+            "runtime bidi frame did not include a payload",
             code=ErrorCode.PROTOCOL,
             retry=RetryHint.NEVER,
         )
@@ -1392,10 +1399,124 @@ def _receipt(receipt: Any) -> dict[str, object]:
         "prev_receipt_hash_hex": receipt.prev_receipt_hash.hex(),
         "self_hash_hex": receipt.self_hash.hex(),
         "payload_content_type": receipt.payload_content_type,
+        "causal_binding_kind": _causal_binding_kind(receipt.causal_binding),
+        "causal_binding": _causal_binding_projection(receipt.causal_binding),
+        "authority_binding_kind": _authority_binding_kind(receipt.authority_binding),
+        "authority_binding": _authority_binding_projection(receipt.authority_binding),
         "cleanup_complete": receipt.cleanup_complete,
         "reason": receipt.reason,
         "child_invocation_id": receipt.child_invocation_id,
     }
+
+
+def _receipt_ref_projection(receipt: Any) -> dict[str, object]:
+    return {
+        "receipt_hash_hex": receipt.receipt_hash.hex(),
+        "receipt_ura": receipt.receipt_ura,
+    }
+
+
+def _causal_binding_projection(context: Any) -> dict[str, object] | None:
+    form = context.WhichOneof("form")
+    if form == "none":
+        return {"form": "none"}
+    if form == "scalar":
+        return {"form": "scalar", "receipt": _receipt_ref_projection(context.scalar)}
+    if form == "list":
+        return {
+            "form": "list",
+            "prior": [_receipt_ref_projection(receipt) for receipt in context.list.prior],
+        }
+    if form == "merkle":
+        return {
+            "form": "merkle",
+            "root_hex": context.merkle.root.hex(),
+            "proof_ura": context.merkle.proof_ura,
+        }
+    return None
+
+
+def _causal_binding_kind(context: Any) -> str:
+    form = context.WhichOneof("form")
+    if form == "none":
+        return "none"
+    if form == "scalar":
+        return "scalar"
+    if form == "list":
+        return "list"
+    if form == "merkle":
+        return "merkle"
+    return ""
+
+
+def _authority_binding_projection(binding: Any) -> dict[str, object] | None:
+    authority = binding.WhichOneof("authority")
+    if authority == "self_authority":
+        return {
+            "kind": "self",
+            "principal_ura": binding.self_authority.principal_ura,
+        }
+    if authority == "delegated_authority":
+        value = binding.delegated_authority
+        return {
+            "kind": "delegation",
+            "issuer_ura": value.issuer_ura,
+            "subject_ura": value.subject_ura,
+            "caller_ura": value.caller_ura,
+            "audience": value.audience,
+            "scopes": list(value.scopes),
+            "issued_at_ms": value.issued_at_ms,
+            "expires_at_ms": value.expires_at_ms,
+            "signature_base64": base64.b64encode(value.signature).decode("ascii"),
+        }
+    if authority == "capability_grant":
+        return {
+            "kind": "capability",
+            "capability_ura": binding.capability_grant.capability_ura,
+        }
+    if authority == "policy_grant":
+        return {
+            "kind": "policy",
+            "policy_ura": binding.policy_grant.policy_ura,
+        }
+    if authority == "session_authority":
+        value = binding.session_authority
+        return {
+            "kind": "session",
+            "backend_ura": value.backend_ura,
+            "user_ura": value.user_ura,
+            "session_id": value.session_id,
+            "scopes": list(value.scopes),
+            "audiences": list(value.audiences),
+            "issued_at_ms": value.issued_at_ms,
+            "expires_at_ms": value.expires_at_ms,
+            "signature_base64": base64.b64encode(value.signature).decode("ascii"),
+        }
+    if authority == "bootstrap_authority":
+        return {
+            "kind": "bootstrap",
+            "principal_ura": binding.bootstrap_authority.principal_ura,
+            "realm": binding.bootstrap_authority.realm,
+            "ability": binding.bootstrap_authority.ability,
+        }
+    return None
+
+
+def _authority_binding_kind(binding: Any) -> str:
+    authority = binding.WhichOneof("authority")
+    if authority == "self_authority":
+        return "self"
+    if authority == "delegated_authority":
+        return "delegation"
+    if authority == "capability_grant":
+        return "capability"
+    if authority == "policy_grant":
+        return "policy"
+    if authority == "session_authority":
+        return "session"
+    if authority == "bootstrap_authority":
+        return "bootstrap"
+    return ""
 
 
 def _response_failure(

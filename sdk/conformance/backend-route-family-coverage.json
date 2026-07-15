@@ -14,12 +14,12 @@
         },
         {
           "kind": "sdk_conformance_case",
-          "ref": "sdk/conformance/cases/daemon-control-only.yaml"
+          "ref": "sdk/conformance/cases/runtime-control-only.yaml"
         }
       ],
       "sdk_primitives": [
         "HealthClient",
-        "DaemonControl",
+        "RuntimeHost",
         "RuntimeClient"
       ],
       "backend_profile_refs": [

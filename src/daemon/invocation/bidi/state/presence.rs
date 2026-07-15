@@ -262,8 +262,7 @@ pub enum PresenceEvent {
 struct PresenceSlot {
     session_id: PresenceSessionId,
     sender: DispatchSender,
-    /// Carrier contract the device declared on frame 0 (DEC-F004).
-    /// 0 = legacy JSON device; 1 = carrier-v1 proto frames.
+    /// Canonical carrier contract the device declared on frame 0 (DEC-F004).
     contract: SessionContract,
     /// Trust evidence attached to the admission decision that
     /// created this live slot. This is not a second liveness map:
@@ -275,16 +274,26 @@ struct PresenceSlot {
 /// dispatch contract version the claimant declared plus its per-boot
 /// claimant fingerprint (T1.2). One value object so registration
 /// sites cannot pass half the negotiation.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) const CANONICAL_SESSION_CARRIER_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionContract {
     pub version: u32,
     pub claimant_boot_nonce: Vec<u8>,
 }
 
 impl SessionContract {
-    /// A device that sent no SessionOpenExt — the JSON era.
-    pub fn legacy() -> Self {
-        Self::default()
+    pub fn canonical() -> Self {
+        Self {
+            version: CANONICAL_SESSION_CARRIER_VERSION,
+            claimant_boot_nonce: Vec::new(),
+        }
+    }
+}
+
+impl Default for SessionContract {
+    fn default() -> Self {
+        Self::canonical()
     }
 }
 
@@ -329,12 +338,24 @@ pub struct PresenceRegistration {
     pub session_id: PresenceSessionId,
     pub displaced: Option<DispatchSender>,
     /// T1.2: the prior claimant's boot nonce when this registration
-    /// displaced a live slot. Empty nonce = the prior was a legacy
-    /// device. `None` = nothing was displaced. A displacement whose
+    /// displaced a live slot. Empty nonce means the prior did not publish a
+    /// claimant fingerprint. `None` = nothing was displaced. A displacement whose
     /// nonce differs from the new claimant's is a claimant conflict
     /// (two processes fighting over one URA), not a same-device
     /// restart.
     pub displaced_claimant_nonce: Option<Vec<u8>>,
+}
+
+/// Atomic snapshot of one live reverse-dispatch session.
+///
+/// Sender identity and carrier version must come from the same presence slot.
+/// Reading them through separate registry lookups can combine a displaced
+/// sender with its replacement's negotiated contract.
+#[derive(Clone, Debug)]
+pub struct PresenceDispatchSession {
+    pub session_id: PresenceSessionId,
+    pub sender: DispatchSender,
+    pub contract_version: u32,
 }
 
 /// Concurrent registry of live `session.open` reverse channels.
@@ -392,24 +413,14 @@ impl PresenceRegistry {
     /// Returns the displaced sender if any so the caller can observe
     /// the prior session's state if it cares; production paths
     /// drop it.
-    /// Carrier contract version the live session at `ura` declared on
-    /// frame 0. `None` = no live session. `Some(0)` = legacy JSON
-    /// device. The hub dispatch write path consults this to pick the
-    /// frame encoding per device (DEC-F004 rolling upgrade).
-    pub fn dispatch_contract_version(&self, ura: &str) -> Option<u32> {
-        self.by_ura.get(ura).map(|slot| slot.contract.version)
-    }
-
     pub fn insert(&self, ura: String, sender: DispatchSender) -> Option<DispatchSender> {
         self.insert_tracked(ura, sender).displaced
     }
 
-    /// Register a new `session.open` and return the registry-owned
-    /// `session_id` alongside any displaced prior sender. Legacy
-    /// (contract-v0) registration; frame-0 negotiated sessions use
-    /// [`PresenceRegistry::insert_negotiated`].
+    /// Register a canonical `session.open` and return the registry-owned
+    /// `session_id` alongside any displaced prior sender.
     pub fn insert_tracked(&self, ura: String, sender: DispatchSender) -> PresenceRegistration {
-        self.insert_negotiated(ura, sender, SessionContract::legacy())
+        self.insert_negotiated(ura, sender, SessionContract::canonical())
     }
 
     /// Register a new `session.open` carrying the frame-0 carrier
@@ -435,6 +446,12 @@ impl PresenceRegistry {
         contract: SessionContract,
         trust: SessionTrustContext,
     ) -> PresenceRegistration {
+        assert!(
+            contract.version >= CANONICAL_SESSION_CARRIER_VERSION,
+            "session contract v{} is retired; v{} or newer is required",
+            contract.version,
+            CANONICAL_SESSION_CARRIER_VERSION,
+        );
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         let prior = self.by_ura.insert(
             ura.clone(),
@@ -510,15 +527,27 @@ impl PresenceRegistry {
     /// can hold it across `await` points without locking the shard.
     #[must_use]
     pub fn lookup(&self, ura: &str) -> Option<DispatchSender> {
-        self.by_ura.get(ura).map(|entry| entry.sender.clone())
+        self.lookup_dispatch_session(ura)
+            .map(|session| session.sender)
+    }
+
+    /// Snapshot sender identity and negotiated carrier contract from one live
+    /// slot. Dispatchers must use this instead of independent sender/version
+    /// reads so session displacement cannot create a mixed-generation view.
+    #[must_use]
+    pub fn lookup_dispatch_session(&self, ura: &str) -> Option<PresenceDispatchSession> {
+        self.by_ura.get(ura).map(|entry| PresenceDispatchSession {
+            session_id: entry.session_id,
+            sender: entry.sender.clone(),
+            contract_version: entry.contract.version,
+        })
     }
 
     /// Find the current `(session_id, sender)` pair for `ura`.
     #[must_use]
     pub fn lookup_tracked(&self, ura: &str) -> Option<(PresenceSessionId, DispatchSender)> {
-        self.by_ura
-            .get(ura)
-            .map(|entry| (entry.session_id, entry.sender.clone()))
+        self.lookup_dispatch_session(ura)
+            .map(|session| (session.session_id, session.sender))
     }
 
     /// O(1) liveness check. Hot paths (route resolution runs per
@@ -575,7 +604,7 @@ impl PresenceRegistry {
     /// with `public_key_b64`.
     ///
     /// This is the runtime half of user-key revocation. A missing
-    /// slot, a non-user legacy slot with no admitted key, or a slot
+    /// slot, a slot with no admitted user key, or a slot
     /// admitted by a different key is a no-op and emits no offline
     /// event.
     pub fn force_revoke_if_admitted_key(
@@ -640,7 +669,8 @@ mod tests {
         assert!(first.displaced.is_none());
         assert!(first.displaced_claimant_nonce.is_none());
         assert_eq!(
-            reg.dispatch_contract_version("easynet:///r/t/device/d1"),
+            reg.lookup_dispatch_session("easynet:///r/t/device/d1")
+                .map(|session| session.contract_version),
             Some(1)
         );
 
@@ -651,27 +681,29 @@ mod tests {
             "easynet:///r/t/device/d1".into(),
             tx2,
             SessionContract {
-                version: 0,
+                version: CANONICAL_SESSION_CARRIER_VERSION,
                 claimant_boot_nonce: vec![2; 16],
             },
         );
         assert!(second.displaced.is_some());
         assert_eq!(second.displaced_claimant_nonce, Some(vec![1; 16]));
         assert_eq!(
-            reg.dispatch_contract_version("easynet:///r/t/device/d1"),
-            Some(0)
+            reg.lookup_dispatch_session("easynet:///r/t/device/d1")
+                .map(|session| session.contract_version),
+            Some(CANONICAL_SESSION_CARRIER_VERSION)
         );
     }
 
     #[test]
-    fn legacy_insert_tracked_registers_contract_v0() {
+    fn insert_tracked_registers_canonical_contract() {
         let reg = PresenceRegistry::new();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let r = reg.insert_tracked("easynet:///r/t/device/d2".into(), tx);
         assert!(r.displaced_claimant_nonce.is_none());
         assert_eq!(
-            reg.dispatch_contract_version("easynet:///r/t/device/d2"),
-            Some(0)
+            reg.lookup_dispatch_session("easynet:///r/t/device/d2")
+                .map(|session| session.contract_version),
+            Some(CANONICAL_SESSION_CARRIER_VERSION)
         );
     }
 
@@ -853,7 +885,7 @@ mod tests {
         registry.insert_negotiated_with_trust(
             ura.clone(),
             make_dispatch_sender(),
-            SessionContract::legacy(),
+            SessionContract::canonical(),
             SessionTrustContext::user_pubkey(key),
         );
 
@@ -870,7 +902,7 @@ mod tests {
         registry.insert_negotiated_with_trust(
             ura.clone(),
             make_dispatch_sender(),
-            SessionContract::legacy(),
+            SessionContract::canonical(),
             SessionTrustContext::user_pubkey("pubkey-b"),
         );
 

@@ -308,233 +308,44 @@ pub(super) fn dispatch_to_agent(
         // same id will not help.
         .ok_or_else(|| EalError::NotFound(format!("agent '{key}' not found in registry")))?;
 
-    // Fast path: if the target ability has an `[exec]` binding in its
-    // on-disk manifest, run the executor directly and skip spawning
-    // the LLM. This is the EAL counterpart of the dispatcher's
-    // shell-exec short-circuit in `chat_ability::build_agent_ability_handler`
-    // — both paths converge on `manifests_for(...) → run_shell_exec(...)`
-    // for a deterministic ability. Without this branch, EAL's
-    // `agent.ability(...)` syntax would always go through the chat
-    // CLI even when the manifest pinned a concrete argv, and a
-    // weather lookup that should take 200 ms would burn 30 s of LLM
-    // tool-search latency.
     let bare_ability = ability.as_str();
-    let manifest_match = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
+    let timeout = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
         &agent_id.name,
         entry,
     )
     .into_iter()
-    .find(|m| m.name() == bare_ability);
-    if let Some(manifest) = manifest_match {
-        if let Some(exec) = manifest.exec() {
-            // Lower the step onto the daemon's Axon Invocation surface
-            // first: the daemon executes the same `[exec]` manifest but
-            // the call becomes a ledger-recorded seven-tuple invocation
-            // (caller/callee/ability/subject/nonce/causal_context/args)
-            // whose receipt anchors downstream steps reference as their
-            // causal parents. The in-process executor below remains the
-            // offline path (daemon down / ability not registered yet)
-            // and is recorded with `invocation: None` — no fabricated
-            // receipts.
-            //
-            // `adapter_fault: "drop_causal_context"` is the phase-1
-            // benchmark fault-injection knob (Easynet-Semantic-Operator-
-            // Integration negative missions): it models a binding that
-            // fails to preserve causal placement, so the invocation is
-            // emitted with an empty causal_context while the argument
-            // still reaches the adapter.
-            let display_name = format!("{}.{}", agent_id.name, bare_ability);
-            let timeout = manifest
-                .timeout_seconds()
-                .map(std::time::Duration::from_secs);
-            let effective_parents: &[Value] =
-                if arguments.get("adapter_fault").and_then(Value::as_str)
-                    == Some("drop_causal_context")
-                {
-                    &[]
-                } else {
-                    causal_parents
-                };
-            match crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
-                bare_ability,
-                arguments.clone(),
-                None,
-                effective_parents,
-                timeout,
-                Some(trace_id),
-                Some(&agent_id.name),
-            ) {
-                Ok((value, meta)) => {
-                    return Ok(StepDispatchOutcome {
-                        value,
-                        invocation: Some(meta),
-                    });
-                }
-                Err(err) => {
-                    use crate::support::platform::local_invoke::{
-                        classify_invoke_error, LocalInvokeErrorKind,
-                    };
-                    match classify_invoke_error(&err) {
-                        // Nothing ran (daemon down / ability not
-                        // registered there) — the in-process executor
-                        // below may legitimately take over.
-                        LocalInvokeErrorKind::DaemonOffline
-                        | LocalInvokeErrorKind::AbilityUnregistered => {}
-                        // The daemon ran the same manifest and failed for
-                        // real; re-running in-process would double-execute
-                        // a side-effecting ability to mask a true error.
-                        LocalInvokeErrorKind::Failed => {
-                            return Err(EalError::Unavailable(format!(
-                                "daemon invoke {display_name}: {err}"
-                            )));
-                        }
-                    }
-                }
-            }
-            return (match exec {
-                crate::daemon::ability::manifest::AbilityExec::Shell(spec) => {
-                    crate::daemon::execution::mission::executors::shell::run_shell_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
-                }
-                crate::daemon::ability::manifest::AbilityExec::Http(spec) => {
-                    crate::daemon::execution::mission::executors::http::run_http_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
-                }
-                crate::daemon::ability::manifest::AbilityExec::Eal(spec) => {
-                    crate::daemon::execution::mission::executors::eal::run_eal_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
-                }
-                crate::daemon::ability::manifest::AbilityExec::Mcp(spec) => {
-                    let _ = timeout;
-                    crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
-                        spec, arguments,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
-                }
-                crate::daemon::ability::manifest::AbilityExec::HostStream(_) => {
-                    // host_stream is a server-stream executor; an EAL step
-                    // is a unary child invocation and cannot carry its
-                    // many-frame output. Such an ability registers as
-                    // stream-mode and is reached via the stream dispatch
-                    // path, never here — surface a clear error if an EAL
-                    // program nonetheless targets one as a unary step.
-                    Err(EalError::Unavailable(
-                        "host_stream exec is server-stream; it cannot run as a \
-                         unary EAL step — call it as a stream invocation"
-                            .to_string(),
-                    ))
-                }
-            })
-            .map(Into::into);
-        }
-    }
+    .find(|manifest| manifest.name() == bare_ability)
+    .and_then(|manifest| manifest.timeout_seconds())
+    .map(std::time::Duration::from_secs);
 
-    // `<agent>.chat` is special: when an EAL mission desugars
-    // `easynet agent send` it wants the driver's live stderr
-    // timeline in the *current* CLI process. Routing chat through
-    // the daemon's unary Invoke RPC would hide that live output in
-    // the daemon process and reduce the caller to a final snapshot.
-    // Keep chat local by reusing the daemon handler's own parsing /
-    // context / resume logic directly in-process.
-    if bare_ability == crate::daemon::ability::builtins::agents::chat::ABILITY_VERB {
-        return crate::daemon::ability::builtins::agents::chat::invoke_direct_with_progress(
-            &agent_id.name,
-            entry,
-            &[],
-            arguments.clone(),
-            None,
-        )
-        .map(Into::into)
-        .map_err(|e| EalError::Unavailable(format!("agent chat: {e}")));
-    }
-
-    // Second fast path: try the local daemon's ability registry over
-    // the control socket. The daemon's public function name is the
-    // owner-local ability (`echo`, `discover`, `invoke`, ...); the
-    // hosted agent name is passed separately as callee/delegation
-    // context so Axon can bind the call to the canonical owner Ability
-    // URA. Keeping `<agent>.<verb>` out of the wire function_name is
-    // the convergence point with DescriptorBoundEnvelope dispatch:
-    // display names are not dispatch keys.
-    //
-    // We do the IPC round-trip here only when the manifest path
-    // above did NOT short-circuit. Every outcome is terminal — there is
-    // no chat fall-through. An ability the daemon does not recognise is a
-    // NOT_FOUND, the same answer the daemon/MCP surface gives; the EAL
-    // path must not divert to an LLM-fabricated reply for an ability that
-    // does not exist (that would make the same call return different
-    // results depending on the entry point). The only abilities reachable
-    // by chatting an agent are the explicit `<agent>.chat` verb handled
-    // above and declared abilities with a real `exec`, handled in-process
-    // or registered on the daemon.
+    // Every Mission/EAL agent step is one daemon-owned Axon Invocation.
+    // The daemon resolves the registered implementation and owns the only
+    // execution and terminal-receipt path. Transport or registration
+    // failure is terminal here: executing the manifest or chat handler in
+    // this process would create a second semantic model and can duplicate
+    // side effects after an uncertain transport outcome.
     let display_name = format!("{}.{}", agent_id.name, ability.as_str());
-    match try_dispatch_via_daemon(&agent_id.name, ability.as_str(), arguments) {
-        DaemonDispatch::Result(value) => Ok(value.into()),
-        DaemonDispatch::AbilityNotFound => Err(EalError::NotFound(format!(
-            "unknown ability: {display_name}"
-        ))),
-        DaemonDispatch::DaemonDown(reason) => Err(EalError::Unavailable(format!(
-            "daemon {display_name}: {reason}"
-        ))),
-        DaemonDispatch::Error(reason) => Err(EalError::Unavailable(format!(
-            "daemon {display_name}: {reason}"
-        ))),
-    }
-}
-
-/// Outcome of attempting to dispatch a `<agent>.<verb>` call through
-/// the local daemon's control socket.
-///
-/// Why a custom enum (rather than `Result<Option<Value>, ...>`)
-/// -----------------------------------------------------------
-/// `dispatch_to_agent` maps each outcome onto a distinct terminal answer:
-///   1. Got a value → return it.
-///   2. Daemon told us "no such ability" → NOT_FOUND. The same answer the
-///      daemon/MCP surface gives; the call does not divert to a chat
-///      reply just because the daemon was consulted first.
-///   3. Daemon down / daemon errored → Unavailable. Surfacing the error
-///      is the point — masking a transport failure would be worse.
-///
-/// A flat `Result<Option<Value>, ...>` would collapse (2) and (3) into
-/// the "Err" axis, indistinguishable without string-matching the error
-/// message — fragile.
-enum DaemonDispatch {
-    Result(Value),
-    AbilityNotFound,
-    DaemonDown(String),
-    Error(String),
-}
-
-/// Dispatch an owner-local ability against the local daemon through
-/// Axon's local Invocation gRPC surface, with the hosted agent carried
-/// as explicit callee context. Returns one of the four outcome variants
-/// the caller branches on.
-fn try_dispatch_via_daemon(
-    agent_name: &str,
-    ability_name: &str,
-    arguments: &Value,
-) -> DaemonDispatch {
     use crate::support::platform::local_invoke::{classify_invoke_error, LocalInvokeErrorKind};
     match crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
-        ability_name,
+        bare_ability,
         arguments.clone(),
         None,
-        &[],
-        None,
-        None,
-        Some(agent_name),
+        causal_parents,
+        timeout,
+        Some(trace_id),
+        Some(&agent_id.name),
     ) {
-        Ok((value, _meta)) => DaemonDispatch::Result(value),
+        Ok((value, meta)) => Ok(StepDispatchOutcome {
+            value,
+            invocation: Some(meta),
+        }),
         Err(err) => match classify_invoke_error(&err) {
-            LocalInvokeErrorKind::DaemonOffline => DaemonDispatch::DaemonDown(format!("{err}")),
-            LocalInvokeErrorKind::AbilityUnregistered => DaemonDispatch::AbilityNotFound,
-            LocalInvokeErrorKind::Failed => DaemonDispatch::Error(format!("{err}")),
+            LocalInvokeErrorKind::AbilityUnregistered => Err(EalError::NotFound(format!(
+                "unknown ability: {display_name}"
+            ))),
+            LocalInvokeErrorKind::DaemonOffline | LocalInvokeErrorKind::Failed => Err(
+                EalError::Unavailable(format!("daemon invoke {display_name}: {err}")),
+            ),
         },
     }
 }

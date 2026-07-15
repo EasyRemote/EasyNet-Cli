@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "a2a.bridge.send_task"
-description = "Dispatch an A2A task against a locally-hosted agent. Resolves to the in-process registry name `<agent_name>.<skill_name>`; visibility is re-checked against the live AgentRegistry on each call. Returns {ok:true, result} or {ok:false, error}."
+descriptor_version = "1.0.0"
+description = "Dispatch an A2A task against a locally-hosted agent. Resolves to the in-process registry name `<agent_name>.<skill_name>`; visibility is re-checked against the live capability publication on each call. Returns {ok:true, result} or {ok:false, error}."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

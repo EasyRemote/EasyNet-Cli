@@ -459,6 +459,7 @@ func parseReceiptRecords(value any) ([]InvocationLedgerRecord, error) {
 }
 
 func parseReceiptRecord(value any) (InvocationLedgerRecord, error) {
+	value = unwrapReceiptRecordValue(value)
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return InvocationLedgerRecord{}, invalidReceipt("encode Axon invocation ledger record", err)
@@ -468,6 +469,23 @@ func parseReceiptRecord(value any) (InvocationLedgerRecord, error) {
 		return InvocationLedgerRecord{}, invalidReceipt("decode Axon invocation ledger record", err)
 	}
 	return record, nil
+}
+
+func unwrapReceiptRecordValue(value any) any {
+	row, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	for _, key := range []string{"record", "ledger_record"} {
+		nested, ok := row[key]
+		if !ok || nested == nil {
+			continue
+		}
+		if _, ok := nested.(map[string]any); ok {
+			return nested
+		}
+	}
+	return value
 }
 
 func receiptLedgerSource(output map[string]any) (ReceiptLedgerSource, error) {

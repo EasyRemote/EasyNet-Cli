@@ -8,6 +8,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub(crate) mod local_invocation;
+pub(crate) mod receipt_signing;
 pub mod self_identity;
 mod signer_policy;
 

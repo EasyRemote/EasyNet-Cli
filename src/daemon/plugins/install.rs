@@ -29,6 +29,17 @@ pub struct PluginInstaller {
     root: PathBuf,
 }
 
+struct CompanionUpdateRollback<'a> {
+    target: &'a Path,
+    previous_state: &'a PluginStateToml,
+    rollback_backup: Option<&'a (PathBuf, PathBuf)>,
+    installed_package: &'a Arc<PluginPackage>,
+    previous_package: Option<&'a Arc<PluginPackage>>,
+    previous_companion_status:
+        Option<&'a crate::daemon::plugins::companion::DesktopCompanionStatus>,
+    companion_manager: &'a DesktopCompanionManager,
+}
+
 impl PluginInstaller {
     /// Construct an installer for a plugin root.
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -230,15 +241,16 @@ impl PluginInstaller {
                     executable_artifact_changed,
                 ) {
                     let update_error = err.to_string();
-                    let rollback_error = self.rollback_failed_companion_update(
-                        &target,
-                        &previous_state,
-                        rollback_backup.as_ref(),
-                        &installed_package,
-                        previous_package.as_ref(),
-                        previous_companion_status.as_ref(),
-                        companion_manager,
-                    );
+                    let rollback_error =
+                        self.rollback_failed_companion_update(CompanionUpdateRollback {
+                            target: &target,
+                            previous_state: &previous_state,
+                            rollback_backup: rollback_backup.as_ref(),
+                            installed_package: &installed_package,
+                            previous_package: previous_package.as_ref(),
+                            previous_companion_status: previous_companion_status.as_ref(),
+                            companion_manager,
+                        });
                     if let Err(rollback_error) = rollback_error {
                         return Err(PluginHostError::CompanionUpdateRollbackFailed {
                             id: installed.id,
@@ -398,16 +410,17 @@ impl PluginInstaller {
 
     fn rollback_failed_companion_update(
         &self,
-        target: &Path,
-        previous_state: &PluginStateToml,
-        rollback_backup: Option<&(PathBuf, PathBuf)>,
-        installed_package: &Arc<PluginPackage>,
-        previous_package: Option<&Arc<PluginPackage>>,
-        previous_companion_status: Option<
-            &crate::daemon::plugins::companion::DesktopCompanionStatus,
-        >,
-        companion_manager: &DesktopCompanionManager,
+        rollback: CompanionUpdateRollback<'_>,
     ) -> std::result::Result<(), String> {
+        let CompanionUpdateRollback {
+            target,
+            previous_state,
+            rollback_backup,
+            installed_package,
+            previous_package,
+            previous_companion_status,
+            companion_manager,
+        } = rollback;
         let mut failures = Vec::new();
         if let Err(err) = companion_manager.remove(installed_package) {
             failures.push(format!("companion_remove_new={err}"));
@@ -1286,9 +1299,10 @@ layer = "control"
 
     fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "1"
+            r#"schema_version = "2"
 name = "{ability}"
 description = "test descriptor for {ability}"
+admission_action = "invoke"
 
 [input_schema]
 type = "object"

@@ -3,6 +3,8 @@ pub mod admin_status;
 pub mod api_key;
 pub mod consent;
 pub mod health;
+#[cfg(feature = "axon-pb")]
+pub mod invocation_cancel;
 pub mod invocation_history;
 pub mod meta;
 pub mod network_health;

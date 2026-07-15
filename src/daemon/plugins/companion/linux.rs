@@ -10,6 +10,7 @@ use super::status::{
 };
 use super::{CompanionActionReport, DesktopCompanionSupervisor};
 
+#[derive(Default)]
 pub struct LinuxDesktopCompanionSupervisor;
 
 impl LinuxDesktopCompanionSupervisor {

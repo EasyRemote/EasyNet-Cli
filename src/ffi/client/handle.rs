@@ -37,7 +37,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use tokio::runtime::Runtime;
 
@@ -49,6 +49,40 @@ const FALLBACK_FFI_WORKER_THREADS: usize = 4;
 /// "null handle" / "not yet allocated".
 pub type EasynetHandle = u64;
 
+/// Process-local identity of one live client session.
+///
+/// `EasynetHandle` is the public C ABI token. `incarnation` is the
+/// library-private session generation minted when a `ClientSession` is
+/// constructed. FFI sub-resources bind to this pair so they cannot be
+/// controlled by a later session that happens to present the same numeric
+/// handle value after release/reallocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct ClientSessionBinding {
+    pub handle: EasynetHandle,
+    pub incarnation: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientSessionLifecyclePhase {
+    Active,
+    Closing,
+    Released,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ClientSessionClosed;
+
+pub(crate) struct ClientSessionResourceGuard<'a> {
+    binding: ClientSessionBinding,
+    _guard: MutexGuard<'a, ClientSessionLifecyclePhase>,
+}
+
+impl ClientSessionResourceGuard<'_> {
+    pub(crate) fn binding(&self) -> ClientSessionBinding {
+        self.binding
+    }
+}
+
 /// Library-side state for one Client.
 ///
 /// Wrapped in an `Arc<ClientSession>` inside the registry so that
@@ -59,6 +93,13 @@ pub type EasynetHandle = u64;
 /// contract is "send one frame, read one frame"; concurrent calls
 /// would interleave the framed reads.
 pub struct ClientSession {
+    /// Explicit lifecycle state for resource registration. Submit/open paths
+    /// must hold this lock while inserting child FFI resources; shutdown holds
+    /// the same lock while moving the session to Closing and draining children.
+    lifecycle: Mutex<ClientSessionLifecyclePhase>,
+    /// Library-private session generation used to bind child FFI resources to
+    /// the live client session that created them.
+    incarnation: u64,
     /// IPC version negotiated with the daemon. 0 means "no IPC
     /// connection attempted" (test sessions); a real session always
     /// carries the value chosen by the version-overlap check.
@@ -90,6 +131,8 @@ impl ClientSession {
             .as_ref()
             .map(|path| path.display().to_string());
         Self {
+            lifecycle: Mutex::new(ClientSessionLifecyclePhase::Active),
+            incarnation: next_session_incarnation(),
             ipc_version,
             control_path,
             invocation_endpoint,
@@ -109,6 +152,8 @@ impl ClientSession {
         invocation_endpoint: Option<String>,
     ) -> Self {
         Self {
+            lifecycle: Mutex::new(ClientSessionLifecyclePhase::Active),
+            incarnation: next_session_incarnation(),
             ipc_version: 0,
             control_path,
             invocation_endpoint,
@@ -122,12 +167,66 @@ impl ClientSession {
     #[cfg(test)]
     fn dummy(control_path: String) -> Self {
         Self {
+            lifecycle: Mutex::new(ClientSessionLifecyclePhase::Active),
+            incarnation: next_session_incarnation(),
             ipc_version: 0,
             control_path,
             invocation_endpoint: None,
             client: None,
         }
     }
+
+    pub(crate) fn binding(&self, handle: EasynetHandle) -> ClientSessionBinding {
+        ClientSessionBinding {
+            handle,
+            incarnation: self.incarnation,
+        }
+    }
+
+    pub(crate) fn resource_registration_guard(
+        &self,
+        handle: EasynetHandle,
+    ) -> Result<ClientSessionResourceGuard<'_>, ClientSessionClosed> {
+        let guard = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *guard != ClientSessionLifecyclePhase::Active {
+            return Err(ClientSessionClosed);
+        }
+        Ok(ClientSessionResourceGuard {
+            binding: self.binding(handle),
+            _guard: guard,
+        })
+    }
+
+    pub(crate) fn begin_closing(
+        &self,
+        handle: EasynetHandle,
+    ) -> Result<ClientSessionBinding, ClientSessionClosed> {
+        let mut guard = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *guard != ClientSessionLifecyclePhase::Active {
+            return Err(ClientSessionClosed);
+        }
+        *guard = ClientSessionLifecyclePhase::Closing;
+        Ok(self.binding(handle))
+    }
+
+    pub(crate) fn mark_released(&self) {
+        let mut guard = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = ClientSessionLifecyclePhase::Released;
+    }
+}
+
+fn next_session_incarnation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Process-wide registry. A plain `Mutex<HashMap>` is sufficient
@@ -223,6 +322,10 @@ pub(crate) fn get(handle: EasynetHandle) -> Option<Arc<ClientSession>> {
         .cloned()
 }
 
+pub(crate) fn binding_for_handle(handle: EasynetHandle) -> Option<ClientSessionBinding> {
+    get(handle).map(|session| session.binding(handle))
+}
+
 /// Release a handle. Returns `true` when the handle was present
 /// (and is now removed), `false` when the handle was unknown.
 /// Idempotent — a double-free returns `false` the second time.
@@ -268,6 +371,66 @@ mod tests {
         // field; Arc::ptr_eq is noisier to set up here and not more
         // informative.
         assert_eq!(looked_up.control_path, "/tmp/test-control.json");
+        assert_eq!(looked_up.binding(h).handle, h);
+    }
+
+    #[test]
+    fn session_binding_changes_per_allocated_session() {
+        let (first_handle, first_session) = alloc(test_session());
+        let (second_handle, second_session) = alloc(test_session());
+
+        let first_binding = first_session.binding(first_handle);
+        let second_binding = second_session.binding(second_handle);
+
+        assert_ne!(first_binding, second_binding);
+        assert_eq!(binding_for_handle(first_handle), Some(first_binding));
+        assert_eq!(binding_for_handle(second_handle), Some(second_binding));
+
+        assert!(release(first_handle));
+        assert_eq!(binding_for_handle(first_handle), None);
+        assert_eq!(binding_for_handle(second_handle), Some(second_binding));
+        assert!(release(second_handle));
+    }
+
+    #[test]
+    fn session_lifecycle_rejects_registration_after_closing() {
+        let (handle, session) = alloc(test_session());
+        let binding = session.begin_closing(handle).expect("begin closing");
+        assert_eq!(binding.handle, handle);
+        assert!(session.resource_registration_guard(handle).is_err());
+        session.mark_released();
+        assert!(session.begin_closing(handle).is_err());
+        assert!(release(handle));
+    }
+
+    #[test]
+    fn session_lifecycle_blocks_closing_until_registration_guard_drops() {
+        let (handle, session) = alloc(test_session());
+        let registration = session
+            .resource_registration_guard(handle)
+            .expect("resource registration");
+        let session_for_shutdown = Arc::clone(&session);
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = session_for_shutdown.begin_closing(handle).is_ok();
+            tx.send(result).expect("send shutdown result");
+        });
+
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "shutdown must wait while resource registration is in progress"
+        );
+        drop(registration);
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(2))
+                .expect("shutdown should proceed after registration guard drops"),
+            true
+        );
+        session.mark_released();
+        assert!(release(handle));
     }
 
     #[test]

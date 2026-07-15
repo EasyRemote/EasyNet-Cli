@@ -162,9 +162,7 @@ require_only_files src/bin \
   easynet-daemon.rs \
   easynet-keyring.rs \
   gen-ability-tomls.rs \
-  sdk-conformance-runner.rs \
-  real-user-smoke.rs \
-  real-publish-smoke.rs
+  real-user-smoke.rs
 
 require_only_dirs src \
   bin core daemon cli ffi eal support

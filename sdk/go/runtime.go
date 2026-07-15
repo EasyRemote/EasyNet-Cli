@@ -10,6 +10,54 @@ import (
 	"sync"
 )
 
+// InvocationControlCapability is the opaque authority for controlling a
+// submitted Invocation observation lifecycle.
+//
+// The current daemon registry is still backed by a process-local numeric
+// handle, but that number is adapter-private. SDK consumers operate on
+// InvocationHandle; transport adapters receive this capability object.
+type InvocationControlCapability struct {
+	handleID     uint64
+	runtimeBound bool
+}
+
+func newInvocationControlCapability(handleID uint64) (InvocationControlCapability, error) {
+	return newRuntimeInvocationControlCapability(handleID)
+}
+
+func newRuntimeInvocationControlCapability(handleID uint64) (InvocationControlCapability, error) {
+	if handleID == 0 {
+		return InvocationControlCapability{}, invalidRuntimePayload("invocation control capability is required", nil)
+	}
+	return InvocationControlCapability{handleID: handleID, runtimeBound: true}, nil
+}
+
+func newSnapshotInvocationControlCapability(handleID uint64) (InvocationControlCapability, error) {
+	if handleID == 0 {
+		return InvocationControlCapability{}, invalidRuntimePayload("handle_id is required", nil)
+	}
+	return InvocationControlCapability{handleID: handleID}, nil
+}
+
+func (c InvocationControlCapability) valid() bool {
+	return c.handleID != 0 && c.runtimeBound
+}
+
+// AdapterHandleID projects the adapter-private daemon handle behind this
+// capability. RuntimeTransport implementations use it to address their handle
+// store; application code should keep treating InvocationHandle as the public
+// lifecycle object.
+func (c InvocationControlCapability) AdapterHandleID() (uint64, error) {
+	if !c.valid() {
+		return 0, invalidRuntimePayload("runtime-bound invocation control capability is required", nil)
+	}
+	return c.handleID, nil
+}
+
+func (c InvocationControlCapability) adapterHandleID() uint64 {
+	return c.handleID
+}
+
 // RuntimeTransport is the narrow Runtime Core invocation transport seam.
 type RuntimeTransport interface {
 	Invoke(ctx context.Context, draftJSON []byte) ([]byte, error)
@@ -17,25 +65,53 @@ type RuntimeTransport interface {
 	OpenBidi(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error)
 	Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
 	SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error)
-	AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error)
-	CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error)
-	HandleEvents(ctx context.Context, handleID uint64) ([]byte, error)
-	FreeHandle(ctx context.Context, handleID uint64) error
+	AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error)
+	CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error)
+	HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error)
+	FreeHandle(ctx context.Context, control InvocationControlCapability) error
 	Close(ctx context.Context) error
+}
+
+// DescriptorResolverTransport is an optional provider seam for resolving
+// runtime-governed AbilityDescriptorRefs before building Invocation drafts.
+type DescriptorResolverTransport interface {
+	ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error)
+}
+
+// RuntimeDescriptorRefRequest selects one runtime-owned ability descriptor.
+type RuntimeDescriptorRefRequest struct {
+	CalleeURA  string `json:"callee_ura"`
+	Ability    string `json:"ability"`
+	CallMode   string `json:"call_mode,omitempty"`
+	CallerURA  string `json:"caller_ura,omitempty"`
+	SubjectURA string `json:"subject_ura,omitempty"`
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.
 type RuntimeTransportFunc struct {
-	InvokeFunc       func(ctx context.Context, draftJSON []byte) ([]byte, error)
-	OpenStreamFunc   func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error)
-	OpenBidiFunc     func(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error)
-	PrepareFunc      func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
-	SubmitSignedFunc func(ctx context.Context, signedJSON []byte) ([]byte, error)
-	AwaitHandleFunc  func(ctx context.Context, handleID uint64) ([]byte, error)
-	CancelHandleFunc func(ctx context.Context, handleID uint64, reason string) ([]byte, error)
-	HandleEventsFunc func(ctx context.Context, handleID uint64) ([]byte, error)
-	FreeHandleFunc   func(ctx context.Context, handleID uint64) error
-	CloseFunc        func(ctx context.Context) error
+	InvokeFunc               func(ctx context.Context, draftJSON []byte) ([]byte, error)
+	OpenStreamFunc           func(ctx context.Context, draftJSON []byte) (StreamTransport, []byte, error)
+	OpenBidiFunc             func(ctx context.Context, draftJSON []byte, streamsJSON []byte) (BidiTransport, []byte, error)
+	PrepareFunc              func(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error)
+	SubmitSignedFunc         func(ctx context.Context, signedJSON []byte) ([]byte, error)
+	AwaitHandleFunc          func(ctx context.Context, control InvocationControlCapability) ([]byte, error)
+	CancelHandleFunc         func(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error)
+	HandleEventsFunc         func(ctx context.Context, control InvocationControlCapability) ([]byte, error)
+	FreeHandleFunc           func(ctx context.Context, control InvocationControlCapability) error
+	ResolveDescriptorRefFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
+	CloseFunc                func(ctx context.Context) error
+}
+
+func runtimeBidiOpenJSON(sessionID string, maxBufferedFrames int) ([]byte, error) {
+	return json.Marshal(struct {
+		SessionID         string `json:"session_id"`
+		State             string `json:"state"`
+		MaxBufferedFrames int    `json:"max_buffered_frames"`
+	}{
+		SessionID:         sessionID,
+		State:             "Open",
+		MaxBufferedFrames: maxBufferedFrames,
+	})
 }
 
 func (f RuntimeTransportFunc) Invoke(ctx context.Context, draftJSON []byte) ([]byte, error) {
@@ -73,32 +149,51 @@ func (f RuntimeTransportFunc) SubmitSigned(ctx context.Context, signedJSON []byt
 	return f.SubmitSignedFunc(ctx, signedJSON)
 }
 
-func (f RuntimeTransportFunc) AwaitHandle(ctx context.Context, handleID uint64) ([]byte, error) {
+func (f RuntimeTransportFunc) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	if f.AwaitHandleFunc == nil {
 		return nil, invalidRuntimeClient("runtime await-handle transport function is required")
 	}
-	return f.AwaitHandleFunc(ctx, handleID)
+	if !control.valid() {
+		return nil, invalidRuntimePayload("invocation control capability is required", nil)
+	}
+	return f.AwaitHandleFunc(ctx, control)
 }
 
-func (f RuntimeTransportFunc) CancelHandle(ctx context.Context, handleID uint64, reason string) ([]byte, error) {
+func (f RuntimeTransportFunc) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
 	if f.CancelHandleFunc == nil {
 		return nil, invalidRuntimeClient("runtime cancel-handle transport function is required")
 	}
-	return f.CancelHandleFunc(ctx, handleID, reason)
+	if !control.valid() {
+		return nil, invalidRuntimePayload("invocation control capability is required", nil)
+	}
+	return f.CancelHandleFunc(ctx, control, reason)
 }
 
-func (f RuntimeTransportFunc) HandleEvents(ctx context.Context, handleID uint64) ([]byte, error) {
+func (f RuntimeTransportFunc) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
 	if f.HandleEventsFunc == nil {
 		return nil, invalidRuntimeClient("runtime handle-events transport function is required")
 	}
-	return f.HandleEventsFunc(ctx, handleID)
+	if !control.valid() {
+		return nil, invalidRuntimePayload("invocation control capability is required", nil)
+	}
+	return f.HandleEventsFunc(ctx, control)
 }
 
-func (f RuntimeTransportFunc) FreeHandle(ctx context.Context, handleID uint64) error {
+func (f RuntimeTransportFunc) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
 	if f.FreeHandleFunc == nil {
 		return invalidRuntimeClient("runtime free-handle transport function is required")
 	}
-	return f.FreeHandleFunc(ctx, handleID)
+	if !control.valid() {
+		return invalidRuntimePayload("invocation control capability is required", nil)
+	}
+	return f.FreeHandleFunc(ctx, control)
+}
+
+func (f RuntimeTransportFunc) ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.ResolveDescriptorRefFunc == nil {
+		return nil, invalidRuntimeClient("runtime descriptor resolver transport function is required")
+	}
+	return f.ResolveDescriptorRefFunc(ctx, requestJSON)
 }
 
 func (f RuntimeTransportFunc) Close(ctx context.Context) error {
@@ -145,6 +240,43 @@ func (c *RuntimeClient) runtimeTransport(ctx context.Context) (RuntimeTransport,
 		return nil, invalidRuntimeClient("runtime client is not initialized")
 	}
 	return c.transport, nil
+}
+
+// ResolveDescriptorRef asks the runtime provider for the complete
+// descriptor-bound Ability ref selected by a callee, ability, and call mode.
+func (c *RuntimeClient) ResolveDescriptorRef(ctx context.Context, req RuntimeDescriptorRefRequest) (string, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return "", err
+	}
+	resolver, ok := transport.(DescriptorResolverTransport)
+	if !ok {
+		return "", invalidRuntimeClient("runtime transport does not expose descriptor resolution")
+	}
+	if strings.TrimSpace(req.CallMode) == "" {
+		req.CallMode = "rpc"
+	}
+	requestJSON, err := json.Marshal(req)
+	if err != nil {
+		return "", invalidRuntimePayload(fmt.Sprintf("encode descriptor_ref resolution request: %v", err), err)
+	}
+	raw, err := resolver.ResolveDescriptorRef(ctx, requestJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return "", sdkErr
+		}
+		return "", transportRuntimeError("resolve descriptor_ref transport failed", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return "", invalidRuntimePayload(fmt.Sprintf("decode descriptor_ref resolution: %v", err), err)
+	}
+	descriptorRef, _ := decoded["descriptor_ref"].(string)
+	if strings.TrimSpace(descriptorRef) == "" {
+		return "", invalidRuntimePayload("descriptor_ref resolution omitted descriptor_ref", nil)
+	}
+	return descriptorRef, nil
 }
 
 // PrepareOptions are daemon-owned prepare policy knobs.
@@ -321,7 +453,7 @@ func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocatio
 		}
 		return InvocationHandle{}, transportRuntimeError("submit signed transport failed", err)
 	}
-	return NewInvocationHandleFromJSON(raw)
+	return newRuntimeInvocationHandleFromJSON(raw)
 }
 
 // Await waits for a submitted invocation handle to reach a terminal result.
@@ -330,10 +462,11 @@ func (c *RuntimeClient) Await(ctx context.Context, handle InvocationHandle) (Inv
 	if err != nil {
 		return InvocationResult{}, err
 	}
-	if handle.HandleID() == 0 {
-		return InvocationResult{}, invalidRuntimePayload("handle_id is required", nil)
+	control, err := handle.controlCapability()
+	if err != nil {
+		return InvocationResult{}, err
 	}
-	raw, err := transport.AwaitHandle(ctx, handle.HandleID())
+	raw, err := transport.AwaitHandle(ctx, control)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -350,10 +483,11 @@ func (c *RuntimeClient) Cancel(ctx context.Context, handle InvocationHandle, rea
 	if err != nil {
 		return InvocationCancel{}, err
 	}
-	if handle.HandleID() == 0 {
-		return InvocationCancel{}, invalidRuntimePayload("handle_id is required", nil)
+	control, err := handle.controlCapability()
+	if err != nil {
+		return InvocationCancel{}, err
 	}
-	raw, err := transport.CancelHandle(ctx, handle.HandleID(), reason)
+	raw, err := transport.CancelHandle(ctx, control, reason)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -361,7 +495,7 @@ func (c *RuntimeClient) Cancel(ctx context.Context, handle InvocationHandle, rea
 		}
 		return InvocationCancel{}, transportRuntimeError("cancel handle transport failed", err)
 	}
-	return NewInvocationCancelFromJSON(raw)
+	return newInvocationCancelFromJSON(raw, &control)
 }
 
 // Events returns the current event snapshot for a submitted invocation handle.
@@ -370,10 +504,11 @@ func (c *RuntimeClient) Events(ctx context.Context, handle InvocationHandle) (In
 	if err != nil {
 		return InvocationHandle{}, err
 	}
-	if handle.HandleID() == 0 {
-		return InvocationHandle{}, invalidRuntimePayload("handle_id is required", nil)
+	control, err := handle.controlCapability()
+	if err != nil {
+		return InvocationHandle{}, err
 	}
-	raw, err := transport.HandleEvents(ctx, handle.HandleID())
+	raw, err := transport.HandleEvents(ctx, control)
 	if err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
@@ -381,7 +516,7 @@ func (c *RuntimeClient) Events(ctx context.Context, handle InvocationHandle) (In
 		}
 		return InvocationHandle{}, transportRuntimeError("handle events transport failed", err)
 	}
-	return NewInvocationHandleFromJSON(raw)
+	return newInvocationHandleSnapshotFromJSON(raw, &control)
 }
 
 // CloseHandle releases daemon-side observation state for a submitted invocation handle.
@@ -390,10 +525,11 @@ func (c *RuntimeClient) CloseHandle(ctx context.Context, handle InvocationHandle
 	if err != nil {
 		return err
 	}
-	if handle.HandleID() == 0 {
-		return invalidRuntimePayload("handle_id is required", nil)
+	control, err := handle.controlCapability()
+	if err != nil {
+		return err
 	}
-	if err := transport.FreeHandle(ctx, handle.HandleID()); err != nil {
+	if err := transport.FreeHandle(ctx, control); err != nil {
 		var sdkErr *SDKError
 		if errors.As(err, &sdkErr) {
 			return sdkErr
@@ -457,35 +593,135 @@ type InvocationResult struct {
 // Cryptographic verification requires a full Axon InvocationReceipt and is
 // deliberately exposed by ReceiptClient instead of this summary.
 type RuntimeReceipt struct {
-	Raw                map[string]any `json:"-"`
-	ReceiptID          string         `json:"receipt_id,omitempty"`
-	ReceiptURA         string         `json:"receipt_ura,omitempty"`
-	InvocationID       string         `json:"invocation_id,omitempty"`
-	ReceiptType        string         `json:"receipt_type,omitempty"`
-	State              string         `json:"state,omitempty"`
-	Index              uint64         `json:"index,omitempty"`
-	TimestampUnixMS    int64          `json:"timestamp_unix_ms,omitempty"`
-	PrevReceiptHashHex string         `json:"prev_receipt_hash_hex,omitempty"`
-	SelfHashHex        string         `json:"self_hash_hex,omitempty"`
-	CleanupComplete    *bool          `json:"cleanup_complete,omitempty"`
-	Reason             string         `json:"reason,omitempty"`
-	ChildInvocationID  string         `json:"child_invocation_id,omitempty"`
+	Raw                   map[string]any                `json:"-"`
+	ReceiptID             string                        `json:"receipt_id,omitempty"`
+	ReceiptURA            string                        `json:"receipt_ura,omitempty"`
+	InvocationID          string                        `json:"invocation_id,omitempty"`
+	ReceiptType           string                        `json:"receipt_type,omitempty"`
+	State                 string                        `json:"state,omitempty"`
+	Index                 uint64                        `json:"index,omitempty"`
+	TimestampUnixMS       int64                         `json:"timestamp_unix_ms,omitempty"`
+	PrevReceiptHashHex    string                        `json:"prev_receipt_hash_hex,omitempty"`
+	SelfHashHex           string                        `json:"self_hash_hex,omitempty"`
+	CleanupComplete       *bool                         `json:"cleanup_complete,omitempty"`
+	Reason                string                        `json:"reason,omitempty"`
+	ChildInvocationID     string                        `json:"child_invocation_id,omitempty"`
+	PayloadBase64         string                        `json:"payload_base64,omitempty"`
+	CallerBinding         *RuntimeReceiptAgentBinding   `json:"caller_binding,omitempty"`
+	CalleeBinding         *RuntimeReceiptAgentBinding   `json:"callee_binding,omitempty"`
+	SubjectBinding        *RuntimeReceiptSubjectBinding `json:"subject_binding,omitempty"`
+	InvocationNonceBase64 string                        `json:"invocation_nonce_base64,omitempty"`
+	CausalBindingKind     string                        `json:"causal_binding_kind,omitempty"`
+	CausalBinding         map[string]any                `json:"causal_binding,omitempty"`
+	CalleeSignature       *RuntimeReceiptSignature      `json:"callee_signature,omitempty"`
+	SignerBinding         *RuntimeReceiptAgentBinding   `json:"signer_binding,omitempty"`
+	HostAttestationBase64 string                        `json:"host_attestation_base64,omitempty"`
+	AuthorityBindingKind  string                        `json:"authority_binding_kind,omitempty"`
+	AuthorityBinding      map[string]any                `json:"authority_binding,omitempty"`
+	AbilityBinding        string                        `json:"ability_binding,omitempty"`
+	Failure               *RuntimeReceiptFailure        `json:"failure,omitempty"`
+	Usage                 *RuntimeReceiptUsage          `json:"usage,omitempty"`
+	SubjectRef            *RuntimeReceiptEntityRef      `json:"subject_ref,omitempty"`
+	DescriptorVersion     string                        `json:"descriptor_version,omitempty"`
+	SchemaHashHex         string                        `json:"schema_hash_hex,omitempty"`
+	ImplHashHex           string                        `json:"impl_hash_hex,omitempty"`
+	RuntimeEnv            string                        `json:"runtime_env,omitempty"`
+	AuthorityProof        *RuntimeReceiptAuthorityProof `json:"authority_proof,omitempty"`
+	InputHashHex          string                        `json:"input_hash_hex,omitempty"`
+	OutputHashHex         string                        `json:"output_hash_hex,omitempty"`
+	ParentReceipts        []RuntimeReceiptRef           `json:"parent_receipts,omitempty"`
+}
+
+type RuntimeReceiptAgentBinding struct {
+	URA     string `json:"ura,omitempty"`
+	Profile string `json:"profile,omitempty"`
+}
+
+type RuntimeReceiptSubjectBinding struct {
+	URA     string `json:"ura,omitempty"`
+	Profile string `json:"profile,omitempty"`
+}
+
+type RuntimeReceiptEntityRef struct {
+	Kind    int32  `json:"kind,omitempty"`
+	URA     string `json:"ura,omitempty"`
+	Profile string `json:"profile,omitempty"`
+}
+
+type RuntimeReceiptSignature struct {
+	Algorithm       string `json:"algorithm,omitempty"`
+	SignatureBase64 string `json:"signature_base64,omitempty"`
+	KeyIDHint       string `json:"key_id_hint,omitempty"`
+}
+
+type RuntimeReceiptFailure struct {
+	Code          string `json:"code,omitempty"`
+	Message       string `json:"message,omitempty"`
+	Retryable     bool   `json:"retryable,omitempty"`
+	Stage         int32  `json:"stage,omitempty"`
+	SecurityClass int32  `json:"security_class,omitempty"`
+}
+
+type RuntimeReceiptUsage struct {
+	TokensIn      uint64 `json:"tokens_in,omitempty"`
+	TokensOut     uint64 `json:"tokens_out,omitempty"`
+	DurationMS    uint64 `json:"duration_ms,omitempty"`
+	ExternalCalls uint32 `json:"external_calls,omitempty"`
+}
+
+type RuntimeReceiptRef struct {
+	ReceiptHashHex string `json:"receipt_hash_hex,omitempty"`
+	ReceiptURA     string `json:"receipt_ura,omitempty"`
+}
+
+type RuntimeReceiptAuthorityProof struct {
+	ProofType          string                      `json:"proof_type,omitempty"`
+	BindingKind        string                      `json:"binding_kind,omitempty"`
+	ProofPayloadBase64 string                      `json:"proof_payload_base64,omitempty"`
+	ProofHashHex       string                      `json:"proof_hash_hex,omitempty"`
+	Issuer             *RuntimeReceiptAgentBinding `json:"issuer,omitempty"`
+	Signature          *RuntimeReceiptSignature    `json:"signature,omitempty"`
+	AdmissionHook      string                      `json:"admission_hook,omitempty"`
 }
 
 func NewRuntimeReceiptFromJSON(raw []byte) (RuntimeReceipt, error) {
 	var dto struct {
-		ReceiptID          string `json:"receipt_id"`
-		ReceiptURA         string `json:"receipt_ura"`
-		InvocationID       string `json:"invocation_id"`
-		ReceiptType        string `json:"receipt_type"`
-		State              string `json:"state"`
-		Index              int64  `json:"index"`
-		TimestampUnixMS    int64  `json:"timestamp_unix_ms"`
-		PrevReceiptHashHex string `json:"prev_receipt_hash_hex"`
-		SelfHashHex        string `json:"self_hash_hex"`
-		CleanupComplete    *bool  `json:"cleanup_complete"`
-		Reason             string `json:"reason"`
-		ChildInvocationID  string `json:"child_invocation_id"`
+		ReceiptID             string                        `json:"receipt_id"`
+		ReceiptURA            string                        `json:"receipt_ura"`
+		InvocationID          string                        `json:"invocation_id"`
+		ReceiptType           string                        `json:"receipt_type"`
+		State                 string                        `json:"state"`
+		Index                 int64                         `json:"index"`
+		TimestampUnixMS       int64                         `json:"timestamp_unix_ms"`
+		PrevReceiptHashHex    string                        `json:"prev_receipt_hash_hex"`
+		SelfHashHex           string                        `json:"self_hash_hex"`
+		CleanupComplete       *bool                         `json:"cleanup_complete"`
+		Reason                string                        `json:"reason"`
+		ChildInvocationID     string                        `json:"child_invocation_id"`
+		PayloadBase64         string                        `json:"payload_base64"`
+		CallerBinding         *RuntimeReceiptAgentBinding   `json:"caller_binding"`
+		CalleeBinding         *RuntimeReceiptAgentBinding   `json:"callee_binding"`
+		SubjectBinding        *RuntimeReceiptSubjectBinding `json:"subject_binding"`
+		InvocationNonceBase64 string                        `json:"invocation_nonce_base64"`
+		CausalBindingKind     string                        `json:"causal_binding_kind"`
+		CausalBinding         map[string]any                `json:"causal_binding"`
+		CalleeSignature       *RuntimeReceiptSignature      `json:"callee_signature"`
+		SignerBinding         *RuntimeReceiptAgentBinding   `json:"signer_binding"`
+		HostAttestationBase64 string                        `json:"host_attestation_base64"`
+		AuthorityBindingKind  string                        `json:"authority_binding_kind"`
+		AuthorityBinding      map[string]any                `json:"authority_binding"`
+		AbilityBinding        string                        `json:"ability_binding"`
+		Failure               *RuntimeReceiptFailure        `json:"failure"`
+		Usage                 *RuntimeReceiptUsage          `json:"usage"`
+		SubjectRef            *RuntimeReceiptEntityRef      `json:"subject_ref"`
+		DescriptorVersion     string                        `json:"descriptor_version"`
+		SchemaHashHex         string                        `json:"schema_hash_hex"`
+		ImplHashHex           string                        `json:"impl_hash_hex"`
+		RuntimeEnv            string                        `json:"runtime_env"`
+		AuthorityProof        *RuntimeReceiptAuthorityProof `json:"authority_proof"`
+		InputHashHex          string                        `json:"input_hash_hex"`
+		OutputHashHex         string                        `json:"output_hash_hex"`
+		ParentReceipts        []RuntimeReceiptRef           `json:"parent_receipts"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return RuntimeReceipt{}, invalidRuntimePayload(fmt.Sprintf("decode runtime receipt JSON: %v", err), err)
@@ -498,19 +734,43 @@ func NewRuntimeReceiptFromJSON(raw []byte) (RuntimeReceipt, error) {
 		return RuntimeReceipt{}, invalidRuntimePayload("runtime receipt must be an object", err)
 	}
 	return RuntimeReceipt{
-		Raw:                rawMap,
-		ReceiptID:          dto.ReceiptID,
-		ReceiptURA:         dto.ReceiptURA,
-		InvocationID:       dto.InvocationID,
-		ReceiptType:        dto.ReceiptType,
-		State:              dto.State,
-		Index:              uint64(dto.Index),
-		TimestampUnixMS:    dto.TimestampUnixMS,
-		PrevReceiptHashHex: dto.PrevReceiptHashHex,
-		SelfHashHex:        dto.SelfHashHex,
-		CleanupComplete:    dto.CleanupComplete,
-		Reason:             dto.Reason,
-		ChildInvocationID:  dto.ChildInvocationID,
+		Raw:                   rawMap,
+		ReceiptID:             dto.ReceiptID,
+		ReceiptURA:            dto.ReceiptURA,
+		InvocationID:          dto.InvocationID,
+		ReceiptType:           dto.ReceiptType,
+		State:                 dto.State,
+		Index:                 uint64(dto.Index),
+		TimestampUnixMS:       dto.TimestampUnixMS,
+		PrevReceiptHashHex:    dto.PrevReceiptHashHex,
+		SelfHashHex:           dto.SelfHashHex,
+		CleanupComplete:       dto.CleanupComplete,
+		Reason:                dto.Reason,
+		ChildInvocationID:     dto.ChildInvocationID,
+		PayloadBase64:         dto.PayloadBase64,
+		CallerBinding:         dto.CallerBinding,
+		CalleeBinding:         dto.CalleeBinding,
+		SubjectBinding:        dto.SubjectBinding,
+		InvocationNonceBase64: dto.InvocationNonceBase64,
+		CausalBindingKind:     dto.CausalBindingKind,
+		CausalBinding:         cloneRuntimeReceiptObject(dto.CausalBinding),
+		CalleeSignature:       dto.CalleeSignature,
+		SignerBinding:         dto.SignerBinding,
+		HostAttestationBase64: dto.HostAttestationBase64,
+		AuthorityBindingKind:  dto.AuthorityBindingKind,
+		AuthorityBinding:      cloneRuntimeReceiptObject(dto.AuthorityBinding),
+		AbilityBinding:        dto.AbilityBinding,
+		Failure:               dto.Failure,
+		Usage:                 dto.Usage,
+		SubjectRef:            dto.SubjectRef,
+		DescriptorVersion:     dto.DescriptorVersion,
+		SchemaHashHex:         dto.SchemaHashHex,
+		ImplHashHex:           dto.ImplHashHex,
+		RuntimeEnv:            dto.RuntimeEnv,
+		AuthorityProof:        dto.AuthorityProof,
+		InputHashHex:          dto.InputHashHex,
+		OutputHashHex:         dto.OutputHashHex,
+		ParentReceipts:        dto.ParentReceipts,
 	}, nil
 }
 
@@ -617,24 +877,15 @@ func (r InvocationResult) ElapsedMS() int64 {
 	return r.elapsedMS
 }
 
-func (r InvocationResult) Receipt() json.RawMessage {
-	return r.TerminalReceipt()
-}
-
 // AdmissionReceipt returns the pre-execution admission checkpoint, when the
 // runtime emitted one.
 func (r InvocationResult) AdmissionReceipt() json.RawMessage {
 	return append(json.RawMessage(nil), r.admissionReceipt...)
 }
 
-// TerminalReceipt returns the execution terminal checkpoint. Receipt is the
-// public compatibility projection of this same value.
+// TerminalReceipt returns the execution terminal checkpoint.
 func (r InvocationResult) TerminalReceipt() json.RawMessage {
 	return append(json.RawMessage(nil), r.terminalReceipt...)
-}
-
-func (r InvocationResult) ReceiptSummary() *RuntimeReceipt {
-	return r.TerminalReceiptSummary()
 }
 
 func (r InvocationResult) AdmissionReceiptSummary() *RuntimeReceipt {
@@ -682,7 +933,6 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		SelectedNodeID    string          `json:"selected_node_id"`
 		SchedulingReason  string          `json:"scheduling_reason"`
 		ElapsedMS         int64           `json:"elapsed_ms"`
-		Receipt           json.RawMessage `json:"receipt"`
 		AdmissionReceipt  json.RawMessage `json:"admission_receipt"`
 		TerminalReceipt   json.RawMessage `json:"terminal_receipt"`
 		Error             json.RawMessage `json:"error"`
@@ -716,10 +966,7 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	if !*dto.OK && failure == nil {
 		return InvocationResult{}, invalidRuntimePayload("failed result must include error", nil)
 	}
-	terminalReceipt, err := normalizeTerminalReceipt(dto.Receipt, dto.TerminalReceipt)
-	if err != nil {
-		return InvocationResult{}, err
-	}
+	terminalReceipt := cloneOptionalJSON(dto.TerminalReceipt)
 	admissionReceiptSummary, err := decodeRuntimeReceiptSummary(dto.AdmissionReceipt)
 	if err != nil {
 		return InvocationResult{}, err
@@ -765,6 +1012,8 @@ func cloneRuntimeReceipt(receipt *RuntimeReceipt) *RuntimeReceipt {
 	}
 	clone := *receipt
 	clone.Raw = receipt.RawProjection()
+	clone.CausalBinding = cloneRuntimeReceiptObject(receipt.CausalBinding)
+	clone.AuthorityBinding = cloneRuntimeReceiptObject(receipt.AuthorityBinding)
 	if receipt.CleanupComplete != nil {
 		value := *receipt.CleanupComplete
 		clone.CleanupComplete = &value
@@ -772,29 +1021,19 @@ func cloneRuntimeReceipt(receipt *RuntimeReceipt) *RuntimeReceipt {
 	return &clone
 }
 
-func normalizeTerminalReceipt(compatibility, terminal json.RawMessage) (json.RawMessage, error) {
-	compatibility = cloneOptionalJSON(compatibility)
-	terminal = cloneOptionalJSON(terminal)
-	if len(terminal) == 0 {
-		terminal = compatibility
+func cloneRuntimeReceiptObject(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
 	}
-	if len(compatibility) == 0 {
-		compatibility = terminal
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
 	}
-	if len(compatibility) != 0 && len(terminal) != 0 {
-		var compatibilityValue any
-		var terminalValue any
-		if err := json.Unmarshal(compatibility, &compatibilityValue); err != nil {
-			return nil, invalidRuntimePayload(fmt.Sprintf("decode receipt JSON: %v", err), err)
-		}
-		if err := json.Unmarshal(terminal, &terminalValue); err != nil {
-			return nil, invalidRuntimePayload(fmt.Sprintf("decode terminal_receipt JSON: %v", err), err)
-		}
-		if !jsonValuesEqual(compatibilityValue, terminalValue) {
-			return nil, invalidRuntimePayload("receipt must equal terminal_receipt", nil)
-		}
+	var clone map[string]any
+	if err := json.Unmarshal(encoded, &clone); err != nil {
+		return nil
 	}
-	return terminal, nil
+	return clone
 }
 
 func cloneOptionalJSON(raw json.RawMessage) json.RawMessage {
@@ -802,12 +1041,6 @@ func cloneOptionalJSON(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return append(json.RawMessage(nil), raw...)
-}
-
-func jsonValuesEqual(left, right any) bool {
-	leftJSON, leftErr := json.Marshal(left)
-	rightJSON, rightErr := json.Marshal(right)
-	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func decodeInvocationFailure(raw json.RawMessage) (*InvocationFailure, error) {
@@ -836,14 +1069,24 @@ func decodeInvocationFailure(raw json.RawMessage) (*InvocationFailure, error) {
 
 // InvocationCancel is the daemon cancellation outcome for a submitted handle.
 type InvocationCancel struct {
-	handleID  uint64
-	cancelled bool
-	state     string
-	terminal  bool
+	control         InvocationControlCapability
+	requestAccepted bool
+	deduplicated    bool
+	cancelled       bool
+	state           string
+	terminal        bool
 }
 
-func (c InvocationCancel) HandleID() uint64 {
-	return c.handleID
+func (c InvocationCancel) ControlCapability() InvocationControlCapability {
+	return c.control
+}
+
+func (c InvocationCancel) RequestAccepted() bool {
+	return c.requestAccepted
+}
+
+func (c InvocationCancel) Deduplicated() bool {
+	return c.deduplicated
 }
 
 func (c InvocationCancel) Cancelled() bool {
@@ -860,11 +1103,17 @@ func (c InvocationCancel) Terminal() bool {
 
 // NewInvocationCancelFromJSON decodes the daemon cancellation outcome projection.
 func NewInvocationCancelFromJSON(raw []byte) (InvocationCancel, error) {
+	return newInvocationCancelFromJSON(raw, nil)
+}
+
+func newInvocationCancelFromJSON(raw []byte, expectedControl *InvocationControlCapability) (InvocationCancel, error) {
 	var dto struct {
-		HandleID  uint64 `json:"handle_id"`
-		Cancelled bool   `json:"cancelled"`
-		State     string `json:"state"`
-		Terminal  bool   `json:"terminal"`
+		HandleID        uint64 `json:"handle_id"`
+		RequestAccepted *bool  `json:"request_accepted"`
+		Deduplicated    *bool  `json:"deduplicated"`
+		Cancelled       bool   `json:"cancelled"`
+		State           string `json:"state"`
+		Terminal        bool   `json:"terminal"`
 	}
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return InvocationCancel{}, invalidRuntimePayload(fmt.Sprintf("decode invocation cancel JSON: %v", err), err)
@@ -875,17 +1124,38 @@ func NewInvocationCancelFromJSON(raw []byte) (InvocationCancel, error) {
 	if dto.State == "" {
 		return InvocationCancel{}, invalidRuntimePayload("state is required", nil)
 	}
+	if dto.RequestAccepted == nil {
+		return InvocationCancel{}, invalidRuntimePayload("request_accepted is required", nil)
+	}
+	if dto.Deduplicated == nil {
+		return InvocationCancel{}, invalidRuntimePayload("deduplicated is required", nil)
+	}
+	var control InvocationControlCapability
+	var err error
+	if expectedControl != nil {
+		if expectedControl.adapterHandleID() != dto.HandleID {
+			return InvocationCancel{}, invalidRuntimePayload("handle_id does not match invocation control capability", nil)
+		}
+		control = *expectedControl
+	} else {
+		control, err = newSnapshotInvocationControlCapability(dto.HandleID)
+		if err != nil {
+			return InvocationCancel{}, err
+		}
+	}
 	return InvocationCancel{
-		handleID:  dto.HandleID,
-		cancelled: dto.Cancelled,
-		state:     dto.State,
-		terminal:  dto.Terminal,
+		control:         control,
+		requestAccepted: *dto.RequestAccepted,
+		deduplicated:    *dto.Deduplicated,
+		cancelled:       dto.Cancelled,
+		state:           dto.State,
+		terminal:        dto.Terminal,
 	}, nil
 }
 
 // InvocationHandle is the submitted invocation observation handle projection.
 type InvocationHandle struct {
-	handleID uint64
+	control  InvocationControlCapability
 	state    string
 	terminal bool
 	events   []InvocationHandleEvent
@@ -901,8 +1171,15 @@ type InvocationHandleEvent struct {
 	result   json.RawMessage
 }
 
-func (h InvocationHandle) HandleID() uint64 {
-	return h.handleID
+func (h InvocationHandle) ControlCapability() InvocationControlCapability {
+	return h.control
+}
+
+func (h InvocationHandle) controlCapability() (InvocationControlCapability, error) {
+	if !h.control.valid() {
+		return InvocationControlCapability{}, invalidRuntimePayload("runtime-bound invocation control capability is required", nil)
+	}
+	return h.control, nil
 }
 
 func (h InvocationHandle) State() string {
@@ -947,6 +1224,14 @@ func (e InvocationHandleEvent) Result() json.RawMessage {
 
 // NewInvocationHandleFromJSON decodes the daemon handle snapshot projection.
 func NewInvocationHandleFromJSON(raw []byte) (InvocationHandle, error) {
+	return newInvocationHandleSnapshotFromJSON(raw, nil)
+}
+
+func newRuntimeInvocationHandleFromJSON(raw []byte) (InvocationHandle, error) {
+	return newInvocationHandleSnapshotFromJSON(raw, nil, true)
+}
+
+func newInvocationHandleSnapshotFromJSON(raw []byte, expectedControl *InvocationControlCapability, trusted ...bool) (InvocationHandle, error) {
 	var dto struct {
 		HandleID uint64 `json:"handle_id"`
 		State    string `json:"state"`
@@ -970,6 +1255,9 @@ func NewInvocationHandleFromJSON(raw []byte) (InvocationHandle, error) {
 	if dto.State == "" {
 		return InvocationHandle{}, invalidRuntimePayload("state is required", nil)
 	}
+	if expectedControl != nil && expectedControl.adapterHandleID() != dto.HandleID {
+		return InvocationHandle{}, invalidRuntimePayload("handle_id does not match invocation control capability", nil)
+	}
 	events := make([]InvocationHandleEvent, 0, len(dto.Events))
 	for _, event := range dto.Events {
 		if event.Sequence == 0 {
@@ -987,8 +1275,21 @@ func NewInvocationHandleFromJSON(raw []byte) (InvocationHandle, error) {
 			result:   append(json.RawMessage(nil), event.Result...),
 		})
 	}
+	var control InvocationControlCapability
+	var err error
+	switch {
+	case expectedControl != nil:
+		control = *expectedControl
+	case len(trusted) > 0 && trusted[0]:
+		control, err = newRuntimeInvocationControlCapability(dto.HandleID)
+	default:
+		control, err = newSnapshotInvocationControlCapability(dto.HandleID)
+	}
+	if err != nil {
+		return InvocationHandle{}, err
+	}
 	return InvocationHandle{
-		handleID: dto.HandleID,
+		control:  control,
 		state:    dto.State,
 		terminal: dto.Terminal,
 		events:   events,

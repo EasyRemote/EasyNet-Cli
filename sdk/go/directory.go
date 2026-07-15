@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	axonsdk "easynet.run/axon/sdk/go/easynet"
+	directorycore "easynet.run/cli/sdk/go/directorycore"
 )
 
 const (
@@ -19,13 +20,13 @@ type DirectoryEvent = axonsdk.DirectoryEvent
 type DirectoryAgentSummary = axonsdk.DirectoryAgentSummary
 type DirectorySigningAuthority = axonsdk.DirectorySigningAuthority
 
-type DirectoryResolveKind string
+type DirectoryResolveKind = directorycore.ResolveKind
 
 const (
-	DirectoryResolveRoute             DirectoryResolveKind = "RESOLVE_TYPE_ROUTE"
-	DirectoryResolveListing           DirectoryResolveKind = "RESOLVE_TYPE_DIRECTORY_LISTING"
-	DirectoryResolveCanonicalIdentity DirectoryResolveKind = "RESOLVE_TYPE_CANONICAL_IDENTITY"
-	DirectoryResolveOwner             DirectoryResolveKind = "RESOLVE_TYPE_OWNER"
+	DirectoryResolveRoute             = directorycore.ResolveRoute
+	DirectoryResolveListing           = directorycore.ResolveListing
+	DirectoryResolveCanonicalIdentity = directorycore.ResolveCanonicalIdentity
+	DirectoryResolveOwner             = directorycore.ResolveOwner
 )
 
 type DirectoryResolveRequest struct {
@@ -148,124 +149,6 @@ func (c *DirectoryClient) Subscribe(ctx context.Context, request DirectorySubscr
 	return c.provider.Subscribe(ctx, request)
 }
 
-// RuntimeDirectoryProvider lowers Directory operations through the canonical
-// RuntimeAbilityClient. Cursor and resume tokens are daemon-owned opaque
-// values; the SDK forwards and validates bounded progression only.
-type RuntimeDirectoryProvider struct {
-	ability *RuntimeAbilityClient
-}
-
-func NewRuntimeDirectoryProvider(ability *RuntimeAbilityClient) (*RuntimeDirectoryProvider, error) {
-	if ability == nil {
-		return nil, invalidDirectory("runtime ability client is required", nil)
-	}
-	return &RuntimeDirectoryProvider{ability: ability}, nil
-}
-
-func (p *RuntimeDirectoryProvider) Resolve(ctx context.Context, request DirectoryResolveRequest) (DirectoryResolution, error) {
-	if p == nil || p.ability == nil {
-		return DirectoryResolution{}, invalidDirectory("runtime Directory provider is not initialized", nil)
-	}
-	queryURA := strings.TrimSpace(request.QueryURA)
-	realmHint := strings.TrimSpace(request.RealmHint)
-	if queryURA == "" && realmHint == "" {
-		return DirectoryResolution{}, invalidDirectory("query_ura or realm_hint is required", nil)
-	}
-	kind := request.Kind
-	if kind == "" {
-		kind = DirectoryResolveRoute
-	}
-	args := map[string]any{"qtype": string(kind)}
-	if queryURA != "" {
-		args["query_name"] = queryURA
-	}
-	if realmHint != "" {
-		args["realm_hint"] = realmHint
-	}
-	if ability := strings.TrimSpace(request.AbilityName); ability != "" {
-		args["ability_name"] = ability
-	}
-	if request.IncludeAbilities != nil {
-		args["include_abilities"] = *request.IncludeAbilities
-	}
-	output, err := p.ability.Invoke(ctx, request.Call, "namespace.resolve", args)
-	if err != nil {
-		return DirectoryResolution{}, err
-	}
-	return projectDirectoryResolution(output)
-}
-
-func (p *RuntimeDirectoryProvider) List(ctx context.Context, request DirectoryListRequest) (DirectoryPage, error) {
-	if p == nil || p.ability == nil {
-		return DirectoryPage{}, invalidDirectory("runtime Directory provider is not initialized", nil)
-	}
-	limit, err := directoryLimit(request.Limit)
-	if err != nil {
-		return DirectoryPage{}, err
-	}
-	cursor, err := directoryCursor(request.Cursor)
-	if err != nil {
-		return DirectoryPage{}, err
-	}
-	args := map[string]any{
-		"qtype": string(DirectoryResolveListing),
-		"limit": limit,
-	}
-	if prefix := strings.TrimSpace(request.URAPrefix); prefix != "" {
-		args["query_name"] = prefix
-	}
-	if cursor != "" {
-		args["cursor"] = cursor
-	}
-	if request.IncludeAbilities != nil {
-		args["include_abilities"] = *request.IncludeAbilities
-	}
-	output, err := p.ability.Invoke(ctx, request.Call, "namespace.resolve", args)
-	if err != nil {
-		return DirectoryPage{}, err
-	}
-	resolution, err := projectDirectoryResolution(output)
-	if err != nil {
-		return DirectoryPage{}, err
-	}
-	if resolution.AnswerKind == "RESOLVE_ANSWER_KIND_NEGATIVE" || len(resolution.Negative) != 0 {
-		return DirectoryPage{}, invalidDirectory(directoryNegativeDetail(resolution), nil)
-	}
-	if uint32(len(resolution.Records)) > limit {
-		return DirectoryPage{}, invalidDirectory("runtime Directory listing exceeds the bounded page and has no stable cursor", nil)
-	}
-	nextCursor, err := directoryCursor(resolution.NextCursor)
-	if err != nil {
-		return DirectoryPage{}, err
-	}
-	if nextCursor != "" && nextCursor == cursor {
-		return DirectoryPage{}, invalidDirectory("runtime Directory listing returned a repeated cursor", nil)
-	}
-	return DirectoryPage{Records: resolution.Records, Limit: limit, NextCursor: nextCursor}, nil
-}
-
-func (p *RuntimeDirectoryProvider) Subscribe(ctx context.Context, request DirectorySubscribeRequest) (*DirectorySubscription, error) {
-	if p == nil || p.ability == nil {
-		return nil, invalidDirectory("runtime Directory provider is not initialized", nil)
-	}
-	args := map[string]any{}
-	if request.ResumeCursor != nil {
-		token, err := directoryCursor(request.ResumeCursor.Token)
-		if err != nil {
-			return nil, err
-		}
-		args["resume_sequence"] = request.ResumeCursor.Sequence
-		if token != "" {
-			args["resume_token"] = token
-		}
-	}
-	handle, err := p.ability.OpenStream(ctx, request.Call, "federation.subscribe_directory_v2", args)
-	if err != nil {
-		return nil, err
-	}
-	return newDirectorySubscription(handle), nil
-}
-
 type DirectorySubscription struct {
 	handle *StreamHandle
 	state  DirectorySubscriptionState
@@ -348,7 +231,9 @@ func (s *DirectorySubscription) transition(event DirectoryEvent) error {
 	return nil
 }
 
-func projectDirectoryResolution(output map[string]any) (DirectoryResolution, error) {
+// ProjectDirectoryResolution projects a daemon namespace.resolve output object
+// into the SDK's product-neutral DirectoryResolution model.
+func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, error) {
 	if answer, ok := output["answer"].(map[string]any); ok {
 		output = answer
 	}
@@ -366,7 +251,7 @@ func projectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 			if !ok {
 				return DirectoryResolution{}, invalidDirectory("Directory record must be an object", nil)
 			}
-			records = append(records, projectDirectoryRecord(record))
+			records = append(records, ProjectDirectoryRecord(record))
 		}
 	}
 	return DirectoryResolution{
@@ -403,7 +288,9 @@ func directoryMapSlice(value any) []map[string]any {
 	return result
 }
 
-func projectDirectoryRecord(raw map[string]any) DirectoryRecord {
+// ProjectDirectoryRecord projects one raw namespace.resolve Directory record
+// while preserving its source facts for product read models.
+func ProjectDirectoryRecord(raw map[string]any) DirectoryRecord {
 	copyRaw := make(map[string]any, len(raw))
 	for key, value := range raw {
 		copyRaw[key] = value

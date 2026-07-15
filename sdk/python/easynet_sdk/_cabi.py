@@ -11,13 +11,13 @@ import ctypes
 import ctypes.util
 import json
 import queue as queue_module
+import sys
 import threading
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable
 
 from .errors import ErrorCode, RetryHint, SDKError, retryable_for_hint
-from .stream import StreamHandle
+from .runtime import InvocationControlCapability
 
 EXPECTED_ABI_VERSION = 5
 EASYNET_OK = 0
@@ -47,7 +47,9 @@ class CLILibrary:
             found = ctypes.util.find_library("easynet_cli")
             if found:
                 candidates.append(found)
-            candidates.extend(name for name in _platform_library_candidates() if Path(name).exists())
+            candidates.extend(
+                name for name in _platform_library_candidates() if name not in candidates
+            )
         if not candidates:
             raise _transport_error("libeasynet_cli was not found")
 
@@ -584,8 +586,8 @@ class CABIDiscoveryTransport:
 
 
 @dataclass
-class CABIDaemonTransport:
-    """Daemon lifecycle transport backed by generic C ABI v5."""
+class CABIRuntimeLifecycleTransport:
+    """Runtime host lifecycle transport backed by generic C ABI v5."""
 
     lib: CLILibrary
     _handles: dict[str, int] = field(default_factory=dict)
@@ -595,36 +597,47 @@ class CABIDaemonTransport:
     def discover(self, options_json: bytes) -> bytes:
         self._require_open()
         raw = self.lib.daemon_discover(options_json)
-        status = _daemon_status_from_cabi("0", raw)
-        return _json_bytes(status["endpoints"])
+        status = _runtime_status_from_cabi("0", raw)
+        endpoints = status["endpoints"]
+        if not isinstance(endpoints, dict):
+            raise TypeError("runtime host discovery omitted endpoints")
+        return _json_bytes(endpoints)
 
     def start(self, config_json: bytes) -> bytes:
         self._require_open()
-        daemon_handle = self.lib.daemon_start(_daemon_start_config_for_cabi(config_json))
-        public_id = str(daemon_handle)
-        self._handles[public_id] = daemon_handle
-        status = _daemon_status_from_cabi(public_id, self.lib.daemon_status(daemon_handle))
+        native_handle = self.lib.daemon_start(
+            _runtime_start_config_for_cabi(config_json)
+        )
+        public_id = str(native_handle)
+        self._handles[public_id] = native_handle
+        status = _runtime_status_from_cabi(
+            public_id, self.lib.daemon_status(native_handle)
+        )
         self._status_cache[public_id] = status
         return _json_bytes(status)
 
     def attach(self, options_json: bytes) -> bytes:
         self._require_open()
-        daemon_handle = self.lib.daemon_attach(options_json)
-        public_id = str(daemon_handle)
-        self._handles[public_id] = daemon_handle
-        status = _daemon_status_from_cabi(public_id, self.lib.daemon_status(daemon_handle))
+        native_handle = self.lib.daemon_attach(options_json)
+        public_id = str(native_handle)
+        self._handles[public_id] = native_handle
+        status = _runtime_status_from_cabi(
+            public_id, self.lib.daemon_status(native_handle)
+        )
         self._status_cache[public_id] = status
         return _json_bytes(status)
 
     def status(self, handle_id: str) -> bytes:
-        daemon_handle = self._require_daemon_handle(handle_id)
-        status = _daemon_status_from_cabi(handle_id, self.lib.daemon_status(daemon_handle))
+        native_handle = self._require_runtime_handle(handle_id)
+        status = _runtime_status_from_cabi(
+            handle_id, self.lib.daemon_status(native_handle)
+        )
         self._status_cache[handle_id] = status
         return _json_bytes(status)
 
     def invocation_endpoint(self, handle_id: str) -> str:
-        daemon_handle = self._require_daemon_handle(handle_id)
-        endpoint = self.lib.daemon_invocation_endpoint(daemon_handle)
+        native_handle = self._require_runtime_handle(handle_id)
+        endpoint = self.lib.daemon_invocation_endpoint(native_handle)
         status = dict(self._status_cache.get(handle_id, {}))
         cached_endpoints = status.get("endpoints", {})
         endpoints = dict(cached_endpoints) if isinstance(cached_endpoints, dict) else {}
@@ -672,21 +685,23 @@ class CABIDaemonTransport:
         )
 
     def _open_client_handle(self, handle_id: str, profile: str) -> int:
-        daemon_handle = self._require_daemon_handle(handle_id)
-        client_handle = self.lib.daemon_open_client(daemon_handle)
+        native_handle = self._require_runtime_handle(handle_id)
+        client_handle = self.lib.daemon_open_client(native_handle)
         if client_handle <= 0:
             raise SDKError(
                 code=ErrorCode.INVALID_HANDLE,
                 stage="cabi",
                 retry=RetryHint.NEVER,
-                message=f"C ABI daemon open {profile} returned an invalid client handle",
+                message=(
+                    f"C ABI runtime open {profile} returned an invalid client handle"
+                ),
             )
         return client_handle
 
     def stop(self, handle_id: str, options_json: bytes) -> bytes:
         _ = options_json
-        daemon_handle = self._require_daemon_handle(handle_id)
-        self.lib.daemon_stop(daemon_handle)
+        native_handle = self._require_runtime_handle(handle_id)
+        self.lib.daemon_stop(native_handle)
         self._handles.pop(handle_id, None)
         prior = self._status_cache.pop(handle_id, {})
         stopped = {
@@ -699,31 +714,31 @@ class CABIDaemonTransport:
         return _json_bytes(stopped)
 
     def detach(self, handle_id: str) -> None:
-        daemon_handle = self._require_daemon_handle(handle_id)
-        self.lib.daemon_detach(daemon_handle)
+        native_handle = self._require_runtime_handle(handle_id)
+        self.lib.daemon_detach(native_handle)
         self._handles.pop(handle_id, None)
         self._status_cache.pop(handle_id, None)
 
-    def _require_daemon_handle(self, handle_id: str) -> int:
+    def _require_runtime_handle(self, handle_id: str) -> int:
         self._require_open()
-        daemon_handle = self._handles.get(handle_id)
-        if daemon_handle is None or daemon_handle <= 0:
+        native_handle = self._handles.get(handle_id)
+        if native_handle is None or native_handle <= 0:
             raise SDKError(
                 code=ErrorCode.INVALID_HANDLE,
                 stage="cabi",
                 retry=RetryHint.NEVER,
-                message="daemon handle is not owned by this transport",
+                message="runtime handle is not owned by this transport",
             )
-        return daemon_handle
+        return native_handle
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         first_error: SDKError | None = None
-        for handle_id, daemon_handle in list(self._handles.items()):
+        for handle_id, native_handle in list(self._handles.items()):
             try:
-                self.lib.daemon_detach(daemon_handle)
+                self.lib.daemon_detach(native_handle)
             except SDKError as exc:
                 if first_error is None:
                     first_error = exc
@@ -735,7 +750,91 @@ class CABIDaemonTransport:
 
     def _require_open(self) -> None:
         if self._closed:
-            raise _closed_error("daemon transport is closed")
+            raise _closed_error("runtime lifecycle transport is closed")
+
+
+CABIDaemonTransport = CABIRuntimeLifecycleTransport
+
+
+@dataclass
+class _CABIPreparedHandle:
+    native_id: int
+    state: str = "ready"
+
+
+@dataclass
+class _CABIPreparedHandleRegistry:
+    _handles: dict[str, _CABIPreparedHandle] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def register(
+        self,
+        key: str,
+        prepared_id: int,
+        free_prepared: Callable[[int], None],
+    ) -> None:
+        with self._lock:
+            duplicate = key in self._handles
+            if not duplicate:
+                self._handles[key] = _CABIPreparedHandle(prepared_id)
+        if duplicate:
+            free_prepared(prepared_id)
+            raise SDKError(
+                code=ErrorCode.PROTOCOL,
+                stage="cabi",
+                retry=RetryHint.NEVER,
+                message="C ABI prepare returned a duplicate prepared handle id",
+            )
+
+    def claim_for_signing(self, key: str) -> int:
+        with self._lock:
+            handle = self._handles.get(key)
+            if handle is None:
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="cabi",
+                    retry=RetryHint.NEVER,
+                    message="prepared invocation handle is not owned by this transport",
+                )
+            if handle.state != "ready":
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="cabi",
+                    retry=RetryHint.NEVER,
+                    message="prepared invocation handle is already being signed",
+                )
+            handle.state = "signing"
+            return handle.native_id
+
+    def release_signing_claim(self, key: str, prepared_id: int) -> None:
+        with self._lock:
+            handle = self._handles.get(key)
+            if (
+                handle is not None
+                and handle.native_id == prepared_id
+                and handle.state == "signing"
+            ):
+                handle.state = "ready"
+
+    def consume_signing_claim(self, key: str, prepared_id: int) -> None:
+        with self._lock:
+            handle = self._handles.get(key)
+            if (
+                handle is not None
+                and handle.native_id == prepared_id
+                and handle.state == "signing"
+            ):
+                self._handles.pop(key, None)
+
+    def drain(self) -> tuple[int, ...]:
+        with self._lock:
+            prepared_ids = tuple(handle.native_id for handle in self._handles.values())
+            self._handles.clear()
+            return prepared_ids
+
+    def keys(self) -> set[str]:
+        with self._lock:
+            return set(self._handles)
 
 
 @dataclass
@@ -745,7 +844,9 @@ class CABIRuntimeTransport:
     lib: CLILibrary
     handle: int
     owns_handle: bool = False
-    _prepared_ids: dict[str, int] = field(default_factory=dict)
+    _prepared_handles: _CABIPreparedHandleRegistry = field(
+        default_factory=_CABIPreparedHandleRegistry
+    )
     _streams: dict[int, "_CABIStreamTransport"] = field(default_factory=dict)
     _bidis: dict[int, "_CABIBidiTransport"] = field(default_factory=dict)
     _closed: bool = False
@@ -755,6 +856,13 @@ class CABIRuntimeTransport:
 
     def runtime_diagnostics(self) -> bytes:
         return self.lib.runtime_diagnostics(self._require_open())
+
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        diagnostics = _json_object(
+            self.lib.runtime_diagnostics(self._require_open()),
+            "runtime diagnostics",
+        )
+        return _resolve_descriptor_ref_from_diagnostics(request_json, diagnostics)
 
     def invoke(self, draft_json: bytes) -> bytes:
         return self.lib.invocation_invoke(self._require_open(), draft_json)
@@ -833,6 +941,19 @@ class CABIRuntimeTransport:
         prepared_c_id, raw = self.lib.invocation_prepare(
             self._require_open(), draft_json, options_json
         )
+        options = _json_object(options_json, "prepare options")
+        material_only = bool(options.get("material_only") is True)
+        if material_only:
+            if prepared_c_id != 0:
+                self.lib.prepared_invocation_free(prepared_c_id)
+                raise SDKError(
+                    code=ErrorCode.INVALID_HANDLE,
+                    stage="cabi",
+                    retry=RetryHint.NEVER,
+                    message="C ABI material-only prepare retained a prepared handle",
+                )
+            return raw
+
         key = _prepared_key(_json_object(raw, "prepared invocation"))
         if prepared_c_id <= 0:
             raise SDKError(
@@ -841,48 +962,42 @@ class CABIRuntimeTransport:
                 retry=RetryHint.NEVER,
                 message="C ABI prepare returned an invalid prepared handle",
             )
-        if key in self._prepared_ids:
-            self.lib.prepared_invocation_free(prepared_c_id)
-            raise SDKError(
-                code=ErrorCode.PROTOCOL,
-                stage="cabi",
-                retry=RetryHint.NEVER,
-                message="C ABI prepare returned a duplicate prepared request id",
-            )
-        self._prepared_ids[key] = prepared_c_id
+        self._prepared_handles.register(
+            key,
+            prepared_c_id,
+            self.lib.prepared_invocation_free,
+        )
         return raw
 
     def submit_signed(self, signed_json: bytes) -> bytes:
         signed = _json_object(signed_json, "signed invocation")
         prepared = _required_object(signed, "prepared")
         key = _prepared_key(prepared)
-        prepared_c_id = self._prepared_ids.get(key)
-        if prepared_c_id is None:
-            raise SDKError(
-                code=ErrorCode.INVALID_HANDLE,
-                stage="cabi",
-                retry=RetryHint.NEVER,
-                message="prepared invocation handle is not owned by this transport",
-            )
-        if _signed_invocation_uses_local_daemon_signing(signed):
-            signed_c_id, _ = self.lib.invocation_sign_prepared_local(prepared_c_id)
-        else:
-            signature_json = json.dumps(
-                _required_object(signed, "signature"),
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-            signed_c_id, _ = self.lib.invocation_sign_prepared(
-                prepared_c_id, signature_json
-            )
+        prepared_c_id = self._prepared_handles.claim_for_signing(key)
+        try:
+            if _signed_invocation_uses_local_daemon_signing(signed):
+                signed_c_id, _ = self.lib.invocation_sign_prepared_local(prepared_c_id)
+            else:
+                signature_json = json.dumps(
+                    _required_object(signed, "signature"),
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+                signed_c_id, _ = self.lib.invocation_sign_prepared(
+                    prepared_c_id, signature_json
+                )
+        except Exception:
+            self._prepared_handles.release_signing_claim(key, prepared_c_id)
+            raise
         if signed_c_id <= 0:
+            self._prepared_handles.release_signing_claim(key, prepared_c_id)
             raise SDKError(
                 code=ErrorCode.INVALID_HANDLE,
                 stage="cabi",
                 retry=RetryHint.NEVER,
                 message="C ABI sign returned an invalid signed handle",
             )
-        self._prepared_ids.pop(key, None)
+        self._prepared_handles.consume_signing_claim(key, prepared_c_id)
         try:
             _, submitted_json = self.lib.invocation_submit_signed_handle(
                 self._require_open(), signed_c_id
@@ -895,16 +1010,22 @@ class CABIRuntimeTransport:
             raise
         return submitted_json
 
-    def await_handle(self, handle_id: int) -> bytes:
+    def await_handle(self, control: InvocationControlCapability) -> bytes:
+        handle_id = control._adapter_handle_id()
         return self.lib.invocation_handle_await(self._require_open(), handle_id)
 
-    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+    def cancel_handle(
+        self, control: InvocationControlCapability, reason: str
+    ) -> bytes:
+        handle_id = control._adapter_handle_id()
         return self.lib.invocation_handle_cancel(self._require_open(), handle_id, reason)
 
-    def handle_events(self, handle_id: int) -> bytes:
+    def handle_events(self, control: InvocationControlCapability) -> bytes:
+        handle_id = control._adapter_handle_id()
         return self.lib.invocation_handle_events(self._require_open(), handle_id)
 
-    def free_handle(self, handle_id: int) -> None:
+    def free_handle(self, control: InvocationControlCapability) -> None:
+        handle_id = control._adapter_handle_id()
         self.lib.invocation_handle_free(self._require_open(), handle_id)
 
     def close(self) -> None:
@@ -923,13 +1044,12 @@ class CABIRuntimeTransport:
             except SDKError as exc:
                 if first_error is None:
                     first_error = exc
-        for prepared_id in tuple(self._prepared_ids.values()):
+        for prepared_id in self._prepared_handles.drain():
             try:
                 self.lib.prepared_invocation_free(prepared_id)
             except SDKError as exc:
                 if first_error is None:
                     first_error = exc
-        self._prepared_ids.clear()
         self._closed = True
         if self.owns_handle:
             try:
@@ -955,23 +1075,23 @@ class CABIRuntimeTransport:
 
 @dataclass
 class CABIRuntimeConnector:
-    """RuntimeConnection connector backed by C ABI daemon lifecycle calls."""
+    """RuntimeConnection connector backed by C ABI runtime lifecycle calls."""
 
     lib: CLILibrary
-    _daemon: CABIDaemonTransport = field(init=False)
+    _lifecycle: CABIRuntimeLifecycleTransport = field(init=False)
     _runtime: CABIRuntimeTransport | None = None
     _closed: bool = False
 
     def __post_init__(self) -> None:
-        self._daemon = CABIDaemonTransport(self.lib)
+        self._lifecycle = CABIRuntimeLifecycleTransport(self.lib)
 
     def resolve(self, options_json: bytes) -> bytes:
         self._require_open()
         options = _json_object(options_json or b"{}", "runtime connect options")
         control_path = _optional_json_string(options, "control_path")
         endpoints = _json_object(
-            self._daemon.discover(_json_bytes({"control_path": control_path})),
-            "daemon endpoints",
+            self._lifecycle.discover(_json_bytes({"control_path": control_path})),
+            "runtime host endpoints",
         )
         endpoint = _optional_json_string(options, "endpoint") or _optional_json_string(
             endpoints, "invocation_endpoint"
@@ -981,7 +1101,7 @@ class CABIRuntimeConnector:
                 code=ErrorCode.CONTROL_ONLY,
                 stage="cabi",
                 retry=RetryHint.SAFE,
-                message="daemon discovery did not advertise invocation_endpoint",
+                message="runtime discovery did not advertise invocation_endpoint",
             )
         return _json_bytes(
             {
@@ -1001,7 +1121,7 @@ class CABIRuntimeConnector:
         invocation_endpoint = _required_json_string(endpoint, "endpoint")
         control_path = _optional_json_string(endpoint, "control_path")
         control_endpoint = _optional_json_string(endpoint, "control_endpoint")
-        status_raw = self._daemon.attach(
+        status_raw = self._lifecycle.attach(
             _json_bytes(
                 {
                     "control_endpoint": control_endpoint,
@@ -1010,10 +1130,10 @@ class CABIRuntimeConnector:
                 }
             )
         )
-        status = _json_object(status_raw, "daemon status")
+        status = _json_object(status_raw, "runtime host status")
         handle_id = _required_json_string(status, "handle_id")
         try:
-            runtime, _ = self._daemon.open_runtime(
+            runtime, _ = self._lifecycle.open_runtime(
                 handle_id,
                 _json_bytes(
                     {
@@ -1023,10 +1143,10 @@ class CABIRuntimeConnector:
                 ),
             )
         except BaseException:
-            self._daemon.detach(handle_id)
+            self._lifecycle.detach(handle_id)
             raise
         try:
-            self._daemon.detach(handle_id)
+            self._lifecycle.detach(handle_id)
         except BaseException:
             runtime.close()
             raise
@@ -1053,7 +1173,7 @@ class CABIRuntimeConnector:
             finally:
                 self._runtime = None
         try:
-            self._daemon.close()
+            self._lifecycle.close()
         except SDKError as exc:
             if first_error is None:
                 first_error = exc
@@ -1072,6 +1192,7 @@ class _CABIStreamTransport:
     callback_token: int
     inbox: "_CallbackInbox"
     _terminal_action_done: bool = False
+    _cancel_sent: bool = False
     _next_sequence: int = 1
 
     def recv(self, timeout: float | None = None) -> bytes:
@@ -1084,18 +1205,18 @@ class _CABIStreamTransport:
         )
 
     def cancel(self, reason: str) -> bytes:
-        if not self._terminal_action_done:
+        if not self._terminal_action_done and not self._cancel_sent:
             self.owner.lib.invocation_stream_cancel(
                 self.owner._handle_if_open(), self.stream_id
             )
-            self._terminal_action_done = True
-            self.owner._remove_stream(self.stream_id, self.callback_token)
+            self._cancel_sent = True
         return _json_bytes(
             {
                 "stream_id": str(self.stream_id),
-                "cancelled": True,
-                "state": "Cancelled",
-                "terminal": True,
+                "cancel_requested": True,
+                "cancelled": False,
+                "state": "CancelRequested",
+                "terminal": False,
             }
         )
 
@@ -1124,6 +1245,7 @@ class _CABIBidiTransport:
     callback_token: int
     inbox: "_CallbackInbox"
     _terminal_action_done: bool = False
+    _cancel_sent: bool = False
     _next_sequence: int = 1
 
     def send(self, frame_json: bytes) -> bytes:
@@ -1165,17 +1287,16 @@ class _CABIBidiTransport:
         self.owner._remove_bidi(self.bidi_id, self.callback_token)
 
     def cancel(self, reason: str) -> bytes:
-        if not self._terminal_action_done:
+        if not self._terminal_action_done and not self._cancel_sent:
             self.owner.lib.invocation_bidi_cancel(
                 self.owner._handle_if_open(), self.bidi_id
             )
-            self._terminal_action_done = True
-            self.owner._remove_bidi(self.bidi_id, self.callback_token)
+            self._cancel_sent = True
         return _json_bytes(
             {
                 "session_id": str(self.bidi_id),
-                "state": "Cancelled",
-                "terminal": True,
+                "state": "CancelRequested",
+                "terminal": False,
                 "reason": reason,
             }
         )
@@ -1210,6 +1331,12 @@ def _project_cabi_ordered_event(
     event["sequence"] = allocate_sequence(sequence)
     if "payload_base64" not in event and "data_base64" in event:
         event["payload_base64"] = event.get("data_base64")
+    if "kind" not in event:
+        legacy_event = event.get("event")
+        if legacy_event in {"binary_chunk", "chunk"}:
+            event["kind"] = "data"
+        elif isinstance(legacy_event, str) and legacy_event:
+            event["kind"] = legacy_event
     state = event.get("state")
     if isinstance(state, int) and not isinstance(state, bool):
         event["state"] = _axon_invocation_state_name(state)
@@ -1219,6 +1346,10 @@ def _project_cabi_ordered_event(
             "message": _string_or_empty(event.get("message")),
         }
     return _json_bytes(event)
+
+
+def _string_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _axon_invocation_state_name(state: int) -> str:
@@ -1332,13 +1463,22 @@ _STREAM_CALLBACK_HANDLE = _StreamCallback(_stream_callback)
 _BIDI_CALLBACK_HANDLE = _BidiCallback(_bidi_callback)
 
 
+def open_cabi_runtime_lifecycle_transport(
+    *,
+    library_path: str | None = None,
+) -> CABIRuntimeLifecycleTransport:
+    """Open a C ABI runtime host lifecycle transport."""
+
+    return CABIRuntimeLifecycleTransport(lib=CLILibrary.load(library_path))
+
+
 def open_cabi_daemon_transport(
     *,
     library_path: str | None = None,
-) -> CABIDaemonTransport:
-    """Open a C ABI daemon lifecycle transport."""
+) -> "CABIDaemonTransport":
+    """Source-compatible alias for ``open_cabi_runtime_lifecycle_transport``."""
 
-    return CABIDaemonTransport(lib=CLILibrary.load(library_path))
+    return open_cabi_runtime_lifecycle_transport(library_path=library_path)
 
 
 def open_cabi_runtime_transport(
@@ -1372,8 +1512,8 @@ def _json_bytes(value: dict[str, object]) -> bytes:
     return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
-def _daemon_start_config_for_cabi(config_json: bytes) -> bytes:
-    config = _json_object(config_json, "daemon start config")
+def _runtime_start_config_for_cabi(config_json: bytes) -> bytes:
+    config = _json_object(config_json, "runtime host start config")
     unsupported = [
         field_name
         for field_name in (
@@ -1392,7 +1532,7 @@ def _daemon_start_config_for_cabi(config_json: bytes) -> bytes:
             stage="cabi",
             retry=RetryHint.NEVER,
             message=(
-                "C ABI daemon start does not support fields: "
+                "C ABI runtime host start does not support fields: "
                 + ", ".join(sorted(unsupported))
             ),
         )
@@ -1413,12 +1553,12 @@ def _daemon_start_config_for_cabi(config_json: bytes) -> bytes:
     return _json_bytes(projected)
 
 
-def _daemon_status_from_cabi(handle_id: str, raw: bytes) -> dict[str, object]:
-    decoded = _json_object(raw, "daemon status")
-    endpoints = _daemon_endpoints_from_cabi(decoded)
+def _runtime_status_from_cabi(handle_id: str, raw: bytes) -> dict[str, object]:
+    decoded = _json_object(raw, "runtime host status")
+    endpoints = _runtime_endpoints_from_cabi(decoded)
     state = decoded.get("state")
     if not isinstance(state, str) or state == "":
-        state = _daemon_state_from_cabi(decoded)
+        state = _runtime_state_from_cabi(decoded)
     status: dict[str, object] = {
         "state": state,
         "endpoints": endpoints,
@@ -1441,7 +1581,7 @@ def _daemon_status_from_cabi(handle_id: str, raw: bytes) -> dict[str, object]:
     return status
 
 
-def _daemon_endpoints_from_cabi(decoded: dict[str, object]) -> dict[str, object]:
+def _runtime_endpoints_from_cabi(decoded: dict[str, object]) -> dict[str, object]:
     raw_endpoints = decoded.get("endpoints")
     if isinstance(raw_endpoints, dict):
         return {
@@ -1458,7 +1598,7 @@ def _daemon_endpoints_from_cabi(decoded: dict[str, object]) -> dict[str, object]
     }
 
 
-def _daemon_state_from_cabi(decoded: dict[str, object]) -> str:
+def _runtime_state_from_cabi(decoded: dict[str, object]) -> str:
     invocation_ready = decoded.get("invocation_accepting") is True
     control_ready = decoded.get("control_accepting") is True
     pid_alive = decoded.get("pid_alive") is True
@@ -1525,20 +1665,11 @@ def _merge_bidi_streams(draft_json: bytes, streams_json: bytes) -> bytes:
 
 
 def _platform_library_candidates() -> tuple[str, ...]:
-    repo_root = Path(__file__).resolve().parents[3]
-    return tuple(
-        str(repo_root / path)
-        for path in (
-            "target/release/libeasynet_cli.dylib",
-            "target/release/libeasynet_cli.so",
-            "target/release/deps/libeasynet_cli.dylib",
-            "target/release/deps/libeasynet_cli.so",
-            "target/debug/libeasynet_cli.dylib",
-            "target/debug/libeasynet_cli.so",
-            "target/debug/deps/libeasynet_cli.dylib",
-            "target/debug/deps/libeasynet_cli.so",
-        )
-    )
+    if sys.platform == "darwin":
+        return ("libeasynet_cli.dylib",)
+    if sys.platform == "win32":
+        return ("easynet_cli.dll",)
+    return ("libeasynet_cli.so",)
 
 
 def _json_object(raw: bytes, label: str) -> dict[str, object]:
@@ -1588,18 +1719,75 @@ def _required_object(
     return value
 
 
+def _resolve_descriptor_ref_from_diagnostics(
+    request_json: bytes, diagnostics: dict[str, object]
+) -> bytes:
+    request = _json_object(request_json or b"{}", "descriptor_ref resolution request")
+    callee_ura = _required_string(request, "callee_ura")
+    ability = _required_string(request, "ability")
+    call_mode = str(request.get("call_mode") or "rpc").strip() or "rpc"
+    ability_is_ura = ability.startswith("easynet:///r/")
+    catalog = diagnostics.get("descriptor_catalog")
+    if not isinstance(catalog, dict):
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            message="runtime diagnostics omitted descriptor_catalog",
+        )
+    entries = catalog.get("entries")
+    if not isinstance(entries, list):
+        raise SDKError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            stage="cabi",
+            retry=RetryHint.NEVER,
+            message="runtime descriptor_catalog.entries must be an array",
+        )
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_owner_ura = str(entry.get("owner_ura") or "").strip()
+        if str(entry.get("call_mode") or "rpc").strip() != call_mode:
+            continue
+        entry_name = str(entry.get("name") or "").strip()
+        entry_ability_ura = str(entry.get("ability_ura") or "").strip()
+        if ability_is_ura:
+            if ability != entry_ability_ura:
+                continue
+        elif entry_owner_ura != callee_ura or ability != entry_name:
+            continue
+        descriptor_ref = str(entry.get("descriptor_ref") or "").strip()
+        if descriptor_ref:
+            return _json_bytes(
+                {
+                    "descriptor_ref": descriptor_ref,
+                    "ability_ura": entry_ability_ura,
+                    "owner_ura": entry_owner_ura,
+                    "name": entry_name,
+                    "call_mode": call_mode,
+                    "source": catalog.get("source") or "descriptor_catalog",
+                }
+            )
+    raise SDKError(
+        code=ErrorCode.NOT_FOUND,
+        stage="cabi",
+        retry=RetryHint.NEVER,
+        message=(
+            f"descriptor_ref not found for callee_ura={callee_ura!r} "
+            f"ability={ability!r} call_mode={call_mode!r}"
+        ),
+    )
+
+
 def _prepared_key(decoded: dict[str, object]) -> str:
     prepared_id = decoded.get("prepared_id")
     if isinstance(prepared_id, str) and prepared_id.strip() != "":
         return prepared_id
-    request_id = decoded.get("request_id")
-    if isinstance(request_id, str) and request_id.strip() != "":
-        return request_id
     raise SDKError(
         code=ErrorCode.INVALID_ARGUMENT,
         stage="sdk",
         retry=RetryHint.NEVER,
-        message="prepared_id or request_id is required",
+        message="prepared_id is required",
     )
 
 

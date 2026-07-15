@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "shell.run"
+descriptor_version = "1.0.0"
 description = "Run a bash command string through the AXIOM Tier 2.5 8-stage security pipeline (empty / pre-check / AST / security catalogue / permission rules / path constraints / read-only classifier / destructive list) before dispatching to bash -c. Part of the baseline-locomotion-v1 profile."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

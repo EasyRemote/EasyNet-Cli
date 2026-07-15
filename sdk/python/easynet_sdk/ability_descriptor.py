@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol, cast
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .runtime_ability import RuntimeAbilityClient, RuntimeCallContext
@@ -98,6 +98,10 @@ class AbilityDescriptorProvider(Protocol):
     def list(self, request: AbilityDescriptorListRequest) -> AbilityDescriptorPage: ...
 
     def get(self, request: AbilityDescriptorGetRequest) -> AbilityDescriptorProjection: ...
+
+
+class _AddressingProjector(Protocol):
+    def project_descriptor_ref(self, value: str) -> Any: ...
 
 
 class AbilityDescriptorClient:
@@ -202,7 +206,7 @@ def parse_ability_descriptor_ref(
 
     try:
         if addressing is not None:
-            projection = addressing.project_descriptor_ref(raw)
+            projection = cast(_AddressingProjector, addressing).project_descriptor_ref(raw)
         else:
             from .axon_addressing import project_descriptor_ref
 

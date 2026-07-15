@@ -37,13 +37,41 @@ public final class RuntimeClient implements AutoCloseable {
   public InvocationHandle submitSigned(SignedInvocation signed) {
     requireOpen();
     byte[] raw = transport.submitSigned(Objects.requireNonNull(signed, "signed").toJSON());
-    return InvocationHandle.fromJSON(raw).bindRuntime(this);
+    return InvocationHandle.fromRuntimeJSON(raw).bindRuntime(this);
   }
 
   public InvocationHandle submitSigned(PreparedInvocation prepared) {
     requireOpen();
     Objects.requireNonNull(prepared, "prepared");
     throw SDKError.validation("runtime", "signed invocation is required");
+  }
+
+  public InvocationResult awaitResult(InvocationHandle handle) {
+    requireOpen();
+    byte[] raw = transport.awaitHandle(Objects.requireNonNull(handle, "handle").controlCapability());
+    return InvocationResult.fromJSON(raw);
+  }
+
+  public InvocationCancel cancel(InvocationHandle handle, String reason) {
+    requireOpen();
+    InvocationControlCapability control = Objects.requireNonNull(handle, "handle").controlCapability();
+    byte[] raw =
+        transport.cancelHandle(
+            control,
+            Objects.requireNonNullElse(reason, ""));
+    return InvocationCancel.fromJSONWithControl(raw, control);
+  }
+
+  public InvocationHandle events(InvocationHandle handle) {
+    requireOpen();
+    InvocationControlCapability control = Objects.requireNonNull(handle, "handle").controlCapability();
+    byte[] raw = transport.handleEvents(control);
+    return InvocationHandle.fromJSONWithControl(raw, control).bindRuntime(this);
+  }
+
+  public void closeHandle(InvocationHandle handle) {
+    requireOpen();
+    transport.freeHandle(Objects.requireNonNull(handle, "handle").controlCapability());
   }
 
   public StreamHandle openStream(InvocationDraft draft) {

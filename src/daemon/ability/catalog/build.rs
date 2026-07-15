@@ -1163,10 +1163,11 @@ fn build_registry_with_services_result_inner(
 
 /// Declare the stable Agent execution planes derived from the daemon's paired
 /// user identity before the catalog is constructed. These roots are runtime
-/// architecture, not hosted-agent lifecycle rows: Pages executes management
-/// abilities through `<user>.pages`, while reflected MCP tools execute through
-/// `<user>.mcp`. Both static eager registration and the post-boot dynamic MCP
-/// overlay therefore pass the same immutable authority gate.
+/// architecture, not hosted-agent lifecycle rows: Pages and Files execute
+/// resource-management abilities through `<user>.pages` and `<user>.files`,
+/// while reflected MCP tools execute through `<user>.mcp`. Static eager
+/// registration and post-boot dynamic overlays therefore pass the same
+/// immutable authority gate.
 fn declare_daemon_native_agent_authorities(
     mut authority_context: AbilityAuthorityContext,
     identity: &PagesIdentity,
@@ -1183,6 +1184,7 @@ fn declare_daemon_native_agent_authorities(
         .unwrap_or(crate::core::ura::REALM_EASYNET);
     let declared_roots = [
         ("Pages", pages::management_agent_ura(realm, user)),
+        ("Files", files::management_agent_ura(realm, user)),
         (
             "MCP reflection",
             easynet_axon::ura::agent_ura(realm, user, "mcp"),

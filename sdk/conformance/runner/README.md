@@ -2,7 +2,7 @@
 
 This directory defines the runner contract for language SDK conformance.
 
-The repository ships a manifest runner as `cargo run --bin
+The repository ships a manifest runner as `cargo run -p
 sdk-conformance-runner`. It loads the shared cases from `../cases`, validates
 fixture and schema references, validates every referenced fixture through
 `../fixture-schema-bindings.json`, and emits machine-readable result records.
@@ -21,61 +21,94 @@ equivalent machine-readable results. Pass the report with `--adapter-report` to
 turn manifest validation into a language action-adapter gate:
 
 ```bash
-cargo run --bin sdk-conformance-runner -- \
+cargo run -p sdk-conformance-runner -- \
   --language rust \
   --adapter-report sdk/conformance/runner/rust-action-adapter-report.json
 
-cargo run --bin sdk-conformance-runner -- \
+cargo run -p sdk-conformance-runner -- \
   --language c_abi \
   --adapter-report sdk/conformance/runner/c-abi-action-adapter-report.json
 
-cargo run --bin sdk-conformance-runner -- \
+cargo run -p sdk-conformance-runner -- \
   --language go \
   --adapter-report sdk/conformance/runner/go-action-adapter-report.json
 
-cargo run --bin sdk-conformance-runner -- \
+cargo run -p sdk-conformance-runner -- \
   --language python \
   --adapter-report sdk/conformance/runner/python-action-adapter-report.json
 
-cargo run --bin sdk-conformance-runner -- \
+cargo run -p sdk-conformance-runner -- \
   --language node \
   --adapter-report sdk/conformance/runner/node-action-adapter-report.json
 
-cargo run --bin sdk-conformance-runner -- \
+cargo run -p sdk-conformance-runner -- \
   --language java \
   --adapter-report sdk/conformance/runner/java-action-adapter-report.json
 
-cargo run --bin sdk-conformance-runner -- \
+cargo run -p sdk-conformance-runner -- \
   --language swift \
   --adapter-report sdk/conformance/runner/swift-action-adapter-report.json
 ```
 
-Minimum result record:
+Minimum live result record:
 
 ```json
 {
   "case_id": "invocation/complete_tuple",
-  "language": "rust",
+  "language": "go",
   "profile": "runtime_core",
+  "case_sha256": "...",
+  "selector": "TestInvocationBuilderBuildsCompleteTuple",
+  "evidence": [{
+    "kind": "go_test",
+    "ref_path": "sdk/go/invocation_test.go",
+    "sha256": "..."
+  }],
+  "collected_tests": ["TestInvocationBuilderBuildsCompleteTuple"],
+  "attestation_sha256": "...",
   "status": "passed",
-  "error_code": null
+  "error_code": null,
+  "executions": [
+    {
+      "phase": "execution",
+      "command": ["go", "test", "-json", "-run", "^TestInvocationBuilderBuildsCompleteTuple$", "-count=1", "./..."],
+      "working_directory": "sdk/go",
+      "exit_code": 0,
+      "output_sha256": "..."
+    }
+  ]
 }
 ```
 
 Skipped required cases block a `language-stable` claim.
 
-Adapter report records are language-owned evidence that the required shared
-case was executed by that facade's conformance adapter. A required case without
-a report record fails as `ACTION_ADAPTER_MISSING`; a failed record, mismatched
-profile, missing evidence, or evidence path outside the repository fails as
-`ACTION_ADAPTER_FAILED`.
+Adapter reports are schema-v2 coverage manifests, not test-result reports. They
+contain no `status`; the schema rejects a committed status attestation. Each
+record maps a shared case to a test source and pins that source by SHA-256.
+`execution-manifest.json` is runner-owned and binds that same case to one exact
+selector and evidence path. The runner verifies the case digest and evidence
+hash, proves the selector is declared in the bound source, collects the
+selector through the language test tool, then executes that exact collected
+test. Reports cannot supply or override selectors or commands.
+
+A required case without a report record fails as `ACTION_ADAPTER_MISSING`; a
+mismatched profile, invalid evidence scope, missing evidence, stale hash, or
+report/manifest evidence mismatch fails closed. Missing execution is
+`ACTION_ADAPTER_EXECUTION_MISSING`; an uncollected, multiply collected,
+unrelated, or failing selector is `ACTION_ADAPTER_EXECUTION_FAILED`. The
+emitted case SHA-256, evidence SHA-256, selector, collected test, command,
+working directory, exit code and command-output SHA-256 form one live result.
+The runner hashes those fields into `attestation_sha256`, so replacing any one
+of them produces a different attestation.
 
 The report is closed over the shared manifest. Every record must match an
 existing manifest case and that case must declare the requested language in
 `required_for`; unknown or language-undeclared records invalidate the report
 instead of being ignored. Evidence kind must match the report language, for
 example `rust_test`, `c_abi_test`, `go_test`, or `python_test`; cross-language
-evidence is rejected.
+evidence is rejected. Evidence paths must also fall under the test-source roots
+covered by that language's fixed suite, such as `sdk/go/**/*_test.go` or
+`sdk/python/tests/test_*.py`.
 
 Every adapter consumes the generic runtime cases explicitly listed for its
 language in `required_for`. The shared manifest contains no product profile

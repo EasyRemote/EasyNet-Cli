@@ -3,8 +3,8 @@
 //
 // File: src/bin/easynet-daemon.rs
 // Description: Long-running daemon entry — one process owns the
-//              Control-plane IPC server, daemon Invocation, runtime
-//              dispatch, and ability hosting. Directory liveness is
+//              Control-plane IPC server, daemon Invocation, and ability
+//              hosting. Directory liveness is
 //              the session-lifetime federation.heartbeat loop inside
 //              the invocation transport (the legacy heartbeat sidecar
 //              was retired in F-049/T1.5-1).
@@ -12,15 +12,13 @@
 // Current shape
 // -------------
 // - Always: spin up a tokio multi-thread runtime and run the daemon
-//   IPC surfaces on it: boot/status control, daemon Invocation, and
-//   runtime-dispatch for Axon local-tool delegation.
+//   IPC surfaces on it: boot/status control and daemon Invocation.
 //
 // What is NOT here yet
 // --------------------
 // - Schedule tick (PR-SCHED).
 // - Nothing on control.sock dispatches product abilities. Product
-//   calls enter through daemon Invocation; Axon-owned delegated calls
-//   enter through runtime-dispatch.
+//   calls enter through daemon Invocation.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -46,11 +44,9 @@ use easynet_cli::daemon::boot::kernel::api::KernelApi;
 use easynet_cli::daemon::boot::kernel::Kernel;
 use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
 use easynet_cli::daemon::control::discovery::DaemonIdentity;
-use easynet_cli::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
-use easynet_cli::daemon::control::{discovery, runtime_dispatch, server};
+use easynet_cli::daemon::control::{discovery, server};
 use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
 use easynet_cli::daemon::execution::schedule::ScheduleService;
-use easynet_cli::daemon::federation::gateway::NoopGateway;
 use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use easynet_cli::daemon::invocation::receipts::runtime_record::{
     RuntimeCausalContext, RuntimeInvocation,
@@ -214,6 +210,8 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
+    easynet_cli::daemon::persistence::config::migrate_legacy_agents_directory()?;
+
     // The key service is a detached custody process so that it cannot be
     // inherited accidentally by arbitrary child commands. Its lifecycle is
     // nevertheless owned by this daemon: every normal shutdown and every
@@ -221,8 +219,8 @@ async fn main() -> anyhow::Result<()> {
     // preserves that terminal transition across all early-return boot paths.
     let _key_service_shutdown = KeyServiceShutdownGuard;
 
-    // v1: a Kernel wrapping a NoopGateway is sufficient for the
-    // loop scheduler and permission/session services. The daemon installs the
+    // The daemon installs the SubscriberBroker-backed Kernel for loop,
+    // permission, and session services.
     // SubscriberBroker permission variant so a Client UI
     // connected to consent.subscribe sees real pending
     // requests when an agent dispatch is gated. (When no Client
@@ -230,9 +228,7 @@ async fn main() -> anyhow::Result<()> {
     // headless does not freeze on permission gates.)
     let boot_bus = BootBus::new();
     boot_bus.emit_started("kernel");
-    let kernel = Arc::new(Kernel::new_with_subscriber_broker(Arc::new(
-        NoopGateway::new(),
-    )));
+    let kernel = Arc::new(Kernel::new_with_subscriber_broker());
     boot_bus.emit_ok("kernel");
 
     boot_bus.emit_started("daemon-config");
@@ -354,14 +350,27 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let invocation_ledger = open_invocation_ledger();
-    let local_runtime = easynet_axon::invocation::LocalRuntime::new();
     let hub_published_abilities = HubPublishedAbilityStore::new();
+    let voice_calls = match daemon_config.mode() {
+        DaemonMode::Hub | DaemonMode::Both => {
+            easynet_cli::daemon::persistence::voice_calls::HubRealmVoiceCallRepository::from_env(
+                daemon_config.realm(),
+            )?
+        }
+        DaemonMode::Device => None,
+    };
+    let mut receipt_owner_uras = Vec::new();
+    let mut hosted_agent_device_ura = None;
     let authority_context = match daemon_config.mode() {
-        DaemonMode::Hub => Some(
-            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
-                easynet_cli::core::ura::hub_ura(daemon_config.realm()),
-            )?,
-        ),
+        DaemonMode::Hub => {
+            let hub_ura = easynet_cli::core::ura::hub_ura(daemon_config.realm());
+            receipt_owner_uras.push(hub_ura.clone());
+            Some(
+                easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+                    hub_ura,
+                )?,
+            )
+        }
         DaemonMode::Device | DaemonMode::Both => {
             let creds = config::load_credentials().map_err(|err| {
                 anyhow::anyhow!(
@@ -369,19 +378,47 @@ async fn main() -> anyhow::Result<()> {
                     daemon_config.mode().as_str()
                 )
             })?;
-            let device_ura =
-                easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
-            let hosted_agent_uras = easynet_cli::daemon::persistence::hosted_agent_authority_roots()
-                .map_err(|err| anyhow::anyhow!(
+            let device_ura = easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+            receipt_owner_uras.push(device_ura.clone());
+            let hosted_agent_uras = easynet_cli::daemon::persistence::hosted_agent_authority_roots(
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
                     "daemon ability registry requires readable hosted-agent lifecycle state: {err}"
-                ))?;
+                )
+            })?;
+            hosted_agent_device_ura = Some(device_ura.clone());
             Some(match daemon_config.mode() {
                 DaemonMode::Device => easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(device_ura, hosted_agent_uras)?,
-                DaemonMode::Both => easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(device_ura, hosted_agent_uras)?,
+                DaemonMode::Both => {
+                    receipt_owner_uras.push(easynet_cli::core::ura::hub_ura(daemon_config.realm()));
+                    easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(device_ura, hosted_agent_uras)?
+                },
                 DaemonMode::Hub => unreachable!("Hub mode handled above"),
             })
         }
     };
+    let mut receipt_authority_config =
+        easynet_cli::daemon::axon_bridge::runtime_factory::ProductionReceiptAuthorityConfig::new(
+            receipt_owner_uras,
+        );
+    if let Some(device_ura) = hosted_agent_device_ura {
+        let inventory = authority_context
+            .as_ref()
+            .and_then(|context| context.hosted_agent_signing_inventory())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "hosted-Agent receipt authority requires the catalog-owned inventory"
+                )
+            })?;
+        receipt_authority_config =
+            receipt_authority_config.with_hosted_agent_inventory(device_ura, inventory);
+    }
+    let local_runtime =
+        easynet_cli::daemon::axon_bridge::runtime_factory::build_production_local_runtime(
+            receipt_authority_config,
+        )
+        .map_err(|error| anyhow::anyhow!("build owner-bound Axon receipt runtime: {error}"))?;
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -421,9 +458,22 @@ async fn main() -> anyhow::Result<()> {
             local_runtime: Some(Arc::clone(&local_runtime)),
             authority_context,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
-            shared_stores: ability_catalog::RegistrySharedStores::new(Arc::clone(
-                &hub_published_abilities,
-            )),
+            shared_stores: {
+                let stores = ability_catalog::RegistrySharedStores::new(Arc::clone(
+                    &hub_published_abilities,
+                ));
+                match voice_calls {
+                    Some(repository) => {
+                        let provider =
+                            easynet_cli::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly::try_new(
+                                repository,
+                            )
+                            .map_err(|error| anyhow::anyhow!("assemble Hub Voice provider: {error}"))?;
+                        stores.with_voice_call_provider_assembly(provider)
+                    }
+                    None => stores,
+                }
+            },
         },
     )?;
     let registry = Arc::clone(&built_registry.catalog);
@@ -468,17 +518,12 @@ async fn main() -> anyhow::Result<()> {
     // execution itself goes through `local_runtime`.
     let _registry = Arc::clone(&registry);
 
-    // Runtime-dispatch re-enters Axon with the original externally-signed
-    // envelope. It deliberately has no daemon-local resolver: resolving again
-    // would replace the caller's signed invocation tuple.
-    let adapter = RuntimeDispatchAdapter::new_with_runtime(Arc::clone(&local_runtime));
-
     // Daemon RuntimeInvocation transport: gRPC InvocationServer.
     // Start this BEFORE any other daemon listener binds so
     // `daemon-config.toml` is validated at the top of the boot order
-    // rather than after control/runtime-dispatch sockets already
-    // exist. That keeps the PR-1 "load config before any listener
-    // bind" invariant honest whenever the feature-gated transport is compiled in.
+    // rather than after the control socket already exists. That preserves
+    // the PR-1 invariant that config loads before any listener binds whenever
+    // the feature-gated transport is compiled in.
     // Hold the session-shutdown handle for the daemon's lifetime;
     // dropping it at shutdown drains the live `session.open` dial
     // (F-007 — was Box::leak'd). Bound directly from the boot result:
@@ -489,6 +534,8 @@ async fn main() -> anyhow::Result<()> {
         boot_bus.emit_started("daemon-invocation-transport");
         match easynet_cli::daemon::invocation::start_daemon_invocation_transport(
             Arc::clone(&local_runtime),
+            Arc::clone(&registry),
+            built_registry.invocation_cancellations.clone(),
             invocation_ledger,
             Arc::clone(&hot_agent_registrar_cell),
             Some(Arc::clone(&built_registry.plugin_runtime_manager)),
@@ -538,31 +585,6 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_started("schedule-tick");
     spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
     boot_bus.emit_ok("schedule-tick");
-
-    // Step-3 runtime-dispatch UDS responder. Listens on a
-    // separate socket from `control.sock` because the runtime side
-    // talks newline-delimited single-line JSON, while the CLI/MCP IPC
-    // server speaks length-delimited frames. axon-runtime opens this
-    // socket only when it has resolved a `runtime_local_tools` entry
-    // whose `dispatch_endpoint` points at it — i.e., one of the
-    // abilities the daemon registered via `runtime.register_local_tool`
-    // at boot. Binding failure is a boot failure because a daemon that
-    // cannot accept runtime-local delegation is not fully Ready.
-    boot_bus.emit_started("runtime-dispatch");
-    let runtime_dispatch_server = match runtime_dispatch::RuntimeDispatchServer::bind().await {
-        Ok(server) => server,
-        Err(err) => {
-            boot_bus.emit_failed("runtime-dispatch", err.to_string());
-            return Err(err);
-        }
-    };
-    let dispatch_adapter = adapter.clone();
-    tokio::spawn(async move {
-        if let Err(e) = runtime_dispatch_server.serve(dispatch_adapter).await {
-            eprintln!("[runtime-dispatch] responder exited: {e:#}");
-        }
-    });
-    boot_bus.emit_ok("runtime-dispatch");
 
     // RFC-006-B v0.6 — Pages reference system listener.
     //
@@ -618,8 +640,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // The control server remains a boot/status socket. Product
-    // ability calls use daemon.sock Invocation; `runtime-dispatch`
-    // remains the daemon-internal bridge for Axon local tool calls.
+    // ability calls use daemon.sock Invocation and dispatch to the
+    // embedded LocalRuntime in process.
     boot_bus.emit_started("control-ready");
     boot_bus.emit_ok("control-ready");
     boot_bus.emit_ready();

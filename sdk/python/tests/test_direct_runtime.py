@@ -10,9 +10,11 @@ from typing import Any, cast
 import grpc
 
 from easynet_sdk import (
+    AddressingProjection,
     ConnectOptions,
     DaemonInvocationTransport,
     ErrorCode,
+    InvocationHandle,
     InvocationSignature,
     SDKError,
     is_code,
@@ -24,11 +26,9 @@ from easynet_sdk._axon_pb.axon.v1 import (
 )
 from easynet_sdk.control_ipc import ControlDiscovery, IpcVersionRange
 from easynet_sdk.direct_runtime import (
-    DirectDaemonRuntimeConnector,
-    DirectDaemonRuntimeTransport,
+    DirectRuntimeConnector,
+    DirectRuntimeTransport,
 )
-from easynet_sdk import AbilityAddress
-
 from test_runtime import complete_draft
 
 invoke_pb2: Any = _invoke_pb2
@@ -150,7 +150,7 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
 
 class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_resolves_invocation_endpoint_from_discovery(self) -> None:
-        connector = DirectDaemonRuntimeConnector(
+        connector = DirectRuntimeConnector(
             control_path="/tmp/control.json",
             discovery_reader=lambda path: ControlDiscovery(
                 socket_path="/tmp/control.sock",
@@ -182,7 +182,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_reports_control_only_without_invocation_endpoint(
         self,
     ) -> None:
-        connector = DirectDaemonRuntimeConnector(
+        connector = DirectRuntimeConnector(
             discovery_reader=lambda path: ControlDiscovery(
                 socket_path="/tmp/control.sock",
                 supported_ipc_versions=IpcVersionRange(1, 1),
@@ -198,7 +198,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_connector_handshake_reports_runtime_capabilities(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            connector = DirectDaemonRuntimeConnector(identity=_identity())
+            connector = DirectRuntimeConnector(identity=_identity())
             transport, facts_json = connector.handshake(
                 json.dumps(
                     {
@@ -228,7 +228,7 @@ class DirectRuntimeTests(unittest.TestCase):
         handle_transport = _RecordingHandleTransport()
         draft_json = complete_draft().to_json().encode("utf-8")
         with _fake_daemon(servicer) as endpoint:
-            connector = DirectDaemonRuntimeConnector(
+            connector = DirectRuntimeConnector(
                 handle_transport=handle_transport,
                 identity=_identity(),
             )
@@ -246,10 +246,13 @@ class DirectRuntimeTests(unittest.TestCase):
                 facts = json.loads(facts_json.decode("utf-8"))
                 prepared = transport.prepare(draft_json, b'{"resolve":true}')
                 submitted = transport.submit_signed(b'{"signed":true}')
-                awaited = transport.await_handle(7)
-                cancelled = transport.cancel_handle(7, "stop")
-                events = transport.handle_events(7)
-                transport.free_handle(7)
+                control = InvocationHandle._from_runtime_json(
+                    b'{"handle_id":7,"state":"Submitted","terminal":false}'
+                ).control_capability()
+                awaited = transport.await_handle(control)
+                cancelled = transport.cancel_handle(control, "stop")
+                events = transport.handle_events(control)
+                transport.free_handle(control)
             finally:
                 transport.close()
                 connector.close()
@@ -279,7 +282,7 @@ class DirectRuntimeTests(unittest.TestCase):
         handle_transport = _RecordingHandleTransport()
         draft_json = _user_subject_draft_json()
         with _fake_daemon(servicer) as endpoint:
-            connector = DirectDaemonRuntimeConnector(
+            connector = DirectRuntimeConnector(
                 handle_transport=handle_transport,
                 identity=_identity(),
             )
@@ -309,7 +312,7 @@ class DirectRuntimeTests(unittest.TestCase):
         identity = _identity()
         with _fake_daemon(servicer) as endpoint:
             connector = (
-                DirectDaemonRuntimeConnector()
+                DirectRuntimeConnector()
                 .with_identity(identity, close_on_connector_close=True)
                 .with_handle_transport(
                     handle_transport,
@@ -340,7 +343,7 @@ class DirectRuntimeTests(unittest.TestCase):
         servicer = RecordingInvocationServicer()
         handle_transport = _RecordingHandleTransport()
         with _fake_daemon(servicer) as endpoint:
-            transport = DirectDaemonRuntimeTransport.open(
+            transport = DirectRuntimeTransport.open(
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
@@ -374,7 +377,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(result["terminal_state"], "Completed")
         self.assertEqual(result["output_json"], {"ready": True})
         self.assertEqual(result["selected_node_id"], "node-direct")
-        receipt = cast(dict[str, object], result["receipt"])
+        receipt = cast(dict[str, object], result["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-direct")
 
         self.assertEqual(len(servicer.requests), 1)
@@ -461,7 +464,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_transport_rejects_descriptor_not_owned_by_callee(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DirectDaemonRuntimeTransport.open(
+            transport = DirectRuntimeTransport.open(
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
@@ -539,7 +542,7 @@ class DirectRuntimeTests(unittest.TestCase):
     ) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DirectDaemonRuntimeTransport.open(
+            transport = DirectRuntimeTransport.open(
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
@@ -685,6 +688,11 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(terminal["sequence"], 3)
         self.assertEqual(terminal["kind"], "terminal")
         self.assertTrue(terminal["terminal"])
+        self.assertNotIn("receipt", terminal)
+        payload = cast(dict[str, object], terminal.get("payload_json") or {})
+        self.assertNotIn("receipt", payload)
+        terminal_receipt = cast(dict[str, object], terminal["terminal_receipt"])
+        self.assertEqual(terminal_receipt["invocation_id"], "inv-bidi")
 
         self.assertEqual(len(servicer.bidi_up_frames), 3)
         open_frame = servicer.bidi_up_frames[0]
@@ -720,6 +728,83 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(servicer.bidi_up_frames[2].WhichOneof("payload"), "control")
         self.assertEqual(servicer.bidi_up_frames[2].control.WhichOneof("control"), "eof")
 
+    def test_direct_runtime_provider_json_uses_canonical_receipt_fields(self) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                raw = transport.invoke(complete_draft().to_json().encode("utf-8"))
+            finally:
+                transport.close()
+
+        result = json.loads(raw.decode("utf-8"))
+        self.assertNotIn("receipt", result)
+        receipt = cast(dict[str, object], result["terminal_receipt"])
+        self.assertEqual(receipt["invocation_id"], "inv-direct")
+
+    def test_direct_runtime_stream_provider_json_uses_terminal_receipt(self) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                stream_transport, _ = transport.open_stream(
+                    complete_draft().to_json().encode("utf-8")
+                )
+                stream_transport.recv(timeout=1)
+                raw_terminal = stream_transport.recv(timeout=1)
+            finally:
+                transport.close()
+
+        terminal = json.loads(raw_terminal.decode("utf-8"))
+        self.assertNotIn("receipt", terminal)
+        receipt = cast(dict[str, object], terminal["terminal_receipt"])
+        self.assertEqual(receipt["invocation_id"], "inv-stream")
+
+    def test_direct_runtime_bidi_provider_json_uses_terminal_receipt(self) -> None:
+        servicer = RecordingInvocationServicer()
+        streams_json = json.dumps(
+            [{"stream_id": 1, "content_type": "application/json"}],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                bidi_transport, _ = transport.open_bidi(
+                    complete_draft().to_json().encode("utf-8"),
+                    streams_json,
+                )
+                bidi_transport.send(
+                    b'{"sequence":1,"kind":"data","stream_id":1,'
+                    b'"payload_base64":"eyJwaW5nIjp0cnVlfQ=="}'
+                )
+                bidi_transport.recv(timeout=1)
+                bidi_transport.close_send()
+                raw_terminal = bidi_transport.recv(timeout=1)
+            finally:
+                transport.close()
+
+        terminal = json.loads(raw_terminal.decode("utf-8"))
+        self.assertNotIn("receipt", terminal)
+        payload = cast(dict[str, object], terminal.get("payload_json") or {})
+        self.assertNotIn("receipt", payload)
+        receipt = cast(dict[str, object], terminal["terminal_receipt"])
+        self.assertEqual(receipt["invocation_id"], "inv-bidi")
+
     def test_direct_transport_rejects_non_contiguous_bidi_up_sequence(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
@@ -748,7 +833,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_transport_rejects_empty_bidi_streams_before_wire_call(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DirectDaemonRuntimeTransport.open(
+            transport = DirectRuntimeTransport.open(
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
@@ -770,7 +855,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_transport_reports_unsupported_modes_explicitly(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DirectDaemonRuntimeTransport.open(
+            transport = DirectRuntimeTransport.open(
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
@@ -792,7 +877,7 @@ class DirectRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             endpoint = str(Path(tmp) / "missing.sock")
             with self.assertRaises(SDKError) as raised:
-                DirectDaemonRuntimeTransport.open(
+                DirectRuntimeTransport.open(
                     endpoint,
                     dial_timeout_seconds=0.05,
                     identity=_identity(),
@@ -802,7 +887,7 @@ class DirectRuntimeTests(unittest.TestCase):
 
     def test_direct_transport_requires_identity_projection_before_open(self) -> None:
         with self.assertRaises(SDKError) as raised:
-            DirectDaemonRuntimeTransport.open(
+            DirectRuntimeTransport.open(
                 "/tmp/direct-runtime-unused.sock",
                 dial_timeout_seconds=0.05,
             )
@@ -813,7 +898,7 @@ class DirectRuntimeTests(unittest.TestCase):
     def test_direct_transport_rejects_use_after_close(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
-            transport = DirectDaemonRuntimeTransport.open(
+            transport = DirectRuntimeTransport.open(
                 endpoint,
                 dial_timeout_seconds=1,
                 invoke_timeout_seconds=1,
@@ -862,20 +947,24 @@ class _RecordingIdentity:
             raise AssertionError(f"unexpected descriptor_ref: {descriptor_ref}")
         return ABILITY_URA
 
-    def ability_address(self, ability_ura: str) -> AbilityAddress:
+    def project_ability_ura(self, ability_ura: str) -> AddressingProjection:
         self.ability_uras.append(ability_ura)
         if ability_ura != ABILITY_URA:
             raise AssertionError(f"unexpected ability_ura: {ability_ura}")
-        return AbilityAddress(
-            ability_ura=ability_ura,
-            owner_ura=self.owner_ura,
-            owner_kind="device",
-            public_name=ABILITY_PUBLIC_NAME,
-            subject_ura=ability_ura,
-            local_registry_ability=ABILITY_PUBLIC_NAME,
-            namespace="observe",
-            local_name="health",
+        return AddressingProjection(
+            kind="ability",
+            valid=True,
             profile="easynet-strict-v2",
+            ura=ability_ura,
+            ability_ura=ability_ura,
+            components={
+                "owner_ura": self.owner_ura,
+                "owner_kind": "device",
+                "public_name": ABILITY_PUBLIC_NAME,
+                "local_registry_ability": ABILITY_PUBLIC_NAME,
+                "namespace": "observe",
+                "local_name": "health",
+            },
             metadata={"grammar_owner": "axon"},
         )
 
@@ -927,20 +1016,20 @@ class _RecordingHandleTransport:
         self.calls.append(("submit_signed", signed_json))
         return b'{"handle_id":7,"state":"Submitted"}'
 
-    def await_handle(self, handle_id: int) -> bytes:
-        self.calls.append(("await_handle", handle_id))
+    def await_handle(self, control) -> bytes:
+        self.calls.append(("await_handle", control._adapter_handle_id()))
         return b'{"ok":true,"terminal_state":"Completed"}'
 
-    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
-        self.calls.append(("cancel_handle", handle_id, reason))
+    def cancel_handle(self, control, reason: str) -> bytes:
+        self.calls.append(("cancel_handle", control._adapter_handle_id(), reason))
         return b'{"handle_id":7,"cancelled":true}'
 
-    def handle_events(self, handle_id: int) -> bytes:
-        self.calls.append(("handle_events", handle_id))
+    def handle_events(self, control) -> bytes:
+        self.calls.append(("handle_events", control._adapter_handle_id()))
         return b'{"handle_id":7,"events":[]}'
 
-    def free_handle(self, handle_id: int) -> None:
-        self.calls.append(("free_handle", handle_id))
+    def free_handle(self, control) -> None:
+        self.calls.append(("free_handle", control._adapter_handle_id()))
 
     def close(self) -> None:
         self.close_count += 1

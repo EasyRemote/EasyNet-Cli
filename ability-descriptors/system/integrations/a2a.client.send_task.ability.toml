@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "a2a.client.send_task"
+descriptor_version = "1.0.0"
 description = "Outbound A2A: dispatch a signed descriptor-bound RPC Invoke against a remote node's `<agent_name>.<skill_name>` ability through the daemon's canonical Invocation service. Returns {ok:true,result} on success; remote failures surface as {ok:false,error}. The `args` payload remains opaque to the routing layer."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

@@ -2,8 +2,11 @@ from easynet_sdk import (
     AddressingClient,
     AxonAddressingTransport,
     DaemonControl,
-    DaemonLifecycleState,
     DaemonMode,
+    RuntimeHandle,
+    RuntimeHostRole,
+    RuntimeLifecycle,
+    RuntimeLifecycleState,
     RuntimeAbilityClient,
     RuntimeAdminClient,
     RuntimeAdminAbilityClient,
@@ -59,8 +62,8 @@ class MemoryDaemonTransport:
 class MemoryHealthTransport:
     def runtime_health(self) -> bytes:
         return (
-            b'{"api_ready":true,"daemon_ready":true,"invocation_ready":true,'
-            b'"directory_ready":true,"trust_ready":true,"runtime_ready":true,'
+            b'{"api_ready":true,"invocation_ready":true,"directory_ready":true,'
+            b'"trust_ready":true,"runtime_ready":true,'
             b'"diagnostics":["health-ok"]}'
         )
 
@@ -100,35 +103,41 @@ class RuntimeAdminTransportFake:
 
 def test_runtime_admin_readiness_composes_lifecycle_and_health() -> None:
     admin = RuntimeAdminClient(
-        DaemonControl(MemoryDaemonTransport()),
+        RuntimeLifecycle(MemoryDaemonTransport()),
         HealthClient(MemoryHealthTransport()),
     )
 
-    handle = admin.start(StartConfig(mode=DaemonMode.HUB))
+    handle = admin.start(StartConfig(mode=RuntimeHostRole.HUB))
     readiness = admin.readiness(handle)
 
+    assert isinstance(handle, RuntimeHandle)
     assert readiness.ready is True
-    assert readiness.lifecycle_state == DaemonLifecycleState.RUNNING
+    assert readiness.lifecycle_state == RuntimeLifecycleState.RUNNING
     assert readiness.messages == ("status-ok", "health-ok")
     assert readiness.diagnostics is not None
 
 
 def test_runtime_admin_rejects_missing_handle_and_control() -> None:
-    admin = RuntimeAdminClient(DaemonControl(MemoryDaemonTransport()))
+    admin = RuntimeAdminClient(RuntimeLifecycle(MemoryDaemonTransport()))
 
     try:
         admin.status(None)  # type: ignore[arg-type]
     except SDKError as exc:
-        assert "daemon handle is required" in exc.message
+        assert "runtime handle is required" in exc.message
     else:
         raise AssertionError("status accepted missing handle")
 
     try:
         RuntimeAdminClient(None)  # type: ignore[arg-type]
     except SDKError as exc:
-        assert "daemon control is required" in exc.message
+        assert "runtime lifecycle is required" in exc.message
     else:
         raise AssertionError("constructor accepted missing control")
+
+
+def test_runtime_lifecycle_names_keep_daemon_alias_compatibility() -> None:
+    assert DaemonControl is RuntimeLifecycle
+    assert DaemonMode is RuntimeHostRole
 
 
 def test_runtime_admin_ability_client_lists_sessions() -> None:

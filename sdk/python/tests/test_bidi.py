@@ -77,6 +77,46 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(received.sequence, 1)
         self.assertEqual(session.state, BidiState.OPEN)
 
+    def test_bidi_frame_preserves_finalization_checkpoints(self) -> None:
+        frame = BidiFrame.from_json(
+            b'{"sequence":9,"kind":"terminal","stream_id":1,"terminal":true,'
+            b'"admission_receipt":{"invocation_id":"inv-1","index":3,'
+            b'"authority_proof":{"proof_type":"signed"}},'
+            b'"terminal_receipt":{"invocation_id":"inv-1","index":8,'
+            b'"output_hash":"abcd"}}'
+        )
+
+        self.assertEqual(frame.admission_receipt["index"], 3)
+        self.assertEqual(frame.terminal_receipt["index"], 8)
+        encoded = json.loads(frame.to_json())
+        self.assertEqual(
+            encoded["admission_receipt"]["authority_proof"]["proof_type"],
+            "signed",
+        )
+        self.assertEqual(encoded["terminal_receipt"]["output_hash"], "abcd")
+
+    def test_bidi_frame_accepts_legacy_event_alias(self) -> None:
+        frame = BidiFrame.from_json(b'{"sequence":1,"event":"data","stream_id":1}')
+
+        self.assertEqual(frame.kind, "data")
+
+    def test_transport_terminal_fails_session_without_runtime_terminal(self) -> None:
+        transport = MemoryBidiTransport(
+            [
+                b'{"sequence":1,"event":"error","stream_id":1,"terminal":false,'
+                b'"transport_terminal":true,"error":{"code":"ROUTE_UNAVAILABLE"}}'
+            ]
+        )
+        session = new_session(transport)
+
+        frame = session.receive()
+
+        self.assertFalse(frame.terminal)
+        self.assertTrue(frame.transport_terminal)
+        self.assertEqual(session.state, BidiState.FAILED)
+        with self.assertRaises(SDKError):
+            session.terminal_frame()
+
     def test_close_send_differs_from_cancel(self) -> None:
         transport = MemoryBidiTransport()
         session = new_session(transport)
@@ -111,8 +151,8 @@ class BidiTests(unittest.TestCase):
         transport = MemoryBidiTransport(
             [
                 b'{"sequence":1,"kind":"terminal","stream_id":1,"terminal":true,'
-                b'"payload_json":{"receipt":{"receipt_ura":'
-                b'"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}}'
+                b'"payload_json":{"ok":true},"terminal_receipt":{"receipt_ura":'
+                b'"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}'
             ]
         )
         session = new_session(transport)
@@ -125,9 +165,26 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(terminal.frame_type, "terminal")
         self.assertEqual(terminal.seq, 1)
         self.assertEqual(
-            terminal.receipt, {"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}
+            terminal.terminal_receipt,
+            {
+                "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"
+            },
         )
         self.assertIn(b'"frame_type":"terminal"', terminal.to_json())
+        self.assertIn(b'"terminal_receipt":', terminal.to_json())
+        self.assertNotIn(b'"receipt":', terminal.to_json())
+
+    def test_bidi_frame_ignores_legacy_receipt_only_field(self) -> None:
+        frame = BidiFrame.from_json(
+            b'{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,'
+            b'"receipt":{"receipt_id":"legacy-only"}}'
+        )
+
+        terminal = BidiTerminalFrame.from_frame("bidi-legacy", frame)
+
+        self.assertIsNone(frame.terminal_receipt)
+        self.assertFalse(hasattr(frame, "receipt"))
+        self.assertIsNone(terminal.terminal_receipt)
 
     def test_cancel_is_terminal(self) -> None:
         transport = MemoryBidiTransport()

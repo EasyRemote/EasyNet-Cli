@@ -25,7 +25,7 @@ use std::collections::HashSet;
 
 use tonic::Status;
 
-use crate::daemon::axon_bridge::descriptor_ref::descriptor_version_from_descriptor_ref;
+use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
 use crate::daemon::axon_bridge::wire_descriptor::{
     descriptor_bound_from_wire_parts, WireCallerIdentity,
 };
@@ -35,11 +35,9 @@ use crate::daemon::invocation::admission::child_invocation_builder::{
     ChildInvocationBuilder, ExternallySignedChildInvocation, SelectedChildRoute,
 };
 use crate::daemon::invocation::admission::decision::{SignatureDecisionReason, TraceStage};
-use crate::daemon::invocation::dispatch::deps::{
-    DirectoryPlane, FederationDial, IdentityPlane, RuntimePlane,
-};
+use crate::daemon::invocation::dispatch::deps::{DirectoryPlane, FederationDial, IdentityPlane};
 use crate::daemon::invocation::routing::route_resolver::{
-    DaemonRouteResolver, LocalRuntimeAuthoritySnapshot, ResolveRouteFailure, SelectedInvokeRoute,
+    DaemonRouteResolver, ResolveRouteFailure, SelectedInvokeRoute,
 };
 use easynet_axon::pb::axon::v1::Envelope;
 
@@ -52,7 +50,6 @@ pub(crate) struct TargetGate {
     directory: DirectoryPlane,
     federation: FederationDial,
     identity: IdentityPlane,
-    runtime: RuntimePlane,
     local_agent_targets: LocalAgentTargetIndex,
 }
 
@@ -62,29 +59,23 @@ impl TargetGate {
         directory: DirectoryPlane,
         federation: FederationDial,
         identity: IdentityPlane,
-        runtime: RuntimePlane,
     ) -> Self {
         Self {
             admission,
             directory,
             federation,
             identity,
-            runtime,
             local_agent_targets: LocalAgentTargetIndex::load(),
         }
     }
 
     /// Build the RFC-005 route resolver wired with every authority this
     /// daemon owns: local presence, hosted-agent placement, owner
-    /// projection, optional peer delegation, and — when the daemon has a
-    /// live `LocalRuntime` — the daemon's local runtime namespace
-    /// authority (RFC-005 §4 / D105).
+    /// projection, optional peer delegation, and the daemon's live ability
+    /// control-plane publication authority (RFC-005 §4 / D105).
     ///
-    /// The local runtime authority is a snapshot of the dispatch table
-    /// captured here, so routes for this device and its hosted agents are
-    /// proven from live local bindings rather than the hub projection
-    /// cache. Capturing the snapshot is the only async step; the resolver
-    /// itself stays synchronous.
+    /// One immutable catalog snapshot proves both local dispatchability and
+    /// directory publication, so hot registrations cannot diverge by path.
     pub(crate) async fn route_resolver(&self) -> DaemonRouteResolver<'_> {
         let mut resolver = DaemonRouteResolver::new(
             &self.directory.presence,
@@ -104,14 +95,13 @@ impl TargetGate {
                 self.federation.allow_directory_auto_route,
             );
         }
-        if let Some(runtime) = self.runtime.local_runtime.as_ref() {
+        if let Some(catalog) = self.directory.local_ability_catalog.as_ref() {
             if let Some(local_authority_ura) = local_runtime_authority_ura(
                 self.admission.daemon_ura(),
                 self.identity.session_realm.as_deref(),
             ) {
-                let snapshot = LocalRuntimeAuthoritySnapshot::capture(runtime).await;
-                resolver =
-                    resolver.with_local_runtime_authority(local_authority_ura, Box::new(snapshot));
+                let snapshot = LocalAbilityPublicationSnapshot::capture(catalog);
+                resolver = resolver.with_local_catalog_authority(local_authority_ura, snapshot);
             }
         }
         resolver
@@ -333,66 +323,6 @@ fn local_runtime_authority_ura(
         .map(crate::core::ura::hub_ura)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::local_runtime_authority_ura;
-
-    #[test]
-    fn local_runtime_authority_prefers_device_daemon_ura() {
-        let device_ura = "easynet:///r/test-realm/device/dev-1";
-
-        assert_eq!(
-            local_runtime_authority_ura(Some(device_ura), Some("test-realm")),
-            Some(device_ura.to_string())
-        );
-    }
-
-    #[test]
-    fn local_runtime_authority_falls_back_to_hub_ura_without_daemon_identity() {
-        assert_eq!(
-            local_runtime_authority_ura(None, Some("test-realm")),
-            Some(crate::core::ura::hub_ura("test-realm"))
-        );
-    }
-
-    #[test]
-    fn local_runtime_authority_executes_same_realm_hub_through_local_device() {
-        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
-        let local_realm = crate::core::ura::parse_ura(&local_device_ura)
-            .expect("local device URA parses")
-            .realm;
-
-        assert_eq!(
-            local_runtime_authority_ura(
-                Some(&crate::core::ura::hub_ura(&local_realm)),
-                Some(&local_realm)
-            ),
-            Some(local_device_ura)
-        );
-    }
-
-    #[test]
-    fn local_runtime_authority_keeps_cross_realm_hub_as_callee_authority() {
-        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
-        let local_realm = crate::core::ura::parse_ura(&local_device_ura)
-            .expect("local device URA parses")
-            .realm;
-        let remote_realm = format!("{local_realm}-remote");
-        let hub_ura = crate::core::ura::hub_ura(&remote_realm);
-
-        assert_eq!(
-            local_runtime_authority_ura(Some(&hub_ura), Some(&local_realm)),
-            Some(hub_ura)
-        );
-    }
-
-    #[test]
-    fn local_runtime_authority_rejects_empty_inputs() {
-        assert_eq!(local_runtime_authority_ura(Some("  "), Some("  ")), None);
-        assert_eq!(local_runtime_authority_ura(None, None), None);
-    }
-}
-
 // ── Route-outcome wire mapping ─────────────────────────────────────
 //
 // Stable error codes + `Status` constructors for every way a
@@ -401,9 +331,7 @@ mod tests {
 // dispatch surfaces consume them verbatim.
 
 pub(crate) const ROUTE_NEGATIVE_CODE: &str = "ROUTE_NEGATIVE";
-pub(crate) const RESOLVE_SELECTED_HOST_UNAVAILABLE_CODE: &str = "RESOLVE_UNAVAILABLE";
 pub(crate) const ROUTE_PROFILE_BLOCKED_CODE: &str = "ROUTE_PROFILE_BLOCKED";
-pub(crate) const ROUTE_SELECTED_REMOTE_HOST_CODE: &str = "ROUTE_SELECTED_REMOTE_HOST";
 
 pub(crate) fn route_negative_message(failure: &ResolveRouteFailure) -> String {
     format!(
@@ -415,7 +343,20 @@ pub(crate) fn route_negative_message(failure: &ResolveRouteFailure) -> String {
 }
 
 pub(crate) fn route_negative_status(failure: ResolveRouteFailure) -> Status {
-    Status::failed_precondition(route_negative_message(&failure))
+    use easynet_axon::pb::axon::v1::NegativeReason;
+
+    let message = route_negative_message(&failure);
+    match failure.reason {
+        NegativeReason::Nxdomain | NegativeReason::Nodata => Status::not_found(message),
+        NegativeReason::Unauthorized => Status::permission_denied(message),
+        NegativeReason::Throttled => Status::resource_exhausted(message),
+        NegativeReason::Overloaded => Status::unavailable(message),
+        NegativeReason::Refused => Status::invalid_argument(message),
+        NegativeReason::Unspecified
+        | NegativeReason::Noroute
+        | NegativeReason::Stale
+        | NegativeReason::Loop => Status::failed_precondition(message),
+    }
 }
 
 pub(crate) fn route_profile_blocked_message(selected_route: &SelectedInvokeRoute) -> String {
@@ -429,25 +370,6 @@ pub(crate) fn route_profile_blocked_message(selected_route: &SelectedInvokeRoute
 
 pub(crate) fn route_profile_blocked_status(selected_route: &SelectedInvokeRoute) -> Status {
     Status::failed_precondition(route_profile_blocked_message(selected_route))
-}
-
-pub(crate) fn route_selected_remote_host_status(
-    label: &str,
-    selected_route: &SelectedInvokeRoute,
-) -> Status {
-    Status::failed_precondition(format!(
-        "{ROUTE_SELECTED_REMOTE_HOST_CODE}: {label} selected execution host `{}` for route `{}`; \
-         direct local dispatch can execute only routes hosted by this daemon",
-        selected_route.execution_host_ura, selected_route.route_ura,
-    ))
-}
-
-pub(crate) fn selected_host_unavailable_message(selected_route: &SelectedInvokeRoute) -> String {
-    format!(
-        "{RESOLVE_SELECTED_HOST_UNAVAILABLE_CODE}: namespace.resolve selected execution host `{}` \
-         for route `{}` but the session disappeared before dispatch",
-        selected_route.execution_host_ura, selected_route.route_ura,
-    )
 }
 
 /// Build the descriptor-bound child invocation facts for a caller-signed
@@ -476,21 +398,13 @@ pub(crate) fn signed_envelope_for_selected_route(
             ))
         })?
         .to_string();
-    let descriptor_version = descriptor_version_from_descriptor_ref(&signed_descriptor_ref)
-        .map_err(|err| {
-            Status::invalid_argument(format!(
-                "{}: signed descriptor ref `{signed_descriptor_ref}` is invalid for route `{}`: {err}",
-                SignatureDecisionReason::SignedDescriptorRefMismatch.as_str(),
-                selected_route.route_ura
-            ))
-        })?;
     let route = SelectedChildRoute::descriptor_bound(
         selected_route.route_ura.clone(),
         selected_route.callee_ura.clone(),
         Some(selected_route.execution_host_ura.clone()),
         selected_route.ability_ura.clone(),
         selected_route.dispatch_name.clone(),
-        descriptor_version,
+        signed_descriptor_ref.clone(),
     )
     .map_err(status_from_child_invocation_failure)?;
     let signed_caller = envelope
@@ -578,5 +492,122 @@ fn status_from_child_invocation_failure(failure: ChildInvocationBuildFailure) ->
             Status::permission_denied(message)
         }
         _ => Status::invalid_argument(message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{local_runtime_authority_ura, route_negative_status};
+    use crate::daemon::invocation::routing::route_resolver::ResolveRouteFailure;
+
+    fn negative_status(reason: easynet_axon::pb::axon::v1::NegativeReason) -> tonic::Status {
+        route_negative_status(ResolveRouteFailure {
+            query_name: "easynet:///r/acme/device/node-a#skill.list".to_string(),
+            reason,
+            detail: "test negative".to_string(),
+        })
+    }
+
+    #[test]
+    fn resolver_absence_maps_to_not_found() {
+        use easynet_axon::pb::axon::v1::NegativeReason;
+
+        for reason in [NegativeReason::Nxdomain, NegativeReason::Nodata] {
+            assert_eq!(negative_status(reason).code(), tonic::Code::NotFound);
+        }
+    }
+
+    #[test]
+    fn resolver_policy_and_capacity_reasons_keep_typed_transport_codes() {
+        use easynet_axon::pb::axon::v1::NegativeReason;
+
+        assert_eq!(
+            negative_status(NegativeReason::Unauthorized).code(),
+            tonic::Code::PermissionDenied
+        );
+        assert_eq!(
+            negative_status(NegativeReason::Throttled).code(),
+            tonic::Code::ResourceExhausted
+        );
+        assert_eq!(
+            negative_status(NegativeReason::Overloaded).code(),
+            tonic::Code::Unavailable
+        );
+        assert_eq!(
+            negative_status(NegativeReason::Refused).code(),
+            tonic::Code::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn resolver_placement_reasons_remain_failed_precondition() {
+        use easynet_axon::pb::axon::v1::NegativeReason;
+
+        for reason in [
+            NegativeReason::Unspecified,
+            NegativeReason::Noroute,
+            NegativeReason::Stale,
+            NegativeReason::Loop,
+        ] {
+            assert_eq!(
+                negative_status(reason).code(),
+                tonic::Code::FailedPrecondition
+            );
+        }
+    }
+
+    #[test]
+    fn local_runtime_authority_prefers_device_daemon_ura() {
+        let device_ura = "easynet:///r/test-realm/device/dev-1";
+
+        assert_eq!(
+            local_runtime_authority_ura(Some(device_ura), Some("test-realm")),
+            Some(device_ura.to_string())
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_falls_back_to_hub_ura_without_daemon_identity() {
+        assert_eq!(
+            local_runtime_authority_ura(None, Some("test-realm")),
+            Some(crate::core::ura::hub_ura("test-realm"))
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_executes_same_realm_hub_through_local_device() {
+        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+        let local_realm = crate::core::ura::parse_ura(&local_device_ura)
+            .expect("local device URA parses")
+            .realm;
+
+        assert_eq!(
+            local_runtime_authority_ura(
+                Some(&crate::core::ura::hub_ura(&local_realm)),
+                Some(&local_realm)
+            ),
+            Some(local_device_ura)
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_keeps_cross_realm_hub_as_callee_authority() {
+        let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+        let local_realm = crate::core::ura::parse_ura(&local_device_ura)
+            .expect("local device URA parses")
+            .realm;
+        let remote_realm = format!("{local_realm}-remote");
+        let hub_ura = crate::core::ura::hub_ura(&remote_realm);
+
+        assert_eq!(
+            local_runtime_authority_ura(Some(&hub_ura), Some(&local_realm)),
+            Some(hub_ura)
+        );
+    }
+
+    #[test]
+    fn local_runtime_authority_rejects_empty_inputs() {
+        assert_eq!(local_runtime_authority_ura(Some("  "), Some("  ")), None);
+        assert_eq!(local_runtime_authority_ura(None, None), None);
     }
 }

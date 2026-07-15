@@ -36,13 +36,10 @@ impl PassphraseStore {
         // CLI and daemon process. This also prevents a second reader from
         // observing the short interval between create_new and sync_all.
         let _guard = ExclusiveFileLock::acquire_for_data_path(&self.path).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!(
-                    "acquire passphrase store lock for {}: {error}",
-                    self.path.display()
-                ),
-            )
+            io::Error::other(format!(
+                "acquire passphrase store lock for {}: {error}",
+                self.path.display()
+            ))
         })?;
 
         match self.read_existing() {

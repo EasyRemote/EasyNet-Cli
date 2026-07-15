@@ -7,7 +7,8 @@
 //!
 //! Default-on; one per `easynet-daemon` instance. It advertises the local
 //! host's operational surface: filesystem, process, terminal, session,
-//! browser/media/voice, skill package management, observe/admin/meta, and
+//! browser/media, hosted-Agent authoring, skill package management,
+//! observe/admin/meta, and
 //! schedule/loop/discuss abilities that run in the daemon.
 //!
 //! Per RFC §A4: "device" is an implementation profile, NOT a
@@ -104,7 +105,9 @@ mod tests {
             // resolve-before-invoke can start or refresh hosted agents.
             "agent.start",
             "agent.stop",
+            "agent.purge",
             "agent.refresh",
+            crate::daemon::ability::names::agents::AGENT_ABILITY_PUT,
             "meta.list_resources",
             // Session timeline state is daemon-local and therefore belongs
             // to the device-profile Agent, not the LLM sub-agent whose run
@@ -144,6 +147,8 @@ mod tests {
             "mcp.bridge.call_tool",
             "conversation.send",
             "federation.join",
+            "voice.create_call",
+            "voice.subscribe",
         ] {
             assert!(
                 !names.contains(name),

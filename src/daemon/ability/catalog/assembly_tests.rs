@@ -19,6 +19,34 @@ fn sha256_hex_for_test(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
+fn default_voice_capability_state_evidence(
+) -> Vec<crate::daemon::ability::conformance::VoiceCapabilityStateEvidence> {
+    crate::daemon::ability::conformance::voice_capability_state_evidence(
+        crate::daemon::ability::conformance::VoiceAssemblyEvidence::default(),
+    )
+}
+
+fn provider_backed_voice_capability_state_evidence(
+) -> Vec<crate::daemon::ability::conformance::VoiceCapabilityStateEvidence> {
+    crate::daemon::ability::conformance::voice_capability_state_evidence(
+        crate::daemon::ability::conformance::VoiceAssemblyEvidence {
+            repository_assembled: true,
+            executable_delivery_evidence: false,
+        },
+    )
+}
+
+fn is_session_open_device_carrier_template(
+    row: &crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow,
+) -> bool {
+    row.name == crate::daemon::ability::names::device_control::SESSION_OPEN
+        && row.owner == crate::daemon::ability::dispatch::OwnerKind::Device
+        && row.descriptor.owner_ura
+            == super::runtime_admin_contracts::SESSION_OPEN_TEMPLATE_DEVICE_URA
+        && row.descriptor.call_mode() == crate::daemon::ability::CallMode::Bidi
+        && row.descriptor.admission_action().as_str() == "stream"
+}
+
 /// Seed `local-agents.json` with the canonical hosted-agent identities the
 /// hot registrar requires before it will register `<agent>.chat` into the
 /// runtime. Each tuple is `(profile, name)`; the agent URA is the canonical
@@ -37,8 +65,10 @@ fn seed_hosted_agents_for_chat(agent_names: &[&str]) {
         ..Default::default()
     })
     .expect("seed paired Device credentials");
-    let mut local = LocalAgentsFile::default();
-    local.host_device_agent_ura = crate::core::ura::device_ura("localhost", "dev");
+    let mut local = LocalAgentsFile {
+        host_device_agent_ura: crate::core::ura::device_ura("localhost", "dev"),
+        ..LocalAgentsFile::default()
+    };
     let mut durable = AgentRegistry::default();
     for name in agent_names {
         let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
@@ -108,11 +138,8 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
     // Diagnostic for the production NODATA: agent.list resolves but
     // terminal.list does not. Both are OwnerKind::Device RPC abilities
     // and both must be in the published set that (a) drives the device
-    // profile and (b) is registered into the live LocalRuntime via
-    // runtime.register_local_tool.
-    // Hold the env lock: published_ability_names() reads HOME-rooted
-    // registry state, so a concurrent HOME-mutating test must not race it.
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    // profile and (b) is registered directly into the daemon's live,
+    // embedded LocalRuntime during catalog assembly.
     let names = published_ability_names();
     assert!(
         names.iter().any(|n| n == "agent.list"),
@@ -328,7 +355,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
     // and tells them how to fix it.
     let mut missing: Vec<String> = Vec::new();
     let mut drift: Vec<String> = Vec::new();
-    for meta in published_system_abilities() {
+    for meta in system_ability_contract_inventory() {
         let toml_path = descriptor_path_for(&meta.name);
         let on_disk = match std::fs::read_to_string(&toml_path) {
             Ok(body) => body,
@@ -337,8 +364,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
                 continue;
             }
         };
-        let expected =
-            ability_toml::render_ability_toml(&meta.name, &meta.description, meta.input_schema());
+        let expected = ability_toml::render_ability_contract_toml(&meta);
         if on_disk != expected {
             drift.push(meta.name.clone());
         }
@@ -363,12 +389,51 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
     );
 }
 
-/// Walk every published ability and confirm a handler is
-/// registered under SOME invocation mode (RPC, Stream, or
-/// Bidi). Distinguishes "ability advertised in
-/// list_abilities() but dispatcher returns ABILITY_NOT_FOUND"
-/// from "ability is callable". This is the bare minimum for
-/// the question "is this ability really wired".
+#[test]
+fn contract_inventory_retains_voice_without_leaking_it_into_live_inventory() {
+    let contract_inventory = system_ability_contract_inventory();
+    let live_names = published_system_abilities()
+        .into_iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<std::collections::BTreeSet<_>>();
+
+    for evidence in default_voice_capability_state_evidence() {
+        let contract = contract_inventory
+            .iter()
+            .find(|contract| contract.name == evidence.name)
+            .unwrap_or_else(|| panic!("{} missing from contract inventory", evidence.name));
+        assert_eq!(contract.call_mode, evidence.call_mode);
+        assert_eq!(contract.capability_state, evidence.state);
+        assert!(
+            !live_names.contains(evidence.name),
+            "{} contract must not become operational inventory",
+            evidence.name
+        );
+        assert!(
+            std::path::Path::new(&descriptor_path_for(evidence.name)).exists(),
+            "{} contract descriptor must remain on disk",
+            evidence.name
+        );
+    }
+
+    use crate::daemon::ability::descriptors::AdmissionAction;
+    let action_for = |name: &str| {
+        contract_inventory
+            .iter()
+            .find(|contract| contract.name == name)
+            .map(|contract| contract.admission_action)
+            .unwrap_or_else(|| panic!("{name} missing from contract inventory"))
+    };
+    assert_eq!(action_for("voice.show_call"), AdmissionAction::Read);
+    assert_eq!(action_for("voice.list_calls"), AdmissionAction::Read);
+    assert_eq!(action_for("voice.report_metrics"), AdmissionAction::Invoke);
+    assert_eq!(action_for("voice.subscribe"), AdmissionAction::Stream);
+}
+
+/// Walk the canonical published system descriptor set and confirm a handler is
+/// registered under the descriptor's invocation mode. The descriptor set is
+/// deliberately the baseline: deriving the baseline from `list_abilities()`
+/// would hide a descriptor whose registration was omitted entirely.
 ///
 /// What this DOES NOT verify:
 ///   * the handler implementation is correct (most need
@@ -387,22 +452,54 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
 fn every_published_ability_resolves_to_a_handler() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
-    let names: Vec<String> = reg.list_abilities();
+    let daemon_invocation_surface: std::collections::BTreeSet<&'static str> =
+        crate::daemon::ability::conformance::HubBaseline::required_abilities()
+            .into_iter()
+            .filter(|ability| {
+                ability.surface
+                    == crate::daemon::ability::conformance::BaselineSurface::DaemonInvocation
+            })
+            .map(|ability| ability.name)
+            .collect();
     let mut unresolved: Vec<String> = Vec::new();
-    for name in &names {
-        // <agent>.chat handlers register as Stream. Most
-        // system abilities register as RPC. Bidi is rare
-        // (PTY attach). We accept any of the three.
-        let has_rpc = reg.has_rpc(name);
-        let has_stream = reg.has_stream(name);
-        let has_bidi = reg.has_bidi(name);
+    let mut wrong_mode: Vec<String> = Vec::new();
+    for metadata in published_system_abilities() {
+        let name = metadata.name;
+        if daemon_invocation_surface.contains(name.as_str()) {
+            continue;
+        }
+        let has_rpc = reg.has_rpc(&name);
+        let has_stream = reg.has_stream(&name);
+        let has_bidi = reg.has_bidi(&name);
         if !(has_rpc || has_stream || has_bidi) {
-            unresolved.push(name.clone());
+            unresolved.push(name);
+            continue;
+        }
+
+        let expected_mode_is_registered = if metadata.hints.streaming_only {
+            has_stream
+        } else if metadata.hints.bidi_only {
+            has_bidi
+        } else {
+            has_rpc
+        };
+        if !expected_mode_is_registered {
+            wrong_mode.push(format!(
+                "{}: expected={}, registered=[rpc:{has_rpc}, stream:{has_stream}, bidi:{has_bidi}]",
+                name,
+                if metadata.hints.streaming_only {
+                    "stream"
+                } else if metadata.hints.bidi_only {
+                    "bidi"
+                } else {
+                    "rpc"
+                }
+            ));
         }
     }
     assert!(
-        unresolved.is_empty(),
-        "abilities listed by list_abilities() but with NO handler registered: {unresolved:?}"
+        unresolved.is_empty() && wrong_mode.is_empty(),
+        "published system abilities are not executable:\n  missing handlers: {unresolved:?}\n  wrong modes: {wrong_mode:?}"
     );
 }
 
@@ -543,6 +640,7 @@ fn is_fast_read_only_smoke_ability(name: &str) -> bool {
             | "schedule.list"
             | "plugin.status"
             | "meta.list_resources"
+            | "context.catalog"
             | "context.clipboard.list"
             | "context.folders.list"
             | "context.favorites.list"
@@ -580,6 +678,7 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
         "admin.status",
         "agent.start",
         "agent.stop",
+        "agent.purge",
         "agent.refresh",
     ];
     let missing: Vec<&str> = must_have
@@ -594,6 +693,23 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
         names.len(),
         names
     );
+}
+
+#[test]
+fn agent_purge_descriptor_is_destructive_but_agent_stop_is_not() {
+    let descriptors = published_system_abilities();
+    let stop = descriptors
+        .iter()
+        .find(|descriptor| descriptor.name == "agent.stop")
+        .expect("agent.stop descriptor");
+    let purge = descriptors
+        .iter()
+        .find(|descriptor| descriptor.name == "agent.purge")
+        .expect("agent.purge descriptor");
+
+    assert!(!stop.hints.destructive);
+    assert!(purge.hints.destructive);
+    assert_ne!(stop.name, purge.name);
 }
 
 #[test]
@@ -650,17 +766,129 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_hub_roots(
         "combined authority set must admit every built-in owner plane"
     );
 
-    for owner_ura in [device_ura, hub_ura] {
+    for owner_ura in [&device_ura, &hub_ura] {
         let record = registry
             .control_plane_record_for_authority_mode(
-                &owner_ura,
+                owner_ura,
                 "meta.list_abilities",
                 crate::daemon::ability::CallMode::Rpc,
             )
             .expect("authority-scoped lookup")
             .unwrap_or_else(|| panic!("meta.list_abilities missing for {owner_ura}"));
-        assert_eq!(record.authority().scope().authority_root(), owner_ura);
+        assert_eq!(record.authority().scope().authority_root(), *owner_ura);
     }
+
+    for evidence in default_voice_capability_state_evidence() {
+        for authority in [&hub_ura, &device_ura] {
+            assert!(
+                registry
+                    .control_plane_record_for_authority_mode(
+                        authority,
+                        evidence.name,
+                        evidence.call_mode,
+                    )
+                    .expect("voice seam authority lookup")
+                    .is_none(),
+                "{} must not be published without its provider",
+                evidence.name
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_voice_repository_registers_only_hub_call_aggregate_routes() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("voice-fixture", "dev");
+    let hub_ura = crate::core::ura::hub_ura("voice-fixture");
+    let mut config = registry_config_for_agents(&agents);
+    config.authority_context = Some(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura.clone(),
+        )
+        .expect("combined authority context"),
+    );
+    let voice_shared_root = tempfile::tempdir().expect("create explicit shared Voice fixture root");
+    let repository = Arc::new(
+        crate::daemon::persistence::voice_calls::HubRealmVoiceCallRepository::open(
+            voice_shared_root.path(),
+            "voice-fixture",
+        )
+        .expect("open explicit shared Voice fixture"),
+    );
+    let provider =
+        crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly::try_new(
+            repository,
+        )
+        .expect("qualify explicit shared Voice fixture");
+    config.shared_stores =
+        RegistrySharedStores::default().with_voice_call_provider_assembly(provider);
+    let built = build_registry_with_services_result(config)
+        .expect("assemble registry with explicit voice repository");
+    assert_eq!(
+        built.voice_capability_state,
+        provider_backed_voice_capability_state_evidence()
+    );
+    let registry = built.catalog;
+    let contracts = system_ability_contract_inventory_for_voice_assembly(
+        crate::daemon::ability::conformance::VoiceAssemblyEvidence {
+            repository_assembled: true,
+            executable_delivery_evidence: false,
+        },
+    );
+
+    for evidence in provider_backed_voice_capability_state_evidence() {
+        let hub_record = registry
+            .control_plane_record_for_authority_mode(&hub_ura, evidence.name, evidence.call_mode)
+            .expect("Hub voice authority lookup");
+        if evidence.state == crate::daemon::ability::conformance::CapabilityState::ProviderBacked {
+            let record = hub_record.unwrap_or_else(|| panic!("{} missing", evidence.name));
+            assert_eq!(record.descriptor().owner_ura, hub_ura);
+            assert_eq!(record.authority().scope().authority_root(), hub_ura);
+            let contract = contracts
+                .iter()
+                .find(|contract| contract.name == evidence.name)
+                .unwrap_or_else(|| panic!("{} contract missing", evidence.name));
+            assert_eq!(record.descriptor().call_mode(), contract.call_mode);
+            assert_eq!(
+                record.descriptor().admission_action(),
+                contract.admission_action
+            );
+        } else {
+            assert!(
+                hub_record.is_none(),
+                "{} has no media provider",
+                evidence.name
+            );
+        }
+        assert!(
+            registry
+                .control_plane_record_for_authority_mode(
+                    &device_ura,
+                    evidence.name,
+                    evidence.call_mode,
+                )
+                .expect("Device voice exclusion lookup")
+                .is_none(),
+            "{} must never have a Device owner",
+            evidence.name
+        );
+    }
+}
+
+#[test]
+fn unqualified_voice_repository_is_rejected_before_registry_assembly() {
+    let error =
+        crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly::try_new(
+            Arc::new(
+                crate::daemon::ability::builtins::resources::voice_contract::TestVoiceCallRepository::default(),
+            ),
+        )
+        .expect_err("unqualified repositories must not assemble as production Voice providers");
+    assert!(error
+        .to_string()
+        .contains("not qualified for durable realm authority"));
 }
 
 #[test]
@@ -695,6 +923,30 @@ fn pages_management_is_user_owned_and_runs_on_the_declared_pages_agent() {
         .expect("Pages publish must be registered under its declared execution Agent");
     assert_eq!(record.authority().scope().owner_projection(), "user:alice");
     assert_eq!(record.authority().scope().authority_root(), pages_agent);
+
+    crate::daemon::ability::builtins::resources::pages::register_project_abilities(
+        &registry,
+        "pages-owner",
+        "alice",
+        "portfolio",
+    )
+    .expect("register dynamic Pages project abilities");
+    let fetch_record = registry
+        .control_plane_record_for_authority_mode(
+            &pages_agent,
+            "alice.portfolio.page.fetch",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("dynamic Pages control-plane lookup")
+        .expect("page.fetch must use the same declared Pages execution Agent");
+    assert_eq!(
+        fetch_record.authority().scope().owner_projection(),
+        "user:alice"
+    );
+    assert_eq!(
+        fetch_record.authority().scope().authority_root(),
+        pages_agent
+    );
 }
 
 #[test]
@@ -702,7 +954,7 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();
     let hub_ura = crate::core::ura::hub_ura("hub-only");
-    let runtime = easynet_axon::invocation::LocalRuntime::new();
+    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
     let mut config = registry_config_for_agents(&agents);
     config.local_runtime = Some(Arc::clone(&runtime));
     config.authority_context = Some(
@@ -718,12 +970,24 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
         !rows.is_empty(),
         "Hub registry must retain its Hub abilities"
     );
+    let leaked_rows: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            !(row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
+                && row.descriptor.owner_ura == hub_ura)
+                && !is_session_open_device_carrier_template(row)
+        })
+        .collect();
     assert!(
-        rows.iter().all(
-            |row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
-                && row.descriptor.owner_ura == hub_ura
-        ),
-        "Hub registry leaked a non-Hub authority row: {rows:?}"
+        leaked_rows.is_empty(),
+        "Hub registry leaked a non-Hub authority row outside the session.open Device carrier template: {leaked_rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| is_session_open_device_carrier_template(row))
+            .count(),
+        1,
+        "Hub registry must retain exactly one session.open Device carrier template"
     );
     let exclusions = registry.static_authority_exclusion_snapshot();
     assert!(
@@ -753,6 +1017,20 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
         )
         .is_some(),
         "Hub LocalRuntime must retain Hub meta.list_abilities"
+    );
+
+    let hub_voice_list = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &hub_ura,
+        crate::daemon::ability::names::resources::VOICE_LIST_CALLS,
+    )
+    .expect("Hub voice.list_calls runtime key");
+    assert!(
+        crate::support::async_bridge::run_blocking(
+            runtime.ability_options(&hub_voice_list),
+            crate::support::async_bridge::NoRuntimeFallback::UseFuturesExecutor,
+        )
+        .is_none(),
+        "Hub LocalRuntime must not expose voice.list_calls without a realm provider"
     );
 
     let former_synthetic_device = crate::core::ura::device_ura("hub-only", "local");
@@ -793,11 +1071,12 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
     );
     let built = build_registry_for_daemon_result(config)
         .expect("Hub daemon builder must not parse Device agent transaction state");
-    assert!(built
-        .catalog
-        .authority_ability_catalog_snapshot()
-        .iter()
-        .all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub));
+    let rows = built.catalog.authority_ability_catalog_snapshot();
+    assert!(
+        rows.iter().all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
+            || is_session_open_device_carrier_template(row)),
+        "Hub daemon builder leaked Device/Agent state outside the session.open carrier template: {rows:?}"
+    );
     assert!(built
         .catalog
         .authority_ability_catalog_snapshot()
@@ -806,6 +1085,33 @@ fn hub_daemon_builder_does_not_read_device_agent_transaction_state() {
             |row| row.name == crate::daemon::ability::names::governance::AUTHORITY_BINDING_GRANT
                 && row.owner == crate::daemon::ability::dispatch::OwnerKind::Hub
         ));
+}
+
+#[test]
+fn hub_daemon_builder_starts_without_publishing_unprovided_voice_capabilities() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
+    config.authority_context = Some(
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
+            crate::core::ura::hub_ura("voice-provider-required"),
+        )
+        .expect("Hub authority context"),
+    );
+
+    let built = build_registry_for_daemon_result(config)
+        .expect("Hub daemon must start when optional voice providers are absent");
+    assert_eq!(
+        built.voice_capability_state,
+        default_voice_capability_state_evidence()
+    );
+    let rows = built.catalog.authority_ability_catalog_snapshot();
+    for evidence in default_voice_capability_state_evidence() {
+        assert!(
+            !rows.iter().any(|row| row.name == evidence.name),
+            "{} must not appear operational without its provider",
+            evidence.name
+        );
+    }
 }
 
 #[test]
@@ -869,7 +1175,6 @@ fn published_abilities_includes_skill_list_with_real_metadata() {
 
 #[test]
 fn published_system_abilities_excludes_plugin_package_abilities() {
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let plugin_leaks: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -883,9 +1188,6 @@ fn published_system_abilities_excludes_plugin_package_abilities() {
 
 #[test]
 fn published_abilities_marks_server_stream_routes_as_streaming_only() {
-    // Hold the env lock: published_abilities() reads HOME-rooted registry
-    // state, so a concurrent HOME-mutating test must not race it.
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "consent.subscribe",
@@ -895,7 +1197,6 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
         "mic.subscribe",
         "camera.subscribe",
         "screen.subscribe",
-        "voice.subscribe",
     ];
     #[cfg(feature = "remote-desktop")]
     let expected = {
@@ -922,12 +1223,7 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
 fn published_abilities_marks_bidi_routes_as_bidi_only() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let metas = published_abilities();
-    let expected = [
-        "fs.transfer",
-        "terminal.attach",
-        "speaker.publish",
-        "voice.transcribe",
-    ];
+    let expected = ["fs.transfer", "terminal.attach", "speaker.publish"];
     #[cfg(feature = "remote-desktop")]
     let expected = {
         let mut expected = expected.to_vec();
@@ -971,12 +1267,8 @@ fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
 
 #[test]
 fn published_abilities_excludes_per_agent_chat_handlers() {
-    // `<agent>.chat` is published via the per-agent manifest path
-    // (`daemon::federation::publish::republish_abilities_via_advertise`) off the
-    // on-disk `chat.ability.toml`. Re-publishing it through the
-    // system path would double-register with a synthesised schema
-    // that shadows the manifest's real one. The filter in
-    // `published_abilities()` enforces this; pin it.
+    // Deterministic system metadata excludes dynamic hosted-Agent rows. Live
+    // daemon publication captures those rows from the committed control plane.
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     seed_hosted_agents_for_chat(&["alice"]);
@@ -1027,7 +1319,6 @@ fn daemon_local_discover_is_routable_but_not_publishable() {
 
 #[test]
 fn description_for_and_input_schema_for_cover_every_published_name() {
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
     // Adding a new ability to build_registry without also adding
     // arms to `description_for`/`input_schema_for` would let it
     // ship with the unknown-name fallback ("(system ability)" and

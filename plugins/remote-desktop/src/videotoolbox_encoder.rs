@@ -86,7 +86,7 @@ pub struct EncodedAccessUnit {
 
 /// Snapshot of the native encoder's live-media backpressure state.
 ///
-/// This is not a protocol type. The CLI maps it into Axon session events so
+/// This is not a protocol type. The plugin maps it into product session events so
 /// operators can distinguish true high-refresh WebRTC from hidden queueing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoToolboxEncoderStats {

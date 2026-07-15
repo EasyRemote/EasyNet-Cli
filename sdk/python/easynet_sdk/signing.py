@@ -7,7 +7,10 @@ import binascii
 import hashlib
 import json
 from dataclasses import dataclass, field, replace
-from typing import Any, Mapping, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Protocol, cast
+
+if TYPE_CHECKING:
+    from .runtime import InvocationHandle, RuntimeClient
 
 from .errors import ErrorCode, RetryHint, SDKError
 from .signer_handle import SignerHandle, signer_handle_provenance_error
@@ -245,7 +248,7 @@ class SignedInvocation:
     def to_json(self) -> str:
         return json.dumps(self.to_json_dict(), separators=(",", ":"), sort_keys=True)
 
-    def submit(self):
+    def submit(self) -> "InvocationHandle":
         """Submit this signed Invocation through its bound RuntimeClient."""
 
         return _require_runtime(self._runtime).submit_signed(self)
@@ -438,7 +441,7 @@ def _invalid_prepared(
     )
 
 
-def _require_runtime(runtime: object | None):
+def _require_runtime(runtime: object | None) -> "RuntimeClient":
     if runtime is None:
         raise SDKError(
             code=ErrorCode.INVALID_HANDLE,
@@ -447,4 +450,4 @@ def _require_runtime(runtime: object | None):
             retryable=False,
             message="invocation is not bound to a RuntimeClient",
         )
-    return runtime
+    return cast("RuntimeClient", runtime)

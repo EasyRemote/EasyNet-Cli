@@ -50,9 +50,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::cli::commands::mission_runs::{run_mission_inproc, MissionRunOpts};
 use crate::daemon::ability::manifest::EalExec;
 use crate::daemon::execution::mission::context::ParentInvocationContext;
+use crate::daemon::execution::mission::orchestration::{run_mission_inproc, MissionRunOpts};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 

@@ -2,8 +2,8 @@
 // =============================================================
 //
 // This boundary validates who may publish a complete ability set and proves
-// that every projected Ability URA belongs to that owner before the mutable
-// federation catalog is touched.
+// that every canonical Ability publication unit, including its call-mode
+// geometry, belongs to that owner before the mutable catalog is touched.
 
 use thiserror::Error;
 
@@ -176,4 +176,88 @@ pub(crate) enum OwnerProjectionPublicationError {
     OwnerBindingMissing,
     #[error("projection integrity check failed: {0}")]
     Integrity(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, CallMode, Visibility};
+    use crate::daemon::federation::read_model::owner_projection::prepare_and_persist;
+    use crate::daemon::trust::anchor::TrustedPrincipalOwner;
+
+    const DEVICE_URA: &str = "easynet:///r/test/device/dev-1";
+    const AGENT_URA: &str = "easynet:///r/test/agent/dev.chat";
+    const HUB_URA: &str = "easynet:///r/test/hub";
+    const USER_ID: &str = "16567c49-7621-468e-8ed0-273825299cc2";
+    const USER_URA: &str = "easynet:///r/test/user/16567c49-7621-468e-8ed0-273825299cc2";
+
+    fn owner_binding(principal_ura: &str) -> TrustedPrincipalOwner {
+        TrustedPrincipalOwner {
+            principal_ura: principal_ura.to_string(),
+            owner_user_id: USER_ID.to_string(),
+            owner_ura: USER_URA.to_string(),
+            owner_username: Some("dev".to_string()),
+            added_at_unix_ms: 1,
+        }
+    }
+
+    fn descriptor(call_mode: CallMode) -> AbilityDescriptor {
+        AbilityDescriptor::new(
+            "chat",
+            AGENT_URA,
+            Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("agent chat descriptor")
+        .with_call_mode(call_mode)
+    }
+
+    #[test]
+    fn admitted_agent_publication_accepts_canonical_multi_mode_geometry() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let publication = prepare_and_persist(
+            AGENT_URA,
+            DEVICE_URA,
+            &[descriptor(CallMode::Rpc), descriptor(CallMode::Stream)],
+        )
+        .expect("canonical agent publication");
+        let publication: OwnerProjectionPublication = serde_json::from_value(
+            serde_json::to_value(publication).expect("publication serializes"),
+        )
+        .expect("publication wire round-trip");
+        assert_eq!(publication.ability_summaries.len(), 1);
+        assert_eq!(
+            publication.ability_summaries[0]
+                .callable_summary
+                .mode_geometry
+                .len(),
+            2
+        );
+
+        let trust_anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+            Vec::new(),
+            vec![owner_binding(DEVICE_URA), owner_binding(AGENT_URA)],
+            Vec::new(),
+        )
+        .expect("owner bindings");
+        let advertised_agents = AdvertisedAgentStore::new();
+
+        OwnerProjectionPublicationAuthority::verify_admitted_session(
+            DEVICE_URA,
+            HUB_URA,
+            &publication,
+            &advertised_agents,
+            &trust_anchor,
+        )
+        .expect("multi-mode geometry passes receive admission");
+        let error = OwnerProjectionPublicationAuthority::verify_admitted_session(
+            "easynet:///r/test/device/dev-2",
+            HUB_URA,
+            &publication,
+            &advertised_agents,
+            &trust_anchor,
+        )
+        .expect_err("host identity remains bound");
+        assert_eq!(error, OwnerProjectionPublicationError::HostMismatch);
+    }
 }

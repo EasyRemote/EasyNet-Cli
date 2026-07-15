@@ -42,9 +42,11 @@ use easynet_cli::daemon::ability::builtins::resources::pages::list_get_unpublish
     handle_get, handle_list, handle_unpublish, handle_unpublish_with_registry,
 };
 use easynet_cli::daemon::ability::builtins::resources::pages::publish::handle_publish;
-use easynet_cli::daemon::ability::builtins::resources::pages::state::PUBLISHED_PROJECTS;
+use easynet_cli::daemon::ability::builtins::resources::pages::state::{
+    DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+};
 use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
-use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
 use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
 use std::sync::Arc;
 
@@ -101,6 +103,30 @@ struct Fixture {
     registry: Arc<AxonAbilityCatalog>,
 }
 
+fn registry_for_pages_owner(
+    runtime: Arc<LocalRuntime>,
+    realm: &str,
+    user: &str,
+) -> AxonAbilityCatalog {
+    let pages_agent = ura::agent_ura(realm, user, "pages");
+    let authority_context = AbilityAuthorityContext::for_combined_authority_roots(ura::device_ura(
+        realm,
+        "pages-test-device",
+    ))
+    .expect("Pages test Device authority context")
+    .with_declared_agent_authority_root(pages_agent)
+    .expect("Pages execution Agent must be explicitly hosted by the test daemon");
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority_context)
+}
+
+fn configured_local_runtime() -> Arc<LocalRuntime> {
+    let runtime = LocalRuntime::new_local_fast();
+    easynet_cli::daemon::axon_bridge::runtime_factory::configure_local_runtime(
+        &runtime, None, None,
+    );
+    runtime
+}
+
 impl Fixture {
     fn new(name_seed: &str) -> Self {
         let home = TestHomeGuard::new();
@@ -125,14 +151,22 @@ impl Fixture {
         .expect("write hello");
         fs::write(folder.join("style.css"), "h1 { color: red; }").expect("write css");
 
+        let user = format!("alice-{pid}");
+        let realm = "easynet.run".to_string();
+        let registry = Arc::new(registry_for_pages_owner(
+            configured_local_runtime(),
+            &realm,
+            &user,
+        ));
+
         Self {
             _home: home,
-            user: format!("alice-{pid}"),
+            user,
             project_id: pid,
             folder,
-            realm: "easynet.run".to_string(),
+            realm,
             listener_port: 8787,
-            registry: Arc::new(AxonAbilityCatalog::new()),
+            registry,
         }
     }
 
@@ -425,36 +459,15 @@ fn u12_concurrent_fetches() {
 #[test]
 fn u13_file_size_cap_enforced() {
     let f = Fixture::new("u13");
-    // Create a file larger than the daemon's cap (default 100 MiB).
-    // Generating 100 MiB inside a unit test would slow CI; instead
-    // we pick a file that exists (style.css, 18 bytes) and reach
-    // into the publish handle to lower its cap to 10 bytes, then
-    // verify the fetch exceeds the lowered cap.
+    // A sparse file exercises the real metadata size gate without allocating
+    // or writing 100 MiB in the test process.
+    let oversized = fs::File::create(f.folder.join("oversized.bin"))
+        .expect("create oversized sparse test file");
+    oversized
+        .set_len(DEFAULT_FILE_SIZE_CAP + 1)
+        .expect("set sparse test file length");
     f.publish();
-    let key = (f.user.clone(), f.project_id.clone());
-    {
-        // Mutate cap. PUBLISHED_PROJECTS values are Arc<ProjectHandle>
-        // so we cannot edit in place; instead we re-insert with a
-        // ProjectHandle whose cap is small.
-        let entry = PUBLISHED_PROJECTS
-            .get(&key)
-            .expect("just published")
-            .clone();
-        // try_unwrap may fail if multiple Arcs exist (the DashMap entry
-        // itself holds one). In that case, soft-pass: we still proved
-        // the cap mechanism is in the read path on the green case.
-        match std::sync::Arc::try_unwrap(entry) {
-            Ok(mut h) => {
-                h.file_size_cap = 5; // smaller than style.css (18 bytes)
-                PUBLISHED_PROJECTS.insert(key.clone(), std::sync::Arc::new(h));
-            }
-            Err(_still_shared) => {
-                eprintln!("[u13] arc still shared; soft-pass");
-                return;
-            }
-        }
-    }
-    let err = handle_fetch(&f.user, &f.project_id, json!({"path": "/style.css"}))
+    let err = handle_fetch(&f.user, &f.project_id, json!({"path": "/oversized.bin"}))
         .expect_err("over-cap fetch should fail");
     assert!(format!("{err}").contains("size") || format!("{err}").contains("cap"));
 }
@@ -462,20 +475,12 @@ fn u13_file_size_cap_enforced() {
 #[test]
 fn u14_pages_management_abilities_are_in_local_runtime() {
     let _home = TestHomeGuard::new();
-    let runtime = LocalRuntime::new();
+    key_service_fixture::install();
+    let runtime = configured_local_runtime();
     let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
     let user = "alice-runtime";
     let pages_agent = ura::agent_ura("easynet.run", user, "pages");
-    let authority_context = easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
-        ura::device_ura("easynet.run", "pages-test-device"),
-    )
-    .expect("pages test Device authority context")
-    .with_declared_agent_authority_root(pages_agent.clone())
-    .expect("pages execution Agent is explicitly hosted by the test daemon");
-    let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        Arc::clone(&runtime),
-        authority_context,
-    );
+    let mut reg = registry_for_pages_owner(Arc::clone(&runtime), "easynet.run", user);
 
     pages::register(
         &mut reg,

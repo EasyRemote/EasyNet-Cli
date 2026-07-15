@@ -246,6 +246,7 @@ mod tests {
     fn request(agent_ura: &str) -> AdvertiseAgentRequest {
         AdvertiseAgentRequest {
             agent_ura: agent_ura.to_string(),
+            generation: 1,
             signing_authority: Some(AdvertiseSigningAuthorityRequest::HostedBy {
                 host_ura: "easynet:///r/test/device/dev-1".to_string(),
             }),

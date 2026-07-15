@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use super::descriptors::AdmissionAction;
 use super::{
     AbilityControlPlaneError, AbilityControlPlaneKey, AbilityDescriptor, AbilityDescriptorRegistry,
     AbilityHints, AbilityImplBinding, AbilityImplRegistry, AbilityImplSource, AuthorityBinding,
@@ -105,6 +106,7 @@ pub struct AbilityControlPlaneRegistration<'a> {
     descriptor_version: String,
     call_mode: CallMode,
     receipt_semantics: ReceiptSemantics,
+    admission_action: AdmissionAction,
     descriptor_hints: Option<AbilityHints>,
     manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
     authority_scope: AuthorityScope,
@@ -117,6 +119,7 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
     pub fn new(
         ability: impl Into<String>,
         call_mode: CallMode,
+        admission_action: AdmissionAction,
         manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
         authority_scope: AuthorityScope,
         runtime_env: RuntimeEnv,
@@ -127,6 +130,7 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
             descriptor_version: manifest_descriptor_version(manifest).to_string(),
             call_mode,
             receipt_semantics: ReceiptSemantics::Operational,
+            admission_action,
             descriptor_hints: None,
             manifest,
             authority_scope,
@@ -195,6 +199,7 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
             descriptor_version,
             call_mode,
             receipt_semantics,
+            admission_action,
             descriptor_hints,
             manifest,
             authority_scope,
@@ -220,6 +225,7 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
             &ability,
             &authority_root,
             call_mode,
+            admission_action,
             manifest,
         )
         .map_err(|error| AbilityControlPlaneError::DescriptorConstruction {
@@ -293,6 +299,7 @@ impl AbilityControlPlaneRegistry {
         &mut self,
         ability: impl Into<String>,
         call_mode: CallMode,
+        admission_action: AdmissionAction,
         manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
         authority_scope: AuthorityScope,
         runtime_env: RuntimeEnv,
@@ -301,6 +308,7 @@ impl AbilityControlPlaneRegistry {
         self.register_registration(AbilityControlPlaneRegistration::new(
             ability,
             call_mode,
+            admission_action,
             manifest,
             authority_scope,
             runtime_env,
@@ -763,6 +771,7 @@ mod tests {
             .register(
                 "fs.read",
                 CallMode::Rpc,
+                AdmissionAction::Read,
                 None,
                 AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
@@ -797,6 +806,7 @@ mod tests {
             .register(
                 "agent.search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 Some(&manifest),
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:manifest").unwrap(),
@@ -845,6 +855,7 @@ mod tests {
                 AbilityControlPlaneRegistration::new(
                     "pages.publish",
                     CallMode::Rpc,
+                    AdmissionAction::Invoke,
                     Some(&manifest),
                     AuthorityScope::new("agent:pages", LOCAL_AGENT_URA).unwrap(),
                     RuntimeEnv::daemon_native(),
@@ -870,6 +881,7 @@ mod tests {
             .register(
                 "assistant.chat",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
@@ -905,6 +917,7 @@ mod tests {
                 AbilityControlPlaneRegistration::new(
                     "agent.search",
                     CallMode::Rpc,
+                    AdmissionAction::Invoke,
                     Some(&manifest),
                     AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:manifest").unwrap(),
@@ -931,6 +944,7 @@ mod tests {
                 AbilityControlPlaneRegistration::new(
                     "fs.read",
                     CallMode::Rpc,
+                    AdmissionAction::Read,
                     None,
                     AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
                     RuntimeEnv::new("env:v1").unwrap(),
@@ -944,6 +958,7 @@ mod tests {
                 AbilityControlPlaneRegistration::new(
                     "fs.read",
                     CallMode::Rpc,
+                    AdmissionAction::Read,
                     None,
                     AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
                     RuntimeEnv::new("env:v2").unwrap(),
@@ -988,6 +1003,7 @@ mod tests {
             .register(
                 "agent.chat",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:rpc").unwrap(),
@@ -998,6 +1014,7 @@ mod tests {
             .register(
                 "agent.chat",
                 CallMode::Stream,
+                AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:stream").unwrap(),
@@ -1035,6 +1052,7 @@ mod tests {
             .register(
                 "agent.chat",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:rpc").unwrap(),
@@ -1045,6 +1063,7 @@ mod tests {
             .register(
                 "agent.chat",
                 CallMode::Stream,
+                AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:stream").unwrap(),
@@ -1082,6 +1101,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", "easynet:///r/default/agent/user.a").unwrap(),
                 RuntimeEnv::new("env:a").unwrap(),
@@ -1092,6 +1112,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", "easynet:///r/default/agent/user.b").unwrap(),
                 RuntimeEnv::new("env:b").unwrap(),
@@ -1119,6 +1140,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a").unwrap(),
@@ -1129,6 +1151,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", owner_b).unwrap(),
                 RuntimeEnv::new("env:b").unwrap(),
@@ -1176,6 +1199,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a-rpc").unwrap(),
@@ -1186,6 +1210,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Stream,
+                AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a-stream").unwrap(),
@@ -1196,6 +1221,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", owner_b).unwrap(),
                 RuntimeEnv::new("env:b-rpc").unwrap(),
@@ -1237,6 +1263,7 @@ mod tests {
             .register(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 Some(&manifest),
                 AuthorityScope::new("agent:a", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:v2").unwrap(),

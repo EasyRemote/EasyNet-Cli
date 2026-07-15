@@ -76,11 +76,10 @@ if [[ "${1:-}" == "--self-test" ]]; then
   make_easyremote_good "$easyremote_good"
   make_backend_bad "$backend_bad"
 
-  if EASYNET_EASYREMOTE_ROOT="$easyremote_good" EASYNET_BACKEND_ROOT="$backend_bad" "$0" >"$tmp/cutover.out" 2>&1; then
-    echo "self-test expected aggregate cutover readiness to fail on raw backend Axon import" >&2
+  if bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" "$backend_bad" >"$tmp/cutover.out" 2>&1; then
+    echo "self-test expected backend boundary to fail on raw backend Axon import" >&2
     exit 1
   fi
-  grep -Fq "failed: backend SDK-only boundary" "$tmp/cutover.out"
   grep -Fq "raw_axon_import" "$tmp/cutover.out"
 
   echo "check-sdk-cutover-readiness self-test ok"
@@ -97,6 +96,10 @@ run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-
 run_gate "SDK canonical public API" bash "$SELF_DIR/check-sdk-canonical-public-api.sh" || status=1
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
 run_gate "SDK conformance reports" bash "$SELF_DIR/check-sdk-conformance-reports.sh" || status=1
+run_gate "SDK live parity matrix" env \
+  EASYNET_SDK_PARITY_RESULTS_DIR="$REPO_ROOT/target/sdk-conformance-live-results" \
+  EASYNET_SDK_PARITY_ALLOW_SNAPSHOT_RESULTS=1 \
+  bash "$SELF_DIR/check-sdk-parity-matrix.sh" || status=1
 run_gate "generic FFI ABI v5 exact surface" bash "$SELF_DIR/check-ffi-abi-v5-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1

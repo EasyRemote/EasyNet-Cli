@@ -265,7 +265,6 @@ fn typed_error_json(code: Option<i32>, message: &str) -> serde_json::Value {
         "details": {
             "abi_code": code.unwrap_or(ERR_GENERIC),
             "abi_symbol": metadata.abi_symbol,
-            "legacy_untyped": code.is_none(),
         },
     })
 }
@@ -420,7 +419,7 @@ mod tests {
             assert_eq!(value["retry"], "never");
             assert_eq!(value["message"], "bad handle");
             assert_eq!(value["details"]["abi_code"], ERR_INVALID_HANDLE);
-            assert_eq!(value["details"]["legacy_untyped"], false);
+            assert_eq!(value["details"]["abi_symbol"], "ERR_INVALID_HANDLE");
         })
         .join()
         .unwrap();
@@ -438,7 +437,8 @@ mod tests {
             unsafe { crate::ffi::strings::easynet_string_free(out) };
             assert_eq!(value["code"], "GENERIC");
             assert_eq!(value["message"], "legacy text");
-            assert_eq!(value["details"]["legacy_untyped"], true);
+            assert_eq!(value["details"]["abi_code"], ERR_GENERIC);
+            assert_eq!(value["details"]["abi_symbol"], "ERR_GENERIC");
         })
         .join()
         .unwrap();

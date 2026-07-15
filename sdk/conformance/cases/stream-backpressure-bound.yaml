@@ -1,8 +1,6 @@
 id: stream/backpressure_bound
 profile: runtime_core
 required_for:
-  - rust
-  - c_abi
   - go
   - python
   - node

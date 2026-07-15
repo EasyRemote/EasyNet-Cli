@@ -22,7 +22,6 @@ fn open_entry_directory() {
 
 fn abilities_for_returns_empty_when_root_path_missing() {}
 fn entry_without_root_path_publishes_no_abilities() {}
-fn abilities_for_publication_synthesizes_default_chat_without_root_path() {}
 RS
 
 (
@@ -45,6 +44,25 @@ set -e
 
 cat > "$SB/src/daemon/execution/mission/agent_ability_specs.rs" <<'RS'
 fn open_entry_directory() {
+    eprintln!("registry row is missing root_path");
+    eprintln!("root_path /tmp/a belongs to agent \"other\"");
+}
+
+fn abilities_for_returns_empty_when_root_path_missing() {}
+fn entry_without_root_path_publishes_no_abilities() {}
+fn abilities_for_publication() { default_chat_manifest(); }
+RS
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-runtime-abilities-manifest-boundary.sh
+) >/tmp/check-runtime-abilities.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "synthetic publication fallback should exit 1 (got $rc)"
+
+cat > "$SB/src/daemon/execution/mission/agent_ability_specs.rs" <<'RS'
+fn open_entry_directory() {
     let _root = crate::persistence::config::agents_root().join(agent_name);
     eprintln!("registry row is missing root_path");
     eprintln!("root_path /tmp/a belongs to agent \"other\"");
@@ -52,7 +70,6 @@ fn open_entry_directory() {
 
 fn abilities_for_returns_empty_when_root_path_missing() {}
 fn entry_without_root_path_publishes_no_abilities() {}
-fn abilities_for_publication_synthesizes_default_chat_without_root_path() {}
 RS
 set +e
 (

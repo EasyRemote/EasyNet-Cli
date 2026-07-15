@@ -112,6 +112,8 @@ type InvokeResponse struct {
 	ResultJSON        []byte
 	ResultContentType string
 	SelectedNodeID    string
+	AdmissionReceipt  []byte
+	TerminalReceipt   []byte
 	Error             *InvokeError
 }
 

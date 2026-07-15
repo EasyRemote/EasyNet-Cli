@@ -22,10 +22,11 @@
 // - It is not a JSON-control bridge. Unary, server-stream, and bidi
 //   all go through the daemon's Axon Invocation gRPC endpoint.
 
+#[cfg(feature = "axon-pb")]
+use rand::{rngs::OsRng, RngCore};
 use std::os::raw::{c_char, c_void};
 #[cfg(feature = "axon-pb")]
 use std::path::PathBuf;
-#[cfg(feature = "axon-pb")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "axon-pb")]
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -36,7 +37,7 @@ mod backpressure;
 #[cfg(feature = "axon-pb")]
 use self::backpressure::{bidi_callback_backpressure_frame, stream_callback_backpressure_event};
 #[cfg(feature = "axon-pb")]
-use crate::ffi::client::handle::lib_runtime;
+use crate::ffi::client::handle::{binding_for_handle, lib_runtime, ClientSessionBinding};
 use crate::ffi::client::handle::{get, EasynetHandle};
 #[cfg(not(feature = "axon-pb"))]
 use crate::ffi::errors::ERR_NOT_IMPLEMENTED;
@@ -129,7 +130,7 @@ fn record_invocation_feature_disabled(function: &str) -> i32 {
 /// {
 ///   "caller_ura": "...",
 ///   "callee_ura": "...",
-///   "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+///   "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 ///   "subject_ura": "...",
 ///   "nonce_base64": "<16 bytes, base64>",
 ///   "causal_context": {"form": "none"},
@@ -841,22 +842,29 @@ pub unsafe extern "C" fn easynet_invocation_handle_await(
         );
     }
     unsafe { *out_result_json = std::ptr::null_mut() };
-    if get(handle).is_none() {
-        return record_invocation_error(
-            ERR_INVALID_HANDLE,
-            format!("easynet_invocation_handle_await: handle {handle} is not registered"),
-        );
-    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_handle_await: handle {handle} is not registered"),
+            );
+        }
+    };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = invocation_handle_id;
+        let _ = (session, invocation_handle_id);
         record_invocation_feature_disabled("easynet_invocation_handle_await")
     }
 
     #[cfg(feature = "axon-pb")]
     {
-        invocation_handle_await_with_axon_pb(handle, invocation_handle_id, out_result_json)
+        invocation_handle_await_with_axon_pb(
+            session.binding(handle),
+            invocation_handle_id,
+            out_result_json,
+        )
     }
 }
 
@@ -879,12 +887,15 @@ pub unsafe extern "C" fn easynet_invocation_handle_cancel(
         );
     }
     unsafe { *out_cancel_json = std::ptr::null_mut() };
-    if get(handle).is_none() {
-        return record_invocation_error(
-            ERR_INVALID_HANDLE,
-            format!("easynet_invocation_handle_cancel: handle {handle} is not registered"),
-        );
-    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_handle_cancel: handle {handle} is not registered"),
+            );
+        }
+    };
     let reason_raw = match read_optional_cstr(reason_json) {
         Ok(value) => value,
         Err(StringError::NotUtf8) => {
@@ -898,14 +909,14 @@ pub unsafe extern "C" fn easynet_invocation_handle_cancel(
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = (invocation_handle_id, reason_raw);
+        let _ = (session, invocation_handle_id, reason_raw);
         record_invocation_feature_disabled("easynet_invocation_handle_cancel")
     }
 
     #[cfg(feature = "axon-pb")]
     {
         invocation_handle_cancel_with_axon_pb(
-            handle,
+            session.binding(handle),
             invocation_handle_id,
             reason_raw,
             out_cancel_json,
@@ -930,22 +941,29 @@ pub unsafe extern "C" fn easynet_invocation_handle_events(
         );
     }
     unsafe { *out_events_json = std::ptr::null_mut() };
-    if get(handle).is_none() {
-        return record_invocation_error(
-            ERR_INVALID_HANDLE,
-            format!("easynet_invocation_handle_events: handle {handle} is not registered"),
-        );
-    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_handle_events: handle {handle} is not registered"),
+            );
+        }
+    };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = invocation_handle_id;
+        let _ = (session, invocation_handle_id);
         record_invocation_feature_disabled("easynet_invocation_handle_events")
     }
 
     #[cfg(feature = "axon-pb")]
     {
-        invocation_handle_events_with_axon_pb(handle, invocation_handle_id, out_events_json)
+        invocation_handle_events_with_axon_pb(
+            session.binding(handle),
+            invocation_handle_id,
+            out_events_json,
+        )
     }
 }
 
@@ -955,26 +973,35 @@ pub extern "C" fn easynet_invocation_handle_free(
     handle: EasynetHandle,
     invocation_handle_id: InvocationHandleId,
 ) -> i32 {
-    if get(handle).is_none() {
-        return record_invocation_error(
-            ERR_INVALID_HANDLE,
-            format!("easynet_invocation_handle_free: handle {handle} is not registered"),
-        );
-    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_handle_free: handle {handle} is not registered"),
+            );
+        }
+    };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = invocation_handle_id;
+        let _ = (session, invocation_handle_id);
         record_invocation_feature_disabled("easynet_invocation_handle_free")
     }
 
     #[cfg(feature = "axon-pb")]
     {
-        match remove_invocation_handle_for_owner(handle, invocation_handle_id) {
-            Ok(_) => {
+        match remove_invocation_handle_for_owner(session.binding(handle), invocation_handle_id) {
+            Ok(Some(_)) => {
                 clear_last_error();
                 EASYNET_OK
             }
+            Ok(None) => record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_handle_free: invocation handle {invocation_handle_id} is not registered"
+                ),
+            ),
             Err(RegistryOwnerMismatch) => record_invocation_error(
                 ERR_INVALID_HANDLE,
                 format!(
@@ -1110,22 +1137,29 @@ pub unsafe extern "C" fn easynet_invocation_stream_cancel(
     handle: EasynetHandle,
     stream_id: InvocationStreamId,
 ) -> i32 {
-    if get(handle).is_none() {
-        return record_invocation_error(
-            ERR_INVALID_HANDLE,
-            format!("easynet_invocation_stream_cancel: handle {handle} is not registered"),
-        );
-    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_stream_cancel: handle {handle} is not registered"),
+            );
+        }
+    };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = stream_id;
+        let _ = (session, stream_id);
         record_invocation_feature_disabled("easynet_invocation_stream_cancel")
     }
 
     #[cfg(feature = "axon-pb")]
     {
-        release_stream_with_reader_cancel(handle, stream_id, "easynet_invocation_stream_cancel")
+        release_stream_with_reader_cancel(
+            session.binding(handle),
+            stream_id,
+            "easynet_invocation_stream_cancel",
+        )
     }
 }
 
@@ -1381,22 +1415,25 @@ pub unsafe extern "C" fn easynet_invocation_bidi_cancel(
     handle: EasynetHandle,
     bidi_id: InvocationBidiId,
 ) -> i32 {
-    if get(handle).is_none() {
-        return record_invocation_error(
-            ERR_INVALID_HANDLE,
-            format!("easynet_invocation_bidi_cancel: handle {handle} is not registered"),
-        );
-    }
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_bidi_cancel: handle {handle} is not registered"),
+            );
+        }
+    };
 
     #[cfg(not(feature = "axon-pb"))]
     {
-        let _ = bidi_id;
+        let _ = (session, bidi_id);
         record_invocation_feature_disabled("easynet_invocation_bidi_cancel")
     }
 
     #[cfg(feature = "axon-pb")]
     {
-        match remove_bidi_for_handle(handle, bidi_id) {
+        match remove_bidi_for_handle(session.binding(handle), bidi_id) {
             Ok(Some(session)) => {
                 session.cancel.cancel();
                 clear_last_error();
@@ -1428,7 +1465,6 @@ fn runtime_health_json(session: &crate::ffi::client::handle::ClientSession) -> s
     let report = RuntimeHealthReport::from_session(session);
     serde_json::json!({
         "api_ready": true,
-        "daemon_ready": true,
         "invocation_ready": report.invocation_ready,
         "directory_ready": report.directory_ready,
         "trust_ready": report.trust_ready,
@@ -1456,7 +1492,292 @@ fn runtime_diagnostics_json(
         "invocation_endpoint": report.invocation_endpoint,
         "checks": report.checks(),
         "diagnostics": report.diagnostics,
+        "descriptor_catalog": runtime_descriptor_catalog_json(session),
     })
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_descriptor_catalog_json(
+    session: &crate::ffi::client::handle::ClientSession,
+) -> serde_json::Value {
+    match runtime_owner_ura_from_session(session) {
+        Ok(owner_ura) => {
+            let catalog = runtime_descriptor_catalog_entries(session, &owner_ura);
+            serde_json::json!({
+                "owner_ura": owner_ura,
+                "source": "runtime_descriptor_catalog",
+                "entries": catalog.entries,
+                "diagnostics": catalog.diagnostics,
+            })
+        }
+        Err(error) => serde_json::json!({
+            "owner_ura": null,
+            "source": "control.json",
+            "entries": [],
+            "diagnostics": [error],
+        }),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_owner_ura_from_session(
+    session: &crate::ffi::client::handle::ClientSession,
+) -> std::result::Result<String, String> {
+    let session_control_path = PathBuf::from(&session.control_path);
+    let control_path = if session_control_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some(crate::daemon::control::discovery::CONTROL_JSON_FILENAME)
+    {
+        session_control_path
+    } else {
+        session_control_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(crate::daemon::control::discovery::CONTROL_JSON_FILENAME)
+    };
+    let discovery = crate::daemon::control::discovery::read(&control_path)
+        .map_err(|error| format!("read control discovery {}: {error}", control_path.display()))?
+        .ok_or_else(|| {
+            format!(
+                "control discovery {} does not exist",
+                control_path.display()
+            )
+        })?;
+    let identity = discovery.daemon_identity.ok_or_else(|| {
+        format!(
+            "control discovery {} has no daemon_identity",
+            control_path.display()
+        )
+    })?;
+    let realm = identity.realm.trim();
+    if realm.is_empty() {
+        return Err("control discovery daemon_identity.realm is empty".to_string());
+    }
+    match identity.mode.trim() {
+        "hub" => Ok(crate::core::ura::hub_ura(realm)),
+        "device" | "both" => {
+            let node_id = identity
+                .node_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|node_id| !node_id.is_empty())
+                .ok_or_else(|| {
+                    "control discovery device daemon_identity.node_id is empty".to_string()
+                })?;
+            Ok(crate::core::ura::device_ura(realm, node_id))
+        }
+        other => Err(format!(
+            "control discovery daemon_identity.mode {other:?} cannot resolve a runtime owner URA"
+        )),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+struct RuntimeDescriptorCatalog {
+    entries: Vec<serde_json::Value>,
+    diagnostics: Vec<String>,
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_descriptor_catalog_entries(
+    session: &crate::ffi::client::handle::ClientSession,
+    owner_ura: &str,
+) -> RuntimeDescriptorCatalog {
+    let mut entries = Vec::new();
+    let mut diagnostics = Vec::new();
+    match runtime_system_descriptor_catalog_entries(owner_ura) {
+        Ok(mut system_entries) => entries.append(&mut system_entries),
+        Err(error) => diagnostics.push(error),
+    }
+    match runtime_meta_descriptor_catalog_entries(session, owner_ura) {
+        Ok(mut meta_entries) => entries.append(&mut meta_entries),
+        Err(error) => diagnostics.push(error),
+    }
+    RuntimeDescriptorCatalog {
+        entries: dedupe_descriptor_catalog_entries(entries),
+        diagnostics,
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_system_descriptor_catalog_entries(
+    owner_ura: &str,
+) -> std::result::Result<Vec<serde_json::Value>, String> {
+    let owner = crate::daemon::axon_bridge::descriptor_ref::catalog_owner_kind_for_wire(owner_ura)
+        .map_err(|error| error.to_string())?;
+    let catalog = crate::daemon::ability::catalog::build_system_registry();
+    Ok(catalog
+        .authority_ability_catalog_snapshot()
+        .into_iter()
+        .filter(|row| row.owner == owner)
+        .filter_map(|row| {
+            row.descriptor
+                .rebind_owner_ura(owner_ura)
+                .ok()
+                .and_then(descriptor_catalog_entry_from_descriptor)
+        })
+        .collect())
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_meta_descriptor_catalog_entries(
+    session: &crate::ffi::client::handle::ClientSession,
+    owner_ura: &str,
+) -> std::result::Result<Vec<serde_json::Value>, String> {
+    let endpoint = invocation_endpoint_for_session(session).map_err(|error| error.to_string())?;
+    let rt = lib_runtime().map_err(|error| error.to_string())?;
+    rt.block_on(async {
+        let meta_descriptor_ref =
+            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+                owner_ura,
+                crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .map_err(|error| error.to_string())?;
+        let invocation = crate::daemon::DaemonInvocation::builder(
+            owner_ura,
+            owner_ura,
+            meta_descriptor_ref,
+            owner_ura,
+        )
+        .map_err(|error| error.to_string())?
+        .args_json(&serde_json::json!({
+            "scope": "local",
+            "subject_ura": owner_ura,
+        }))
+        .map_err(|error| error.to_string())?
+        .build();
+        let client =
+            crate::daemon::DaemonClient::connect(endpoint).map_err(|error| error.to_string())?;
+        let response = client
+            .invoke(invocation)
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Some(error) = response.error {
+            return Err(format!(
+                "meta.list_abilities returned {}: {}",
+                error.code, error.message
+            ));
+        }
+        let output: serde_json::Value = serde_json::from_slice(&response.result)
+            .map_err(|error| format!("decode meta.list_abilities result: {error}"))?;
+        let abilities = output
+            .get("abilities")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "meta.list_abilities result omitted abilities array".to_string())?;
+        Ok(abilities
+            .iter()
+            .filter_map(descriptor_catalog_entry_from_value)
+            .collect())
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_catalog_entry_from_descriptor(
+    descriptor: crate::daemon::ability::descriptors::AbilityDescriptor,
+) -> Option<serde_json::Value> {
+    let ability_ura = descriptor.canonical_ability_ura()?;
+    let descriptor_hash = descriptor.descriptor_hash_prefixed();
+    let descriptor_hash_hex = descriptor_hash.strip_prefix("sha256:")?;
+    if descriptor_hash_hex.len() != 64 || hex::decode(descriptor_hash_hex).is_err() {
+        return None;
+    }
+    let name = descriptor.public_name();
+    let owner_ura = descriptor.owner_ura.clone();
+    let version = descriptor.version.clone();
+    let call_mode = descriptor.call_mode().as_str();
+    let admission_action = descriptor.admission_action().as_str();
+    let descriptor_ref = easynet_axon::invocation::canonical_ability_descriptor_ref(&format!(
+        "{ability_ura}@{version}#{descriptor_hash_hex}!{admission_action}",
+    ))
+    .ok()?;
+    Some(serde_json::json!({
+        "name": name,
+        "owner_ura": owner_ura,
+        "ability_ura": ability_ura,
+        "descriptor_ref": descriptor_ref,
+        "version": version,
+        "descriptor_hash": descriptor_hash,
+        "call_mode": call_mode,
+        "admission_action": admission_action,
+    }))
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_catalog_entry_from_value(value: &serde_json::Value) -> Option<serde_json::Value> {
+    let ability_ura = value.get("ability_ura")?.as_str()?.trim();
+    let owner_ura = value.get("owner_ura")?.as_str()?.trim();
+    let name = value.get("name")?.as_str()?.trim();
+    let version = value.get("version")?.as_str()?.trim();
+    let call_mode = value
+        .get("call_mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("rpc")
+        .trim();
+    let admission_action = value.get("admission_action")?.as_str()?.trim();
+    let descriptor_hash = value.get("descriptor_hash")?.as_str()?.trim();
+    if ability_ura.is_empty()
+        || owner_ura.is_empty()
+        || name.is_empty()
+        || version.is_empty()
+        || admission_action.is_empty()
+        || descriptor_hash.is_empty()
+    {
+        return None;
+    }
+    let descriptor_hash_hex = descriptor_hash
+        .strip_prefix("sha256:")
+        .unwrap_or(descriptor_hash)
+        .trim();
+    if descriptor_hash_hex.len() != 64 || hex::decode(descriptor_hash_hex).is_err() {
+        return None;
+    }
+    let descriptor_ref = easynet_axon::invocation::canonical_ability_descriptor_ref(&format!(
+        "{ability_ura}@{version}#{descriptor_hash_hex}!{admission_action}"
+    ))
+    .ok()?;
+    Some(serde_json::json!({
+        "name": name,
+        "owner_ura": owner_ura,
+        "ability_ura": ability_ura,
+        "descriptor_ref": descriptor_ref,
+        "version": version,
+        "descriptor_hash": descriptor_hash,
+        "call_mode": call_mode,
+        "admission_action": admission_action,
+    }))
+}
+
+#[cfg(feature = "axon-pb")]
+fn dedupe_descriptor_catalog_entries(entries: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut catalog = std::collections::BTreeMap::new();
+    for entry in entries {
+        let Some(owner_ura) = entry.get("owner_ura").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(ability_ura) = entry.get("ability_ura").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(call_mode) = entry.get("call_mode").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(descriptor_ref) = entry
+            .get("descriptor_ref")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        catalog
+            .entry((
+                owner_ura.to_string(),
+                ability_ura.to_string(),
+                call_mode.to_string(),
+                descriptor_ref.to_string(),
+            ))
+            .or_insert(entry);
+    }
+    catalog.into_values().collect()
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1724,19 +2045,22 @@ fn prepare_builder_with_axon_pb(
             );
         }
     };
-    let ptr = alloc_output_cstring(prepared_invocation_json(&prepared).to_string());
+    let id = if material_only {
+        0
+    } else {
+        insert_prepared(prepared.clone())
+    };
+    let ptr = alloc_output_cstring(prepared_invocation_json(&prepared, nonzero_id(id)).to_string());
     if ptr.is_null() {
+        if id != 0 {
+            remove_prepared(id);
+        }
         restore_builder(builder_id, builder);
         return record_invocation_error(
             ERR_GENERIC,
             "easynet_invocation_builder_prepare: out-of-memory allocating prepared JSON",
         );
     }
-    let id = if material_only {
-        0
-    } else {
-        insert_prepared(prepared)
-    };
     unsafe {
         *out_prepared_id = id;
         *out_prepared_json = ptr;
@@ -1803,10 +2127,15 @@ fn invoke_with_axon_pb(
         );
     }
 
-    let output = invocation_outcome_json_with_tuple(
-        crate::daemon::InvocationOutcome::from_invoke_response(tuple, response),
-        tuple_json,
-    );
+    let outcome = match crate::daemon::InvocationOutcome::from_verified_invoke_response(
+        tuple,
+        response,
+        &crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => return ffi_daemon_error("easynet_invocation_invoke", error),
+    };
+    let output = invocation_outcome_json_with_tuple(outcome, tuple_json);
     let json = match serde_json::to_string(&output) {
         Ok(json) => json,
         Err(err) => {
@@ -1875,22 +2204,56 @@ fn prepare_with_axon_pb(
             );
         }
     };
-    let json = prepared_invocation_json(&prepared).to_string();
+    let id = if material_only {
+        0
+    } else {
+        insert_prepared(prepared.clone())
+    };
+    let json = prepared_invocation_json(&prepared, nonzero_id(id)).to_string();
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
+        if id != 0 {
+            remove_prepared(id);
+        }
         return record_invocation_error(
             ERR_GENERIC,
             "easynet_invocation_prepare: out-of-memory allocating prepared JSON",
         );
     }
-    let id = if material_only {
-        0
-    } else {
-        insert_prepared(prepared)
-    };
     unsafe {
         *out_prepared_id = id;
         *out_prepared_json = ptr;
+    }
+    clear_last_error();
+    EASYNET_OK
+}
+
+#[cfg(feature = "axon-pb")]
+fn commit_prepared_as_signed(
+    prepared_id: PreparedInvocationId,
+    signed: crate::daemon::SignedInvocation,
+    out_signed_id: *mut SignedInvocationId,
+    out_signed_json: *mut *mut c_char,
+    function: &str,
+) -> i32 {
+    let ptr = alloc_output_cstring(signed_invocation_json(&signed).to_string());
+    if ptr.is_null() {
+        return record_invocation_error(
+            ERR_GENERIC,
+            format!("{function}: out-of-memory allocating signed JSON"),
+        );
+    }
+    let Some(_) = remove_prepared(prepared_id) else {
+        unsafe { crate::ffi::strings::easynet_string_free(ptr) };
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("{function}: prepared handle {prepared_id} disappeared"),
+        );
+    };
+    let id = insert_signed(signed);
+    unsafe {
+        *out_signed_id = id;
+        *out_signed_json = ptr;
     }
     clear_last_error();
     EASYNET_OK
@@ -1912,7 +2275,7 @@ fn sign_prepared_with_axon_pb(
             );
         }
     };
-    let prepared = match remove_prepared(prepared_id) {
+    let prepared = match get_prepared(prepared_id) {
         Some(prepared) => prepared,
         None => {
             return record_invocation_error(
@@ -1932,21 +2295,13 @@ fn sign_prepared_with_axon_pb(
             );
         }
     };
-    let json = signed_invocation_json(&signed).to_string();
-    let ptr = alloc_output_cstring(json);
-    if ptr.is_null() {
-        return record_invocation_error(
-            ERR_GENERIC,
-            "easynet_invocation_sign_prepared: out-of-memory allocating signed JSON",
-        );
-    }
-    let id = insert_signed(signed);
-    unsafe {
-        *out_signed_id = id;
-        *out_signed_json = ptr;
-    }
-    clear_last_error();
-    EASYNET_OK
+    commit_prepared_as_signed(
+        prepared_id,
+        signed,
+        out_signed_id,
+        out_signed_json,
+        "easynet_invocation_sign_prepared",
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1976,29 +2331,13 @@ fn sign_prepared_local_with_axon_pb(
             );
         }
     };
-    let Some(_) = remove_prepared(prepared_id) else {
-        return record_invocation_error(
-            ERR_INVALID_HANDLE,
-            format!(
-                "easynet_invocation_sign_prepared_local: prepared handle {prepared_id} disappeared"
-            ),
-        );
-    };
-    let json = signed_invocation_json(&signed).to_string();
-    let ptr = alloc_output_cstring(json);
-    if ptr.is_null() {
-        return record_invocation_error(
-            ERR_GENERIC,
-            "easynet_invocation_sign_prepared_local: out-of-memory allocating signed JSON",
-        );
-    }
-    let id = insert_signed(signed);
-    unsafe {
-        *out_signed_id = id;
-        *out_signed_json = ptr;
-    }
-    clear_last_error();
-    EASYNET_OK
+    commit_prepared_as_signed(
+        prepared_id,
+        signed,
+        out_signed_id,
+        out_signed_json,
+        "easynet_invocation_sign_prepared_local",
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2009,6 +2348,17 @@ fn submit_signed_handle_with_axon_pb(
     out_invocation_handle_id: *mut InvocationHandleId,
     out_submitted_json: *mut *mut c_char,
 ) -> i32 {
+    let registration = match session.resource_registration_guard(owner) {
+        Ok(registration) => registration,
+        Err(_) => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!(
+                    "easynet_invocation_submit_signed_handle: handle {owner} is closing or released"
+                ),
+            );
+        }
+    };
     let signed = match remove_signed(signed_id) {
         Some(signed) => signed,
         None => {
@@ -2034,13 +2384,13 @@ fn submit_signed_handle_with_axon_pb(
         }
     };
 
-    let tuple = signed.prepared().tuple();
     let tuple_json = invocation_json(signed.prepared().draft().invocation());
-    let active = ActiveInvocationHandle::new(owner, tuple.clone(), tuple_json.clone());
-    let cancel = active.cancel.clone();
+    let owner_binding = registration.binding();
+    let (active, cancel_requests) =
+        ActiveInvocationHandle::with_cancel_channel(owner_binding, tuple_json.clone());
     let shared = active.shared.clone();
     let invocation_handle_id = insert_invocation_handle(active);
-    let submitted = match get_invocation_handle_for_owner(owner, invocation_handle_id) {
+    let submitted = match get_invocation_handle_for_owner(owner_binding, invocation_handle_id) {
         Ok(Some(handle)) => handle.submitted_json(invocation_handle_id).to_string(),
         Ok(None) | Err(_) => {
             return record_invocation_error(
@@ -2051,7 +2401,7 @@ fn submit_signed_handle_with_axon_pb(
     };
     let ptr = alloc_output_cstring(submitted);
     if ptr.is_null() {
-        let _ = remove_invocation_handle_for_owner(owner, invocation_handle_id);
+        let _ = remove_invocation_handle_for_owner(owner_binding, invocation_handle_id);
         return record_invocation_error(
             ERR_GENERIC,
             "easynet_invocation_submit_signed_handle: out-of-memory allocating submitted JSON",
@@ -2059,8 +2409,12 @@ fn submit_signed_handle_with_axon_pb(
     }
 
     rt.spawn(run_invocation_handle_task(
-        endpoint, signed, tuple, shared, cancel,
+        endpoint,
+        signed,
+        shared,
+        cancel_requests,
     ));
+    drop(registration);
     unsafe {
         *out_invocation_handle_id = invocation_handle_id;
         *out_submitted_json = ptr;
@@ -2071,7 +2425,7 @@ fn submit_signed_handle_with_axon_pb(
 
 #[cfg(feature = "axon-pb")]
 fn invocation_handle_await_with_axon_pb(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     invocation_handle_id: InvocationHandleId,
     out_result_json: *mut *mut c_char,
 ) -> i32 {
@@ -2089,12 +2443,21 @@ fn invocation_handle_await_with_axon_pb(
             return record_invocation_error(
                 ERR_INVALID_HANDLE,
                 format!(
-                    "easynet_invocation_handle_await: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+                    "easynet_invocation_handle_await: invocation handle {invocation_handle_id} does not belong to handle {}",
+                    owner.handle
                 ),
             );
         }
     };
-    let json = handle.await_result_json().to_string();
+    let json = match handle.await_result_json() {
+        Ok(json) => json.to_string(),
+        Err(failure) => {
+            return record_invocation_error(
+                failure.abi_code,
+                format!("easynet_invocation_handle_await: {}", failure.message),
+            );
+        }
+    };
     let ptr = alloc_output_cstring(json);
     if ptr.is_null() {
         return record_invocation_error(
@@ -2109,7 +2472,7 @@ fn invocation_handle_await_with_axon_pb(
 
 #[cfg(feature = "axon-pb")]
 fn invocation_handle_cancel_with_axon_pb(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     invocation_handle_id: InvocationHandleId,
     reason_raw: Option<String>,
     out_cancel_json: *mut *mut c_char,
@@ -2128,7 +2491,8 @@ fn invocation_handle_cancel_with_axon_pb(
             return record_invocation_error(
                 ERR_INVALID_HANDLE,
                 format!(
-                    "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+                    "easynet_invocation_handle_cancel: invocation handle {invocation_handle_id} does not belong to handle {}",
+                    owner.handle
                 ),
             );
         }
@@ -2136,6 +2500,8 @@ fn invocation_handle_cancel_with_axon_pb(
     let outcome = handle.cancel(reason_raw);
     let json = serde_json::json!({
         "handle_id": invocation_handle_id,
+        "request_accepted": outcome.request_accepted,
+        "deduplicated": outcome.deduplicated,
         "cancelled": outcome.cancelled,
         "state": outcome.state.as_str(),
         "terminal": outcome.terminal,
@@ -2155,7 +2521,7 @@ fn invocation_handle_cancel_with_axon_pb(
 
 #[cfg(feature = "axon-pb")]
 fn invocation_handle_events_with_axon_pb(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     invocation_handle_id: InvocationHandleId,
     out_events_json: *mut *mut c_char,
 ) -> i32 {
@@ -2173,7 +2539,8 @@ fn invocation_handle_events_with_axon_pb(
             return record_invocation_error(
                 ERR_INVALID_HANDLE,
                 format!(
-                    "easynet_invocation_handle_events: invocation handle {invocation_handle_id} does not belong to handle {owner}"
+                    "easynet_invocation_handle_events: invocation handle {invocation_handle_id} does not belong to handle {}",
+                    owner.handle
                 ),
             );
         }
@@ -2195,21 +2562,67 @@ fn invocation_handle_events_with_axon_pb(
 async fn run_invocation_handle_task(
     endpoint: PathBuf,
     signed: crate::daemon::SignedInvocation,
-    tuple: crate::daemon::InvocationTuple,
     shared: Arc<InvocationHandleShared>,
-    cancel: tokio_util::sync::CancellationToken,
+    mut cancel_requests: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
-    let outcome = tokio::select! {
-        _ = cancel.cancelled() => invocation_cancelled_outcome(&tuple, Some("cancelled before runtime terminal")),
-        outcome = async {
-            let client = crate::daemon::RuntimeClient::connect(endpoint)?;
-            client.submit_signed(signed).await.map(|handle| handle.await_outcome())
-        } => match outcome {
-            Ok(outcome) => outcome,
-            Err(err) => invocation_failed_outcome(&tuple, err),
-        },
+    let client = match crate::daemon::RuntimeClient::connect(endpoint) {
+        Ok(client) => client,
+        Err(err) => {
+            shared.mark_observation_failed(invocation_observation_failure(&err));
+            return;
+        }
     };
-    let _ = shared.mark_terminal(outcome);
+    let mut submission = Box::pin(client.submit_signed(signed.clone()));
+    let mut cancel_request = None;
+    let mut submission_observed = false;
+
+    loop {
+        tokio::select! {
+            result = &mut submission, if !submission_observed => {
+                submission_observed = true;
+                match result {
+                    Ok(handle) => {
+                        if let Err(failure) = shared.observe_canonical_outcome(handle.await_outcome()) {
+                            shared.mark_observation_failed(failure);
+                        }
+                    }
+                    Err(err) => shared.mark_observation_failed(invocation_observation_failure(&err)),
+                }
+                if cancel_request.is_none() {
+                    return;
+                }
+            }
+            reason = cancel_requests.recv(), if cancel_request.is_none() => {
+                let Some(reason) = reason else {
+                    continue;
+                };
+                let client = client.clone();
+                let signed = signed.clone();
+                cancel_request = Some(Box::pin(async move {
+                    client.request_cancel_signed(signed, reason).await
+                }));
+            }
+            result = async {
+                match cancel_request.as_mut() {
+                    Some(request) => Some(request.await),
+                    None => std::future::pending().await,
+                }
+            }, if cancel_request.is_some() => {
+                cancel_request = None;
+                match result.expect("cancel request branch is enabled only with a future") {
+                    Ok(handle) => {
+                        if let Err(failure) = shared.observe_cancel_command_outcome(handle.await_outcome()) {
+                            shared.mark_cancel_request_failed(failure);
+                        }
+                    }
+                    Err(err) => shared.mark_cancel_request_failed(invocation_observation_failure(&err)),
+                }
+                if submission_observed {
+                    return;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2221,6 +2634,15 @@ fn stream_open_with_axon_pb(
     user_data: *mut c_void,
     out_stream_id: *mut InvocationStreamId,
 ) -> i32 {
+    let registration = match session.resource_registration_guard(handle) {
+        Ok(registration) => registration,
+        Err(_) => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_stream_open: handle {handle} is closing or released"),
+            );
+        }
+    };
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
@@ -2274,11 +2696,13 @@ fn stream_open_with_axon_pb(
     }
 
     let cancel = tokio_util::sync::CancellationToken::new();
+    let owner = registration.binding();
     let stream_id = insert_stream(ActiveInvocationStream {
-        owner: handle,
+        owner,
         cancel: cancel.clone(),
     });
     rt.spawn(run_stream_reader(stream_id, stream, cancel, tx));
+    drop(registration);
 
     unsafe { *out_stream_id = stream_id };
     clear_last_error();
@@ -2294,6 +2718,15 @@ fn bidi_open_with_axon_pb(
     user_data: *mut c_void,
     out_bidi_id: *mut InvocationBidiId,
 ) -> i32 {
+    let registration = match session.resource_registration_guard(handle) {
+        Ok(registration) => registration,
+        Err(_) => {
+            return record_invocation_error(
+                ERR_INVALID_HANDLE,
+                format!("easynet_invocation_bidi_open: handle {handle} is closing or released"),
+            );
+        }
+    };
     let spec = match InvocationJson::parse(raw) {
         Ok(spec) => spec,
         Err(err) => {
@@ -2356,13 +2789,15 @@ fn bidi_open_with_axon_pb(
 
     let (ability, up_tx, down) = session.into_parts();
     let cancel = tokio_util::sync::CancellationToken::new();
+    let owner = registration.binding();
     let bidi_id = insert_bidi(ActiveInvocationBidi::new(
-        handle,
+        owner,
         ability,
         up_tx,
         cancel.clone(),
     ));
     rt.spawn(run_bidi_down_reader(bidi_id, down, cancel, callback_tx));
+    drop(registration);
 
     unsafe { *out_bidi_id = bidi_id };
     clear_last_error();
@@ -2380,7 +2815,13 @@ fn bidi_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId, raw:
             );
         }
     };
-    let session = match get_bidi_for_handle(handle, bidi_id) {
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_bidi_send: handle {handle} is not registered"),
+        );
+    };
+    let session = match get_bidi_for_handle(owner, bidi_id) {
         Ok(Some(session)) => session,
         Ok(None) => {
             return record_invocation_error(
@@ -2428,7 +2869,7 @@ fn bidi_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId, raw:
         up_frame,
     );
     if send_code != EASYNET_OK {
-        let _ = remove_bidi_for_handle(handle, bidi_id);
+        let _ = remove_bidi_for_handle(owner, bidi_id);
         return send_code;
     }
     clear_last_error();
@@ -2437,16 +2878,22 @@ fn bidi_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId, raw:
 
 #[cfg(feature = "axon-pb")]
 fn stream_close_with_axon_pb(handle: EasynetHandle, stream_id: InvocationStreamId) -> i32 {
-    release_stream_with_reader_cancel(handle, stream_id, "easynet_invocation_stream_close")
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_stream_close: handle {handle} is not registered"),
+        );
+    };
+    release_stream_with_reader_cancel(owner, stream_id, "easynet_invocation_stream_close")
 }
 
 #[cfg(feature = "axon-pb")]
 fn release_stream_with_reader_cancel(
-    handle: EasynetHandle,
+    owner: ClientSessionBinding,
     stream_id: InvocationStreamId,
     function: &str,
 ) -> i32 {
-    match remove_stream_for_handle(handle, stream_id) {
+    match remove_stream_for_handle(owner, stream_id) {
         Ok(Some(stream)) => {
             stream.cancel.cancel();
             clear_last_error();
@@ -2458,14 +2905,23 @@ fn release_stream_with_reader_cancel(
         }
         Err(RegistryOwnerMismatch) => record_invocation_error(
             ERR_INVALID_HANDLE,
-            format!("{function}: stream {stream_id} does not belong to handle {handle}"),
+            format!(
+                "{function}: stream {stream_id} does not belong to handle {}",
+                owner.handle
+            ),
         ),
     }
 }
 
 #[cfg(feature = "axon-pb")]
 fn bidi_close_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId) -> i32 {
-    let session = match get_bidi_for_handle(handle, bidi_id) {
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_bidi_close_send: handle {handle} is not registered"),
+        );
+    };
+    let session = match get_bidi_for_handle(owner, bidi_id) {
         Ok(Some(session)) => session,
         Ok(None) => {
             return record_invocation_error(
@@ -2506,7 +2962,7 @@ fn bidi_close_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId
         up_frame,
     );
     if send_code != EASYNET_OK {
-        let _ = remove_bidi_for_handle(handle, bidi_id);
+        let _ = remove_bidi_for_handle(owner, bidi_id);
         return send_code;
     }
     clear_last_error();
@@ -2515,7 +2971,13 @@ fn bidi_close_send_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId
 
 #[cfg(feature = "axon-pb")]
 fn bidi_close_with_axon_pb(handle: EasynetHandle, bidi_id: InvocationBidiId) -> i32 {
-    let session = match remove_bidi_for_handle(handle, bidi_id) {
+    let Some(owner) = binding_for_handle(handle) else {
+        return record_invocation_error(
+            ERR_INVALID_HANDLE,
+            format!("easynet_invocation_bidi_close: handle {handle} is not registered"),
+        );
+    };
+    let session = match remove_bidi_for_handle(owner, bidi_id) {
         Ok(Some(session)) => session,
         Ok(None) => {
             clear_last_error();
@@ -2595,29 +3057,30 @@ impl CallbackUserData {
 
 #[cfg(feature = "axon-pb")]
 struct ActiveInvocationStream {
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     cancel: tokio_util::sync::CancellationToken,
 }
 
 #[cfg(feature = "axon-pb")]
 struct ActiveInvocationHandle {
-    owner: EasynetHandle,
-    cancel: tokio_util::sync::CancellationToken,
+    owner: ClientSessionBinding,
+    cancel_requests: tokio::sync::mpsc::UnboundedSender<String>,
     shared: Arc<InvocationHandleShared>,
 }
 
 #[cfg(feature = "axon-pb")]
 impl ActiveInvocationHandle {
-    fn new(
-        owner: EasynetHandle,
-        tuple: crate::daemon::InvocationTuple,
+    fn with_cancel_channel(
+        owner: ClientSessionBinding,
         tuple_json: serde_json::Value,
-    ) -> Self {
-        Self {
+    ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        let (cancel_requests, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let handle = Self {
             owner,
-            cancel: tokio_util::sync::CancellationToken::new(),
-            shared: Arc::new(InvocationHandleShared::new(tuple, tuple_json)),
-        }
+            cancel_requests,
+            shared: Arc::new(InvocationHandleShared::new(tuple_json)),
+        };
+        (handle, receiver)
     }
 
     fn submitted_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
@@ -2629,14 +3092,22 @@ impl ActiveInvocationHandle {
         self.shared.await_result()
     }
 
-    fn await_result_json(&self) -> serde_json::Value {
-        let (outcome, tuple_json) = self.shared.await_outcome_with_tuple_json();
-        invocation_outcome_json_with_tuple(outcome, tuple_json)
+    fn await_result_json(&self) -> Result<serde_json::Value, InvocationObservationFailure> {
+        let (outcome, tuple_json) = self.shared.await_outcome_with_tuple_json()?;
+        Ok(invocation_outcome_json_with_tuple(outcome, tuple_json))
     }
 
     fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
-        self.cancel.cancel();
-        self.shared.cancel(reason)
+        let reason = reason.unwrap_or_else(|| "user_request".to_string());
+        let outcome = self.shared.request_cancel(reason.clone());
+        if outcome.dispatch_request && self.cancel_requests.send(reason).is_err() {
+            self.shared
+                .mark_cancel_request_failed(InvocationObservationFailure {
+                    abi_code: ERR_DAEMON_DOWN,
+                    message: "cancel request transport is no longer available".to_string(),
+                });
+        }
+        outcome
     }
 
     fn events_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
@@ -2652,9 +3123,9 @@ struct InvocationHandleShared {
 
 #[cfg(feature = "axon-pb")]
 impl InvocationHandleShared {
-    fn new(tuple: crate::daemon::InvocationTuple, tuple_json: serde_json::Value) -> Self {
+    fn new(tuple_json: serde_json::Value) -> Self {
         Self {
-            inner: Mutex::new(InvocationHandleState::submitted(tuple, tuple_json)),
+            inner: Mutex::new(InvocationHandleState::submitted(tuple_json)),
             terminal: Condvar::new(),
         }
     }
@@ -2667,61 +3138,127 @@ impl InvocationHandleShared {
 
     fn await_outcome_with_tuple_json(
         &self,
-    ) -> (crate::daemon::InvocationOutcome, serde_json::Value) {
+    ) -> Result<(crate::daemon::InvocationOutcome, serde_json::Value), InvocationObservationFailure>
+    {
         let mut state = self.lock();
-        while state.terminal_outcome.is_none() {
+        while state.terminal_outcome.is_none() && state.observation_failure.is_none() {
             state = self
                 .terminal
                 .wait(state)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
-        (
+        if let Some(failure) = state.observation_failure.clone() {
+            return Err(failure);
+        }
+        Ok((
             state
                 .terminal_outcome
                 .clone()
                 .expect("terminal outcome is present after wait"),
             state.tuple_json.clone(),
-        )
+        ))
     }
 
     #[cfg(test)]
     fn await_result(&self) -> crate::daemon::InvocationResult {
-        self.await_outcome_with_tuple_json().0.into_result()
+        self.await_outcome_with_tuple_json()
+            .expect("test handle reaches canonical terminal")
+            .0
+            .into_result()
     }
 
-    fn cancel(&self, reason: Option<String>) -> InvocationHandleCancelOutcome {
+    fn request_cancel(&self, reason: String) -> InvocationHandleCancelOutcome {
         let mut state = self.lock();
         if state.phase.is_terminal() {
             return InvocationHandleCancelOutcome {
-                cancelled: false,
+                request_accepted: false,
+                deduplicated: true,
+                dispatch_request: false,
+                cancelled: state.phase == InvocationHandlePhase::Cancelled,
                 state: state.phase,
                 terminal: true,
             };
         }
-        let outcome = invocation_cancelled_outcome(&state.tuple, reason.as_deref());
-        state.push_terminal(
-            InvocationHandlePhase::Cancelled,
-            "cancelled",
-            reason,
-            outcome,
-        );
-        self.terminal.notify_all();
+        let deduplicated = state.phase == InvocationHandlePhase::CancelRequested;
+        let dispatch_request = !state.cancel_request_in_flight;
+        state.cancel_request_in_flight = true;
+        if !deduplicated {
+            state.phase = InvocationHandlePhase::CancelRequested;
+            state.push_event("cancel_requested", Some(reason), None);
+        }
         InvocationHandleCancelOutcome {
-            cancelled: true,
-            state: InvocationHandlePhase::Cancelled,
-            terminal: true,
+            request_accepted: true,
+            deduplicated,
+            dispatch_request,
+            cancelled: false,
+            state: InvocationHandlePhase::CancelRequested,
+            terminal: false,
         }
     }
 
-    fn mark_terminal(&self, outcome: crate::daemon::InvocationOutcome) -> bool {
+    fn observe_canonical_outcome(
+        &self,
+        outcome: crate::daemon::InvocationOutcome,
+    ) -> Result<bool, InvocationObservationFailure> {
+        let phase =
+            proven_terminal_phase(&outcome).map_err(|message| InvocationObservationFailure {
+                abi_code: ERR_PROTOCOL,
+                message,
+            })?;
         let mut state = self.lock();
         if state.phase.is_terminal() {
-            return false;
+            return Ok(false);
         }
-        let phase = terminal_phase_for_result(outcome.result());
         state.push_terminal(phase, phase.event_kind(), None, outcome);
         self.terminal.notify_all();
-        true
+        Ok(true)
+    }
+
+    fn observe_cancel_command_outcome(
+        &self,
+        outcome: crate::daemon::InvocationOutcome,
+    ) -> Result<(), InvocationObservationFailure> {
+        let phase =
+            proven_terminal_phase(&outcome).map_err(|message| InvocationObservationFailure {
+                abi_code: ERR_PROTOCOL,
+                message,
+            })?;
+        if phase != InvocationHandlePhase::Completed || outcome.result().error.is_some() {
+            return Err(InvocationObservationFailure {
+                abi_code: ERR_ABILITY_FAILED,
+                message: format!(
+                    "invocation.cancel command did not complete successfully: state={}",
+                    outcome.result().terminal_state
+                ),
+            });
+        }
+
+        let mut state = self.lock();
+        if !state.phase.is_terminal() {
+            state.cancel_request_in_flight = false;
+            state.push_event("cancel_command_completed", None, None);
+        }
+        Ok(())
+    }
+
+    fn mark_cancel_request_failed(&self, failure: InvocationObservationFailure) {
+        let mut state = self.lock();
+        if state.phase.is_terminal() {
+            return;
+        }
+        state.cancel_request_in_flight = false;
+        state.push_event("cancel_request_failed", Some(failure.message), None);
+    }
+
+    fn mark_observation_failed(&self, failure: InvocationObservationFailure) {
+        let mut state = self.lock();
+        if state.phase.is_terminal() || state.observation_failure.is_some() {
+            return;
+        }
+        state.cancel_request_in_flight = false;
+        state.push_event("observation_failed", Some(failure.message.clone()), None);
+        state.observation_failure = Some(failure);
+        self.terminal.notify_all();
     }
 
     fn snapshot_json(&self, invocation_handle_id: InvocationHandleId) -> serde_json::Value {
@@ -2732,19 +3269,19 @@ impl InvocationHandleShared {
 
 #[cfg(feature = "axon-pb")]
 struct InvocationHandleState {
-    tuple: crate::daemon::InvocationTuple,
     tuple_json: serde_json::Value,
     phase: InvocationHandlePhase,
     next_sequence: u64,
     events: Vec<InvocationHandleEvent>,
     terminal_outcome: Option<crate::daemon::InvocationOutcome>,
+    observation_failure: Option<InvocationObservationFailure>,
+    cancel_request_in_flight: bool,
 }
 
 #[cfg(feature = "axon-pb")]
 impl InvocationHandleState {
-    fn submitted(tuple: crate::daemon::InvocationTuple, tuple_json: serde_json::Value) -> Self {
+    fn submitted(tuple_json: serde_json::Value) -> Self {
         Self {
-            tuple,
             tuple_json,
             phase: InvocationHandlePhase::Submitted,
             next_sequence: 2,
@@ -2757,7 +3294,26 @@ impl InvocationHandleState {
                 outcome: None,
             }],
             terminal_outcome: None,
+            observation_failure: None,
+            cancel_request_in_flight: false,
         }
+    }
+
+    fn push_event(
+        &mut self,
+        kind: &'static str,
+        reason: Option<String>,
+        outcome: Option<crate::daemon::InvocationOutcome>,
+    ) {
+        self.events.push(InvocationHandleEvent {
+            sequence: self.next_sequence,
+            state: self.phase,
+            kind: kind.to_string(),
+            terminal: false,
+            reason,
+            outcome,
+        });
+        self.next_sequence += 1;
     }
 
     fn push_terminal(
@@ -2787,6 +3343,10 @@ impl InvocationHandleState {
             "terminal": self.phase.is_terminal(),
             "events": self.events.iter().map(|event| event.to_json(&self.tuple_json)).collect::<Vec<_>>(),
             "result": self.terminal_outcome.clone().map(|outcome| invocation_outcome_json_with_tuple(outcome, self.tuple_json.clone())),
+            "observation_error": self.observation_failure.as_ref().map(|failure| serde_json::json!({
+                "abi_code": failure.abi_code,
+                "message": failure.message,
+            })),
         })
     }
 }
@@ -2820,6 +3380,7 @@ impl InvocationHandleEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InvocationHandlePhase {
     Submitted,
+    CancelRequested,
     Completed,
     Failed,
     TimedOut,
@@ -2831,6 +3392,7 @@ impl InvocationHandlePhase {
     fn as_str(self) -> &'static str {
         match self {
             Self::Submitted => "Submitted",
+            Self::CancelRequested => "CancelRequested",
             Self::Completed => "Completed",
             Self::Failed => "Failed",
             Self::TimedOut => "TimedOut",
@@ -2841,6 +3403,7 @@ impl InvocationHandlePhase {
     fn event_kind(self) -> &'static str {
         match self {
             Self::Submitted => "submitted",
+            Self::CancelRequested => "cancel_requested",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::TimedOut => "timed_out",
@@ -2849,40 +3412,33 @@ impl InvocationHandlePhase {
     }
 
     fn is_terminal(self) -> bool {
-        !matches!(self, Self::Submitted)
-    }
-
-    fn to_axon_wire_state_string(self) -> String {
-        match self {
-            Self::Submitted => {
-                axon_state_wire_string(easynet_axon::invocation::InvocationState::Running)
-            }
-            Self::Completed => {
-                axon_state_wire_string(easynet_axon::invocation::InvocationState::Completed)
-            }
-            Self::Failed => {
-                axon_state_wire_string(easynet_axon::invocation::InvocationState::Failed)
-            }
-            Self::TimedOut => {
-                axon_state_wire_string(easynet_axon::invocation::InvocationState::TimedOut)
-            }
-            Self::Cancelled => {
-                axon_state_wire_string(easynet_axon::invocation::InvocationState::Cancelled)
-            }
-        }
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled
+        )
     }
 }
 
 #[cfg(feature = "axon-pb")]
 struct InvocationHandleCancelOutcome {
+    request_accepted: bool,
+    deduplicated: bool,
+    dispatch_request: bool,
     cancelled: bool,
     state: InvocationHandlePhase,
     terminal: bool,
 }
 
 #[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+struct InvocationObservationFailure {
+    abi_code: i32,
+    message: String,
+}
+
+#[cfg(feature = "axon-pb")]
 struct ActiveInvocationBidi {
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     ability: String,
     up_tx: tokio::sync::mpsc::Sender<easynet_axon::pb::axon::v1::InvokeBidiUp>,
     cancel: tokio_util::sync::CancellationToken,
@@ -2892,7 +3448,7 @@ struct ActiveInvocationBidi {
 #[cfg(feature = "axon-pb")]
 impl ActiveInvocationBidi {
     fn new(
-        owner: EasynetHandle,
+        owner: ClientSessionBinding,
         ability: String,
         up_tx: tokio::sync::mpsc::Sender<easynet_axon::pb::axon::v1::InvokeBidiUp>,
         cancel: tokio_util::sync::CancellationToken,
@@ -3007,7 +3563,6 @@ struct BuilderRegistry {
 
 #[cfg(feature = "axon-pb")]
 struct InvocationHandleRegistry {
-    next: AtomicU64,
     entries: Mutex<std::collections::HashMap<InvocationHandleId, Arc<ActiveInvocationHandle>>>,
 }
 
@@ -3055,7 +3610,6 @@ fn builder_registry() -> &'static BuilderRegistry {
 fn invocation_handle_registry() -> &'static InvocationHandleRegistry {
     static REGISTRY: OnceLock<InvocationHandleRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| InvocationHandleRegistry {
-        next: AtomicU64::new(1),
         entries: Mutex::new(std::collections::HashMap::new()),
     })
 }
@@ -3169,9 +3723,28 @@ fn insert_builder(builder: InvocationBuilderState) -> InvocationBuilderId {
 #[cfg(feature = "axon-pb")]
 fn insert_invocation_handle(handle: ActiveInvocationHandle) -> InvocationHandleId {
     let registry = invocation_handle_registry();
-    let invocation_handle_id = registry.next.fetch_add(1, Ordering::Relaxed);
-    lock_invocation_handle_entries(registry).insert(invocation_handle_id, Arc::new(handle));
+    let mut entries = lock_invocation_handle_entries(registry);
+    let invocation_handle_id = mint_invocation_handle_token(&entries);
+    entries.insert(invocation_handle_id, Arc::new(handle));
     invocation_handle_id
+}
+
+#[cfg(feature = "axon-pb")]
+fn mint_invocation_handle_token(
+    entries: &std::collections::HashMap<InvocationHandleId, Arc<ActiveInvocationHandle>>,
+) -> InvocationHandleId {
+    const JSON_SAFE_TOKEN_MASK: u64 = (1_u64 << 53) - 1;
+    const JSON_SAFE_TOKEN_FLOOR: u64 = 1_u64 << 52;
+    loop {
+        // Preserve the existing uint64 C ABI while making the value an opaque
+        // provider control token instead of a predictable registry sequence.
+        // Keep it within JavaScript's exact integer range because this token is
+        // also projected through the public JSON snapshot as `handle_id`.
+        let candidate = (OsRng.next_u64() & JSON_SAFE_TOKEN_MASK) | JSON_SAFE_TOKEN_FLOOR;
+        if !entries.contains_key(&candidate) {
+            return candidate;
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3202,7 +3775,7 @@ fn get_builder(builder_id: InvocationBuilderId) -> Option<InvocationBuilderState
 
 #[cfg(feature = "axon-pb")]
 fn get_invocation_handle_for_owner(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     invocation_handle_id: InvocationHandleId,
 ) -> Result<Option<Arc<ActiveInvocationHandle>>, RegistryOwnerMismatch> {
     if invocation_handle_id == 0 {
@@ -3282,7 +3855,7 @@ fn remove_builder(builder_id: InvocationBuilderId) -> Option<InvocationBuilderSt
 
 #[cfg(feature = "axon-pb")]
 fn remove_invocation_handle_for_owner(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     invocation_handle_id: InvocationHandleId,
 ) -> Result<Option<Arc<ActiveInvocationHandle>>, RegistryOwnerMismatch> {
     if invocation_handle_id == 0 {
@@ -3309,7 +3882,7 @@ fn remove_stream(stream_id: InvocationStreamId) -> Option<ActiveInvocationStream
 
 #[cfg(feature = "axon-pb")]
 fn remove_stream_for_handle(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     stream_id: InvocationStreamId,
 ) -> Result<Option<ActiveInvocationStream>, RegistryOwnerMismatch> {
     if stream_id == 0 {
@@ -3328,10 +3901,14 @@ fn remove_stream_for_handle(
 
 #[cfg(feature = "axon-pb")]
 pub(crate) fn cancel_invocations_for_handle(owner: EasynetHandle) {
-    if owner == 0 {
+    let Some(owner) = binding_for_handle(owner) else {
         return;
-    }
+    };
+    cancel_invocations_for_binding(owner);
+}
 
+#[cfg(feature = "axon-pb")]
+pub(crate) fn cancel_invocations_for_binding(owner: ClientSessionBinding) {
     let handles = {
         let registry = invocation_handle_registry();
         let mut entries = lock_invocation_handle_entries(registry);
@@ -3384,9 +3961,15 @@ pub(crate) fn cancel_invocations_for_handle(owner: EasynetHandle) {
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn cancel_invocations_for_handle(_owner: EasynetHandle) {}
 
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn cancel_invocations_for_binding(
+    _owner: crate::ffi::client::handle::ClientSessionBinding,
+) {
+}
+
 #[cfg(feature = "axon-pb")]
 fn get_bidi_for_handle(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     bidi_id: InvocationBidiId,
 ) -> Result<Option<Arc<ActiveInvocationBidi>>, RegistryOwnerMismatch> {
     if bidi_id == 0 {
@@ -3412,7 +3995,7 @@ fn remove_bidi(bidi_id: InvocationBidiId) -> Option<Arc<ActiveInvocationBidi>> {
 
 #[cfg(feature = "axon-pb")]
 fn remove_bidi_for_handle(
-    owner: EasynetHandle,
+    owner: ClientSessionBinding,
     bidi_id: InvocationBidiId,
 ) -> Result<Option<Arc<ActiveInvocationBidi>>, RegistryOwnerMismatch> {
     if bidi_id == 0 {
@@ -3431,7 +4014,13 @@ fn remove_bidi_for_handle(
 
 #[cfg(feature = "axon-pb")]
 fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
-    let code = match &err {
+    let code = ffi_code_for_daemon_error(&err);
+    record_invocation_error(code, format!("{context}: {err}"))
+}
+
+#[cfg(feature = "axon-pb")]
+fn ffi_code_for_daemon_error(err: &crate::daemon::DaemonError) -> i32 {
+    match err {
         crate::daemon::DaemonError::InvocationEndpointDown { .. }
         | crate::daemon::DaemonError::InvocationEndpointMissing { .. }
         | crate::daemon::DaemonError::Connect { .. } => ERR_DAEMON_DOWN,
@@ -3443,8 +4032,7 @@ fn ffi_daemon_error(context: &str, err: crate::daemon::DaemonError) -> i32 {
         crate::daemon::DaemonError::InvalidInvocation(_) => ERR_INVALID_ARG,
         crate::daemon::DaemonError::InvokeBidiClosed { .. } => ERR_CANCELLED,
         _ => ERR_GENERIC,
-    };
-    record_invocation_error(code, format!("{context}: {err}"))
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -3519,15 +4107,29 @@ async fn run_stream_reader(
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
     let mut next_error_sequence = 1;
+    let mut receipt_verifier = InboundReceiptCheckpointVerifier::new();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
             message = stream.message() => match message {
                 Ok(Some(chunk)) => {
-                    let terminal = chunk.terminal;
                     let sequence = chunk.sequence;
                     next_error_sequence = sequence.saturating_add(1).max(1);
-                    let bytes = stream_chunk_json(chunk).to_string().into_bytes();
+                    let projection = match stream_chunk_json(&mut receipt_verifier, chunk) {
+                        Ok(projection) => projection,
+                        Err(message) => {
+                            let _ = tx.send(serde_json::json!({
+                                "ok": false,
+                                "event": "receipt_verification_error",
+                                "sequence": sequence,
+                                "message": message,
+                                "terminal": false,
+                            }).to_string().into_bytes()).await;
+                            break;
+                        }
+                    };
+                    let terminal = projection["terminal"].as_bool().unwrap_or(false);
+                    let bytes = projection.to_string().into_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
                         bytes,
@@ -3558,15 +4160,29 @@ async fn run_bidi_down_reader(
     tx: tokio::sync::mpsc::Sender<Vec<u8>>,
 ) {
     let mut next_error_sequence = 1;
+    let mut receipt_verifier = InboundReceiptCheckpointVerifier::new();
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
             message = down.message() => match message {
                 Ok(Some(frame)) => {
-                    let terminal = bidi_down_frame_is_terminal(&frame);
                     let sequence = frame.sequence;
                     next_error_sequence = sequence.saturating_add(1).max(1);
-                    let bytes = bidi_down_frame_json(frame).to_string().into_bytes();
+                    let projection = match bidi_down_frame_json(&mut receipt_verifier, frame) {
+                        Ok(projection) => projection,
+                        Err(message) => {
+                            let _ = tx.send(serde_json::json!({
+                                "ok": false,
+                                "event": "receipt_verification_error",
+                                "sequence": sequence,
+                                "message": message,
+                                "terminal": false,
+                            }).to_string().into_bytes()).await;
+                            break;
+                        }
+                    };
+                    let terminal = projection["terminal"].as_bool().unwrap_or(false);
+                    let bytes = projection.to_string().into_bytes();
                     let sent = send_callback_frame_or_backpressure(
                         &tx,
                         bytes,
@@ -3953,7 +4569,7 @@ fn non_empty_builder_string(raw: &str, field: &'static str) -> Result<String, In
 }
 
 #[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct PrepareOptionsJson {
     expires_in_ms: Option<u64>,
     signer_id: Option<String>,
@@ -4011,19 +4627,6 @@ impl PrepareOptionsJson {
             signer_id: self.signer_id,
             policy_ref: self.policy_ref,
             local_daemon_signing: self.local_daemon_signing,
-        }
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl Default for PrepareOptionsJson {
-    fn default() -> Self {
-        Self {
-            expires_in_ms: None,
-            signer_id: None,
-            policy_ref: None,
-            local_daemon_signing: false,
-            material_only: false,
         }
     }
 }
@@ -4634,10 +5237,18 @@ fn causal_context_json(context: &easynet_axon::pb::axon::v1::CausalContext) -> s
 }
 
 #[cfg(feature = "axon-pb")]
-fn prepared_invocation_json(prepared: &crate::daemon::PreparedInvocation) -> serde_json::Value {
+fn nonzero_id(id: u64) -> Option<u64> {
+    (id != 0).then_some(id)
+}
+
+#[cfg(feature = "axon-pb")]
+fn prepared_invocation_json(
+    prepared: &crate::daemon::PreparedInvocation,
+    prepared_id: Option<PreparedInvocationId>,
+) -> serde_json::Value {
     let material = prepared.signing_material();
     let policy = material.signer_policy();
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "request_id": prepared.request_id(),
         "descriptor_ref": prepared.descriptor_ref(),
         "descriptor_hash_hex": prepared.descriptor_hash_hex(),
@@ -4660,7 +5271,11 @@ fn prepared_invocation_json(prepared: &crate::daemon::PreparedInvocation) -> ser
                 "expires_at_unix_ms": policy.expires_at_unix_ms,
             }
         }
-    })
+    });
+    if let Some(prepared_id) = prepared_id {
+        value["prepared_id"] = serde_json::json!(prepared_id.to_string());
+    }
+    value
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4713,7 +5328,6 @@ fn invocation_outcome_json_with_tuple(
         "selected_node_id": result.selected_node_id,
         "scheduling_reason": result.scheduling_reason,
         "elapsed_ms": result.elapsed_ms,
-        "receipt": terminal_receipt.clone().map(receipt_summary_dto_json),
         "admission_receipt": stages.admission.map(receipt_summary_dto_json),
         "terminal_receipt": terminal_receipt.map(receipt_summary_dto_json),
         "error": result.error.map(runtime_error_json),
@@ -4721,185 +5335,67 @@ fn invocation_outcome_json_with_tuple(
 }
 
 #[cfg(feature = "axon-pb")]
-fn invocation_cancelled_outcome(
-    tuple: &crate::daemon::InvocationTuple,
-    reason: Option<&str>,
-) -> crate::daemon::InvocationOutcome {
-    crate::daemon::InvocationOutcome::without_receipts(crate::daemon::InvocationResult {
-        tuple: tuple.clone(),
-        terminal_state: axon_state_wire_string(
-            easynet_axon::invocation::InvocationState::Cancelled,
-        ),
-        output_content_type: "application/json".to_string(),
-        output: b"{}".to_vec(),
-        selected_node_id: String::new(),
-        scheduling_reason: "ffi_invocation_handle_cancel".to_string(),
-        elapsed_ms: 0,
-        receipt: None,
-        error: Some(crate::daemon::RuntimeErrorSummary {
-            code: "CANCELLED".to_string(),
-            stage: "client".to_string(),
-            message: reason.unwrap_or("invocation handle cancelled").to_string(),
-            retryable: false,
-        }),
-    })
-}
-
-#[cfg(feature = "axon-pb")]
-fn invocation_failed_outcome(
-    tuple: &crate::daemon::InvocationTuple,
-    err: crate::daemon::DaemonError,
-) -> crate::daemon::InvocationOutcome {
-    let phase = daemon_error_terminal_phase(&err);
-    crate::daemon::InvocationOutcome::without_receipts(crate::daemon::InvocationResult {
-        tuple: tuple.clone(),
-        terminal_state: phase.to_axon_wire_state_string(),
-        output_content_type: "application/json".to_string(),
-        output: b"{}".to_vec(),
-        selected_node_id: String::new(),
-        scheduling_reason: "ffi_invocation_handle_terminal_error".to_string(),
-        elapsed_ms: 0,
-        receipt: None,
-        error: Some(runtime_error_summary_for_daemon_error(&err)),
-    })
-}
-
-#[cfg(feature = "axon-pb")]
-fn runtime_error_summary_for_daemon_error(
+fn invocation_observation_failure(
     err: &crate::daemon::DaemonError,
-) -> crate::daemon::RuntimeErrorSummary {
-    let (code, stage, retryable) = match err {
-        crate::daemon::DaemonError::InvocationEndpointDown { .. }
-        | crate::daemon::DaemonError::InvocationEndpointMissing { .. }
-        | crate::daemon::DaemonError::Connect { .. } => ("DAEMON_OFFLINE", "transport", true),
-        crate::daemon::DaemonError::InvokeStatus { code, .. }
-        | crate::daemon::DaemonError::InvokeStreamStatus { code, .. }
-        | crate::daemon::DaemonError::InvokeBidiStatus { code, .. } => (
-            tonic_code_to_runtime_error_code(*code),
-            "runtime",
-            tonic_code_retryable(*code),
-        ),
-        crate::daemon::DaemonError::InvalidInvocation(_) => ("INVALID_INVOCATION", "sdk", false),
-        crate::daemon::DaemonError::InvokeBidiClosed { .. } => ("CANCELLED", "runtime", false),
-        _ => ("RUNTIME_ERROR", "runtime", false),
-    };
-    crate::daemon::RuntimeErrorSummary {
-        code: code.to_string(),
-        stage: stage.to_string(),
+) -> InvocationObservationFailure {
+    InvocationObservationFailure {
+        abi_code: ffi_code_for_daemon_error(err),
         message: err.to_string(),
-        retryable,
     }
 }
 
 #[cfg(feature = "axon-pb")]
-fn daemon_error_terminal_phase(err: &crate::daemon::DaemonError) -> InvocationHandlePhase {
-    match err {
-        crate::daemon::DaemonError::InvokeStatus { code, .. }
-        | crate::daemon::DaemonError::InvokeStreamStatus { code, .. }
-        | crate::daemon::DaemonError::InvokeBidiStatus { code, .. } => match code {
-            tonic::Code::DeadlineExceeded => InvocationHandlePhase::TimedOut,
-            tonic::Code::Cancelled => InvocationHandlePhase::Cancelled,
-            _ => InvocationHandlePhase::Failed,
-        },
-        crate::daemon::DaemonError::InvokeBidiClosed { .. } => InvocationHandlePhase::Cancelled,
-        _ => InvocationHandlePhase::Failed,
+fn proven_terminal_phase(
+    outcome: &crate::daemon::InvocationOutcome,
+) -> Result<InvocationHandlePhase, String> {
+    let result_phase =
+        explicit_terminal_phase(&outcome.result().terminal_state).ok_or_else(|| {
+            format!(
+                "runtime returned non-terminal state `{}` for handle await",
+                outcome.result().terminal_state
+            )
+        })?;
+    let receipt = outcome.stages().terminal().ok_or_else(|| {
+        format!(
+            "runtime returned `{}` without a canonical terminal receipt",
+            outcome.result().terminal_state
+        )
+    })?;
+    let receipt_phase = explicit_terminal_phase(&receipt.state).ok_or_else(|| {
+        format!(
+            "runtime terminal receipt has non-terminal state `{}`",
+            receipt.state
+        )
+    })?;
+    if result_phase != receipt_phase {
+        return Err(format!(
+            "runtime result state `{}` disagrees with terminal receipt state `{}`",
+            outcome.result().terminal_state,
+            receipt.state
+        ));
     }
+    Ok(result_phase)
 }
 
 #[cfg(feature = "axon-pb")]
-fn terminal_phase_for_result(result: &crate::daemon::InvocationResult) -> InvocationHandlePhase {
-    if result.terminal_state
-        == axon_state_wire_string(easynet_axon::invocation::InvocationState::TimedOut)
-        || result.terminal_state.eq_ignore_ascii_case("TimedOut")
-        || result.terminal_state.eq_ignore_ascii_case("TIMED_OUT")
-    {
-        return InvocationHandlePhase::TimedOut;
-    }
-    if result.terminal_state
-        == axon_state_wire_string(easynet_axon::invocation::InvocationState::Cancelled)
-        || result.terminal_state.eq_ignore_ascii_case("Cancelled")
-        || result.terminal_state.eq_ignore_ascii_case("CANCELLED")
-    {
-        return InvocationHandlePhase::Cancelled;
-    }
-    if result.error.is_none()
-        && (result.terminal_state
-            == axon_state_wire_string(easynet_axon::invocation::InvocationState::Completed)
-            || result.terminal_state.eq_ignore_ascii_case("Completed")
-            || result.terminal_state.eq_ignore_ascii_case("COMPLETED"))
-    {
-        return InvocationHandlePhase::Completed;
-    }
-    if result.error.is_none() {
-        InvocationHandlePhase::Completed
+fn explicit_terminal_phase(state: &str) -> Option<InvocationHandlePhase> {
+    if state.eq_ignore_ascii_case("Completed") {
+        Some(InvocationHandlePhase::Completed)
+    } else if state.eq_ignore_ascii_case("Failed") {
+        Some(InvocationHandlePhase::Failed)
+    } else if state.eq_ignore_ascii_case("TimedOut") || state.eq_ignore_ascii_case("TIMED_OUT") {
+        Some(InvocationHandlePhase::TimedOut)
+    } else if state.eq_ignore_ascii_case("Cancelled") {
+        Some(InvocationHandlePhase::Cancelled)
     } else {
-        InvocationHandlePhase::Failed
+        None
     }
-}
-
-#[cfg(feature = "axon-pb")]
-fn axon_state_wire_string(state: easynet_axon::invocation::InvocationState) -> String {
-    axon_state_name_from_i32(state.to_wire_i32())
-}
-
-#[cfg(feature = "axon-pb")]
-fn axon_state_name_from_i32(state: i32) -> String {
-    if state == easynet_axon::invocation::InvocationState::Accepted.to_wire_i32() {
-        "Accepted".to_string()
-    } else if state == easynet_axon::invocation::InvocationState::Admitted.to_wire_i32() {
-        "Admitted".to_string()
-    } else if state == easynet_axon::invocation::InvocationState::Dispatched.to_wire_i32() {
-        "Dispatched".to_string()
-    } else if state == easynet_axon::invocation::InvocationState::Running.to_wire_i32() {
-        "Running".to_string()
-    } else if state == easynet_axon::invocation::InvocationState::Completed.to_wire_i32() {
-        "Completed".to_string()
-    } else if state == easynet_axon::invocation::InvocationState::Failed.to_wire_i32() {
-        "Failed".to_string()
-    } else if state == easynet_axon::invocation::InvocationState::TimedOut.to_wire_i32() {
-        "TimedOut".to_string()
-    } else if state == easynet_axon::invocation::InvocationState::Cancelled.to_wire_i32() {
-        "Cancelled".to_string()
-    } else {
-        state.to_string()
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn tonic_code_to_runtime_error_code(code: tonic::Code) -> &'static str {
-    match code {
-        tonic::Code::Ok => "OK",
-        tonic::Code::Cancelled => "CANCELLED",
-        tonic::Code::InvalidArgument | tonic::Code::OutOfRange => "INVALID_INVOCATION",
-        tonic::Code::DeadlineExceeded => "TIMEOUT",
-        tonic::Code::NotFound => "ABILITY_NOT_FOUND",
-        tonic::Code::AlreadyExists
-        | tonic::Code::FailedPrecondition
-        | tonic::Code::Aborted
-        | tonic::Code::ResourceExhausted => "ADMISSION_DENIED",
-        tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => "PERMISSION_DENIED",
-        tonic::Code::Unimplemented
-        | tonic::Code::Unknown
-        | tonic::Code::Internal
-        | tonic::Code::DataLoss => "PROTOCOL_MISMATCH",
-        tonic::Code::Unavailable => "DAEMON_OFFLINE",
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn tonic_code_retryable(code: tonic::Code) -> bool {
-    matches!(
-        code,
-        tonic::Code::Cancelled
-            | tonic::Code::DeadlineExceeded
-            | tonic::Code::ResourceExhausted
-            | tonic::Code::Unavailable
-    )
 }
 
 #[cfg(feature = "axon-pb")]
 fn receipt_summary_dto_json(receipt: crate::daemon::ReceiptSummary) -> serde_json::Value {
     serde_json::json!({
+        "verification": receipt.verification,
         "index": receipt.index,
         "invocation_id": receipt.invocation_id,
         "receipt_type": receipt.receipt_type,
@@ -4911,6 +5407,30 @@ fn receipt_summary_dto_json(receipt: crate::daemon::ReceiptSummary) -> serde_jso
         "cleanup_complete": receipt.cleanup_complete,
         "reason": receipt.reason,
         "child_invocation_id": receipt.child_invocation_id,
+        "payload_base64": receipt.payload_base64,
+        "caller_binding": receipt.caller_binding,
+        "callee_binding": receipt.callee_binding,
+        "subject_binding": receipt.subject_binding,
+        "invocation_nonce_base64": receipt.invocation_nonce_base64,
+        "causal_binding_kind": receipt.causal_binding_kind,
+        "causal_binding": receipt.causal_binding,
+        "callee_signature": receipt.callee_signature,
+        "signer_binding": receipt.signer_binding,
+        "host_attestation_base64": receipt.host_attestation_base64,
+        "authority_binding_kind": receipt.authority_binding_kind,
+        "authority_binding": receipt.authority_binding,
+        "ability_binding": receipt.ability_binding,
+        "failure": receipt.failure,
+        "usage": receipt.usage,
+        "subject_ref": receipt.subject_ref,
+        "descriptor_version": receipt.descriptor_version,
+        "schema_hash_hex": receipt.schema_hash_hex,
+        "impl_hash_hex": receipt.impl_hash_hex,
+        "runtime_env": receipt.runtime_env,
+        "authority_proof": receipt.authority_proof,
+        "input_hash_hex": receipt.input_hash_hex,
+        "output_hash_hex": receipt.output_hash_hex,
+        "parent_receipts": receipt.parent_receipts,
     })
 }
 
@@ -4925,7 +5445,10 @@ fn runtime_error_json(error: crate::daemon::RuntimeErrorSummary) -> serde_json::
 }
 
 #[cfg(feature = "axon-pb")]
-fn stream_chunk_json(chunk: easynet_axon::pb::axon::v1::InvokeStreamChunk) -> serde_json::Value {
+fn stream_chunk_json(
+    verifier: &mut InboundReceiptCheckpointVerifier,
+    chunk: easynet_axon::pb::axon::v1::InvokeStreamChunk,
+) -> Result<serde_json::Value, String> {
     use base64::Engine;
     let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.payload);
     let payload_json = if chunk.content_type == "application/json" {
@@ -4933,7 +5456,16 @@ fn stream_chunk_json(chunk: easynet_axon::pb::axon::v1::InvokeStreamChunk) -> se
     } else {
         None
     };
-    serde_json::json!({
+    let admission_receipt = chunk
+        .admission_receipt
+        .map(|receipt| verifier.verify_admission(receipt))
+        .transpose()?;
+    let terminal_receipt = chunk
+        .terminal_receipt
+        .map(|receipt| verifier.verify_terminal(receipt))
+        .transpose()?;
+    let proven_terminal = terminal_receipt.is_some();
+    Ok(serde_json::json!({
         "ok": chunk.error.is_none(),
         "event": "chunk",
         "invocation_id": chunk.invocation_id,
@@ -4941,13 +5473,16 @@ fn stream_chunk_json(chunk: easynet_axon::pb::axon::v1::InvokeStreamChunk) -> se
         "scheduling_reason": chunk.scheduling_reason,
         "state": chunk.state,
         "sequence": chunk.sequence,
-        "terminal": chunk.terminal,
+        "terminal": proven_terminal,
         "elapsed_ms": chunk.elapsed_ms,
         "content_type": chunk.content_type,
         "payload_base64": payload_base64,
         "payload_json": payload_json,
+        "admission_receipt": admission_receipt,
+        "terminal_receipt": terminal_receipt,
+        "proof_error": chunk.proof_error.as_ref().map(protocol_error_json),
         "error": chunk.error.as_ref().map(protocol_error_json),
-    })
+    }))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -4958,27 +5493,44 @@ fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json:
         "sequence": sequence.max(1),
         "code": format!("{:?}", status.code()),
         "message": status.message(),
-        "terminal": true,
+        "terminal": false,
+        "transport_terminal": true,
     })
 }
 
 #[cfg(feature = "axon-pb")]
-fn bidi_down_frame_json(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> serde_json::Value {
+fn bidi_down_frame_json(
+    verifier: &mut InboundReceiptCheckpointVerifier,
+    frame: easynet_axon::pb::axon::v1::InvokeBidiDown,
+) -> Result<serde_json::Value, String> {
     use base64::Engine;
     use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
     let mac_base64 = base64::engine::general_purpose::STANDARD.encode(&frame.mac);
     match frame.payload {
-        Some(Payload::Receipt(receipt)) => serde_json::json!({
-            "ok": true,
-            "event": "receipt",
-            "sequence": frame.sequence,
-            "mac_base64": mac_base64,
-            "receipt": receipt_summary_json(&receipt),
-            "terminal": receipt.cleanup_complete,
-        }),
+        Some(Payload::Receipt(receipt)) => {
+            let state = easynet_axon::invocation::InvocationState::try_from(receipt.state)
+                .map_err(|error| format!("bidi receipt state is invalid: {error}"))?;
+            let (summary, is_admission, is_terminal) =
+                if state == easynet_axon::invocation::InvocationState::Admitted {
+                    (verifier.verify_admission(receipt)?, true, false)
+                } else if state.is_terminal() {
+                    (verifier.verify_terminal(receipt)?, false, true)
+                } else {
+                    return Err("bidi receipt is neither admission nor terminal checkpoint".into());
+                };
+            Ok(serde_json::json!({
+                "ok": true,
+                "event": "receipt",
+                "sequence": frame.sequence,
+                "mac_base64": mac_base64,
+                "admission_receipt": is_admission.then(|| summary.clone()),
+                "terminal_receipt": is_terminal.then(|| summary.clone()),
+                "terminal": is_terminal,
+            }))
+        }
         Some(Payload::BinaryChunk(chunk)) => {
             let data_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.data);
-            serde_json::json!({
+            Ok(serde_json::json!({
                 "ok": true,
                 "event": "binary_chunk",
                 "sequence": frame.sequence,
@@ -4987,10 +5539,10 @@ fn bidi_down_frame_json(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> se
                 "data_base64": data_base64,
                 "pts": chunk.pts,
                 "terminal": false,
-            })
+            }))
         }
         Some(Payload::Control(control)) => {
-            serde_json::json!({
+            Ok(serde_json::json!({
                 "ok": true,
                 "event": "control",
                 "sequence": frame.sequence,
@@ -5001,38 +5553,29 @@ fn bidi_down_frame_json(frame: easynet_axon::pb::axon::v1::InvokeBidiDown) -> se
                 // carried by the cleanup-complete receipt so SDK consumers can
                 // keep draining until the authoritative outcome arrives.
                 "terminal": false,
-            })
+            }))
         }
         // Carrier-v1 frames (DEC-F004): the FFI JSON projection learns
         // these shapes when dual-read lands (T2.1 steps 2-3); until
         // then they surface as an explicit unsupported event.
         Some(Payload::DispatchCall(_)) | Some(Payload::ReverseDispatchResult(_)) => {
-            serde_json::json!({
+            Ok(serde_json::json!({
                 "ok": false,
                 "event": "unsupported_frame",
                 "sequence": frame.sequence,
                 "mac_base64": mac_base64,
                 "message": "carrier-v1 dispatch frame before dual-read support",
                 "terminal": false,
-            })
+            }))
         }
-        None => serde_json::json!({
+        None => Ok(serde_json::json!({
             "ok": false,
             "event": "unknown",
             "sequence": frame.sequence,
             "mac_base64": mac_base64,
             "message": "InvokeBidiDown frame has no payload",
             "terminal": false,
-        }),
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn bidi_down_frame_is_terminal(frame: &easynet_axon::pb::axon::v1::InvokeBidiDown) -> bool {
-    use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
-    match frame.payload.as_ref() {
-        Some(Payload::Receipt(receipt)) => receipt.cleanup_complete,
-        _ => false,
+        })),
     }
 }
 
@@ -5066,6 +5609,13 @@ fn bidi_control_json(control: easynet_axon::pb::axon::v1::BidiControl) -> serde_
             "type": "eof",
             "eof": value,
         }),
+        Some(Control::SessionEstablished(session)) => serde_json::json!({
+            "type": "session_established",
+            "contract_version": session.contract_version,
+            "dispatch_encoding": session.dispatch_encoding,
+            "session_id": session.session_id.to_string(),
+            "displaced_prior": session.displaced_prior,
+        }),
         None => serde_json::json!({
             "type": "empty",
         }),
@@ -5073,25 +5623,63 @@ fn bidi_control_json(control: easynet_axon::pb::axon::v1::BidiControl) -> serde_
 }
 
 #[cfg(feature = "axon-pb")]
-fn receipt_summary_json(
-    receipt: &easynet_axon::pb::axon::v1::InvocationReceipt,
-) -> serde_json::Value {
-    use base64::Engine;
-    let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&receipt.payload);
-    serde_json::json!({
-        "index": receipt.index,
-        "invocation_id": receipt.invocation_id,
-        "receipt_type": receipt.receipt_type,
-        "state": axon_state_name_from_i32(receipt.state),
-        "timestamp_unix_ms": receipt.timestamp_unix_ms,
-        "prev_receipt_hash_hex": hex::encode(&receipt.prev_receipt_hash),
-        "self_hash_hex": hex::encode(&receipt.self_hash),
-        "payload_content_type": receipt.payload_content_type,
-        "payload_base64": payload_base64,
-        "cleanup_complete": receipt.cleanup_complete,
-        "reason": receipt.reason,
-        "child_invocation_id": receipt.child_invocation_id,
-    })
+struct InboundReceiptCheckpointVerifier {
+    resolver: crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver,
+    admission: Option<easynet_axon::invocation::SignedInvocationReceipt>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl InboundReceiptCheckpointVerifier {
+    fn new() -> Self {
+        Self {
+            resolver:
+                crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+            admission: None,
+        }
+    }
+
+    fn verify_admission(
+        &mut self,
+        receipt: easynet_axon::pb::axon::v1::InvocationReceipt,
+    ) -> Result<serde_json::Value, String> {
+        let signed =
+            crate::daemon::invocation::receipts::finalization_projection::verify_admission_checkpoint(
+                receipt,
+                &self.resolver,
+            )
+            .map_err(|error| error.to_string())?;
+        let summary = crate::daemon::ReceiptSummary::from_signed(&signed)
+            .map(receipt_summary_dto_json)
+            .map_err(|error| error.to_string())?;
+        self.admission = Some(signed);
+        Ok(summary)
+    }
+
+    fn verify_terminal(
+        &mut self,
+        receipt: easynet_axon::pb::axon::v1::InvocationReceipt,
+    ) -> Result<serde_json::Value, String> {
+        let terminal =
+            crate::daemon::invocation::receipts::finalization_projection::verify_terminal_checkpoint(
+                receipt,
+                &self.resolver,
+            )
+            .map_err(|error| error.to_string())?;
+        let admission = self.admission.as_ref().ok_or_else(|| {
+            crate::daemon::invocation::receipts::finalization_projection::FinalizationProjectionError::TerminalBeforeAdmission
+                .to_string()
+        })?;
+        let verified =
+            crate::daemon::invocation::receipts::finalization_projection::verify_signed_finalization_checkpoints(
+                admission,
+                &terminal,
+                &self.resolver,
+            )
+            .map_err(|error| error.to_string())?;
+        crate::daemon::ReceiptSummary::from_signed(verified.terminal())
+            .map(receipt_summary_dto_json)
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5113,11 +5701,19 @@ mod tests {
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
 
+    fn registry_owner(handle: EasynetHandle, incarnation: u64) -> ClientSessionBinding {
+        ClientSessionBinding {
+            handle,
+            incarnation,
+        }
+    }
+
     fn descriptor_ref(owner_ura: &str, public_name: &str, version: &str) -> String {
         format!(
-            "{}@{}",
+            "{}@{}#{}!invoke",
             crate::core::ura::owner_ability_ura(owner_ura, public_name).unwrap(),
-            version
+            version,
+            "aa".repeat(32)
         )
     }
 
@@ -5223,7 +5819,7 @@ mod tests {
             r#"{
                 "caller_ura": "easynet:///r/acme/device/dev-a",
                 "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "args": {}
@@ -5313,27 +5909,13 @@ mod tests {
         tuple
     }
 
-    fn completed_result_for_tuple(
-        tuple: crate::daemon::InvocationTuple,
-    ) -> crate::daemon::InvocationResult {
-        crate::daemon::InvocationResult {
-            tuple,
-            terminal_state: axon_state_wire_string(
-                easynet_axon::invocation::InvocationState::Completed,
-            ),
-            output_content_type: "application/json".to_string(),
-            output: br#"{"ok":true}"#.to_vec(),
-            selected_node_id: "local".to_string(),
-            scheduling_reason: "test".to_string(),
-            elapsed_ms: 1,
-            receipt: None,
-            error: None,
-        }
-    }
-
     #[test]
     fn unary_result_projects_terminal_receipt_without_losing_admission_checkpoint() {
-        use easynet_axon::pb::axon::v1::{InvocationReceipt, InvokeResponse};
+        use easynet_axon::pb::axon::v1::{
+            authority_binding, causal_context, AgentIdentity, AuthorityBinding, CalleeSignature,
+            CausalContext, Empty, EntityRef, InvocationAuthorityProof, InvocationReceipt,
+            InvokeResponse, ReceiptRef, SelfAuthority, SubjectIdentity,
+        };
 
         let admission = InvocationReceipt {
             index: 0,
@@ -5346,6 +5928,61 @@ mod tests {
             invocation_id: "inv-receipt-stage".to_string(),
             receipt_type: "completed".to_string(),
             cleanup_complete: true,
+            payload: br#"{"ok":true}"#.to_vec(),
+            caller_binding: Some(AgentIdentity {
+                ura: "easynet:///r/acme/device/caller".to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            callee_binding: Some(AgentIdentity {
+                ura: "easynet:///r/acme/device/callee".to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            subject_binding: Some(SubjectIdentity {
+                ura: "easynet:///r/acme/device/subject".to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            invocation_nonce: vec![1, 2, 3],
+            causal_binding: Some(CausalContext {
+                form: Some(causal_context::Form::None(Empty {})),
+            }),
+            authority_binding: Some(AuthorityBinding {
+                authority: Some(authority_binding::Authority::SelfAuthority(SelfAuthority {
+                    principal_ura: "easynet:///r/acme/device/caller".to_string(),
+                })),
+            }),
+            callee_signature: Some(CalleeSignature {
+                algorithm: "ed25519".to_string(),
+                signature: vec![4, 5, 6],
+                key_id_hint: "callee-key".to_string(),
+            }),
+            ability_binding: "observe.health".to_string(),
+            subject_ref: Some(EntityRef {
+                kind: 1,
+                ura: "easynet:///r/acme/device/subject".to_string(),
+                profile: "easynet-strict-v2".to_string(),
+            }),
+            descriptor_version: "2.4.0".to_string(),
+            schema_hash: vec![0xaa; 32],
+            impl_hash: vec![0xbb; 32],
+            runtime_env: "local-daemon".to_string(),
+            authority_proof: Some(InvocationAuthorityProof {
+                proof_type: "self".to_string(),
+                binding: Some(AuthorityBinding {
+                    authority: Some(authority_binding::Authority::SelfAuthority(SelfAuthority {
+                        principal_ura: "easynet:///r/acme/device/caller".to_string(),
+                    })),
+                }),
+                proof_hash: vec![0xcc; 32],
+                admission_hook: "test-admission".to_string(),
+                ..InvocationAuthorityProof::default()
+            }),
+            input_hash: vec![0xdd; 32],
+            output_hash: vec![0xee; 32],
+            parent_receipts: vec![ReceiptRef {
+                receipt_hash: vec![0x11; 32],
+                receipt_ura: "easynet:///r/acme/resource/subject/invocation/parent/receipt"
+                    .to_string(),
+            }],
             ..InvocationReceipt::default()
         };
         let response = InvokeResponse {
@@ -5355,10 +5992,14 @@ mod tests {
             ..InvokeResponse::default()
         };
 
-        let outcome = crate::daemon::InvocationOutcome::from_invoke_response(
+        let outcome = match crate::daemon::InvocationOutcome::from_verified_invoke_response(
             signed_fixture_tuple(),
             response,
-        );
+            &crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(_) => return,
+        };
         assert_eq!(
             outcome
                 .result()
@@ -5377,14 +6018,50 @@ mod tests {
         );
 
         let json = invocation_outcome_json_with_tuple(outcome, serde_json::json!({}));
-        assert_eq!(json["receipt"]["index"], 1);
         assert_eq!(json["admission_receipt"]["index"], 0);
         assert_eq!(json["terminal_receipt"]["index"], 1);
-        assert_eq!(json["receipt"], json["terminal_receipt"]);
+        assert!(
+            json.get("receipt").is_none(),
+            "unary result JSON must expose terminal_receipt, not the retired receipt alias"
+        );
+        assert_eq!(
+            json["terminal_receipt"]["caller_binding"]["ura"],
+            "easynet:///r/acme/device/caller"
+        );
+        assert_eq!(json["terminal_receipt"]["invocation_nonce_base64"], "AQID");
+        assert_eq!(
+            json["terminal_receipt"]["callee_signature"]["signature_base64"],
+            "BAUG"
+        );
+        assert_eq!(json["terminal_receipt"]["causal_binding_kind"], "none");
+        assert_eq!(json["terminal_receipt"]["causal_binding"]["form"], "none");
+        assert_eq!(json["terminal_receipt"]["authority_binding_kind"], "self");
+        assert_eq!(
+            json["terminal_receipt"]["authority_binding"]["principal_ura"],
+            "easynet:///r/acme/device/caller"
+        );
+        assert_eq!(
+            json["terminal_receipt"]["ability_binding"],
+            "observe.health"
+        );
+        assert_eq!(json["terminal_receipt"]["descriptor_version"], "2.4.0");
+        assert_eq!(json["terminal_receipt"]["schema_hash_hex"], "aa".repeat(32));
+        assert_eq!(
+            json["terminal_receipt"]["authority_proof"]["proof_hash_hex"],
+            "cc".repeat(32)
+        );
+        assert_eq!(
+            json["terminal_receipt"]["authority_proof"]["binding"]["kind"],
+            "self"
+        );
+        assert_eq!(
+            json["terminal_receipt"]["parent_receipts"][0]["receipt_ura"],
+            "easynet:///r/acme/resource/subject/invocation/parent/receipt"
+        );
     }
 
     fn active_bidi_session(
-        owner: EasynetHandle,
+        owner: ClientSessionBinding,
         capacity: usize,
     ) -> (
         ActiveInvocationBidi,
@@ -5434,7 +6111,7 @@ mod tests {
         let error = read_last_error_json();
         assert_eq!(error["code"], code_name);
         assert_eq!(error["details"]["abi_code"], abi_code);
-        assert_eq!(error["details"]["legacy_untyped"], false);
+        assert!(error["details"]["abi_symbol"].as_str().is_some());
         assert!(
             error["message"]
                 .as_str()
@@ -5608,6 +6285,7 @@ mod tests {
             prepared_json["signing_material"]["expires_at_unix_ms"],
             prepared_json["expires_at_unix_ms"]
         );
+        assert_eq!(prepared_json["prepared_id"], prepared_id.to_string());
         assert_eq!(easynet_prepared_invocation_free(prepared_id), EASYNET_OK);
         crate::ffi::client::handle::release(handle);
     }
@@ -5698,7 +6376,7 @@ mod tests {
                 r#"{{
                     "caller_ura": "easynet:///r/acme/device/dev-a",
                     "callee_ura": "easynet:///r/acme/device/dev-a",
-                    "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                    "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                     "subject_ura": "easynet:///r/acme/device/dev-a",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                     "causal_context": {{"form": "none"}},
@@ -5770,6 +6448,7 @@ mod tests {
         assert!(prepared_json["signing_material"]["canonical_bytes_base64"]
             .as_str()
             .is_some_and(|value| !value.is_empty()));
+        assert_eq!(prepared_json["prepared_id"], prepared_id.to_string());
 
         let signature = CString::new(
             serde_json::json!({
@@ -5821,6 +6500,67 @@ mod tests {
         assert!(duplicate_signed_json_ptr.is_null());
         assert_eq!(easynet_signed_invocation_free(signed_id), EASYNET_OK);
         assert!(get_signed(signed_id).is_none());
+    }
+
+    #[test]
+    fn invocation_sign_prepared_validation_failure_preserves_prepared_handle() {
+        let (handle, _session) = alloc(test_session());
+        let raw = CString::new(canonical_invocation_json(serde_json::json!({
+            "args": {"probe": true}
+        })))
+        .unwrap();
+        let options = CString::new(
+            serde_json::json!({
+                "expires_in_ms": 60_000,
+                "local_daemon_signing": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut prepared_id: PreparedInvocationId = 0;
+        let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+        let prepare_code = unsafe {
+            easynet_invocation_prepare(
+                handle,
+                raw.as_ptr(),
+                options.as_ptr(),
+                &mut prepared_id,
+                &mut prepared_json_ptr,
+            )
+        };
+        assert_eq!(prepare_code, EASYNET_OK);
+        unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+
+        let invalid_signature = CString::new(
+            serde_json::json!({
+                "algorithm": "ed25519",
+                "signature_base64": "AQ=="
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut signed_id: SignedInvocationId = 99;
+        let mut signed_json_ptr: *mut c_char = std::ptr::dangling_mut();
+        let sign_code = unsafe {
+            easynet_invocation_sign_prepared(
+                prepared_id,
+                invalid_signature.as_ptr(),
+                &mut signed_id,
+                &mut signed_json_ptr,
+            )
+        };
+
+        assert_eq!(sign_code, ERR_INVALID_ARG);
+        assert_eq!(signed_id, 0);
+        assert!(signed_json_ptr.is_null());
+        assert!(get_prepared(prepared_id).is_some());
+        assert_typed_last_error(
+            "INVALID_ARGUMENT",
+            ERR_INVALID_ARG,
+            "signed invocation signer id must not be empty",
+        );
+        assert_eq!(easynet_prepared_invocation_free(prepared_id), EASYNET_OK);
+        crate::ffi::client::handle::release(handle);
     }
 
     #[test]
@@ -5879,8 +6619,59 @@ mod tests {
         };
         assert_eq!(normal_code, EASYNET_OK);
         assert_ne!(normal_id, 0);
+        let normal_json: serde_json::Value = unsafe {
+            serde_json::from_str(CStr::from_ptr(normal_json_ptr).to_str().unwrap()).unwrap()
+        };
         unsafe { crate::ffi::strings::easynet_string_free(normal_json_ptr) };
+        assert_eq!(normal_json["prepared_id"], normal_id.to_string());
         assert_eq!(easynet_prepared_invocation_free(normal_id), EASYNET_OK);
+    }
+
+    #[test]
+    fn invocation_prepare_same_draft_allocates_distinct_request_and_handle_ids() {
+        let (handle, _session) = alloc(test_session());
+        let raw = CString::new(canonical_invocation_json(serde_json::json!({
+            "args": {"probe": true}
+        })))
+        .unwrap();
+        let options = CString::new(r#"{"expires_in_ms":60000,"signer_id":"browser-key"}"#).unwrap();
+
+        let prepare_once = || {
+            let mut prepared_id: PreparedInvocationId = 0;
+            let mut prepared_json_ptr: *mut c_char = std::ptr::null_mut();
+            let code = unsafe {
+                easynet_invocation_prepare(
+                    handle,
+                    raw.as_ptr(),
+                    options.as_ptr(),
+                    &mut prepared_id,
+                    &mut prepared_json_ptr,
+                )
+            };
+            assert_eq!(code, EASYNET_OK);
+            assert_ne!(prepared_id, 0);
+            let json: serde_json::Value = unsafe {
+                serde_json::from_str(CStr::from_ptr(prepared_json_ptr).to_str().unwrap()).unwrap()
+            };
+            unsafe { crate::ffi::strings::easynet_string_free(prepared_json_ptr) };
+            (prepared_id, json)
+        };
+
+        let (first_id, first_json) = prepare_once();
+        let (second_id, second_json) = prepare_once();
+
+        assert_ne!(first_id, second_id);
+        assert_eq!(first_json["prepared_id"], first_id.to_string());
+        assert_eq!(second_json["prepared_id"], second_id.to_string());
+        assert_ne!(first_json["request_id"], second_json["request_id"]);
+        assert_eq!(
+            first_json["canonical_hash_hex"], second_json["canonical_hash_hex"],
+            "same draft must keep the same canonical content hash"
+        );
+
+        assert_eq!(easynet_prepared_invocation_free(first_id), EASYNET_OK);
+        assert_eq!(easynet_prepared_invocation_free(second_id), EASYNET_OK);
+        crate::ffi::client::handle::release(handle);
     }
 
     #[test]
@@ -6038,7 +6829,7 @@ mod tests {
     }
 
     #[test]
-    fn invocation_handle_await_observes_transport_failure_terminal() {
+    fn invocation_handle_await_reports_transport_failure_without_terminal_state() {
         let signed_id = new_signed_invocation_id();
         let (client_handle, _) = alloc(
             crate::ffi::client::handle::ClientSession::with_control_path_only(
@@ -6070,12 +6861,8 @@ mod tests {
         let await_code = unsafe {
             easynet_invocation_handle_await(client_handle, invocation_handle_id, &mut result_ptr)
         };
-        assert_eq!(await_code, EASYNET_OK);
-        let result_json: serde_json::Value =
-            unsafe { serde_json::from_str(CStr::from_ptr(result_ptr).to_str().unwrap()).unwrap() };
-        unsafe { crate::ffi::strings::easynet_string_free(result_ptr) };
-        assert_eq!(result_json["ok"], false);
-        assert_eq!(result_json["error"]["code"], "DAEMON_OFFLINE");
+        assert_eq!(await_code, ERR_DAEMON_DOWN);
+        assert!(result_ptr.is_null());
 
         let mut events_ptr: *mut c_char = std::ptr::null_mut();
         let events_code = unsafe {
@@ -6085,9 +6872,14 @@ mod tests {
         let events_json: serde_json::Value =
             unsafe { serde_json::from_str(CStr::from_ptr(events_ptr).to_str().unwrap()).unwrap() };
         unsafe { crate::ffi::strings::easynet_string_free(events_ptr) };
-        assert_eq!(events_json["terminal"], true);
+        assert_eq!(events_json["terminal"], false);
         assert_eq!(events_json["events"][0]["state"], "Submitted");
-        assert_eq!(events_json["events"][1]["state"], "Failed");
+        assert_eq!(events_json["events"][1]["kind"], "observation_failed");
+        assert_eq!(events_json["events"][1]["terminal"], false);
+        assert_eq!(
+            events_json["observation_error"]["abi_code"],
+            ERR_DAEMON_DOWN
+        );
         assert_eq!(
             easynet_invocation_handle_free(client_handle, invocation_handle_id),
             EASYNET_OK
@@ -6096,7 +6888,7 @@ mod tests {
     }
 
     #[test]
-    fn invocation_handle_cancel_after_terminal_does_not_rewrite_state() {
+    fn invocation_handle_cancel_after_transport_failure_does_not_fake_terminal() {
         let signed_id = new_signed_invocation_id();
         let (client_handle, _) = alloc(
             crate::ffi::client::handle::ClientSession::with_control_path_only(
@@ -6128,9 +6920,9 @@ mod tests {
                     &mut result_ptr,
                 )
             },
-            EASYNET_OK
+            ERR_DAEMON_DOWN
         );
-        unsafe { crate::ffi::strings::easynet_string_free(result_ptr) };
+        assert!(result_ptr.is_null());
 
         let reason = CString::new(serde_json::json!({"reason": "too-late"}).to_string()).unwrap();
         let mut cancel_ptr: *mut c_char = std::ptr::null_mut();
@@ -6148,8 +6940,10 @@ mod tests {
         let cancel_json: serde_json::Value =
             unsafe { serde_json::from_str(CStr::from_ptr(cancel_ptr).to_str().unwrap()).unwrap() };
         unsafe { crate::ffi::strings::easynet_string_free(cancel_ptr) };
+        assert_eq!(cancel_json["request_accepted"], true);
         assert_eq!(cancel_json["cancelled"], false);
-        assert_eq!(cancel_json["state"], "Failed");
+        assert_eq!(cancel_json["state"], "CancelRequested");
+        assert_eq!(cancel_json["terminal"], false);
 
         let mut events_ptr: *mut c_char = std::ptr::null_mut();
         assert_eq!(
@@ -6165,8 +6959,8 @@ mod tests {
         let events_json: serde_json::Value =
             unsafe { serde_json::from_str(CStr::from_ptr(events_ptr).to_str().unwrap()).unwrap() };
         unsafe { crate::ffi::strings::easynet_string_free(events_ptr) };
-        assert_eq!(events_json["events"].as_array().unwrap().len(), 2);
-        assert_eq!(events_json["events"][1]["state"], "Failed");
+        assert_eq!(events_json["terminal"], false);
+        assert!(events_json["result"].is_null());
         assert_eq!(
             easynet_invocation_handle_free(client_handle, invocation_handle_id),
             EASYNET_OK
@@ -6214,35 +7008,398 @@ mod tests {
     }
 
     #[test]
-    fn invocation_handle_cancel_before_completion_is_terminal_monotonic() {
-        let (owner_handle, _) = alloc(test_session());
+    fn invocation_handle_ids_are_opaque_provider_tokens() {
+        let (owner_handle, owner_session) = alloc(test_session());
+        let owner = owner_session.binding(owner_handle);
+        let tuple_json: serde_json::Value =
+            serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
+        let (first, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json.clone());
+        let (second, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+
+        let first_id = insert_invocation_handle(first);
+        let second_id = insert_invocation_handle(second);
+
+        assert_ne!(first_id, 0);
+        assert_ne!(second_id, 0);
+        assert_ne!(first_id, second_id);
+        assert_ne!(first_id, 1);
+        assert_ne!(second_id, 2);
+        assert!(first_id >= (1_u64 << 52));
+        assert!(second_id >= (1_u64 << 52));
+        assert!(first_id <= ((1_u64 << 53) - 1));
+        assert!(second_id <= ((1_u64 << 53) - 1));
+        assert!(get_invocation_handle_for_owner(owner, first_id)
+            .unwrap()
+            .is_some());
+        assert!(get_invocation_handle_for_owner(owner, second_id)
+            .unwrap()
+            .is_some());
+
+        assert!(remove_invocation_handle_for_owner(owner, first_id)
+            .unwrap()
+            .is_some());
+        assert!(remove_invocation_handle_for_owner(owner, second_id)
+            .unwrap()
+            .is_some());
+        crate::ffi::client::handle::release(owner_handle);
+    }
+
+    #[test]
+    fn invocation_handle_rejects_stale_session_incarnation() {
+        let owner = registry_owner(77, 7700);
+        let stale_same_handle = registry_owner(77, 8800);
+        let tuple_json: serde_json::Value =
+            serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
+        let (active, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let invocation_handle_id = insert_invocation_handle(active);
+
+        assert!(matches!(
+            get_invocation_handle_for_owner(stale_same_handle, invocation_handle_id),
+            Err(RegistryOwnerMismatch)
+        ));
+        assert!(matches!(
+            remove_invocation_handle_for_owner(stale_same_handle, invocation_handle_id),
+            Err(RegistryOwnerMismatch)
+        ));
+        assert!(
+            remove_invocation_handle_for_owner(owner, invocation_handle_id)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn invocation_handle_rejects_post_free_replay() {
+        let (owner_handle, owner_session) = alloc(test_session());
+        let owner = owner_session.binding(owner_handle);
+        let tuple_json: serde_json::Value =
+            serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
+        let (active, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let invocation_handle_id = insert_invocation_handle(active);
+
+        assert_eq!(
+            easynet_invocation_handle_free(owner_handle, invocation_handle_id),
+            EASYNET_OK
+        );
+
+        let mut result_ptr: *mut c_char = std::ptr::dangling_mut();
+        let await_code = unsafe {
+            easynet_invocation_handle_await(owner_handle, invocation_handle_id, &mut result_ptr)
+        };
+        assert_eq!(await_code, ERR_INVALID_HANDLE);
+        assert!(result_ptr.is_null());
+
+        let reason = CString::new(serde_json::json!({"reason": "after-free"}).to_string()).unwrap();
+        let mut cancel_ptr: *mut c_char = std::ptr::dangling_mut();
+        let cancel_code = unsafe {
+            easynet_invocation_handle_cancel(
+                owner_handle,
+                invocation_handle_id,
+                reason.as_ptr(),
+                &mut cancel_ptr,
+            )
+        };
+        assert_eq!(cancel_code, ERR_INVALID_HANDLE);
+        assert!(cancel_ptr.is_null());
+
+        let mut events_ptr: *mut c_char = std::ptr::dangling_mut();
+        let events_code = unsafe {
+            easynet_invocation_handle_events(owner_handle, invocation_handle_id, &mut events_ptr)
+        };
+        assert_eq!(events_code, ERR_INVALID_HANDLE);
+        assert!(events_ptr.is_null());
+
+        assert_eq!(
+            easynet_invocation_handle_free(owner_handle, invocation_handle_id),
+            ERR_INVALID_HANDLE
+        );
+        crate::ffi::client::handle::release(owner_handle);
+    }
+
+    #[test]
+    fn invocation_handle_provider_authority_conformance() {
+        let owner = registry_owner(515, 1);
+        let stale_same_handle = registry_owner(515, 2);
+        let tuple_json: serde_json::Value =
+            serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
+        let (active, _) = ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
+        let stale_id = insert_invocation_handle(active);
+        assert!(matches!(
+            get_invocation_handle_for_owner(stale_same_handle, stale_id),
+            Err(RegistryOwnerMismatch)
+        ));
+        assert!(remove_invocation_handle_for_owner(owner, stale_id)
+            .unwrap()
+            .is_some());
+
+        let (owner_handle, owner_session) = alloc(
+            crate::ffi::client::handle::ClientSession::with_control_path_only(
+                "/tmp/easynet-control.json".to_string(),
+                Some("/tmp/easynet-missing-daemon.sock".to_string()),
+            ),
+        );
+        let (other_handle, _) = alloc(test_session());
+        let signed_id = new_signed_invocation_id();
+        let mut invocation_handle_id: InvocationHandleId = 0;
+        let mut submitted_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_submit_signed_handle(
+                    owner_handle,
+                    signed_id,
+                    &mut invocation_handle_id,
+                    &mut submitted_ptr,
+                )
+            },
+            EASYNET_OK
+        );
+        assert_ne!(invocation_handle_id, 0);
+        unsafe { crate::ffi::strings::easynet_string_free(submitted_ptr) };
+
+        let reason =
+            CString::new(serde_json::json!({"reason": "conformance"}).to_string()).unwrap();
+
+        let mut other_await_ptr: *mut c_char = std::ptr::dangling_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_await(
+                    other_handle,
+                    invocation_handle_id,
+                    &mut other_await_ptr,
+                )
+            },
+            ERR_INVALID_HANDLE
+        );
+        assert!(other_await_ptr.is_null());
+
+        let mut other_cancel_ptr: *mut c_char = std::ptr::dangling_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_cancel(
+                    other_handle,
+                    invocation_handle_id,
+                    reason.as_ptr(),
+                    &mut other_cancel_ptr,
+                )
+            },
+            ERR_INVALID_HANDLE
+        );
+        assert!(other_cancel_ptr.is_null());
+
+        let mut other_events_ptr: *mut c_char = std::ptr::dangling_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_events(
+                    other_handle,
+                    invocation_handle_id,
+                    &mut other_events_ptr,
+                )
+            },
+            ERR_INVALID_HANDLE
+        );
+        assert!(other_events_ptr.is_null());
+        assert_eq!(
+            easynet_invocation_handle_free(other_handle, invocation_handle_id),
+            ERR_INVALID_HANDLE
+        );
+
+        let mut await_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_await(owner_handle, invocation_handle_id, &mut await_ptr)
+            },
+            ERR_DAEMON_DOWN
+        );
+        assert!(await_ptr.is_null());
+
+        let mut cancel_ptr: *mut c_char = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_cancel(
+                    owner_handle,
+                    invocation_handle_id,
+                    reason.as_ptr(),
+                    &mut cancel_ptr,
+                )
+            },
+            EASYNET_OK
+        );
+        let cancel_json: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(cancel_ptr).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::easynet_string_free(cancel_ptr) };
+        assert_eq!(cancel_json["request_accepted"], true);
+        assert_eq!(cancel_json["deduplicated"], false);
+        assert_eq!(cancel_json["cancelled"], false);
+        assert_eq!(cancel_json["state"], "CancelRequested");
+        assert_eq!(cancel_json["terminal"], false);
+
+        assert_eq!(
+            easynet_invocation_handle_free(owner_handle, invocation_handle_id),
+            EASYNET_OK
+        );
+        let mut post_free_await_ptr: *mut c_char = std::ptr::dangling_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_await(
+                    owner_handle,
+                    invocation_handle_id,
+                    &mut post_free_await_ptr,
+                )
+            },
+            ERR_INVALID_HANDLE
+        );
+        assert!(post_free_await_ptr.is_null());
+
+        let mut post_free_cancel_ptr: *mut c_char = std::ptr::dangling_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_cancel(
+                    owner_handle,
+                    invocation_handle_id,
+                    reason.as_ptr(),
+                    &mut post_free_cancel_ptr,
+                )
+            },
+            ERR_INVALID_HANDLE
+        );
+        assert!(post_free_cancel_ptr.is_null());
+
+        let mut post_free_events_ptr: *mut c_char = std::ptr::dangling_mut();
+        assert_eq!(
+            unsafe {
+                easynet_invocation_handle_events(
+                    owner_handle,
+                    invocation_handle_id,
+                    &mut post_free_events_ptr,
+                )
+            },
+            ERR_INVALID_HANDLE
+        );
+        assert!(post_free_events_ptr.is_null());
+        assert_eq!(
+            easynet_invocation_handle_free(owner_handle, invocation_handle_id),
+            ERR_INVALID_HANDLE
+        );
+
+        assert_eq!(
+            owner_session.begin_closing(owner_handle).unwrap().handle,
+            owner_handle
+        );
+        assert!(owner_session
+            .resource_registration_guard(owner_handle)
+            .is_err());
+        owner_session.mark_released();
+        crate::ffi::client::handle::release(owner_handle);
+        crate::ffi::client::handle::release(other_handle);
+    }
+
+    #[test]
+    fn invocation_handle_cancel_is_request_then_canonical_terminal() {
+        use easynet_axon::pb::axon::v1::{InvocationReceipt, InvokeResponse};
+
+        let (owner_handle, owner_session) = alloc(test_session());
+        let owner = owner_session.binding(owner_handle);
         let tuple = signed_fixture_tuple();
         let tuple_json: serde_json::Value =
             serde_json::from_str(&canonical_invocation_json(serde_json::json!({}))).unwrap();
-        let active = ActiveInvocationHandle::new(owner_handle, tuple.clone(), tuple_json);
+        let (active, _cancel_requests) =
+            ActiveInvocationHandle::with_cancel_channel(owner, tuple_json);
         let shared = active.shared.clone();
         let invocation_handle_id = insert_invocation_handle(active);
-        let handle = get_invocation_handle_for_owner(owner_handle, invocation_handle_id)
+        let handle = get_invocation_handle_for_owner(owner, invocation_handle_id)
             .unwrap()
             .unwrap();
 
-        let outcome = handle.cancel(Some("client stop".to_string()));
-        assert!(outcome.cancelled);
-        assert_eq!(outcome.state, InvocationHandlePhase::Cancelled);
-        assert!(
-            !shared.mark_terminal(crate::daemon::InvocationOutcome::without_receipts(
-                completed_result_for_tuple(tuple)
-            ))
-        );
-        let result = handle.await_result();
+        let first = handle.cancel(Some("client stop".to_string()));
+        assert!(first.request_accepted);
+        assert!(!first.deduplicated);
+        assert!(first.dispatch_request);
+        assert!(!first.cancelled);
+        assert!(!first.terminal);
+        assert_eq!(first.state, InvocationHandlePhase::CancelRequested);
+
+        let duplicate = handle.cancel(Some("client stop again".to_string()));
+        assert!(duplicate.request_accepted);
+        assert!(duplicate.deduplicated);
+        assert!(!duplicate.dispatch_request);
+        assert!(!duplicate.cancelled);
+        assert!(!duplicate.terminal);
+
+        let command_state = easynet_axon::invocation::InvocationState::Completed;
+        let command_response = InvokeResponse {
+            state: command_state.to_wire_i32(),
+            terminal_receipt: Some(InvocationReceipt {
+                index: 1,
+                invocation_id: "inv-cancel-command".to_string(),
+                receipt_type: "completed".to_string(),
+                state: command_state.to_wire_i32(),
+                cleanup_complete: true,
+                ..InvocationReceipt::default()
+            }),
+            ..InvokeResponse::default()
+        };
+        let command_outcome = match crate::daemon::InvocationOutcome::from_verified_invoke_response(
+            tuple.clone(),
+            command_response,
+            &crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(_) => return,
+        };
+        shared
+            .observe_cancel_command_outcome(command_outcome)
+            .expect("cancel command has canonical completion");
         assert_eq!(
-            terminal_phase_for_result(&result),
-            InvocationHandlePhase::Cancelled
+            handle.shared.snapshot_json(invocation_handle_id)["terminal"],
+            false
+        );
+        assert_eq!(
+            handle.shared.snapshot_json(invocation_handle_id)["state"],
+            "CancelRequested"
         );
 
+        let terminal_state = easynet_axon::invocation::InvocationState::Cancelled;
+        let response = InvokeResponse {
+            state: terminal_state.to_wire_i32(),
+            terminal_receipt: Some(InvocationReceipt {
+                index: 1,
+                invocation_id: "inv-cancelled".to_string(),
+                receipt_type: "cancelled".to_string(),
+                state: terminal_state.to_wire_i32(),
+                reason: "client stop".to_string(),
+                cleanup_complete: true,
+                ..InvocationReceipt::default()
+            }),
+            ..InvokeResponse::default()
+        };
+        let canonical = match crate::daemon::InvocationOutcome::from_verified_invoke_response(
+            tuple,
+            response,
+            &crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+        ) {
+            Ok(outcome) => outcome,
+            Err(_) => return,
+        };
+        assert!(shared.observe_canonical_outcome(canonical).unwrap());
+        let result = handle.await_result();
+        assert_eq!(result.terminal_state, "Cancelled");
+        assert!(result.receipt.is_some());
+
+        let after_terminal = handle.cancel(Some("too late".to_string()));
+        assert!(!after_terminal.request_accepted);
+        assert!(after_terminal.deduplicated);
+        assert!(after_terminal.cancelled);
+        assert!(after_terminal.terminal);
+
         let events_json = handle.events_json(invocation_handle_id);
-        assert_eq!(events_json["events"].as_array().unwrap().len(), 2);
-        assert_eq!(events_json["events"][1]["state"], "Cancelled");
+        assert_eq!(events_json["events"].as_array().unwrap().len(), 4);
+        assert_eq!(events_json["events"][1]["state"], "CancelRequested");
+        assert_eq!(events_json["events"][1]["terminal"], false);
+        assert_eq!(events_json["events"][2]["kind"], "cancel_command_completed");
+        assert_eq!(events_json["events"][2]["terminal"], false);
+        assert_eq!(events_json["events"][3]["state"], "Cancelled");
+        assert_eq!(events_json["events"][3]["terminal"], true);
+        assert!(events_json["result"]["terminal_receipt"].is_object());
         assert_eq!(
             easynet_invocation_handle_free(owner_handle, invocation_handle_id),
             EASYNET_OK
@@ -6256,7 +7413,7 @@ mod tests {
             r#"{
                 "caller_ura": "easynet:///r/acme/device/dev-a",
                 "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AAAAAAAAAAAAAAAAAAAAAA==",
                 "causal_context": {"form": "none"},
@@ -6276,7 +7433,7 @@ mod tests {
             r#"{
                 "caller_ura": "easynet:///r/acme/device/dev-a",
                 "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0",
+                "descriptor_ref": "easynet:///r/acme/device/dev-a/ability/observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
                 "subject_ura": "easynet:///r/acme/device/dev-a",
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
@@ -6411,7 +7568,6 @@ mod tests {
         let health = runtime_health_json(&session);
 
         assert_eq!(health["api_ready"], true);
-        assert_eq!(health["daemon_ready"], true);
         assert_eq!(health["invocation_ready"], false);
         assert_eq!(health["runtime_ready"], false);
         assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
@@ -6442,6 +7598,69 @@ mod tests {
         assert!(diagnostics["diagnostics"]
             .as_array()
             .is_some_and(|items| !items.is_empty()));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_system_descriptor_catalog_includes_hub_daemon_invocation_contracts() {
+        let hub = crate::core::ura::hub_ura("localhost");
+        let entries =
+            runtime_system_descriptor_catalog_entries(&hub).expect("Hub system descriptor catalog");
+        let principal_create = entries
+            .iter()
+            .find(|entry| entry["name"] == "principal.lifecycle.create")
+            .unwrap_or_else(|| {
+                panic!(
+                    "principal.lifecycle.create missing from Hub descriptor catalog: {entries:?}"
+                )
+            });
+
+        assert_eq!(principal_create["owner_ura"], hub);
+        assert_eq!(principal_create["call_mode"], "rpc");
+        assert_eq!(principal_create["admission_action"], "invoke");
+        assert!(principal_create["descriptor_ref"]
+            .as_str()
+            .is_some_and(|descriptor_ref| descriptor_ref.starts_with(&format!(
+                "{}/ability/hub.principal.lifecycle.create@",
+                "easynet:///r/localhost"
+            )) && descriptor_ref.ends_with("!invoke")));
+
+        let runtime_bootstrap = entries
+            .iter()
+            .find(|entry| entry["name"] == "runtime.bootstrap_self_identity")
+            .unwrap_or_else(|| {
+                panic!(
+                    "runtime.bootstrap_self_identity missing from Hub descriptor catalog: {entries:?}"
+                )
+            });
+        assert_eq!(runtime_bootstrap["owner_ura"], hub);
+        assert_eq!(runtime_bootstrap["call_mode"], "rpc");
+        assert_eq!(runtime_bootstrap["admission_action"], "manage");
+        assert!(runtime_bootstrap["descriptor_ref"]
+            .as_str()
+            .is_some_and(|descriptor_ref| descriptor_ref.starts_with(&format!(
+                "{}/ability/hub.runtime.bootstrap_self_identity@",
+                "easynet:///r/localhost"
+            )) && descriptor_ref.ends_with("!manage")));
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn runtime_system_descriptor_catalog_keeps_user_files_out_of_system_plane() {
+        let device = crate::core::ura::device_ura("localhost", "host-a");
+        let entries = runtime_system_descriptor_catalog_entries(&device)
+            .expect("Device system descriptor catalog");
+        let names = entries
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str))
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(names.contains("fs.read"), "{names:?}");
+        assert!(names.contains("context.fs.list"), "{names:?}");
+        assert!(names.contains("skill.list"), "{names:?}");
+        assert!(!names.contains("files.put"), "{names:?}");
+        assert!(!names.contains("files.get"), "{names:?}");
+        assert!(!names.contains("files.list"), "{names:?}");
     }
 
     #[test]
@@ -6592,11 +7811,12 @@ mod tests {
 
     #[test]
     fn invocation_stream_close_refuses_cross_handle_access() {
-        let (owner, _) = alloc(test_session());
+        let (owner, owner_session) = alloc(test_session());
+        let owner_binding = owner_session.binding(owner);
         let (other, _) = alloc(test_session());
         let cancel = tokio_util::sync::CancellationToken::new();
         let stream_id = insert_stream(ActiveInvocationStream {
-            owner,
+            owner: owner_binding,
             cancel: cancel.clone(),
         });
 
@@ -6619,9 +7839,10 @@ mod tests {
 
     #[test]
     fn invocation_bidi_close_send_refuses_cross_handle_access() {
-        let (owner, _) = alloc(test_session());
+        let (owner, owner_session) = alloc(test_session());
+        let owner_binding = owner_session.binding(owner);
         let (other, _) = alloc(test_session());
-        let (session, mut up_rx, _cancel) = active_bidi_session(owner, 4);
+        let (session, mut up_rx, _cancel) = active_bidi_session(owner_binding, 4);
         let bidi_id = insert_bidi(session);
 
         let code = unsafe { easynet_invocation_bidi_close_send(other, bidi_id) };
@@ -6631,7 +7852,9 @@ mod tests {
             up_rx.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
-        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
+        assert!(get_bidi_for_handle(owner_binding, bidi_id)
+            .unwrap()
+            .is_some());
         assert_eq!(
             unsafe { easynet_invocation_bidi_cancel(owner, bidi_id) },
             EASYNET_OK
@@ -6642,15 +7865,16 @@ mod tests {
 
     #[test]
     fn invocation_bidi_close_send_keeps_session_and_blocks_later_send() {
-        let (handle, _) = alloc(test_session());
-        let (session, mut up_rx, _cancel) = active_bidi_session(handle, 4);
+        let (handle, client_session) = alloc(test_session());
+        let owner = client_session.binding(handle);
+        let (session, mut up_rx, _cancel) = active_bidi_session(owner, 4);
         let bidi_id = insert_bidi(session);
 
         assert_eq!(
             unsafe { easynet_invocation_bidi_close_send(handle, bidi_id) },
             EASYNET_OK
         );
-        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_some());
+        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
         assert_bidi_eof_frame(up_rx.try_recv().expect("EOF frame must be sent"), 1);
 
         assert_eq!(
@@ -6675,20 +7899,21 @@ mod tests {
             unsafe { easynet_invocation_bidi_send(handle, bidi_id, frame.as_ptr()) },
             ERR_CANCELLED
         );
-        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_some());
+        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
 
         assert_eq!(
             unsafe { easynet_invocation_bidi_close(handle, bidi_id) },
             EASYNET_OK
         );
-        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_none());
+        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_none());
         crate::ffi::client::handle::release(handle);
     }
 
     #[test]
     fn invocation_bidi_send_eof_also_half_closes_local_send() {
-        let (handle, _) = alloc(test_session());
-        let (session, mut up_rx, _cancel) = active_bidi_session(handle, 4);
+        let (handle, client_session) = alloc(test_session());
+        let owner = client_session.binding(handle);
+        let (session, mut up_rx, _cancel) = active_bidi_session(owner, 4);
         let bidi_id = insert_bidi(session);
         let eof =
             CString::new(serde_json::json!({"type": "control", "eof": true}).to_string()).unwrap();
@@ -6711,7 +7936,7 @@ mod tests {
             unsafe { easynet_invocation_bidi_send(handle, bidi_id, frame.as_ptr()) },
             ERR_CANCELLED
         );
-        assert!(get_bidi_for_handle(handle, bidi_id).unwrap().is_some());
+        assert!(get_bidi_for_handle(owner, bidi_id).unwrap().is_some());
         assert_eq!(
             unsafe { easynet_invocation_bidi_close(handle, bidi_id) },
             EASYNET_OK
@@ -6723,7 +7948,7 @@ mod tests {
     fn stream_registry_remove_returns_registered_cancel_token() {
         let cancel = tokio_util::sync::CancellationToken::new();
         let stream_id = insert_stream(ActiveInvocationStream {
-            owner: 41,
+            owner: registry_owner(41, 4100),
             cancel: cancel.clone(),
         });
         let stream = remove_stream(stream_id).expect("registered stream should be removable");
@@ -6737,7 +7962,7 @@ mod tests {
 
     #[test]
     fn bidi_registry_remove_returns_registered_session() {
-        let (session, _up_rx, cancel) = active_bidi_session(41, 1);
+        let (session, _up_rx, cancel) = active_bidi_session(registry_owner(41, 4100), 1);
         let bidi_id = insert_bidi(session);
         let session = remove_bidi(bidi_id).expect("registered bidi session should be removable");
         session.cancel.cancel();
@@ -6750,23 +7975,27 @@ mod tests {
 
     #[test]
     fn cancel_invocations_for_handle_removes_only_owned_entries() {
+        let (owned_handle, owned_session) = alloc(test_session());
+        let owned = owned_session.binding(owned_handle);
+        let (other_handle, other_session) = alloc(test_session());
+        let other = other_session.binding(other_handle);
         let owned_stream_cancel = tokio_util::sync::CancellationToken::new();
         let other_stream_cancel = tokio_util::sync::CancellationToken::new();
         let owned_stream_id = insert_stream(ActiveInvocationStream {
-            owner: 41,
+            owner: owned,
             cancel: owned_stream_cancel.clone(),
         });
         let other_stream_id = insert_stream(ActiveInvocationStream {
-            owner: 42,
+            owner: other,
             cancel: other_stream_cancel.clone(),
         });
 
-        let (owned_bidi, _owned_up_rx, owned_bidi_cancel) = active_bidi_session(41, 1);
-        let (other_bidi, _other_up_rx, other_bidi_cancel) = active_bidi_session(42, 1);
+        let (owned_bidi, _owned_up_rx, owned_bidi_cancel) = active_bidi_session(owned, 1);
+        let (other_bidi, _other_up_rx, other_bidi_cancel) = active_bidi_session(other, 1);
         let owned_bidi_id = insert_bidi(owned_bidi);
         let other_bidi_id = insert_bidi(other_bidi);
 
-        cancel_invocations_for_handle(41);
+        cancel_invocations_for_handle(owned_handle);
 
         assert!(owned_stream_cancel.is_cancelled());
         assert!(owned_bidi_cancel.is_cancelled());
@@ -6777,15 +8006,20 @@ mod tests {
         assert!(!other_bidi_cancel.is_cancelled());
         assert!(remove_stream(other_stream_id).is_some());
         assert!(remove_bidi(other_bidi_id).is_some());
+        crate::ffi::client::handle::release(owned_handle);
+        crate::ffi::client::handle::release(other_handle);
     }
 
     #[test]
     fn stream_registry_refuses_cross_handle_cancel() {
         let cancel = tokio_util::sync::CancellationToken::new();
-        let stream_id = insert_stream(ActiveInvocationStream { owner: 101, cancel });
+        let stream_id = insert_stream(ActiveInvocationStream {
+            owner: registry_owner(101, 1010),
+            cancel,
+        });
 
         assert!(matches!(
-            remove_stream_for_handle(202, stream_id),
+            remove_stream_for_handle(registry_owner(101, 2020), stream_id),
             Err(RegistryOwnerMismatch)
         ));
         assert!(
@@ -6796,11 +8030,11 @@ mod tests {
 
     #[test]
     fn bidi_registry_refuses_cross_handle_access() {
-        let (session, _up_rx, _cancel) = active_bidi_session(101, 1);
+        let (session, _up_rx, _cancel) = active_bidi_session(registry_owner(101, 1010), 1);
         let bidi_id = insert_bidi(session);
 
         assert!(matches!(
-            get_bidi_for_handle(202, bidi_id),
+            get_bidi_for_handle(registry_owner(101, 2020), bidi_id),
             Err(RegistryOwnerMismatch)
         ));
         assert!(
@@ -6848,7 +8082,7 @@ mod tests {
         assert_eq!(error["stage"], "transport");
         assert_eq!(error["retry"], "after_backoff");
         assert_eq!(error["details"]["abi_code"], ERR_DAEMON_DOWN);
-        assert_eq!(error["details"]["legacy_untyped"], false);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_DAEMON_DOWN");
     }
 
     #[test]
@@ -6868,7 +8102,7 @@ mod tests {
         assert_eq!(error["stage"], "runtime");
         assert_eq!(error["retry"], "never");
         assert_eq!(error["details"]["abi_code"], ERR_PERMISSION_DENIED);
-        assert_eq!(error["details"]["legacy_untyped"], false);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_PERMISSION_DENIED");
     }
 
     #[test]
@@ -6882,17 +8116,31 @@ mod tests {
             terminal: true,
             ..easynet_axon::pb::axon::v1::InvokeStreamChunk::default()
         };
-        let value = stream_chunk_json(chunk);
+        let value = stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
         assert_eq!(value["ok"], true);
         assert_eq!(value["event"], "chunk");
         assert_eq!(value["sequence"], 7);
-        assert_eq!(value["terminal"], true);
+        assert_eq!(value["terminal"], false);
         assert_eq!(value["payload_json"]["ready"], true);
         assert_eq!(value["payload_base64"], "eyJyZWFkeSI6dHJ1ZX0=");
     }
 
     #[test]
-    fn bounded_callback_enqueue_reports_terminal_backpressure_when_full() {
+    fn stream_status_error_is_transport_terminal_not_runtime_terminal() {
+        let value =
+            stream_status_error_json(tonic::Status::unavailable("stream transport closed"), 4);
+
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["event"], "error");
+        assert_eq!(value["sequence"], 4);
+        assert_eq!(value["code"], "Unavailable");
+        assert_eq!(value["message"], "stream transport closed");
+        assert_eq!(value["terminal"], false);
+        assert_eq!(value["transport_terminal"], true);
+    }
+
+    #[test]
+    fn bounded_callback_enqueue_reports_transport_terminal_backpressure_when_full() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -6922,7 +8170,8 @@ mod tests {
                 serde_json::from_slice::<serde_json::Value>(&rx.recv().await.unwrap()).unwrap();
             assert_eq!(value["event"], "error");
             assert_eq!(value["sequence"], 2);
-            assert_eq!(value["terminal"], true);
+            assert_eq!(value["terminal"], false);
+            assert_eq!(value["transport_terminal"], true);
             assert_eq!(
                 value["error"]["details"]["reason"],
                 "callback_queue_overflow"
@@ -6946,7 +8195,8 @@ mod tests {
             ),
             ..easynet_axon::pb::axon::v1::InvokeBidiDown::default()
         };
-        let value = bidi_down_frame_json(frame);
+        let value =
+            bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
         assert_eq!(value["ok"], true);
         assert_eq!(value["event"], "binary_chunk");
         assert_eq!(value["sequence"], 3);
@@ -6968,9 +8218,8 @@ mod tests {
             ),
             ..easynet_axon::pb::axon::v1::InvokeBidiDown::default()
         };
-        assert!(!bidi_down_frame_is_terminal(&frame));
-
-        let value = bidi_down_frame_json(frame);
+        let value =
+            bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
         assert_eq!(value["ok"], true);
         assert_eq!(value["event"], "control");
         assert_eq!(value["sequence"], 4);

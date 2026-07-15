@@ -1,24 +1,15 @@
 import pytest
 
 from easynet_sdk import (
-    AddressingClient,
-    AxonAddressingTransport,
     InvocationHandle,
     RuntimeClient,
-    RuntimeAbilityClient,
-    RuntimeAbilityEventSubscriptionProvider,
-    RuntimeCallContext,
     RuntimeEventClient,
     RuntimeEventCursor,
+    RuntimeEventPage,
     RuntimeEventReadRequest,
-    RuntimeEventStreamKind,
     RuntimeEventStreamState,
-    RuntimeEventSubscriptionClient,
-    RuntimeEventSubscriptionCursor,
-    RuntimeEventSubscriptionRequest,
     RuntimeHandleEventProvider,
     SDKError,
-    runtime_event_subscription_ability,
 )
 
 from test_runtime import MemoryRuntimeTransport
@@ -28,7 +19,7 @@ def test_runtime_event_client_reads_bounded_typed_page() -> None:
     runtime = RuntimeClient(MemoryRuntimeTransport())
     provider = RuntimeHandleEventProvider(runtime)
     client = RuntimeEventClient(provider)
-    handle = InvocationHandle.from_json(
+    handle = InvocationHandle._from_runtime_json(
         b'{"handle_id":7,"state":"Submitted","terminal":false,"events":[],"result":null}'
     )
 
@@ -47,10 +38,33 @@ def test_runtime_event_client_reads_bounded_typed_page() -> None:
     assert page.terminal is True
 
 
+def test_runtime_event_client_treats_failed_invocation_as_terminal_feed() -> None:
+    class FailedInvocationTransport(MemoryRuntimeTransport):
+        def handle_events(self, control) -> bytes:
+            return (
+                b'{"handle_id":7,"state":"Failed","terminal":true,'
+                b'"events":[{"sequence":1,"kind":"submitted",'
+                b'"state":"Submitted","terminal":false},{"sequence":2,'
+                b'"kind":"failed","state":"Failed","terminal":true}],'
+                b'"result":{"ok":false}}'
+            )
+
+    provider = RuntimeHandleEventProvider(RuntimeClient(FailedInvocationTransport()))
+    handle = InvocationHandle._from_runtime_json(
+        b'{"handle_id":7,"state":"Submitted","terminal":false,"events":[],"result":null}'
+    )
+
+    page = provider.read_events(RuntimeEventReadRequest(handle=handle))
+
+    assert page.state == RuntimeEventStreamState.TERMINAL
+    assert page.terminal is True
+    assert page.events[-1].state == "Failed"
+
+
 def test_runtime_event_client_rejects_unbounded_limit() -> None:
     runtime = RuntimeClient(MemoryRuntimeTransport())
     provider = RuntimeHandleEventProvider(runtime)
-    handle = InvocationHandle.from_json(
+    handle = InvocationHandle._from_runtime_json(
         b'{"handle_id":7,"state":"Submitted","terminal":false,"events":[],"result":null}'
     )
 
@@ -58,126 +72,12 @@ def test_runtime_event_client_rejects_unbounded_limit() -> None:
         provider.read_events(RuntimeEventReadRequest(handle=handle, limit=501))
 
 
-def test_runtime_event_subscription_provider_builds_device_draft() -> None:
-    client = RuntimeEventSubscriptionClient(
-        RuntimeAbilityEventSubscriptionProvider(
-            RuntimeAbilityClient(
-                RuntimeClient(MemoryRuntimeTransport()),
-                AddressingClient(AxonAddressingTransport()),
-            )
+def test_runtime_event_page_rejects_incoherent_terminal_flag() -> None:
+    with pytest.raises(SDKError, match="terminal flag does not match"):
+        RuntimeEventPage(
+            events=(),
+            cursor=RuntimeEventCursor(),
+            state=RuntimeEventStreamState.LIVE,
+            terminal=True,
+            limit=1,
         )
-    )
-
-    draft = client.build(
-        RuntimeEventSubscriptionRequest(
-            call=_call(),
-            stream=RuntimeEventStreamKind.DEVICE,
-            realm="example",
-            owner_ura="easynet:///r/example/user/alice",
-            device_ura="easynet:///r/example/device/laptop",
-            resume_cursor=RuntimeEventSubscriptionCursor(stream="device", sequence=42),
-            heartbeat_interval_ms=30000,
-        )
-    )
-
-    assert draft.descriptor_ref == (
-        "easynet:///r/example/ability/hub.events.device.subscribe@1.0.0"
-    )
-    assert draft.metadata["sdk_profile"] == "runtime_events"
-    assert draft.metadata["system_ability"] == "events.device.subscribe"
-    assert draft.args["stream"] == "device"
-    assert draft.args["daemon_ability"] == "events.device.subscribe"
-    assert draft.args["realm"] == "example"
-    assert draft.args["owner_ura"] == "easynet:///r/example/user/alice"
-    assert draft.args["device_ura"] == "easynet:///r/example/device/laptop"
-    assert draft.args["heartbeat_interval_ms"] == 30000
-    assert draft.args["resume_cursor"] == "device:42"
-
-
-def test_runtime_event_subscription_provider_builds_session_draft_with_since_sequence() -> None:
-    client = RuntimeEventSubscriptionClient(
-        RuntimeAbilityEventSubscriptionProvider(
-            RuntimeAbilityClient(
-                RuntimeClient(MemoryRuntimeTransport()),
-                AddressingClient(AxonAddressingTransport()),
-            )
-        )
-    )
-
-    draft = client.build(
-        RuntimeEventSubscriptionRequest(
-            call=_call(),
-            stream=RuntimeEventStreamKind.SESSION,
-            session_id="session-1",
-            resume_cursor=RuntimeEventSubscriptionCursor(stream="session", sequence=42),
-        )
-    )
-
-    assert draft.descriptor_ref == (
-        "easynet:///r/example/ability/hub.session.attach@1.0.0"
-    )
-    assert draft.metadata["system_ability"] == "session.attach"
-    assert "stream" not in draft.args
-    assert "daemon_ability" not in draft.args
-    assert draft.args["session_id"] == "session-1"
-    assert draft.args["since_seq"] == 42
-
-
-def test_runtime_event_subscription_provider_rejects_mismatched_resume_cursor() -> None:
-    client = RuntimeEventSubscriptionClient(
-        RuntimeAbilityEventSubscriptionProvider(
-            RuntimeAbilityClient(
-                RuntimeClient(MemoryRuntimeTransport()),
-                AddressingClient(AxonAddressingTransport()),
-            )
-        )
-    )
-
-    with pytest.raises(SDKError, match="does not match subscription stream"):
-        client.build(
-            RuntimeEventSubscriptionRequest(
-                call=_call(),
-                stream=RuntimeEventStreamKind.DEVICE,
-                resume_cursor=RuntimeEventSubscriptionCursor(
-                    stream="invocation", sequence=42
-                ),
-            )
-        )
-
-    with pytest.raises(SDKError, match="sequence must be non-negative"):
-        client.build(
-            RuntimeEventSubscriptionRequest(
-                call=_call(),
-                stream=RuntimeEventStreamKind.DEVICE,
-                resume_cursor=RuntimeEventSubscriptionCursor(
-                    stream="device", sequence=-1
-                ),
-            )
-        )
-
-    with pytest.raises(SDKError, match="token must be canonical"):
-        client.build(
-            RuntimeEventSubscriptionRequest(
-                call=_call(),
-                stream=RuntimeEventStreamKind.DEVICE,
-                resume_cursor=RuntimeEventSubscriptionCursor(
-                    stream="device", sequence=42, token=" device:42 "
-                ),
-            )
-        )
-
-
-def test_runtime_event_subscription_ability_rejects_unsupported_stream() -> None:
-    with pytest.raises(SDKError, match="unsupported runtime event stream"):
-        runtime_event_subscription_ability("unknown")  # type: ignore[arg-type]
-
-
-def _call() -> RuntimeCallContext:
-    return RuntimeCallContext(
-        caller_ura="easynet:///r/example/agent/alice.client",
-        callee_ura="easynet:///r/example/hub",
-        subject_ura="easynet:///r/example/user/alice",
-        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
-        causal_context={"form": "none"},
-        metadata={"request_id": "events-1"},
-    )

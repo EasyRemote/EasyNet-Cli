@@ -107,43 +107,66 @@ func (c *RuntimeConnection) Connect(ctx context.Context, opts ConnectOptions) er
 	if c.state == ConnectionClosed {
 		return invalidRuntimeClient("runtime connection is closed")
 	}
-	c.state = ConnectionResolving
 	optionsJSON, err := json.Marshal(opts)
 	if err != nil {
 		c.fail(invalidRuntimePayload(fmt.Sprintf("encode connect options: %v", err), err))
 		return c.lastError
 	}
+	attempts := 1
+	if opts.Reconnect {
+		attempts = 2
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := c.transition(ConnectionResolving); err != nil {
+			return err
+		}
+		if err := c.connectAttempt(ctx, optionsJSON); err == nil {
+			return nil
+		} else {
+			c.lastError = err
+		}
+		if attempt+1 == attempts {
+			c.fail(c.lastError)
+			return c.lastError
+		}
+		if err := c.transition(ConnectionDegraded); err != nil {
+			return err
+		}
+		if err := c.transition(ConnectionReconnecting); err != nil {
+			return err
+		}
+	}
+	return c.lastError
+}
+
+func (c *RuntimeConnection) connectAttempt(ctx context.Context, optionsJSON []byte) error {
 	rawEndpoint, err := c.connector.Resolve(ctx, optionsJSON)
 	if err != nil {
-		c.fail(wrapRuntimeConnectError("resolve runtime endpoint failed", err))
-		return c.lastError
+		return wrapRuntimeConnectError("resolve runtime endpoint failed", err)
 	}
 	endpoint, err := NewRuntimeEndpointFromJSON(rawEndpoint)
 	if err != nil {
-		c.fail(err)
-		return c.lastError
+		return err
 	}
 	c.endpoint = endpoint
-	c.state = ConnectionConnecting
+	if err := c.transition(ConnectionConnecting); err != nil {
+		return err
+	}
 	transport, rawHandshake, err := c.connector.Handshake(ctx, rawEndpoint)
 	if err != nil {
-		c.fail(wrapRuntimeConnectError("runtime handshake failed", err))
-		return c.lastError
+		return wrapRuntimeConnectError("runtime handshake failed", err)
 	}
 	if transport == nil {
-		c.fail(invalidRuntimeClient("runtime transport is required after handshake"))
-		return c.lastError
+		return invalidRuntimeClient("runtime transport is required after handshake")
 	}
 	handshake, err := decodeHandshakeFacts(rawHandshake)
 	if err != nil {
-		c.fail(err)
-		return c.lastError
+		return err
 	}
 	c.transport = transport
 	c.handshake = handshake
 	c.lastError = nil
-	c.state = ConnectionReady
-	return nil
+	return c.transition(ConnectionReady)
 }
 
 // RuntimeClient returns a RuntimeClient only when the connection is ready.
@@ -170,7 +193,9 @@ func (c *RuntimeConnection) Close(ctx context.Context) error {
 	}
 	err := c.connector.Close(ctx)
 	c.transport = nil
-	c.state = ConnectionClosed
+	if transitionErr := c.transition(ConnectionClosed); transitionErr != nil {
+		return transitionErr
+	}
 	if err != nil {
 		c.lastError = wrapRuntimeConnectError("runtime close failed", err)
 		return c.lastError
@@ -211,8 +236,28 @@ func (c *RuntimeConnection) fail(err error) {
 	c.transport = nil
 	c.lastError = err
 	if c.state != ConnectionClosed {
-		c.state = ConnectionFailed
+		if transitionErr := c.transition(ConnectionFailed); transitionErr != nil {
+			c.lastError = transitionErr
+		}
 	}
+}
+
+func (c *RuntimeConnection) transition(next ConnectionState) error {
+	allowed := map[ConnectionState]map[ConnectionState]bool{
+		ConnectionIdle:         {ConnectionResolving: true, ConnectionClosed: true},
+		ConnectionResolving:    {ConnectionConnecting: true, ConnectionDegraded: true, ConnectionFailed: true, ConnectionClosed: true},
+		ConnectionConnecting:   {ConnectionReady: true, ConnectionDegraded: true, ConnectionFailed: true, ConnectionClosed: true},
+		ConnectionReady:        {ConnectionResolving: true, ConnectionClosed: true},
+		ConnectionDegraded:     {ConnectionReconnecting: true, ConnectionFailed: true, ConnectionClosed: true},
+		ConnectionReconnecting: {ConnectionResolving: true, ConnectionFailed: true, ConnectionClosed: true},
+		ConnectionFailed:       {ConnectionResolving: true, ConnectionClosed: true},
+		ConnectionClosed:       {ConnectionClosed: true},
+	}
+	if !allowed[c.state][next] {
+		return invalidRuntimeClient(fmt.Sprintf("runtime connection cannot transition from %s to %s", c.state, next))
+	}
+	c.state = next
+	return nil
 }
 
 // NewRuntimeEndpointFromJSON decodes daemon endpoint discovery JSON.

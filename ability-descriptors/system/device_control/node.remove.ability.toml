@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "node.remove"
+descriptor_version = "1.0.0"
 description = "Remove a node from the device set. Refuses to remove the local device (use `easynet device reset` for that). Remote removal awaits the federation Invoke replacement."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

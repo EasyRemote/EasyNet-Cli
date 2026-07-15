@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol, Sequence
+from typing import Mapping, Protocol, Sequence, cast
 
 from easynet_axon import parse_ura as _parse_ura
 from easynet_axon.invocation import (
@@ -194,7 +194,7 @@ class ReceiptReference:
                 receipt_hash=self.receipt_hash,
                 receipt_ura=self.receipt_ura,
             )
-            return _causal_to_json(_AxonCausalContext.scalar(reference))
+            return cast(Mapping[str, object], _causal_to_json(_AxonCausalContext.scalar(reference)))
         except Exception as error:
             raise _invalid("project scalar receipt causal context", error) from error
 

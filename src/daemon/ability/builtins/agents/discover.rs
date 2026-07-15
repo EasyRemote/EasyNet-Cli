@@ -88,7 +88,7 @@ pub const DEVICE_DISCOVER_ABILITY: &str = crate::daemon::ability::names::agents:
 /// not own how a daemon reaches the realm directory. Production daemon
 /// boot injects a local read-model resolver so `<agent>.discover`
 /// does not re-enter the daemon over its own UDS. Bridge-only harnesses
-/// use [`BridgeDiscoverFederationResolver`] to preserve the historical
+/// use [`DetachedDiscoverFederationResolver`] to make the missing dependency
 /// Axon runtime path.
 pub type SharedDiscoverFederationResolver = Arc<dyn DiscoverFederationResolver>;
 
@@ -121,40 +121,26 @@ pub trait DiscoverFederationResolver: Send + Sync {
     >;
 }
 
-/// Axon-bridge resolver used by historical bridge runtimes and
-/// narrow unit tests that do not boot the daemon Invocation service.
+/// Explicit unresolved directory dependency used by deterministic catalogue
+/// tests. Production daemon assembly replaces it with the late-bound local
+/// directory resolver before any public-tier discovery can succeed.
 #[derive(Debug, Default)]
-pub struct BridgeDiscoverFederationResolver;
+pub struct DetachedDiscoverFederationResolver;
 
-impl DiscoverFederationResolver for BridgeDiscoverFederationResolver {
+impl DiscoverFederationResolver for DetachedDiscoverFederationResolver {
     fn resolve_agents(
         &self,
-        tenant: &str,
-        realm: &str,
-        caller_ura: String,
-        tenant_filter: Option<String>,
+        _tenant: &str,
+        _realm: &str,
+        _caller_ura: String,
+        _tenant_filter: Option<String>,
     ) -> Result<
         Vec<crate::daemon::federation::client::ability_contract::ResolvedAgent>,
         DiscoverFederationResolveError,
     > {
-        let (bridge, _) = crate::daemon::persistence::config::load_and_connect().map_err(|e| {
-            DiscoverFederationResolveError::NotJoined(format!(
-                "no usable Axon bridge runtime ({e}); start the daemon and join a realm before \
-                 scope=\"user\" or scope=\"public\""
-            ))
-        })?;
-        let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
-            &bridge, caller_ura,
-        );
-        crate::daemon::federation::advertise::resolve_agents_with_filter(
-            &invoker,
-            tenant,
-            realm,
-            "",
-            true,
-            tenant_filter,
-        )
-        .map_err(DiscoverFederationResolveError::Unavailable)
+        Err(DiscoverFederationResolveError::NotJoined(
+            "daemon directory resolver is not attached".to_string(),
+        ))
     }
 }
 
@@ -213,7 +199,7 @@ pub struct LocalDirectoryDiscoverFederationResolver {
         Arc<crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore>,
     ability_catalog:
         Arc<crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
-    self_device_ura: Option<String>,
+    local_ability_catalog: Arc<OnceLock<Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>>>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -228,13 +214,15 @@ impl LocalDirectoryDiscoverFederationResolver {
         ability_catalog: Arc<
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
         >,
-        self_device_ura: Option<String>,
+        local_ability_catalog: Arc<
+            OnceLock<Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>>,
+        >,
     ) -> Self {
         Self {
             presence,
             advertised_agents,
             ability_catalog,
-            self_device_ura,
+            local_ability_catalog,
         }
     }
 }
@@ -262,7 +250,7 @@ impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
             &self.presence,
             Some(self.advertised_agents.as_ref()),
             Some(self.ability_catalog.as_ref()),
-            self.self_device_ura.as_deref(),
+            self.local_ability_catalog.get().map(Arc::as_ref),
         );
         let value = serde_json::to_value(response)
             .map_err(|e| DiscoverFederationResolveError::Unavailable(e.to_string()))?;
@@ -351,7 +339,7 @@ pub fn register_for_agent<F, R>(
         agent_name,
         agent_registry_provider,
         dispatch_registry_handle,
-        Arc::new(BridgeDiscoverFederationResolver),
+        Arc::new(DetachedDiscoverFederationResolver),
     );
 }
 
@@ -372,9 +360,10 @@ pub fn register_for_agent_with_resolver<F, R>(
         Arc::new(move || agent_registry_provider().into_agent_registry_load_result());
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let agent = agent_name.clone();
-    reg.register_rpc_with_spec(
+    reg.register_rpc_with_spec_and_action(
         &qualified,
         OwnerKind::Agent(agent_name),
+        crate::daemon::ability::descriptors::AdmissionAction::Read,
         manifest(),
         Arc::new(move |args: Value| {
             dispatch(
@@ -407,9 +396,10 @@ pub fn register_device_aggregate_with_resolver<F, R>(
     use crate::daemon::ability::dispatch::OwnerKind;
     let provider: AgentRegistryProvider =
         Arc::new(move || agent_registry_provider().into_agent_registry_load_result());
-    reg.register_rpc_with_spec(
+    reg.register_rpc_with_spec_and_action(
         DEVICE_DISCOVER_ABILITY,
         OwnerKind::Device,
+        crate::daemon::ability::descriptors::AdmissionAction::Read,
         manifest(),
         Arc::new(move |args: Value| {
             dispatch(
@@ -738,12 +728,8 @@ fn resolve_via_federation(
         ));
     }
 
-    // Pin the caller URA to the daemon's own device-profile Agent
-    // URA. Without this the bridge synthesises a hub-literal caller
-    // (`agents/easynet:prv:hub:<realm>`) and the hub's membership
-    // gate rejects with AXON_MEMBERSHIP_REQUIRED — same caller-URA
-    // fix we apply at the daemon-boot advertise call site (see
-    // `cli::start::republish_via_federation_best_effort`).
+    // Pin the caller URA to the daemon's own Device URA. The session
+    // membership gate requires this exact joined identity.
     let device_caller_ura = crate::core::ura::device_ura(tenant, &creds.node_id);
     // Tenant_filter wire shape mirrors RFC-002 §5 update:
     //   * User scope → None: hub auto-fills caller_tenant.
@@ -1401,7 +1387,9 @@ mod tests {
     #[test]
     fn register_publishes_discover_manifest_description() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1482,7 +1470,9 @@ mod tests {
     #[test]
     fn unknown_scope_is_rejected() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -2000,12 +1990,16 @@ mod tests {
             });
 
         // Build a registry with the provider handler + the per-agent
-        // discover. Wire the OnceLock to the same registry so the
-        // builtin discover can resolve the provider.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        // discover. Wire the OnceLock to the same runtime-backed registry so
+        // the provider delegation exercises the same LocalRuntime boundary as
+        // daemon dispatch.
+        let mut reg = AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        );
+        reg.register_rpc_with_owner_and_action(
             "userx.discover",
             crate::daemon::ability::dispatch::OwnerKind::Device,
+            crate::daemon::ability::descriptors::AdmissionAction::Read,
             provider_handler,
         );
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
@@ -2046,9 +2040,10 @@ mod tests {
     #[test]
     fn provider_target_is_descriptor_bound_with_explicit_subject() {
         let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        reg.register_rpc_with_owner_and_action(
             "userx.discover",
             crate::daemon::ability::dispatch::OwnerKind::Device,
+            crate::daemon::ability::descriptors::AdmissionAction::Read,
             Arc::new(|_args| Ok(json!({"candidates": []}))),
         );
         let mut agents = AgentRegistry::default();

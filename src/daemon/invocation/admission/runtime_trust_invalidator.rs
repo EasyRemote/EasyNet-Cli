@@ -241,7 +241,7 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.to_string(),
             sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
             crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                 "pubkey-a",
             ),
@@ -263,7 +263,7 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.to_string(),
             sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
             crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                 "pubkey-b",
             ),
@@ -286,7 +286,7 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.clone(),
             sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
             crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                 "pubkey-a",
             ),
@@ -324,7 +324,7 @@ mod tests {
         presence.insert_negotiated_with_trust(
             subject.clone(),
             sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
+            crate::daemon::invocation::bidi::state::presence::SessionContract::canonical(),
             crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
                 "pubkey-a",
             ),
@@ -354,6 +354,7 @@ mod tests {
         presence.insert(host.to_string(), sender());
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: subject.to_string(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".to_string()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -384,6 +385,7 @@ mod tests {
         ] {
             advertised.upsert(AdvertisedAgentRecord {
                 agent_ura: agent_ura.to_string(),
+                generation: 1,
                 public_key_hex: String::new(),
                 host_node_id: Some("dev-1".to_string()),
                 signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -393,6 +395,7 @@ mod tests {
         }
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: "easynet:///r/local/agent/bob.helper".to_string(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-2".to_string()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {

@@ -52,13 +52,13 @@ class MemoryRuntimeTransport:
     def submit_signed(self, signed_json: bytes) -> bytes:
         return b"{}"
 
-    def await_handle(self, handle_id: int) -> bytes:
+    def await_handle(self, control) -> bytes:
         return b"{}"
 
-    def cancel_handle(self, handle_id: int, reason: str) -> bytes:
+    def cancel_handle(self, control, reason: str) -> bytes:
         return b"{}"
 
-    def handle_events(self, handle_id: int) -> bytes:
+    def handle_events(self, control) -> bytes:
         return b"{}"
 
 

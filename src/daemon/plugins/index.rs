@@ -589,9 +589,10 @@ layer = "control"
 
     fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "1"
+            r#"schema_version = "2"
 name = "{ability}"
 description = "test descriptor for {ability}"
+admission_action = "invoke"
 
 [input_schema]
 type = "object"

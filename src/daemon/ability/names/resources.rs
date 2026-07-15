@@ -2,6 +2,7 @@ pub const CONTEXT_CLIPBOARD_LIST: &str = "context.clipboard.list";
 pub const CONTEXT_CLIPBOARD_GET: &str = "context.clipboard.get";
 pub const CONTEXT_CLIPBOARD_TRACK: &str = "context.clipboard.track";
 pub const CONTEXT_CLIPBOARD_REMOVE: &str = "context.clipboard.remove";
+pub const CONTEXT_CATALOG: &str = "context.catalog";
 pub const CONTEXT_FOLDERS_LIST: &str = "context.folders.list";
 pub const CONTEXT_FS_LIST: &str = "context.fs.list";
 pub const CONTEXT_FAVORITES_LIST: &str = "context.favorites.list";

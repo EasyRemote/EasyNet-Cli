@@ -51,10 +51,12 @@ make_sandbox() {
     "$dir/src/bin" \
     "$dir/src/ffi" \
     "$dir/target" \
+    "$dir/tools/sdk-conformance-runner/src" \
     "$dir/tools/scripts"
   cp "$ROOT/include/easynet_cli.h" "$dir/include/easynet_cli.h"
   cp "$ROOT/include/easynet_cli.exports.v5" "$dir/include/easynet_cli.exports.v5"
-  cp "$ROOT/src/bin/sdk-conformance-runner.rs" "$dir/src/bin/sdk-conformance-runner.rs"
+  cp "$ROOT/tools/sdk-conformance-runner/Cargo.toml" "$dir/tools/sdk-conformance-runner/Cargo.toml"
+  cp "$ROOT/tools/sdk-conformance-runner/src/main.rs" "$dir/tools/sdk-conformance-runner/src/main.rs"
   mkdir -p "$dir/src/ffi/features"
   cp "$ROOT/src/ffi/features/mod.rs" "$dir/src/ffi/features/mod.rs"
   local checker
@@ -98,6 +100,26 @@ trap 'rm -rf "$SB" /tmp/sdk-scaffold-test.out' EXIT
 FIXTURE="$SB/repo"
 make_sandbox "$FIXTURE"
 bash "$CHECK" "$FIXTURE" >/dev/null
+
+printf '{}\n' >"$FIXTURE/sdk/schemas/resource-ref.schema.json"
+expect_fail "$FIXTURE"
+rm "$FIXTURE/sdk/schemas/resource-ref.schema.json"
+
+python3 - "$FIXTURE/sdk/conformance/fixture-schema-bindings.json" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["bindings"].append({
+    "fixture": "resource-ref.local-fs.v4.json",
+    "schema": "resource-ref.schema.json",
+})
+path.write_text(json.dumps(data, indent=2) + "\n")
+PY
+expect_fail "$FIXTURE"
+cp \
+  "$ROOT/sdk/conformance/fixture-schema-bindings.json" \
+  "$FIXTURE/sdk/conformance/fixture-schema-bindings.json"
 
 rm "$FIXTURE/sdk/schemas/invocation.schema.json"
 expect_fail "$FIXTURE"

@@ -1824,6 +1824,10 @@ mod tests {
         caller_env_with_subject(caller, FORGET, subject_for(learner_ura, "quote"))
     }
 
+    fn executable_test_runtime() -> Arc<easynet_axon::invocation::LocalRuntime> {
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None)
+    }
+
     fn hot_registrar_cell_with_runtime(
         runtime: Arc<easynet_axon::invocation::LocalRuntime>,
     ) -> SharedHotRegistrarCell {
@@ -1833,7 +1837,7 @@ mod tests {
                 Arc::new(Vec::new()),
                 Arc::clone(&dispatch_handle),
                 Arc::new(
-                    crate::daemon::ability::builtins::agents::discover::BridgeDiscoverFederationResolver,
+                    crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver,
                 ),
             );
         registrar
@@ -2129,7 +2133,7 @@ mod tests {
         )
         .expect("owner teaches");
 
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let runtime = executable_test_runtime();
         let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
 
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
@@ -2175,7 +2179,7 @@ mod tests {
         )
         .expect("owner teaches");
 
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let runtime = executable_test_runtime();
         let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2316,7 +2320,7 @@ mod tests {
             "forget artifact step remains complete when runtime sync is degraded"
         );
 
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let runtime = executable_test_runtime();
         let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2433,7 +2437,7 @@ mod tests {
         // only then does forget retire the tombstone. Without it the
         // compensating transaction correctly keeps the row degraded (see
         // forget_runtime_sync_unavailable_returns_error_and_keeps_tombstone).
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let runtime = executable_test_runtime();
         let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -2545,7 +2549,7 @@ mod tests {
         // ...the imported descriptor copy is. Wire a live registrar so
         // runtime sync converges (Committed) and the forget finalizes;
         // require-forget-runtime-convergence keeps the tombstone otherwise.
-        let runtime = easynet_axon::invocation::LocalRuntime::new();
+        let runtime = executable_test_runtime();
         let hot_cell = hot_registrar_cell_with_runtime(Arc::clone(&runtime));
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

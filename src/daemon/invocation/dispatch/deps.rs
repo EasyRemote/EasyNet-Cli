@@ -25,6 +25,7 @@
 
 use std::sync::Arc;
 
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::wire::AbilityWireRegistry;
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
@@ -58,6 +59,9 @@ pub(crate) struct DirectoryPlane {
     /// `federation.advertise_abilities`, projected through
     /// `federation.resolve(include_abilities=true)`.
     pub(crate) ability_catalog: Arc<AbilityCatalogStore>,
+    /// Live daemon ability control plane. Local resolver publication and route
+    /// admission capture one immutable snapshot from this same aggregate.
+    pub(crate) local_ability_catalog: Option<Arc<AxonAbilityCatalog>>,
     /// Daemon-wide federated directory snapshot cell written by
     /// per-peer `RemoteDirectoryClient` tasks, read by
     /// `federation.discover`.
@@ -158,4 +162,8 @@ pub(crate) struct RuntimePlane {
     /// Daemon-owned local bidi wire profile registry, projected from
     /// plugin wire metadata at boot.
     pub(crate) ability_wire: Arc<AbilityWireRegistry>,
+    /// Correlates transport cancel requests with the one Axon-owned unary
+    /// lifecycle that can produce terminal proof.
+    pub(crate) cancellations:
+        crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
 }

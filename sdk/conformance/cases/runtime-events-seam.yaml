@@ -10,7 +10,10 @@ steps:
   - action: reject_cross_stream_resume_cursor
   - action: require_bounded_buffer
   - action: require_terminal_state
+  - action: require_provider_neutral_topic_model
+  - action: require_product_catalog_outside_canonical_model
 expect:
   result: runtime_events_contract
   provider_required: true
   durable_resume_cursor: true
+  canonical_inventory_closed: true

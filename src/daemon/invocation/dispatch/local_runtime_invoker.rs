@@ -19,7 +19,7 @@ use easynet_axon::invocation::{
 use serde_json::Value;
 
 use crate::daemon::axon_bridge::descriptor_ref::{
-    ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_version,
+    ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_binding,
 };
 use crate::daemon::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
@@ -101,15 +101,36 @@ impl LocalRuntimeSubjectPolicy {
     }
 }
 
-fn local_invocation_subject(
-    target: &InvocationTarget,
-    callee_ura: &str,
-) -> Result<SubjectIdentity, String> {
-    Ok(LocalRuntimeSubjectPolicy::from_target(target, callee_ura)?.into_subject_identity())
+#[derive(Debug, Clone)]
+struct LocalRuntimeInvocationPolicy {
+    subject: LocalRuntimeSubjectPolicy,
+    causal_context: CausalContext,
 }
 
-fn local_invocation_causal_context(target: &InvocationTarget) -> CausalContext {
-    target.causal_context.clone().unwrap_or(CausalContext::None)
+impl LocalRuntimeInvocationPolicy {
+    fn from_target(target: &InvocationTarget, callee_ura: &str) -> Result<Self, String> {
+        Ok(Self {
+            subject: LocalRuntimeSubjectPolicy::from_target(target, callee_ura)?,
+            causal_context: target.causal_context.clone().unwrap_or(CausalContext::None),
+        })
+    }
+
+    fn into_envelope_parts(
+        self,
+        callee_ura: String,
+        ability: String,
+        payload: &[u8],
+    ) -> DescriptorBoundEnvelopeParts<'_> {
+        DescriptorBoundEnvelopeParts {
+            caller: system_agent_identity(),
+            callee: local_identity(&callee_ura),
+            ability,
+            subject: self.subject.into_subject_identity(),
+            invocation_nonce: fresh_nonce(),
+            causal_context: self.causal_context,
+            args_bytes: payload,
+        }
+    }
 }
 
 async fn local_descriptor_bound_envelope(
@@ -119,24 +140,18 @@ async fn local_descriptor_bound_envelope(
     payload: &[u8],
 ) -> Result<DescriptorBoundEnvelope, String> {
     let callee_ura = local_invocation_callee_ura(target);
-    let subject = local_invocation_subject(target, &callee_ura)?;
+    let invocation_policy = LocalRuntimeInvocationPolicy::from_target(target, &callee_ura)?;
     let runtime_ability =
         ability_ura_for_wire(&callee_ura, &target.ability).map_err(|err| format!("{err}"))?;
-    let descriptor_version = registered_descriptor_version(runtime, &runtime_ability, mode)
+    let descriptor_binding = registered_descriptor_binding(runtime, &runtime_ability, mode)
         .await
         .map_err(|err| err.message().to_string())?;
     let ability =
-        ability_descriptor_ref_for_wire(&callee_ura, &target.ability, &descriptor_version)
+        ability_descriptor_ref_for_wire(&callee_ura, &target.ability, &descriptor_binding)
             .map_err(|err| format!("{err}"))?;
-    DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
-        caller: system_agent_identity(),
-        callee: local_identity(&callee_ura),
-        ability,
-        subject,
-        invocation_nonce: fresh_nonce(),
-        causal_context: local_invocation_causal_context(target),
-        args_bytes: payload,
-    })
+    DescriptorBoundEnvelope::from_parts(
+        invocation_policy.into_envelope_parts(callee_ura, ability, payload),
+    )
     .map_err(|err| format!("{err}"))
 }
 
@@ -180,12 +195,10 @@ pub fn ability_frame_to_json(frame: &AbilityFrame) -> Result<Value, String> {
     decode_json_payload(&frame.payload)
 }
 
-/// Reason-string fragments that the Axon SDK + the CLI's own local
-/// dispatch arm produce when an ability is unknown. Centralised so
-/// every consumer (`ability_dispatch`, `daemon/control/runtime_dispatch`,
-/// `daemon/control/runtime_dispatch_adapter`) classifies "not found" through
-/// the same predicate. If a future SDK version rephrases its
-/// reason, this is the single grep target.
+/// Reason-string fragments that Axon runtime bindings may produce when an
+/// ability is unknown. Canonical Invocation dispatch classifies all local
+/// misses through this predicate; it is the single update point if the SDK
+/// changes its diagnostic vocabulary.
 pub const NOT_FOUND_REASON_FRAGMENTS: &[&str] = &[
     "unknown_ability",
     "no local handler registered",
@@ -295,7 +308,7 @@ pub async fn invoke_local_rpc(
 
 pub async fn rpc_value_from_handle(handle: InvocationHandle) -> Result<Value, String> {
     let state = handle.wait().await;
-    let events = handle.core().snapshot_events().await;
+    let events = handle.events_snapshot().await;
     let terminal = events
         .iter()
         .rev()
@@ -346,8 +359,16 @@ mod tests {
     use serde_json::json;
 
     const TEST_DESCRIPTOR_VERSION: &str = "1.0.0";
+    const TEST_DESCRIPTOR_HASH: [u8; 32] = [0x33; 32];
     const TEST_SCHEMA_HASH: [u8; 32] = [0x11; 32];
     const TEST_IMPL_HASH: [u8; 32] = [0x22; 32];
+
+    fn expected_descriptor_ref(ability_ura: &str) -> String {
+        format!(
+            "{ability_ura}@{TEST_DESCRIPTOR_VERSION}#{}!invoke",
+            hex::encode(TEST_DESCRIPTOR_HASH)
+        )
+    }
 
     fn target(ability: String, subject: Option<String>) -> InvocationTarget {
         InvocationTarget {
@@ -376,6 +397,8 @@ mod tests {
                     .with_modes(AbilityCallModes::RPC)
                     .with_descriptor_proof(
                         TEST_DESCRIPTOR_VERSION,
+                        "invoke",
+                        TEST_DESCRIPTOR_HASH,
                         TEST_SCHEMA_HASH,
                         TEST_IMPL_HASH,
                     ),
@@ -403,7 +426,7 @@ mod tests {
         assert_eq!(envelope.envelope().subject.ura, owner);
         assert_eq!(
             envelope.envelope().ability,
-            format!("{ability}@{TEST_DESCRIPTOR_VERSION}")
+            expected_descriptor_ref(&ability)
         );
     }
 
@@ -425,9 +448,8 @@ mod tests {
         assert_eq!(envelope.envelope().subject.ura, subject);
         assert_eq!(
             envelope.envelope().ability,
-            format!(
-                "{}@{TEST_DESCRIPTOR_VERSION}",
-                crate::core::ura::owner_ability_ura(&local_device_ura(), "fs.read").unwrap()
+            expected_descriptor_ref(
+                &crate::core::ura::owner_ability_ura(&local_device_ura(), "fs.read").unwrap()
             )
         );
     }
@@ -450,9 +472,9 @@ mod tests {
         assert_eq!(envelope.envelope().subject.ura, subject);
         assert_eq!(
             envelope.envelope().ability,
-            format!(
-                "{}@{TEST_DESCRIPTOR_VERSION}",
-                crate::core::ura::owner_ability_ura(&local_device_ura(), "device.inspect").unwrap()
+            expected_descriptor_ref(
+                &crate::core::ura::owner_ability_ura(&local_device_ura(), "device.inspect")
+                    .unwrap()
             )
         );
     }

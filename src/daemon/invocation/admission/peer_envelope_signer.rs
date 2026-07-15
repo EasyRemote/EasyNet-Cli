@@ -304,10 +304,10 @@ fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Resul
         .ok_or_else(|| {
             Status::internal("cross-hub canonical_invoke signing: callee URA missing after rewrite")
         })?;
-    crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+    crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
         callee_ura,
         ability,
-        crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        crate::daemon::ability::CallMode::Rpc,
     )
     .map_err(|err| {
         Status::internal(format!(
@@ -344,6 +344,15 @@ mod tests {
             crate::core::ura::hub_ura(realm),
             [3u8; 32],
         ))
+    }
+
+    fn peer_discover_descriptor_ref() -> String {
+        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            "easynet:///r/peer/hub",
+            "federation.discover",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("peer federation.discover descriptor ref")
     }
 
     #[test]
@@ -393,6 +402,7 @@ mod tests {
     async fn peer_request_normalizes_hub_and_user_provenance_before_signing() {
         let signer = test_hub_signer("local");
         let expected_subject = "easynet:///r/peer/ability/hub.federation.discover".to_string();
+        let expected_descriptor_ref = peer_discover_descriptor_ref();
 
         for provenance_ura in [
             crate::core::ura::hub_ura("origin"),
@@ -430,7 +440,7 @@ mod tests {
                     .metadata
                     .get(SIGNED_DESCRIPTOR_REF_METADATA_KEY)
                     .map(String::as_str),
-                Some("easynet:///r/peer/ability/hub.federation.discover@1.0.0")
+                Some(expected_descriptor_ref.as_str())
             );
         }
     }
@@ -438,6 +448,7 @@ mod tests {
     #[tokio::test]
     async fn sign_peer_request_preserves_causal_context() {
         let signer = test_hub_signer("local");
+        let descriptor_ref = peer_discover_descriptor_ref();
         let mut env = Envelope {
             caller: Some(AgentIdentity {
                 ura: crate::core::ura::hub_ura("local"),
@@ -470,7 +481,7 @@ mod tests {
             // single-segment name has no valid hub descriptor URA. Use a
             // real federation ability, as every production caller does.
             "federation.discover",
-            "easynet:///r/peer/ability/hub.federation.discover@1.0.0",
+            &descriptor_ref,
             br#"{"q":"chat"}"#,
             Some("local"),
             Some(signer.as_ref()),
@@ -486,7 +497,7 @@ mod tests {
             .expect("ed25519 signature bytes");
         let descriptor_bound = descriptor_bound_from_wire_parts(
             env.clone(),
-            "easynet:///r/peer/ability/hub.federation.discover@1.0.0".to_string(),
+            descriptor_ref,
             br#"{"q":"chat"}"#,
             WireCallerIdentity::FromEnvelope,
         )
@@ -516,10 +527,11 @@ mod tests {
             Some("local"),
         )
         .expect("peer envelope");
+        let descriptor_ref = peer_discover_descriptor_ref();
         let error = sign_peer_request_envelope(
             &mut env,
             "federation.discover",
-            "easynet:///r/peer/ability/hub.federation.discover@1.0.0",
+            &descriptor_ref,
             br#"{"q":"chat"}"#,
             Some("local"),
             None,
@@ -545,10 +557,11 @@ mod tests {
             Some("local"),
         )
         .expect("peer envelope");
+        let descriptor_ref = peer_discover_descriptor_ref();
         let error = sign_peer_request_envelope(
             &mut env,
             "federation.discover",
-            "easynet:///r/peer/ability/hub.federation.discover@1.0.0",
+            &descriptor_ref,
             br#"{"q":"chat"}"#,
             Some("local"),
             Some(signer.as_ref()),

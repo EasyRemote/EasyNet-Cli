@@ -1,0 +1,33 @@
+schema_version = "2"
+name = "invocation.cancel"
+descriptor_version = "1.0.0"
+description = "Request cancellation of one registered unary Invocation lifecycle owned by this authority."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["target_lifecycle_hash", "reason"]
+additionalProperties = false
+
+[input_schema.properties.reason]
+type = "string"
+maxLength = 1024
+
+[input_schema.properties.target_invocation_id]
+type = "string"
+minLength = 1
+
+[input_schema.properties.target_lifecycle_hash]
+type = "string"
+pattern = "^[0-9a-fA-F]{64}$"

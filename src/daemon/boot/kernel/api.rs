@@ -10,9 +10,8 @@
 //
 // Layering rule
 // -------------
-// The plan v10.1–v10.3 pins two hard trait boundaries:
-//   * KernelApi      — daemon control/schedulers ↔ daemon kernel
-//   * GatewayApi     — daemon kernel ↔ federation/network adapter
+// The plan v10.1–v10.3 pins one execution boundary:
+//   * KernelApi — daemon control/schedulers ↔ daemon kernel
 //
 // CI enforcement lives in `tools/scripts/check-kernel-boundary.sh`:
 // anything under `src/daemon/control/` may import

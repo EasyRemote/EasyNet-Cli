@@ -1,0 +1,29 @@
+id: sdk/seven_language_capability_matrix
+profile: sdk_parity
+required_for:
+  - go
+  - python
+description: The canonical capability set expands to one explicit state cell for every Rust, C ABI, Go, Python, Node, Java and Swift combination, with live executable evidence for every non-unsupported cell.
+steps:
+  - action: load_sdk_parity_matrix
+    manifest: sdk/conformance/sdk-parity-matrix.json
+  - action: require_status_taxonomy
+  - action: require_canonical_runtime_capabilities
+  - action: require_evidence_refs
+  - action: require_provider_backed_action_reports
+  - action: reject_false_cutover_ready
+  - action: reject_product_boundary_rows
+expect:
+  result: sdk_parity_matrix_enforced
+  case_id: sdk/seven_language_capability_matrix
+  language_count: 7
+  capability_count: 31
+  matrix_cell_count: 217
+  product_boundary_count: 0
+  missing_capability: false
+  missing_language_cell: false
+  duplicate_language_cell: false
+  invalid_status: false
+  provider_backed_action_reports: live_runner_attested
+  product_specific_capability: false
+  false_cutover_ready: false

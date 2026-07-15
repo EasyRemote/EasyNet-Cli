@@ -155,8 +155,8 @@ enum CredentialCheck {
 
 /// Device-mode preflight budget for the Hub session socket.
 ///
-/// This is intentionally a plain TCP reachability probe, not an Axon
-/// `DendriteBridge` connect. `runtime start` is about to spawn
+/// This is intentionally a plain TCP reachability probe, not a federation
+/// session connect. `runtime start` is about to spawn
 /// `easynet-daemon`, and the daemon owns the real Axon Invocation /
 /// session handshake. The CLI only needs to reject a clearly absent
 /// listener before forking a background process; requiring the
@@ -435,16 +435,16 @@ fn with_bridge_lib_env(cfg: crate::daemon::DaemonStartConfig) -> crate::daemon::
     }
 }
 
-fn start_stdio_mcp_server(creds: &config::Credentials) {
+fn start_stdio_mcp_server(creds: &config::Credentials) -> anyhow::Result<()> {
     let config = crate::daemon::ability::catalog::profiles::mcp::StdioServerConfig {
         server_name: "easynet-device".into(),
         tenant_id: creds.realm.clone(),
         agent_name: None,
     };
-    let configured = crate::daemon::ability::catalog::profiles::mcp::build_stdio_server(&config);
+    let configured = crate::daemon::ability::catalog::profiles::mcp::build_stdio_server(&config)?;
     let descriptor_count = configured.descriptor_count();
     std::thread::spawn(move || {
-        let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
+        let server = crate::daemon::execution::mcp::stdio::StdioMcpServer::new(configured.provider)
             .with_server_name(configured.server_name)
             .with_server_version(env!("CARGO_PKG_VERSION"));
         if let Err(e) = server.run(std::io::stdin().lock(), &mut std::io::stdout()) {
@@ -454,11 +454,12 @@ fn start_stdio_mcp_server(creds: &config::Credentials) {
     output::success(&format!(
         "MCP server started on stdio ({descriptor_count} tools advertised)"
     ));
+    Ok(())
 }
 
 fn run_foreground_with_daemon(creds: &config::Credentials, no_mcp: bool) -> anyhow::Result<()> {
     if !no_mcp {
-        start_stdio_mcp_server(creds);
+        start_stdio_mcp_server(creds)?;
     }
 
     let shutdown = ShutdownSignal::new();
@@ -466,139 +467,6 @@ fn run_foreground_with_daemon(creds: &config::Credentials, no_mcp: bool) -> anyh
     output::info("Running in foreground (Ctrl-C to stop)...");
     shutdown.wait();
     super::stop::run(super::stop::StopArgs {})
-}
-
-/// Best-effort by contract — daemon startup completes regardless
-/// of advertise failures so heartbeat, federation join, and other
-/// surfaces stay reachable. The directory just degrades until a
-/// later boot or operator-initiated re-advertise catches up.
-pub(crate) fn republish_via_federation_best_effort(
-    bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
-    creds: &config::Credentials,
-) {
-    let plan = match build_bootstrap_plan(creds) {
-        Ok(p) => p,
-        Err(e) => {
-            output::warn(&format!("bootstrap plan: {e}"));
-            return;
-        }
-    };
-    // Pin the caller URA for hub-shaped federation calls so the
-    // bridge stamps the envelope caller to a canonical URA —
-    // `plan.host_device_ura` already carries that shape (see
-    // `build_bootstrap_plan_from`).
-    let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
-        bridge,
-        plan.host_device_ura.clone(),
-    );
-
-    // Bootstrap self-identity FIRST. Every subsequent signed Invoke
-    // (federation.advertise_*, runtime.register_local_tool, anything)
-    // carries an `easynet.public_key` derived from the daemon's
-    // identity; the runtime rejects them with
-    // AXON_EASYNET_SUBJECT_KEY_UNREGISTERED until that key is
-    // recorded in `state.identity.node_keys` for this node. Calling
-    // bootstrap_self_identity here publishes this Device owner's public
-    // projection once per runtime lifetime; it is a no-op on subsequent
-    // calls. Hub identity is registered by the Hub runtime that owns it.
-    if !plan.realm.is_empty() {
-        let identity_outcome =
-            crate::daemon::federation::publish::bootstrap_self_identity_via_runtime(
-                &invoker,
-                &creds.realm,
-                &plan.realm,
-                &creds.node_id,
-            );
-        match &identity_outcome.result {
-            Ok(_) => output::detail(
-                "runtime-identity",
-                &format!("bootstrapped trusted-key material for {}", creds.node_id),
-            ),
-            Err(msg) => output::warn(&format!(
-                "runtime.bootstrap_self_identity failed: {msg}; signed Invokes will fail until \
-                 the runtime accepts this node's key (federation.advertise_* + every \
-                 frontend Invoke depend on this)"
-            )),
-        }
-    }
-
-    let outcomes = crate::daemon::federation::publish::republish_abilities_via_advertise(
-        &invoker,
-        &creds.realm,
-        &plan,
-    );
-
-    let mut ok = 0usize;
-    let mut total = 0usize;
-    let mut skipped = false;
-    for o in &outcomes {
-        if o.label == "skipped" {
-            skipped = true;
-            continue;
-        }
-        total += 1;
-        match &o.result {
-            Ok(_) => ok += 1,
-            Err(msg) => {
-                output::warn(&format!("advertise {} failed: {msg}", o.label));
-            }
-        }
-    }
-    if skipped {
-        output::detail(
-            "directory",
-            "advertise deferred — daemon has no realm yet (run easynet device join)",
-        );
-    } else if total > 0 {
-        output::detail(
-            "directory",
-            &format!(
-                "{ok}/{total} federation.advertise_* calls succeeded — entries visible to peers"
-            ),
-        );
-    }
-
-    // Step-3 register: tell axon-runtime that *this daemon* is the
-    // implementation behind every daemon-owned ability. Without this
-    // an InvokeAbility from the EasyNet frontend reaches the runtime,
-    // resolves no SessionRegistry binding, and falls through to
-    // NoBinding — even though the daemon is right there listening on
-    // its dispatch UDS. Best-effort: a register failure leaves the
-    // dispatch path degraded but keeps boot moving.
-    #[cfg(feature = "axon-pb")]
-    if !plan.realm.is_empty() && !plan.host_device_ura.is_empty() {
-        let dispatch_endpoint = crate::daemon::control::runtime_dispatch::dispatch_endpoint_ura();
-        let reg_outcomes = crate::daemon::federation::publish::register_local_tools_via_runtime(
-            &invoker,
-            &creds.realm,
-            &plan.realm,
-            &creds.node_id,
-            &dispatch_endpoint,
-        );
-        let mut reg_ok = 0usize;
-        let mut reg_total = 0usize;
-        for o in &reg_outcomes {
-            reg_total += 1;
-            match &o.result {
-                Ok(_) => reg_ok += 1,
-                Err(msg) => {
-                    output::warn(&format!(
-                        "runtime.register_local_tool {} failed: {msg}",
-                        o.label
-                    ));
-                }
-            }
-        }
-        if reg_total > 0 {
-            output::detail(
-                "runtime-dispatch",
-                &format!(
-                    "{reg_ok}/{reg_total} runtime.register_local_tool calls succeeded — \
-                     daemon-owned abilities are reachable via runtime"
-                ),
-            );
-        }
-    }
 }
 
 /// Build a `BootstrapPlan` from credentials + the loaded agent

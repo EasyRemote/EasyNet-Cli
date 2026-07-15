@@ -781,6 +781,7 @@ mod tests {
             name,
             LOCAL_DEVICE_URA,
             crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
         )
         .unwrap()
     }
@@ -904,6 +905,7 @@ mod tests {
                 "mentor.quote",
                 "easynet:///r/default/agent/u.mentor",
                 CallMode::Rpc,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                 Some(&base),
             )
             .unwrap();
@@ -912,6 +914,7 @@ mod tests {
                 "mentor.quote",
                 "easynet:///r/default/agent/u.mentor",
                 CallMode::Rpc,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
                 Some(&restricted),
             )
             .unwrap();

@@ -103,7 +103,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
 
         let result = try await runtime.invoke(draft)
         XCTAssertTrue(result.ok)
-        XCTAssertEqual(result.receipt["receipt_ref"], "opaque-receipt-ref")
+        XCTAssertEqual(result.terminalReceipt["receipt_ref"], "opaque-receipt-ref")
 
         let prepared = try await runtime.prepare(draft, options: ["deadline_ms": 1000])
         XCTAssertFalse(prepared.submitReady())
@@ -118,10 +118,27 @@ final class RuntimeCoreSeamTests: XCTestCase {
         let signed = try prepared.signWithCallerSignature(signature)
         XCTAssertTrue(signed.submitReady())
         let handle = try await signed.submit()
-        XCTAssertEqual(handle.handleId, 7)
         XCTAssertFalse(handle.terminal)
+        let awaited = try await runtime.awaitResult(handle)
+        XCTAssertTrue(awaited.ok)
+        let cancelled = try await runtime.cancel(handle, reason: "done")
+        XCTAssertTrue(cancelled.requestAccepted)
+        XCTAssertTrue(cancelled.terminal)
+        let events = try await runtime.events(handle)
+        XCTAssertTrue(events.terminal)
+        try await runtime.closeHandle(handle)
         let submittedSigner = await transport.submittedSigner()
         XCTAssertEqual(submittedSigner, "caller-key-1")
+        let forged = try InvocationHandle.fromJSON(
+            Data(#"{"handle_id":7,"state":"Running","terminal":false}"#.utf8)
+        )
+        await expectSDKError(.invalidArgument) {
+            _ = try await runtime.awaitResult(forged)
+        }
+        await transport.setEventHandleId(8)
+        await expectSDKError(.invalidArgument) {
+            _ = try await runtime.events(handle)
+        }
 
         await expectSDKError(.invalidArgument) {
             _ = try await runtime.submitSigned(prepared)
@@ -130,6 +147,24 @@ final class RuntimeCoreSeamTests: XCTestCase {
         expectSyncSDKError(.invalidHandle) {
             _ = try runtime.newInvocation()
         }
+    }
+
+    func testInvocationResultUsesTerminalReceipt() throws {
+        let canonical = try InvocationResult.fromJSON(
+            Data(
+                #"{"ok":true,"terminal_state":"Completed","terminal_receipt":{"receipt_ref":"canonical-terminal"}}"#
+                    .utf8
+            )
+        )
+        XCTAssertEqual(canonical.terminalReceipt["receipt_ref"], "canonical-terminal")
+
+        let legacyOnly = try InvocationResult.fromJSON(
+            Data(
+                #"{"ok":true,"terminal_state":"Completed","receipt":{"receipt_ref":"legacy-only"}}"#
+                    .utf8
+            )
+        )
+        XCTAssertTrue(legacyOnly.terminalReceipt.isEmpty)
     }
 
     func testAuthorityMetadataIsTypedAndMutuallyExclusive() async throws {
@@ -246,6 +281,70 @@ final class RuntimeCoreSeamTests: XCTestCase {
         )
     }
 
+    func testABICompatibleAcceptsExactVersion() async throws {
+        let client = Client(transport: MemoryDiscoveryTransport())
+        let features = try await client.requireABI(5)
+        XCTAssertEqual(features.abiVersion, 5)
+    }
+
+    func testABIIncompatibleRejectsMismatch() async throws {
+        let client = Client(transport: MemoryDiscoveryTransport())
+        await expectSDKError(.versionIncompatible) { _ = try await client.requireABI(4) }
+    }
+
+    func testRetryHintsPreserveRetryability() {
+        let safe = SDKError(code: .timeout, stage: "execution", retryHint: .safe, retryable: true, message: "timeout")
+        let never = SDKError.validation("input", "bad")
+        XCTAssertEqual(safe.retryHint, .safe)
+        XCTAssertTrue(safe.retryable)
+        XCTAssertEqual(never.retryHint, .never)
+        XCTAssertFalse(never.retryable)
+    }
+
+    func testCanonicalSigningMaterialComesFromPrepare() async throws {
+        let runtime = RuntimeClient(transport: MemoryRuntimeTransport(descriptor: descriptor))
+        let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])
+        XCTAssertEqual(prepared.signingMaterial.descriptorRef, descriptor)
+        XCTAssertEqual(Data(base64Encoded: prepared.signingMaterial.canonicalBytesBase64), Data("canonical".utf8))
+    }
+
+    func testCompleteTupleRejectsMissingCaller() {
+        expectSyncSDKError(.invalidArgument) {
+            _ = try InvocationBuilder()
+                .withCalleeURA(callee)
+                .withDescriptorRef(descriptor)
+                .withSubjectURA(callee)
+                .withNonce(nonce)
+                .withCausalContext("{\"form\":\"none\"}")
+                .withArgsJSON("{}")
+                .inspect()
+        }
+    }
+
+    func testPreparedInvocationCannotBeSubmitted() async throws {
+        let runtime = RuntimeClient(transport: MemoryRuntimeTransport(descriptor: descriptor))
+        let prepared = try await runtime.prepare(completeDraft(runtime), options: ["deadline_ms": 1000])
+        await expectSDKError(.invalidArgument) { _ = try await runtime.submitSigned(prepared) }
+    }
+
+    func testStreamAndBidiBackpressureAreBounded() async throws {
+        let stream = StreamHandle(source: CountingStreamSource())
+        for _ in 0...StreamHandle.maxRetainedEvents { _ = try await stream.next() }
+        XCTAssertEqual(stream.terminalEvent()?.state, "BackpressureTerminated")
+        let bidi = BidiSession(source: CountingBidiSource())
+        for _ in 0...BidiSession.maxRetainedFrames { _ = try await bidi.next() }
+        XCTAssertEqual(bidi.terminalFrame()?.kind, "backpressure_terminated")
+    }
+
+    func testStreamOrderAndTerminalArePreserved() async throws {
+        let stream = StreamHandle(source: OrderedTerminalStreamSource())
+        let first = try await stream.next()
+        XCTAssertEqual(first.sequence, 0)
+        let terminal = try await stream.next()
+        XCTAssertEqual(terminal.sequence, 1)
+        XCTAssertTrue(terminal.terminal)
+    }
+
     private func completeBuilder() -> InvocationBuilder {
         InvocationBuilder()
             .withCallerURA(caller)
@@ -337,7 +436,6 @@ actor MemoryHealthTransport: HealthTransport, DiagnosticsTransport {
             """
             {
               "api_ready": true,
-              "daemon_ready": true,
               "invocation_ready": false,
               "directory_ready": false,
               "trust_ready": true,
@@ -376,6 +474,7 @@ actor MemoryHealthTransport: HealthTransport, DiagnosticsTransport {
 actor MemoryRuntimeTransport: RuntimeTransport {
     private let descriptor: String
     private var signer = ""
+    private var eventHandleId: Int64 = 7
 
     init(descriptor: String) {
         self.descriptor = descriptor
@@ -386,7 +485,7 @@ actor MemoryRuntimeTransport: RuntimeTransport {
             ok: true,
             terminalState: .completed,
             outputJSON: "{\"ok\":true}",
-            receipt: ["receipt_ref": "opaque-receipt-ref", "receipt_hash": "opaque-hash"]
+            terminalReceipt: ["receipt_ref": "opaque-receipt-ref", "receipt_hash": "opaque-hash"]
         )
     }
 
@@ -426,6 +525,48 @@ actor MemoryRuntimeTransport: RuntimeTransport {
         )
     }
 
+    func awaitHandle(_ control: InvocationControlCapability) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "ok": true,
+                "terminal_state": "Completed",
+                "output_json": ["done": true],
+                "terminal_receipt": ["receipt_ref": "opaque-receipt-ref"],
+            ],
+            options: [.sortedKeys]
+        )
+    }
+
+    func cancelHandle(_ control: InvocationControlCapability, reason: String) throws -> Data {
+        let handleId = try control.adapterHandleId()
+        return try JSONSerialization.data(
+            withJSONObject: [
+                "handle_id": handleId,
+                "request_accepted": true,
+                "deduplicated": false,
+                "cancelled": true,
+                "state": "Cancelled",
+                "terminal": true,
+            ],
+            options: [.sortedKeys]
+        )
+    }
+
+    func handleEvents(_ control: InvocationControlCapability) throws -> Data {
+        let handleId = eventHandleId
+        _ = try control.adapterHandleId()
+        return try JSONSerialization.data(
+            withJSONObject: [
+                "handle_id": handleId,
+                "state": "Completed",
+                "terminal": true,
+            ],
+            options: [.sortedKeys]
+        )
+    }
+
+    func freeHandle(_ control: InvocationControlCapability) throws {}
+
     func openStream(_ draft: InvocationDraft) -> StreamSource {
         CountingStreamSource()
     }
@@ -438,6 +579,10 @@ actor MemoryRuntimeTransport: RuntimeTransport {
 
     func submittedSigner() -> String {
         signer
+    }
+
+    func setEventHandleId(_ handleId: Int64) {
+        eventHandleId = handleId
     }
 }
 
@@ -482,6 +627,15 @@ actor CountingStreamSource: StreamSource {
     }
 
     func close() {}
+}
+
+actor OrderedTerminalStreamSource: StreamSource {
+    private var sequence = 0
+
+    func next() throws -> StreamEvent {
+        defer { sequence += 1 }
+        return sequence == 0 ? try .data(0, payloadJSON: "{}") : try .terminal(1, state: "Completed")
+    }
 }
 
 actor CountingBidiSource: BidiSource {

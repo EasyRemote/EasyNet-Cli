@@ -1293,6 +1293,12 @@ mod tests {
         register_with_backend(reg, Arc::new(SyntheticBackend));
     }
 
+    fn executable_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_with_runtime(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
+        )
+    }
+
     fn clear_recording_sessions_for_test() {
         recording_sessions().lock().unwrap().clear();
     }
@@ -1399,7 +1405,7 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-e2e");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1450,7 +1456,7 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-preview");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1490,7 +1496,7 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-recording");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let start = dispatcher
@@ -1543,7 +1549,7 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-recording-duplicate");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let start_args = json!({"fps": 5, "max_duration_ms": 5000, "max_bytes": 1048576});
@@ -1606,7 +1612,7 @@ mod tests {
     #[test]
     fn camera_subscribe_stream_preview_errors_name_subscribe_ability() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1638,7 +1644,7 @@ mod tests {
     #[test]
     fn handler_rejects_missing_subject_with_subject_required_reason() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1667,7 +1673,7 @@ mod tests {
         // Save an empty resources.json so load() returns Default
         // rather than picking up some prior test's state.
         resources::save(&ResourcesFile::default()).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1708,7 +1714,7 @@ mod tests {
         );
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {
@@ -1735,7 +1741,7 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args_even_on_envelope_path() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let target = InvocationTarget {

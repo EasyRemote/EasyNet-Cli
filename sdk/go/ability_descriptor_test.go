@@ -107,7 +107,7 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 		return runtimeAbilityResultJSON(true, `{"abilities":[{
 			"name":"namespace.resolve",
 			"ability_ura":"easynet:///r/example/ability/hub.namespace.resolve",
-			"descriptor_ref":"easynet:///r/example/ability/hub.namespace.resolve@1.0.0",
+			"descriptor_ref":"easynet:///r/example/ability/hub.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
 			"owner_ura":"easynet:///r/example/hub",
 			"descriptor_version":"1.0.0",
 			"schema_hash":"sha256:abc",
@@ -122,7 +122,7 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 			"schema_summary":{"input":{"type":"object"}},
 			"metadata":{"stable":"true"}
 		}]}`, "", false), nil
-	}}
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, err := NewRuntimeClient(transport)
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
@@ -143,7 +143,7 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if seen["descriptor_ref"] != "easynet:///r/example/ability/hub.meta.list_abilities@1.0.0" {
+	if seen["descriptor_ref"] != "easynet:///r/example/ability/hub.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
 		t.Fatalf("descriptor_ref = %q", seen["descriptor_ref"])
 	}
 	if len(page.Descriptors) != 1 {
@@ -151,7 +151,7 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 	}
 	got := page.Descriptors[0]
 	if got.AbilityURA != "easynet:///r/example/ability/hub.namespace.resolve" ||
-		got.DescriptorRef != "easynet:///r/example/ability/hub.namespace.resolve@1.0.0" ||
+		got.DescriptorRef != "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" ||
 		got.Version != "1.0.0" ||
 		got.Class != "runtime" ||
 		got.SchemaHash != "sha256:abc" ||
@@ -170,7 +170,7 @@ func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testi
 			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/hub.observe.health","owner_ura":"easynet:///r/example/hub","version":"1.0.0","call_mode":"rpc"},
 			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/hub.observe.health","owner_ura":"easynet:///r/example/hub","version":"2.0.0","call_mode":"rpc"}
 		]}`, "", false), nil
-	}}
+	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeAbilityDescriptorProvider(ability)

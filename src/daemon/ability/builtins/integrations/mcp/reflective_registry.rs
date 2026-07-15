@@ -1263,6 +1263,7 @@ fn register_one_tool<W: RegistryWriter>(
         description.clone()
     };
     let manifest = AbilityManifest::new(manifest_verb, desc_text.clone(), input_schema.clone())
+        .and_then(|manifest| manifest.with_admission_action("stream"))
         .map_err(|e| ReflectFailure {
             server: server_name.to_string(),
             tool: Some(upstream_tool.clone()),
@@ -1349,17 +1350,22 @@ fn register_one_tool<W: RegistryWriter>(
     // the URA the caller sees later is derived from `owner_ura`
     // + `local_name` (no `mcp_upstream` substring). Provenance goes
     // ONLY into `source`.
-    let descriptor = AbilityDescriptor::new(local_name.clone(), owner_ura, Visibility::Scoped)
-        .map_err(|e| ReflectFailure {
-            server: server_name.to_string(),
-            tool: Some(upstream_tool.clone()),
-            reason: format!("descriptor build failed: {e}"),
-        })?
-        .with_input_schema(input_schema)
-        .with_description(desc_text)
-        .with_source(provenance)
-        .with_metadata_entry("mcp_server", server_name.to_string())
-        .with_metadata_entry("mcp_tool", upstream_tool.clone());
+    let descriptor = AbilityDescriptor::new(
+        local_name.clone(),
+        owner_ura,
+        Visibility::Scoped,
+        crate::daemon::ability::descriptors::AdmissionAction::Stream,
+    )
+    .map_err(|e| ReflectFailure {
+        server: server_name.to_string(),
+        tool: Some(upstream_tool.clone()),
+        reason: format!("descriptor build failed: {e}"),
+    })?
+    .with_input_schema(input_schema)
+    .with_description(desc_text)
+    .with_source(provenance)
+    .with_metadata_entry("mcp_server", server_name.to_string())
+    .with_metadata_entry("mcp_tool", upstream_tool.clone());
 
     Ok(ReflectedAbility {
         ability_name: local_name,
@@ -1619,7 +1625,7 @@ mod tests {
             )
             .expect("MCP test authority context");
         AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            easynet_axon::invocation::LocalRuntime::new(),
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None),
             authority_context,
         )
     }
@@ -1854,9 +1860,10 @@ while True:
         let (_dir, svc) = make_echo_client("echo");
         let owner = "easynet:///r/r/agent/u.mcp";
         let mut reg = registry_for_mcp_owner(owner);
-        reg.register_rpc_with_owner(
+        reg.register_rpc_with_owner_and_action(
             "echo_one",
             OwnerKind::Agent("mcp".into()),
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             Arc::new(|_: Value| Ok(json!("local"))),
         );
 
@@ -1888,8 +1895,9 @@ while True:
         // against the operator running before they've configured
         // any upstreams.
         let svc = McpClientService::new();
-        let mut reg = AxonAbilityCatalog::new();
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
+        let owner = "easynet:///r/r/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let result = reflect_all(&svc, &mut reg, owner).await;
         assert!(result.registered.is_empty());
         assert!(result.failed.is_empty());
     }
@@ -1962,7 +1970,7 @@ while True:
         // any mode-dependent work. This invariant holds across all
         // three modes — `pages_user = None` always wins.
         let svc = empty_mcp();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
         for mode in [
             McpReflectionMode::Off,
             McpReflectionMode::Lazy,
@@ -1982,7 +1990,7 @@ while True:
         // `EASYNET_MCP_REFLECTION=off` is the operator's explicit opt
         // out — pairing state is irrelevant, the plan stays Skip.
         let svc = empty_mcp();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
         let plan = PostArcReflection::plan(
             McpReflectionMode::Off,
             Some("test-user"),
@@ -2001,7 +2009,7 @@ while True:
         // is sufficient — the actual reflection happens later inside
         // the supervisor's spawned thread.
         let svc = empty_mcp();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = registry_for_mcp_owner("easynet:///r/test-realm/agent/test-user.mcp");
         let plan = PostArcReflection::plan(
             McpReflectionMode::Lazy,
             Some("test-user"),
@@ -2226,9 +2234,10 @@ while True:
         // from the [a, b] state. Manually register `a` so the
         // diff has something to remove.
         use std::sync::Arc;
-        reg2.register_rpc_with_owner(
+        reg2.register_rpc_with_owner_and_action(
             "a",
             OwnerKind::Agent("mcp".into()),
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             Arc::new(|_: Value| Ok(serde_json::json!({"stale": "tool a"}))),
         );
         // After this seed, reg2 has [a, b, c]. previously_reflected

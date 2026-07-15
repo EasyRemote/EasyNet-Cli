@@ -277,9 +277,56 @@ impl RuntimeClient {
         }
         let tuple = signed.prepared().tuple();
         let response = self.inner.invoke(signed.into_daemon_invocation()).await?;
-        Ok(InvocationHandle {
-            outcome: InvocationOutcome::from_invoke_response(tuple, response),
+        let outcome = InvocationOutcome::from_verified_invoke_response(
+            tuple,
+            response,
+            &local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+        )?;
+        Ok(InvocationHandle { outcome })
+    }
+
+    /// Submit an independently signed `invocation.cancel` command for a target
+    /// Invocation. The returned handle proves only the command lifecycle; the
+    /// target's terminal outcome remains observable through its original
+    /// submit handle.
+    pub async fn request_cancel_signed(
+        &self,
+        signed: SignedInvocation,
+        reason: String,
+    ) -> Result<InvocationHandle> {
+        if self.state != ClientConnectionState::Ready {
+            return Err(DaemonError::InvocationEndpointDown {
+                endpoint: self.inner.endpoint().to_path_buf(),
+            });
+        }
+        let caller_ura = signed.prepared().tuple().caller_ura;
+        let prepared = signed.prepare_cancel_command(reason)?;
+        let signer = tokio::task::spawn_blocking(move || {
+            crate::daemon::identity::self_identity::RuntimeSigningIdentity::load_default(caller_ura)
         })
+        .await
+        .map_err(|error| {
+            DaemonError::InvalidInvocation(format!(
+                "load invocation.cancel authority signer task failed: {error}"
+            ))
+        })?
+        .map_err(|error| {
+            DaemonError::InvalidInvocation(format!(
+                "load invocation.cancel authority signer failed: {error}"
+            ))
+        })?;
+        let signed_cancel = prepared.sign_with_canonical_signer(&signer).await?;
+        let tuple = signed_cancel.prepared().tuple();
+        let response = self
+            .inner
+            .invoke(signed_cancel.into_daemon_invocation())
+            .await?;
+        let outcome = InvocationOutcome::from_verified_invoke_response(
+            tuple,
+            response,
+            &local_daemon_grpc::LocalKeyServiceReceiptResolver::new(),
+        )?;
+        Ok(InvocationHandle { outcome })
     }
 
     /// Return typed runtime readiness without using JSON control
@@ -407,20 +454,42 @@ pub struct InvocationOutcome {
 }
 
 impl InvocationOutcome {
-    pub(crate) fn from_invoke_response(
+    pub(crate) fn from_verified_invoke_response(
         tuple: InvocationTuple,
         response: easynet_axon::pb::axon::v1::InvokeResponse,
-    ) -> Self {
+        resolver: &dyn easynet_axon::invocation::KeyResolver,
+    ) -> Result<Self> {
+        use easynet_axon::invocation::InvocationState;
+
         let error = response.error.as_ref().map(RuntimeErrorSummary::from_wire);
+        let admission_wire = response.admission_receipt.clone().ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "InvokeResponse omitted its signed admission receipt".to_string(),
+            )
+        })?;
+        let terminal_wire = response.terminal_receipt.clone().ok_or_else(|| {
+            DaemonError::InvalidInvocation(
+                "InvokeResponse omitted its signed terminal receipt".to_string(),
+            )
+        })?;
+        let checkpoints =
+            crate::daemon::invocation::receipts::finalization_projection::verify_wire_finalization_checkpoints(
+                admission_wire,
+                terminal_wire,
+                resolver,
+            )
+            .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        let response_state = InvocationState::try_from(response.state).map_err(|error| {
+            DaemonError::InvalidInvocation(format!("InvokeResponse state is invalid: {error}"))
+        })?;
+        if checkpoints.terminal().state() != response_state {
+            return Err(DaemonError::InvalidInvocation(
+                "verified terminal receipt state disagrees with InvokeResponse state".to_string(),
+            ));
+        }
         let stages = InvocationReceiptStages {
-            admission: response
-                .admission_receipt
-                .as_ref()
-                .map(ReceiptSummary::from_wire),
-            terminal: response
-                .terminal_receipt
-                .as_ref()
-                .map(ReceiptSummary::from_wire),
+            admission: Some(ReceiptSummary::from_signed(checkpoints.admission())?),
+            terminal: Some(ReceiptSummary::from_signed(checkpoints.terminal())?),
         };
         let result = InvocationResult {
             tuple,
@@ -433,7 +502,7 @@ impl InvocationOutcome {
             receipt: stages.terminal.clone(),
             error,
         };
-        Self::new(result, stages)
+        Ok(Self::new(result, stages))
     }
 
     pub(crate) fn new(result: InvocationResult, stages: InvocationReceiptStages) -> Self {
@@ -458,14 +527,6 @@ impl InvocationOutcome {
 
     pub(crate) fn into_parts(self) -> (InvocationResult, InvocationReceiptStages) {
         (self.result, self.stages)
-    }
-
-    pub(crate) fn without_receipts(result: InvocationResult) -> Self {
-        debug_assert!(result.receipt.is_none());
-        Self {
-            result,
-            stages: InvocationReceiptStages::default(),
-        }
     }
 }
 
@@ -495,8 +556,9 @@ fn invocation_state_name(state: i32) -> String {
 
 /// Receipt summary DTO. This is a projection, not a full cryptographic
 /// verification claim.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
 pub struct ReceiptSummary {
+    pub verification: ReceiptVerification,
     pub index: u64,
     pub invocation_id: String,
     pub receipt_type: String,
@@ -508,15 +570,48 @@ pub struct ReceiptSummary {
     pub cleanup_complete: bool,
     pub reason: String,
     pub child_invocation_id: String,
+    pub payload_base64: String,
+    pub caller_binding: Option<ReceiptAgentBindingSummary>,
+    pub callee_binding: Option<ReceiptAgentBindingSummary>,
+    pub subject_binding: Option<ReceiptSubjectBindingSummary>,
+    pub invocation_nonce_base64: String,
+    pub causal_binding_kind: String,
+    pub causal_binding: serde_json::Value,
+    pub callee_signature: Option<ReceiptSignatureSummary>,
+    pub signer_binding: Option<ReceiptAgentBindingSummary>,
+    pub host_attestation_base64: String,
+    pub authority_binding_kind: String,
+    pub authority_binding: serde_json::Value,
+    pub ability_binding: String,
+    pub failure: Option<ReceiptFailureSummary>,
+    pub usage: Option<ReceiptUsageSummary>,
+    pub subject_ref: Option<ReceiptEntityRefSummary>,
+    pub descriptor_version: String,
+    pub schema_hash_hex: String,
+    pub impl_hash_hex: String,
+    pub runtime_env: String,
+    pub authority_proof: Option<ReceiptAuthorityProofSummary>,
+    pub input_hash_hex: String,
+    pub output_hash_hex: String,
+    pub parent_receipts: Vec<ReceiptRefSummary>,
 }
 
 impl ReceiptSummary {
-    pub(crate) fn from_wire(receipt: &easynet_axon::pb::axon::v1::InvocationReceipt) -> Self {
+    pub(crate) fn from_signed(
+        receipt: &easynet_axon::invocation::SignedInvocationReceipt,
+    ) -> Result<Self> {
+        let wire = easynet_axon::invocation::wire::receipt_to_wire(receipt)
+            .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
+        Ok(Self::from_verified_wire(&wire))
+    }
+
+    fn from_verified_wire(receipt: &easynet_axon::pb::axon::v1::InvocationReceipt) -> Self {
         Self {
+            verification: ReceiptVerification::Verified,
             index: receipt.index,
             invocation_id: receipt.invocation_id.clone(),
             receipt_type: receipt.receipt_type.clone(),
-            state: receipt.state.to_string(),
+            state: invocation_state_name(receipt.state),
             timestamp_unix_ms: receipt.timestamp_unix_ms,
             prev_receipt_hash_hex: hex::encode(&receipt.prev_receipt_hash),
             self_hash_hex: hex::encode(&receipt.self_hash),
@@ -524,8 +619,298 @@ impl ReceiptSummary {
             cleanup_complete: receipt.cleanup_complete,
             reason: receipt.reason.clone(),
             child_invocation_id: receipt.child_invocation_id.clone(),
+            payload_base64: base64_bytes(&receipt.payload),
+            caller_binding: receipt.caller_binding.as_ref().map(agent_binding_summary),
+            callee_binding: receipt.callee_binding.as_ref().map(agent_binding_summary),
+            subject_binding: receipt
+                .subject_binding
+                .as_ref()
+                .map(subject_binding_summary),
+            invocation_nonce_base64: base64_bytes(&receipt.invocation_nonce),
+            causal_binding_kind: causal_binding_kind(receipt.causal_binding.as_ref()),
+            causal_binding: causal_binding_summary(receipt.causal_binding.as_ref()),
+            callee_signature: receipt.callee_signature.as_ref().map(signature_summary),
+            signer_binding: receipt.signer_binding.as_ref().map(agent_binding_summary),
+            host_attestation_base64: base64_bytes(&receipt.host_attestation),
+            authority_binding_kind: authority_binding_kind(receipt.authority_binding.as_ref()),
+            authority_binding: authority_binding_summary(receipt.authority_binding.as_ref()),
+            ability_binding: receipt.ability_binding.clone(),
+            failure: receipt.failure.as_ref().map(failure_summary),
+            usage: receipt.usage.as_ref().map(usage_summary),
+            subject_ref: receipt.subject_ref.as_ref().map(entity_ref_summary),
+            descriptor_version: receipt.descriptor_version.clone(),
+            schema_hash_hex: hex::encode(&receipt.schema_hash),
+            impl_hash_hex: hex::encode(&receipt.impl_hash),
+            runtime_env: receipt.runtime_env.clone(),
+            authority_proof: receipt
+                .authority_proof
+                .as_ref()
+                .map(authority_proof_summary),
+            input_hash_hex: hex::encode(&receipt.input_hash),
+            output_hash_hex: hex::encode(&receipt.output_hash),
+            parent_receipts: receipt
+                .parent_receipts
+                .iter()
+                .map(receipt_ref_summary)
+                .collect(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptVerification {
+    Verified,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptAgentBindingSummary {
+    pub ura: String,
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptSubjectBindingSummary {
+    pub ura: String,
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptEntityRefSummary {
+    pub kind: i32,
+    pub ura: String,
+    pub profile: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptSignatureSummary {
+    pub algorithm: String,
+    pub signature_base64: String,
+    pub key_id_hint: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptFailureSummary {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+    pub stage: i32,
+    pub security_class: i32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptUsageSummary {
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub duration_ms: u64,
+    pub external_calls: u32,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptRefSummary {
+    pub receipt_hash_hex: String,
+    pub receipt_ura: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize)]
+pub struct ReceiptAuthorityProofSummary {
+    pub proof_type: String,
+    pub binding_kind: String,
+    pub binding: serde_json::Value,
+    pub proof_payload_base64: String,
+    pub proof_hash_hex: String,
+    pub issuer: Option<ReceiptAgentBindingSummary>,
+    pub signature: Option<ReceiptSignatureSummary>,
+    pub admission_hook: String,
+}
+
+fn base64_bytes(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn agent_binding_summary(
+    binding: &easynet_axon::pb::axon::v1::AgentIdentity,
+) -> ReceiptAgentBindingSummary {
+    ReceiptAgentBindingSummary {
+        ura: binding.ura.clone(),
+        profile: binding.profile.clone(),
+    }
+}
+
+fn subject_binding_summary(
+    binding: &easynet_axon::pb::axon::v1::SubjectIdentity,
+) -> ReceiptSubjectBindingSummary {
+    ReceiptSubjectBindingSummary {
+        ura: binding.ura.clone(),
+        profile: binding.profile.clone(),
+    }
+}
+
+fn entity_ref_summary(
+    reference: &easynet_axon::pb::axon::v1::EntityRef,
+) -> ReceiptEntityRefSummary {
+    ReceiptEntityRefSummary {
+        kind: reference.kind,
+        ura: reference.ura.clone(),
+        profile: reference.profile.clone(),
+    }
+}
+
+fn signature_summary(
+    signature: &easynet_axon::pb::axon::v1::CalleeSignature,
+) -> ReceiptSignatureSummary {
+    ReceiptSignatureSummary {
+        algorithm: signature.algorithm.clone(),
+        signature_base64: base64_bytes(&signature.signature),
+        key_id_hint: signature.key_id_hint.clone(),
+    }
+}
+
+fn receipt_ref_summary(reference: &easynet_axon::pb::axon::v1::ReceiptRef) -> ReceiptRefSummary {
+    ReceiptRefSummary {
+        receipt_hash_hex: hex::encode(&reference.receipt_hash),
+        receipt_ura: reference.receipt_ura.clone(),
+    }
+}
+
+fn failure_summary(failure: &easynet_axon::pb::axon::v1::Error) -> ReceiptFailureSummary {
+    ReceiptFailureSummary {
+        code: failure.code.clone(),
+        message: failure.message.clone(),
+        retryable: failure.retryable,
+        stage: failure.stage,
+        security_class: failure.security_class,
+    }
+}
+
+fn usage_summary(usage: &easynet_axon::pb::axon::v1::InvocationUsage) -> ReceiptUsageSummary {
+    ReceiptUsageSummary {
+        tokens_in: usage.tokens_in,
+        tokens_out: usage.tokens_out,
+        duration_ms: usage.duration_ms,
+        external_calls: usage.external_calls,
+    }
+}
+
+fn authority_proof_summary(
+    proof: &easynet_axon::pb::axon::v1::InvocationAuthorityProof,
+) -> ReceiptAuthorityProofSummary {
+    ReceiptAuthorityProofSummary {
+        proof_type: proof.proof_type.clone(),
+        binding_kind: authority_binding_kind(proof.binding.as_ref()),
+        binding: authority_binding_summary(proof.binding.as_ref()),
+        proof_payload_base64: base64_bytes(&proof.proof_payload),
+        proof_hash_hex: hex::encode(&proof.proof_hash),
+        issuer: proof.issuer.as_ref().map(agent_binding_summary),
+        signature: proof.signature.as_ref().map(signature_summary),
+        admission_hook: proof.admission_hook.clone(),
+    }
+}
+
+fn causal_binding_summary(
+    causal: Option<&easynet_axon::pb::axon::v1::CausalContext>,
+) -> serde_json::Value {
+    use easynet_axon::pb::axon::v1::causal_context::Form;
+
+    match causal.and_then(|context| context.form.as_ref()) {
+        Some(Form::None(_)) => serde_json::json!({"form": "none"}),
+        Some(Form::Scalar(receipt)) => serde_json::json!({
+            "form": "scalar",
+            "receipt": receipt_ref_summary(receipt),
+        }),
+        Some(Form::List(list)) => serde_json::json!({
+            "form": "list",
+            "prior": list.prior.iter().map(receipt_ref_summary).collect::<Vec<_>>(),
+        }),
+        Some(Form::Merkle(root)) => serde_json::json!({
+            "form": "merkle",
+            "root_hex": hex::encode(&root.root),
+            "proof_ura": root.proof_ura,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn causal_binding_kind(causal: Option<&easynet_axon::pb::axon::v1::CausalContext>) -> String {
+    use easynet_axon::pb::axon::v1::causal_context::Form;
+
+    match causal.and_then(|context| context.form.as_ref()) {
+        Some(Form::None(_)) => "none",
+        Some(Form::Scalar(_)) => "scalar",
+        Some(Form::List(_)) => "list",
+        Some(Form::Merkle(_)) => "merkle",
+        None => "",
+    }
+    .to_string()
+}
+
+fn authority_binding_summary(
+    binding: Option<&easynet_axon::pb::axon::v1::AuthorityBinding>,
+) -> serde_json::Value {
+    use easynet_axon::pb::axon::v1::authority_binding::Authority;
+
+    match binding.and_then(|binding| binding.authority.as_ref()) {
+        Some(Authority::SelfAuthority(value)) => serde_json::json!({
+            "kind": "self",
+            "principal_ura": value.principal_ura,
+        }),
+        Some(Authority::DelegatedAuthority(value)) => serde_json::json!({
+            "kind": "delegation",
+            "issuer_ura": value.issuer_ura,
+            "subject_ura": value.subject_ura,
+            "caller_ura": value.caller_ura,
+            "audience": value.audience,
+            "scopes": value.scopes,
+            "issued_at_ms": value.issued_at_ms,
+            "expires_at_ms": value.expires_at_ms,
+            "signature_base64": base64_bytes(&value.signature),
+        }),
+        Some(Authority::CapabilityGrant(value)) => serde_json::json!({
+            "kind": "capability",
+            "capability_ura": value.capability_ura,
+        }),
+        Some(Authority::PolicyGrant(value)) => serde_json::json!({
+            "kind": "policy",
+            "policy_ura": value.policy_ura,
+        }),
+        Some(Authority::SessionAuthority(value)) => serde_json::json!({
+            "kind": "session",
+            "backend_ura": value.backend_ura,
+            "user_ura": value.user_ura,
+            "session_id": value.session_id,
+            "scopes": value.scopes,
+            "audiences": value.audiences,
+            "issued_at_ms": value.issued_at_ms,
+            "expires_at_ms": value.expires_at_ms,
+            "signature_base64": base64_bytes(&value.signature),
+        }),
+        Some(Authority::BootstrapAuthority(value)) => serde_json::json!({
+            "kind": "bootstrap",
+            "principal_ura": value.principal_ura,
+            "realm": value.realm,
+            "ability": value.ability,
+        }),
+        None => serde_json::Value::Null,
+    }
+}
+
+fn authority_binding_kind(
+    binding: Option<&easynet_axon::pb::axon::v1::AuthorityBinding>,
+) -> String {
+    use easynet_axon::pb::axon::v1::authority_binding::Authority;
+
+    match binding.and_then(|binding| binding.authority.as_ref()) {
+        Some(Authority::SelfAuthority(_)) => "self",
+        Some(Authority::DelegatedAuthority(_)) => "delegation",
+        Some(Authority::CapabilityGrant(_)) => "capability",
+        Some(Authority::PolicyGrant(_)) => "policy",
+        Some(Authority::SessionAuthority(_)) => "session",
+        Some(Authority::BootstrapAuthority(_)) => "bootstrap",
+        None => "",
+    }
+    .to_string()
 }
 
 /// Stable SDK error summary for result DTOs and health.

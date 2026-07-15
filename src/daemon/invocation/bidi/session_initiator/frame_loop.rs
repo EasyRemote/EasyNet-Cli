@@ -158,26 +158,18 @@ fn apply_session_contract(
     hub_endpoint: &str,
     connection_state_sink: &dyn SessionConnectionStateSink,
 ) {
-    use easynet_axon::pb::axon::v1::invoke_bidi_down::Payload;
-    let Some(Payload::Receipt(receipt)) = frame.payload.as_ref() else {
+    use easynet_axon::pb::axon::v1::{bidi_control, invoke_bidi_down::Payload};
+    let Some(Payload::Control(control)) = frame.payload.as_ref() else {
         return;
     };
-    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&receipt.payload) else {
+    let Some(bidi_control::Control::SessionEstablished(contract)) = control.control.as_ref() else {
         return;
     };
-    let Some(contract) = body.get("session_contract") else {
-        return;
-    };
-    let version = contract
-        .get("version")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0) as u32;
-    let negotiated = version.min(DEVICE_DISPATCH_CONTRACT_VERSION);
+    let negotiated = contract
+        .contract_version
+        .min(DEVICE_DISPATCH_CONTRACT_VERSION);
     outbound.set_negotiated_contract(negotiated);
-    let displaced_prior = contract
-        .get("displaced_prior")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
+    let displaced_prior = contract.displaced_prior;
     crate::op_event!(
         component = session,
         kind = session_contract_negotiated,

@@ -21,4 +21,16 @@ if rg -n 'struct HostedAgentReceiptHeader|enum SigningModel|HostedReceiptError' 
   fail "CLI runtime must not redeclare Axon hosted receipt audit types"
 fi
 
+legacy_projection_roots=()
+for root in src/daemon/execution/mission src/support src/ffi; do
+  if [[ -d "$root" ]]; then
+    legacy_projection_roots+=("$root")
+  fi
+done
+
+if ((${#legacy_projection_roots[@]} > 0)) \
+  && rg -n 'dispatch_receipt|receipt_header|HostedAgentReceiptHeader' "${legacy_projection_roots[@]}" -g '*.rs'; then
+  fail "mission/support/FFI paths must not rebuild legacy hosted receipt headers"
+fi
+
 echo "check-hosted-receipt-axon-boundary: ok"

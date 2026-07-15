@@ -21,6 +21,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(feature = "axon-pb")]
+use std::collections::{HashSet, VecDeque};
+#[cfg(feature = "axon-pb")]
+use std::sync::{Mutex, OnceLock};
+
+#[cfg(feature = "axon-pb")]
 use crate::daemon::ability::{
     HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
@@ -134,17 +139,7 @@ pub(crate) async fn connect_channel(
 /// the local Invocation transport. CLI modules should depend on this
 /// client instead of rebuilding socket/protobuf/tonic plumbing.
 #[derive(Debug, Clone)]
-pub(crate) struct LocalDaemonAbilityClient {
-    #[cfg(all(test, feature = "axon-pb"))]
-    transport: LocalDaemonAbilityTransport,
-}
-
-#[cfg(all(test, feature = "axon-pb"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalDaemonAbilityTransport {
-    Grpc,
-    InProcessAgentManagement,
-}
+pub(crate) struct LocalDaemonAbilityClient;
 
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +147,17 @@ enum LocalDaemonSubjectPolicy {
     Explicit(String),
     DeclaredDefault(String),
     SelfTarget,
+}
+
+pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
+    pub function_name: &'a str,
+    pub payload_json: serde_json::Value,
+    pub callee_ura: &'a str,
+    pub default_subject_ura: &'a str,
+    pub subject: Option<String>,
+    pub timeout: Duration,
+    pub input_frames: Vec<serde_json::Value>,
+    pub max_frames: Option<usize>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -345,102 +351,38 @@ fn normalized_local_daemon_ura(value: &str, field: &str) -> anyhow::Result<Strin
 }
 
 #[cfg(feature = "axon-pb")]
+fn local_daemon_status_error(function_name: &str, status: tonic::Status) -> anyhow::Error {
+    anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonStatus {
+            ability: function_name.to_string(),
+            code: status.code().into(),
+            message: status.message().to_string(),
+        },
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn local_daemon_connect_error(
+    socket_path: &std::path::Path,
+    source: anyhow::Error,
+) -> anyhow::Error {
+    anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "connect to local Axon daemon gRPC endpoint at {}: {source:#}",
+            socket_path.display()
+        )),
+    )
+}
+
+#[cfg(feature = "axon-pb")]
 impl LocalDaemonAbilityClient {
     fn grpc() -> Self {
-        Self {
-            #[cfg(test)]
-            transport: LocalDaemonAbilityTransport::Grpc,
-        }
+        Self
     }
 
     pub(crate) fn new() -> anyhow::Result<Self> {
         Self::validate_socket()?;
         Ok(Self::grpc())
-    }
-
-    fn require_host_device_ura(caller_ura: impl Into<String>) -> anyhow::Result<()> {
-        let caller_ura = caller_ura.into();
-        if caller_ura.trim().is_empty() {
-            anyhow::bail!("host device URA is empty; cannot invoke local daemon abilities");
-        }
-        normalized_local_daemon_ura(caller_ura.trim(), "host_device_ura")?;
-        Ok(())
-    }
-
-    /// Constructor for CLI agent-management commands.
-    ///
-    /// **Production semantics** (release builds): requires a paired
-    /// device caller URA and a live daemon gRPC listener. Without
-    /// either, returns an `Err` whose message tells the operator to
-    /// pair/start the daemon. This is the ONLY production behaviour.
-    ///
-    /// **Test seam** (`cfg(test)` only): if the caller URA is
-    /// missing OR the daemon socket is not reachable, falls back to
-    /// `for_agent_management_in_process_test_only` — an in-process
-    /// catalog wired with just the agent-list + agent-lifecycle
-    /// abilities. Lets unit tests exercise `easynet agent …` CLI
-    /// surfaces without spinning up a real daemon. Production
-    /// builds never see this branch: the
-    /// `LocalDaemonAbilityTransport::InProcessAgentManagement`
-    /// variant is `cfg(all(test, feature = "axon-pb"))`, so the
-    /// fallback constructor below cannot be reached from a release
-    /// binary even if the gating accidentally drifted on one site.
-    pub(crate) fn for_agent_management(caller_ura: Option<String>) -> anyhow::Result<Self> {
-        let trimmed = caller_ura
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-
-        #[cfg(test)]
-        {
-            if let Some(caller_ura) = trimmed {
-                if Self::require_host_device_ura(caller_ura).is_ok()
-                    && Self::validate_socket().is_ok()
-                {
-                    return Ok(Self::grpc());
-                }
-            }
-            Ok(Self::for_agent_management_in_process_test_only())
-        }
-
-        #[cfg(not(test))]
-        {
-            let caller_ura = trimmed.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "local daemon caller URA is unavailable; pair/start this device before \
-                     using agent management"
-                )
-            })?;
-            Self::require_host_device_ura(caller_ura)?;
-            Self::validate_socket()?;
-            Ok(Self::grpc())
-        }
-    }
-
-    /// `cfg(test)`-only in-process flavour. Tests that need to
-    /// pin in-process behaviour explicitly call this constructor
-    /// rather than relying on `for_agent_management`'s implicit
-    /// fallback; the name makes "this is a test seam" obvious to
-    /// the next reader of the test code.
-    #[cfg(test)]
-    fn for_agent_management_in_process_test_only() -> Self {
-        Self {
-            transport: LocalDaemonAbilityTransport::InProcessAgentManagement,
-        }
-    }
-
-    pub(crate) fn invoke(
-        &self,
-        function_name: &str,
-        payload_json: serde_json::Value,
-    ) -> anyhow::Result<serde_json::Value> {
-        self.invoke_with_subject_policy(
-            function_name,
-            payload_json,
-            LocalDaemonSubjectPolicy::SelfTarget,
-            Duration::from_secs(30),
-        )
     }
 
     pub(crate) fn invoke_with_subject(
@@ -475,12 +417,6 @@ impl LocalDaemonAbilityClient {
         subject_policy: LocalDaemonSubjectPolicy,
         timeout: Duration,
     ) -> anyhow::Result<serde_json::Value> {
-        #[cfg(test)]
-        if self.transport == LocalDaemonAbilityTransport::InProcessAgentManagement {
-            let _ = subject_policy;
-            return invoke_agent_management_in_process(function_name, payload_json);
-        }
-
         invoke_local_daemon_ability_with_subject_policy(
             function_name,
             payload_json,
@@ -507,22 +443,13 @@ impl LocalDaemonAbilityClient {
 #[allow(dead_code)]
 impl LocalDaemonAbilityClient {
     pub(crate) fn new() -> anyhow::Result<Self> {
-        anyhow::bail!(
-            "invoking daemon-hosted Axon abilities requires the `axon-pb` feature; \
-             rebuild with `cargo build --features axon-pb`"
-        )
-    }
-
-    pub(crate) fn for_agent_management(_caller_ura: Option<String>) -> anyhow::Result<Self> {
-        #[cfg(test)]
-        {
-            Ok(Self {})
-        }
-        #[cfg(not(test))]
-        anyhow::bail!(
-            "agent management requires the daemon-hosted Axon ability surface; rebuild with \
-             --features axon-pb"
-        )
+        Err(anyhow::Error::new(
+            crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(
+                "invoking daemon-hosted Axon abilities requires the `axon-pb` feature; rebuild \
+                 with `cargo build --features axon-pb`"
+                    .to_string(),
+            ),
+        ))
     }
 
     pub(crate) fn invoke(
@@ -530,11 +457,6 @@ impl LocalDaemonAbilityClient {
         function_name: &str,
         _payload_json: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        #[cfg(test)]
-        {
-            invoke_agent_management_in_process(function_name, _payload_json)
-        }
-        #[cfg(not(test))]
         anyhow::bail!(
             "invoking `{}` through the local Axon daemon requires the `axon-pb` feature; \
              rebuild with `cargo build --features axon-pb`",
@@ -550,58 +472,6 @@ impl LocalDaemonAbilityClient {
     ) -> anyhow::Result<serde_json::Value> {
         self.invoke(function_name, payload_json)
     }
-}
-
-#[cfg(test)]
-fn invoke_agent_management_in_process(
-    function_name: &str,
-    payload_json: serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    use std::sync::{Arc, OnceLock};
-
-    let runtime = easynet_axon::invocation::LocalRuntime::new();
-    let dispatch_handle = Arc::new(OnceLock::new());
-    let registrar = crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
-        Arc::new(Vec::new()),
-        Arc::clone(&dispatch_handle),
-        Arc::new(
-            crate::daemon::ability::builtins::agents::discover::BridgeDiscoverFederationResolver,
-        ),
-    );
-    registrar
-        .set_runtime(Arc::clone(&runtime))
-        .map_err(|error| anyhow::anyhow!("wire in-process agent registrar runtime: {error}"))?;
-
-    let hot_registrar: Arc<
-        crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
-    > = Arc::new(OnceLock::new());
-    hot_registrar
-        .set(registrar)
-        .map_err(|_| anyhow::anyhow!("wire in-process agent registrar cell twice"))?;
-
-    let authority_context =
-        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
-            crate::core::ura::device_ura("localhost", "test-device"),
-            Vec::<String>::new(),
-        )
-        .map_err(|error| anyhow::anyhow!("build in-process agent authority: {error}"))?;
-    let mut catalog = crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        runtime,
-        authority_context,
-    );
-    crate::daemon::ability::builtins::agents::list::register(&mut catalog, || {
-        crate::daemon::persistence::agent_registry::load_agents()
-            .map_err(|error| anyhow::anyhow!("test agent.list registry load: {error:#}"))
-    });
-    crate::daemon::ability::builtins::agents::lifecycle::register(
-        &mut catalog,
-        Arc::clone(&hot_registrar),
-    );
-    let catalog = Arc::new(catalog);
-    dispatch_handle
-        .set(Arc::clone(&catalog))
-        .map_err(|_| anyhow::anyhow!("wire in-process agent dispatch handle twice"))?;
-    catalog.invoke_rpc_json(function_name, payload_json)
 }
 
 /// Invoke a daemon-hosted ability through Axon's local Invocation
@@ -708,15 +578,18 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
 /// Invocation gRPC transport and drain JSON-frame down output.
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    callee_ura: &str,
-    default_subject_ura: &str,
-    subject: Option<String>,
-    timeout: Duration,
-    input_frames: Vec<serde_json::Value>,
-    max_frames: Option<usize>,
+    request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
+    let LocalDaemonTargetedBidiRequest {
+        function_name,
+        payload_json,
+        callee_ura,
+        default_subject_ura,
+        subject,
+        timeout,
+        input_frames,
+        max_frames,
+    } = request;
     let subject_policy =
         LocalDaemonSubjectPolicy::explicit_or_declared_default(default_subject_ura, subject)?;
     invoke_local_daemon_ability_bidi_json_frames_with_target(
@@ -770,32 +643,20 @@ fn invoke_local_daemon_ability_stream_with_target(
     runtime.block_on(async move {
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
-            .with_context(|| {
-                format!(
-                    "connect to local Axon daemon gRPC endpoint at {}",
-                    socket_path.display()
-                )
-            })?;
+            .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         let mut stream = client
             .invoke_stream(request)
             .await
-            .map_err(|status| {
-                anyhow::anyhow!(
-                    "daemon error streaming {function_name} through Axon \
-                     (code={:?}): {}",
-                    status.code(),
-                    status.message()
-                )
-            })?
+            .map_err(|status| local_daemon_status_error(&function_name, status))?
             .into_inner();
 
         let mut frames = Vec::new();
         while let Some(chunk) = stream
             .message()
             .await
-            .with_context(|| format!("read {function_name} InvokeStream chunk from local daemon"))?
+            .map_err(|status| local_daemon_status_error(&function_name, status))?
         {
             let payload = if chunk.payload.is_empty() {
                 serde_json::Value::Null
@@ -890,12 +751,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
     runtime.block_on(async move {
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
-            .with_context(|| {
-                format!(
-                    "connect to local Axon daemon gRPC endpoint at {}",
-                    socket_path.display()
-                )
-            })?;
+            .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel)
                 .max_decoding_message_size(
@@ -937,21 +793,14 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
         let mut down = client
             .invoke_bidi(tonic::Request::new(ReceiverStream::new(up_rx)))
             .await
-            .map_err(|status| {
-                anyhow::anyhow!(
-                    "daemon error opening bidi {function_name} through Axon \
-                     (code={:?}): {}",
-                    status.code(),
-                    status.message()
-                )
-            })?
+            .map_err(|status| local_daemon_status_error(&function_name, status))?
             .into_inner();
 
         let mut frames = Vec::new();
         while let Some(frame) = down
             .message()
             .await
-            .with_context(|| format!("read {function_name} InvokeBidi down frame"))?
+            .map_err(|status| local_daemon_status_error(&function_name, status))?
         {
             let sequence = frame.sequence;
             let Some(payload) = frame.payload else {
@@ -1044,15 +893,9 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
 
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
-    function_name: &str,
-    _payload_json: serde_json::Value,
-    _callee_ura: &str,
-    _default_subject_ura: &str,
-    _subject: Option<String>,
-    _timeout: Duration,
-    _input_frames: Vec<serde_json::Value>,
-    _max_frames: Option<usize>,
+    request: LocalDaemonTargetedBidiRequest<'_>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
+    let function_name = request.function_name;
     anyhow::bail!(
         "bidirectional `{}` through the local Axon daemon requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",
@@ -1115,22 +958,13 @@ fn invoke_local_daemon_ability_with_callee_and_subject(
     runtime.block_on(async move {
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
-            .with_context(|| {
-                format!(
-                    "connect to local Axon daemon gRPC endpoint at {}",
-                    socket_path.display()
-                )
-            })?;
+            .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
-        let response = client.invoke(request).await.map_err(|status| {
-            anyhow::anyhow!(
-                "daemon error invoking {function_name} through Axon \
-                 (code={:?}): {}",
-                status.code(),
-                status.message()
-            )
-        })?;
+        let response = client
+            .invoke(request)
+            .await
+            .map_err(|status| local_daemon_status_error(&function_name, status))?;
         let body = response.into_inner();
         if body.result.is_empty() {
             return Ok(serde_json::Value::Null);
@@ -1179,12 +1013,7 @@ fn invoke_local_daemon_ability_stream_first_payload_with_target(
     runtime.block_on(async move {
         let channel = connect_channel(socket_path.clone(), timeout, Duration::from_secs(10))
             .await
-            .with_context(|| {
-                format!(
-                    "connect to local Axon daemon gRPC endpoint at {}",
-                    socket_path.display()
-                )
-            })?;
+            .map_err(|source| local_daemon_connect_error(&socket_path, source))?;
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         let projection =
@@ -1208,18 +1037,15 @@ fn invoke_local_daemon_ability_stream_first_payload_with_target(
 ///      `ReceiptList` for a fan-in join. The default path leaves the
 ///      field unset; this path makes causal placement a first-class
 ///      input so receipt-DAG reconstruction has real edges to read.
-///   2. After the invoke completes, the daemon's invocation ledger is
-///      read directly by `request_id` for the persisted record. This is
-///      intentionally not an `invocation.history.get` call: metadata
-///      observation must not create a second invocation in the audit trail.
-///      The returned metadata carries the
-///      ledger-assigned `invocation_ura`, `trace_id`, and receipt
-///      anchors — the material a downstream step needs to reference
-///      THIS invocation as its causal parent.
+///   2. The terminal `InvokeResponse` supplies the signed receipt used
+///      to construct the invocation URA and causal receipt anchor. The
+///      response is the atomic protocol result; this path never polls a
+///      product ledger projection after execution.
 ///
-/// A parent entry missing a usable `(receipt_ura, receipt_hash)` pair
-/// is rejected before dispatch. Omitting an edge would mutate the
-/// invocation DAG while still returning a successful step result.
+/// A parent entry must match a `(receipt_ura, receipt_hash)` capability
+/// produced by a finalization projection verified in this process. Shape-only
+/// or stale claims are rejected before dispatch; they cannot be upgraded into
+/// causal evidence by JSON parsing.
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     function_name: &str,
@@ -1238,7 +1064,33 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
         step_timeout,
         trace_id,
         delegation: None,
-        callee_agent,
+        target: LocalDaemonInvocationMetaTarget::MissionCompatibility { callee_agent },
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    default_subject_ura: &str,
+    subject: Option<String>,
+    causal_parents: &[serde_json::Value],
+    step_timeout: Option<Duration>,
+    trace_id: Option<&str>,
+) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
+    invoke_local_daemon_ability_with_invocation_meta_inner(LocalDaemonInvocationMetaRequest {
+        function_name,
+        payload_json,
+        subject,
+        causal_parents,
+        step_timeout,
+        trace_id,
+        delegation: None,
+        target: LocalDaemonInvocationMetaTarget::Canonical {
+            callee_ura,
+            default_subject_ura,
+        },
     })
 }
 
@@ -1261,7 +1113,7 @@ pub(crate) fn invoke_local_daemon_ability_with_hosted_agent_delegation(
         step_timeout,
         trace_id,
         delegation: Some(delegated),
-        callee_agent: None,
+        target: LocalDaemonInvocationMetaTarget::MissionCompatibility { callee_agent: None },
     })
 }
 
@@ -1274,119 +1126,567 @@ struct LocalDaemonInvocationMetaRequest<'a> {
     step_timeout: Option<Duration>,
     trace_id: Option<&'a str>,
     delegation: Option<HostedAgentDelegationRequest>,
-    callee_agent: Option<&'a str>,
+    target: LocalDaemonInvocationMetaTarget<'a>,
 }
 
-/// State machine for projecting daemon invocation metadata after a terminal
-/// unary response.
-///
-/// Invariant 1: `ReceiptBacked` is the only state that may be used as a
-/// causal parent because it owns a complete `(receipt_ura, receipt_hash)`
-/// anchor.
-/// Invariant 2: pending states still return the invocation result and submitted
-/// tuple echoes. Observation surfaces may report them; child-invocation builders
-/// must reject them before dispatch.
+#[cfg(feature = "axon-pb")]
+enum LocalDaemonInvocationMetaTarget<'a> {
+    MissionCompatibility {
+        callee_agent: Option<&'a str>,
+    },
+    Canonical {
+        callee_ura: &'a str,
+        default_subject_ura: &'a str,
+    },
+}
+
+#[cfg(feature = "axon-pb")]
+struct ResolvedLocalDaemonInvocationMetaTarget {
+    callee_ura: String,
+    subject_ura: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl LocalDaemonInvocationMetaTarget<'_> {
+    fn resolve(
+        self,
+        subject: Option<String>,
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<ResolvedLocalDaemonInvocationMetaTarget> {
+        match self {
+            Self::Canonical {
+                callee_ura,
+                default_subject_ura,
+            } => {
+                let callee_ura = normalized_local_daemon_ura(callee_ura, "callee_ura")?;
+                let subject_ura = LocalDaemonSubjectPolicy::explicit_or_declared_default(
+                    default_subject_ura,
+                    subject,
+                )?
+                .resolve(&callee_ura)?;
+                Ok(ResolvedLocalDaemonInvocationMetaTarget {
+                    callee_ura,
+                    subject_ura,
+                })
+            }
+            Self::MissionCompatibility { callee_agent } => {
+                let callee_ura = match callee_agent.map(str::trim).filter(|a| !a.is_empty()) {
+                    Some(agent) => canonical_hosted_agent_ura_by_name(agent)?,
+                    None => local_daemon_default_callee_ura(),
+                };
+                let subject_ura = match subject.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                {
+                    Some(explicit) => explicit.to_string(),
+                    None => match trace_id.map(str::trim).filter(|t| !t.is_empty()) {
+                        Some(mission_id) => LocalMissionSubjectOwner::from_runtime_identity()?
+                            .mission_subject_ura(mission_id),
+                        None => callee_ura.clone(),
+                    },
+                };
+                Ok(ResolvedLocalDaemonInvocationMetaTarget {
+                    callee_ura,
+                    subject_ura,
+                })
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug)]
+struct UnverifiedTerminalInvocationProjection {
+    state: &'static str,
+    admission_receipt: easynet_axon::pb::axon::v1::InvocationReceipt,
+    terminal_receipt: easynet_axon::pb::axon::v1::InvocationReceipt,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug)]
+struct VerifiedTerminalInvocationProjection {
+    invocation_id: String,
+    invocation_ura: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    state: &'static str,
+    receipt: serde_json::Value,
+    causal_anchor: VerifiedCausalAnchor,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CausalAnchorKey {
+    receipt_ura: String,
+    receipt_hash: [u8; 32],
+}
+
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone)]
-enum InvocationMetadataProjection {
-    ReceiptBacked {
-        ledger_record: serde_json::Value,
-        terminal_receipt: serde_json::Value,
-    },
-    LedgerPending {
-        reason: String,
-    },
-    ReceiptAnchorPending {
-        ledger_record: serde_json::Value,
-        terminal_receipt: serde_json::Value,
-        reason: String,
-    },
+struct VerifiedCausalReceiptRef(CausalAnchorKey);
+
+#[cfg(feature = "axon-pb")]
+impl VerifiedCausalReceiptRef {
+    fn to_wire(&self) -> easynet_axon::pb::axon::v1::ReceiptRef {
+        easynet_axon::pb::axon::v1::ReceiptRef {
+            receipt_ura: self.0.receipt_ura.clone(),
+            receipt_hash: self.0.receipt_hash.to_vec(),
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
-impl InvocationMetadataProjection {
-    fn from_polled_ledger_record(
-        ledger_record: serde_json::Value,
-        request_id: &str,
-        ability: &str,
+#[derive(Debug, Clone)]
+struct VerifiedCausalAnchor {
+    reference: VerifiedCausalReceiptRef,
+    receipt_type: String,
+    state: &'static str,
+    timestamp_unix_ms: i64,
+    anchor_count: u64,
+}
+
+#[cfg(feature = "axon-pb")]
+impl VerifiedCausalAnchor {
+    fn from_terminal(
+        invocation_ura: &str,
+        terminal: &easynet_axon::invocation::SignedInvocationReceipt,
+        state: &'static str,
     ) -> Self {
-        if ledger_record.is_null() {
-            return Self::LedgerPending {
-                reason: format!(
-                    "ledger did not expose invocation record for request_id {request_id} after local invoke {ability}"
+        Self {
+            reference: VerifiedCausalReceiptRef(CausalAnchorKey {
+                receipt_ura: format!(
+                    "{}/receipt/{}",
+                    invocation_ura.trim_end_matches('/'),
+                    terminal.index()
                 ),
-            };
+                receipt_hash: terminal.self_hash(),
+            }),
+            receipt_type: terminal.receipt_type().to_string(),
+            state,
+            timestamp_unix_ms: terminal.timestamp_unix_ms(),
+            anchor_count: terminal.index().saturating_add(1),
         }
+    }
 
-        match terminal_receipt_from_ledger_record(&ledger_record) {
-            Some(terminal_receipt) if terminal_receipt_has_complete_anchor(&terminal_receipt) => {
-                Self::ReceiptBacked {
-                    ledger_record,
-                    terminal_receipt,
-                }
+    fn projection(&self) -> serde_json::Value {
+        serde_json::json!({
+            "receipt_ura": self.reference.0.receipt_ura,
+            "receipt_hash": hex::encode(self.reference.0.receipt_hash),
+            "receipt_type": self.receipt_type,
+            "state": self.state,
+            "timestamp_unix_ms": self.timestamp_unix_ms,
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+const MAX_VERIFIED_CAUSAL_ANCHORS: usize = 4_096;
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Default)]
+struct VerifiedCausalAnchorRegistry {
+    anchors: HashSet<CausalAnchorKey>,
+    insertion_order: VecDeque<CausalAnchorKey>,
+}
+
+#[cfg(feature = "axon-pb")]
+impl VerifiedCausalAnchorRegistry {
+    fn record(&mut self, anchor: &VerifiedCausalAnchor) {
+        let key = anchor.reference.0.clone();
+        if !self.anchors.insert(key.clone()) {
+            return;
+        }
+        self.insertion_order.push_back(key);
+        while self.insertion_order.len() > MAX_VERIFIED_CAUSAL_ANCHORS {
+            if let Some(expired) = self.insertion_order.pop_front() {
+                self.anchors.remove(&expired);
             }
-            Some(terminal_receipt) => Self::ReceiptAnchorPending {
-                ledger_record,
-                terminal_receipt,
-                reason: format!(
-                    "ledger record for request_id {request_id} after local invoke {ability} has no complete terminal receipt anchor"
-                ),
-            },
-            None => Self::ReceiptAnchorPending {
-                ledger_record,
-                terminal_receipt: serde_json::Value::Null,
-                reason: format!(
-                    "ledger record for request_id {request_id} after local invoke {ability} has no receipt_chain projection"
-                ),
-            },
         }
     }
 
-    fn state_label(&self) -> &'static str {
-        match self {
-            Self::ReceiptBacked { .. } => "receipt_backed",
-            Self::LedgerPending { .. } => "ledger_pending",
-            Self::ReceiptAnchorPending { .. } => "receipt_anchor_pending",
-        }
+    fn restore(&self, claim: &CausalAnchorKey) -> Option<VerifiedCausalReceiptRef> {
+        self.anchors
+            .contains(claim)
+            .then(|| VerifiedCausalReceiptRef(claim.clone()))
     }
+}
 
-    fn ledger_field(&self, key: &str) -> serde_json::Value {
-        match self {
-            Self::ReceiptBacked { ledger_record, .. }
-            | Self::ReceiptAnchorPending { ledger_record, .. } => ledger_record
-                .get(key)
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-            Self::LedgerPending { .. } => serde_json::Value::Null,
-        }
-    }
+#[cfg(feature = "axon-pb")]
+fn verified_causal_anchor_registry() -> &'static Mutex<VerifiedCausalAnchorRegistry> {
+    static REGISTRY: OnceLock<Mutex<VerifiedCausalAnchorRegistry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(VerifiedCausalAnchorRegistry::default()))
+}
 
-    fn receipt(&self) -> serde_json::Value {
-        match self {
-            Self::ReceiptBacked {
-                terminal_receipt, ..
-            }
-            | Self::ReceiptAnchorPending {
-                terminal_receipt, ..
-            } => terminal_receipt.clone(),
-            Self::LedgerPending { .. } => serde_json::Value::Null,
-        }
-    }
+#[cfg(feature = "axon-pb")]
+fn record_verified_causal_anchor(anchor: &VerifiedCausalAnchor) -> anyhow::Result<()> {
+    verified_causal_anchor_registry()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("verified causal anchor registry is poisoned"))?
+        .record(anchor);
+    Ok(())
+}
 
-    fn diagnostic(&self) -> Option<&str> {
-        match self {
-            Self::ReceiptBacked { .. } => None,
-            Self::LedgerPending { reason } | Self::ReceiptAnchorPending { reason, .. } => {
-                Some(reason.as_str())
-            }
+#[cfg(feature = "axon-pb")]
+pub(crate) struct LocalKeyServiceReceiptResolver {
+    key_service: crate::daemon::identity::self_identity::KeyringClient,
+}
+
+#[cfg(feature = "axon-pb")]
+impl LocalKeyServiceReceiptResolver {
+    pub(crate) fn new() -> Self {
+        Self {
+            key_service: crate::daemon::identity::self_identity::KeyringClient::default_path(),
         }
     }
 }
 
 #[cfg(feature = "axon-pb")]
-use crate::support::platform::invocation_receipt_projection::{
-    terminal_receipt_from_ledger_record, terminal_receipt_has_complete_anchor,
-};
+impl easynet_axon::invocation::KeyResolver for LocalKeyServiceReceiptResolver {
+    fn resolve(
+        &self,
+        signer_ura: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, easynet_axon::invocation::AxonError> {
+        use crate::daemon::identity::self_identity::SelfIdentity as _;
+
+        self.key_service.public_key(signer_ura).map_err(|error| {
+            easynet_axon::invocation::AxonError::permission_denied(
+                "local_receipt_signer_key_untrusted",
+            )
+            .with_message(format!(
+                "trusted local key service cannot resolve receipt signer {signer_ura:?}: {error}"
+            ))
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug)]
+struct SubmittedInvocationProjection {
+    envelope: easynet_axon::pb::axon::v1::Envelope,
+    function_name: String,
+    input_hash: [u8; 32],
+}
+
+#[cfg(feature = "axon-pb")]
+impl SubmittedInvocationProjection {
+    fn from_request(
+        request: &easynet_axon::pb::axon::v1::InvokeRequest,
+        ability: &str,
+    ) -> anyhow::Result<Self> {
+        let envelope = request
+            .envelope
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("{ability}: invoke request omitted its envelope"))?;
+        Ok(Self {
+            envelope,
+            function_name: request.function_name.clone(),
+            input_hash: easynet_axon::invocation::sha256(&request.arguments),
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl UnverifiedTerminalInvocationProjection {
+    fn from_response(
+        response: &easynet_axon::pb::axon::v1::InvokeResponse,
+        submitted: &SubmittedInvocationProjection,
+        ability: &str,
+    ) -> anyhow::Result<Self> {
+        use anyhow::{anyhow, bail};
+        use easynet_axon::invocation::InvocationState;
+
+        let state = InvocationState::try_from(response.state)
+            .map_err(|error| anyhow!("{ability}: invalid terminal state: {error}"))?;
+        if !state.is_terminal() {
+            bail!("{ability}: InvokeResponse is not terminal: {state:?}");
+        }
+        if state != InvocationState::Completed {
+            let failure = response
+                .error
+                .as_ref()
+                .or(response.proof_error.as_ref())
+                .map(|error| format!("{}: {}", error.code, error.message))
+                .unwrap_or_else(|| "terminal response omitted typed failure details".to_string());
+            bail!("{ability}: invocation ended in {state:?}: {failure}");
+        }
+        if response.error.is_some() || response.proof_error.is_some() {
+            bail!("{ability}: completed response carried a protocol error");
+        }
+        let admission = response.admission_receipt.as_ref().ok_or_else(|| {
+            anyhow!("{ability}: completed InvokeResponse omitted its signed admission receipt")
+        })?;
+        let receipt = response.terminal_receipt.as_ref().ok_or_else(|| {
+            anyhow!("{ability}: terminal InvokeResponse omitted its signed terminal receipt")
+        })?;
+        if receipt.invocation_id.trim().is_empty() {
+            bail!("{ability}: terminal receipt omitted invocation_id");
+        }
+        let receipt_state = InvocationState::try_from(receipt.state)
+            .map_err(|error| anyhow!("{ability}: invalid terminal receipt state: {error}"))?;
+        if receipt_state != state {
+            bail!(
+                "{ability}: response state {state:?} does not match terminal receipt state {receipt_state:?}"
+            );
+        }
+        let state_label = state
+            .default_event_type()
+            .ok_or_else(|| anyhow!("{ability}: terminal receipt projected an unspecified state"))?;
+        if receipt.receipt_type != state_label {
+            bail!(
+                "{ability}: terminal receipt type {:?} does not match state {state_label:?}",
+                receipt.receipt_type
+            );
+        }
+        validate_receipt_signature_shape(admission, "admission", ability)?;
+        validate_receipt_signature_shape(receipt, "terminal", ability)?;
+        if admission.receipt_type != "admitted"
+            || admission.state != InvocationState::Admitted.to_wire_i32()
+        {
+            bail!("{ability}: admission checkpoint is not an admitted receipt");
+        }
+        if receipt.index <= admission.index {
+            bail!("{ability}: terminal checkpoint index is not after admission");
+        }
+        if !receipt.cleanup_complete {
+            bail!("{ability}: completed terminal receipt did not attest cleanup completion");
+        }
+        if receipt.failure.is_some() {
+            bail!("{ability}: completed terminal receipt carried a typed failure");
+        }
+        if admission.invocation_id != receipt.invocation_id {
+            bail!("{ability}: admission and terminal receipts name different invocations");
+        }
+        validate_submitted_receipt_binding(admission, submitted, ability, "admission")?;
+        validate_submitted_receipt_binding(receipt, submitted, ability, "terminal")?;
+        validate_receipt_chain_binding(admission, receipt, ability)?;
+        if receipt.output_hash != easynet_axon::invocation::sha256(&response.result) {
+            bail!("{ability}: terminal receipt output_hash does not bind the response payload");
+        }
+        let caller_ura = receipt
+            .caller_binding
+            .as_ref()
+            .map(|binding| binding.ura.trim())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("{ability}: terminal receipt omitted caller binding"))?
+            .to_string();
+        let callee_ura = receipt
+            .callee_binding
+            .as_ref()
+            .map(|binding| binding.ura.trim())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("{ability}: terminal receipt omitted callee binding"))?
+            .to_string();
+        let subject_ura = receipt
+            .subject_binding
+            .as_ref()
+            .map(|binding| binding.ura.trim())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("{ability}: terminal receipt omitted subject binding"))?
+            .to_string();
+        for (field, ura) in [
+            ("caller", caller_ura.as_str()),
+            ("callee", callee_ura.as_str()),
+            ("subject", subject_ura.as_str()),
+        ] {
+            crate::core::ura::parse_ura(ura)
+                .map_err(|error| anyhow!("{ability}: receipt {field} is not a URA: {error}"))?;
+        }
+        easynet_axon::ura::invocation_record_ura_for_binding(
+            &subject_ura,
+            &callee_ura,
+            &caller_ura,
+            &receipt.invocation_id,
+        )
+        .ok_or_else(|| {
+            anyhow!(
+                "{ability}: no receipt binding can own invocation {}",
+                receipt.invocation_id
+            )
+        })?;
+        Ok(Self {
+            state: state_label,
+            admission_receipt: admission.clone(),
+            terminal_receipt: receipt.clone(),
+        })
+    }
+
+    fn verify(
+        self,
+        resolver: &dyn easynet_axon::invocation::KeyResolver,
+        ability: &str,
+    ) -> anyhow::Result<VerifiedTerminalInvocationProjection> {
+        use anyhow::anyhow;
+
+        let checkpoints =
+            crate::daemon::invocation::receipts::finalization_projection::verify_wire_finalization_checkpoints(
+                self.admission_receipt,
+                self.terminal_receipt,
+                resolver,
+            )
+            .map_err(|error| {
+                let message = format!("{ability}: {error}");
+                anyhow::Error::new(error).context(message)
+            })?;
+        let terminal = checkpoints.terminal();
+        let binding = terminal.axiom_binding();
+        let caller_ura = binding.caller.ura.clone();
+        let callee_ura = binding.callee.ura.clone();
+        let subject_ura = binding.subject.ura.clone();
+        let invocation_ura = easynet_axon::ura::invocation_record_ura_for_binding(
+            &subject_ura,
+            &callee_ura,
+            &caller_ura,
+            terminal.invocation_id(),
+        )
+        .ok_or_else(|| {
+            anyhow!(
+                "{ability}: no verified receipt binding can own invocation {}",
+                terminal.invocation_id()
+            )
+        })?;
+        let causal_anchor =
+            VerifiedCausalAnchor::from_terminal(&invocation_ura, terminal, self.state);
+        let receipt = serde_json::json!({
+            "head_receipt_hash": hex::encode(terminal.self_hash()),
+            "anchor": causal_anchor.projection(),
+            "anchor_count": causal_anchor.anchor_count,
+            "cryptographic_verification": "finalization_checkpoints_verified",
+            "verification_scope": "admission_and_terminal",
+        });
+        Ok(VerifiedTerminalInvocationProjection {
+            invocation_id: terminal.invocation_id().to_string(),
+            invocation_ura,
+            caller_ura,
+            callee_ura,
+            subject_ura,
+            state: self.state,
+            receipt,
+            causal_anchor,
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_receipt_signature_shape(
+    receipt: &easynet_axon::pb::axon::v1::InvocationReceipt,
+    stage: &str,
+    ability: &str,
+) -> anyhow::Result<()> {
+    use anyhow::{anyhow, bail};
+
+    if receipt.self_hash.len() != 32 {
+        bail!(
+            "{ability}: {stage} receipt self_hash must be 32 bytes, got {}",
+            receipt.self_hash.len()
+        );
+    }
+    let signature = receipt
+        .callee_signature
+        .as_ref()
+        .ok_or_else(|| anyhow!("{ability}: {stage} receipt omitted its callee signature"))?;
+    if signature.algorithm != "ed25519" || signature.signature.len() != 64 {
+        bail!("{ability}: {stage} receipt carried an invalid signature shape");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_submitted_receipt_binding(
+    receipt: &easynet_axon::pb::axon::v1::InvocationReceipt,
+    submitted: &SubmittedInvocationProjection,
+    ability: &str,
+    stage: &str,
+) -> anyhow::Result<()> {
+    use anyhow::bail;
+
+    let envelope = &submitted.envelope;
+    if receipt.caller_binding != envelope.caller
+        || receipt.callee_binding != envelope.callee
+        || receipt.subject_binding != envelope.subject
+        || receipt.invocation_nonce != envelope.invocation_nonce
+        || receipt.causal_binding != envelope.causal_context
+    {
+        bail!("{ability}: {stage} receipt does not bind the submitted invocation tuple");
+    }
+    let ability_ura =
+        easynet_axon::invocation::ability_ura_from_descriptor_ref(&receipt.ability_binding)
+            .map_err(|error| {
+                anyhow::anyhow!("{ability}: {stage} receipt ability binding is invalid: {error}")
+            })?;
+    let public_name = easynet_axon::ura::qualified_ability_name(ability_ura).ok_or_else(|| {
+        anyhow::anyhow!("{ability}: {stage} receipt ability binding has no public ability name")
+    })?;
+    if public_name != submitted.function_name {
+        bail!("{ability}: {stage} receipt ability does not match submitted function_name");
+    }
+    if receipt.input_hash != submitted.input_hash {
+        bail!("{ability}: {stage} receipt input_hash does not bind submitted arguments");
+    }
+    if receipt.authority_binding.is_none()
+        || receipt.subject_ref.is_none()
+        || receipt.descriptor_version.trim().is_empty()
+        || receipt.schema_hash.len() != 32
+        || receipt.schema_hash.iter().all(|byte| *byte == 0)
+        || receipt.impl_hash.len() != 32
+        || receipt.impl_hash.iter().all(|byte| *byte == 0)
+        || receipt.runtime_env.trim().is_empty()
+    {
+        bail!("{ability}: {stage} receipt omitted required descriptor-bound proof facts");
+    }
+    let expected_parents = submitted_parent_receipts(envelope.causal_context.as_ref(), ability)?;
+    if receipt.parent_receipts != expected_parents {
+        bail!("{ability}: {stage} receipt parent list does not bind causal_context");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "axon-pb")]
+fn submitted_parent_receipts(
+    causal: Option<&easynet_axon::pb::axon::v1::CausalContext>,
+    ability: &str,
+) -> anyhow::Result<Vec<easynet_axon::pb::axon::v1::ReceiptRef>> {
+    use anyhow::bail;
+    use easynet_axon::pb::axon::v1::causal_context::Form;
+
+    Ok(match causal.and_then(|context| context.form.as_ref()) {
+        None | Some(Form::None(_)) => Vec::new(),
+        Some(Form::Scalar(reference)) => vec![reference.clone()],
+        Some(Form::List(list)) => list.prior.clone(),
+        Some(Form::Merkle(_)) => {
+            bail!("{ability}: local mission invocation does not support Merkle causal parents")
+        }
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_receipt_chain_binding(
+    admission: &easynet_axon::pb::axon::v1::InvocationReceipt,
+    terminal: &easynet_axon::pb::axon::v1::InvocationReceipt,
+    ability: &str,
+) -> anyhow::Result<()> {
+    use anyhow::bail;
+
+    if admission.caller_binding != terminal.caller_binding
+        || admission.callee_binding != terminal.callee_binding
+        || admission.subject_binding != terminal.subject_binding
+        || admission.invocation_nonce != terminal.invocation_nonce
+        || admission.causal_binding != terminal.causal_binding
+        || admission.signer_binding != terminal.signer_binding
+        || admission.host_attestation != terminal.host_attestation
+        || admission.authority_binding != terminal.authority_binding
+        || admission.ability_binding != terminal.ability_binding
+        || admission.subject_ref != terminal.subject_ref
+        || admission.descriptor_version != terminal.descriptor_version
+        || admission.schema_hash != terminal.schema_hash
+        || admission.impl_hash != terminal.impl_hash
+        || admission.runtime_env != terminal.runtime_env
+        || admission.authority_proof != terminal.authority_proof
+        || admission.input_hash != terminal.input_hash
+        || admission.parent_receipts != terminal.parent_receipts
+    {
+        bail!("{ability}: terminal receipt changed admission-bound proof facts");
+    }
+    Ok(())
+}
 
 #[cfg(feature = "axon-pb")]
 const STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES: usize = 64;
@@ -1406,31 +1706,25 @@ async fn invoke_local_daemon_json(
     client: &mut LocalInvocationGrpcClient,
     request: easynet_axon::pb::axon::v1::InvokeRequest,
     function_name: &str,
-) -> anyhow::Result<(serde_json::Value, String)> {
-    use anyhow::{anyhow, Context};
+) -> anyhow::Result<(
+    serde_json::Value,
+    easynet_axon::pb::axon::v1::InvokeResponse,
+)> {
+    use anyhow::Context;
     use serde_json::Value;
 
-    let response = client.invoke(request).await.map_err(|status| {
-        anyhow!(
-            "daemon error invoking {function_name} through Axon \
-             (code={:?}): {}",
-            status.code(),
-            status.message()
-        )
-    })?;
+    let response = client
+        .invoke(request)
+        .await
+        .map_err(|status| local_daemon_status_error(function_name, status))?;
     let body = response.into_inner();
-    let request_id = body
-        .header
-        .as_ref()
-        .map(|header| header.request_id.clone())
-        .unwrap_or_default();
     let value = if body.result.is_empty() {
         Value::Null
     } else {
         serde_json::from_slice(&body.result)
             .with_context(|| format!("decode {function_name} Axon response"))?
     };
-    Ok((value, request_id))
+    Ok((value, body))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1439,26 +1733,19 @@ async fn invoke_local_daemon_first_stream_payload(
     request: easynet_axon::pb::axon::v1::InvokeServerStreamRequest,
     function_name: &str,
 ) -> anyhow::Result<LocalDaemonStreamProjection> {
-    use anyhow::{anyhow, bail, Context};
+    use anyhow::{bail, Context};
 
     let mut stream = client
         .invoke_stream(request)
         .await
-        .map_err(|status| {
-            anyhow!(
-                "daemon error streaming {function_name} through Axon \
-                 (code={:?}): {}",
-                status.code(),
-                status.message()
-            )
-        })?
+        .map_err(|status| local_daemon_status_error(function_name, status))?
         .into_inner();
 
     let mut frames_seen = 0_usize;
     while let Some(chunk) = stream
         .message()
         .await
-        .with_context(|| format!("read {function_name} InvokeStream chunk from local daemon"))?
+        .map_err(|status| local_daemon_status_error(function_name, status))?
     {
         frames_seen = frames_seen.saturating_add(1);
         if !chunk.payload.is_empty() {
@@ -1494,7 +1781,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         step_timeout,
         trace_id,
         delegation,
-        callee_agent,
+        target,
     } = request;
     let function_name = function_name.trim().to_string();
     if function_name.is_empty() {
@@ -1510,25 +1797,11 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         );
     }
 
-    let default_callee_ura = local_daemon_default_callee_ura();
-    // Identity granularity: a caller-provided agent name resolves through
-    // local-agents.json to the canonical hosted Agent URA. The local device
-    // remains only the execution substrate and mission-resource owner; it is
-    // not allowed to synthesize a new callee identity during invocation.
-    let callee_ura = match callee_agent.map(str::trim).filter(|a| !a.is_empty()) {
-        Some(agent) => canonical_hosted_agent_ura_by_name(agent)?,
-        _ => default_callee_ura.clone(),
-    };
-    let subject_ura = match subject.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(explicit) => explicit.to_string(),
-        None => match trace_id.map(str::trim).filter(|t| !t.is_empty()) {
-            Some(mission_id) => {
-                LocalMissionSubjectOwner::from_runtime_identity()?.mission_subject_ura(mission_id)
-            }
-            _ => callee_ura.clone(),
-        },
-    };
-    let receipt_refs = receipt_refs_from_causal_parents(causal_parents)?;
+    let ResolvedLocalDaemonInvocationMetaTarget {
+        callee_ura,
+        subject_ura,
+    } = target.resolve(subject, trace_id)?;
+    let receipt_refs = verified_receipt_refs_from_causal_parents(causal_parents)?;
     let mut refs = receipt_refs;
     let causal_form = match refs.len() {
         0 => pb::causal_context::Form::None(pb::Empty {}),
@@ -1559,6 +1832,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             delegation.metadata_value()?,
         );
     }
+    let submitted = SubmittedInvocationProjection::from_request(&request, &function_name)?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -1575,77 +1849,62 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         .unwrap_or_else(|| Duration::from_secs(60));
     let invoke_socket = socket_path.clone();
     let invoke_fn = function_name.clone();
-    let (result_value, request_id) = runtime.block_on(async move {
+    let (result_value, response) = runtime.block_on(async move {
         let channel = connect_channel(
             invoke_socket.clone(),
             request_timeout,
             Duration::from_secs(10),
         )
         .await
-        .with_context(|| {
-            format!(
-                "connect to local Axon daemon gRPC endpoint at {}",
-                invoke_socket.display()
-            )
-        })?;
+        .map_err(|source| local_daemon_connect_error(&invoke_socket, source))?;
         let mut client =
             easynet_axon::pb::axon::v1::invocation_client::InvocationClient::new(channel);
         invoke_local_daemon_json(&mut client, request, &invoke_fn).await
     })?;
-    if request_id.is_empty() {
+    let request_id = response
+        .header
+        .as_ref()
+        .map(|header| header.request_id.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow!("daemon response invoking {function_name} did not include request_id")
+        })?
+        .to_string();
+    let terminal = UnverifiedTerminalInvocationProjection::from_response(
+        &response,
+        &submitted,
+        &function_name,
+    )?
+    .verify(&LocalKeyServiceReceiptResolver::new(), &function_name)?;
+    if request_id != terminal.invocation_id {
         bail!(
-            "daemon response invoking {function_name} did not include request_id; \
-             cannot build ledger-backed invocation metadata"
+            "daemon response invoking {function_name} returned request_id {request_id:?} \
+             but terminal receipt belongs to {:?}",
+            terminal.invocation_id
         );
     }
+    record_verified_causal_anchor(&terminal.causal_anchor)?;
 
-    // The unary invoke returns at terminal state, but the ledger sink persists
-    // asynchronously. Poll the daemon's side-effect-free `invocation.record.get`
-    // read RPC rather than opening the redb ledger file from this CLI process:
-    // redb takes an exclusive cross-process lock, so a second-process open fails
-    // hard whenever the daemon is running. The daemon services the read off its
-    // own in-process ledger handle and writes no row, so observation never
-    // appends another invocation to the ledger it is observing.
-    let record_reader = LocalDaemonAbilityClient::new()?;
-    let mut ledger_record = Value::Null;
-    for _ in 0..10 {
-        let response = record_reader.invoke(
-            crate::daemon::ability::builtins::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
-            serde_json::json!({ "request_id": request_id }),
-        )?;
-        if let Some(record) = response.get("record").filter(|record| !record.is_null()) {
-            ledger_record = record.clone();
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    let metadata_projection = InvocationMetadataProjection::from_polled_ledger_record(
-        ledger_record,
-        &request_id,
-        &function_name,
-    );
-
-    // Identity fields are the LEDGER's persisted values, not the
-    // submitted ones — the daemon may rewrite the callee during route
-    // selection, and the record must report what was actually
-    // persisted (same rule as trace_id). `submitted_*` keep the
-    // pre-admission view for audit diffing.
+    // Identity fields come from the signed terminal receipt, not from the
+    // submitted request and not from an asynchronously persisted product
+    // ledger projection. This makes the causal anchor available atomically
+    // with the terminal response and keeps Axon as the protocol truth owner.
     let mut meta = serde_json::json!({
         "request_id": request_id,
-        "trace_id": metadata_projection.ledger_field("trace_id"),
-        "invocation_ura": metadata_projection.ledger_field("invocation_ura"),
-        "caller_ura": metadata_projection.ledger_field("caller_ura"),
-        "callee_ura": metadata_projection.ledger_field("callee_ura"),
-        "subject_ura": metadata_projection.ledger_field("subject_ura"),
+        "trace_id": trace_id,
+        "invocation_ura": terminal.invocation_ura,
+        "caller_ura": terminal.caller_ura,
+        "callee_ura": terminal.callee_ura,
+        "subject_ura": terminal.subject_ura,
         "submitted_caller_ura": wire_caller_ura,
         "submitted_callee_ura": callee_ura,
         "submitted_subject_ura": subject_ura,
         "ability": function_name,
         "nonce": nonce_hex,
         "causal_context": { "parents": causal_parents },
-        "receipt": metadata_projection.receipt(),
-        "metadata_state": metadata_projection.state_label(),
-        "ledger_state": metadata_projection.ledger_field("state"),
+        "receipt": terminal.receipt,
+        "metadata_state": "finalization_checkpoints_verified",
+        "ledger_state": terminal.state,
     });
     if let Some(delegation) = delegation {
         meta["delegation"] = serde_json::json!({
@@ -1656,21 +1915,19 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
             "wire_callee_ura": meta.get("callee_ura").cloned().unwrap_or(Value::Null),
         });
     }
-    if let Some(diagnostic) = metadata_projection.diagnostic() {
-        meta["metadata_diagnostic"] = serde_json::json!(diagnostic);
-    }
-
     Ok((result_value, meta))
 }
 
 #[cfg(feature = "axon-pb")]
-fn receipt_refs_from_causal_parents(
+fn verified_receipt_refs_from_causal_parents(
     causal_parents: &[serde_json::Value],
 ) -> anyhow::Result<Vec<easynet_axon::pb::axon::v1::ReceiptRef>> {
-    use anyhow::{bail, Context};
-    use easynet_axon::pb::axon::v1 as pb;
+    use anyhow::Context;
     use serde_json::Value;
 
+    let registry = verified_causal_anchor_registry()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("verified causal anchor registry is poisoned"))?;
     let mut refs = Vec::with_capacity(causal_parents.len());
     for (idx, parent) in causal_parents.iter().enumerate() {
         let receipt_ura = parent
@@ -1687,16 +1944,22 @@ fn receipt_refs_from_causal_parents(
             .ok_or_else(|| anyhow::anyhow!("causal parent #{idx} is missing receipt_hash"))?;
         let receipt_hash = hex::decode(hash_hex)
             .with_context(|| format!("decode causal parent #{idx} receipt_hash as hex"))?;
-        if receipt_hash.len() != 32 {
-            bail!(
+        let receipt_hash: [u8; 32] = receipt_hash.try_into().map_err(|bytes: Vec<u8>| {
+            anyhow::anyhow!(
                 "causal parent #{idx} receipt_hash must decode to 32 bytes, got {}",
-                receipt_hash.len()
-            );
-        }
-        refs.push(pb::ReceiptRef {
-            receipt_hash,
+                bytes.len()
+            )
+        })?;
+        let claim = CausalAnchorKey {
             receipt_ura: receipt_ura.to_string(),
-        });
+            receipt_hash,
+        };
+        let verified = registry.restore(&claim).ok_or_else(|| {
+            anyhow::anyhow!(
+                "causal parent #{idx} was not cryptographically verified in this process"
+            )
+        })?;
+        refs.push(verified.to_wire());
     }
     Ok(refs)
 }
@@ -1713,6 +1976,24 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     anyhow::bail!(
         "invoking `{}` with invocation metadata requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`",
+        function_name
+    )
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
+    function_name: &str,
+    _payload_json: serde_json::Value,
+    _callee_ura: &str,
+    _default_subject_ura: &str,
+    _subject: Option<String>,
+    _causal_parents: &[serde_json::Value],
+    _step_timeout: Option<std::time::Duration>,
+    _trace_id: Option<&str>,
+) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
+    anyhow::bail!(
+        "invoking targeted `{}` with invocation metadata requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",
         function_name
     )
@@ -1740,22 +2021,12 @@ pub(crate) fn invoke_local_daemon_ability(
     function_name: &str,
     _payload_json: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    #[cfg(test)]
-    {
-        if function_name.starts_with("agent.") {
-            return invoke_agent_management_in_process(function_name, _payload_json);
-        }
-        anyhow::bail!(
-            "daemon not running: local Axon gRPC listener is unavailable in this test build. \
-             Start it with `easynet runtime start` or `easynet start`."
-        );
-    }
-    #[cfg(not(test))]
-    anyhow::bail!(
-        "invoking `{}` through the local Axon daemon requires the `axon-pb` feature; \
-         rebuild with `cargo build --features axon-pb`",
-        function_name
-    )
+    Err(anyhow::Error::new(
+        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
+            "invoking `{function_name}` through the local Axon daemon requires the `axon-pb` \
+             feature; rebuild with `cargo build --features axon-pb`"
+        )),
+    ))
 }
 
 #[cfg(not(feature = "axon-pb"))]
@@ -1956,52 +2227,376 @@ mod tests {
     }
 
     #[test]
-    fn invocation_metadata_projection_models_missing_ledger_as_pending_state() {
-        let projection = InvocationMetadataProjection::from_polled_ledger_record(
-            serde_json::Value::Null,
-            "req-1",
-            "discover",
-        );
+    fn canonical_invocation_meta_target_preserves_declared_owner_and_subject() {
+        let target = LocalDaemonInvocationMetaTarget::Canonical {
+            callee_ura: "easynet:///r/acme/agent/alice.tools",
+            default_subject_ura: "easynet:///r/acme/ability/alice.tools.files.read",
+        }
+        .resolve(None, Some("mission-id-must-not-rewrite-subject"))
+        .expect("canonical targeted meta identity");
 
-        assert_eq!(projection.state_label(), "ledger_pending");
-        assert_eq!(projection.receipt(), serde_json::Value::Null);
-        assert!(projection
-            .diagnostic()
-            .expect("pending diagnostic")
-            .contains("req-1"));
+        assert_eq!(target.callee_ura, "easynet:///r/acme/agent/alice.tools");
+        assert_eq!(
+            target.subject_ura,
+            "easynet:///r/acme/ability/alice.tools.files.read"
+        );
+        assert_ne!(target.callee_ura, local_daemon_default_callee_ura());
+    }
+
+    fn completed_receipt_response_fixture(
+        seed: u8,
+        _invocation_id: &str,
+    ) -> (
+        SubmittedInvocationProjection,
+        easynet_axon::pb::axon::v1::InvokeResponse,
+        ed25519_dalek::SigningKey,
+    ) {
+        use easynet_axon::invocation::{
+            make_ability, AbilityCallModes, AbilityOptions, AgentIdentity,
+            Ed25519ReceiptSigningAuthority, InvocationState, ReceiptSigningAuthority,
+            StaticReceiptSigningAuthorityProvider, UraProfile,
+        };
+        use easynet_axon::pb::axon::v1::InvokeResponse;
+        use ed25519_dalek::SigningKey;
+
+        let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+            "job.run",
+            serde_json::json!({"job": 1}),
+            Some("easynet:///r/acme/device/edge-1"),
+            LocalDaemonSubjectPolicy::Explicit(
+                "easynet:///r/acme/resource/user.jobs/job-1".to_string(),
+            ),
+            Duration::from_secs(5),
+        )
+        .expect("loopback invocation");
+        let request = invocation.invoke_request().expect("invoke request");
+        let submitted =
+            SubmittedInvocationProjection::from_request(&request, "job.run").expect("submitted");
+        let envelope = request.envelope.clone().expect("envelope");
+        let callee_wire = envelope.callee.as_ref().expect("callee");
+        let callee = AgentIdentity::new(
+            callee_wire.ura.clone(),
+            UraProfile::parse(&callee_wire.profile).expect("callee profile"),
+        );
+        let signing_key = SigningKey::from_bytes(&[seed; 32]);
+
+        let runtime = {
+            let authority: std::sync::Arc<dyn ReceiptSigningAuthority> =
+                std::sync::Arc::new(Ed25519ReceiptSigningAuthority::self_signed(
+                    callee.clone(),
+                    signing_key.clone(),
+                    "local-daemon-grpc-fixture",
+                ));
+            let mut provider = StaticReceiptSigningAuthorityProvider::new();
+            provider
+                .insert(authority)
+                .expect("insert fixture receipt authority");
+            easynet_axon::invocation::LocalRuntime::new_with_receipt_signing_authority_provider(
+                std::sync::Arc::new(provider),
+            )
+        };
+        crate::daemon::axon_bridge::runtime_factory::configure_local_runtime(&runtime, None, None);
+        let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+            &callee.ura,
+            "job.run",
+        )
+        .expect("ability URA");
+        let descriptor_binding =
+            crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire(
+                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                [3; 32],
+                "invoke",
+            )
+            .expect("descriptor binding");
+        let descriptor_ref =
+            crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                &callee.ura,
+                "job.run",
+                &descriptor_binding,
+            )
+            .expect("descriptor ref");
+        let result = br#"{"ok":true}"#.to_vec();
+        let dispatch = crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+            envelope,
+            descriptor_ref,
+            request.arguments.clone(),
+            Default::default(),
+        )
+        .expect("local-system descriptor-bound dispatch");
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("fixture runtime")
+            .block_on(async {
+                runtime
+                    .register_ability_with_options(
+                        ability_ura,
+                        make_ability({
+                            let result = result.clone();
+                            move |_| {
+                                let result = result.clone();
+                                async move { Ok(result) }
+                            }
+                        }),
+                        AbilityOptions::default()
+                            .with_modes(AbilityCallModes::RPC)
+                            .with_descriptor_proof(
+                                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                                "invoke",
+                                [3; 32],
+                                [1; 32],
+                                [2; 32],
+                            ),
+                    )
+                    .await
+                    .expect("register fixture ability");
+                let outcome = crate::daemon::axon_bridge::dispatch_shim::dispatch_rpc_admitted(
+                    &runtime,
+                    dispatch,
+                    &Default::default(),
+                )
+                .await;
+                assert_eq!(outcome.state, InvocationState::Completed);
+                assert!(outcome.error.is_none(), "{:?}", outcome.error);
+                InvokeResponse {
+                    state: InvocationState::Completed.to_wire_i32(),
+                    result: outcome.payload_bytes,
+                    admission_receipt: Some(
+                        easynet_axon::invocation::wire::receipt_to_wire(
+                            &outcome.admission_receipt.expect("admission receipt"),
+                        )
+                        .expect("signed admission fixture projects to wire"),
+                    ),
+                    terminal_receipt: Some(
+                        easynet_axon::invocation::wire::receipt_to_wire(
+                            &outcome.terminal_receipt.expect("terminal receipt"),
+                        )
+                        .expect("signed terminal fixture projects to wire"),
+                    ),
+                    ..Default::default()
+                }
+            });
+        (submitted, response, signing_key)
+    }
+
+    struct FixedReceiptKeyResolver {
+        signer_ura: String,
+        key: ed25519_dalek::VerifyingKey,
+    }
+
+    impl easynet_axon::invocation::KeyResolver for FixedReceiptKeyResolver {
+        fn resolve(
+            &self,
+            signer_ura: &str,
+        ) -> Result<ed25519_dalek::VerifyingKey, easynet_axon::invocation::AxonError> {
+            if signer_ura == self.signer_ura {
+                return Ok(self.key);
+            }
+            Err(easynet_axon::invocation::AxonError::permission_denied(
+                "test_receipt_key_unknown",
+            ))
+        }
+    }
+
+    struct UnknownReceiptKeyResolver;
+
+    impl easynet_axon::invocation::KeyResolver for UnknownReceiptKeyResolver {
+        fn resolve(
+            &self,
+            _signer_ura: &str,
+        ) -> Result<ed25519_dalek::VerifyingKey, easynet_axon::invocation::AxonError> {
+            Err(easynet_axon::invocation::AxonError::permission_denied(
+                "test_receipt_key_unknown",
+            ))
+        }
+    }
+
+    fn fixture_resolver(
+        response: &easynet_axon::pb::axon::v1::InvokeResponse,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> FixedReceiptKeyResolver {
+        let signer_ura = response
+            .terminal_receipt
+            .as_ref()
+            .and_then(|receipt| receipt.callee_binding.as_ref())
+            .expect("fixture callee")
+            .ura
+            .clone();
+        FixedReceiptKeyResolver {
+            signer_ura,
+            key: signing_key.verifying_key(),
+        }
+    }
+
+    fn causal_parent_claim(
+        response: &easynet_axon::pb::axon::v1::InvokeResponse,
+    ) -> serde_json::Value {
+        let terminal = response
+            .terminal_receipt
+            .as_ref()
+            .expect("terminal receipt");
+        let caller_ura = &terminal.caller_binding.as_ref().expect("caller").ura;
+        let callee_ura = &terminal.callee_binding.as_ref().expect("callee").ura;
+        let subject_ura = &terminal.subject_binding.as_ref().expect("subject").ura;
+        let invocation_ura = easynet_axon::ura::invocation_record_ura_for_binding(
+            subject_ura,
+            callee_ura,
+            caller_ura,
+            &terminal.invocation_id,
+        )
+        .expect("invocation URA");
+        serde_json::json!({
+            "receipt_ura": format!(
+                "{}/receipt/{}",
+                invocation_ura.trim_end_matches('/'),
+                terminal.index
+            ),
+            "receipt_hash": hex::encode(&terminal.self_hash),
+        })
     }
 
     #[test]
-    fn invocation_metadata_projection_models_incomplete_anchor_as_pending_state() {
-        let projection = InvocationMetadataProjection::from_polled_ledger_record(
-            serde_json::json!({
-                "state": "completed",
-                "trace_id": "trace-1",
-                "receipt_chain": {
-                    "head_receipt_hash": "",
-                    "anchors": []
-                }
-            }),
-            "req-2",
-            "discover",
+    fn verified_finalization_projection_is_the_only_causal_anchor_source() {
+        let (submitted, response, signing_key) =
+            completed_receipt_response_fixture(0x31, "inv-verified-chain");
+        let terminal = response
+            .terminal_receipt
+            .as_ref()
+            .expect("terminal receipt");
+        let expected_hash = hex::encode(&terminal.self_hash);
+        let expected_anchor_count = terminal.index + 1;
+        let expected_anchor_suffix = format!("/receipt/{}", terminal.index);
+        let resolver = fixture_resolver(&response, &signing_key);
+
+        let projection =
+            UnverifiedTerminalInvocationProjection::from_response(&response, &submitted, "job.run")
+                .expect("well-formed unverified projection")
+                .verify(&resolver, "job.run")
+                .expect("cryptographically verified finalization projection");
+        record_verified_causal_anchor(&projection.causal_anchor)
+            .expect("record verified causal capability");
+        assert_eq!(projection.state, "completed");
+        assert_eq!(
+            projection.receipt["anchor_count"],
+            serde_json::json!(expected_anchor_count)
+        );
+        assert_eq!(
+            projection.receipt["anchor"]["receipt_hash"],
+            serde_json::json!(expected_hash)
+        );
+        assert!(projection.receipt["anchor"]["receipt_ura"]
+            .as_str()
+            .expect("receipt URA")
+            .ends_with(&expected_anchor_suffix));
+        assert_eq!(
+            projection.receipt["cryptographic_verification"],
+            "finalization_checkpoints_verified"
         );
 
-        assert_eq!(projection.state_label(), "receipt_anchor_pending");
+        let parent = serde_json::json!({
+            "receipt_ura": projection.receipt["anchor"]["receipt_ura"],
+            "receipt_hash": projection.receipt["anchor"]["receipt_hash"],
+        });
+        let refs = verified_receipt_refs_from_causal_parents(&[parent])
+            .expect("verified projection restores a causal receipt capability");
+        assert_eq!(refs.len(), 1);
         assert_eq!(
-            projection.ledger_field("trace_id"),
-            serde_json::json!("trace-1")
+            refs[0].receipt_hash,
+            response
+                .terminal_receipt
+                .as_ref()
+                .expect("terminal receipt")
+                .self_hash
         );
-        assert!(projection
-            .diagnostic()
-            .expect("anchor diagnostic")
-            .contains("no complete terminal receipt anchor"));
+    }
+
+    #[test]
+    fn tampered_terminal_receipt_never_becomes_a_verified_projection() {
+        let (submitted, mut response, signing_key) =
+            completed_receipt_response_fixture(0x32, "inv-tampered-terminal");
+        response
+            .terminal_receipt
+            .as_mut()
+            .and_then(|receipt| receipt.callee_signature.as_mut())
+            .expect("terminal signature")
+            .signature[0] ^= 1;
+        let resolver = fixture_resolver(&response, &signing_key);
+
+        let unverified =
+            UnverifiedTerminalInvocationProjection::from_response(&response, &submitted, "job.run")
+                .expect("signature tamper retains structural shape");
+        let error = unverified
+            .verify(&resolver, "job.run")
+            .expect_err("tampered signature must fail closed");
+        assert!(error
+            .to_string()
+            .contains("terminal receipt signature is invalid"));
+    }
+
+    #[test]
+    fn unknown_receipt_key_cannot_authorize_a_causal_parent() {
+        let (submitted, response, _signing_key) =
+            completed_receipt_response_fixture(0x33, "inv-unknown-receipt-key");
+        let parent = causal_parent_claim(&response);
+
+        let unverified =
+            UnverifiedTerminalInvocationProjection::from_response(&response, &submitted, "job.run")
+                .expect("well-formed unverified projection");
+        let error = unverified
+            .verify(&UnknownReceiptKeyResolver, "job.run")
+            .expect_err("unknown signer key must fail closed");
+        let axon_error = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<easynet_axon::invocation::AxonError>())
+            .expect("verification error preserves the source AxonError");
+        assert_eq!(axon_error.reason, "test_receipt_key_unknown");
+
+        let error = verified_receipt_refs_from_causal_parents(&[parent])
+            .expect_err("unverified anchor must not enter causal context");
+        assert!(error
+            .to_string()
+            .contains("was not cryptographically verified"));
+    }
+
+    #[test]
+    fn terminal_invocation_projection_rejects_response_receipt_state_mismatch() {
+        use easynet_axon::invocation::InvocationState;
+        let (submitted, mut response, _signing_key) =
+            completed_receipt_response_fixture(0x34, "inv-state-mismatch");
+        let terminal = response
+            .terminal_receipt
+            .as_mut()
+            .expect("terminal receipt");
+        terminal.receipt_type = "failed".to_string();
+        terminal.state = InvocationState::Failed.to_wire_i32();
+
+        let error =
+            UnverifiedTerminalInvocationProjection::from_response(&response, &submitted, "job.run")
+                .expect_err("mismatched response and receipt state must fail closed");
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn terminal_invocation_projection_rejects_failed_terminal_response() {
+        use easynet_axon::invocation::InvocationState;
+
+        let (submitted, mut response, _signing_key) =
+            completed_receipt_response_fixture(0x35, "inv-failed-response");
+        response.state = InvocationState::Failed.to_wire_i32();
+
+        let error =
+            UnverifiedTerminalInvocationProjection::from_response(&response, &submitted, "job.run")
+                .expect_err("failed terminal state must not become a successful product result");
+        assert!(error.to_string().contains("ended in Failed"));
     }
 
     #[test]
     fn stream_first_payload_projection_has_bounded_empty_frame_budget() {
-        assert!(
-            STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES > 0
-                && STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES <= 64
-        );
+        const {
+            assert!(
+                STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES > 0
+                    && STREAM_FIRST_FRAME_PROJECTION_MAX_FRAMES <= 64
+            );
+        }
     }
 }

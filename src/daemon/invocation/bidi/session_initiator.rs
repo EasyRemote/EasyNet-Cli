@@ -111,7 +111,7 @@ pub(crate) use connection_state::{
 pub use envelope::build_session_envelope_open;
 use frame_loop::{run_live_session, LiveSessionRun};
 #[cfg(test)]
-use prelude::build_synthetic_pages_ability_descriptors;
+use prelude::committed_owner_ability_descriptors;
 use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};
 pub use prelude::{SessionPreludeInputs, UserTrustBootstrapError, UserTrustSync};
 pub use supervisor::SessionCloseStats;
@@ -888,14 +888,31 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_pages_descriptors_match_resolver_lookup_keys() {
-        // RFC-005 name match: the backend invokes `project_list` against
-        // `agent/<user>.pages`; the resolver looks up the relative name
-        // `project_list` AND the canonical ability URA
-        // `…/ability/<user>.pages.project_list`. The advertised descriptor
-        // must project to both, or pages.* stays NODATA.
+    fn owner_projection_uses_only_committed_descriptors() {
         let owner = "easynet:///r/acme/agent/alice.pages";
-        let descriptors = build_synthetic_pages_ability_descriptors(owner, Some("dev-1"));
+        let other_owner = "easynet:///r/acme/device/dev-1";
+        let committed = vec![
+            AbilityDescriptor::new(
+                "project_list",
+                owner,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            )
+            .expect("pages descriptor")
+            .with_input_schema(serde_json::json!({
+                "type": "object",
+                "required": ["project_id"],
+                "properties": {"project_id": {"type": "string"}}
+            })),
+            AbilityDescriptor::new(
+                "skill.list",
+                other_owner,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            )
+            .expect("device descriptor"),
+        ];
+        let descriptors = committed_owner_ability_descriptors(&committed, owner, Some("dev-1"));
         let by_public: std::collections::BTreeMap<_, _> = descriptors
             .iter()
             .map(|d| (d.public_name(), d.canonical_ability_ura()))
@@ -904,44 +921,19 @@ mod tests {
             by_public.get("project_list").cloned().flatten().as_deref(),
             Some("easynet:///r/acme/ability/alice.pages.project_list"),
         );
-        assert_eq!(
-            by_public.get("pages.publish").cloned().flatten().as_deref(),
-            Some("easynet:///r/acme/ability/alice.pages.pages.publish"),
-        );
-        assert_eq!(
-            by_public.get("pages.health").cloned().flatten().as_deref(),
-            Some("easynet:///r/acme/ability/alice.pages.pages.health"),
-        );
-        // All five management abilities are present.
-        assert_eq!(descriptors.len(), 5);
-
-        // The advertised descriptor must carry the input schema so the
-        // Frontend InvokeAbilityDialog renders a form (not "No input
-        // required" → empty-arg invoke → missing project_id 400).
-        let get = descriptors
-            .iter()
-            .find(|d| d.public_name() == "pages.get")
-            .expect("pages.get descriptor present");
-        let schema = &get.schema_summary.input;
+        assert_eq!(descriptors.len(), 1);
+        let schema = &descriptors[0].schema_summary.input;
         assert_eq!(
             schema["required"][0], "project_id",
-            "pages.get must advertise project_id as required, got: {schema}"
+            "committed schema must survive publication, got: {schema}"
         );
-        let health = descriptors
-            .iter()
-            .find(|d| d.public_name() == "pages.health")
-            .expect("pages.health descriptor present");
         assert_eq!(
-            health.metadata.get("host_node_id").map(String::as_str),
+            descriptors[0]
+                .metadata
+                .get("host_node_id")
+                .map(String::as_str),
             Some("dev-1"),
-            "synthetic pages descriptors must remain bound to the host device"
-        );
-        assert!(
-            health.schema_summary.input["properties"]
-                .get("surface_ref")
-                .is_some(),
-            "pages.health must advertise optional surface_ref, got: {}",
-            health.schema_summary.input
+            "committed descriptor must remain bound to the execution host"
         );
     }
 
@@ -1196,11 +1188,18 @@ mod tests {
                 Ok(InvokeBidiDown {
                     sequence: 0,
                     payload: Some(
-                        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::Receipt(
-                            easynet_axon::pb::axon::v1::InvocationReceipt {
-                                state: easynet_axon::invocation::InvocationState::Admitted
-                                    .to_wire_i32(),
-                                ..easynet_axon::pb::axon::v1::InvocationReceipt::default()
+                        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::Control(
+                            BidiControl {
+                                control: Some(
+                                    easynet_axon::pb::axon::v1::bidi_control::Control::SessionEstablished(
+                                        easynet_axon::pb::axon::v1::BidiSessionEstablished {
+                                            contract_version: DEVICE_DISPATCH_CONTRACT_VERSION,
+                                            dispatch_encoding: "proto".to_string(),
+                                            session_id: 1,
+                                            displaced_prior: false,
+                                        },
+                                    ),
+                                ),
                             },
                         ),
                     ),
@@ -1846,6 +1845,7 @@ mod tests {
             "agent.start",
             owner,
             crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
         )
         .expect("test descriptor")];
 
@@ -1980,23 +1980,22 @@ mod tests {
             },
         )
         .expect("save local agents");
-        let mut registry = crate::daemon::persistence::agent_registry::AgentRegistry::default();
-        registry.agents.insert(
-            "anthropic".to_string(),
-            crate::daemon::persistence::agent_registry::AgentEntry::new(
-                crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
-                Some("sonnet".to_string()),
-            ),
-        );
-        crate::daemon::persistence::agent_registry::save_agents(&registry)
-            .expect("save agents registry");
-
-        let descriptors = vec![AbilityDescriptor::new(
-            "agent.start",
-            device_ura,
-            crate::daemon::ability::descriptors::Visibility::Scoped,
-        )
-        .expect("test descriptor")];
+        let descriptors = vec![
+            AbilityDescriptor::new(
+                "agent.start",
+                device_ura,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            )
+            .expect("test descriptor"),
+            AbilityDescriptor::new(
+                "chat",
+                agent_ura,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            )
+            .expect("committed hosted-agent descriptor"),
+        ];
         let signer = TestSessionSigner::random(device_ura);
         let expected_public_key_hex = hex::encode(
             signer

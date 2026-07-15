@@ -24,7 +24,6 @@ use console::style;
 use crate::daemon::boot::join_connection_state;
 use crate::daemon::execution::mission::drivers::{claude_code, codex};
 use crate::daemon::persistence::config;
-use crate::support::platform::net;
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
     /// Emit JSON instead of the human-readable report.
@@ -244,8 +243,7 @@ fn check_user_signing_key() -> Check {
 
 fn check_runtime() -> Check {
     match config::load() {
-        Ok(state) => match state.runtime_kind {
-            config::RuntimeKind::DaemonOnly => match crate::support::platform::local_invoke::invoke_local_ability(
+        Ok(state) => match crate::support::platform::local_invoke::invoke_local_ability(
                 "observe.health",
                 serde_json::json!({"source": "doctor"}),
             ) {
@@ -264,32 +262,6 @@ fn check_runtime() -> Check {
                     ),
                 },
             },
-            // Legacy raw axon-runtime state. Unified device and hub paths
-            // now record DaemonOnly and flow through the branch above;
-            // this arm covers only pre-unification or non-product state.
-            config::RuntimeKind::AxonBridge => {
-                let alive = state.pid.is_some_and(net::is_pid_alive)
-                    || net::discover_pid_from_endpoint(&state.endpoint).is_some();
-                if alive {
-                    Check {
-                        name: "local runtime".to_string(),
-                        status: CheckStatus::Ok,
-                        detail: format!("bridge runtime (legacy) up at {}", state.endpoint),
-                        hint: None,
-                    }
-                } else {
-                    Check {
-                        name: "local runtime".to_string(),
-                        status: CheckStatus::Fail,
-                        detail: "runtime metadata present, but the bridge process is not alive"
-                            .to_string(),
-                        hint: Some(
-                            "Run 'easynet runtime stop' to clear stale state, then 'easynet runtime start'.",
-                        ),
-                    }
-                }
-            }
-        },
         Err(_) => Check {
             name: "local runtime".to_string(),
             status: CheckStatus::Warn,
@@ -305,19 +277,6 @@ fn check_federation() -> Check {
     // and `easynet runtime status` use). DirectoryEntries carry a
     // `status` field (`active` / `stale` / `draining`); `non-active`
     // is the doctor's "peer probe failed" equivalent in the new shape.
-    if config::load()
-        .map(|state| state.uses_bridge())
-        .unwrap_or(false)
-    {
-        return Check {
-            name: "federation".to_string(),
-            status: CheckStatus::Warn,
-            detail: "bridge/hub mode has no local daemon federation probe".to_string(),
-            hint: Some(
-                "Start device mode ('easynet runtime start') if you want daemon-backed federation health checks.",
-            ),
-        };
-    }
     federation_check_impl()
 }
 

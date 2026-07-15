@@ -1,0 +1,37 @@
+schema_version = "2"
+name = "federation.advertise_agent"
+descriptor_version = "1.0.0"
+description = "Publish one hosted Agent directory row under the calling device's federation presence."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["agent_ura"]
+additionalProperties = true
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "Hosted Agent URA being advertised."
+
+[input_schema.properties.generation]
+type = "integer"
+description = "Monotonic directory generation for this advertisement."
+
+[input_schema.properties.host_node_id]
+type = "string"
+description = "Host device or node URA that carries the Agent."
+
+[input_schema.properties.public_key_hex]
+type = "string"
+description = "Optional advertised Agent verifying key."

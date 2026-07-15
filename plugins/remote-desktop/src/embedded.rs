@@ -13,6 +13,7 @@ use crate::daemon::plugins::{
 
 pub(crate) mod config;
 pub(crate) mod constants;
+pub(crate) mod contract;
 pub(crate) mod errors;
 pub(crate) mod event_log;
 pub(crate) mod handlers;

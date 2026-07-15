@@ -19,6 +19,7 @@ class BidiState(StrEnum):
     CREATED = "Created"
     OPENING = "Opening"
     OPEN = "Open"
+    CANCEL_REQUESTED = "CancelRequested"
     HALF_CLOSED_LOCAL = "HalfClosedLocal"
     HALF_CLOSED_REMOTE = "HalfClosedRemote"
     TERMINAL = "Terminal"
@@ -70,10 +71,13 @@ class BidiFrame:
     kind: str
     stream_id: int = 0
     terminal: bool = False
+    transport_terminal: bool = False
     payload_content_type: str = ""
     payload_base64: str = ""
     payload_json: Any = None
     error: Any = None
+    admission_receipt: Any = None
+    terminal_receipt: Any = None
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "BidiFrame":
@@ -94,6 +98,10 @@ class BidiFrame:
             kind=kind,
             stream_id=_optional_non_negative_int(decoded.get("stream_id"), "stream_id"),
             terminal=_optional_bool(decoded.get("terminal"), "terminal") or False,
+            transport_terminal=_optional_bool(
+                decoded.get("transport_terminal"), "transport_terminal"
+            )
+            or False,
             payload_content_type=_optional_string(
                 decoded.get("payload_content_type"), "payload_content_type"
             )
@@ -104,6 +112,8 @@ class BidiFrame:
             or "",
             payload_json=decoded.get("payload_json"),
             error=decoded.get("error"),
+            admission_receipt=decoded.get("admission_receipt"),
+            terminal_receipt=decoded.get("terminal_receipt"),
         )
 
     def to_json(self) -> bytes:
@@ -113,6 +123,8 @@ class BidiFrame:
             "stream_id": self.stream_id,
             "terminal": self.terminal,
         }
+        if self.transport_terminal:
+            value["transport_terminal"] = self.transport_terminal
         if self.payload_content_type:
             value["payload_content_type"] = self.payload_content_type
         if self.payload_base64:
@@ -121,6 +133,10 @@ class BidiFrame:
             value["payload_json"] = self.payload_json
         if self.error is not None:
             value["error"] = self.error
+        if self.admission_receipt is not None:
+            value["admission_receipt"] = self.admission_receipt
+        if self.terminal_receipt is not None:
+            value["terminal_receipt"] = self.terminal_receipt
         return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
@@ -133,7 +149,7 @@ class BidiTerminalFrame:
     seq: int
     payload: Any = None
     error: Any = None
-    receipt: Any = None
+    terminal_receipt: Any = None
 
     @classmethod
     def from_frame(cls, session_id: str, frame: BidiFrame) -> "BidiTerminalFrame":
@@ -148,7 +164,7 @@ class BidiTerminalFrame:
             seq=frame.sequence,
             payload=frame.payload_json,
             error=frame.error,
-            receipt=_receipt_from_payload(frame.payload_json),
+            terminal_receipt=frame.terminal_receipt,
         )
 
     def to_json(self) -> bytes:
@@ -161,8 +177,8 @@ class BidiTerminalFrame:
             value["payload"] = self.payload
         if self.error is not None:
             value["error"] = self.error
-        if self.receipt is not None:
-            value["receipt"] = self.receipt
+        if self.terminal_receipt is not None:
+            value["terminal_receipt"] = self.terminal_receipt
         return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
@@ -186,6 +202,7 @@ class BidiOutcome:
             raise _invalid_bidi("bidi outcome JSON must be an object")
         state = _bidi_state(_required_string(decoded, "state"))
         if state not in {
+            BidiState.CANCEL_REQUESTED,
             BidiState.HALF_CLOSED_LOCAL,
             BidiState.HALF_CLOSED_REMOTE,
             BidiState.TERMINAL,
@@ -195,6 +212,8 @@ class BidiOutcome:
         }:
             raise _invalid_bidi("invalid bidi outcome state")
         terminal = _required_bool(decoded, "terminal")
+        if state == BidiState.CANCEL_REQUESTED and terminal:
+            raise _invalid_bidi("bidi cancel request must not be terminal")
         if (
             state
             in {
@@ -390,6 +409,8 @@ class BidiSession:
         if frame.terminal:
             self._terminal_frame = BidiTerminalFrame.from_frame(self.session_id, frame)
             self.state = BidiState.TERMINAL
+        elif frame.transport_terminal:
+            self.state = BidiState.FAILED
         elif frame.kind == "remote_close_send":
             if self.state == BidiState.HALF_CLOSED_LOCAL:
                 self.state = BidiState.TERMINAL
@@ -465,12 +486,6 @@ def _bidi_terminal_frame_type(frame: BidiFrame) -> str:
     if frame.error is not None:
         return "error"
     return "terminal"
-
-
-def _receipt_from_payload(payload: Any) -> Any:
-    if isinstance(payload, dict) and isinstance(payload.get("receipt"), dict):
-        return payload["receipt"]
-    return None
 
 
 def _invalid_bidi(message: str, cause: BaseException | None = None) -> SDKError:

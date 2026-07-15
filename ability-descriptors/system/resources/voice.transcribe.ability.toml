@@ -1,6 +1,19 @@
-schema_version = "1"
+schema_version = "2"
 name = "voice.transcribe"
-description = "Stream audio in, receive transcription text out. True bidi: caller pushes audio BinaryChunk UP, callee returns text BinaryChunk (or structured JSON) DOWN. Subject MUST be an ASR-model resource_ura."
+descriptor_version = "1.0.0"
+description = "Stream audio in, receive transcription text out. True bidi: caller pushes audio BinaryChunk UP, callee returns text BinaryChunk (or structured JSON) DOWN. Subject MUST be an ASR-model resource_ura governed by the realm Hub."
+call_mode = "bidi"
+capability_state = "unsupported"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "null"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

@@ -15,7 +15,7 @@ from .connection import (
     RuntimeConnection,
 )
 from .control_ipc import ControlIpcClient, default_control_path
-from .daemon import DaemonControl
+from .daemon import RuntimeLifecycle
 from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
 from .axon_addressing import AddressingClient
@@ -32,6 +32,12 @@ from .transport import DaemonInvocationTransport
 class _Closable(Protocol):
     def close(self) -> None:
         ...
+
+
+class _ProfileTransportOpener(Protocol):
+    def __call__(
+        self, *, control_path: str, library_path: str | None
+    ) -> _Closable: ...
 
 
 _TClosable = TypeVar("_TClosable", bound=_Closable)
@@ -154,17 +160,22 @@ class SdkEnvironment:
         )
         return self._track(Client(transport))
 
-    def daemon_control(self) -> DaemonControl:
-        """Open daemon lifecycle control over the SDK default transport."""
+    def runtime_lifecycle(self) -> RuntimeLifecycle:
+        """Open runtime host lifecycle control over the SDK default transport."""
 
         self._require_open()
         from . import _cabi
 
-        transport = _cabi.open_cabi_daemon_transport(
+        transport = _cabi.open_cabi_runtime_lifecycle_transport(
             library_path=self.library_path,
         )
         self._track(transport)
-        return DaemonControl(transport)
+        return RuntimeLifecycle(transport)
+
+    def daemon_control(self) -> RuntimeLifecycle:
+        """Source-compatible alias for ``runtime_lifecycle``."""
+
+        return self.runtime_lifecycle()
 
     def control_ipc_client(self, *, timeout: float | None = None) -> ControlIpcClient:
         """Open a direct boot/status control IPC client."""
@@ -180,9 +191,9 @@ class SdkEnvironment:
     def connect_local(
         self, options: ConnectOptions = ConnectOptions()
     ) -> RuntimeClient:
-        """Discover, attach, open, and detach a local daemon runtime client."""
+        """Discover, attach, open, and detach a local runtime host client."""
 
-        client = self.daemon_control().connect_local(self._connect_options(options))
+        client = self.runtime_lifecycle().connect_local(self._connect_options(options))
         return self._track(client)
 
     def runtime_connection(
@@ -208,10 +219,10 @@ class SdkEnvironment:
         """Open a direct Axon runtime connection with canonical Addressing."""
 
         self._require_open()
-        from .direct_runtime import DirectDaemonRuntimeConnector
+        from .direct_runtime import DirectRuntimeConnector
 
         addressing = _canonical_addressing_client()
-        connector = DirectDaemonRuntimeConnector(
+        connector = DirectRuntimeConnector(
             control_path=self.resolved_control_path(),
             identity=addressing,
             close_identity=True,
@@ -253,7 +264,7 @@ class SdkEnvironment:
     def runtime_client_direct(
         self, options: ConnectOptions = ConnectOptions()
     ) -> RuntimeClient:
-        """Open a direct daemon Axon gRPC-over-UDS runtime client."""
+        """Open a direct Axon gRPC-over-UDS runtime client."""
 
         return self._track(self.runtime_connection_direct(options).runtime_client())
 
@@ -341,7 +352,7 @@ class SdkEnvironment:
         return owned
 
     def resolved_control_path(self) -> str:
-        """Return the configured daemon control discovery path or SDK default."""
+        """Return the configured runtime control discovery path or SDK default."""
 
         self._require_open()
         return self.control_path or str(default_control_path())
@@ -378,7 +389,7 @@ class SdkEnvironment:
             reconnect=options.reconnect,
         )
 
-    def _profile_transport(self, opener: object) -> _Closable:
+    def _profile_transport(self, opener: _ProfileTransportOpener) -> _Closable:
         self._require_open()
         return opener(
             control_path=self.resolved_control_path(),

@@ -5,9 +5,9 @@
 // Description: Lifecycle state and terminal reason for one remote desktop
 // session.
 
-use easynet_axon::RemoteDesktopSessionState;
+use super::contract::RemoteDesktopSessionState;
 
-/// Axon wire-facing lifecycle enum used by remote desktop session projections.
+/// Product-owned lifecycle vocabulary used by remote desktop projections.
 pub(in crate::daemon::plugins::remote_desktop) type RemoteDesktopState = RemoteDesktopSessionState;
 
 /// Lifecycle state for one remote desktop session.
