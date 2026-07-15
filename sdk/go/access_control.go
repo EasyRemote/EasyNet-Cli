@@ -766,7 +766,16 @@ func accessControlPermissionRequestResolveArgs(request AccessControlPermissionRe
 		args["created_grant"] = accessControlGrantWire(grant)
 	}
 	if request.AuthorityProof != nil {
-		args["authority_proof"] = accessControlAuthorityProofWire(*request.AuthorityProof, projected.PrincipalID)
+		proof := *request.AuthorityProof
+		proof.OwnerURA = firstNonEmpty(proof.OwnerURA, projected.OwnerURA)
+		proof.PrincipalKind = firstNonEmptyPrincipalKind(proof.PrincipalKind, projected.PrincipalKind)
+		proof.PrincipalURA = firstNonEmpty(proof.PrincipalURA, projected.PrincipalURA)
+		wire, err := accessControlAuthorityProofWire(proof)
+		if err != nil {
+			return AccessControlPermissionRequestResolveRequest{}, nil, err
+		}
+		request.AuthorityProof = &proof
+		args["authority_proof"] = wire
 	}
 	return request, args, nil
 }
@@ -942,14 +951,23 @@ func accessControlPermissionRequestWire(request AccessControlPermissionRequest) 
 	return wire
 }
 
-func accessControlAuthorityProofWire(proof AccessControlAuthorityProof, principalID string) map[string]any {
-	ownerUserID, _ := accessControlUserIDFromURA(proof.OwnerURA, "authority_proof.owner_ura")
+func accessControlAuthorityProofWire(proof AccessControlAuthorityProof) (map[string]any, error) {
+	if strings.TrimSpace(proof.ProofID) == "" {
+		return nil, invalidAccessControl("authority_proof.proof_id is required", nil)
+	}
+	if _, err := accessControlUserIDFromURA(proof.OwnerURA, "authority_proof.owner_ura"); err != nil {
+		return nil, err
+	}
+	if proof.PrincipalKind == "" {
+		proof.PrincipalKind = AccessControlPrincipalUser
+	}
+	if _, err := accessControlPrincipalID(proof.PrincipalKind, proof.PrincipalURA, proof.PrincipalID); err != nil {
+		return nil, err
+	}
 	wire := map[string]any{
 		"proof_id":       strings.TrimSpace(proof.ProofID),
-		"owner_user_id":  ownerUserID,
 		"owner_ura":      strings.TrimSpace(proof.OwnerURA),
 		"principal_kind": string(proof.PrincipalKind),
-		"principal_id":   firstNonEmpty(proof.PrincipalID, principalID),
 		"principal_ura":  strings.TrimSpace(proof.PrincipalURA),
 	}
 	optionalStringArg(wire, "grant_id", proof.GrantID)
@@ -974,7 +992,7 @@ func accessControlAuthorityProofWire(proof AccessControlAuthorityProof, principa
 	optionalStringArg(wire, "expires_at", proof.ExpiresAt)
 	optionalStringArg(wire, "signature", proof.Signature)
 	optionalStringArg(wire, "verification_key_id", proof.VerificationKeyID)
-	return wire
+	return wire, nil
 }
 
 func accessControlUserIDFromURA(raw string, field string) (string, error) {
@@ -995,7 +1013,10 @@ func accessControlPrincipalID(kind AccessControlPrincipalKind, principalURA stri
 		kind = AccessControlPrincipalUser
 	}
 	if principalURA == "" {
-		return principalID, nil
+		if principalID != "" {
+			return "", invalidAccessControl("principal_ura is required when principal_id is provided", nil)
+		}
+		return "", nil
 	}
 	parts, err := ParseURAParts(principalURA)
 	if err != nil {
@@ -1313,6 +1334,15 @@ func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyPrincipalKind(values ...AccessControlPrincipalKind) AccessControlPrincipalKind {
+	for _, value := range values {
+		if value != "" {
+			return value
 		}
 	}
 	return ""

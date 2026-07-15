@@ -1,6 +1,7 @@
 import unittest
 
 from easynet_sdk.access_control import (
+    AccessControlAuthorityProof,
     AccessControlCheckRequest,
     AccessControlEffect,
     AccessControlGrant,
@@ -226,6 +227,68 @@ class AccessControlTests(unittest.TestCase):
             )
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
+    def test_runtime_provider_rejects_scalar_principal_mutation_inputs(self) -> None:
+        def assert_rejects_before_invoke(request_call) -> None:
+            ability = _MemoryAbility()
+            provider = RuntimeAccessControlProvider(ability)
+            with self.assertRaises(SDKError) as caught:
+                request_call(provider)
+            self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+            self.assertEqual(ability.ability, "")
+
+        assert_rejects_before_invoke(
+            lambda provider: provider.grant(
+                AccessControlGrantRequest(
+                    call=_call(),
+                    grant=AccessControlGrant(
+                        grant_id="grant-1",
+                        owner_ura="easynet:///r/example/user/alice",
+                        principal_kind=AccessControlPrincipalKind.USER,
+                        principal_id="bob",
+                        actions=("invoke",),
+                        created_by="easynet:///r/example/user/alice",
+                    ),
+                )
+            )
+        )
+        assert_rejects_before_invoke(
+            lambda provider: provider.list(
+                AccessControlListRequest(
+                    call=_call(),
+                    owner_ura="easynet:///r/example/user/alice",
+                    principal_kind=AccessControlPrincipalKind.USER,
+                    principal_id="bob",
+                )
+            )
+        )
+        assert_rejects_before_invoke(
+            lambda provider: provider.create_request(
+                AccessControlPermissionRequestCreateRequest(
+                    call=_call(),
+                    request=AccessControlPermissionRequest(
+                        request_id="request-1",
+                        owner_ura="easynet:///r/example/user/alice",
+                        principal_kind=AccessControlPrincipalKind.USER,
+                        principal_id="bob",
+                        callee_ura="easynet:///r/example/device/dev-a",
+                        subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
+                        ability_ura="easynet:///r/example/device/dev-a/ability/device.observe.health",
+                        action="invoke",
+                    ),
+                )
+            )
+        )
+        assert_rejects_before_invoke(
+            lambda provider: provider.list_requests(
+                AccessControlPermissionRequestListRequest(
+                    call=_call(),
+                    owner_ura="easynet:///r/example/user/alice",
+                    principal_kind=AccessControlPrincipalKind.USER,
+                    principal_id="bob",
+                )
+            )
+        )
+
     def test_runtime_provider_manages_permission_requests(self) -> None:
         ability = _MemoryAbility()
         provider = RuntimeAccessControlProvider(ability)
@@ -258,6 +321,7 @@ class AccessControlTests(unittest.TestCase):
                     actions=("invoke",),
                     created_by="easynet:///r/example/user/alice",
                 ),
+                authority_proof=AccessControlAuthorityProof(proof_id="proof-1"),
                 actor_ura="easynet:///r/example/user/alice",
             )
         )
@@ -265,6 +329,12 @@ class AccessControlTests(unittest.TestCase):
         self.assertTrue(resolved.idempotent_replay)
         self.assertIsNotNone(resolved.created_grant)
         self.assertIsNotNone(resolved.authority_proof)
+        authority_proof = ability.arguments["authority_proof"]
+        self.assertIsInstance(authority_proof, dict)
+        self.assertEqual(authority_proof["owner_ura"], "easynet:///r/example/user/alice")
+        self.assertEqual(authority_proof["principal_ura"], "easynet:///r/example/user/bob")
+        self.assertNotIn("owner_user_id", authority_proof)
+        self.assertNotIn("principal_id", authority_proof)
 
         listed = provider.list_requests(
             AccessControlPermissionRequestListRequest(

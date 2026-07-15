@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Mapping, Protocol, Sequence
 
@@ -680,16 +680,23 @@ def _permission_request_resolve_args(
             request.created_grant, projected.owner_ura, projected.principal_ura
         )
         args["created_grant"] = _grant_wire(created_grant)
+    authority_proof = None
     if request.authority_proof is not None:
-        args["authority_proof"] = _authority_proof_wire(
-            request.authority_proof, projected.principal_id
+        authority_proof = replace(
+            request.authority_proof,
+            owner_ura=request.authority_proof.owner_ura.strip() or projected.owner_ura,
+            principal_kind=request.authority_proof.principal_kind
+            or projected.principal_kind,
+            principal_ura=request.authority_proof.principal_ura.strip()
+            or projected.principal_ura,
         )
+        args["authority_proof"] = _authority_proof_wire(authority_proof)
     return (
         AccessControlPermissionRequestResolveRequest(
             call=request.call,
             request=projected,
             created_grant=created_grant,
-            authority_proof=request.authority_proof,
+            authority_proof=authority_proof,
             owner_ura=projected.owner_ura,
             principal_ura=projected.principal_ura,
             actor_ura=request.actor_ura.strip(),
@@ -900,18 +907,16 @@ def _permission_request_wire(request: AccessControlPermissionRequest) -> dict[st
     return wire
 
 
-def _authority_proof_wire(
-    proof: AccessControlAuthorityProof, principal_id: str
-) -> dict[str, object]:
-    owner_user_id = _user_id_from_user_ura(proof.owner_ura.strip(), "authority_proof.owner_ura")
+def _authority_proof_wire(proof: AccessControlAuthorityProof) -> dict[str, object]:
+    if not proof.proof_id.strip():
+        raise _invalid("authority_proof.proof_id is required")
+    _user_id_from_user_ura(proof.owner_ura.strip(), "authority_proof.owner_ura")
+    principal_kind = proof.principal_kind or AccessControlPrincipalKind.USER
+    _principal_id(principal_kind, proof.principal_ura, proof.principal_id)
     wire: dict[str, object] = {
         "proof_id": proof.proof_id.strip(),
-        "owner_user_id": owner_user_id,
         "owner_ura": proof.owner_ura.strip(),
-        "principal_kind": (
-            proof.principal_kind or AccessControlPrincipalKind.USER
-        ).value,
-        "principal_id": proof.principal_id.strip() or principal_id,
+        "principal_kind": principal_kind.value,
         "principal_ura": proof.principal_ura.strip(),
     }
     for key, value in {
@@ -959,7 +964,9 @@ def _principal_id(
     if kind is None:
         kind = AccessControlPrincipalKind.USER
     if not principal_ura:
-        return principal_id
+        if principal_id:
+            raise _invalid("principal_ura is required when principal_id is provided")
+        return ""
     projection = parse_ura(principal_ura)
     if kind == AccessControlPrincipalKind.USER:
         if projection.kind != "user":

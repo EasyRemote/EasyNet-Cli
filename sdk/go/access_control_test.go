@@ -213,6 +213,84 @@ func TestRuntimeAccessControlProviderRejectsNonUserOwnerURA(t *testing.T) {
 	}
 }
 
+func TestRuntimeAccessControlProviderRejectsScalarPrincipalMutationInputs(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*RuntimeAccessControlProvider) error
+	}{
+		{
+			name: "grant",
+			run: func(provider *RuntimeAccessControlProvider) error {
+				_, err := provider.Grant(context.Background(), AccessControlGrantRequest{
+					Call: accessControlCallFixture(),
+					Grant: AccessControlGrant{
+						GrantID:       "grant-1",
+						OwnerURA:      "easynet:///r/example/user/alice",
+						PrincipalKind: AccessControlPrincipalUser,
+						PrincipalID:   "bob",
+						Actions:       []string{"invoke"},
+						CreatedBy:     "easynet:///r/example/user/alice",
+					},
+				})
+				return err
+			},
+		},
+		{
+			name: "list",
+			run: func(provider *RuntimeAccessControlProvider) error {
+				_, err := provider.List(context.Background(), AccessControlListRequest{
+					Call:          accessControlCallFixture(),
+					OwnerURA:      "easynet:///r/example/user/alice",
+					PrincipalKind: AccessControlPrincipalUser,
+					PrincipalID:   "bob",
+				})
+				return err
+			},
+		},
+		{
+			name: "permission_request_create",
+			run: func(provider *RuntimeAccessControlProvider) error {
+				request := accessControlPermissionRequestFixture()
+				request.PrincipalURA = ""
+				request.PrincipalID = "bob"
+				_, err := provider.CreateRequest(context.Background(), AccessControlPermissionRequestCreateRequest{
+					Call:    accessControlCallFixture(),
+					Request: request,
+				})
+				return err
+			},
+		},
+		{
+			name: "permission_request_list",
+			run: func(provider *RuntimeAccessControlProvider) error {
+				_, err := provider.ListRequests(context.Background(), AccessControlPermissionRequestListRequest{
+					Call:          accessControlCallFixture(),
+					OwnerURA:      "easynet:///r/example/user/alice",
+					PrincipalKind: AccessControlPrincipalUser,
+					PrincipalID:   "bob",
+				})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := &memoryAccessControlAbility{}
+			provider, err := NewRuntimeAccessControlProvider(transport)
+			if err != nil {
+				t.Fatalf("NewRuntimeAccessControlProvider: %v", err)
+			}
+			err = tt.run(provider)
+			if !IsCode(err, ErrInvalidArgument) {
+				t.Fatalf("error = %v", err)
+			}
+			if transport.ability != "" {
+				t.Fatalf("scalar principal reached runtime ability %s with args %#v", transport.ability, transport.args)
+			}
+		})
+	}
+}
+
 func TestRuntimeAccessControlProviderManagesPermissionRequests(t *testing.T) {
 	transport := &memoryAccessControlAbility{}
 	provider, err := NewRuntimeAccessControlProvider(transport)
@@ -251,16 +329,27 @@ func TestRuntimeAccessControlProviderManagesPermissionRequests(t *testing.T) {
 		CreatedBy:     "easynet:///r/example/user/alice",
 	}
 	resolved, err := provider.ResolveRequest(context.Background(), AccessControlPermissionRequestResolveRequest{
-		Call:         accessControlCallFixture(),
-		Request:      accessControlPermissionRequestFixture(),
-		CreatedGrant: &grant,
-		ActorURA:     "easynet:///r/example/user/alice",
+		Call:           accessControlCallFixture(),
+		Request:        accessControlPermissionRequestFixture(),
+		CreatedGrant:   &grant,
+		AuthorityProof: &AccessControlAuthorityProof{ProofID: "proof-1"},
+		ActorURA:       "easynet:///r/example/user/alice",
 	})
 	if err != nil {
 		t.Fatalf("ResolveRequest: %v", err)
 	}
 	if !resolved.IdempotentReplay || resolved.CreatedGrant == nil || resolved.AuthorityProof == nil {
 		t.Fatalf("resolution projection lost: %#v", resolved)
+	}
+	authorityProof := transport.args["authority_proof"].(map[string]any)
+	if authorityProof["owner_ura"] != "easynet:///r/example/user/alice" || authorityProof["principal_ura"] != "easynet:///r/example/user/bob" {
+		t.Fatalf("authority proof did not inherit canonical URAs: %#v", authorityProof)
+	}
+	if _, ok := authorityProof["owner_user_id"]; ok {
+		t.Fatalf("owner storage key leaked into authority proof wire: %#v", authorityProof)
+	}
+	if _, ok := authorityProof["principal_id"]; ok {
+		t.Fatalf("principal storage key leaked into authority proof wire: %#v", authorityProof)
 	}
 
 	listed, err := provider.ListRequests(context.Background(), AccessControlPermissionRequestListRequest{
