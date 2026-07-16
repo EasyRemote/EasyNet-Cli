@@ -162,7 +162,7 @@ one normative anchor here, and that every locally-introduced
 invariant in this document (SO/CSH/RC/TA/VP-INV-*) is self-contained.
 The work this document directly authorises is Phase~1: schema-level
 \texttt{canonical:bool} marking, the two-class receipt split,
-\texttt{principal/} caller URIs, a content-as-blob boundary, and a
+\texttt{principal/} caller URAs, a content-as-blob boundary, and a
 state-key-keyed receipt index.
 \end{abstract}
 
@@ -254,7 +254,7 @@ schema is fixed by the state type. The state key uniquely
 identifies one instance within $t$. State key fields \textbf{MUST}
 include enough information to derive the canonical authority for
 the object (\S\ref{sec:authority}); placing the
-\texttt{owner\_agent} URI inside the state key is the standard
+\texttt{owner\_agent} URA inside the state key is the standard
 mechanism, because authority that lived as a mutable field could
 be rewritten by a transition, opening a privilege-escalation
 primitive the protocol refuses to expose.
@@ -551,8 +551,8 @@ An \texttt{OperationalReceipt} \textbf{MAY} carry a structured
 site made about the request; its presence \textbf{MUST NOT}
 influence \texttt{canonical\_state\_hash}, and its absence
 \textbf{MUST NOT} affect canonical replay correctness. Specific
-field schema is delegated to the call site (\S\ref{sec:caller-uri}
-specifies one in the principal-URI context). RFC-006 main commits
+field schema is delegated to the call site (\S\ref{sec:caller-ura}
+specifies one in the principal-URA context). RFC-006 main commits
 only to the channel's existence and to its non-canonical nature.
 
 \subsection{Concurrent transition admissibility}
@@ -702,7 +702,7 @@ fact, not a runtime invariant the application must remember.
 
 \normsv{}
 Every state object has exactly one \emph{owner agent}, identified
-by an EasyNet agent URI. The owner agent is the \emph{canonical
+by an EasyNet Agent URA. The owner agent is the \emph{canonical
 authority} for the object: every \texttt{CanonicalReceipt} for the
 object \textbf{MUST} carry the owner agent's signature
 (\S\ref{sec:owner-sig}).
@@ -774,12 +774,12 @@ loop in which the owner signs canonical receipts on demand from
 co-located delegates.
 \end{notebox}
 
-\subsection{The principal/ caller URI scheme}
-\label{sec:caller-uri}
+\subsection{The principal/ caller URA scheme}
+\label{sec:caller-ura}
 
 \normsv{}
 The \texttt{envelope.caller} field of every invocation \textbf{MUST}
-be a URI under one of two namespaces:
+be a URA under one of two namespaces:
 
 \begin{itemize}[leftmargin=2em,itemsep=0.3em]
     \item \textbf{Agent caller.}
@@ -806,11 +806,11 @@ where \texttt{ip-hash} is a stable hash (e.g.
 is an opaque token or the literal \texttt{"-"} when absent. The
 class \texttt{human-anon} is the conformant placeholder for a
 hub-translated public browser request; using the hub's own agent
-URI as caller for such requests is non-conformant.
+URA as caller for such requests is non-conformant.
 
 \textbf{Disambiguation discipline.} Authorisation, scope-check, and
 audit code paths \textbf{MUST} discriminate \texttt{agent/} from
-\texttt{principal/} by URI prefix and \textbf{MUST NOT} treat a
+\texttt{principal/} by URA prefix and \textbf{MUST NOT} treat a
 \texttt{principal/} caller as carrying agent-level identity
 guarantees. Specifically: a \texttt{principal/human-anon/...} caller
 has no signature, no key, no realm membership; any code path that
@@ -821,7 +821,7 @@ silently.
 \begin{warningbox}
 Phase~1 implementation: the existing \texttt{envelope.caller} parser
 in \texttt{EasyNet-Cli} assumes \texttt{agent/} form throughout.
-Acceptance of \texttt{principal/} URIs requires extending the parser,
+Acceptance of \texttt{principal/} URAs requires extending the parser,
 extending scope-check, and adding a fail-fast classifier in
 \texttt{ability\_proxy}. This is Phase~1c work.
 \end{warningbox}
@@ -1017,7 +1017,7 @@ TR-INV-8  & Cross-state-space composition                      & \S\ref{sec:cros
 TR-INV-9  & Concurrent canonical transitions                   & \S\ref{sec:concurrency} (RC-INV-2) \\
 TR-INV-10 & Content-as-blob boundary                           & \S\ref{sec:content-as-blob} (CSH-INV-2) \\
 TR-INV-11 & URA-receipt traceability                           & \S\ref{sec:receipt-index} \\
-TR-INV-12 & Hub-translated caller identity                     & \S\ref{sec:caller-uri} \\
+TR-INV-12 & Hub-translated caller identity                     & \S\ref{sec:caller-ura} \\
 TR-INV-13 & Caller-context as observability channel            & \S\ref{sec:caller-context} \\
 \bottomrule
 \end{tabularx}
@@ -1076,7 +1076,7 @@ Each item below is a Phase~1 deliverable in
     choice from \S\ref{sec:owner-sig}). Discharges TR-INV-1,
     TR-INV-2, TR-INV-5, RC-INV-1, RC-INV-2, TA-INV-1.
 
-    \item \textbf{1c. \texttt{principal/} caller URI parser and
+    \item \textbf{1c. \texttt{principal/} caller URA parser and
     classifier.} Extend \texttt{envelope.caller} parser; add a
     fail-fast classifier; ensure scope-check distinguishes
     \texttt{agent/} from \texttt{principal/}. Discharges TR-INV-12.

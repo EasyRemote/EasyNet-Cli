@@ -1214,42 +1214,6 @@ mod tests {
         }
     }
 
-    /// End-to-end success path: `easynet agent send claude "say only
-    /// OK"` desugars to a mission and produces a real reply. Requires
-    /// local claude CLI + auth.
-    #[test]
-    #[ignore]
-    fn agent_send_desugar_e2e() {
-        use std::process::Command;
-
-        let bin = if std::path::Path::new("./target/release/easynet").exists() {
-            "./target/release/easynet"
-        } else if std::path::Path::new("./target/debug/easynet").exists() {
-            "./target/debug/easynet"
-        } else {
-            "easynet"
-        };
-
-        let out = Command::new(bin)
-            .args(["agent", "send", "claude", "say only the word OK"])
-            .output()
-            .expect("run easynet agent send");
-
-        assert!(out.status.success(), "non-zero exit: {:?}", out);
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            stdout.to_uppercase().contains("OK"),
-            "expected 'OK' in stdout, got: {stdout}"
-        );
-
-        // The dispatching banner must appear on stderr.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            stderr.contains("dispatching via mission runtime"),
-            "expected mission-runtime banner on stderr, got: {stderr}"
-        );
-    }
-
     // ── AgentAdapter trait contract ─────────────────────────────────
 
     /// A synthetic adapter used to prove the trait's contract holds

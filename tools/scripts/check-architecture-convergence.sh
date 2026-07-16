@@ -678,6 +678,23 @@ for path in sorted(semantic_ura_factory_files):
             "semantic URA factory result must not be bound to a URI-named variable",
         )
 
+rfc006_stateful_docs = (
+    cli_root / "docs/AXON-RFC-006-stateful-easynet.tex",
+    cli_root / "docs/rfc/AXON-RFC-006-stateful-easynet.tex",
+    cli_root / "docs/rfc/AXON-RFC-006-stateful-easynet.md",
+)
+for rfc006_stateful in rfc006_stateful_docs:
+    if rfc006_stateful.exists():
+        text = rfc006_stateful.read_text(encoding="utf-8", errors="replace")
+        stale_uri = re.search(r"\buri(?:s)?\b|caller-uri|principal-URI", text, re.I)
+        if stale_uri:
+            add(
+                "R4_RFC006_IDENTITY_URI_TERMINOLOGY",
+                rfc006_stateful,
+                line_number(text, stale_uri.start()),
+                "RFC-006 identity/address terminology must use URA, not URI",
+            )
+
 
 # Rule 7: unary InvocationResult uses one canonical terminal receipt projection.
 # Stream and bidi frames may carry event-level `receipt` payloads; this rule is
@@ -4413,6 +4430,25 @@ for path, requirements in mcp_stdio_requirements:
             path,
             line_number(production_text, re.search(r"\bread_line\s*\(", production_text).start()),
             "MCP stdio production readers must not use unbounded read_line",
+        )
+
+# Rule 23b: mission recursion/child-invocation evidence must be executable.
+# A guard that depends on local Claude/Codex auth and is permanently ignored is
+# documentation, not architecture evidence; canonical Mission child proof lives
+# in runtime-level tests that do not spawn external agents.
+mission_dispatch = cli_root / "src/daemon/execution/mission/dispatch.rs"
+if mission_dispatch.exists():
+    text = source(mission_dispatch)
+    ignored_recursion = re.search(
+        r"#\s*\[\s*ignore[^\]]*\]\s*(?:\n\s*(?://.*)?)*\n\s*fn\s+agent_send_desugar_e2e\b",
+        text,
+    )
+    if ignored_recursion:
+        add(
+            "R23B_MISSION_RECURSION_IGNORED_EVIDENCE",
+            mission_dispatch,
+            line_number(text, ignored_recursion.start()),
+            "mission recursion/agent-send architecture evidence must not be a permanently ignored external-CLI test",
         )
 
 # Rule 24: cancellation terminal retention is an idempotent lifecycle index.

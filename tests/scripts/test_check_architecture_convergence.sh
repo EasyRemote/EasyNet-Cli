@@ -2262,6 +2262,25 @@ expect_fail \
   "R4_TRANSPORT_LOCATOR_AS_SEMANTIC_URA"
 
 make_good_fixture
+cat >"$CLI/docs/AXON-RFC-006-stateful-easynet.tex" <<'EOF'
+\subsection{The principal/ caller URI scheme}
+\label{sec:caller-uri}
+The owner agent is identified by an EasyNet agent URI.
+EOF
+expect_fail \
+  "RFC-006 identity URI terminology" \
+  "R4_RFC006_IDENTITY_URI_TERMINOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/docs/rfc"
+cat >"$CLI/docs/rfc/AXON-RFC-006-stateful-easynet.md" <<'EOF'
+TR-INV-12 requires every hub-translated caller to use a principal URI.
+EOF
+expect_fail \
+  "RFC-006 companion identity URI terminology" \
+  "R4_RFC006_IDENTITY_URI_TERMINOLOGY"
+
+make_good_fixture
 cat >>"$CLI/sdk/python/easynet_sdk/runtime.py" <<'EOF'
 def decode_unary_result(decoded):
     return decoded.get("receipt")
@@ -2589,6 +2608,16 @@ EOF
 expect_fail \
   "mcp stdio unbounded frame reader" \
   "R23_MCP_STDIO_UNBOUNDED_FRAME_READER"
+
+make_good_fixture
+cat >"$CLI/src/daemon/execution/mission/dispatch.rs" <<'EOF'
+#[test]
+#[ignore]
+fn agent_send_desugar_e2e() {}
+EOF
+expect_fail \
+  "mission recursion ignored evidence" \
+  "R23B_MISSION_RECURSION_IGNORED_EVIDENCE"
 
 make_good_fixture
 cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
