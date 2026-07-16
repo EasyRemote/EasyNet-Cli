@@ -771,6 +771,27 @@ fn bootstrap_local_agent_projection(creds: &Credentials) {
     let plan = build_bootstrap_plan(creds)?;
     lifecycle::bootstrap_local_agent_projection(&plan)
 }
+
+fn load_and_verify_credentials_with<F>(verify: F) -> anyhow::Result<(Credentials, bool)>
+where
+    F: Fn(&Credentials) -> CredentialCheck,
+{
+    let creds = config::load_credentials()?;
+    if has_daemon_native_join_lineage(&creds) {
+        return Ok((creds, true));
+    }
+    match verify(&creds) {
+        CredentialCheck::Valid => Ok((creds, true)),
+        CredentialCheck::NetworkUnavailable => anyhow::bail!("hub credential verification unavailable"),
+        CredentialCheck::Revoked(msg) => anyhow::bail!(msg),
+    }
+}
+
+fn has_daemon_native_join_lineage(creds: &Credentials) -> bool {
+    creds.credential_token.trim().is_empty()
+        && creds.join_receipt_hash.as_deref().is_some_and(|value| !value.trim().is_empty())
+        && creds.hub_pubkey_b64.as_deref().is_some_and(|value| !value.trim().is_empty())
+}
 EOF
   cat >"$CLI/src/cli/commands/groups/principal.rs" <<'EOF'
 enum PrincipalCommandActor<'a> {
@@ -3550,6 +3571,24 @@ EOF
 expect_fail \
   "boot discovery aggregate provider fork" \
   "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/start.rs" <<'EOF'
+fn load_and_verify_credentials_with<F>(verify: F) -> anyhow::Result<(Credentials, bool)>
+where
+    F: Fn(&Credentials) -> CredentialCheck,
+{
+    let creds = config::load_credentials()?;
+    match verify(&creds) {
+        CredentialCheck::Valid => Ok((creds, true)),
+        CredentialCheck::NetworkUnavailable => anyhow::bail!("hub credential verification unavailable"),
+        CredentialCheck::Revoked(msg) => anyhow::bail!(msg),
+    }
+}
+EOF
+expect_fail \
+  "daemon native join credential verifier fork" \
+  "R51_DAEMON_NATIVE_JOIN_CREDENTIAL_VERIFICATION_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

@@ -603,7 +603,8 @@ fn parse_skill_file_args(
 /// use `<cwd>/skills/` so EasyNet's own listing surfaces the
 /// artifact, but we know the LLM won't auto-load it.
 fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
-    let owner = AgentAggregateRepository::load_snapshot()?.registered_skill_owner(owner_id)?;
+    let owner = AgentAggregateRepository::load_snapshot()?
+        .registered_agent_workspace(owner_id, "skill.publish")?;
     let root = owner.root_path().to_path_buf();
     if !root.is_dir() {
         anyhow::bail!(

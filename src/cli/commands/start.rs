@@ -521,6 +521,13 @@ where
         anyhow::bail!("no credentials — cannot start device agent");
     };
 
+    if has_daemon_native_join_lineage(&creds) {
+        output::info(
+            "Hub URA join lineage detected; skipping backend HTTP credential verification.",
+        );
+        return Ok((creds, true));
+    }
+
     match verify(&creds) {
         CredentialCheck::Valid => Ok((creds, true)),
         CredentialCheck::NetworkUnavailable => {
@@ -572,6 +579,18 @@ where
             anyhow::bail!("credential revoked");
         }
     }
+}
+
+fn has_daemon_native_join_lineage(creds: &config::Credentials) -> bool {
+    creds.credential_token.trim().is_empty()
+        && creds
+            .join_receipt_hash
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && creds
+            .hub_pubkey_b64
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn verify_hub_session_endpoint(creds: &config::Credentials) -> anyhow::Result<()> {
@@ -1007,6 +1026,24 @@ mod tests {
             config::load_credentials().is_ok(),
             "credentials should remain on transient outage; only revocation deletes them"
         );
+    }
+
+    #[test]
+    fn load_and_verify_credentials_skips_backend_for_hub_ura_join_lineage() {
+        let _g = HomeGuard::new();
+        let mut creds = test_creds();
+        creds.credential_token.clear();
+        creds.join_receipt_hash = Some("sha256:test-join-receipt".into());
+        creds.hub_pubkey_b64 = Some("hub-pubkey".into());
+        config::save_credentials(&creds).expect("save daemon-native credentials");
+
+        let (loaded, verified) = load_and_verify_credentials_with(|_| {
+            panic!("backend verify must not be called for Hub URA join credentials")
+        })
+        .expect("daemon-native credentials should pass without backend HTTP");
+
+        assert!(verified);
+        assert_eq!(loaded.node_id, "node-test");
     }
 
     #[test]

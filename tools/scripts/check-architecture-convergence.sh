@@ -3917,6 +3917,71 @@ if catalog_build.exists():
                     detail,
                 )
 
+# Rule 51: daemon-native Hub URA join credentials must not be forced through
+# backend HTTP token verification. Token-paired credentials still use the
+# backend verifier; federation-native credentials are proven by join lineage and
+# Hub trust material persisted by `federation.join`.
+cli_start = cli_root / "src/cli/commands/start.rs"
+if cli_start.exists():
+    text = source(cli_start)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "fn has_daemon_native_join_lineage(",
+            "CLI start must classify daemon-native Hub URA join credentials explicitly",
+        ),
+        (
+            "creds.credential_token.trim().is_empty()",
+            "daemon-native join lineage must require tokenless credentials",
+        ),
+        (
+            "join_receipt_hash",
+            "daemon-native join lineage must require the federation join receipt hash",
+        ),
+        (
+            "hub_pubkey_b64",
+            "daemon-native join lineage must require pinned Hub trust material",
+        ),
+    ):
+        if token not in production_text:
+            add("R51_DAEMON_NATIVE_JOIN_CREDENTIAL_VERIFICATION_FORK", cli_start, 1, detail)
+    body = brace_function_body(
+        production_text,
+        r"fn\s+load_and_verify_credentials_with(?:<[^>]+>)?\s*\(",
+    )
+    if body is None:
+        add(
+            "R51_DAEMON_NATIVE_JOIN_CREDENTIAL_VERIFICATION_FORK",
+            cli_start,
+            1,
+            "CLI start must keep credential verification in load_and_verify_credentials_with",
+        )
+    else:
+        offset, method_body = body
+        lineage_index = method_body.find("has_daemon_native_join_lineage(&creds)")
+        verify_index = method_body.find("verify(&creds)")
+        if lineage_index < 0:
+            add(
+                "R51_DAEMON_NATIVE_JOIN_CREDENTIAL_VERIFICATION_FORK",
+                cli_start,
+                line_number(production_text, offset),
+                "load_and_verify_credentials_with must check daemon-native join lineage",
+            )
+        if verify_index < 0:
+            add(
+                "R51_DAEMON_NATIVE_JOIN_CREDENTIAL_VERIFICATION_FORK",
+                cli_start,
+                line_number(production_text, offset),
+                "token-paired credentials must still use the backend verifier",
+            )
+        if lineage_index >= 0 and verify_index >= 0 and lineage_index > verify_index:
+            add(
+                "R51_DAEMON_NATIVE_JOIN_CREDENTIAL_VERIFICATION_FORK",
+                cli_start,
+                line_number(production_text, offset),
+                "daemon-native join lineage must short-circuit before backend verifier execution",
+            )
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the

@@ -78,18 +78,23 @@ impl AgentAggregateSnapshot {
         self.registry.clone()
     }
 
-    pub(crate) fn registered_skill_owner(
+    pub(crate) fn registered_agent_workspace(
         &self,
         owner_id: &str,
-    ) -> anyhow::Result<AgentRegisteredSkillOwner> {
+        operation: &str,
+    ) -> Result<AgentRegisteredWorkspace, AgentRegisteredWorkspaceLookupError> {
         let entry = self.registry.agents.get(owner_id).ok_or_else(|| {
-            anyhow::anyhow!(
-                "owner_agent_id {owner_id:?} is not registered (registered agents: {:?})",
-                self.registry.agents.keys().collect::<Vec<_>>()
-            )
+            AgentRegisteredWorkspaceLookupError::Missing {
+                owner_id: owner_id.to_string(),
+                registered_agent_ids: self.registry.agents.keys().cloned().collect(),
+            }
         })?;
-        Ok(AgentRegisteredSkillOwner {
-            root_path: entry.required_root_path(owner_id, "skill.publish")?,
+        Ok(AgentRegisteredWorkspace {
+            root_path: entry
+                .required_root_path(owner_id, operation)
+                .map_err(
+                    |source| AgentRegisteredWorkspaceLookupError::InvalidWorkspace { source },
+                )?,
             agent_type: entry.agent_type,
         })
     }
@@ -222,13 +227,27 @@ impl AgentAggregateSnapshot {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentRegisteredWorkspaceLookupError {
+    #[error(
+        "owner_agent_id {owner_id:?} is not registered (registered agents: {:?})",
+        registered_agent_ids
+    )]
+    Missing {
+        owner_id: String,
+        registered_agent_ids: Vec<String>,
+    },
+    #[error("registered Agent workspace is invalid: {source:#}")]
+    InvalidWorkspace { source: anyhow::Error },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AgentRegisteredSkillOwner {
+pub(crate) struct AgentRegisteredWorkspace {
     root_path: PathBuf,
     agent_type: agent_registry::AgentType,
 }
 
-impl AgentRegisteredSkillOwner {
+impl AgentRegisteredWorkspace {
     pub(crate) fn root_path(&self) -> &Path {
         &self.root_path
     }
@@ -735,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_skill_owner_projects_root_and_type() {
+    fn registered_agent_workspace_projects_root_and_type() {
         let root = std::env::temp_dir().join("easynet-agent-owner");
         let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
         entry.root_path = Some(root.clone());
@@ -744,7 +763,7 @@ mod tests {
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
         let owner = snapshot
-            .registered_skill_owner("claude")
+            .registered_agent_workspace("claude", "skill.publish")
             .expect("registered owner");
 
         assert_eq!(owner.root_path(), root.as_path());
@@ -752,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_skill_owner_reports_missing_and_corrupt_rows() {
+    fn registered_agent_workspace_reports_missing_and_corrupt_rows() {
         let mut registry = AgentRegistry::default();
         registry
             .agents
@@ -760,7 +779,7 @@ mod tests {
         let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
 
         let missing = snapshot
-            .registered_skill_owner("claude")
+            .registered_agent_workspace("claude", "skill.publish")
             .expect_err("missing owner");
         assert!(
             missing
@@ -769,7 +788,7 @@ mod tests {
         );
 
         let corrupt = snapshot
-            .registered_skill_owner("codex")
+            .registered_agent_workspace("codex", "skill.publish")
             .expect_err("missing root path");
         assert!(corrupt.to_string().contains("skill.publish"));
     }
