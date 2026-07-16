@@ -343,15 +343,48 @@
       `EmptyReceiptProofFacts()` in Go `LocalRuntime`.
 - [x] Verify Go invocation tests plus V2 gate/self-test.
 
+## RF-4 Go Runtime Lifecycle Facade Slice
+
+- [x] Identify that Go industrial lifecycle vectors required runtime-level
+      `CoreOf`, `Cancel`, and `SendMessage` APIs.
+- [x] Preserve a single lifecycle owner by delegating runtime-level
+      `Cancel` and `SendMessage` through the existing generation-checked
+      control state machine.
+- [x] Expose `CoreOf` as an inspection surface for immutable snapshots and
+      current-state queries.
+- [x] Verify Go invocation package tests, focused industrial lifecycle/audit
+      vectors, and the full Go industrial package.
+
+## RF-6 Node LocalRuntime Receipt Proof Facts Slice
+
+- [x] Identify that Node `LocalRuntime` still emitted signed and system-local
+      bindings with `EMPTY_RECEIPT_PROOF_FACTS`.
+- [x] Add `receiptProofFactsWithOutputHash` so event receipts can refresh
+      proof output facts without mutating the admission binding.
+- [x] Refresh `InvocationCore.emit` per-event proof facts alongside per-event
+      payload digest.
+- [x] Move Node signed descriptor-bound receipt facts to the LocalRuntime
+      binding boundary.
+- [x] Give Node system-local `invokeAsync` receipts the same separate
+      `system-local.invoke.v1` proof identity used for Java, Python, and Go.
+- [x] Add Node runtime tests proving signed and system-local terminal receipts
+      carry non-empty schema/impl hashes, authority proof, runtime env, input
+      hash, and output hash.
+- [x] Extend the EasyNet-Cli V2 gate and self-test to reject
+      `EMPTY_RECEIPT_PROOF_FACTS` in Node `LocalRuntime`.
+- [x] Verify Node invocation tests, Node package verify, and V2
+      gate/self-test.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
 - [ ] RF-3 remaining language package/vector/example audit for
       descriptor-bound-only public proof.
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
-- [ ] RF-4 shared lifecycle matrix and transition vectors.
-- [ ] RF-6 Node runtime proof-fact production path, remaining examples and
-      tests, and descriptor proof-binding parity closure.
+- [ ] RF-4 shared lifecycle matrix, transition vectors, and cross-language
+      provider status cutover.
+- [ ] RF-6 remaining examples and tests, and descriptor proof-binding parity
+      closure.
 - [ ] RF-1 product SDK surface extraction.
 - [ ] RF-2 Mission/EAL extraction from Axon canonical runtime.
 - [ ] RF-9 URA terminology and generated-schema ownership closure.

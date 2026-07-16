@@ -508,3 +508,62 @@ while event emission owns output facts.
 This slice removes the Go LocalRuntime empty proof-fact production path and
 adds a V2 gate/self-test for that exact regression. RF-6 remains open for
 Node, remaining examples/tests, and full descriptor proof-binding parity.
+
+## Current Slice: RF-4 Go Runtime Lifecycle Facade
+
+Owner: EasyNet-Axon Go LocalRuntime lifecycle/control surface.
+
+The Go LocalRuntime already had an internal lifecycle state machine for
+generation-checked cancellation, bounded message inbox delivery, event
+sequencing, parent-child cancellation propagation, and receipt-chain audit
+inspection. The public runtime facade, however, only exposed those controls
+through `InvocationHandle`. Industrial lifecycle vectors also exercise
+runtime-level control by invocation id, so the missing public methods left Go
+with a facade gap even though the internal state machine existed.
+
+The Go LocalRuntime now exposes `CoreOf`, `SendMessage`, and `Cancel` as
+runtime-level methods. `SendMessage` and `Cancel` do not create a second
+control path: they resolve the current generation token and delegate into the
+same `sendWithControl` and `cancelWithControl` paths used by handles. That
+keeps ABA protection, idempotent cancel intent latching, bounded inbox
+delivery, cleanup-before-terminal-receipt ordering, and child cancellation
+propagation under one lifecycle owner.
+
+`CoreOf` is explicitly inspection-oriented. Runtime mutation still goes
+through `LocalRuntime` or `InvocationHandle` control methods, while
+`InvocationCore` provides snapshot/current-state evidence for audit and
+industrial lifecycle vectors.
+
+This slice removes the Go lifecycle facade gap that prevented the Go
+industrial audit/cancel/message vectors from compiling. RF-4 remains open for
+the shared machine-readable transition vectors and cross-language provider
+status cutover.
+
+## Current Slice: RF-6 Node LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Node LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+The Node LocalRuntime had the same RF-6 production defect previously removed
+from Java, Python, and Go: descriptor-bound signed invocations and
+system-local `invokeAsync` calls built `AxiomBinding` values with
+`EMPTY_RECEIPT_PROOF_FACTS`. Because `InvocationCore.emit` refreshed only the
+event payload digest, terminal receipts could still carry an admission-time
+empty proof-fact block even when the emitted payload hash changed.
+
+The Node LocalRuntime now constructs receipt proof facts at the admitted
+binding boundary. Signed descriptor-bound calls derive subject, descriptor
+version, authority proof, input hash, parent receipts, and runtime environment
+from the admitted envelope and caller authority. System-local calls use the
+separate `system-local.invoke.v1` proof identity so infrastructure-originated
+local calls remain auditable without being represented as external signed
+descriptor-bound calls.
+
+`receiptProofFactsWithOutputHash` and `InvocationCore.emit` now refresh the
+proof output hash with each emitted event payload digest. This matches the
+Java/Python/Go ownership model: admission owns descriptor/input/authority
+facts, while event emission owns output facts.
+
+This slice removes the Node LocalRuntime empty proof-fact production path and
+adds a V2 gate/self-test for that exact regression. RF-6 remains open for
+remaining examples/tests and full descriptor proof-binding parity.

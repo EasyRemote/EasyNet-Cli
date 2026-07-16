@@ -418,6 +418,7 @@ check_receipt_proof_fact_contract() {
   local python_axiom="$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
   local python_local_runtime="$AXON_ROOT/sdk/python/easynet_axon/invocation/local_runtime.py"
   local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
+  local node_local_runtime="$AXON_ROOT/sdk/node/src/invocation/local-runtime.ts"
   local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
   local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
   local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
@@ -441,6 +442,10 @@ check_receipt_proof_fact_contract() {
   if rg -n 'proofFacts \?\? EMPTY_RECEIPT_PROOF_FACTS|authorityBinding \?\? AuthorityBinding\.self_|readonly proofFacts\?:|proofFacts\?: ReceiptProofFacts|authorityBinding\?: AuthorityBinding' "$node_invocation" \
     --glob '!axiom-authority.test.ts'; then
     fail "Node receipt construction still allows omitted authority or proof facts"
+  fi
+
+  if rg -n 'EMPTY_RECEIPT_PROOF_FACTS' "$node_local_runtime"; then
+    fail "Node LocalRuntime still emits receipts with empty proof facts"
   fi
 
   if rg -n 'authorityBinding: AuthorityBinding\? = nil|proofFacts: ReceiptProofFacts = \.empty|\?\? \.selfAuthority' "$swift_invocation"; then
@@ -555,6 +560,7 @@ PY
   touch "$tmp/axon/sdk/python/easynet_axon/invocation/axiom.py"
   touch "$tmp/axon/sdk/python/easynet_axon/invocation/audit.py"
   touch "$tmp/axon/sdk/python/easynet_axon/invocation/local_runtime.py"
+  touch "$tmp/axon/sdk/node/src/invocation/local-runtime.ts"
   touch "$tmp/axon/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
   touch "$tmp/axon/sdk/go/easynet/invocation/axiom.go"
   touch "$tmp/axon/sdk/go/easynet/invocation/local_runtime.go"
@@ -575,6 +581,12 @@ PY
     > "$tmp/axon-python-receipt-runtime/sdk/python/easynet_axon/invocation/local_runtime.py"
   if ( AXON_ROOT="$tmp/axon-python-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Python LocalRuntime empty proof facts gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-node-receipt-runtime"
+  printf 'const binding = { proofFacts: EMPTY_RECEIPT_PROOF_FACTS };\n' \
+    > "$tmp/axon-node-receipt-runtime/sdk/node/src/invocation/local-runtime.ts"
+  if ( AXON_ROOT="$tmp/axon-node-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Node LocalRuntime empty proof facts gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-receipt-runtime"
   printf 'binding := AxiomBinding{ProofFacts: EmptyReceiptProofFacts()}\n' \

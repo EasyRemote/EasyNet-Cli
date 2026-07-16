@@ -162,3 +162,18 @@
 - The V2 RF-6 gate must reject `EmptyReceiptProofFacts()` in Go production
   LocalRuntime code; test fixtures can remain explicit until the broader
   constructor/test cleanup slice closes RF-6 globally.
+- Go runtime-level lifecycle controls must not bypass handle controls. The
+  runtime `Cancel` and `SendMessage` APIs resolve the current generation token
+  and enter the same control state machine used by `InvocationHandle`.
+- `CoreOf` is an inspection surface for audit/lifecycle vectors, not a second
+  mutation API. Mutating lifecycle operations remain owned by LocalRuntime and
+  InvocationHandle control methods.
+- Node LocalRuntime follows the same RF-6 ownership as Java, Python, and Go:
+  receipt proof facts are constructed at the admitted binding boundary, while
+  per-event output hashes are refreshed when `InvocationCore` emits receipts.
+- Node `invokeAsync` is a system-local runtime path. It gets complete proof
+  facts under `system-local.invoke.v1` rather than reusing empty facts or
+  pretending to be an externally signed descriptor-bound call.
+- The V2 RF-6 gate must reject `EMPTY_RECEIPT_PROOF_FACTS` in Node production
+  LocalRuntime code; the sentinel may remain only as an explicit fixture value
+  for tests and non-production construction audits.

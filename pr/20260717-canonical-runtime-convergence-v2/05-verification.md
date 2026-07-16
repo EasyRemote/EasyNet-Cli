@@ -580,10 +580,10 @@ Commands run on 2026-07-17:
   passed.
 - `go test ./tests/industrial -run 'Test_audit_receipt_chain_verify|Test_audit_tamper_detection|Test_invocation_terminal_monotonicity|Test_supervisor_cleanup_before_receipt' -count=1`
   from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
-  failed to compile because the industrial package still references
-  current-missing `LocalRuntime.CoreOf`, `LocalRuntime.Cancel`, and
-  `LocalRuntime.SendMessage` public APIs. This is not used as RF-6 proof-fact
-  evidence; it remains RF-4/lifecycle API debt.
+  failed to compile at the RF-6 checkpoint because the industrial package
+  referenced missing `LocalRuntime.CoreOf`, `LocalRuntime.Cancel`, and
+  `LocalRuntime.SendMessage` public APIs. That lifecycle facade gap is handled
+  by the RF-4 Go Runtime Lifecycle Facade slice below.
 - After the Axon RF-6 Go commit, `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
   passed and updated `sdk/conformance/canonical-public-api.json` to Axon
   revision `f167a15444d8f5f744f9d87c25208e5ff4209c1d`.
@@ -602,3 +602,89 @@ removal, the Go descriptor-ref parser convergence required by Rust verifier
 interoperability, and the EasyNet-Cli V2 regression gate for that path. It
 does not complete RF-6 for Node, remaining examples/tests, or full descriptor
 proof-binding parity with Rust.
+
+## RF-4 Go Runtime Lifecycle Facade Slice
+
+Commands run on 2026-07-17:
+
+- `go test ./easynet/invocation -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./tests/industrial -run 'Test_audit_receipt_chain_verify|Test_audit_tamper_detection|Test_event_stream_sequence_monotonic|Test_invocation_parent_child_cancel_propagation|Test_message_inbox_fifo|Test_message_inbox_idempotent|Test_supervisor_cleanup_before_receipt|Test_invocation_terminal_monotonicity' -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./tests/industrial -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- After the Axon RF-4 Go lifecycle facade commit, `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and updated `sdk/conformance/canonical-public-api.json` to Axon
+  revision `a1ff7f72a42b4738072233bf9b448adf8413bad0`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 existing lint errors in files outside this RF-4 Go/gate slice:
+  `publish.rs`, `runtime.rs`, `lifecycle.rs`, `access_control.rs`,
+  `catalog_metadata.rs`, `health.rs`, `route_resolver.rs`,
+  `agent_lifecycle.rs`, and `config.rs`.
+
+This evidence verifies the Go runtime-level lifecycle facade for audit
+inspection, idempotent cancellation, parent-child cancellation propagation,
+bounded FIFO/idempotent messaging, terminal monotonicity, event sequencing,
+and cleanup-before-terminal-receipt behavior. It does not complete RF-4
+globally because the shared transition-vector suite and cross-language
+provider-backed/cutover-ready statuses remain open.
+
+## RF-6 Node LocalRuntime Receipt Proof Facts Slice
+
+Commands run on 2026-07-17:
+
+- `npm run check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed.
+- `npm run build`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed and produced no tracked generated-file drift.
+- `node --test tests/invoke-signed.test.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 11 tests. The new assertions verify non-empty signed and
+  system-local receipt proof facts and terminal output-hash projection.
+- `npm run generated:check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed.
+- `npm run verify`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, including TypeScript checks, generated verification, 14/14 axiom
+  vectors, and protocol-pack vectors.
+- `rg -n "EMPTY_RECEIPT_PROOF_FACTS" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node/src/invocation/local-runtime.ts /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node/src/invocation/handle.ts /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node/src/invocation/axiom.ts`:
+  reported only the sentinel definition in `axiom.ts`, with no production
+  runtime emission path using it.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Node `LocalRuntime` fixture that uses
+  `EMPTY_RECEIPT_PROOF_FACTS` and proves the gate rejects it.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- After the Axon RF-6 Node commit, `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and updated `sdk/conformance/canonical-public-api.json` to Axon
+  revision `1dad6b5994c4f17473d860f7cf1fb0d493c831b9`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `cargo fmt --all -- --check`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 existing lint errors in files outside this RF-6 Node/gate slice:
+  `publish.rs`, `runtime.rs`, `lifecycle.rs`, `access_control.rs`,
+  `catalog_metadata.rs`, `health.rs`, `route_resolver.rs`,
+  `agent_lifecycle.rs`, and `config.rs`.
+
+This evidence verifies the Node LocalRuntime empty proof-fact production-path
+removal and the EasyNet-Cli V2 regression gate for that path. It does not
+complete RF-6 for remaining examples/tests or full descriptor proof-binding
+parity.
