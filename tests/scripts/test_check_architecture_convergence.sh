@@ -3701,6 +3701,48 @@ expect_fail \
   "R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/dispatch"
+cat >"$CLI/src/daemon/invocation/dispatch/local_runtime_invoker.rs" <<'EOF'
+async fn rpc_value_from_handle(handle: InvocationHandle) -> Value {
+    let state = handle.wait().await;
+    let terminal = events.iter().rev().find(|event| event.state.is_terminal());
+    project(state, terminal)
+}
+EOF
+expect_fail \
+  "local runtime RPC canonical terminal projection fork" \
+  "R57_LOCAL_RUNTIME_RPC_CANONICAL_TERMINAL_PROJECTION_FORK"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/receipts" "$CLI/src/daemon/execution/loop_instance"
+cat >"$CLI/src/daemon/invocation/receipts/runtime_record.rs" <<'EOF'
+pub enum TerminalState {
+    Succeeded,
+    Failed { reason: String },
+    Cancelled,
+}
+
+fn project(state: InvocationState) -> TerminalState {
+    match state {
+        InvocationState::TimedOut => Self::Failed { reason: "timeout".to_string() },
+        _ => Self::Succeeded,
+    }
+}
+EOF
+cat >"$CLI/src/daemon/execution/loop_instance/mod.rs" <<'EOF'
+fn consume(state: TerminalState) {
+    match state {
+        TerminalState::Succeeded => {}
+        TerminalState::Failed { reason } => fail(reason),
+        TerminalState::Cancelled => cancel(),
+    }
+}
+EOF
+expect_fail \
+  "terminal timeout projection fork" \
+  "R58_TERMINAL_TIMEOUT_PROJECTION_FORK"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

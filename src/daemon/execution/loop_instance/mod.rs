@@ -93,6 +93,15 @@ impl LoopInvocationDriver for KernelLoopInvocationDriver {
             TerminalState::Cancelled => {
                 anyhow::bail!("loop {} {} iter {} cancelled", loop_id, kind.as_str(), iter);
             }
+            TerminalState::TimedOut { reason } => {
+                anyhow::bail!(
+                    "loop {} {} iter {} timed out: {}",
+                    loop_id,
+                    kind.as_str(),
+                    iter,
+                    reason
+                );
+            }
             TerminalState::Failed { reason } => {
                 anyhow::bail!(
                     "loop {} {} iter {} failed: {}",

@@ -386,6 +386,7 @@ pub fn fresh_nonce_hex() -> String {
 pub enum TerminalState {
     Succeeded,
     Failed { reason: String },
+    TimedOut { reason: String },
     Cancelled,
 }
 
@@ -401,6 +402,7 @@ impl TerminalState {
         match self {
             Self::Succeeded => InvocationState::Completed,
             Self::Failed { .. } => InvocationState::Failed,
+            Self::TimedOut { .. } => InvocationState::TimedOut,
             Self::Cancelled => InvocationState::Cancelled,
         }
     }
@@ -419,7 +421,7 @@ impl TerminalState {
             InvocationState::Failed => Self::Failed {
                 reason: reason.unwrap_or_else(|| "axon invocation failed".to_string()),
             },
-            InvocationState::TimedOut => Self::Failed {
+            InvocationState::TimedOut => Self::TimedOut {
                 reason: reason.unwrap_or_else(|| "axon invocation timed out".to_string()),
             },
             InvocationState::Cancelled => Self::Cancelled,
@@ -551,11 +553,11 @@ mod tests {
         let timed_out = TerminalState::from_axon_terminal(InvocationState::TimedOut, None).unwrap();
         assert_eq!(
             timed_out,
-            TerminalState::Failed {
+            TerminalState::TimedOut {
                 reason: "axon invocation timed out".to_string()
             }
         );
-        assert_eq!(timed_out.axon_terminal_state(), InvocationState::Failed);
+        assert_eq!(timed_out.axon_terminal_state(), InvocationState::TimedOut);
 
         let cancelled = TerminalState::try_from(InvocationState::Cancelled).unwrap();
         assert_eq!(cancelled, TerminalState::Cancelled);

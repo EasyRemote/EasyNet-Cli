@@ -4,7 +4,7 @@
 // Small daemon-side adapter for JSON ability payloads crossing into
 // Axon's embedded LocalRuntime. Callers stay at the EasyNet
 // `InvocationTarget` / `serde_json::Value` layer; this module owns
-// the byte payload, terminal event, stream frame, and bidi split
+// the byte payload, verified RPC terminal projection, stream frame, and bidi split
 // mechanics required by the Axon SDK. It is not an external agent
 // runtime adapter and does not own handler bodies.
 
@@ -307,26 +307,25 @@ pub async fn invoke_local_rpc(
 }
 
 pub async fn rpc_value_from_handle(handle: InvocationHandle) -> Result<Value, String> {
-    let state = handle.wait().await;
-    let events = handle.events_snapshot().await;
-    let terminal = events
-        .iter()
-        .rev()
-        .find(|event| event.state.is_terminal())
-        .ok_or_else(|| {
-            "Axon invocation reached terminal state without terminal event".to_string()
-        })?;
-    match state {
-        InvocationState::Completed => decode_json_payload(&terminal.payload),
+    let finalized = handle
+        .finalized()
+        .await
+        .map_err(|error| format!("finalize local Axon invocation: {error}"))?;
+    match finalized.terminal_state {
+        InvocationState::Completed => decode_json_payload(finalized.output()),
         InvocationState::Failed | InvocationState::TimedOut | InvocationState::Cancelled => {
-            Err(if terminal.reason.is_empty() {
-                format!("Axon invocation ended as {}", state.as_str())
-            } else {
-                terminal.reason.clone()
-            })
+            Err(finalized
+                .failure
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Axon invocation ended as {}",
+                        finalized.terminal_state.as_str()
+                    )
+                }))
         }
         other => Err(format!(
-            "Axon invocation wait returned non-terminal state {}",
+            "Axon finalization returned non-terminal state {}",
             other.as_str()
         )),
     }

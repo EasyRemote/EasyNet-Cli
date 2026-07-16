@@ -28,6 +28,10 @@ receipt_storage_violations() {
   rg -n '\bLedgerPath\b|ledger_path' "$@"
 }
 
+development_loader_violations() {
+  rg -n 'target[/\\](debug|release)([/\\]deps)?' "$@"
+}
+
 canonical_root_output="$("$PYTHON_BIN" "$CONCEPT_VALIDATOR" --print-neutrality-roots --manifest "$CONCEPTS")" \
   || fail "canonical package manifest validation failed"
 canonical_roots=()
@@ -87,6 +91,18 @@ if [[ "${1:-}" == "--self-test" ]]; then
   printf 'package neutralitynegative\ntype ReceiptLedgerSource struct{ LedgerPath string `json:"ledger_path,omitempty"` }\n' >"$injected"
   if ! receipt_storage_violations "$injected" >/dev/null; then
     fail "self-test failed to detect receipt storage path in canonical SDK receipt surface"
+  fi
+  rm -f "$injected"
+  injected="$tmp/sdk/go/__development_loader_negative.go"
+  printf 'package neutralitynegative\nconst implicitDevelopmentProvider = "target/debug/libeasynet_cli.dylib"\n' >"$injected"
+  if ! development_loader_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect development build directory in SDK provider loader"
+  fi
+  rm -f "$injected"
+  injected="$tmp/sdk/python/easynet_sdk/__development_loader_negative.py"
+  printf 'IMPLICIT_DEVELOPMENT_PROVIDER = "target/release/deps/libeasynet_cli.so"\n' >"$injected"
+  if ! development_loader_violations "$injected" >/dev/null; then
+    fail "self-test failed to detect development deps directory in SDK provider loader"
   fi
   rm -f "$injected"
   "$PYTHON_BIN" - "$CONCEPTS" "$tmp/missing-root.json" <<'PY'
@@ -164,6 +180,10 @@ while IFS= read -r path; do production_sources+=("$path"); done < <(
 
 if ((${#production_sources[@]} == 0)); then
   fail "no SDK production sources found"
+fi
+
+if development_loader_violations "${production_sources[@]}"; then
+  fail "development build-directory lookup leaked into SDK production provider loading"
 fi
 
 if receipt_storage_violations \

@@ -4183,6 +4183,81 @@ if kernel_module.exists():
         if token in production_text:
             add("R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK", kernel_module, 1, detail)
 
+# Rule 57: daemon-local RPC dispatch is a terminal presentation adapter, not
+# an alternate lifecycle owner. It must consume Axon's finalized proof instead
+# of searching invocation events after waiting for a terminal state.
+local_runtime_invoker = cli_root / "src/daemon/invocation/dispatch/local_runtime_invoker.rs"
+if local_runtime_invoker.exists():
+    text = source(local_runtime_invoker)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    rpc_projection = brace_function_body(production_text, r"pub\s+async\s+fn\s+rpc_value_from_handle\s*\(")
+    if rpc_projection is None:
+        add(
+            "R57_LOCAL_RUNTIME_RPC_CANONICAL_TERMINAL_PROJECTION_FORK",
+            local_runtime_invoker,
+            1,
+            "local RPC adapter must retain one named canonical terminal projection",
+        )
+    else:
+        offset, rpc_projection_body = rpc_projection
+        if ".finalized()" not in rpc_projection_body:
+            add(
+                "R57_LOCAL_RUNTIME_RPC_CANONICAL_TERMINAL_PROJECTION_FORK",
+                local_runtime_invoker,
+                line_number(production_text, offset),
+                "local RPC adapter must consume Axon finalized invocation proof",
+            )
+        for token, detail in (
+            ("handle.wait().await", "local RPC adapter must not infer terminal state by waiting outside Axon finalization"),
+            ("events.iter().rev().find(|event| event.state.is_terminal())", "local RPC adapter must not derive terminality from an event snapshot"),
+        ):
+            if token in rpc_projection_body:
+                add(
+                    "R57_LOCAL_RUNTIME_RPC_CANONICAL_TERMINAL_PROJECTION_FORK",
+                    local_runtime_invoker,
+                    line_number(production_text, offset),
+                    detail,
+                )
+
+# Rule 58: daemon receipt projection must preserve every Axon terminal state.
+# A timeout is a canonical terminal fact, not a product-level handler failure.
+runtime_record = cli_root / "src/daemon/invocation/receipts/runtime_record.rs"
+loop_instance = cli_root / "src/daemon/execution/loop_instance/mod.rs"
+if runtime_record.exists():
+    text = source(runtime_record)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    terminal_state = brace_function_body(production_text, r"pub\s+enum\s+TerminalState\s*")
+    if terminal_state is None or "TimedOut { reason: String }" not in production_text:
+        add(
+            "R58_TERMINAL_TIMEOUT_PROJECTION_FORK",
+            runtime_record,
+            1,
+            "daemon TerminalState must expose a distinct timed-out terminal projection",
+        )
+    for token, detail in (
+        ("Self::TimedOut { .. } => InvocationState::TimedOut", "daemon timeout projection must map back to Axon TimedOut"),
+        ("InvocationState::TimedOut => Self::TimedOut", "Axon TimedOut must project without collapsing into Failed"),
+    ):
+        if token not in production_text:
+            add("R58_TERMINAL_TIMEOUT_PROJECTION_FORK", runtime_record, 1, detail)
+    if "InvocationState::TimedOut => Self::Failed" in production_text:
+        add(
+            "R58_TERMINAL_TIMEOUT_PROJECTION_FORK",
+            runtime_record,
+            1,
+            "daemon timeout projection must not collapse into Failed",
+        )
+if loop_instance.exists():
+    text = source(loop_instance)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    if "TerminalState::TimedOut { reason }" not in production_text:
+        add(
+            "R58_TERMINAL_TIMEOUT_PROJECTION_FORK",
+            loop_instance,
+            1,
+            "loop terminal consumer must handle timeout distinctly from failure",
+        )
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the
