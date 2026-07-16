@@ -1590,7 +1590,7 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut children = Vec::new();
         for index in 0..12 {
-            let owner = format!("easynet:///r/acme/agent/user.worker-{index}");
+            let owner = crate::core::ura::agent_ura("acme", "user", &format!("worker-{index}"));
             children.push(
                 std::process::Command::new(std::env::current_exe().unwrap())
                     .arg("--exact")

@@ -419,10 +419,11 @@ mod tests {
     fn install_dispatch_registry_once() {
         static INIT: OnceLock<()> = OnceLock::new();
         INIT.get_or_init(|| {
+            let device_ura = crate::core::ura::device_ura("localhost", "pages-test");
             let demo_agent_ura = crate::core::ura::agent_ura("localhost", "dev", "demo");
             let authority_context =
                 crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
-                    crate::daemon::identity::local_invocation::local_device_ura(),
+                    device_ura,
                     vec![demo_agent_ura],
                 )
                 .expect("pages API test hosted Agent authority is canonical");

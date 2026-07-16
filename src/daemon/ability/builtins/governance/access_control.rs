@@ -1403,7 +1403,7 @@ mod tests {
             hash_char: char,
         ) {
             let digest = hash_char.to_string().repeat(64);
-            let ability_ura = format!("easynet:///r/test/ability/hub.{ability_name}");
+            let ability_ura = crate::core::ura::hub_ability_ura("test", ability_name);
             let descriptor_ref = format!("{ability_ura}@1.0.0#{digest}!{action}");
             ledger
                 .put(

@@ -1153,7 +1153,7 @@ mod tests {
         AgentPurgePublicationEntry {
             transaction_id: transaction_id.to_string(),
             name: name.to_string(),
-            agent_ura: format!("easynet:///r/test/agent/alice.{name}"),
+            agent_ura: crate::core::ura::agent_ura("test", "alice", name),
             publication: AgentPurgePublication {
                 host_device_ura: "easynet:///r/test/device/host".to_string(),
                 generation: 1,

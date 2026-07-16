@@ -4292,10 +4292,11 @@ mod tests {
         let req = signed_request_with_nonce(
             caller_ura,
             caller_ura,
-            // Wire-pinned self-session spelling until EasyNet-Axon
-            // ships device.session acceptance (RFC-001 v4.1.6).
-            "session.open",
-            b"",
+            // The Device-owned RPC contract exercises the unary admission
+            // path without fabricating an RPC descriptor for the Bidi-only
+            // session.open runtime-admin carrier.
+            "session.list",
+            b"{}",
             &signing_key,
             [0x5Au8; 16],
         );

@@ -395,7 +395,7 @@ mod tests {
 
     fn subject(name: &str) -> SubjectIdentity {
         SubjectIdentity::new(
-            format!("easynet:///r/mission-test/resource/{name}"),
+            crate::core::ura::resource_dot_ura("mission-test", name, ""),
             UraProfile::EasynetStrictV2,
         )
     }

@@ -582,7 +582,7 @@ mod tests {
             public_key_hex: String::new(),
             host_node_id: Some(host_node_id.into()),
             signing_authority: DurableSigningAuthority::HostedBy {
-                host_ura: format!("easynet:///r/test/device/{host_node_id}"),
+                host_ura: crate::core::ura::device_ura("test", host_node_id),
             },
             lifecycle: InventoryLifecycle::Active,
         }
