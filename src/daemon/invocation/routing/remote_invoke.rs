@@ -28,6 +28,7 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
@@ -480,8 +481,7 @@ fn verify_completed_remote_invoke_response(
     binding: &ForwardedInvocationBinding,
     body: InvokeResponse,
 ) -> anyhow::Result<ForwardedFinalizedInvocation> {
-    let resolver =
-        crate::support::platform::local_daemon_grpc::LocalKeyServiceReceiptResolver::new();
+    let resolver = remote_receipt_key_resolver()?;
     let finalized = ForwardedFinalizedInvocation::verify_response(binding, body, &resolver)
         .map_err(|status| {
             anyhow!(
@@ -522,6 +522,23 @@ fn verify_completed_remote_invoke_response(
         } else {
             message.as_str()
         },
+    )
+}
+
+type RemoteReceiptKeyResolver = crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
+
+fn remote_receipt_key_resolver() -> anyhow::Result<RemoteReceiptKeyResolver> {
+    let trust_path = crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default();
+    let trust_context = format!(
+        "load realm trust anchor for remote receipt verification: {}",
+        trust_path.display()
+    );
+    let trust_anchor = crate::daemon::trust::anchor::RealmTrustAnchor::load_or_empty(&trust_path)
+        .with_context(|| trust_context)?;
+    Ok(
+        crate::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver::new(
+            crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(trust_anchor)),
+        ),
     )
 }
 
@@ -890,6 +907,36 @@ mod tests {
         assert_eq!(
             resolve_remote_caller_ura(None).expect("hub caller"),
             crate::core::ura::hub_ura("localhost")
+        );
+    }
+
+    #[test]
+    fn remote_receipt_key_resolver_rejects_malformed_trust_anchor() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let trust_path = std::env::temp_dir().join(format!(
+            "easynet-remote-receipt-trust-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&trust_path, "trusted_agents = [").expect("write malformed trust anchor");
+
+        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
+        let result = remote_receipt_key_resolver();
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+        }
+        let _ = std::fs::remove_file(&trust_path);
+
+        let error = match result {
+            Ok(_) => panic!("malformed trust anchor must reject receipt verification"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("load realm trust anchor for remote receipt verification"),
+            "diagnostic should identify the remote receipt trust source: {error:#}"
         );
     }
 

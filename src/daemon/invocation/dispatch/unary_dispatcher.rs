@@ -242,9 +242,9 @@ fn admitted_join_principal_owner(
     )?;
     Ok(Some(TrustedPrincipalOwner {
         principal_ura: request.membership_ura.trim().to_string(),
+        owner_username: Some(owner_user_id.clone()),
         owner_user_id,
         owner_ura: principal_ura.to_string(),
-        owner_username: None,
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
     }))
 }

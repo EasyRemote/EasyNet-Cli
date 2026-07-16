@@ -274,6 +274,7 @@ async fn federation_join_with_principal_proof_binds_device_owner_in_runtime_trus
         .expect("device owner binding");
     assert_eq!(owner.owner_ura, user_ura);
     assert_eq!(owner.owner_user_id, "alice");
+    assert_eq!(owner.owner_username.as_deref(), Some("alice"));
 }
 
 #[tokio::test]

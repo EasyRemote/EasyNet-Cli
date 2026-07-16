@@ -1877,6 +1877,44 @@ fn real_ability_publish_routes_with_missing_args() {
 }
 
 #[test]
+fn real_ability_publish_writes_manifest_and_returns_envelope() {
+    let (reg, _g) = registry_with_temp_home();
+    let (agent_id, _) = materialise_skill_fixture(
+        "ability-publish",
+        "existing-fixture-skill",
+        "# Existing fixture skill\n",
+    );
+    let owner_ura = crate::core::ura::agent_ura("localhost", "alice", &agent_id);
+    let manifest = r#"schema_version = "1"
+name = "custom_probe"
+description = "CLI daemon e2e custom ability"
+
+[input_schema]
+type = "object"
+"#;
+
+    let result = dispatcher_for(reg)
+        .execute_rpc(target(
+            "ability.publish",
+            json!({
+                "owner_ura": owner_ura,
+                "manifest_toml": manifest,
+            }),
+        ))
+        .expect("ability.publish must execute through LocalRuntime");
+
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["public_name"], "custom_probe");
+    let path = result["path"]
+        .as_str()
+        .expect("ability.publish result must include path");
+    assert!(
+        std::path::Path::new(path).exists(),
+        "published manifest must exist on disk: {path}"
+    );
+}
+
+#[test]
 fn real_ability_unpublish_routes_with_missing_args() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
