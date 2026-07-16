@@ -1104,6 +1104,9 @@ Commands run on 2026-07-17:
   reintroduces `legacyPlainInvocationBytes`.
 - `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
   passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `73c509a8562fef88c406b0a0470bf5168db1edc9`.
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
   passed.
 - `bash tools/scripts/check-architecture-convergence.sh`: passed.
@@ -1117,3 +1120,85 @@ the legacy plain proof/admission implementation and that retained historical
 plain vector coverage is isolated to a test-only fixture. It does not complete
 RF-3 globally because final package/export/vector/example audit and legacy
 fixture closure remain separate work.
+
+## RF-9 Protocol-Pack URA Vector Naming Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "easynet-uri-v1|input_uri|canonical_uri|URI canonicalization" packaging/protocol-pack document/plans/ecosystem/08-packaging-and-release-plan.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after the vector rename.
+- `bash packaging/protocol-pack/build_protocol_pack.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed and created `dist/protocol-pack/easynet-protocol-pack-1.0.0.tar.gz`.
+- `bash scripts/checks/protocol_pack_conformance_consumers.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes an Axon protocol-pack fixture that
+  reintroduces `easynet-uri-v1.json`, `input_uri`, and `canonical_uri`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies the RF-9 protocol-pack conformance artifact migration
+from URI naming to URA naming and adds regression coverage in the V2 gate. It
+does not complete RF-9 globally because Axon normative documents, compatibility
+wire naming, and generated-schema ownership remain separate closure work.
+
+## RF-9 Active Invocation Normative Document URA Naming Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding)\.uri\b|\bstring uri\b|uri_profile|resolver\.resolve\(uri\)|canonical URI format' document/concepts/AXIOM.tex document/rfcs/001-envelope-axiom-alignment.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after the normative document migration.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes an Axon normative document fixture that
+  reintroduces `string uri`, `URI + profile`, and `caller.uri`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies that the active invocation axiom documents now match
+the URA-only schema and SDK vocabulary for identity composites, signing bytes,
+admission replay keys, and resolver interfaces. It does not complete RF-9
+globally because RFC-002/keyring terminology, historical documents, and
+generated-schema ownership remain separate closure work.
+
+## RF-9 Keyring Resolver URA Naming Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding)\.uri\b|\bstring uri\b|\bpeer_uri\b|find_peer_by_uri|uri_profile|resolver\.resolve\(uri\)|canonical URI format' document/concepts/AXIOM.tex document/rfcs/001-envelope-axiom-alignment.md document/rfcs/002-keyring-and-keyresolver.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after the RFC-002 keyring resolver migration.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes an RFC-002 fixture that reintroduces
+  `string uri`, `peer_uri`, and `find_peer_by_uri`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies that RFC-002 keyring/keyresolver examples now use URA
+vocabulary for identity fields, peer-table projections, and peer key lookup.
+It does not complete RF-9 globally because historical document classification
+and generated-schema ownership remain separate closure work.

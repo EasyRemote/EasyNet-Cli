@@ -577,6 +577,46 @@
 - [x] Verify Go focused/all package tests, V2 gate/self-test, and public API
       manifest refresh before committing this slice.
 
+## RF-9 Protocol-Pack URA Vector Naming Slice
+
+- [x] Identify `easynet-uri-v1.json` as an active protocol-pack conformance
+      vector, not historical documentation.
+- [x] Rename the vector artifact to `easynet-ura-v1.json`.
+- [x] Rename vector schema fields from `input_uri` / `canonical_uri` to
+      `input_ura` / `canonical_ura`.
+- [x] Update the protocol-pack release plan to reference the URA-named vector.
+- [x] Extend the V2 gate and self-test to reject URI-named protocol-pack URA
+      vectors and URI field names.
+- [x] Verify protocol-pack build, protocol-pack consumer inventory, V2
+      gate/self-test, and CLI gate tests before committing this slice.
+
+## RF-9 Active Invocation Normative Document URA Naming Slice
+
+- [x] Identify `AXIOM.tex` and RFC-001 as active normative invocation
+      documents whose identity vocabulary must match the `ura` proto fields.
+- [x] Replace `URI + profile`, `string uri`, `caller.uri`, and related
+      identity/proof wording with URA terminology.
+- [x] Preserve architecture semantics, proto field numbers, canonical byte
+      ordering, and resolver responsibilities.
+- [x] Extend the V2 gate and self-test to reject URI identity vocabulary in
+      those active normative documents.
+- [x] Verify focused document scan, V2 gate/self-test, and CLI convergence
+      checks before committing this slice.
+
+## RF-9 Keyring Resolver URA Naming Slice
+
+- [x] Identify RFC-002 as an active key-custody and KeyResolver contract.
+- [x] Replace `string uri` with `string ura` in the AgentIdentity key-field
+      example.
+- [x] Replace `peer_uri` with `peer_ura` in the keyring projection and ability
+      surface examples.
+- [x] Replace `find_peer_by_uri` with `find_peer_by_ura` in PeerKeyringResolver
+      pseudocode.
+- [x] Extend the V2 normative-document gate and self-test to cover RFC-002
+      keyring/keyresolver URI terminology.
+- [x] Verify focused document scan, V2 gate/self-test, and CLI convergence
+      checks before committing this slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

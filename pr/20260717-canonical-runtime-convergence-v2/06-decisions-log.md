@@ -307,3 +307,19 @@
 - The V2 RF-3 gate now rejects Go legacy plain proof/admission names in
   non-test invocation source because public API inventory cannot detect
   package-private production implementation residue.
+- Protocol-pack conformance vectors are active runtime contracts, not
+  historical prose. A URA grammar vector must therefore use URA vocabulary in
+  its file name, description, and JSON field names.
+- The RF-9 gate now rejects URI-named Axon protocol-pack URA vectors. Transport
+  library `Uri` types remain a separate implementation concern; active
+  routable identity/address artifacts use URA naming.
+- `AXIOM.tex` and RFC-001 are active invocation contracts, not historical
+  migration notes. Their identity composite examples must therefore use
+  `ura`, `caller.ura`, and URA profile terminology to match the canonical
+  proto surface.
+- Changing active normative document vocabulary from URI to URA does not
+  change field numbers or canonical byte ordering; it removes a documentation
+  fork that contradicted the current `AgentIdentity.ura` schema.
+- RFC-002 keyring and KeyResolver examples are also active authority-boundary
+  contracts. Peer-table projections and resolver pseudocode must therefore use
+  `peer_ura` and `find_peer_by_ura` rather than preserving URI vocabulary.

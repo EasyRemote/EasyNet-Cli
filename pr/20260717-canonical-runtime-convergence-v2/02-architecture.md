@@ -869,3 +869,75 @@ production invocation source, with a self-test that reintroduces
 removes the Go production legacy plain implementation. It does not complete
 RF-3 globally because final package/export/vector/example audit and legacy
 fixture closure still require separate evidence.
+
+## Current Slice: RF-9 Protocol-Pack URA Vector Naming
+
+Owner: EasyNet-Axon protocol-pack conformance artifacts and EasyNet-Cli V2
+conformance gate.
+
+The protocol-pack URA grammar vector was still published as
+`easynet-uri-v1.json` and used `input_uri` / `canonical_uri` fields with a
+`URI canonicalization` description. That artifact is active conformance data,
+not a historical note, so it taught downstream SDKs and generated protocol
+packs the retired address vocabulary even though the architecture has URA
+only.
+
+The vector is now `easynet-ura-v1.json` with `input_ura` and `canonical_ura`
+fields. The vector semantics and concrete `easynet:///` values are unchanged;
+only the active protocol vocabulary was corrected. The protocol-pack release
+plan now references the URA-named vector.
+
+The V2 gate now checks Axon's protocol-pack conformance vectors for the retired
+URI-named artifact, `input_uri` / `canonical_uri` fields, and `URI
+canonicalization` descriptions. This slice closes one RF-9 active artifact
+defect. It does not complete RF-9 because broader Axon normative documents,
+wire compatibility naming, and generated-schema ownership still require
+separate closure evidence.
+
+## Current Slice: RF-9 Active Invocation Normative Document URA Naming
+
+Owner: EasyNet-Axon invocation normative documents and EasyNet-Cli V2
+conformance gate.
+
+`document/concepts/AXIOM.tex` and RFC-001 are active normative invocation
+documents. They already depend on proto fields named `ura`, but their prose
+and pseudocode still described identity composites as `URI + profile`,
+`string uri`, `caller.uri`, and `resolver.resolve(uri)`. That creates a
+normative fork: generated schemas and SDKs say URA, while the documents that
+define the invocation axiom teach URI vocabulary.
+
+The active invocation documents now use URA vocabulary for identity composite
+fields, signing bytes, causal receipt references, admission replay keys, and
+resolver interfaces. This aligns the normative text with the existing
+`AgentIdentity.ura` and `SubjectIdentity.ura` proto contract without changing
+wire field numbers, canonical byte semantics, or invocation architecture.
+
+The V2 gate now rejects retired URI identity vocabulary in `AXIOM.tex` and
+RFC-001, with a self-test that reintroduces `string uri`, `URI + profile`, and
+`caller.uri`. This slice closes an RF-9 active normative document defect. It
+does not complete RF-9 because RFC-002/keyring terminology, historical
+documents, and generated-schema ownership still require separate closure
+evidence.
+
+## Current Slice: RF-9 Keyring Resolver URA Naming
+
+Owner: EasyNet-Axon RFC-002 keyring/keyresolver contract and EasyNet-Cli V2
+conformance gate.
+
+RFC-002 defines the keyring and KeyResolver boundary that feeds admission's
+caller-key resolution. It still used `string uri` in the AgentIdentity proto
+example, `peer_uri` in the keyring projection schema and ability surface, and
+`find_peer_by_uri` in the PeerKeyringResolver pseudocode. That kept the
+retired address vocabulary in an active key-custody contract, even though the
+canonical schema and admission code use URA.
+
+The RFC-002 examples now use `string ura`, `peer_ura`, and
+`find_peer_by_ura`. The KeyResolver responsibility is unchanged: admission
+resolves an agent URA to the corresponding public verification key without
+seeing private key material.
+
+The V2 normative-document gate now includes RFC-002 and rejects `peer_uri` and
+`find_peer_by_uri` in addition to the earlier invocation-document URI patterns.
+This slice closes another RF-9 active-document defect. It does not complete
+RF-9 because historical document classification and generated-schema ownership
+remain separate closure work.

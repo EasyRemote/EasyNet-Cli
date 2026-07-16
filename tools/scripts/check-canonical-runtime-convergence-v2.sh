@@ -435,6 +435,47 @@ check_ura_vocabulary_contract() {
   fi
 }
 
+check_axon_protocol_pack_ura_vector_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for protocol-pack URA vector contract: $AXON_ROOT"
+  fi
+
+  local vectors="$AXON_ROOT/packaging/protocol-pack/conformance-vectors"
+  if [[ ! -d "$vectors" ]]; then
+    return
+  fi
+  if [[ -e "$vectors/easynet-uri-v1.json" ]]; then
+    fail "protocol-pack preserves URI-named URA conformance vector"
+  fi
+  if [[ ! -e "$vectors/easynet-ura-v1.json" ]]; then
+    fail "protocol-pack URA conformance vector is missing"
+  fi
+  if rg -n '"(input_uri|canonical_uri)"|"[^"]*URI canonicalization[^"]*"' "$vectors"; then
+    fail "protocol-pack conformance vectors preserve URI terminology for URA data"
+  fi
+}
+
+check_axon_normative_ura_document_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for normative URA document contract: $AXON_ROOT"
+  fi
+
+  local docs=()
+  for path in \
+    "$AXON_ROOT/document/concepts/AXIOM.tex" \
+    "$AXON_ROOT/document/rfcs/001-envelope-axiom-alignment.md" \
+    "$AXON_ROOT/document/rfcs/002-keyring-and-keyresolver.md"
+  do
+    [[ -f "$path" ]] && docs+=("$path")
+  done
+  if ((${#docs[@]} == 0)); then
+    return
+  fi
+  if rg -n '\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding)\.uri\b|\bstring uri\b|\bpeer_uri\b|find_peer_by_uri|uri_profile|resolver\.resolve\(uri\)|canonical URI format' "${docs[@]}"; then
+    fail "Axon active normative documents preserve URI terminology for URA identity data"
+  fi
+}
+
 check_active_ura_transport_classification_contract() {
   "$PYTHON_BIN" - "$@" <<'PY'
 import re
@@ -858,6 +899,24 @@ PY
   if check_active_ura_transport_classification_contract "$tmp/semantic-uri.rs" >/dev/null 2>&1; then
     fail "self-test expected semantic URI terminology to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-uri-vector"
+  mkdir -p "$tmp/axon-uri-vector/packaging/protocol-pack/conformance-vectors"
+  printf '{"description":"Cross-language URI canonicalization vectors","vectors":[{"input_uri":"easynet:///r/example/agent/a","canonical_uri":"easynet:///r/example/agent/a"}]}\n' \
+    > "$tmp/axon-uri-vector/packaging/protocol-pack/conformance-vectors/easynet-uri-v1.json"
+  if ( AXON_ROOT="$tmp/axon-uri-vector"; check_axon_protocol_pack_ura_vector_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon URI vector terminology gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-uri-docs"
+  mkdir -p "$tmp/axon-uri-docs/document/concepts" "$tmp/axon-uri-docs/document/rfcs"
+  printf 'message AgentIdentity { string uri = 1; }\nIdentity messages carry URI + profile.\n' \
+    > "$tmp/axon-uri-docs/document/concepts/AXIOM.tex"
+  printf 'caller.uri\nSystemAgent canonical URI format\n' \
+    > "$tmp/axon-uri-docs/document/rfcs/001-envelope-axiom-alignment.md"
+  printf 'message AgentIdentity { string uri = 1; }\n{"peer_uri":"easynet:///r/example/agent/a"}\nfind_peer_by_uri(agent_ura)\n' \
+    > "$tmp/axon-uri-docs/document/rfcs/002-keyring-and-keyresolver.md"
+  if ( AXON_ROOT="$tmp/axon-uri-docs"; check_axon_normative_ura_document_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon normative URI document gate to fail"
+  fi
   AXON_ROOT="$tmp/axon"
   check_manifest_contract
   check_active_source_contract
@@ -866,6 +925,8 @@ PY
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
   check_ura_vocabulary_contract
+  check_axon_protocol_pack_ura_vector_contract
+  check_axon_normative_ura_document_contract
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   check_schema_source_derivation_contract
   check_axon_product_protocol_boundary_contract
@@ -885,6 +946,8 @@ check_daemon_tuple_route_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
 check_ura_vocabulary_contract
+check_axon_protocol_pack_ura_vector_contract
+check_axon_normative_ura_document_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
 check_axon_product_protocol_boundary_contract
