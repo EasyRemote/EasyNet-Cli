@@ -409,6 +409,10 @@ language_reports=(
   "swift:sdk/conformance/runner/swift-action-adapter-report.json"
 )
 
+check_adapter_report_evidence() {
+  python3 "$SOURCE_ROOT/sdk/conformance/refresh_adapter_report_evidence.py" --check
+}
+
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d "$REPO_ROOT/target/sdk-conformance-report-gate.XXXXXX")"
   SELF_TEST_TMP="$tmp"
@@ -612,6 +616,7 @@ EOF
 fi
 
 rm -rf "$RESULT_DIR"
+check_adapter_report_evidence
 create_source_snapshot
 write_source_attestation_manifest
 ensure_run_nonce

@@ -19,6 +19,7 @@ required=(
   sdk/SDK_PARITY.md
   sdk/CONFORMANCE_SUITE.md
   sdk/conformance/fixture-schema-bindings.json
+  sdk/conformance/refresh_adapter_report_evidence.py
   sdk/conformance/sdk-parity-matrix.json
   sdk/conformance/runner/README.md
   sdk/go/go.mod

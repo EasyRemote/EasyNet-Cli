@@ -144,6 +144,12 @@ rm "$FIXTURE/sdk/SDK_INTERFACE_SPEC.md"
 expect_fail "$FIXTURE"
 cp "$ROOT/sdk/SDK_INTERFACE_SPEC.md" "$FIXTURE/sdk/SDK_INTERFACE_SPEC.md"
 
+rm "$FIXTURE/sdk/conformance/refresh_adapter_report_evidence.py"
+expect_fail "$FIXTURE"
+cp \
+  "$ROOT/sdk/conformance/refresh_adapter_report_evidence.py" \
+  "$FIXTURE/sdk/conformance/refresh_adapter_report_evidence.py"
+
 rm "$FIXTURE/include/easynet_cli.h"
 expect_fail "$FIXTURE"
 
