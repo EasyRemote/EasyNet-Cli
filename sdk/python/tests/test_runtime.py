@@ -92,6 +92,10 @@ class MemoryRuntimeTransport:
             raise self.prepare_error
         self.seen_draft = json.loads(draft_json.decode("utf-8"))
         self.seen_options = json.loads(options_json.decode("utf-8"))
+        if self.seen_options.get("material_only") is True:
+            material_only = json.loads(PREPARED_FIXTURE.decode("utf-8"))
+            material_only.pop("prepared_id", None)
+            return json.dumps(material_only, separators=(",", ":")).encode("utf-8")
         return PREPARED_FIXTURE
 
     def submit_signed(self, signed_json: bytes) -> bytes:

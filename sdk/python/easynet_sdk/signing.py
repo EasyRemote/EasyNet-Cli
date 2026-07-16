@@ -52,57 +52,7 @@ class PreparedInvocation:
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "PreparedInvocation":
-        try:
-            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
-            decoded = json.loads(text)
-        except Exception as exc:
-            raise _invalid_prepared(f"decode prepared invocation JSON: {exc}", exc) from exc
-        if not isinstance(decoded, dict):
-            raise _invalid_prepared("prepared invocation JSON must be an object")
-        if decoded.get("submit_ready") is True:
-            raise _invalid_prepared("PreparedInvocation must not be submit-ready")
-
-        draft = InvocationDraft.from_json(json.dumps(_required_object(decoded, "tuple")))
-        material = _signing_material(_required_object(decoded, "signing_material"))
-        if material.descriptor_ref != draft.descriptor_ref:
-            raise _invalid_prepared(
-                "signing_material.descriptor_ref must match tuple descriptor_ref"
-            )
-        prepared_id = _optional_string(decoded.get("prepared_id"), "prepared_id") or ""
-        request_id = _optional_string(decoded.get("request_id"), "request_id") or ""
-        if prepared_id == "":
-            raise _invalid_prepared("prepared_id is required")
-        descriptor_ref = (
-            _optional_string(decoded.get("descriptor_ref"), "descriptor_ref")
-            or material.descriptor_ref
-        )
-        if descriptor_ref == "":
-            raise _invalid_prepared("descriptor_ref is required")
-        expires_at_unix_ms = _optional_int(
-            decoded.get("expires_at_unix_ms"), "expires_at_unix_ms"
-        ) or material.expires_at_unix_ms
-        canonical_hash_hex = _optional_string(
-            decoded.get("canonical_hash_hex"), "canonical_hash_hex"
-        ) or ""
-        _validate_canonical_material_hash(
-            material.canonical_bytes_base64,
-            canonical_hash_hex,
-        )
-        return cls(
-            tuple=draft,
-            signing_material=material,
-            prepared_id=prepared_id,
-            request_id=request_id,
-            descriptor_ref=descriptor_ref,
-            descriptor_hash_hex=_optional_string(
-                decoded.get("descriptor_hash_hex"), "descriptor_hash_hex"
-            )
-            or "",
-            schema_hash_hex=_optional_string(decoded.get("schema_hash_hex"), "schema_hash_hex")
-            or "",
-            canonical_hash_hex=canonical_hash_hex,
-            expires_at_unix_ms=expires_at_unix_ms,
-        )
+        return _prepared_invocation_from_json(raw, require_prepared_id=True)
 
     def submit_ready(self) -> bool:
         return False
@@ -283,6 +233,67 @@ def _signing_material(decoded: Mapping[str, object]) -> SigningMaterial:
         nonce_base64=_optional_string(decoded.get("nonce_base64"), "nonce_base64") or "",
         signed_fields=tuple(signed_fields),
         signer_policy=policy,
+    )
+
+
+def signing_material_from_prepare_json(raw: bytes | str) -> SigningMaterial:
+    """Decode a stateless prepare projection without a retained native handle."""
+    return _prepared_invocation_from_json(raw, require_prepared_id=False).signing_material
+
+
+def _prepared_invocation_from_json(
+    raw: bytes | str, *, require_prepared_id: bool
+) -> PreparedInvocation:
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+        decoded = json.loads(text)
+    except Exception as exc:
+        raise _invalid_prepared(f"decode prepared invocation JSON: {exc}", exc) from exc
+    if not isinstance(decoded, dict):
+        raise _invalid_prepared("prepared invocation JSON must be an object")
+    if decoded.get("submit_ready") is True:
+        raise _invalid_prepared("PreparedInvocation must not be submit-ready")
+
+    draft = InvocationDraft.from_json(json.dumps(_required_object(decoded, "tuple")))
+    material = _signing_material(_required_object(decoded, "signing_material"))
+    if material.descriptor_ref != draft.descriptor_ref:
+        raise _invalid_prepared(
+            "signing_material.descriptor_ref must match tuple descriptor_ref"
+        )
+    prepared_id = _optional_string(decoded.get("prepared_id"), "prepared_id") or ""
+    request_id = _optional_string(decoded.get("request_id"), "request_id") or ""
+    if require_prepared_id and prepared_id == "":
+        raise _invalid_prepared("prepared_id is required")
+    descriptor_ref = (
+        _optional_string(decoded.get("descriptor_ref"), "descriptor_ref")
+        or material.descriptor_ref
+    )
+    if descriptor_ref == "":
+        raise _invalid_prepared("descriptor_ref is required")
+    expires_at_unix_ms = _optional_int(
+        decoded.get("expires_at_unix_ms"), "expires_at_unix_ms"
+    ) or material.expires_at_unix_ms
+    canonical_hash_hex = _optional_string(
+        decoded.get("canonical_hash_hex"), "canonical_hash_hex"
+    ) or ""
+    _validate_canonical_material_hash(
+        material.canonical_bytes_base64,
+        canonical_hash_hex,
+    )
+    return PreparedInvocation(
+        tuple=draft,
+        signing_material=material,
+        prepared_id=prepared_id,
+        request_id=request_id,
+        descriptor_ref=descriptor_ref,
+        descriptor_hash_hex=_optional_string(
+            decoded.get("descriptor_hash_hex"), "descriptor_hash_hex"
+        )
+        or "",
+        schema_hash_hex=_optional_string(decoded.get("schema_hash_hex"), "schema_hash_hex")
+        or "",
+        canonical_hash_hex=canonical_hash_hex,
+        expires_at_unix_ms=expires_at_unix_ms,
     )
 
 

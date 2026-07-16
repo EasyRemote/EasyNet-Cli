@@ -10,7 +10,13 @@ from .errors import ErrorCode, RetryHint, SDKError
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .stream import StreamHandle, StreamTransport
-from .signing import PreparedInvocation, SignedInvocation, Signer, SigningMaterial
+from .signing import (
+    PreparedInvocation,
+    SignedInvocation,
+    Signer,
+    SigningMaterial,
+    signing_material_from_prepare_json,
+)
 
 
 @runtime_checkable
@@ -762,9 +768,7 @@ class RuntimeClient:
             raise _transport_error(
                 "prepare signing material transport failed", exc
             ) from exc
-        # The daemon-owned prepared identifier is opaque here. The transport
-        # contract guarantees that no native prepared handle was retained.
-        return PreparedInvocation.from_json(raw).signing_material
+        return signing_material_from_prepare_json(raw)
 
     def prepare_builder(
         self,

@@ -19,10 +19,13 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::pin::Pin;
 use std::sync::{Arc, Weak};
+use std::task::{Context, Poll};
 
 use easynet_axon::invocation::{CallMode, StreamingInvocationHandle};
-use tokio::sync::mpsc;
+use futures::Stream;
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Response, Status};
 
@@ -478,11 +481,33 @@ async fn project_local_runtime_stream(
         })?;
 
     let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
+    let (consumer_closed_tx, mut consumer_closed_rx) = watch::channel(false);
     let invocation_id = handle.invocation_id().to_string();
+    let ability_name = ability.to_string();
     tokio::spawn(async move {
         let mut sequence = initial_sequence;
         let mut admission_receipt_sent = false;
-        while let Some(frame_result) = handle.next_frame().await {
+        loop {
+            let frame_result = tokio::select! {
+                changed = consumer_closed_rx.changed() => {
+                    if changed.is_ok() && *consumer_closed_rx.borrow() {
+                        cancel_abandoned_local_stream(
+                            &handle,
+                            ability_name.as_str(),
+                            invocation_id.as_str(),
+                            "stream consumer disconnected",
+                        )
+                        .await;
+                    }
+                    break;
+                }
+                next = handle.next_frame() => {
+                    let Some(frame_result) = next else {
+                        break;
+                    };
+                    frame_result
+                }
+            };
             match frame_result {
                 Ok(frame) => {
                     let terminal = frame.terminal;
@@ -580,7 +605,19 @@ async fn project_local_runtime_stream(
                         ..InvokeStreamChunk::default()
                     };
                     sequence = sequence.saturating_add(1);
-                    if tx.send(Ok(chunk)).await.is_err() || terminal {
+                    if tx.send(Ok(chunk)).await.is_err() {
+                        if !terminal {
+                            cancel_abandoned_local_stream(
+                                &handle,
+                                ability_name.as_str(),
+                                invocation_id.as_str(),
+                                "stream consumer disconnected",
+                            )
+                            .await;
+                        }
+                        break;
+                    }
+                    if terminal {
                         break;
                     }
                 }
@@ -638,8 +675,73 @@ async fn project_local_runtime_stream(
     });
 
     Ok(Response::new(
-        Box::pin(ReceiverStream::new(rx)) as BoxedDownStream<InvokeStreamChunk>
+        Box::pin(DropNotifyingReceiverStream::new(rx, consumer_closed_tx))
+            as BoxedDownStream<InvokeStreamChunk>,
     ))
+}
+
+struct DropNotifyingReceiverStream<T> {
+    inner: ReceiverStream<Result<T, Status>>,
+    close_tx: Option<watch::Sender<bool>>,
+}
+
+impl<T> DropNotifyingReceiverStream<T> {
+    fn new(rx: mpsc::Receiver<Result<T, Status>>, close_tx: watch::Sender<bool>) -> Self {
+        Self {
+            inner: ReceiverStream::new(rx),
+            close_tx: Some(close_tx),
+        }
+    }
+}
+
+impl<T> Unpin for DropNotifyingReceiverStream<T> {}
+
+impl<T> Stream for DropNotifyingReceiverStream<T> {
+    type Item = Result<T, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl<T> Drop for DropNotifyingReceiverStream<T> {
+    fn drop(&mut self) {
+        if let Some(close_tx) = self.close_tx.take() {
+            let _ = close_tx.send(true);
+        }
+    }
+}
+
+async fn cancel_abandoned_local_stream(
+    handle: &StreamingInvocationHandle,
+    ability: &str,
+    invocation_id: &str,
+    reason: &'static str,
+) {
+    match handle.cancel(reason).await {
+        Ok(()) => {
+            if let Err(err) = handle.finalized().await {
+                let err_msg = err.to_string();
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = invoke_stream_local_cancel_finalization_failed,
+                    ability = ability,
+                    invocation_id = invocation_id,
+                    error = err_msg,
+                );
+            }
+        }
+        Err(err) => {
+            let err_msg = err.to_string();
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = invoke_stream_local_cancel_failed,
+                ability = ability,
+                invocation_id = invocation_id,
+                error = err_msg,
+            );
+        }
+    }
 }
 
 impl StreamDispatcher {

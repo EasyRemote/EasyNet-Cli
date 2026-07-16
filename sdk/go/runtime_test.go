@@ -167,7 +167,7 @@ func TestRuntimeClientPrepareSigningMaterialUsesStatelessTransportContract(t *te
 			if err := json.Unmarshal(optionsJSON, &seenOptions); err != nil {
 				t.Fatalf("options JSON: %v", err)
 			}
-			return []byte(preparedFixture), nil
+			return []byte(strings.Replace(preparedFixture, "  \"prepared_id\": \"prepared-example-1\",\n", "", 1)), nil
 		},
 	})
 	if err != nil {
@@ -183,6 +183,9 @@ func TestRuntimeClientPrepareSigningMaterialUsesStatelessTransportContract(t *te
 	}
 	if material.CanonicalBytesBase64() == "" {
 		t.Fatal("canonical signing material is missing")
+	}
+	if _, err := NewPreparedInvocationFromJSON([]byte(strings.Replace(preparedFixture, "  \"prepared_id\": \"prepared-example-1\",\n", "", 1))); err == nil {
+		t.Fatal("retained prepared decoder accepted a material-only response")
 	}
 	if seenOptions["material_only"] != true ||
 		seenOptions["expires_in_ms"] != float64(60_000) ||

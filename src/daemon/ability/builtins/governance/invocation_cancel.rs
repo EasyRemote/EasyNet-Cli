@@ -46,7 +46,7 @@ fn execute(
 }
 
 pub fn description() -> &'static str {
-    "Request cancellation of one registered unary Invocation lifecycle owned by this authority."
+    "Request cancellation of one registered Invocation lifecycle owned by this authority."
 }
 
 pub fn input_schema() -> Value {

@@ -109,6 +109,20 @@ type PreparedInvocation struct {
 
 // NewPreparedInvocationFromJSON decodes daemon/Axon prepared signing material.
 func NewPreparedInvocationFromJSON(raw []byte) (PreparedInvocation, error) {
+	return decodePreparedInvocation(raw, true)
+}
+
+// signingMaterialFromPrepareJSON decodes a stateless prepare projection. Such
+// projections intentionally contain no native prepared capability.
+func signingMaterialFromPrepareJSON(raw []byte) (SigningMaterial, error) {
+	prepared, err := decodePreparedInvocation(raw, false)
+	if err != nil {
+		return SigningMaterial{}, err
+	}
+	return prepared.SigningMaterial(), nil
+}
+
+func decodePreparedInvocation(raw []byte, requirePreparedID bool) (PreparedInvocation, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return PreparedInvocation{}, invalidInvocation(fmt.Sprintf("decode prepared invocation JSON: %v", err), err)
@@ -138,7 +152,7 @@ func NewPreparedInvocationFromJSON(raw []byte) (PreparedInvocation, error) {
 		tuple:            tuple,
 		signingMaterial:  material,
 	}
-	if prepared.preparedID == "" {
+	if requirePreparedID && prepared.preparedID == "" {
 		return PreparedInvocation{}, invalidInvocation("prepared_id is required", nil)
 	}
 	if prepared.descriptorRef == "" {

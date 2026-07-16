@@ -424,6 +424,110 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
 }
 
 #[tokio::test]
+async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
+    use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode};
+    use futures::StreamExt;
+
+    const ABILITY: &str = "test.local_stream_cancel_on_drop";
+    let rt = test_runtime_with_default_trust();
+    let runtime_ability =
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ABILITY).expect("stream ability URA");
+    let first_frame_sent = Arc::new(std::sync::Mutex::new(None));
+    let cancel_observed = Arc::new(std::sync::Mutex::new(None));
+    let (first_tx, first_rx) = tokio::sync::oneshot::channel();
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    *first_frame_sent.lock().expect("first signal lock") = Some(first_tx);
+    *cancel_observed.lock().expect("cancel signal lock") = Some(cancel_tx);
+
+    rt.register_ability_with_options(
+        runtime_ability,
+        make_ability({
+            let first_frame_sent = Arc::clone(&first_frame_sent);
+            let cancel_observed = Arc::clone(&cancel_observed);
+            move |ctx| {
+                let first_frame_sent = Arc::clone(&first_frame_sent);
+                let cancel_observed = Arc::clone(&cancel_observed);
+                async move {
+                    ctx.emit_progress(
+                        serde_json::to_vec(&serde_json::json!({
+                            "MARKER-CANCEL-DROP": "progress-before-drop"
+                        }))
+                        .expect("progress JSON"),
+                        FEDERATION_RESULT_CONTENT_TYPE,
+                    )
+                    .await?;
+                    if let Some(tx) = first_frame_sent.lock().expect("first signal lock").take() {
+                        let _ = tx.send(());
+                    }
+                    ctx.wait_for_cancel().await;
+                    if let Some(tx) = cancel_observed.lock().expect("cancel signal lock").take() {
+                        let _ = tx.send(());
+                    }
+                    Ok(Vec::new())
+                }
+            }
+        }),
+        AbilityOptions::streaming().with_mode_descriptor_proof(
+            CallMode::Stream,
+            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            "invoke",
+            [0x33; 32],
+            [0x11; 32],
+            [0x22; 32],
+        ),
+    )
+    .await
+    .unwrap();
+    let svc = make_service_with_test_runtime(Arc::clone(&rt));
+    publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ABILITY,
+        crate::daemon::ability::CallMode::Stream,
+    )
+    .await;
+
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(
+                ProtoEnvelope::targeted(
+                    crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+                    TEST_DAEMON_URA,
+                    TEST_DAEMON_URA,
+                )
+                .expect("valid unsigned loopback stream envelope")
+                .into_inner(),
+            ),
+            function_name: ABILITY.to_string(),
+            arguments: br#"{}"#.to_vec(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("registered local stream returns Ok");
+
+    let mut stream = resp.into_inner();
+    tokio::time::timeout(std::time::Duration::from_secs(2), first_rx)
+        .await
+        .expect("stream ability emits initial frame")
+        .expect("initial frame signal sent");
+    let first = stream
+        .next()
+        .await
+        .expect("one progress frame")
+        .expect("progress frame is Ok");
+    assert!(!first.terminal);
+    assert_eq!(first.content_type, FEDERATION_RESULT_CONTENT_TYPE);
+
+    drop(stream);
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), cancel_rx)
+        .await
+        .expect("dropping InvokeStream response cancels local runtime")
+        .expect("cancel signal sent");
+}
+
+#[tokio::test]
 async fn invoke_stream_accepts_descriptor_ref_function_name() {
     use easynet_axon::invocation::{make_ability, AbilityOptions, CallMode};
     use futures::StreamExt;

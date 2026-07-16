@@ -20386,12 +20386,12 @@
       "PrepareOptions.signer_id": "0da778a7de8a24673b52c9ffde16055bb6c4a4facc3e96c0fc79f97d077d265f",
       "PrepareOptions.to_json_bytes": "9e8fe94fec0bfafa618620e80e33d5d8412f3f61eaf50e68c7db76bed1fb79e6",
       "PrepareOptions.to_json_dict": "ec3bcc7f1180d0c9532a6c6f5a7989afa2951ed20db2e58bb7422c35da208f18",
-      "PreparedInvocation": "d7148218d661a099259706b0c6cd52e623206062e07f65f88e9b199fa352eb4b",
+      "PreparedInvocation": "e105750b85c4176826d69d44839ed56fc2a29bfb90178d62e54a0fbd5f9a5877",
       "PreparedInvocation.canonical_hash_hex": "f27b9a44caa3d0c947f5d6467c03758e78581c65f4c4915aaf3f4bb838f84bfa",
       "PreparedInvocation.descriptor_hash_hex": "60f1d36e5256ccf49825df5f57b19c0ad6651b4c27c556ebb325c221a5ec6bbd",
       "PreparedInvocation.descriptor_ref": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f",
       "PreparedInvocation.expires_at_unix_ms": "d452d61206c93853290b842f748d3424d3f30fa52623540ba02e643317ff6f70",
-      "PreparedInvocation.from_json": "e31eb84f0511b7eb2224e4adecbfba2dda357b95d34284efa03470cc7dfaf6fb",
+      "PreparedInvocation.from_json": "27dc1a6390a4bd1c49497481ad7c09d0e0c703242ccd1f7ca57697c069c9a9b0",
       "PreparedInvocation.prepared_id": "e72d7788cea9194be6e3c3e42e694325ec65c012f2ba0bcce9ec6c8d085a2414",
       "PreparedInvocation.request_id": "6caa6e6f8ade2c10dc7812ae21dfd81538f8095d74287ef870ec2c0525f150bc",
       "PreparedInvocation.schema_hash_hex": "4a4511c50e6276d65e34a42ace59ada170dec43b4f78fe62cce781c994b04b80",
@@ -20617,7 +20617,7 @@
       "RuntimeCallContext.metadata": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c",
       "RuntimeCallContext.nonce_base64": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313",
       "RuntimeCallContext.subject_ura": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b",
-      "RuntimeClient": "728563f1c462dad359e05f6bb5bcaaf4a9aba6198e99cc310ccb641ac3d30e1a",
+      "RuntimeClient": "b94c8f0c8a40f0e329500985f3d4a92a7c41f5426066d249bbd0cd2c64b4611e",
       "RuntimeClient.await_result": "5e45b2f5310522382858140aaadb85c877d6ab775a01a44527471c0a042971fa",
       "RuntimeClient.cancel": "b787a058907f9b269b2a960426545d28f69e5dfd138ae7156fb3974357b64f8d",
       "RuntimeClient.close": "430c7b85af520673a83698ab826cef864cad0d38d4255842124f654f5ac26b1b",
@@ -20631,7 +20631,7 @@
       "RuntimeClient.prepare": "75619d054982d0d6d42e988c6983294b5d1ba432d619d1cf086f21a53bdbdfb4",
       "RuntimeClient.prepare_and_sign": "797f645914ca040de029fd1c1d3b447d176374c31673e468a6c673914d5bab31",
       "RuntimeClient.prepare_builder": "3df41662885cbefc1fb34695b5d59e96ed722e0f84bf5274d9033aedb7732e8a",
-      "RuntimeClient.prepare_signing_material": "c0cbea2450c70892b8b4af2c79ed681c3f6b985b3fefe93f2ff04e3ca7a2749c",
+      "RuntimeClient.prepare_signing_material": "65f632fa651e813e3093b29115d9050699e1a3a20c14f95cd6897f8202f9e3b4",
       "RuntimeClient.resolve_descriptor_ref": "291cfb90b1fad23606ab1993606654ad55eca6c319f85afa29285e408beb5cd6",
       "RuntimeClient.submit_signed": "51c019b0b8f0b5911baba987e148cfe7eb9edb1ea4905d09144e974a3ccdfe20",
       "RuntimeConnection": "ea8c273bb058d5960632c677c7852d057c07fb80b4b64f871af43848d2da8c86",
@@ -22988,7 +22988,7 @@
       "item": "PreparedInvocation.from_json",
       "parent_capability": "prepare_sign_submit",
       "role": "serialization_projection",
-      "shape_sha256": "e31eb84f0511b7eb2224e4adecbfba2dda357b95d34284efa03470cc7dfaf6fb",
+      "shape_sha256": "27dc1a6390a4bd1c49497481ad7c09d0e0c703242ccd1f7ca57697c069c9a9b0",
       "shape_group": "serialization_projection:preparedinvocation.deserializejson"
     },
     {
@@ -24280,7 +24280,7 @@
           "language": "python",
           "section": "members",
           "item": "PreparedInvocation.from_json",
-          "shape_sha256": "e31eb84f0511b7eb2224e4adecbfba2dda357b95d34284efa03470cc7dfaf6fb"
+          "shape_sha256": "27dc1a6390a4bd1c49497481ad7c09d0e0c703242ccd1f7ca57697c069c9a9b0"
         }
       ],
       "present_languages": [

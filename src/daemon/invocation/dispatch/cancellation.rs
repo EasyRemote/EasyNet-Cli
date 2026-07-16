@@ -1,4 +1,4 @@
-//! Canonical unary Invocation cancellation authority.
+//! Canonical Invocation lifecycle cancellation authority.
 //!
 //! Cancellation is an ordinary descriptor-bound `invocation.cancel`
 //! Invocation. This registry is only the daemon-local lifecycle index used by
@@ -196,6 +196,14 @@ impl InvocationCancellationRegistry {
     #[cfg(test)]
     pub(crate) fn contains(&self, key: &str) -> bool {
         self.lock().entries.contains_key(key)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contains_invocation_id(&self, invocation_id: &str) -> bool {
+        self.lock()
+            .entries
+            .values()
+            .any(|entry| entry.handle().invocation_id() == invocation_id)
     }
 
     /// Execute one admitted cancel command. Completion means the cancellation
