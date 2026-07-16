@@ -227,3 +227,38 @@ resolve through the named descriptor-default policy, and hub-owned abilities
 use the Ability URA as subject because Hub identities are not valid Axon
 subjects. The LocalRuntime adapter consumes the resolved subject and causal
 context; it no longer defines a separate fallback subject state machine.
+
+## Current Slice: Mission Catalog Gateway Target Boundary
+
+Owner: EasyNet-Cli daemon Mission/EAL test gateway.
+
+Production Mission child dispatch already enters Axon through the admitted
+parent `AbilityContext`, `ChildInvocationRequest`, descriptor-bound target,
+parent subject, and runtime-managed causal chain. The cfg-test catalog gateway
+is not the production proof path, but it is the Mission/EAL test port used by
+orchestration tests; it should not preserve a hand-written local target
+literal that copies routing policy.
+
+The catalog gateway now uses `InvocationTarget::local_daemon_system` for its
+daemon-system test dispatch. This keeps Mission/EAL test adapters aligned with
+the canonical target construction boundary while preserving the production
+child-invocation architecture.
+
+## Current Slice: Ability Dispatch Target Fixture Boundary
+
+Owner: EasyNet-Cli daemon ability registry dispatch tests.
+
+`AxonAbilityCatalog` is the daemon registry boundary that forwards local RPC,
+stream, and bidi calls into the attached Axon `LocalRuntime`. Its tests cover
+the core envelope-aware behavior: explicit subjects, derived system subjects,
+remote-route rejection, stream/RPC mode separation, and bidi lifecycle guards.
+Those tests should exercise routing target construction through the target
+value object instead of restating local or remote scope, system subject policy,
+root causal context, and empty metadata literals.
+
+`InvocationTarget` now also owns the remote daemon-system constructor, backed
+by the same internal scoped binding constructor as local targets. Ability
+dispatch fixtures now use named constructors for local RPC, stream, bidi, and
+remote guard targets. This removes a high-visibility set of obsolete tuple
+assembly examples from the registry tests while leaving protobuf transport
+targets and other remaining inventory for separate RF-8/RF-7 slices.

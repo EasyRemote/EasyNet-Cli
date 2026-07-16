@@ -140,6 +140,30 @@
 - [x] Verify routing target tests, LocalRuntime invoker tests, lib build, and
       architecture convergence gate.
 
+## Mission Catalog Gateway Target Boundary Slice
+
+- [x] Identify the cfg-test Mission catalog gateway as a remaining direct
+      local `InvocationTarget` assembly point.
+- [x] Preserve production Mission child dispatch through admitted parent
+      `AbilityContext` and `ChildInvocationRequest`.
+- [x] Migrate the test catalog gateway to
+      `InvocationTarget::local_daemon_system`.
+- [x] Verify Mission invocation gateway tests, lib build, architecture
+      convergence gate, and absence of target literal remnants in the file.
+
+## Ability Dispatch Target Fixture Boundary Slice
+
+- [x] Identify `AxonAbilityCatalog` tests that still hand-assembled local and
+      remote `InvocationTarget` fixtures.
+- [x] Add `InvocationTarget::remote_daemon_system` so remote guard fixtures do
+      not restate daemon-system subject and root-causal policy.
+- [x] Reuse the target value object's scoped binding constructor for local and
+      remote daemon-system targets.
+- [x] Migrate RPC, stream, bidi, explicit-subject, and remote guard fixtures
+      in `dispatch.rs` to named target constructors.
+- [x] Verify routing target tests, ability dispatch tests, lib build,
+      architecture convergence gate, and absence of dispatch target literals.
+
 ## Still Required Before Completion
 
 - [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.

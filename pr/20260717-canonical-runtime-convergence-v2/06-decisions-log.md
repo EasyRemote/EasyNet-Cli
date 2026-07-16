@@ -52,3 +52,12 @@
   owns the public-ingress versus daemon-system tuple source. The LocalRuntime
   adapter should build Axon requests from resolved tuple facts, not define a
   second fallback subject policy.
+- Mission production child dispatch remains descriptor-bound through the
+  admitted parent `AbilityContext`; the test catalog gateway is only a unit
+  test port. Even there, local target construction should use the routing
+  target constructor so Mission/EAL fixtures do not preserve obsolete tuple
+  assembly examples.
+- Ability dispatch registry tests are part of the canonical daemon routing
+  surface. They should construct local and remote daemon-system targets through
+  `InvocationTarget` constructors so the test suite does not teach future
+  adapters to restate tuple policy by hand.

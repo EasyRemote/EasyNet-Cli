@@ -236,3 +236,42 @@ Commands run on 2026-07-17:
 
 This evidence verifies only the LocalRuntime subject derivation ownership
 slice. It does not prove RF-8/RF-7 or SPEC completion.
+
+## Mission Catalog Gateway Target Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "InvocationTarget \\{|TargetScope|InvocationSubject|InvocationCausalContext" src/daemon/execution/mission/invocation_gateway.rs`:
+  no matches.
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -q daemon::execution::mission::invocation_gateway --lib --features axon-pb`:
+  passed, 4 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `invocation_gateway.rs` finding was
+  reported.
+
+This evidence verifies only the Mission catalog gateway target-boundary slice.
+It does not prove RF-8/RF-7, RF-2, or SPEC completion.
+
+## Ability Dispatch Target Fixture Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -q daemon::invocation::routing::target --lib --features axon-pb`:
+  passed, 15 tests.
+- `cargo test -q daemon::ability::dispatch::tests --lib --features axon-pb`:
+  passed, 84 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `rg -n "InvocationTarget \\{|TargetScope::Local|InvocationSubject|InvocationCausalContext" src/daemon/ability/dispatch.rs`:
+  only reported the `ping_target_local` return type; no target literal or
+  target enum construction remains in `dispatch.rs`.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `dispatch.rs` or `target.rs` finding was
+  reported.
+
+This evidence verifies only the ability dispatch target-fixture slice. It does
+not prove RF-8/RF-7 or SPEC completion.

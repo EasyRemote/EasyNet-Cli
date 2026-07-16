@@ -5883,15 +5883,7 @@ mod tests {
     }
 
     fn ping_target_local() -> InvocationTarget {
-        InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "observe.health".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        }
+        InvocationTarget::local_daemon_system("observe.health", json!({}), CallMode::Rpc)
     }
 
     fn invoke_test_rpc(
@@ -5899,15 +5891,11 @@ mod tests {
         ability: &str,
         args: serde_json::Value,
     ) -> anyhow::Result<serde_json::Value> {
-        catalog.invoke_rpc_target_json(InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ability.to_string(),
-            normalized_args: args,
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        })
+        catalog.invoke_rpc_target_json(InvocationTarget::local_daemon_system(
+            ability,
+            args,
+            CallMode::Rpc,
+        ))
     }
 
     fn test_manifest(
@@ -6717,15 +6705,12 @@ mod tests {
             }),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "media.x.snapshot".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01CAM"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            "media.x.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01CAM",
+        );
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(
             resp["saw_subject"],
@@ -6772,15 +6757,7 @@ mod tests {
             }),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "x.optional".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system("x.optional", json!({}), CallMode::Rpc);
         let resp = dispatcher.execute_rpc(target).unwrap();
         assert_eq!(
             resp,
@@ -6806,15 +6783,12 @@ mod tests {
             }),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "x.subscribe".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/x/resource/01MIC"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            "x.subscribe",
+            json!({}),
+            CallMode::Stream,
+            "easynet:///r/x/resource/01MIC",
+        );
         let src = dispatcher.execute_stream(target).unwrap();
         match src {
             StreamSource::Snapshot(frames) => {
@@ -6858,17 +6832,12 @@ mod tests {
         // construction fails loud instead of silently bouncing
         // to Local.
         let dispatcher = empty_registry();
-        let target = InvocationTarget {
-            scope: TargetScope::Remote {
-                node: NodeId::new("peer"),
-            },
-            ability: "observe.health".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::remote_daemon_system(
+            NodeId::new("peer"),
+            "observe.health",
+            json!({}),
+            CallMode::Rpc,
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         let msg = format!("{err}");
         assert!(
@@ -7286,15 +7255,8 @@ mod tests {
             }),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "device.test.echo".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Bidi,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target =
+            InvocationTarget::local_daemon_system("device.test.echo", json!({}), CallMode::Bidi);
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -7317,15 +7279,8 @@ mod tests {
         // bidi. The error must name the ability so an operator can
         // grep for it.
         let dispatcher = empty_registry();
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "terminal.attach".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Bidi,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target =
+            InvocationTarget::local_daemon_system("terminal.attach", json!({}), CallMode::Bidi);
         let err = dispatcher.execute_bidi(target).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("terminal.attach"), "names ability: {msg}");
@@ -7349,15 +7304,8 @@ mod tests {
             Arc::new(|_| anyhow::bail!("intentional handler failure: precondition foo missing")),
         );
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: "device.test.bad".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Bidi,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target =
+            InvocationTarget::local_daemon_system("device.test.bad", json!({}), CallMode::Bidi);
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").contains("precondition foo missing"));
     }
@@ -7369,17 +7317,12 @@ mod tests {
         // lookup or panicking on a missing gateway method; pin it
         // so a later refactor can't drop the guard.
         let dispatcher = empty_registry();
-        let target = InvocationTarget {
-            scope: TargetScope::Remote {
-                node: NodeId::new("01PEER"),
-            },
-            ability: "terminal.attach".into(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Bidi,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::remote_daemon_system(
+            NodeId::new("01PEER"),
+            "terminal.attach",
+            json!({}),
+            CallMode::Bidi,
+        );
         let err = dispatcher.execute_bidi(target).unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("remote"));
     }

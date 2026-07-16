@@ -304,16 +304,12 @@ impl MissionInvocationGateway for CatalogMissionInvocationGateway {
             Some(agent) => format!("{agent}.{}", request.ability),
             None => request.ability,
         };
-        let invocation_target = crate::daemon::invocation::routing::target::InvocationTarget {
-            scope: crate::daemon::invocation::routing::target::TargetScope::Local,
-            ability: ability.clone(),
-            normalized_args: request.args,
-            call_mode: crate::daemon::invocation::routing::target::CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context:
-                crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: HashMap::new(),
-        };
+        let invocation_target =
+            crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(
+                ability.clone(),
+                request.args,
+                crate::daemon::invocation::routing::target::CallMode::Rpc,
+            );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.catalog.invoke_rpc_target_json(invocation_target)
         }));

@@ -391,6 +391,25 @@ impl InvocationTarget {
         )
     }
 
+    /// Construct a remote daemon-system dispatch using the named descriptor
+    /// subject and root-causal derivation policy.
+    #[must_use]
+    pub fn remote_daemon_system(
+        node: NodeId,
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> Self {
+        Self::with_scope_and_bindings(
+            TargetScope::Remote { node },
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::daemon_system_derived(),
+            InvocationCausalContext::daemon_system_root(),
+        )
+    }
+
     fn local_with_bindings(
         ability: impl Into<String>,
         normalized_args: Value,
@@ -398,8 +417,26 @@ impl InvocationTarget {
         subject: InvocationSubject,
         causal_context: InvocationCausalContext,
     ) -> Self {
+        Self::with_scope_and_bindings(
+            TargetScope::Local,
+            ability,
+            normalized_args,
+            call_mode,
+            subject,
+            causal_context,
+        )
+    }
+
+    fn with_scope_and_bindings(
+        scope: TargetScope,
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: InvocationSubject,
+        causal_context: InvocationCausalContext,
+    ) -> Self {
         Self {
-            scope: TargetScope::Local,
+            scope,
             ability: ability.into(),
             normalized_args,
             call_mode,
@@ -708,6 +745,30 @@ mod tests {
             target.causal_context,
             InvocationCausalContext::daemon_system_root()
         );
+    }
+
+    #[test]
+    fn remote_daemon_system_constructor_names_root_derivation_policy() {
+        let target = InvocationTarget::remote_daemon_system(
+            NodeId::new("peer-1"),
+            "observe.health",
+            json!({}),
+            CallMode::Rpc,
+        );
+
+        assert_eq!(
+            target.scope,
+            TargetScope::Remote {
+                node: NodeId::new("peer-1")
+            }
+        );
+        assert_eq!(target.ability, "observe.health");
+        assert_eq!(target.subject, InvocationSubject::daemon_system_derived());
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::daemon_system_root()
+        );
+        assert!(target.request_metadata.is_empty());
     }
 
     #[test]
