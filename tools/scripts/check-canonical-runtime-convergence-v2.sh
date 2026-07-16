@@ -138,7 +138,20 @@ check_axon_product_protocol_boundary_contract() {
     sdk/node/src/mcp/server.ts \
     sdk/node/src/presets/remote_control/descriptor.ts \
     sdk/node/src/presets/ability_dispatch.ts \
-    sdk/node/src/presets/remote_control_case.ts
+    sdk/node/src/presets/remote_control_case.ts \
+    sdk/java/src/main/java/run/easynet/axon/Audio.java \
+    sdk/java/src/main/java/run/easynet/axon/AbilityToolAdapter.java \
+    sdk/java/src/main/java/run/easynet/axon/AxonMcpException.java \
+    sdk/java/src/main/java/run/easynet/axon/DeployMcpListDirRequest.java \
+    sdk/java/src/main/java/run/easynet/axon/UpdateMcpListDirRequest.java \
+    sdk/java/src/main/java/run/easynet/axon/VoiceBridge.java \
+    sdk/java/src/main/java/run/easynet/axon/VoiceService.java \
+    sdk/java/src/main/java/run/easynet/axon/mcp/StdioMcpServer.java \
+    sdk/java/src/main/java/run/easynet/axon/presets/remote_control/RemoteControlDescriptor.java \
+    sdk/java/src/main/java/run/easynet/axon/cases/ability_dispatch/AbilityDispatchCase.java \
+    sdk/swift/Sources/EasyNetAxon/Audio.swift \
+    sdk/swift/Sources/EasyNetAxon/StdioMcpServer.swift \
+    sdk/swift/Sources/EasyNetAxon/ToolAdapter.swift
   do
     [[ ! -e "$AXON_ROOT/$path" ]] \
       || fail "product-owned file remains in canonical Axon surface: $path"
@@ -157,6 +170,16 @@ check_axon_product_protocol_boundary_contract() {
   if [[ -d "$AXON_ROOT/sdk/node" ]] \
     && (cd "$AXON_ROOT" && git ls-files sdk/node 2>/dev/null | grep -Eq '/(audio|tool_adapter|mcp|presets/(remote_control|ability_dispatch)|remote_control_case)([^/]*|/.*)$'); then
     fail "Node SDK tracks a product-owned canonical package"
+  fi
+
+  if [[ -d "$AXON_ROOT/sdk/java" ]] \
+    && (cd "$AXON_ROOT" && git ls-files sdk/java 2>/dev/null | grep -Eq '/(Audio|AbilityToolAdapter|AxonMcpException|DeployMcpListDirRequest|UpdateMcpListDirRequest|VoiceBridge|VoiceService)\.java$|/(mcp|presets/remote_control|cases/ability_dispatch)/'); then
+    fail "Java SDK tracks a product-owned canonical package"
+  fi
+
+  if [[ -d "$AXON_ROOT/sdk/swift" ]] \
+    && (cd "$AXON_ROOT" && git ls-files sdk/swift 2>/dev/null | grep -Eq '/(Audio|StdioMcpServer|ToolAdapter)\.swift$'); then
+    fail "Swift SDK tracks a product-owned canonical package"
   fi
 
   local rust_lib="$AXON_ROOT/sdk/rust/src/lib.rs"
@@ -454,6 +477,10 @@ PY
   touch "$tmp/axon-product/sdk/python/easynet_axon/audio.py"
   mkdir -p "$tmp/axon-product/sdk/node/src/mcp"
   touch "$tmp/axon-product/sdk/node/src/tool_adapter.ts"
+  mkdir -p "$tmp/axon-product/sdk/java/src/main/java/run/easynet/axon/mcp"
+  touch "$tmp/axon-product/sdk/java/src/main/java/run/easynet/axon/AbilityToolAdapter.java"
+  mkdir -p "$tmp/axon-product/sdk/swift/Sources/EasyNetAxon"
+  touch "$tmp/axon-product/sdk/swift/Sources/EasyNetAxon/ToolAdapter.swift"
   if ( AXON_ROOT="$tmp/axon-product"; check_axon_product_protocol_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon product protocol boundary gate to fail"
   fi

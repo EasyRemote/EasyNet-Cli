@@ -174,3 +174,37 @@ tool-adapter, remote-control, and ability-dispatch have been removed from the
 canonical package surface; generic provider package descriptor construction and
 neutral `ToolSpec` now live in `ability_lifecycle.ts`; and the V2 runner now
 rejects Node product package reintroduction.
+
+## 2026-07-17 RF-1 Java Product SDK Extraction
+
+- `rg -n "VoiceBridge|VoiceService|Audio\\b|AbilityToolAdapter|StdioMcpServer|McpToolProvider|McpToolResult|McpToolStreamHandle|DeployMcpListDirRequest|UpdateMcpListDirRequest|RemoteControl|ability_dispatch|run\\.easynet\\.axon\\.mcp|run\\.easynet\\.axon\\.presets|AxonMcpException|MCP & A2A|Voice & Media" sdk/java/src/main sdk/java/src/test sdk/java/README.md --glob '!**/target/**'`
+- `git ls-files sdk/java | rg '(Audio|Voice|Mcp|MCP|ToolAdapter|RemoteControl|remote_control|ability_dispatch|mcp|audio|voice)'`
+- `mvn -q -DskipTests compile` from `sdk/java`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Java SDK product packages for audio, voice, MCP,
+tool-adapter, remote-control, and ability-dispatch case APIs have been removed
+from the canonical package surface; generic provider package descriptor
+construction now lives in `AbilityLifecycle`; and the V2 runner now rejects
+Java product package reintroduction.
+
+## 2026-07-17 RF-1 Swift Product SDK Extraction
+
+- `rg -n "Voice|Audio|Mcp|MCP|ToolAdapter|RemoteControl|remote_control|ability_dispatch|StdioMcp|McpTool|tool_adapter|Voice & Media" sdk/swift/Sources sdk/swift/Tests sdk/swift/Package.swift sdk/swift/README.md --glob '!**/.build/**'`
+- `git ls-files sdk/swift | rg '(Audio|Voice|Mcp|MCP|ToolAdapter|RemoteControl|remote_control|ability_dispatch|mcp|audio|voice|Stdio)'`
+- `swift build --package-path sdk/swift`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Swift SDK product packages for audio, MCP, and
+tool-adapter APIs have been removed from the canonical package surface; generic
+provider package descriptor construction and neutral `ToolSpec` now live in
+`AbilityLifecycle.swift`; and the V2 runner now rejects Swift product package
+reintroduction.

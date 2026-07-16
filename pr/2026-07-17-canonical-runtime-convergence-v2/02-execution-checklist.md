@@ -49,12 +49,14 @@
       their reintroduction from the V2 convergence runner.
 - [x] Extract Node Axon product SDK files from canonical SDK surface and gate
       their reintroduction from the V2 convergence runner.
+- [x] Extract Java Axon product SDK files from canonical SDK surface and gate
+      their reintroduction from the V2 convergence runner.
+- [x] Extract Swift Axon product SDK files from canonical SDK surface and gate
+      their reintroduction from the V2 convergence runner.
 - [x] Gate daemon-owned Mission/EAL execution boundaries from the V2
       convergence runner.
-- [ ] Extract remaining Java and Swift Axon product SDK
-      packages from canonical SDK surfaces.
-- [ ] Keep Mission/EAL state in daemon-owned packages only.
-- [ ] Gate Axon/core copied schemas against Mission state reintroduction where
+- [x] Keep Mission/EAL state in daemon-owned packages only.
+- [x] Gate Axon/core copied schemas against Mission state reintroduction where
       visible in this repository.
 
 ## RF-9 URA and Schema Ownership

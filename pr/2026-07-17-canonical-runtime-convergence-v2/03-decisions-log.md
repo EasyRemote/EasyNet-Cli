@@ -72,3 +72,14 @@
   descriptor construction and neutral `ToolSpec` retained inside
   `ability_lifecycle.ts`; the V2 runner now rejects tracked Node product
   package files.
+- Treat Java SDK `Audio`, `Voice*`, `mcp/*`, `AbilityToolAdapter`,
+  MCP list-dir request models, `presets/remote_control/*`, and
+  `cases/ability_dispatch/*` as product-owned RF-1 surfaces. They are removed
+  from Axon's canonical Java SDK, with generic provider package descriptor
+  construction retained inside `AbilityLifecycle`; the V2 runner now rejects
+  tracked Java product package files.
+- Treat Swift SDK `Audio`, `StdioMcpServer`, and `ToolAdapter` as
+  product-owned RF-1 surfaces. They are removed from Axon's canonical Swift
+  SDK, with generic provider package descriptor construction and neutral
+  `ToolSpec` retained inside `AbilityLifecycle.swift`; the V2 runner now
+  rejects tracked Swift product package files.
