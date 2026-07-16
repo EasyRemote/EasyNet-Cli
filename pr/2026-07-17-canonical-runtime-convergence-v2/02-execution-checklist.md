@@ -28,9 +28,9 @@
 
 ## RF-6 Receipt Proof Facts
 
-- [ ] Inventory receipt constructors and fixtures.
-- [ ] Gate omitted authority/proof facts.
-- [ ] Delete compatibility constructors that synthesize proof facts.
+- [x] Inventory receipt constructors and fixtures.
+- [x] Gate omitted authority/proof facts.
+- [x] Delete compatibility constructors that synthesize proof facts.
 
 ## RF-1 / RF-2 Product and Mission Boundary
 
@@ -43,7 +43,9 @@
 
 - [x] Add active-source terminology gate.
 - [ ] Classify transport-library `uri()` usages outside runtime identity.
-- [ ] Add or verify deterministic schema-copy check.
+- [x] Add deterministic schema-copy check by delegating to Axon's
+      `scripts/proto/sync_axon_v1.sh --check` from the canonical runtime
+      convergence gate.
 
 ## Verification
 

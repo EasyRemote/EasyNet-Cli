@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+AXON_ROOT="${EASYNET_AXON_ROOT:-$ROOT/../EasyNet-Axon}"
 PYTHON_BIN="${PYTHON:-python3}"
 MANIFEST="$ROOT/sdk/conformance/canonical-public-api.json"
 MATRIX="$ROOT/sdk/conformance/sdk-parity-matrix.json"
@@ -98,6 +99,56 @@ check_ura_vocabulary_contract() {
   fi
 }
 
+check_schema_source_derivation_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for schema-source derivation contract: $AXON_ROOT"
+  fi
+
+  local syncer="$AXON_ROOT/scripts/proto/sync_axon_v1.sh"
+  if [[ ! -f "$syncer" ]]; then
+    fail "Axon proto source derivation gate is missing: ${syncer#$AXON_ROOT/}"
+  fi
+
+  if ! bash "$syncer" --check >/dev/null; then
+    fail "Axon proto mirrors diverged from canonical core/proto source"
+  fi
+}
+
+check_receipt_proof_fact_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for receipt proof-fact contract: $AXON_ROOT"
+  fi
+
+  local java_axiom="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+  local java_bundle="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
+  local python_axiom="$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
+  local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
+  local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
+  local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
+
+  if rg -n 'AuthorityBinding\.self\(callerBinding\.ura\)|ReceiptProofFacts\.empty\(\)\);' "$java_axiom" "$java_bundle"; then
+    fail "Java receipt construction/parsing still synthesizes authority or proof facts"
+  fi
+
+  if rg -n 'field\(default_factory=ReceiptProofFacts\)|AuthorityBinding\.self_\(r\.caller_binding\.ura\)|proof_facts if .*else .*ReceiptProofFacts\(\)' "$python_axiom" "$AXON_ROOT/sdk/python/easynet_axon/invocation/audit.py"; then
+    fail "Python receipt construction still defaults authority or proof facts"
+  fi
+
+  if rg -n 'proofFacts \?\? EMPTY_RECEIPT_PROOF_FACTS|authorityBinding \?\? AuthorityBinding\.self_|readonly proofFacts\?:|proofFacts\?: ReceiptProofFacts|authorityBinding\?: AuthorityBinding' "$node_invocation" \
+    --glob '!axiom-authority.test.ts'; then
+    fail "Node receipt construction still allows omitted authority or proof facts"
+  fi
+
+  if rg -n 'authorityBinding: AuthorityBinding\? = nil|proofFacts: ReceiptProofFacts = \.empty|\?\? \.selfAuthority' "$swift_invocation"; then
+    fail "Swift receipt construction still defaults authority or proof facts"
+  fi
+
+  if rg -n 'normaliseAuthority\(r\.AuthorityBinding|ProofFacts:\s*ReceiptProofFacts\{|return ReceiptProofFacts\{' "$go_invocation" \
+    --glob '!axiom.go'; then
+    fail "Go receipt construction still omits constructor-backed proof facts"
+  fi
+}
+
 if [[ "${1:-}" == "--self-test" ]]; then
   tmp="$(mktemp -d "$ROOT/target/canonical-runtime-convergence-v2.XXXXXX")"
   trap 'rm -rf "$tmp"' EXIT
@@ -125,9 +176,46 @@ PY
   then
     fail "self-test expected canonical helper leak to fail"
   fi
+  mkdir -p "$tmp/axon/sdk/node/src/invocation"
+  mkdir -p "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation"
+  mkdir -p "$tmp/axon/sdk/python/easynet_axon/invocation"
+  mkdir -p "$tmp/axon/sdk/swift/Sources/EasyNetAxon/Invocation"
+  mkdir -p "$tmp/axon/sdk/go/easynet/invocation"
+  touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+  touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
+  touch "$tmp/axon/sdk/python/easynet_axon/invocation/axiom.py"
+  touch "$tmp/axon/sdk/python/easynet_axon/invocation/audit.py"
+  touch "$tmp/axon/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+  touch "$tmp/axon/sdk/go/easynet/invocation/axiom.go"
+  printf 'export interface ReceiptBody { readonly proofFacts?: ReceiptProofFacts; }\n' \
+    > "$tmp/axon/sdk/node/src/invocation/axiom.d.ts"
+  if ! rg -n 'proofFacts\?: ReceiptProofFacts' "$tmp/axon/sdk/node/src/invocation" >/dev/null; then
+    fail "self-test expected receipt proof-fact default gate to fail"
+  fi
+  printf '' > "$tmp/axon/sdk/node/src/invocation/axiom.d.ts"
+  mkdir -p "$tmp/axon/scripts/proto"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'set -euo pipefail' \
+    'if [[ "${1:-}" != "--check" ]]; then' \
+    '  exit 2' \
+    'fi' \
+    'if [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/SCHEMA_DERIVATION_BROKEN" ]]; then' \
+    '  exit 1' \
+    'fi' \
+    > "$tmp/axon/scripts/proto/sync_axon_v1.sh"
+  mkdir -p "$tmp/axon-bad/scripts/proto"
+  cp "$tmp/axon/scripts/proto/sync_axon_v1.sh" "$tmp/axon-bad/scripts/proto/sync_axon_v1.sh"
+  touch "$tmp/axon-bad/SCHEMA_DERIVATION_BROKEN"
+  if ( AXON_ROOT="$tmp/axon-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected schema-source derivation gate to fail"
+  fi
+  AXON_ROOT="$tmp/axon"
   check_manifest_contract
   check_active_source_contract
   check_ura_vocabulary_contract
+  check_schema_source_derivation_contract
+  check_receipt_proof_fact_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
 fi
@@ -135,4 +223,6 @@ fi
 check_manifest_contract
 check_active_source_contract
 check_ura_vocabulary_contract
+check_schema_source_derivation_contract
+check_receipt_proof_fact_contract
 echo "canonical-runtime-convergence-v2: OK"

@@ -24,6 +24,8 @@ complete descriptor-bound invocation request.
 - Public plain canonical-byte signing or verification.
 - Process-local signer generation as authority fallback.
 - Ad hoc receipt proof fact synthesis.
+- SDK receipt constructors, encoders, and JSON parsers that synthesize missing
+  authority or proof facts.
 - Ability route handlers that bypass LocalRuntime.
 - Silent defaults for `subject` or `causal_context` at public ingress.
 - Product feature families exported as SDK canonical runtime abstractions.

@@ -22,3 +22,14 @@
   `run_admission` as quarantined public-surface defects in this repository's
   conformance evidence. The canonical runtime entry point is descriptor-bound
   proof.
+- Treat omitted receipt authority/proof facts as a construction error in every
+  Axon SDK language. Explicit zero-valued proof facts remain valid seam-level
+  facts only when the caller supplies the proof-fact object directly.
+- Keep receipt byte layout unchanged. RF-6 changes construction/parsing policy:
+  no SDK encoder or JSON parser may synthesize self-authority or empty proof
+  facts from omission.
+- Treat `core/proto/axon/v1` in EasyNet-Axon as the only canonical proto source.
+  EasyNet-Cli's V2 convergence gate must call Axon's
+  `scripts/proto/sync_axon_v1.sh --check` instead of duplicating byte-for-byte
+  mirror logic locally. This preserves a single schema ownership point while
+  making RF-9 observable from the cross-repo conformance runner.
