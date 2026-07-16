@@ -53,6 +53,27 @@
 - [x] Verify session escalation and local session dispatcher tests plus lib
       build.
 
+## Dispatch Result Projection Slice
+
+- [x] Identify carrier result construction sites with implicit default tails or
+      obfuscated terminal payload projection.
+- [x] Replace terminal payload selection with an explicit completion branch.
+- [x] Remove no-op default tails from fully specified carrier
+      `DispatchResult` literals.
+- [x] Verify local session dispatcher and Axon bridge dispatch shim tests plus
+      lib build.
+
+## Resolver Ingress Tuple Source Slice
+
+- [x] Identify resolver-layer tuple ingress that encoded public/system source
+      as `Option<subject>` plus implicit root causal context.
+- [x] Add `InvocationPlanIngress` as a closed source-state enum.
+- [x] Map daemon-system and public-ingress sources to explicit target subject
+      and causal-context bindings.
+- [x] Validate public-ingress subject URA before target construction.
+- [x] Add positive and negative resolver tests for public ingress tuple
+      propagation.
+
 ## Still Required Before Completion
 
 - [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.

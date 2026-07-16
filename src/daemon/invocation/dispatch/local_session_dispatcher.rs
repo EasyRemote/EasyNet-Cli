@@ -381,7 +381,6 @@ impl LocalAxonSessionDispatcher {
             admission_receipt,
             terminal_receipt,
             failure,
-            ..PbDispatchResult::default()
         };
         outbound
             .send_payload(UpPayload::DispatchResult(reply))
@@ -1309,7 +1308,6 @@ impl LocalAxonSessionDispatcher {
                         admission_receipt,
                         terminal_receipt,
                         failure,
-                        ..PbDispatchResult::default()
                     }))
                     .await
                     .map_err(|_| {

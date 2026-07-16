@@ -13,8 +13,11 @@
   empty proof facts.
 - `core/runtime-rs/client-sdk/src/domain/easynet/semantic.rs` contains a
   process-local default signer fallback.
-- `src/daemon/invocation/dispatch/local_runtime_invoker.rs` defaults subject
-  and causal context for local calls; its ingress classification must prove
-  that no external request can reach those defaults.
+- `src/daemon/invocation/dispatch/local_runtime_invoker.rs` still derives
+  daemon-system subject defaults for explicitly classified system calls.
+  `src/daemon/invocation/routing/target.rs` now separates resolver plans into
+  daemon-system and public-ingress tuple sources, but direct
+  `InvocationTarget` construction sites still need migration before RF-8 can
+  close.
 - `src/support/platform/local_daemon_grpc.rs` remains an adapter boundary to
   retire from direct envelope construction in favour of an Axon-owned builder.

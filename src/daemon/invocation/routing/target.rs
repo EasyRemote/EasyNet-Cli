@@ -159,17 +159,72 @@ pub struct InvocationPlan {
     /// Streaming vs single-shot RPC.
     pub call_mode: CallMode,
 
-    /// AXIOM 7-tuple `subject` — the resource URA the invocation
-    /// acts on. Public ingress reads this from signed envelope material when
-    /// available; daemon-local system calls that need descriptor-derived
-    /// subjects use the explicit resolved-target policy state. Per
-    /// **INV-SUBJECT-ENVELOPE**:
-    /// when set, this MUST come from the invocation envelope (signed
-    /// cross-process bytes), NEVER from args. The IPC translator that
-    /// builds this plan reads the signed envelope's subject field;
-    /// future in-process callers supply it explicitly via the
-    /// `with_subject` builder on the resolved target.
-    pub subject: Option<String>,
+    /// Source of tuple authority for the resolved target.
+    ///
+    /// Public ingress carries inspectable signed tuple facts. Daemon-local
+    /// system calls use a named system derivation policy. Keeping this as a
+    /// sum type prevents the resolver from interpreting a missing public
+    /// `subject` or `causal_context` as a valid root invocation.
+    pub ingress: InvocationPlanIngress,
+}
+
+/// Invocation tuple authority available before target resolution.
+///
+/// `DaemonSystem` is the only resolver-level source allowed to derive the
+/// descriptor subject and root causal context. `PublicIngress` must already
+/// contain the caller-visible tuple facts recovered from signed ingress
+/// material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvocationPlanIngress {
+    DaemonSystem,
+    PublicIngress {
+        subject: String,
+        causal_context: CausalContext,
+    },
+}
+
+impl InvocationPlanIngress {
+    #[must_use]
+    pub fn daemon_system() -> Self {
+        Self::DaemonSystem
+    }
+
+    #[must_use]
+    pub fn public_ingress(subject: impl Into<String>, causal_context: CausalContext) -> Self {
+        Self::PublicIngress {
+            subject: subject.into(),
+            causal_context,
+        }
+    }
+
+    fn into_target_bindings(self) -> anyhow::Result<(InvocationSubject, InvocationCausalContext)> {
+        match self {
+            Self::DaemonSystem => Ok((
+                InvocationSubject::daemon_system_derived(),
+                InvocationCausalContext::daemon_system_root(),
+            )),
+            Self::PublicIngress {
+                subject,
+                causal_context,
+            } => {
+                let subject = checked_public_subject(subject)?;
+                Ok((
+                    InvocationSubject::explicit(subject),
+                    InvocationCausalContext::explicit(causal_context),
+                ))
+            }
+        }
+    }
+}
+
+fn checked_public_subject(subject: String) -> anyhow::Result<String> {
+    let subject = subject.trim();
+    if subject.is_empty() {
+        anyhow::bail!("public invocation ingress subject must not be empty");
+    }
+    crate::core::ura::parse_ura(subject)
+        .map_err(|err| anyhow::anyhow!("public invocation ingress subject is not a URA: {err}"))?;
+    Ok(subject.to_string())
 }
 
 /// Explicit subject binding state for a daemon-local runtime dispatch.
@@ -192,13 +247,6 @@ impl InvocationSubject {
     #[must_use]
     pub fn daemon_system_derived() -> Self {
         Self::DaemonSystemDerived
-    }
-
-    #[must_use]
-    pub fn from_public_ingress(subject: Option<String>) -> Self {
-        subject
-            .map(Self::Explicit)
-            .unwrap_or(Self::DaemonSystemDerived)
     }
 
     #[must_use]
@@ -344,13 +392,14 @@ impl TargetResolver for LocalNodeResolver {
             Some(node) if node == &self.local_node => TargetScope::Local,
             Some(node) => TargetScope::Remote { node: node.clone() },
         };
+        let (subject, causal_context) = plan.ingress.into_target_bindings()?;
         Ok(InvocationTarget {
             scope,
             ability: plan.ability,
             normalized_args: plan.args,
             call_mode: plan.call_mode,
-            subject: InvocationSubject::from_public_ingress(plan.subject),
-            causal_context: InvocationCausalContext::daemon_system_root(),
+            subject,
+            causal_context,
             request_metadata: HashMap::new(),
         })
     }
@@ -385,7 +434,7 @@ mod tests {
             args: json!({}),
             target_node_hint: hint.map(NodeId::new),
             call_mode: CallMode::Rpc,
-            subject: None,
+            ingress: InvocationPlanIngress::daemon_system(),
         }
     }
 
@@ -438,32 +487,60 @@ mod tests {
             args: json!({"prompt": "hello", "count": 3}),
             target_node_hint: None,
             call_mode: CallMode::Rpc,
-            subject: None,
+            ingress: InvocationPlanIngress::daemon_system(),
         };
         let t = r.resolve(plan).unwrap();
         assert_eq!(t.normalized_args, json!({"prompt": "hello", "count": 3}));
     }
 
     #[test]
-    fn resolver_threads_subject_from_plan_to_target() {
-        // INV-SUBJECT-ENVELOPE: when the IPC translator built a
-        // plan with a subject (read from the signed envelope), the
-        // resolver MUST surface it on the resolved target so the
-        // downstream `register_*_with_envelope` handler can read
-        // it. Dropping it here would force handlers back to args
-        // and break the invariant in flight.
+    fn resolver_threads_public_ingress_tuple_context_to_target() {
+        // INV-SUBJECT-ENVELOPE: when the IPC translator builds a
+        // public-ingress plan from signed material, the resolver MUST
+        // surface both subject and causal context on the resolved
+        // target. Dropping either would force handlers back to args or
+        // hidden root defaults and break the seven-tuple invariant.
+        let r = LocalNodeResolver::new(NodeId::new("self"));
+        let causal_context = CausalContext::None;
+        let plan = InvocationPlan {
+            ability: "camera.snapshot".into(),
+            args: json!({}),
+            target_node_hint: None,
+            call_mode: CallMode::Rpc,
+            ingress: InvocationPlanIngress::public_ingress(
+                "easynet:///r/acme/resource/01CAM",
+                causal_context.clone(),
+            ),
+        };
+        let t = r.resolve(plan).unwrap();
+        assert_eq!(
+            t.subject.as_deref(),
+            Some("easynet:///r/acme/resource/01CAM")
+        );
+        assert_eq!(
+            t.causal_context,
+            InvocationCausalContext::explicit(causal_context)
+        );
+    }
+
+    #[test]
+    fn resolver_rejects_public_ingress_without_valid_subject() {
         let r = LocalNodeResolver::new(NodeId::new("self"));
         let plan = InvocationPlan {
             ability: "camera.snapshot".into(),
             args: json!({}),
             target_node_hint: None,
             call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01CAM".into()),
+            ingress: InvocationPlanIngress::public_ingress("not a ura", CausalContext::None),
         };
-        let t = r.resolve(plan).unwrap();
-        assert_eq!(
-            t.subject.as_deref(),
-            Some("easynet:///r/acme/resource/01CAM")
+
+        let err = r
+            .resolve(plan)
+            .expect_err("invalid public subject must fail");
+        assert!(
+            err.to_string()
+                .contains("public invocation ingress subject"),
+            "{err}"
         );
     }
 

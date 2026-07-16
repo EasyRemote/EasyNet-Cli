@@ -299,9 +299,11 @@ async fn drain_to_outcome(handle: InvocationHandle) -> RpcDispatchOutcome {
             RpcDispatchOutcome {
                 invocation_id,
                 state: finalized.terminal_state,
-                payload_bytes: completed
-                    .then(|| finalized.output().to_vec())
-                    .unwrap_or_default(),
+                payload_bytes: if completed {
+                    finalized.output().to_vec()
+                } else {
+                    Vec::new()
+                },
                 error: finalized.failure,
                 admission_receipt: Some(finalized.admission_receipt),
                 terminal_receipt: Some(finalized.terminal_receipt),

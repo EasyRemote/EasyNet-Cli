@@ -91,3 +91,40 @@ The session outbox ready-hook list is named as `SessionReadyHook` and
 `SessionReadyHooks`; the outbox still owns hook execution after a live sender is
 published, but the public lifecycle field no longer exposes nested collection
 mechanics as its type identity.
+
+## Current Slice: Dispatch Result Projection
+
+Owner: EasyNet-Cli daemon Axon bridge and local session dispatch.
+
+Axon finalization and carrier-v1 session results project the same canonical
+result facts: call identity, terminal state, completion payload, failure text,
+and admission/terminal receipts. Those facts must be explicit at the projection
+boundary so a result literal cannot silently inherit default receipt or failure
+fields.
+
+The bridge now expresses completion payload selection as an explicit terminal
+state branch, and session dispatch result literals enumerate every carrier
+field without no-op default tails. This is a local projection cleanup only; it
+does not change the canonical result model or introduce a compatibility path.
+
+## Current Slice: Resolver Ingress Tuple Source
+
+Owner: EasyNet-Cli daemon invocation routing.
+
+Target resolution is the first daemon policy boundary that can distinguish a
+daemon-local system call from a public ingress call. Those sources cannot share
+an `Option<subject>` shape because absence means different things: system calls
+may use a named descriptor-derived subject policy, while public ingress must
+already carry the signed subject and causal context.
+
+`InvocationPlanIngress` now models that source as a closed enum:
+
+- `DaemonSystem` maps to the explicit daemon-system subject and root causal
+  derivation policy.
+- `PublicIngress` requires an inspectable subject and causal context recovered
+  from signed ingress material before target resolution.
+
+The resolver validates public-ingress subjects as URAs and refuses to interpret
+an invalid or absent public subject as daemon-system derivation. This narrows
+RF-8 at the resolver boundary; direct `InvocationTarget` construction sites
+remain to migrate before the fork is closed.

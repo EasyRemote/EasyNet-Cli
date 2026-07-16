@@ -24,3 +24,10 @@
 - Reverse session escalation boxes canonical `InvokeResponse` replies because
   they carry proof material and should not define the fixed size of every
   control reply slot. Ready hooks are named as session outbox lifecycle types.
+- Dispatch result projection must enumerate canonical carrier fields at the
+  bridge/session boundary. No-op default tails are removed because they obscure
+  whether receipt and failure fields are intentionally projected.
+- Resolver plans use `InvocationPlanIngress` rather than `Option<subject>`
+  because public ingress and daemon-system calls have different authority
+  sources. Only the daemon-system variant may select root causal context and
+  descriptor-derived subject policy.

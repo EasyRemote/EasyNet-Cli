@@ -83,3 +83,38 @@ Commands run on 2026-07-17:
 
 This evidence verifies only the session escalation reply ownership slice. It
 does not prove SPEC completion.
+
+## Dispatch Result Projection Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo test -q daemon::invocation::dispatch::local_session_dispatcher::tests --lib --features axon-pb`:
+  passed, 16 tests.
+- `cargo test -q daemon::axon_bridge::dispatch_shim --lib --features axon-pb`:
+  passed, 10 tests.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. The previous
+  `src/daemon/axon_bridge/dispatch_shim.rs::drain_to_outcome`
+  `obfuscated_if_else` finding and two previous carrier result
+  `needless_update` findings in
+  `src/daemon/invocation/dispatch/local_session_dispatcher.rs` are removed.
+
+This evidence verifies only the dispatch result projection slice. It does not
+prove SPEC completion.
+
+## Resolver Ingress Tuple Source Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: initially failed on formatting after the new
+  negative test; `cargo fmt --all` was applied.
+- `cargo test -q daemon::invocation::routing::target --lib --features axon-pb`:
+  passed, 8 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `target.rs` finding was reported.
+
+This evidence verifies only the resolver ingress tuple-source slice. It does
+not prove RF-8 or SPEC completion.
