@@ -87,7 +87,6 @@ use crate::daemon::execution::mission::directory::ABILITY_MANIFEST_SUFFIX;
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
 };
-use crate::daemon::persistence::agent_registry as agents;
 
 /// Wire name of the publish meta-ability. Pinned because the
 /// curator session in `mission.think` calls it by string; a rename
@@ -525,6 +524,7 @@ mod tests {
     }
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
+    use crate::daemon::persistence::agent_registry as agents;
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
 
     /// Materialise a throwaway agent inside a `HomeGuard`-isolated

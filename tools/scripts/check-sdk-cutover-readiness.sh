@@ -3,6 +3,8 @@ set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+CONFORMANCE_REPORTS_SCRIPT="${SDK_CUTOVER_CONFORMANCE_REPORTS_SCRIPT:-$SELF_DIR/check-sdk-conformance-reports.sh}"
+PARITY_MATRIX_SCRIPT="${SDK_CUTOVER_PARITY_MATRIX_SCRIPT:-$SELF_DIR/check-sdk-parity-matrix.sh}"
 
 run_gate() {
   local name="$1"
@@ -16,6 +18,29 @@ run_gate() {
     echo "failed: $name (exit $rc)" >&2
     return "$rc"
   fi
+}
+
+run_sdk_conformance_live_gates() {
+  local live_results_dir="$1"
+  local status=0
+  run_gate "SDK conformance reports" env \
+    SDK_CONFORMANCE_RESULT_DIR="$live_results_dir" \
+    bash "$CONFORMANCE_REPORTS_SCRIPT" || status=1
+  run_gate "SDK live parity matrix" env \
+    EASYNET_SDK_PARITY_RESULTS_DIR="$live_results_dir" \
+    EASYNET_SDK_PARITY_ALLOW_SNAPSHOT_RESULTS=1 \
+    bash "$PARITY_MATRIX_SCRIPT" || status=1
+  return "$status"
+}
+
+allocate_live_results_dir() {
+  if [[ -n "${SDK_CUTOVER_LIVE_RESULTS_DIR:-}" ]]; then
+    mkdir -p "$SDK_CUTOVER_LIVE_RESULTS_DIR"
+    printf '%s\n' "$SDK_CUTOVER_LIVE_RESULTS_DIR"
+    return 0
+  fi
+  mkdir -p "$REPO_ROOT/target"
+  mktemp -d "$REPO_ROOT/target/sdk-conformance-live-results.cutover.XXXXXX"
 }
 
 make_easyremote_good() {
@@ -75,6 +100,46 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "Python SDK static contract self-test" bash "$SELF_DIR/check-python-sdk-static-contract.sh" --self-test
   run_gate "release package contract self-test" bash "$REPO_ROOT/tests/scripts/test_check_release_package_contract.sh"
 
+  focused_live_results="$tmp/cutover-live-results"
+  stale_default="$tmp/sdk-conformance-live-results"
+  mkdir -p "$stale_default"
+  printf 'stale\n' >"$stale_default/rust.json"
+  cat >"$tmp/stub-conformance-reports.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${SDK_CONFORMANCE_RESULT_DIR:-}" ]]; then
+  echo "missing SDK_CONFORMANCE_RESULT_DIR" >&2
+  exit 1
+fi
+mkdir -p "$SDK_CONFORMANCE_RESULT_DIR"
+printf 'fresh\n' >"$SDK_CONFORMANCE_RESULT_DIR/fresh-live-result"
+EOF
+  cat >"$tmp/stub-parity-matrix.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -z "${EASYNET_SDK_PARITY_RESULTS_DIR:-}" ]]; then
+  echo "missing EASYNET_SDK_PARITY_RESULTS_DIR" >&2
+  exit 1
+fi
+test -f "$EASYNET_SDK_PARITY_RESULTS_DIR/fresh-live-result"
+if [[ -f "$EASYNET_SDK_PARITY_RESULTS_DIR/rust.json" ]]; then
+  echo "stale default live result was used" >&2
+  exit 1
+fi
+EOF
+  chmod +x "$tmp/stub-conformance-reports.sh" "$tmp/stub-parity-matrix.sh"
+  CONFORMANCE_REPORTS_SCRIPT="$tmp/stub-conformance-reports.sh" \
+    PARITY_MATRIX_SCRIPT="$tmp/stub-parity-matrix.sh" \
+    run_sdk_conformance_live_gates "$focused_live_results"
+  if [[ ! -f "$focused_live_results/fresh-live-result" ]]; then
+    echo "self-test expected focused live result to be written" >&2
+    exit 1
+  fi
+  if [[ ! -f "$stale_default/rust.json" ]]; then
+    echo "self-test expected stale default fixture to remain outside focused run" >&2
+    exit 1
+  fi
+
   easyremote_good="$tmp/EasyRemoteGood"
   backend_bad="$tmp/EasyNetBad"
   make_easyremote_good "$easyremote_good"
@@ -92,6 +157,7 @@ fi
 
 EASYREMOTE_ROOT="${EASYNET_EASYREMOTE_ROOT:-$REPO_ROOT/../EasyRemote}"
 BACKEND_ROOT="${EASYNET_BACKEND_ROOT:-$REPO_ROOT/../EasyNet}"
+CUTOVER_LIVE_RESULTS_DIR="$(allocate_live_results_dir)"
 
 status=0
 
@@ -100,11 +166,7 @@ run_gate "SDK parity matrix" bash "$SELF_DIR/check-sdk-parity-matrix.sh" --self-
 run_gate "SDK completion matrix" bash "$SELF_DIR/check-sdk-completion-audit.sh" --matrix-only || status=1
 run_gate "SDK canonical public API" bash "$SELF_DIR/check-sdk-canonical-public-api.sh" || status=1
 run_gate "SDK product neutrality" bash "$SELF_DIR/check-sdk-product-neutrality.sh" || status=1
-run_gate "SDK conformance reports" bash "$SELF_DIR/check-sdk-conformance-reports.sh" || status=1
-run_gate "SDK live parity matrix" env \
-  EASYNET_SDK_PARITY_RESULTS_DIR="$REPO_ROOT/target/sdk-conformance-live-results" \
-  EASYNET_SDK_PARITY_ALLOW_SNAPSHOT_RESULTS=1 \
-  bash "$SELF_DIR/check-sdk-parity-matrix.sh" || status=1
+run_sdk_conformance_live_gates "$CUTOVER_LIVE_RESULTS_DIR" || status=1
 run_gate "generic FFI ABI v5 exact surface" bash "$SELF_DIR/check-ffi-abi-v5-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1
