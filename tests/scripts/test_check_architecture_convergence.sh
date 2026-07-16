@@ -338,6 +338,7 @@ struct AgentHostedPlacement {
 }
 
 struct AgentRegisteredWorkspace;
+struct AgentRegisteredRuntimeProjection;
 enum AgentSkillLayout {
     ClaudeCode,
     Codex,
@@ -356,6 +357,12 @@ impl AgentRegisteredWorkspace {
 
     fn skill_layout(&self) -> AgentSkillLayout {
         AgentSkillLayout::ClaudeCode
+    }
+}
+
+impl AgentRegisteredRuntimeProjection {
+    fn ability_manifest_path(&self, ability: &str) -> Option<PathBuf> {
+        Some(PathBuf::from("abilities").join(format!("{ability}.ability.toml")))
     }
 }
 
@@ -458,6 +465,10 @@ impl AgentAggregateSnapshot {
 
     fn registered_agent_workspace(&self, owner_id: &str, operation: &str) -> anyhow::Result<AgentRegisteredWorkspace> {
         Ok(AgentRegisteredWorkspace)
+    }
+
+    fn registered_agent_runtime_projection(&self, owner_id: &str) -> Option<AgentRegisteredRuntimeProjection> {
+        Some(AgentRegisteredRuntimeProjection)
     }
 
     fn registered_agents(&self) -> impl Iterator<Item = (&str, &AgentEntry)> {
@@ -680,9 +691,49 @@ fn run_hosted_agent_advertise_prelude() -> anyhow::Result<()> {
 }
 
 fn advertise_hosted_agent_entry(entry: &AgentHostedAdvertiseEntry) {
-    send_advertise_agent_prelude(entry.agent_ura());
-	}
-	EOF
+    let plan = HostedAgentPreludePublicationPlan::prepare(entry.agent_ura())?;
+    send_advertise_agent_prelude(entry.agent_ura(), plan.generation());
+    let mut advertise_ctx = HostedAgentAbilityAdvertiseContext;
+    advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &plan);
+}
+
+struct HostedAgentPreludePublicationPlan;
+
+impl HostedAgentPreludePublicationPlan {
+    fn prepare(agent_ura: &str) -> anyhow::Result<Self> {
+        owner_projection::prepare_and_persist(agent_ura)?;
+        Ok(Self)
+    }
+
+    fn generation(&self) -> u64 {
+        2
+    }
+}
+
+struct HostedAgentAbilityAdvertiseContext;
+
+fn advertise_hosted_agent_abilities(
+    ctx: &mut HostedAgentAbilityAdvertiseContext,
+    entry: &AgentHostedAdvertiseEntry,
+    plan: &HostedAgentPreludePublicationPlan,
+) {
+    send_prepared_advertise_abilities_prelude(ctx, entry.agent_ura(), plan);
+}
+
+fn send_advertise_agent_prelude(agent_ura: &str, generation: u64) {
+    let body = json!({
+        "agent_ura": agent_ura,
+        "generation": generation,
+    });
+}
+
+fn send_prepared_advertise_abilities_prelude(
+    ctx: &mut HostedAgentAbilityAdvertiseContext,
+    agent_ura: &str,
+    plan: &HostedAgentPreludePublicationPlan,
+) {
+}
+EOF
 	  cat >"$CLI/src/daemon/ability/builtins/resources/skills/list.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentHostedSkillOwnerProjection,
@@ -692,7 +743,7 @@ fn handle(args: Value) -> anyhow::Result<Value> {
     let snapshot = AgentAggregateRepository::load_snapshot()?;
     let hosted_skill_owners = snapshot.hosted_skill_owner_projection();
     let scope = SkillListScope::from_args(&args, &hosted_skill_owners)?;
-    let rows = SkillInventoryBuilder::new(&snapshot.registry, &scope).collect()?;
+    let rows = SkillInventoryBuilder::new(snapshot.skill_inventory_projection(), &scope).collect()?;
     let items: Vec<Value> = rows
         .into_iter()
         .map(|row| {
@@ -863,6 +914,10 @@ struct MissionRunAggregate {
     meta: MissionRunMeta,
 }
 
+pub struct MissionRunOpts {
+    pub run_timeout: Option<std::time::Duration>,
+}
+
 impl MissionRunAggregate {
     fn apply_terminal(&mut self, terminal: MissionRunMeta) {
         self.meta = terminal;
@@ -882,6 +937,10 @@ fn find_implicit_agent_fallback(ir: &MissionIr) -> anyhow::Result<Option<Implici
     let snapshot = AgentAggregateRepository::load_snapshot()?;
     let registered = snapshot.registered_agent_surface_names();
     Ok(None)
+}
+
+fn run_mission_inproc(opts: MissionRunOpts) {
+    execute_with_endpoint_for_trace_with_timeout(opts.run_timeout);
 }
 EOF
   cat >"$CLI/src/daemon/execution/mission/invocation_gateway.rs" <<'EOF'
@@ -2050,6 +2109,24 @@ EOF
 bash -n "$CHECK"
 make_good_fixture
 expect_pass "canonical fixture"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/mission/executors"
+cat >"$CLI/src/daemon/execution/mission/executors/eal.rs" <<'EOF'
+use std::time::Duration;
+
+fn run_eal_exec(timeout: Option<Duration>) {
+    let _ = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+    run_mission_inproc(source, MissionRunOpts {
+        source_label: Some("ability:eal".to_string()),
+        trace_path: None,
+        invocation_context: None,
+    });
+}
+EOF
+expect_fail \
+  "EAL executor run timeout fork" \
+  "R63_EAL_EXEC_RUN_TIMEOUT_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
@@ -3748,6 +3825,18 @@ fn recover_forget_transactions() -> anyhow::Result<()> {
 EOF
 expect_fail \
   "teach registry projection read owner fork" \
+  "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/governance/teach.rs" <<'EOF'
+fn forget() -> anyhow::Result<()> {
+    let snapshot = AgentAggregateRepository::load_snapshot()?;
+    let agent = snapshot.registry.agents.get("apprentice");
+    Ok(())
+}
+EOF
+expect_fail \
+  "teach forget raw runtime registry projection fork" \
   "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK"
 
 make_good_fixture

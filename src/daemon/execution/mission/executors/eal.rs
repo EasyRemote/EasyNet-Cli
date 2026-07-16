@@ -108,7 +108,7 @@ pub fn run_eal_exec_with_invocation_context(
     )?;
 
     let started = Instant::now();
-    let _ = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+    let effective_timeout = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
 
     // Hand to the canonical EAL entry point. We deliberately do NOT
     // re-implement compile/dispatch here — that would create a second
@@ -121,11 +121,7 @@ pub fn run_eal_exec_with_invocation_context(
     // `~/.easynet/missions/runs/*/meta.json` can tell which runs
     // came from a curator-published EAL ability vs a hand-rolled
     // mission.
-    let opts = MissionRunOpts {
-        source_label: Some("ability:eal".to_string()),
-        trace_path: None,
-        invocation_context: parent_invocation,
-    };
+    let opts = mission_run_opts(parent_invocation, effective_timeout);
     let run = run_mission_inproc(&rendered, opts)
         .map_err(|e| anyhow::anyhow!("eal executor: mission run failed: {e}"))?;
 
@@ -167,6 +163,18 @@ pub fn run_eal_exec_with_invocation_context(
         "elapsed_ms": elapsed_ms,
         "ok": run.ok,
     }))
+}
+
+fn mission_run_opts(
+    invocation_context: Option<ParentInvocationContext>,
+    run_timeout: Duration,
+) -> MissionRunOpts {
+    MissionRunOpts {
+        source_label: Some("ability:eal".to_string()),
+        trace_path: None,
+        invocation_context,
+        run_timeout: Some(run_timeout),
+    }
 }
 
 fn args_with_invocation_context(
@@ -236,6 +244,13 @@ mod tests {
             args[AXON_INVOCATION_CONTEXT_KEY]["subject"],
             "easynet:///r/acme/resource/test"
         );
+    }
+
+    #[test]
+    fn mission_opts_carry_manifest_timeout_as_run_deadline() {
+        let opts = mission_run_opts(None, Duration::from_secs(7));
+        assert_eq!(opts.run_timeout, Some(Duration::from_secs(7)));
+        assert_eq!(opts.source_label.as_deref(), Some("ability:eal"));
     }
 
     #[test]

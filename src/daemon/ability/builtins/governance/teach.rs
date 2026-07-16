@@ -1258,7 +1258,9 @@ struct AuthorizedForget {
 impl AuthorizedForget {
     fn from_request(env: EnvelopeContext, request: ForgetRequest) -> anyhow::Result<Self> {
         let agent_snapshot = AgentAggregateRepository::load_snapshot()?;
-        let agent_entry_for_runtime = agent_snapshot.registry.agents.get(&request.agent).cloned();
+        let registered_agent = agent_snapshot.registered_agent_runtime_projection(&request.agent);
+        let agent_entry_for_runtime =
+            registered_agent.as_ref().map(|agent| agent.entry().clone());
         let agent_identity =
             hosted_agent_identity_by_name(&agent_snapshot, &request.agent, FORGET)?;
         let agent_ura = agent_identity.agent_ura.to_string();
@@ -1280,15 +1282,9 @@ impl AuthorizedForget {
             &agent_ura,
             FORGET,
         )?;
-        let manifest = agent_snapshot
-            .registry
-            .agents
-            .get(&request.agent)
-            .and_then(|e| e.root_path.as_ref())
-            .map(|root| {
-                root.join("abilities")
-                    .join(format!("{}.ability.toml", request.ability))
-            });
+        let manifest = registered_agent
+            .as_ref()
+            .and_then(|agent| agent.ability_manifest_path(&request.ability));
         Ok(Self {
             request,
             agent_entry_for_runtime,

@@ -289,6 +289,7 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
             // a second mission execution path.
             trace_path: args.trace.clone(),
             invocation_context: None,
+            run_timeout: None,
         },
     )?;
 

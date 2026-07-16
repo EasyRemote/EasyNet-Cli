@@ -119,6 +119,7 @@ mission "watch-stream" {
             source_label: Some("seven-axes-watch-stream.eal".into()),
             trace_path: None,
             invocation_context: None,
+            run_timeout: None,
         },
     )
     .expect("three-step mission runs through the daemon");

@@ -98,6 +98,7 @@ type IrStep = IrCall;
 pub struct RunContext<'a> {
     pub tenant: &'a str,
     pub trace_id: &'a str,
+    pub deadline: Option<Instant>,
 }
 
 pub trait StepDispatcher {
@@ -165,17 +166,18 @@ impl From<Value> for StepDispatchOutcome {
 /// `MissionRunMeta.trace_id`, every child Invocation envelope, and
 /// the on-disk `trace.json` all name the same run. That identity is
 /// operational metadata, not an eighth Invocation tuple field.
-pub fn execute_with_endpoint_for_trace(
+pub fn execute_with_endpoint_for_trace_with_timeout(
     endpoint: &str,
     tenant: &str,
     ir: &MissionIr,
     trace_id: String,
+    run_timeout: Option<Duration>,
 ) -> anyhow::Result<ExecutionReport> {
     let dispatcher = AgentAwareDispatcher::new(
         endpoint,
         crate::support::platform::timeouts::LOCAL_DAEMON_CONNECT_TIMEOUT_MS,
     );
-    execute_with_dispatcher_for_trace(&dispatcher, tenant, ir, trace_id)
+    execute_with_dispatcher_for_trace_with_timeout(&dispatcher, tenant, ir, trace_id, run_timeout)
 }
 
 // ── Core execution engine ──
@@ -204,12 +206,27 @@ pub fn execute_with_dispatcher_for_trace(
     ir: &MissionIr,
     mission_id: String,
 ) -> anyhow::Result<ExecutionReport> {
+    execute_with_dispatcher_for_trace_with_timeout(dispatcher, tenant, ir, mission_id, None)
+}
+
+/// Execute a mission through an injected dispatcher with an optional run-level
+/// timeout. The timeout is converted once into a deadline and each child
+/// dispatch receives only the remaining budget.
+pub fn execute_with_dispatcher_for_trace_with_timeout(
+    dispatcher: &dyn StepDispatcher,
+    tenant: &str,
+    ir: &MissionIr,
+    mission_id: String,
+    run_timeout: Option<Duration>,
+) -> anyhow::Result<ExecutionReport> {
     // One trace id per mission run, equal to the mission id: every
     // lowered invocation envelope carries it, so the daemon ledger can
     // group the run (`easynet invocation trace <mission_id>`).
+    let deadline = run_timeout.and_then(|timeout| Instant::now().checked_add(timeout));
     let run = RunContext {
         tenant,
         trace_id: &mission_id,
+        deadline,
     };
     let mission_start = Instant::now();
     let started_at = now_unix_ms();

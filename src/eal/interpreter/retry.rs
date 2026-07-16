@@ -132,12 +132,27 @@ pub(super) fn execute_step_with_retry(
         } else {
             None
         };
+        let dispatch_timeout_ms = match effective_dispatch_timeout_ms(step_timeout_ms, run.deadline)
+        {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                let rendered = error.to_string();
+                let elapsed_ms = millis_u64(t0.elapsed());
+                return StepExecResult::Error {
+                    message: rendered,
+                    elapsed_ms,
+                    started_at,
+                    retry_count: attempt,
+                    retry_history,
+                };
+            }
+        };
         let res = dispatcher.dispatch(
             run,
             &step.target,
             &step.ability,
             arguments,
-            step_timeout_ms,
+            dispatch_timeout_ms,
             causal_parents,
         );
 
@@ -232,6 +247,26 @@ pub(super) fn execute_step_with_retry(
         retry_count: max_attempts.saturating_sub(1),
         retry_history,
     }
+}
+
+fn effective_dispatch_timeout_ms(
+    step_timeout_ms: Option<u64>,
+    run_deadline: Option<Instant>,
+) -> Result<Option<u64>, EalError> {
+    let Some(deadline) = run_deadline else {
+        return Ok(step_timeout_ms);
+    };
+    let now = Instant::now();
+    if now >= deadline {
+        return Err(EalError::DeadlineExceeded(
+            "mission run timeout expired before dispatch".to_string(),
+        ));
+    }
+    let remaining_ms = millis_u64(deadline.duration_since(now)).max(1);
+    Ok(match step_timeout_ms {
+        Some(step_timeout) => Some(step_timeout.min(remaining_ms)),
+        None => Some(remaining_ms),
+    })
 }
 
 /// Typed outcome of argument resolution. Splits the "upstream was

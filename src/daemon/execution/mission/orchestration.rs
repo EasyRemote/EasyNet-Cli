@@ -30,8 +30,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::Local;
@@ -726,6 +726,11 @@ pub struct MissionRunOpts {
     /// caller/subject/causal tuple while Axon remains the owner of canonical
     /// invocation and receipt construction.
     pub invocation_context: Option<ParentInvocationContext>,
+    /// Optional run-level deadline for manifest-bound mission executions.
+    /// CLI-authored missions normally rely on step-local EAL timeouts; an
+    /// ability manifest's `timeout_seconds` is a public per-invocation SLA and
+    /// must bound the whole embedded mission.
+    pub run_timeout: Option<std::time::Duration>,
 }
 
 /// Result of a mission run. Returned by `run_mission_inproc`.
@@ -882,11 +887,12 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
     let started = std::time::Instant::now();
     let started_at = chrono::Local::now().to_rfc3339();
 
-    let exec = crate::eal::interpreter::execute_with_endpoint_for_trace(
+    let exec = crate::eal::interpreter::execute_with_endpoint_for_trace_with_timeout(
         &state.endpoint,
         tenant,
         &ir,
         run_id.clone(),
+        opts.run_timeout,
     );
 
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -1045,7 +1051,11 @@ fn sanitize_for_path(name: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_string();
-    if s.is_empty() { "mission".into() } else { s }
+    if s.is_empty() {
+        "mission".into()
+    } else {
+        s
+    }
 }
 
 #[cfg(test)]
@@ -1491,6 +1501,7 @@ mod tests {
                 source_label: Some("regression".into()),
                 trace_path: None,
                 invocation_context: None,
+                run_timeout: None,
             },
         );
         let err = result.expect_err("traditional form on agent name must be rejected");

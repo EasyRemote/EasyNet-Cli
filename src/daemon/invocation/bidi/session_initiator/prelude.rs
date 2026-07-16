@@ -376,60 +376,90 @@ async fn advertise_hosted_agent_entry(
     signer: &dyn CanonicalSigner,
 ) -> Result<(), String> {
     let host_for_advertise = caller_node_id.as_deref();
-    send_advertise_agent_prelude(client, entry.agent_ura(), host_for_advertise, signer)
-        .await
-        .map_err(|error| {
-            format!(
-                "advertise hosted agent `{}` failed (code={:?}): {}",
-                entry.agent_ura(),
-                error.code(),
-                error.message()
-            )
-        })?;
-    let mut advertise_ctx = HostedAgentAbilityAdvertiseContext {
-        client,
+    let plan = HostedAgentPreludePublicationPlan::prepare(
+        entry.agent_ura(),
         caller_ura,
-        caller_node_id: caller_node_id.as_deref(),
+        host_for_advertise,
         ability_descriptors,
+    )?;
+    send_advertise_agent_prelude(
+        client,
+        entry.agent_ura(),
+        plan.generation(),
+        host_for_advertise,
         signer,
-    };
-    advertise_hosted_agent_abilities(&mut advertise_ctx, entry).await
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "advertise hosted agent `{}` failed (code={:?}): {}",
+            entry.agent_ura(),
+            error.code(),
+            error.message()
+        )
+    })?;
+    let mut advertise_ctx = HostedAgentAbilityAdvertiseContext { client, signer };
+    advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &plan).await
 }
 
 struct HostedAgentAbilityAdvertiseContext<'a> {
     client: &'a mut InvocationClient<Channel>,
-    caller_ura: &'a str,
-    caller_node_id: Option<&'a str>,
-    ability_descriptors: &'a [AbilityDescriptor],
     signer: &'a dyn CanonicalSigner,
+}
+
+struct HostedAgentPreludePublicationPlan {
+    descriptors: Vec<AbilityDescriptor>,
+    publication:
+        crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication,
+}
+
+impl HostedAgentPreludePublicationPlan {
+    fn prepare(
+        agent_ura: &str,
+        host_device_ura: &str,
+        host_node_id: Option<&str>,
+        ability_descriptors: &[AbilityDescriptor],
+    ) -> Result<Self, String> {
+        let descriptors =
+            committed_owner_ability_descriptors(ability_descriptors, agent_ura, host_node_id);
+        let publication =
+            crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
+                agent_ura,
+                host_device_ura,
+                &descriptors,
+            )?;
+        Ok(Self {
+            descriptors,
+            publication,
+        })
+    }
+
+    fn generation(&self) -> u64 {
+        self.publication.generation
+    }
+
+    fn ability_count(&self) -> usize {
+        self.descriptors.len()
+    }
 }
 
 async fn advertise_hosted_agent_abilities(
     ctx: &mut HostedAgentAbilityAdvertiseContext<'_>,
     entry: &AgentHostedAdvertiseEntry,
+    plan: &HostedAgentPreludePublicationPlan,
 ) -> Result<(), String> {
-    let descriptors = committed_owner_ability_descriptors(
-        ctx.ability_descriptors,
-        entry.agent_ura(),
-        ctx.caller_node_id,
-    );
-    if descriptors.is_empty() {
-        return Ok(());
-    }
-
-    let ability_count = descriptors.len();
+    let ability_count = plan.ability_count();
     crate::op_event!(
         component = session,
         kind = advertise_hosted_agent_abilities_prelude_sending,
         agent_ura = entry.agent_ura(),
         ability_count = ability_count,
     );
-    send_advertise_abilities_prelude(
+    send_prepared_advertise_abilities_prelude(
         ctx.client,
         entry.agent_ura(),
-        ctx.caller_ura,
         ctx.signer,
-        &descriptors,
+        &plan.publication,
     )
     .await
     .map_err(|error| {
@@ -517,13 +547,14 @@ fn federation_join_public_key_hex(signer: &dyn CanonicalSigner) -> Result<String
 async fn send_advertise_agent_prelude(
     client: &mut InvocationClient<Channel>,
     agent_ura: &str,
+    generation: u64,
     host_node_id: Option<&str>,
     signer: &dyn CanonicalSigner,
 ) -> Result<(), tonic::Status> {
     let caller_ura = signer.owner_ura();
     let mut body = serde_json::json!({
         "agent_ura": agent_ura,
-        "generation": 1,
+        "generation": generation,
         "signing_authority": {
             "kind": "hosted_by",
             "host_ura": caller_ura,
@@ -566,15 +597,23 @@ async fn send_advertise_abilities_prelude(
             "federation.advertise_abilities prelude projection: {e}"
         ))
     })?;
+    send_prepared_advertise_abilities_prelude(client, owner_ura, signer, &projection).await
+}
 
+async fn send_prepared_advertise_abilities_prelude(
+    client: &mut InvocationClient<Channel>,
+    owner_ura: &str,
+    signer: &dyn CanonicalSigner,
+    projection: &crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication,
+) -> Result<(), tonic::Status> {
     let body = serde_json::json!({
-        "owner_ura": projection.owner_ura,
-        "host_device_ura": projection.host_device_ura,
+        "owner_ura": &projection.owner_ura,
+        "host_device_ura": &projection.host_device_ura,
         "generation": projection.generation,
         "projection_revision": projection.projection_revision,
-        "projection_digest": projection.projection_digest,
+        "projection_digest": &projection.projection_digest,
         "lease_expires_unix_ms": projection.lease_expires_unix_ms,
-        "ability_summaries": projection.ability_summaries,
+        "ability_summaries": &projection.ability_summaries,
     });
     let arguments = serde_json::to_vec(&body).map_err(|e| {
         tonic::Status::internal(format!(
@@ -1157,7 +1196,11 @@ pub(super) fn committed_owner_ability_descriptors(
 
 #[cfg(test)]
 mod tests {
-    use super::{paired_user_trust_present, resolved_public_keys, UserTrustSync};
+    use super::{
+        paired_user_trust_present, resolved_public_keys, HostedAgentPreludePublicationPlan,
+        UserTrustSync,
+    };
+    use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use std::sync::Arc;
@@ -1218,5 +1261,43 @@ mod tests {
             &sync,
             "easynet:///r/realm/user/other"
         ));
+    }
+
+    #[test]
+    fn hosted_agent_prelude_plan_uses_retired_owner_cursor_generation() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let owner = "easynet:///r/realm/agent/dev.anthropic";
+        let host = "easynet:///r/realm/device/n1";
+        let descriptors = vec![AbilityDescriptor::new(
+            "chat",
+            owner,
+            Visibility::Scoped,
+            AdmissionAction::Invoke,
+        )
+        .expect("hosted-agent descriptor")];
+
+        let first = crate::daemon::federation::read_model::owner_projection::prepare_and_persist(
+            owner,
+            host,
+            &descriptors,
+        )
+        .expect("first owner projection");
+        let tombstone =
+            crate::daemon::federation::read_model::owner_projection::prepare_removal_and_persist(
+                owner, host,
+            )
+            .expect("retire owner projection")
+            .expect("active cursor produces tombstone");
+
+        let plan =
+            HostedAgentPreludePublicationPlan::prepare(owner, host, Some("n1"), &descriptors)
+                .expect("recreated hosted-agent plan");
+
+        assert_eq!(first.generation, 1);
+        assert_eq!(tombstone.generation, first.generation);
+        assert!(
+            plan.generation() > tombstone.generation,
+            "same-URA hosted-agent prelude must publish the recreated incarnation generation"
+        );
     }
 }

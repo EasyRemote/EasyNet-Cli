@@ -190,6 +190,7 @@ fn run_run(args: RunArgs) -> anyhow::Result<()> {
             source_label: Some(args.file.clone()),
             trace_path: None,
             invocation_context: None,
+            run_timeout: None,
         },
     )?;
 

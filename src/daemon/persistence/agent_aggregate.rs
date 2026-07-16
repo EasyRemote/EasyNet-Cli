@@ -105,6 +105,17 @@ impl AgentAggregateSnapshot {
             .map(AgentRegisteredAgent::into_workspace)
     }
 
+    pub(crate) fn registered_agent_runtime_projection(
+        &self,
+        owner_id: &str,
+    ) -> Option<AgentRegisteredRuntimeProjection> {
+        self.registry
+            .agents
+            .get(owner_id)
+            .cloned()
+            .map(AgentRegisteredRuntimeProjection::new)
+    }
+
     fn registered_agent(
         &self,
         owner_id: &str,
@@ -314,6 +325,28 @@ impl AgentRegisteredAgent {
 
     fn into_workspace(self) -> AgentRegisteredWorkspace {
         self.workspace
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AgentRegisteredRuntimeProjection {
+    entry: AgentEntry,
+}
+
+impl AgentRegisteredRuntimeProjection {
+    fn new(entry: AgentEntry) -> Self {
+        Self { entry }
+    }
+
+    pub(crate) fn entry(&self) -> &AgentEntry {
+        &self.entry
+    }
+
+    pub(crate) fn ability_manifest_path(&self, ability: &str) -> Option<PathBuf> {
+        self.entry
+            .root_path
+            .as_ref()
+            .map(|root| root.join("abilities").join(format!("{ability}.ability.toml")))
     }
 }
 
@@ -919,6 +952,29 @@ mod tests {
             .registered_agent_workspace("codex", "skill.publish")
             .expect("codex app server owner");
         assert_eq!(codex.skill_layout(), AgentSkillLayout::Codex);
+    }
+
+    #[test]
+    fn registered_agent_runtime_projection_preserves_optional_forget_semantics() {
+        let root = std::env::temp_dir().join("easynet-runtime-agent");
+        let mut entry = AgentEntry::new(AgentType::Codex, None);
+        entry.root_path = Some(root.clone());
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert("codex".to_string(), entry.clone());
+        let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
+
+        let projection = snapshot
+            .registered_agent_runtime_projection("codex")
+            .expect("registered runtime projection");
+
+        assert_eq!(projection.entry().agent_type, entry.agent_type);
+        assert_eq!(
+            projection.ability_manifest_path("quote"),
+            Some(root.join("abilities/quote.ability.toml"))
+        );
+        assert!(snapshot
+            .registered_agent_runtime_projection("missing")
+            .is_none());
     }
 
     #[test]

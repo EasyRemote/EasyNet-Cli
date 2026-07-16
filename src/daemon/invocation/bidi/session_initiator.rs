@@ -2037,13 +2037,13 @@ mod tests {
             join.1.get("public_key_hex").and_then(Value::as_str),
             Some(expected_public_key_hex.as_str())
         );
-        assert!(
-            calls
-                .iter()
-                .any(|(name, body)| name == "federation.advertise_agent"
-                    && body.get("agent_ura").and_then(Value::as_str) == Some(agent_ura)),
-            "hosted agent placement must be advertised before session open: {calls:#?}"
-        );
+        let agent_advertise = calls
+            .iter()
+            .find(|(name, body)| {
+                name == "federation.advertise_agent"
+                    && body.get("agent_ura").and_then(Value::as_str) == Some(agent_ura)
+            })
+            .expect("hosted agent placement must be advertised before session open");
         let agent_projection = calls
             .iter()
             .find(|(name, body)| {
@@ -2057,6 +2057,11 @@ mod tests {
                 .get("host_device_ura")
                 .and_then(Value::as_str),
             Some(device_ura)
+        );
+        assert_eq!(
+            agent_advertise.1.get("generation").and_then(Value::as_u64),
+            agent_projection.1.get("generation").and_then(Value::as_u64),
+            "hosted-agent identity and ability projection must publish one cursor generation"
         );
         let summaries = agent_projection
             .1

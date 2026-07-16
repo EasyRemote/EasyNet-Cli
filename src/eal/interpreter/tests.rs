@@ -33,6 +33,8 @@ mod cases {
         calls: Arc<Mutex<Vec<(String, Instant)>>>,
         /// Record of run trace ids observed by dispatch calls.
         traces: Arc<Mutex<Vec<String>>>,
+        /// Record of dispatch timeout budgets observed by calls.
+        timeouts: Arc<Mutex<Vec<Option<u64>>>>,
     }
 
     impl MockDispatcher {
@@ -44,6 +46,7 @@ mod cases {
                 fail_functions: Arc::new(std::collections::HashSet::new()),
                 calls: Arc::new(Mutex::new(Vec::new())),
                 traces: Arc::new(Mutex::new(Vec::new())),
+                timeouts: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -84,7 +87,7 @@ mod cases {
             _target: &IrTarget,
             ability: &AbilityName,
             _arguments: &Value,
-            _timeout_ms: Option<u64>,
+            timeout_ms: Option<u64>,
             _causal_parents: &[Value],
         ) -> Result<StepDispatchOutcome, EalError> {
             let ability_str = ability.as_str().to_string();
@@ -94,6 +97,7 @@ mod cases {
                 .unwrap()
                 .push((ability_str.clone(), Instant::now()));
             self.traces.lock().unwrap().push(run.trace_id.to_string());
+            self.timeouts.lock().unwrap().push(timeout_ms);
 
             // Simulate work
             if self.delay_ms > 0 {
@@ -131,6 +135,7 @@ mod cases {
                 fail_functions: Arc::clone(&self.fail_functions),
                 calls: Arc::clone(&self.calls),
                 traces: Arc::clone(&self.traces),
+                timeouts: Arc::clone(&self.timeouts),
             }))
         }
     }
@@ -196,6 +201,34 @@ mod cases {
             *observed.lock().unwrap(),
             vec!["run-trace-42".to_string()],
             "child dispatch must carry the caller-owned mission trace id"
+        );
+    }
+
+    #[test]
+    fn run_deadline_bounds_step_dispatch_timeout() {
+        let ir = planner::compile(
+            &parser::parse(r#"mission "deadline" { let r = call "slow.op" on "n1" timeout 120 }"#)
+                .unwrap(),
+        )
+        .unwrap();
+        let dispatcher = MockDispatcher::new(0);
+
+        let report = execute_with_dispatcher_for_trace_with_timeout(
+            &dispatcher,
+            "test",
+            &ir,
+            "deadline-run".into(),
+            Some(Duration::from_millis(500)),
+        )
+        .unwrap();
+
+        assert_eq!(report.steps_failed, 0);
+        let observed = dispatcher.timeouts.lock().unwrap().clone();
+        assert_eq!(observed.len(), 1);
+        let timeout = observed[0].expect("run deadline must produce dispatch timeout");
+        assert!(
+            timeout <= 500 && timeout > 0,
+            "dispatch timeout must be clipped to remaining run deadline, got {timeout}"
         );
     }
 

@@ -4175,6 +4175,25 @@ for registry_consumer, label, minimum_calls in (
 # only the durable Agent registry. Their hosted identity checks remain paired
 # snapshot reads elsewhere; these registry-only paths must not reopen
 # agents.json or turn a malformed identity file into a recovery blocker.
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    for token, detail in (
+        (
+            "struct AgentRegisteredRuntimeProjection",
+            "Agent aggregate must expose the registered runtime projection type for teach forget convergence",
+        ),
+        (
+            "fn registered_agent_runtime_projection(",
+            "Agent aggregate snapshot must own optional registered runtime lookup",
+        ),
+        (
+            "fn ability_manifest_path(&self, ability: &str) -> Option<PathBuf>",
+            "registered runtime projection must own teach ability manifest path derivation",
+        ),
+    ):
+        if token not in text:
+            add("R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK", agent_aggregate, 1, detail)
+
 teach_registry_owners = (
     (
         "resolve_owner_manifest",
@@ -4188,6 +4207,13 @@ teach_registry_owners = (
 if governance_teach.exists():
     text = source(governance_teach)
     production_text = text.split("#[cfg(test)]", 1)[0]
+    if "snapshot.registry.agents" in production_text:
+        add(
+            "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK",
+            governance_teach,
+            line_number(production_text, production_text.index("snapshot.registry.agents")),
+            "teach governance production code must consume Agent aggregate runtime projections instead of raw registry rows",
+        )
     if any(f"fn {function_name}" in production_text for function_name, _ in teach_registry_owners):
         for function_name, label in teach_registry_owners:
             body = brace_function_body(production_text, rf"fn\s+{function_name}\s*\(")
@@ -5060,6 +5086,165 @@ for path, surface in (
             1,
             f"{surface} selected-route dispatch must pass live catalog and call mode into RuntimeBoundAbility",
         )
+
+# Rule 62: hosted-agent session prelude has one incarnation generation source.
+# Same-URA Agent recreation is fenced by the durable owner projection cursor.
+# The identity advertisement (`federation.advertise_agent`) and the ability
+# projection (`federation.advertise_abilities`) must consume that cursor-backed
+# generation instead of reviving a local constant in the boot/session path.
+session_prelude = cli_root / "src/daemon/invocation/bidi/session_initiator/prelude.rs"
+if session_prelude.exists():
+    text = source(session_prelude)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    advertise_entry = rust_method_body(production_text, "advertise_hosted_agent_entry")
+    if advertise_entry is None:
+        add(
+            "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
+            session_prelude,
+            1,
+            "hosted-agent prelude must have one publication entrypoint",
+        )
+    else:
+        _, body = advertise_entry
+        for token, detail in (
+            (
+                "HostedAgentPreludePublicationPlan::prepare",
+                "hosted-agent prelude must prepare the owner cursor before identity advertisement",
+            ),
+            (
+                "plan.generation()",
+                "identity advertisement must use the prepared owner cursor generation",
+            ),
+            (
+                "advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &plan)",
+                "ability projection must consume the same prepared publication plan",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
+                    session_prelude,
+                    line_number(production_text, advertise_entry[0]),
+                    detail,
+                )
+    advertise_agent = rust_method_body(production_text, "send_advertise_agent_prelude")
+    if advertise_agent is None:
+        add(
+            "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
+            session_prelude,
+            1,
+            "hosted-agent identity serializer is missing",
+        )
+    else:
+        offset, body = advertise_agent
+        if re.search(r'"generation"\s*:\s*1\b', body):
+            add(
+                "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
+                session_prelude,
+                line_number(production_text, offset),
+                "hosted-agent identity advertisement must not hard-code generation 1",
+            )
+    if not re.search(
+        r"fn\s+send_advertise_agent_prelude\s*\([^)]*generation\s*:\s*u64",
+        production_text,
+        re.S,
+    ):
+        add(
+            "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
+            session_prelude,
+            1,
+            "hosted-agent identity serializer must receive generation as an explicit typed parameter",
+        )
+
+# Rule 63: manifest-bound EAL exec has a real run-level timeout. The
+# `[exec] kind = "eal"` timeout is a public ability SLA, not a local variable
+# to compute and discard. The canonical mission runner owns the deadline and
+# the interpreter clips child dispatch timeouts to the remaining run budget.
+eal_executor = cli_root / "src/daemon/execution/mission/executors/eal.rs"
+mission_orchestration = cli_root / "src/daemon/execution/mission/orchestration.rs"
+eal_interpreter = cli_root / "src/eal/interpreter/mod.rs"
+eal_retry = cli_root / "src/eal/interpreter/retry.rs"
+if eal_executor.exists():
+    text = source(eal_executor)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    discarded_timeout = re.search(r"let\s+_\s*=\s*timeout\s*\.", production_text)
+    if discarded_timeout:
+        add(
+            "R63_EAL_EXEC_RUN_TIMEOUT_FORK",
+            eal_executor,
+            line_number(production_text, discarded_timeout.start()),
+            "EAL executor must not discard the manifest timeout",
+        )
+    for token, detail in (
+        (
+            "let effective_timeout = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS))",
+            "EAL executor must materialize one effective timeout",
+        ),
+        (
+            "mission_run_opts(parent_invocation, effective_timeout)",
+            "EAL executor must pass the effective timeout into mission opts",
+        ),
+        (
+            "run_timeout: Some(run_timeout)",
+            "EAL mission opts must carry the manifest timeout as a run deadline",
+        ),
+    ):
+        if token not in production_text:
+            add("R63_EAL_EXEC_RUN_TIMEOUT_FORK", eal_executor, 1, detail)
+if mission_orchestration.exists():
+    text = source(mission_orchestration).split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "pub run_timeout: Option<std::time::Duration>",
+            "MissionRunOpts must expose a run-level timeout for manifest executors",
+        ),
+        (
+            "execute_with_endpoint_for_trace_with_timeout",
+            "canonical mission runner must pass run timeout into the interpreter",
+        ),
+        (
+            "opts.run_timeout",
+            "canonical mission runner must consume MissionRunOpts.run_timeout",
+        ),
+    ):
+        if token not in text:
+            add("R63_EAL_EXEC_RUN_TIMEOUT_FORK", mission_orchestration, 1, detail)
+if eal_interpreter.exists():
+    text = source(eal_interpreter).split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "pub deadline: Option<Instant>",
+            "RunContext must carry the mission deadline to child dispatch",
+        ),
+        (
+            "execute_with_dispatcher_for_trace_with_timeout",
+            "interpreter must expose the deadline-aware execution path",
+        ),
+        (
+            "Instant::now().checked_add(timeout)",
+            "interpreter must convert run timeout into a fixed deadline once",
+        ),
+    ):
+        if token not in text:
+            add("R63_EAL_EXEC_RUN_TIMEOUT_FORK", eal_interpreter, 1, detail)
+if eal_retry.exists():
+    text = source(eal_retry).split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "effective_dispatch_timeout_ms(step_timeout_ms, run.deadline)",
+            "retry layer must combine step timeout with remaining run deadline",
+        ),
+        (
+            "EalError::DeadlineExceeded",
+            "expired run deadline must fail closed as a typed timeout",
+        ),
+        (
+            "step_timeout.min(remaining_ms)",
+            "child dispatch timeout must be clipped to the remaining run deadline",
+        ),
+    ):
+        if token not in text:
+            add("R63_EAL_EXEC_RUN_TIMEOUT_FORK", eal_retry, 1, detail)
 
 
 if violations:

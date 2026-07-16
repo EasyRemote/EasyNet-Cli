@@ -137,6 +137,7 @@ fn run_handler(args: Value) -> anyhow::Result<Value> {
         source_label: Some(label),
         trace_path: None,
         invocation_context: None,
+        run_timeout: None,
     };
 
     let result =
