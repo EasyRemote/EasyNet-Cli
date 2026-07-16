@@ -202,6 +202,9 @@ class BidiTests(unittest.TestCase):
         self.assertEqual(transport.cancel_reason, "client stop")
         with self.assertRaises(SDKError):
             session.close_send()
+        session.close()
+        self.assertTrue(transport.closed)
+        self.assertEqual(session.state, BidiState.CLOSED)
 
     def test_cancel_rejects_terminal_outcome(self) -> None:
         transport = MemoryBidiTransport()

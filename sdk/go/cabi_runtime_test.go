@@ -76,6 +76,16 @@ func TestCABIBidiFrameJSONProjectsSDKFramesToFFIWire(t *testing.T) {
 	}
 }
 
+func TestCABIBidiFrameJSONRejectsLegacyBinaryChunkKind(t *testing.T) {
+	_, err := cabiBidiFrameJSON([]byte(`{"sequence":1,"kind":"binary_chunk","stream_id":1,"payload_base64":"aGVsbG8="}`))
+	if err == nil {
+		t.Fatalf("cabiBidiFrameJSON accepted legacy binary_chunk kind")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestProjectCABIOrderedEventKeepsCanonicalBidiReceipts(t *testing.T) {
 	var next uint64
 	raw := []byte(`{
@@ -154,14 +164,14 @@ func TestProjectCABIOrderedEventKeepsCanonicalBidiReceipts(t *testing.T) {
 	}
 }
 
-func TestProjectCABIOrderedEventCanonicalizesBidiBinaryChunkAsDataFrame(t *testing.T) {
+func TestProjectCABIOrderedEventKeepsCanonicalDataFrame(t *testing.T) {
 	var next uint64
 	projected, err := projectCABIOrderedEvent([]byte(`{
 		"ok": true,
-		"kind": "binary_chunk",
+		"kind": "data",
 		"sequence": 5,
 		"stream_id": 1,
-		"data_base64": "aGVsbG8=",
+		"payload_base64": "aGVsbG8=",
 		"terminal": false
 	}`), func(observed *uint64) uint64 {
 		if observed == nil {
@@ -180,6 +190,9 @@ func TestProjectCABIOrderedEventCanonicalizesBidiBinaryChunkAsDataFrame(t *testi
 	}
 	if projectedJSON["kind"] != "data" || projectedJSON["payload_base64"] != "aGVsbG8=" {
 		t.Fatalf("projected canonical data frame mismatch: %#v", projectedJSON)
+	}
+	if _, hasLegacyData := projectedJSON["data_base64"]; hasLegacyData {
+		t.Fatalf("legacy data_base64 was preserved in SDK projection: %#v", projectedJSON)
 	}
 	frame, err := NewBidiFrameFromJSON(projected)
 	if err != nil {

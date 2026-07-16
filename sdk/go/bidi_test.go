@@ -270,6 +270,12 @@ func TestBidiCancelIsNonTerminalRequest(t *testing.T) {
 	if _, err := session.CloseSend(context.Background()); err == nil {
 		t.Fatalf("CloseSend succeeded after cancel")
 	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close after cancel request: %v", err)
+	}
+	if !transport.closed || session.State() != BidiClosed {
+		t.Fatalf("bidi close after cancel did not release transport: closed=%v state=%s", transport.closed, session.State())
+	}
 }
 
 func TestBidiCancelRejectsTerminalOutcome(t *testing.T) {

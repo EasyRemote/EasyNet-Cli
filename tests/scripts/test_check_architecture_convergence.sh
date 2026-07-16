@@ -1221,6 +1221,51 @@ expect_fail \
   "R11_STREAM_BIDI_RECEIPT_ALIAS"
 
 make_good_fixture
+mkdir -p "$CLI/src/ffi/invocation"
+cat >"$CLI/src/ffi/invocation/mod.rs" <<'EOF'
+fn stream_chunk_json() -> serde_json::Value {
+    serde_json::json!({
+        "event": "chunk",
+        "content_type": "application/json",
+    })
+}
+EOF
+expect_fail \
+  "C ABI stream callback alias" \
+  "R30_SDK_STREAM_BIDI_CALLBACK_ALIAS"
+
+make_good_fixture
+cat >"$CLI/sdk/go/cabi_runtime.go" <<'EOF'
+func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, useObservedSequence bool) ([]byte, error) {
+    event := map[string]any{}
+    if data, ok := event["data_base64"]; ok {
+        event["payload_base64"] = data
+    }
+    if event["event"] == "binary_chunk" {
+        event["kind"] = "data"
+    }
+    return raw, nil
+}
+EOF
+expect_fail \
+  "Go C ABI callback repair alias" \
+  "R30_SDK_STREAM_BIDI_CALLBACK_ALIAS"
+
+make_good_fixture
+cat >"$CLI/sdk/python/easynet_sdk/_cabi.py" <<'EOF'
+def _project_cabi_ordered_event(raw, allocate_sequence, use_observed_sequence):
+    event = {}
+    if "payload_base64" not in event and "data_base64" in event:
+        event["payload_base64"] = event.get("data_base64")
+    if event.get("event") == "binary_chunk":
+        event["kind"] = "data"
+    return raw
+EOF
+expect_fail \
+  "Python C ABI callback repair alias" \
+  "R30_SDK_STREAM_BIDI_CALLBACK_ALIAS"
+
+make_good_fixture
 mkdir -p "$CLI/src/ffi"
 cat >"$CLI/src/ffi/errors.rs" <<'EOF'
 fn typed_error_json() -> serde_json::Value {

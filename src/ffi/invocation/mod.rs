@@ -4120,7 +4120,7 @@ async fn run_stream_reader(
                         Err(message) => {
                             let _ = tx.send(serde_json::json!({
                                 "ok": false,
-                                "event": "receipt_verification_error",
+                                "kind": "receipt_verification_error",
                                 "sequence": sequence,
                                 "message": message,
                                 "terminal": false,
@@ -4173,7 +4173,7 @@ async fn run_bidi_down_reader(
                         Err(message) => {
                             let _ = tx.send(serde_json::json!({
                                 "ok": false,
-                                "event": "receipt_verification_error",
+                                "kind": "receipt_verification_error",
                                 "sequence": sequence,
                                 "message": message,
                                 "terminal": false,
@@ -5467,7 +5467,7 @@ fn stream_chunk_json(
     let proven_terminal = terminal_receipt.is_some();
     Ok(serde_json::json!({
         "ok": chunk.error.is_none(),
-        "event": "chunk",
+        "kind": "chunk",
         "invocation_id": chunk.invocation_id,
         "selected_node_id": chunk.selected_node_id,
         "scheduling_reason": chunk.scheduling_reason,
@@ -5475,7 +5475,7 @@ fn stream_chunk_json(
         "sequence": chunk.sequence,
         "terminal": proven_terminal,
         "elapsed_ms": chunk.elapsed_ms,
-        "content_type": chunk.content_type,
+        "payload_content_type": chunk.content_type,
         "payload_base64": payload_base64,
         "payload_json": payload_json,
         "admission_receipt": admission_receipt,
@@ -5489,7 +5489,7 @@ fn stream_chunk_json(
 fn stream_status_error_json(status: tonic::Status, sequence: u64) -> serde_json::Value {
     serde_json::json!({
         "ok": false,
-        "event": "error",
+        "kind": "error",
         "sequence": sequence.max(1),
         "code": format!("{:?}", status.code()),
         "message": status.message(),
@@ -5520,7 +5520,7 @@ fn bidi_down_frame_json(
                 };
             Ok(serde_json::json!({
                 "ok": true,
-                "event": "receipt",
+                "kind": "receipt",
                 "sequence": frame.sequence,
                 "mac_base64": mac_base64,
                 "admission_receipt": is_admission.then(|| summary.clone()),
@@ -5529,14 +5529,14 @@ fn bidi_down_frame_json(
             }))
         }
         Some(Payload::BinaryChunk(chunk)) => {
-            let data_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.data);
+            let payload_base64 = base64::engine::general_purpose::STANDARD.encode(&chunk.data);
             Ok(serde_json::json!({
                 "ok": true,
-                "event": "binary_chunk",
+                "kind": "data",
                 "sequence": frame.sequence,
                 "mac_base64": mac_base64,
                 "stream_id": chunk.stream_id,
-                "data_base64": data_base64,
+                "payload_base64": payload_base64,
                 "pts": chunk.pts,
                 "terminal": false,
             }))
@@ -5544,7 +5544,7 @@ fn bidi_down_frame_json(
         Some(Payload::Control(control)) => {
             Ok(serde_json::json!({
                 "ok": true,
-                "event": "control",
+                "kind": "control",
                 "sequence": frame.sequence,
                 "mac_base64": mac_base64,
                 "control": bidi_control_json(control),
@@ -5561,7 +5561,7 @@ fn bidi_down_frame_json(
         Some(Payload::DispatchCall(_)) | Some(Payload::ReverseDispatchResult(_)) => {
             Ok(serde_json::json!({
                 "ok": false,
-                "event": "unsupported_frame",
+                "kind": "unsupported_frame",
                 "sequence": frame.sequence,
                 "mac_base64": mac_base64,
                 "message": "carrier-v1 dispatch frame before dual-read support",
@@ -5570,7 +5570,7 @@ fn bidi_down_frame_json(
         }
         None => Ok(serde_json::json!({
             "ok": false,
-            "event": "unknown",
+            "kind": "unknown",
             "sequence": frame.sequence,
             "mac_base64": mac_base64,
             "message": "InvokeBidiDown frame has no payload",
@@ -8118,9 +8118,11 @@ mod tests {
         };
         let value = stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["event"], "chunk");
+        assert_eq!(value["kind"], "chunk");
         assert_eq!(value["sequence"], 7);
         assert_eq!(value["terminal"], false);
+        assert_eq!(value["payload_content_type"], "application/json");
+        assert!(value.get("content_type").is_none());
         assert_eq!(value["payload_json"]["ready"], true);
         assert_eq!(value["payload_base64"], "eyJyZWFkeSI6dHJ1ZX0=");
     }
@@ -8131,7 +8133,7 @@ mod tests {
             stream_status_error_json(tonic::Status::unavailable("stream transport closed"), 4);
 
         assert_eq!(value["ok"], false);
-        assert_eq!(value["event"], "error");
+        assert_eq!(value["kind"], "error");
         assert_eq!(value["sequence"], 4);
         assert_eq!(value["code"], "Unavailable");
         assert_eq!(value["message"], "stream transport closed");
@@ -8148,13 +8150,13 @@ mod tests {
 
         rt.block_on(async {
             let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-            tx.try_send(br#"{"sequence":1,"event":"chunk"}"#.to_vec())
+            tx.try_send(br#"{"sequence":1,"kind":"chunk"}"#.to_vec())
                 .unwrap();
 
             let sender = tokio::spawn(async move {
                 send_callback_frame_or_backpressure(
                     &tx,
-                    br#"{"sequence":2,"event":"chunk"}"#.to_vec(),
+                    br#"{"sequence":2,"kind":"chunk"}"#.to_vec(),
                     stream_callback_backpressure_event(2, 1),
                 )
                 .await
@@ -8163,12 +8165,12 @@ mod tests {
 
             assert_eq!(
                 rx.recv().await.unwrap(),
-                br#"{"sequence":1,"event":"chunk"}"#.to_vec()
+                br#"{"sequence":1,"kind":"chunk"}"#.to_vec()
             );
             assert!(!sender.await.unwrap());
             let value =
                 serde_json::from_slice::<serde_json::Value>(&rx.recv().await.unwrap()).unwrap();
-            assert_eq!(value["event"], "error");
+            assert_eq!(value["kind"], "error");
             assert_eq!(value["sequence"], 2);
             assert_eq!(value["terminal"], false);
             assert_eq!(value["transport_terminal"], true);
@@ -8198,10 +8200,11 @@ mod tests {
         let value =
             bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["event"], "binary_chunk");
+        assert_eq!(value["kind"], "data");
         assert_eq!(value["sequence"], 3);
         assert_eq!(value["stream_id"], 1);
-        assert_eq!(value["data_base64"], "aGVsbG8=");
+        assert_eq!(value["payload_base64"], "aGVsbG8=");
+        assert!(value.get("data_base64").is_none());
         assert_eq!(value["pts"], 11);
     }
 
@@ -8221,7 +8224,7 @@ mod tests {
         let value =
             bidi_down_frame_json(&mut InboundReceiptCheckpointVerifier::new(), frame).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["event"], "control");
+        assert_eq!(value["kind"], "control");
         assert_eq!(value["sequence"], 4);
         assert_eq!(value["control"]["eof"], true);
         assert_eq!(value["terminal"], false);

@@ -432,8 +432,10 @@ try:
     ), stream_frames
     first_stream = stream_frames[0]
     assert first_stream["ok"] is True, first_stream
-    assert first_stream["event"] == "chunk", first_stream
-    assert first_stream["content_type"] == "application/json", first_stream
+    assert first_stream["kind"] == "chunk", first_stream
+    assert first_stream["payload_content_type"] == "application/json", first_stream
+    assert "event" not in first_stream, first_stream
+    assert "content_type" not in first_stream, first_stream
     assert_ok(
         lib.easynet_invocation_stream_cancel(client_from_daemon.value, stream_id.value),
         "easynet_invocation_stream_cancel after callback",
@@ -486,10 +488,10 @@ try:
     wait_until(
         "bidi business frames",
         lambda: (
-            any(frame.get("event") == "binary_chunk" for frame in bidi_frames)
+            any(frame.get("kind") == "data" for frame in bidi_frames)
             and any(
-                frame.get("event") == "receipt"
-                and frame.get("receipt", {}).get("state") == 5
+                frame.get("kind") == "receipt"
+                and frame.get("terminal_receipt", {}).get("state") == "Completed"
                 and frame.get("terminal") is True
                 for frame in bidi_frames
             )
@@ -498,20 +500,22 @@ try:
     )
     first_bidi = bidi_frames[0]
     assert first_bidi["ok"] is True, first_bidi
-    assert first_bidi["event"] == "receipt", first_bidi
-    assert first_bidi["receipt"]["state"] == 2, first_bidi  # Axon InvocationState::Admitted
+    assert first_bidi["kind"] == "receipt", first_bidi
+    assert first_bidi["admission_receipt"]["state"] == "Admitted", first_bidi
     assert first_bidi["terminal"] is False, first_bidi
+    assert "event" not in first_bidi, first_bidi
+    assert "receipt" not in first_bidi, first_bidi
     chunk_payloads = [
-        base64.b64decode(frame["data_base64"])
+        base64.b64decode(frame["payload_base64"])
         for frame in bidi_frames
-        if frame.get("event") == "binary_chunk"
+        if frame.get("kind") == "data"
     ]
     assert b"".join(chunk_payloads) == download_bytes, bidi_frames
     terminal_bidi = [
         frame for frame in bidi_frames
-        if frame.get("event") == "receipt" and frame.get("terminal") is True
+        if frame.get("kind") == "receipt" and frame.get("terminal") is True
     ][-1]
-    assert terminal_bidi["receipt"]["state"] == 5, terminal_bidi  # Axon InvocationState::Completed
+    assert terminal_bidi["terminal_receipt"]["state"] == "Completed", terminal_bidi
     print("[ffi-smoke] complete Invocation bidi happy path delivered data and terminal receipt")
 
     # 8. Complete Invocation ABI preflight. Malformed JSON fails

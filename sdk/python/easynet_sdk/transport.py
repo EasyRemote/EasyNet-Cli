@@ -1319,6 +1319,7 @@ class DaemonBidiChannel:
 
     def __exit__(self, *exc_info: object) -> None:
         if self.session.state not in {
+            BidiState.CANCEL_REQUESTED,
             BidiState.TERMINAL,
             BidiState.CANCELLED,
             BidiState.FAILED,

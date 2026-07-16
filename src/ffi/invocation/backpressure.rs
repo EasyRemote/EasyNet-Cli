@@ -21,7 +21,7 @@ const CALLBACK_QUEUE_OVERFLOW: &str = "callback_queue_overflow";
 pub(crate) fn stream_callback_backpressure_event(sequence: u64, queue_capacity: usize) -> Value {
     json!({
         "ok": false,
-        "event": "error",
+        "kind": "error",
         "state": "Failed",
         "sequence": sequence,
         "terminal": false,
@@ -35,7 +35,6 @@ pub(crate) fn stream_callback_backpressure_event(sequence: u64, queue_capacity: 
 pub(crate) fn bidi_callback_backpressure_frame(sequence: u64, queue_capacity: usize) -> Value {
     json!({
         "ok": false,
-        "event": "error",
         "kind": "error",
         "sequence": sequence,
         "terminal": false,
@@ -71,7 +70,7 @@ mod tests {
         let event = stream_callback_backpressure_event(7, 64);
 
         assert_eq!(event["ok"], false);
-        assert_eq!(event["event"], "error");
+        assert_eq!(event["kind"], "error");
         assert_eq!(event["state"], "Failed");
         assert_eq!(event["sequence"], 7);
         assert_eq!(event["terminal"], false);
@@ -92,7 +91,6 @@ mod tests {
         let frame = bidi_callback_backpressure_frame(3, 32);
 
         assert_eq!(frame["ok"], false);
-        assert_eq!(frame["event"], "error");
         assert_eq!(frame["kind"], "error");
         assert_eq!(frame["sequence"], 3);
         assert_eq!(frame["terminal"], false);

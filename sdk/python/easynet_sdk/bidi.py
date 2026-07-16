@@ -368,6 +368,7 @@ class BidiSession:
         if self.state == BidiState.CLOSED:
             return
         if self.state not in {
+            BidiState.CANCEL_REQUESTED,
             BidiState.TERMINAL,
             BidiState.CANCELLED,
             BidiState.FAILED,

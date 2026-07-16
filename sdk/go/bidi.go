@@ -378,7 +378,7 @@ func (s *BidiSession) Close(ctx context.Context) error {
 	if s.state == BidiClosed {
 		return nil
 	}
-	if s.state != BidiTerminal && s.state != BidiCancelled && s.state != BidiFailed {
+	if s.state != BidiCancelRequested && s.state != BidiTerminal && s.state != BidiCancelled && s.state != BidiFailed {
 		return invalidRuntimePayload("bidi session must be terminal before close", nil)
 	}
 	if err := s.transport.Close(ctx); err != nil {

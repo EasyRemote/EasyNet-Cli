@@ -492,7 +492,7 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(half_closed["state"], "HalfClosedLocal")
         self.assertFalse(half_closed["terminal"])
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
-        self.assertEqual(cancelled["state"], "Cancelled")
+        self.assertEqual(cancelled["state"], "CancelRequested")
         self.assertEqual(channel.session.state, BidiState.CLOSED)
 
     def test_bidi_timeout_is_forwarded_without_state_mutation(self) -> None:

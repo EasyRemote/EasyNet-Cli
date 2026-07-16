@@ -197,6 +197,37 @@ def rust_method_body(text: str, name: str) -> tuple[int, str] | None:
     return match.start(), text[match.end():]
 
 
+def brace_function_body(text: str, signature_pattern: str) -> tuple[int, str] | None:
+    match = re.search(signature_pattern, text)
+    if not match:
+        return None
+    brace = text.find("{", match.end())
+    if brace < 0:
+        return None
+    index = brace + 1
+    depth = 1
+    while index < len(text):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return match.start(), text[brace + 1:index]
+        index += 1
+    return match.start(), text[brace + 1:]
+
+
+def python_function_body(text: str, name: str) -> tuple[int, str] | None:
+    pattern = rf"^def\s+{re.escape(name)}\s*\("
+    match = re.search(pattern, text, flags=re.M)
+    if not match:
+        return None
+    next_top_level = re.search(r"^(?:def|class)\s+", text[match.end():], flags=re.M)
+    end = match.end() + next_top_level.start() if next_top_level else len(text)
+    return match.start(), text[match.start():end]
+
+
 # Rule 1: product orchestration may enter through a registered Invocation
 # handler, but child EAL/Mission/Chat calls must not execute handlers or
 # implementation bindings directly.
@@ -719,6 +750,113 @@ for path, pattern in frame_receipt_alias_patterns:
             line_number(text, match.start()),
             "stream/bidi SDK wire models must use terminal_receipt, not the retired receipt alias",
         )
+
+
+# Rule 30: C ABI stream/bidi callback JSON has one owner and one DTO shape.
+# Rust FFI emits canonical callback fields; Go/Python C ABI adapters may order
+# and normalize state/error objects, but must not repair retired callback names.
+callback_projection_methods = (
+    (
+        cli_root / "src/ffi/invocation/backpressure.rs",
+        "stream_callback_backpressure_event",
+        ('"event"', '"content_type"', '"data_base64"', '"kind": "binary_chunk"'),
+    ),
+    (
+        cli_root / "src/ffi/invocation/backpressure.rs",
+        "bidi_callback_backpressure_frame",
+        ('"event"', '"content_type"', '"data_base64"', '"kind": "binary_chunk"'),
+    ),
+    (
+        cli_root / "src/ffi/invocation/mod.rs",
+        "stream_chunk_json",
+        ('"event"', '"content_type"', '"data_base64"', '"kind": "binary_chunk"'),
+    ),
+    (
+        cli_root / "src/ffi/invocation/mod.rs",
+        "stream_status_error_json",
+        ('"event"', '"content_type"', '"data_base64"', '"kind": "binary_chunk"'),
+    ),
+    (
+        cli_root / "src/ffi/invocation/mod.rs",
+        "bidi_down_frame_json",
+        ('"event"', '"content_type"', '"data_base64"', '"kind": "binary_chunk"'),
+    ),
+)
+for path, method, retired_tokens in callback_projection_methods:
+    if not path.exists():
+        continue
+    text = source(path)
+    body = rust_method_body(text, method)
+    if body is None:
+        continue
+    offset, method_body = body
+    for token in retired_tokens:
+        if token in method_body:
+            add(
+                "R30_SDK_STREAM_BIDI_CALLBACK_ALIAS",
+                path,
+                line_number(text, offset),
+                f"C ABI callback projection `{method}` must not emit retired callback field {token}",
+            )
+
+go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
+if go_cabi_runtime.exists():
+    text = source(go_cabi_runtime)
+    body = brace_function_body(
+        text,
+        r"func\s+projectCABIOrderedEvent\s*\(",
+    )
+    if body is not None:
+        offset, function_body = body
+        for token, detail in (
+            (
+                '"data_base64"',
+                "Go C ABI event projector must not copy retired data_base64 into payload_base64",
+            ),
+            (
+                '"event"',
+                "Go C ABI event projector must not synthesize kind from retired event",
+            ),
+            (
+                '"binary_chunk"',
+                "Go C ABI event projector must not translate retired binary_chunk/chunk kinds",
+            ),
+        ):
+            if token in function_body:
+                add(
+                    "R30_SDK_STREAM_BIDI_CALLBACK_ALIAS",
+                    go_cabi_runtime,
+                    line_number(text, offset),
+                    detail,
+                )
+
+python_cabi = cli_root / "sdk/python/easynet_sdk/_cabi.py"
+if python_cabi.exists():
+    text = source(python_cabi)
+    body = python_function_body(text, "_project_cabi_ordered_event")
+    if body is not None:
+        offset, function_body = body
+        for token, detail in (
+            (
+                '"data_base64"',
+                "Python C ABI event projector must not copy retired data_base64 into payload_base64",
+            ),
+            (
+                '"event"',
+                "Python C ABI event projector must not synthesize kind from retired event",
+            ),
+            (
+                '"binary_chunk"',
+                "Python C ABI event projector must not translate retired binary_chunk/chunk kinds",
+            ),
+        ):
+            if token in function_body:
+                add(
+                    "R30_SDK_STREAM_BIDI_CALLBACK_ALIAS",
+                    python_cabi,
+                    line_number(text, offset),
+                    detail,
+                )
 
 
 # Rule 8: public FFI error JSON must not expose migration/legacy state.

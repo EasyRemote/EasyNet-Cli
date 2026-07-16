@@ -1329,10 +1329,6 @@ def _project_cabi_ordered_event(
         else None
     )
     event["sequence"] = allocate_sequence(sequence)
-    if "payload_base64" not in event and "data_base64" in event:
-        event["payload_base64"] = event.get("data_base64")
-    if event.get("kind") in {"binary_chunk", "chunk"}:
-        event["kind"] = "data"
     state = event.get("state")
     if isinstance(state, int) and not isinstance(state, bool):
         event["state"] = _axon_invocation_state_name(state)

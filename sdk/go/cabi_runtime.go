@@ -1188,7 +1188,7 @@ func cabiBidiFrameJSON(frameJSON []byte) ([]byte, error) {
 		return nil, err
 	}
 	switch frame.Kind() {
-	case "data", "binary_chunk", "chunk":
+	case "data":
 		wire := map[string]any{
 			"type":      "binary_chunk",
 			"stream_id": frame.StreamID(),
@@ -1380,17 +1380,6 @@ func projectCABIOrderedEvent(raw []byte, allocateSequence func(*uint64) uint64, 
 		}
 	}
 	event["sequence"] = allocateSequence(observed)
-	if _, ok := event["payload_base64"]; !ok {
-		if data, ok := event["data_base64"]; ok {
-			event["payload_base64"] = data
-		}
-	}
-	if kind, ok := event["kind"].(string); ok {
-		switch kind {
-		case "binary_chunk", "chunk":
-			event["kind"] = "data"
-		}
-	}
 	if state, ok := cabiJSONInteger(event["state"]); ok {
 		event["state"] = cabiInvocationStateName(state)
 	}
