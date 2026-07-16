@@ -1117,7 +1117,7 @@ impl UnaryDispatcher {
     /// response, gracefully degrading to local-only behaviour.
     pub(crate) fn dispatch_federation_discover(&self, arguments: &[u8]) -> Result<Vec<u8>, Status> {
         let request: federation_wrappers::DiscoverRequest = parse_json_args(arguments)?;
-        let response = match (
+        let federated_response = match (
             request.local_user_id.as_deref(),
             self.directory.federated_bindings.as_ref(),
             self.identity.session_realm.as_deref(),
@@ -1137,7 +1137,46 @@ impl UnaryDispatcher {
                 federation_wrappers::handle_discover(&request, &self.directory.federated_directory)
             }
         };
+        let response =
+            self.merge_local_presence_into_discover_response(&request, federated_response);
         encode_json_payload(&response)
+    }
+
+    fn merge_local_presence_into_discover_response(
+        &self,
+        request: &federation_wrappers::DiscoverRequest,
+        federated_response: federation_wrappers::DiscoverResponse,
+    ) -> federation_wrappers::DiscoverResponse {
+        let mut by_agent_ura = BTreeMap::new();
+        if let Some(realm) = self
+            .identity
+            .session_realm
+            .as_deref()
+            .filter(|realm| !realm.trim().is_empty())
+        {
+            let local = federation_wrappers::handle_list_user_devices(
+                &federation_wrappers::ListUserDevicesRequest {
+                    realm: realm.to_string(),
+                },
+                &self.directory.presence,
+            );
+            for entry in local.devices {
+                if request
+                    .agent_ura
+                    .as_deref()
+                    .is_some_and(|filter| filter != entry.agent_ura)
+                {
+                    continue;
+                }
+                by_agent_ura.insert(entry.agent_ura.clone(), entry);
+            }
+        }
+        for entry in federated_response.entries {
+            by_agent_ura.entry(entry.agent_ura.clone()).or_insert(entry);
+        }
+        federation_wrappers::DiscoverResponse {
+            entries: by_agent_ura.into_values().collect(),
+        }
     }
 
     /// **PR-N3 commit N3-5**. Hub-side projection of local

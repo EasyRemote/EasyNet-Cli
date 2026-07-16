@@ -147,6 +147,19 @@ pub(crate) fn local_device_ura() -> String {
         })
 }
 
+/// Product URA owned by the local daemon process advertised in control.json.
+///
+/// Hub mode has no device credentials, so `local_device_ura()` intentionally
+/// falls back to `r/default/device/local`. CLI loopback calls that target the
+/// running daemon itself must not use that fallback: a Hub daemon owns
+/// `easynet:///r/<realm>/hub`, while a Device/Both daemon owns its device URA.
+pub(crate) fn local_daemon_ura() -> String {
+    if let Some(ura) = control_discovery_daemon_ura() {
+        return ura;
+    }
+    local_device_ura()
+}
+
 fn persisted_local_device_ura() -> Option<String> {
     let hosted_identity =
         crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_status()
@@ -157,6 +170,20 @@ fn persisted_local_device_ura() -> Option<String> {
         Some(ura.to_string())
     } else {
         None
+    }
+}
+
+fn control_discovery_daemon_ura() -> Option<String> {
+    let path = crate::daemon::control::discovery::default_path();
+    let discovery = crate::daemon::control::discovery::read(&path).ok()??;
+    let identity = discovery.daemon_identity?;
+    match identity.mode.as_str() {
+        "hub" => Some(crate::core::ura::hub_ura(&identity.realm)),
+        "device" | "both" => identity
+            .node_id
+            .as_deref()
+            .map(|node_id| crate::core::ura::device_ura(&identity.realm, node_id)),
+        _ => None,
     }
 }
 
@@ -251,7 +278,10 @@ impl KeyResolver for LocalSystemKeyResolver {
 mod tests {
     use ed25519_dalek::Verifier as _;
 
-    use super::{sign_system_canonical, system_verifying_key};
+    use super::{local_daemon_ura, sign_system_canonical, system_verifying_key};
+    use crate::daemon::control::discovery::{
+        self, ControlDiscovery, DaemonIdentity, IpcVersionRange, IPC_VERSION_V1,
+    };
 
     #[test]
     fn system_signing_capability_verifies_against_the_shared_runtime_projection() {
@@ -262,5 +292,37 @@ mod tests {
             .expect("test key-service state machine projects daemon-local public key")
             .verify(canonical, &signature)
             .expect("daemon-local signature verifies against its shared public projection");
+    }
+
+    #[test]
+    fn local_daemon_ura_uses_control_discovery_identity_before_device_fallback() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        write_discovery_identity("hub", "hub-realm", None);
+        assert_eq!(local_daemon_ura(), crate::core::ura::hub_ura("hub-realm"));
+
+        write_discovery_identity("device", "device-realm", Some("node-a"));
+        assert_eq!(
+            local_daemon_ura(),
+            crate::core::ura::device_ura("device-realm", "node-a")
+        );
+    }
+
+    fn write_discovery_identity(mode: &str, realm: &str, node_id: Option<&str>) {
+        let disc = ControlDiscovery {
+            socket_path: None,
+            pipe_name: None,
+            invocation_endpoint: None,
+            daemon_identity: Some(DaemonIdentity {
+                mode: mode.to_string(),
+                realm: realm.to_string(),
+                node_id: node_id.map(str::to_string),
+            }),
+            pid: std::process::id(),
+            daemon_version: "test".to_string(),
+            supported_ipc_versions: IpcVersionRange::single(IPC_VERSION_V1),
+            capability_flags: Vec::new(),
+            pages_port: None,
+        };
+        discovery::write(&discovery::default_path(), &disc).expect("write control discovery");
     }
 }

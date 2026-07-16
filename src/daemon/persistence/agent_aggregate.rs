@@ -30,6 +30,20 @@ pub(crate) enum AgentAggregateSnapshotLoadError {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentRegistryProjectionLoadError {
+    #[error("load Agent registry projection: {source:#}")]
+    RegistryUnreadable { source: anyhow::Error },
+}
+
+impl AgentRegistryProjectionLoadError {
+    pub(crate) fn into_source_or_self(self) -> anyhow::Error {
+        match self {
+            Self::RegistryUnreadable { source } => source,
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum HostedAgentNameLookupError {
     #[error(
         "hosted Agent name {name:?} is ambiguous across profiles {first_profile:?} and {second_profile:?}"
@@ -83,20 +97,16 @@ impl AgentAggregateSnapshot {
         owner_id: &str,
         operation: &str,
     ) -> Result<AgentRegisteredWorkspace, AgentRegisteredWorkspaceLookupError> {
-        let entry = self.registry.agents.get(owner_id).ok_or_else(|| {
-            AgentRegisteredWorkspaceLookupError::Missing {
-                owner_id: owner_id.to_string(),
-                registered_agent_ids: self.registry.agents.keys().cloned().collect(),
-            }
-        })?;
-        Ok(AgentRegisteredWorkspace {
-            root_path: entry
-                .required_root_path(owner_id, operation)
-                .map_err(
-                    |source| AgentRegisteredWorkspaceLookupError::InvalidWorkspace { source },
-                )?,
-            agent_type: entry.agent_type,
-        })
+        self.registered_agent(owner_id, operation)
+            .map(AgentRegisteredAgent::into_workspace)
+    }
+
+    pub(crate) fn registered_agent(
+        &self,
+        owner_id: &str,
+        operation: &str,
+    ) -> Result<AgentRegisteredAgent, AgentRegisteredWorkspaceLookupError> {
+        AgentRegisteredAgent::from_registry(&self.registry, owner_id, operation)
     }
 
     pub(crate) fn registered_agent_surface_names(&self) -> BTreeSet<String> {
@@ -241,6 +251,67 @@ pub(crate) enum AgentRegisteredWorkspaceLookupError {
     InvalidWorkspace { source: anyhow::Error },
 }
 
+impl AgentRegisteredWorkspaceLookupError {
+    pub(crate) fn into_source_or_self(self) -> anyhow::Error {
+        match self {
+            Self::InvalidWorkspace { source } => source,
+            error => error.into(),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AgentRegisteredAgentLoadError {
+    #[error("load Agent registry projection: {source:#}")]
+    RegistryUnreadable { source: anyhow::Error },
+    #[error(transparent)]
+    Lookup(#[from] AgentRegisteredWorkspaceLookupError),
+}
+
+impl AgentRegisteredAgentLoadError {
+    pub(crate) fn into_source_or_self(self) -> anyhow::Error {
+        match self {
+            Self::RegistryUnreadable { source } => source,
+            Self::Lookup(error) => error.into_source_or_self(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AgentRegisteredAgent {
+    entry: AgentEntry,
+    workspace: AgentRegisteredWorkspace,
+}
+
+impl AgentRegisteredAgent {
+    fn from_registry(
+        registry: &AgentRegistry,
+        owner_id: &str,
+        operation: &str,
+    ) -> Result<Self, AgentRegisteredWorkspaceLookupError> {
+        let entry = registry.agents.get(owner_id).cloned().ok_or_else(|| {
+            AgentRegisteredWorkspaceLookupError::Missing {
+                owner_id: owner_id.to_string(),
+                registered_agent_ids: registry.agents.keys().cloned().collect(),
+            }
+        })?;
+        let workspace = AgentRegisteredWorkspace::from_entry(&entry, owner_id, operation)?;
+        Ok(Self { entry, workspace })
+    }
+
+    pub(crate) fn entry(&self) -> &AgentEntry {
+        &self.entry
+    }
+
+    pub(crate) fn workspace(&self) -> &AgentRegisteredWorkspace {
+        &self.workspace
+    }
+
+    fn into_workspace(self) -> AgentRegisteredWorkspace {
+        self.workspace
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentRegisteredWorkspace {
     root_path: PathBuf,
@@ -248,6 +319,21 @@ pub(crate) struct AgentRegisteredWorkspace {
 }
 
 impl AgentRegisteredWorkspace {
+    fn from_entry(
+        entry: &AgentEntry,
+        owner_id: &str,
+        operation: &str,
+    ) -> Result<Self, AgentRegisteredWorkspaceLookupError> {
+        Ok(Self {
+            root_path: entry
+                .required_root_path(owner_id, operation)
+                .map_err(
+                    |source| AgentRegisteredWorkspaceLookupError::InvalidWorkspace { source },
+                )?,
+            agent_type: entry.agent_type,
+        })
+    }
+
     pub(crate) fn root_path(&self) -> &Path {
         &self.root_path
     }
@@ -616,16 +702,42 @@ impl AgentAggregateRepository {
         Ok(Self::load_hosted_identity_snapshot()?.hosted_identity_status())
     }
 
-    pub(crate) fn try_load_snapshot()
-    -> Result<AgentAggregateSnapshot, AgentAggregateSnapshotLoadError> {
+    pub(crate) fn load_registered_agent(
+        owner_id: &str,
+        operation: &str,
+    ) -> Result<AgentRegisteredAgent, AgentRegisteredAgentLoadError> {
+        let registry = Self::load_registered_agent_registry_projection().map_err(|error| {
+            let AgentRegistryProjectionLoadError::RegistryUnreadable { source } = error;
+            AgentRegisteredAgentLoadError::RegistryUnreadable { source }
+        })?;
+        AgentRegisteredAgent::from_registry(&registry, owner_id, operation).map_err(Into::into)
+    }
+
+    pub(crate) fn load_registered_agent_registry_projection(
+    ) -> Result<AgentRegistry, AgentRegistryProjectionLoadError> {
+        agent_registry::load_agents()
+            .map_err(|source| AgentRegistryProjectionLoadError::RegistryUnreadable { source })
+    }
+
+    pub(crate) fn load_registered_agent_workspace(
+        owner_id: &str,
+        operation: &str,
+    ) -> Result<AgentRegisteredWorkspace, AgentRegisteredAgentLoadError> {
+        Self::load_registered_agent(owner_id, operation).map(AgentRegisteredAgent::into_workspace)
+    }
+
+    pub(crate) fn try_load_snapshot(
+    ) -> Result<AgentAggregateSnapshot, AgentAggregateSnapshotLoadError> {
         let registry = Self::load_registry_projection()?;
         let local_agents = Self::load_hosted_identity_projection()?;
         Ok(AgentAggregateSnapshot::new(registry, local_agents))
     }
 
     fn load_registry_projection() -> Result<AgentRegistry, AgentAggregateSnapshotLoadError> {
-        agent_registry::load_agents()
-            .map_err(|source| AgentAggregateSnapshotLoadError::RegistryUnreadable { source })
+        Self::load_registered_agent_registry_projection().map_err(|error| {
+            let AgentRegistryProjectionLoadError::RegistryUnreadable { source } = error;
+            AgentAggregateSnapshotLoadError::RegistryUnreadable { source }
+        })
     }
 
     fn load_hosted_identity_projection() -> Result<LocalAgentsFile, AgentAggregateSnapshotLoadError>
@@ -637,7 +749,7 @@ impl AgentAggregateRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_registry::{AgentEntry, AgentType};
+    use super::agent_registry::{self, AgentEntry, AgentType};
     use super::*;
 
     fn hosted_agent(profile: &str, name: &str, agent_ura: &str) -> HostedAgentEntry {
@@ -781,16 +893,40 @@ mod tests {
         let missing = snapshot
             .registered_agent_workspace("claude", "skill.publish")
             .expect_err("missing owner");
-        assert!(
-            missing
-                .to_string()
-                .contains("registered agents: [\"codex\"]")
-        );
+        assert!(missing
+            .to_string()
+            .contains("registered agents: [\"codex\"]"));
 
         let corrupt = snapshot
             .registered_agent_workspace("codex", "skill.publish")
             .expect_err("missing root path");
         assert!(corrupt.to_string().contains("skill.publish"));
+    }
+
+    #[test]
+    fn registry_only_workspace_lookup_ignores_unreadable_hosted_identity_state() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let root = crate::daemon::persistence::config::agents_root().join("claude");
+        std::fs::create_dir_all(&root).expect("create registered workspace");
+        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        entry.root_path = Some(root.clone());
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert("claude".to_string(), entry);
+        agent_registry::save_agents(&registry).expect("save registered Agent");
+        std::fs::write(local_agents::path(), b"{").expect("corrupt hosted identity projection");
+
+        let workspace =
+            AgentAggregateRepository::load_registered_agent_workspace("claude", "skill.install")
+                .expect("registry-only workspace lookup");
+
+        assert_eq!(workspace.root_path(), root.as_path());
+        let registry = AgentAggregateRepository::load_registered_agent_registry_projection()
+            .expect("registry-only Agent projection");
+        assert!(registry.agents.contains_key("claude"));
+        assert!(matches!(
+            AgentAggregateRepository::try_load_snapshot(),
+            Err(AgentAggregateSnapshotLoadError::IdentityUnreadable { .. })
+        ));
     }
 
     #[test]
@@ -845,11 +981,9 @@ mod tests {
                 .name,
             "claude"
         );
-        assert!(
-            snapshot
-                .hosted_agent_identity_by_ura("easynet:///r/acme/agent/u1.other")
-                .is_none()
-        );
+        assert!(snapshot
+            .hosted_agent_identity_by_ura("easynet:///r/acme/agent/u1.other")
+            .is_none());
     }
 
     #[test]
@@ -1139,15 +1273,13 @@ mod tests {
 
         let projection = snapshot.local_target_projection();
 
-        assert!(
-            projection
-                .hosted_agent_targets
-                .contains(&HostedAgentTarget {
-                    realm: "acme".to_string(),
-                    user_id: "u1".to_string(),
-                    agent_id: "claude".to_string(),
-                })
-        );
+        assert!(projection
+            .hosted_agent_targets
+            .contains(&HostedAgentTarget {
+                realm: "acme".to_string(),
+                user_id: "u1".to_string(),
+                agent_id: "claude".to_string(),
+            }));
         assert_eq!(projection.hosted_agent_targets.len(), 1);
         assert!(projection.registered_agent_ids.contains("claude"));
         assert!(projection.registered_agent_ids.contains("codex"));

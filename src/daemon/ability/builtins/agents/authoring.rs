@@ -18,6 +18,9 @@ use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 use crate::daemon::ability::CallMode;
 use crate::daemon::axon_bridge::hot_agent_registrar::{block_on_hot_registrar, HotAgentRegistrar};
 use crate::daemon::execution::mission::directory::{AgentDirectory, ABILITY_MANIFEST_SUFFIX};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
+};
 use crate::daemon::persistence::agent_registry::{self as agents, AgentEntry};
 use crate::daemon::persistence::config;
 
@@ -25,8 +28,7 @@ use super::lifecycle::SharedHotRegistrarCell;
 
 pub const ABILITY_PUT_AGENT_ABILITY: &str =
     crate::daemon::ability::names::agents::AGENT_ABILITY_PUT;
-pub const DESCRIPTION: &str =
-    "Atomically persist executable hosted-Agent ability manifests and commit their live runtime publication.";
+pub const DESCRIPTION: &str = "Atomically persist executable hosted-Agent ability manifests and commit their live runtime publication.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthoringState {
@@ -280,20 +282,31 @@ fn put_agent_abilities_handler(
 
     let registrar = require_ready_registrar(hot_registrar)?;
     let _mutation_guard = authoring_lock();
-    let registry = agents::load_agents()
-        .map_err(|error| anyhow::anyhow!("agent.ability.put: load agent registry: {error:#}"))?;
-    let entry =
-        registry.agents.get(name).cloned().ok_or_else(|| {
-            anyhow::anyhow!("agent.ability.put: agent {name:?} is not registered")
-        })?;
-    let root = entry
-        .root_path
-        .clone()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
+    let registered = match AgentAggregateRepository::load_registered_agent(
+        name,
+        "agent.ability.put",
+    ) {
+        Ok(registered) => registered,
+        Err(AgentRegisteredAgentLoadError::RegistryUnreadable { source }) => {
+            return Err(anyhow::anyhow!(
+                "agent.ability.put: load agent registry: {source:#}"
+            ));
+        }
+        Err(AgentRegisteredAgentLoadError::Lookup(
+            AgentRegisteredWorkspaceLookupError::Missing { .. },
+        )) => {
+            anyhow::bail!("agent.ability.put: agent {name:?} is not registered");
+        }
+        Err(AgentRegisteredAgentLoadError::Lookup(
+            AgentRegisteredWorkspaceLookupError::InvalidWorkspace { .. },
+        )) => {
+            anyhow::bail!(
                 "agent.ability.put: registered agent {name:?} has no explicit root_path; refusing to infer a mutation target"
-            )
-        })?;
+            );
+        }
+    };
+    let entry = registered.entry().clone();
+    let root = registered.workspace().root_path().to_path_buf();
     if !root.is_dir() {
         anyhow::bail!(
             "agent.ability.put: agent {name:?} has no on-disk root at {}",

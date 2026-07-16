@@ -2085,7 +2085,7 @@ fn local_daemon_loopback_caller_ura() -> anyhow::Result<String> {
 
 #[cfg(feature = "axon-pb")]
 fn local_daemon_default_callee_ura() -> String {
-    crate::daemon::identity::local_invocation::local_device_ura()
+    crate::daemon::identity::local_invocation::local_daemon_ura()
 }
 
 #[cfg(feature = "axon-pb")]

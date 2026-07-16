@@ -84,6 +84,9 @@ use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::manifest::AbilityManifest;
 use crate::daemon::execution::mission::directory::ABILITY_MANIFEST_SUFFIX;
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
+};
 use crate::daemon::persistence::agent_registry as agents;
 
 /// Wire name of the publish meta-ability. Pinned because the
@@ -342,15 +345,24 @@ fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String, String,
 }
 
 fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
-    let registry = agents::load_agents()?;
-    let entry = registry.agents.get(owner_id).ok_or_else(|| {
-        anyhow::anyhow!(
-            "owner agent id {owner_id:?} is not registered (registered agents: {:?}); \
-             create the agent first via `easynet agent new`",
-            registry.agents.keys().collect::<Vec<_>>()
-        )
-    })?;
-    let root = entry.required_root_path(owner_id, "ability.publish")?;
+    let root = match AgentAggregateRepository::load_registered_agent_workspace(
+        owner_id,
+        "ability.publish",
+    ) {
+        Ok(workspace) => workspace.root_path().to_path_buf(),
+        Err(AgentRegisteredAgentLoadError::Lookup(
+            AgentRegisteredWorkspaceLookupError::Missing {
+                registered_agent_ids,
+                ..
+            },
+        )) => {
+            anyhow::bail!(
+                "owner agent id {owner_id:?} is not registered (registered agents: {registered_agent_ids:?}); \
+                 create the agent first via `easynet agent new`"
+            );
+        }
+        Err(error) => return Err(error.into_source_or_self()),
+    };
     if !root.is_dir() {
         anyhow::bail!(
             "owner agent {owner_id:?} has no on-disk workspace at {} — cannot publish \

@@ -3791,12 +3791,12 @@ if skill_publish_ability.exists():
     production_text = text.split("#[cfg(test)]", 1)[0]
     for token, detail in (
         (
-            "AgentAggregateRepository::load_snapshot()",
-            "skill package owner resolution must load through the Agent aggregate snapshot",
+            "AgentAggregateRepository::load_registered_agent_workspace(",
+            "skill package owner resolution must load through the registry-only Agent workspace resolver",
         ),
         (
-            ".registered_agent_workspace(owner_id, \"skill.publish\")",
-            "skill package owner resolution must consume the aggregate registered-workspace projection",
+            "owner_id, \"skill.publish\"",
+            "skill package owner resolution must declare its registered workspace operation",
         ),
     ):
         if token not in production_text:
@@ -3827,12 +3827,12 @@ if skill_store.exists():
             "shared skill mutations must centralize registered workspace resolution",
         ),
         (
-            "AgentAggregateRepository::load_snapshot()",
-            "shared skill mutations must load through the Agent aggregate snapshot",
+            "AgentAggregateRepository::load_registered_agent_workspace(",
+            "shared skill mutations must load through the registry-only Agent workspace resolver",
         ),
         (
-            ".registered_agent_workspace(agent, mutation.operation())",
-            "shared skill mutations must consume the aggregate registered-workspace projection",
+            "agent, mutation.operation()",
+            "shared skill mutations must declare their registered workspace operation",
         ),
     ):
         if token not in production_text:
@@ -3981,6 +3981,59 @@ if cli_start.exists():
                 line_number(production_text, offset),
                 "daemon-native join lineage must short-circuit before backend verifier execution",
             )
+
+# Rule 52: ability manifest publication resolves registered owner workspaces
+# through the registry-only Agent resolver, never by reopening agents.json.
+ability_publish = cli_root / "src/daemon/ability/builtins/device_control/ability_management/publish.rs"
+if ability_publish.exists():
+    text = source(ability_publish)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "AgentAggregateRepository::load_registered_agent_workspace(",
+            "ability publication must load registered owners through the registry-only workspace resolver",
+        ),
+        (
+            "\"ability.publish\"",
+            "ability publication must declare its registered workspace operation",
+        ),
+    ):
+        if token not in production_text:
+            add("R52_ABILITY_PUBLISH_AGENT_AGGREGATE_WORKSPACE_FORK", ability_publish, 1, detail)
+    for token, detail in (
+        ("agents::load_agents", "ability publication must not load agents.json directly"),
+        ("agent_registry::load_agents", "ability publication must not bypass the Agent resolver"),
+        ("registry.agents", "ability publication must not inspect AgentRegistry rows directly"),
+    ):
+        if token in production_text:
+            add("R52_ABILITY_PUBLISH_AGENT_AGGREGATE_WORKSPACE_FORK", ability_publish, 1, detail)
+
+# Rule 53: transactional agent ability authoring uses both the registered
+# runtime entry and workspace projection, sourced through the registry-only resolver.
+agent_authoring = cli_root / "src/daemon/ability/builtins/agents/authoring.rs"
+if agent_authoring.exists():
+    text = source(agent_authoring)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "AgentAggregateRepository::load_registered_agent(",
+            "agent ability authoring must load its runtime entry through the registry-only resolver",
+        ),
+        (
+            "\"agent.ability.put\"",
+            "agent ability authoring must declare its registered runtime operation",
+        ),
+        ("registered.entry()", "agent ability authoring must use the runtime entry projection"),
+        ("registered.workspace()", "agent ability authoring must use the workspace projection"),
+    ):
+        if token not in production_text:
+            add("R53_AGENT_ABILITY_AUTHORING_REGISTRY_ONLY_WORKSPACE_FORK", agent_authoring, 1, detail)
+    for token, detail in (
+        ("agents::load_agents", "agent ability authoring must not load agents.json directly"),
+        ("registry.agents", "agent ability authoring must not inspect AgentRegistry rows directly"),
+    ):
+        if token in production_text:
+            add("R53_AGENT_ABILITY_AUTHORING_REGISTRY_ONLY_WORKSPACE_FORK", agent_authoring, 1, detail)
 
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The

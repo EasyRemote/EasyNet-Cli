@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::daemon::persistence::agent_aggregate::{
-    AgentAggregateRepository, AgentRegisteredWorkspaceLookupError,
+    AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
 };
 use crate::daemon::persistence::agent_registry as agents;
 use crate::daemon::persistence::config;
@@ -734,13 +734,12 @@ impl SkillMutation {
 }
 
 fn resolve_skill_agent_root(agent: &str, mutation: SkillMutation) -> anyhow::Result<PathBuf> {
-    let snapshot = AgentAggregateRepository::load_snapshot()?;
-    match snapshot.registered_agent_workspace(agent, mutation.operation()) {
+    match AgentAggregateRepository::load_registered_agent_workspace(agent, mutation.operation()) {
         Ok(workspace) => Ok(workspace.root_path().to_path_buf()),
-        Err(AgentRegisteredWorkspaceLookupError::Missing { .. }) => {
-            Err(mutation.missing_owner_error(agent))
-        }
-        Err(error) => Err(error.into()),
+        Err(AgentRegisteredAgentLoadError::Lookup(
+            AgentRegisteredWorkspaceLookupError::Missing { .. },
+        )) => Err(mutation.missing_owner_error(agent)),
+        Err(error) => Err(error.into_source_or_self()),
     }
 }
 

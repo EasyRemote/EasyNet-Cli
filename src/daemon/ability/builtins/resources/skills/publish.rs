@@ -56,7 +56,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
@@ -603,8 +603,8 @@ fn parse_skill_file_args(
 /// use `<cwd>/skills/` so EasyNet's own listing surfaces the
 /// artifact, but we know the LLM won't auto-load it.
 fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
-    let owner = AgentAggregateRepository::load_snapshot()?
-        .registered_agent_workspace(owner_id, "skill.publish")?;
+    let owner =
+        AgentAggregateRepository::load_registered_agent_workspace(owner_id, "skill.publish")?;
     let root = owner.root_path().to_path_buf();
     if !root.is_dir() {
         anyhow::bail!(
@@ -1316,16 +1316,12 @@ mod tests {
         }))
         .expect("tree ok");
         let files = tree["files"].as_array().unwrap();
-        assert!(
-            files
-                .iter()
-                .any(|f| f["path"] == "SKILL.md" && f["type"] == "file")
-        );
-        assert!(
-            files
-                .iter()
-                .any(|f| f["path"] == "notes/guide.md" && f["type"] == "file")
-        );
+        assert!(files
+            .iter()
+            .any(|f| f["path"] == "SKILL.md" && f["type"] == "file"));
+        assert!(files
+            .iter()
+            .any(|f| f["path"] == "notes/guide.md" && f["type"] == "file"));
         assert!(!files.iter().any(|f| f["path"] == ".easynet/install.json"));
 
         let read = read_file_handler(json!({
@@ -1382,13 +1378,11 @@ mod tests {
             "resource_ura": resource_ura,
         }))
         .expect("tree resolves global skill");
-        assert!(
-            tree["files"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|f| f["path"] == "guide.md" && f["type"] == "file")
-        );
+        assert!(tree["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["path"] == "guide.md" && f["type"] == "file"));
 
         let read = read_file_handler(json!({
             "owner_agent_id": name,
@@ -1426,13 +1420,11 @@ mod tests {
         }))
         .expect("tree resolves unscoped global owner");
         assert_eq!(tree["owner_agent_id"], "global:claude-global");
-        assert!(
-            tree["files"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|f| f["path"] == "guide.md" && f["type"] == "file")
-        );
+        assert!(tree["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["path"] == "guide.md" && f["type"] == "file"));
 
         let read = read_file_handler(json!({
             "owner_agent_id": "global:claude-global",

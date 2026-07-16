@@ -56,6 +56,7 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/automation" \
     "$CLI/src/daemon/ability/builtins/agents" \
     "$CLI/src/daemon/ability/builtins/device_control" \
+    "$CLI/src/daemon/ability/builtins/device_control/ability_management" \
     "$CLI/src/daemon/ability/builtins/integrations" \
     "$CLI/src/daemon/execution/mission" \
     "$CLI/src/daemon/execution/mcp" \
@@ -721,7 +722,7 @@ use crate::daemon::persistence::{
 };
 
 fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
-    let owner = AgentAggregateRepository::load_snapshot()?.registered_agent_workspace(owner_id, "skill.publish")?;
+    let owner = AgentAggregateRepository::load_registered_agent_workspace(owner_id, "skill.publish")?;
     let root = owner.root_path().to_path_buf();
     if !root.is_dir() {
         anyhow::bail!("owner agent {owner_id:?} has no on-disk workspace at {}", root.display());
@@ -3589,6 +3590,30 @@ EOF
 expect_fail \
   "daemon native join credential verifier fork" \
   "R51_DAEMON_NATIVE_JOIN_CREDENTIAL_VERIFICATION_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/publish.rs" <<'EOF'
+fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
+    let registry = agents::load_agents()?;
+    let entry = registry.agents.get(owner_id).ok_or_else(|| anyhow::anyhow!("missing"))?;
+    entry.required_root_path(owner_id, "ability.publish")
+}
+EOF
+expect_fail \
+  "ability publish aggregate workspace fork" \
+  "R52_ABILITY_PUBLISH_AGENT_AGGREGATE_WORKSPACE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/authoring.rs" <<'EOF'
+fn put_agent_abilities_handler(name: &str) -> anyhow::Result<()> {
+    let registry = agents::load_agents()?;
+    let entry = registry.agents.get(name).ok_or_else(|| anyhow::anyhow!("missing"))?;
+    sync(entry)
+}
+EOF
+expect_fail \
+  "agent ability authoring registry-only workspace fork" \
+  "R53_AGENT_ABILITY_AUTHORING_REGISTRY_ONLY_WORKSPACE_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

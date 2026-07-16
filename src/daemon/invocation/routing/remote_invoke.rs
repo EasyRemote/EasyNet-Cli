@@ -664,11 +664,12 @@ pub fn invoke_federation_discover_filtered(
     }
     let arg_bytes = serde_json::to_vec(&req_args).context("encode discover args")?;
 
-    let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
+    let subject_ura = federation_discover_subject_ura(&local_daemon_ura)?;
     let request = ProtoEnvelope::targeted(
-        local_device_ura.as_str(),
-        local_device_ura.as_str(),
-        local_device_ura.as_str(),
+        local_daemon_ura.as_str(),
+        local_daemon_ura.as_str(),
+        subject_ura.as_str(),
     )?
     .invoke_request("federation.discover", arg_bytes)?;
 
@@ -707,6 +708,16 @@ pub fn invoke_federation_discover_filtered(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())
+}
+
+fn federation_discover_subject_ura(callee_ura: &str) -> anyhow::Result<String> {
+    let parsed = crate::core::ura::parse_ura(callee_ura)?;
+    if parsed.kind == crate::core::ura::URAKind::Hub {
+        return crate::core::ura::owner_ability_ura(callee_ura, "federation.discover").ok_or_else(
+            || anyhow!("cannot derive federation.discover subject for hub callee `{callee_ura}`"),
+        );
+    }
+    Ok(callee_ura.to_string())
 }
 
 /// `federation.revoke` against the local daemon's gRPC
@@ -835,5 +846,21 @@ mod tests {
         };
         assert_eq!(list.prior.len(), 2);
         assert_eq!(list.prior[0].receipt_hash, vec![0x11; 32]);
+    }
+
+    #[test]
+    fn federation_discover_subject_uses_hub_ability_subject_and_device_self_subject() {
+        let hub = crate::core::ura::hub_ura("acme");
+        assert_eq!(
+            federation_discover_subject_ura(&hub).expect("hub subject"),
+            crate::core::ura::owner_ability_ura(&hub, "federation.discover")
+                .expect("hub ability subject")
+        );
+
+        let device = crate::core::ura::device_ura("acme", "device-a");
+        assert_eq!(
+            federation_discover_subject_ura(&device).expect("device subject"),
+            device
+        );
     }
 }

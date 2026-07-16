@@ -591,6 +591,32 @@ async fn invoke_dispatches_federation_discover_with_no_filter_returns_empty_when
 }
 
 #[tokio::test]
+async fn invoke_dispatches_federation_discover_includes_local_presence_devices() {
+    let presence = Arc::new(PresenceRegistry::new());
+    presence.insert(
+        crate::core::ura::device_ura("local-realm", "device-a"),
+        tokio::sync::mpsc::channel(8).0,
+    );
+    let mut svc = make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
+        .with_session_realm("local-realm");
+    svc.directory.presence = presence;
+    let svc = register_test_daemon_routes(svc, TEST_DAEMON_URA);
+
+    let resp = svc
+        .invoke(invoke_request(ABILITY_FEDERATION_DISCOVER, "{}"))
+        .await
+        .expect("dispatch returns Ok");
+    let body: federation_wrappers::DiscoverResponse = parse_response_body(resp);
+    assert_eq!(body.entries.len(), 1);
+    assert_eq!(
+        body.entries[0].agent_ura,
+        crate::core::ura::device_ura("local-realm", "device-a")
+    );
+    assert_eq!(body.entries[0].node_id, "device-a");
+    assert_eq!(body.entries[0].status, "active");
+}
+
+#[tokio::test]
 async fn invoke_dispatches_federation_discover_returns_peer_entries_when_view_populated() {
     // PR-N3 N3-4: when the federated_directory cell holds
     // entries (write side is the per-peer
