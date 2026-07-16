@@ -41,8 +41,8 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::boot::join_connection_state::{
-    record_snapshot, JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode,
-    JoinFailureParts, JoinTransition,
+    JoinConnectionSnapshot, JoinConnectionState, JoinFailureCode, JoinFailureParts, JoinTransition,
+    record_snapshot,
 };
 use crate::daemon::persistence::config;
 use crate::support::platform::{output, sysinfo};
@@ -383,6 +383,9 @@ fn run_ura_join_stages(
     let node_id = uuid::Uuid::new_v4().to_string();
     let (membership_ura, _, public_key) = ensure_device_runtime_identity(&target.realm, &node_id)?;
     let public_key_hex = hex::encode(public_key.to_bytes());
+    let local_user_id = principal_enrollment
+        .as_ref()
+        .and_then(|proof| user_id_from_principal_ura(&proof.principal_ura));
 
     renderer.set_active("federation-join");
     let join = match do_federation_join_and_resolve_hub_key(
@@ -410,8 +413,8 @@ fn run_ura_join_stages(
         realm: target.realm.clone(),
         deploy_signature: String::new(),
         hub_api_base: None,
-        username: None,
-        user_id: None,
+        username: local_user_id.clone(),
+        user_id: local_user_id,
         hub_pubkey_b64: Some(hex_public_key_to_b64(&join.hub_public_key_hex)?),
         hub_tls_ca_pem_b64: hub_ca
             .map(read_ca_pem_b64)
@@ -423,6 +426,15 @@ fn run_ura_join_stages(
         anyhow::bail!("federation.join receipt missing join_receipt_hash");
     }
     persist_join_credentials(renderer, creds, peer_hub, "cli.join.ura")
+}
+
+fn user_id_from_principal_ura(principal_ura: &str) -> Option<String> {
+    let parsed = crate::core::ura::parse_ura(principal_ura).ok()?;
+    if parsed.kind == crate::core::ura::URAKind::User {
+        parsed.user_id().map(str::to_string)
+    } else {
+        None
+    }
 }
 
 fn join_principal_enrollment_from_args(
@@ -1730,6 +1742,18 @@ mod tests {
     }
 
     #[test]
+    fn hub_ura_join_credentials_can_derive_local_user_id_from_principal_ura() {
+        assert_eq!(
+            user_id_from_principal_ura("easynet:///r/tenant-a/user/alice").as_deref(),
+            Some("alice")
+        );
+        assert_eq!(
+            user_id_from_principal_ura("easynet:///r/tenant-a/hub"),
+            None
+        );
+    }
+
+    #[test]
     fn join_principal_enrollment_id_rejects_generic_proof_mix() {
         let err = join_principal_enrollment_from_args(
             Some("easynet:///r/tenant-a/user/bob"),
@@ -1739,9 +1763,10 @@ mod tests {
         )
         .expect_err("mixed shorthand and generic proof must fail");
 
-        assert!(err
-            .to_string()
-            .contains("cannot be combined with --principal-proof-kind"));
+        assert!(
+            err.to_string()
+                .contains("cannot be combined with --principal-proof-kind")
+        );
     }
 
     #[test]

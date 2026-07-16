@@ -62,10 +62,12 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/governance" \
     "$CLI/src/daemon/ability/builtins/resources" \
     "$CLI/src/daemon/ability/builtins/resources/files_store" \
+    "$CLI/src/daemon/ability/builtins/resources/skills" \
     "$CLI/src/daemon/ability/catalog/profiles" \
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/identity" \
     "$CLI/src/daemon/invocation/admission" \
+    "$CLI/src/daemon/invocation/bidi/session_initiator" \
     "$CLI/src/daemon/invocation/dispatch" \
     "$CLI/src/daemon/invocation/routing" \
     "$CLI/src/daemon/invocation/streams" \
@@ -329,10 +331,22 @@ struct AgentHostedPlacement {
     host_node_id: Option<String>,
 }
 
-struct AgentHostedIdentityStatus {
-    host_device_agent_ura: Option<String>,
-    hosted_agent_count: usize,
-}
+	struct AgentHostedIdentityStatus {
+	    host_device_agent_ura: Option<String>,
+	    hosted_agent_count: usize,
+	}
+
+	struct AgentHostedSkillOwnerProjection;
+
+	impl AgentHostedSkillOwnerProjection {
+	    fn hosted_ura_for(&self, agent_name: &str) -> Option<&str> {
+	        Some("easynet:///r/acme/agent/user.claude")
+	    }
+
+	    fn owner_name_for_agent_ura(&self, agent_ura: &str) -> Option<&str> {
+	        Some("claude")
+	    }
+	}
 
 struct AgentHostDescriptorIdentityProjection {
     host_device_agent_ura: Option<String>,
@@ -360,6 +374,7 @@ impl AgentHostDescriptorIdentityProjection {
 }
 
 struct AgentHostedIdentitySnapshot;
+struct AgentHostedAdvertiseEntry;
 
 impl AgentHostedIdentitySnapshot {
     fn host_descriptor_identity_projection(&self) -> AgentHostDescriptorIdentityProjection {
@@ -377,8 +392,22 @@ impl AgentHostedIdentitySnapshot {
         Some("easynet:///r/acme/agent/user.claude")
     }
 
+    fn hosted_advertise_entries(&self, realm: &str, user_segment: &str) -> Vec<AgentHostedAdvertiseEntry> {
+        vec![AgentHostedAdvertiseEntry]
+    }
+
     fn hosted_agent_authority_roots(&self) -> Vec<String> {
         vec!["easynet:///r/acme/agent/user.claude".to_string()]
+    }
+}
+
+impl AgentHostedAdvertiseEntry {
+    fn agent_ura(&self) -> &str {
+        "easynet:///r/acme/agent/user.claude"
+    }
+
+    fn short_label(&self) -> &str {
+        "user.claude"
     }
 }
 
@@ -403,12 +432,16 @@ impl AgentAggregateSnapshot {
         &self.local_agents.host_device_agent_ura
     }
 
-    fn hosted_identity_status(&self) -> AgentHostedIdentityStatus {
-        AgentHostedIdentityStatus {
-            host_device_agent_ura: Some(self.local_agents.host_device_agent_ura.clone()),
-            hosted_agent_count: self.local_agents.hosted_agents.len(),
-        }
-    }
+	    fn hosted_identity_status(&self) -> AgentHostedIdentityStatus {
+	        AgentHostedIdentityStatus {
+	            host_device_agent_ura: Some(self.local_agents.host_device_agent_ura.clone()),
+	            hosted_agent_count: self.local_agents.hosted_agents.len(),
+	        }
+	    }
+
+	    fn hosted_skill_owner_projection(&self) -> AgentHostedSkillOwnerProjection {
+	        AgentHostedSkillOwnerProjection
+	    }
 
     fn hosted_llm_agent_identity(&self, agent: &str) -> HostedLlmAgentIdentity<'_> {
         HostedLlmAgentIdentity::Present(&self.local_agents.hosted_agents[0])
@@ -548,7 +581,7 @@ fn ledger_resource_ura() -> Option<String> {
     hosted_identity.host_device_agent_ura().map(str::to_string)
 }
 EOF
-  cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
+	  cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
 
 pub fn register<F>(reg: &mut AxonAbilityCatalog, snapshot_provider: F)
@@ -568,10 +601,98 @@ fn list_agents_handler(
     registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>,
 ) -> anyhow::Result<Value> {
     let snapshot = registry_provider()?;
-    Ok(json!({ "agents": agent_rows(&snapshot.registry, &snapshot.local_agents)? }))
+    Ok(json!({ "agents": agent_rows(&snapshot)? }))
+}
+
+fn agent_rows(snapshot: &AgentAggregateSnapshot) -> anyhow::Result<Vec<Value>> {
+    snapshot
+        .registered_agents()
+        .map(|(name, _entry)| {
+            let ura = snapshot.hosted_llm_agent_ura(name);
+            Ok(json!({ "name": name, "ura": ura }))
+        })
+        .collect()
 }
 EOF
-  cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
+  cat >"$CLI/src/daemon/invocation/bidi/session_initiator/prelude.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentHostedAdvertiseEntry,
+};
+
+fn run_hosted_agent_advertise_prelude() -> anyhow::Result<()> {
+    let realm = "acme".to_string();
+    let user_segment = "user".to_string();
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_snapshot()?;
+    let entries = hosted_identity.hosted_advertise_entries(&realm, &user_segment);
+    let labels = entries
+        .iter()
+        .map(AgentHostedAdvertiseEntry::short_label)
+        .collect::<Vec<_>>();
+    for entry in &entries {
+        advertise_hosted_agent_entry(entry);
+    }
+    Ok(())
+}
+
+fn advertise_hosted_agent_entry(entry: &AgentHostedAdvertiseEntry) {
+    send_advertise_agent_prelude(entry.agent_ura());
+	}
+	EOF
+	  cat >"$CLI/src/daemon/ability/builtins/resources/skills/list.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentHostedSkillOwnerProjection,
+};
+
+fn handle(args: Value) -> anyhow::Result<Value> {
+    let snapshot = AgentAggregateRepository::load_snapshot()?;
+    let hosted_skill_owners = snapshot.hosted_skill_owner_projection();
+    let scope = SkillListScope::from_args(&args, &hosted_skill_owners)?;
+    let rows = SkillInventoryBuilder::new(&snapshot.registry, &scope).collect()?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            scoped_skill_resource_ura(
+                &hosted_skill_owners,
+                scope.agent_ura_for_row(&row.agent_id),
+                &row.agent_id,
+                &row.name,
+            )
+        })
+        .collect();
+    Ok(json!({ "items": items }))
+}
+
+impl SkillListScope {
+    fn from_args(args: &Value, hosted_skill_owners: &AgentHostedSkillOwnerProjection) -> anyhow::Result<Self> {
+        let scoped_owner = owner_name_for_agent_ura(
+            hosted_skill_owners,
+            "easynet:///r/acme/agent/user.claude",
+        )?;
+        Ok(Self::new(scoped_owner))
+    }
+}
+
+fn owner_name_for_agent_ura(
+    hosted_skill_owners: &AgentHostedSkillOwnerProjection,
+    agent_ura: &str,
+) -> anyhow::Result<String> {
+    hosted_skill_owners
+        .owner_name_for_agent_ura(agent_ura)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("missing"))
+}
+
+fn scoped_skill_resource_ura(
+    hosted_skill_owners: &AgentHostedSkillOwnerProjection,
+    explicit_agent_ura: Option<&str>,
+    agent_name: &str,
+    skill_name: &str,
+) -> Option<String> {
+    let agent_ura = explicit_agent_ura.or_else(|| hosted_skill_owners.hosted_ura_for(agent_name))?;
+    crate::daemon::federation::read_model::owner_projection::skill_resource_ura(agent_ura, skill_name)
+}
+EOF
+	  cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
 fn registration_hints(owner_ura: &str, registry_name: &str, call_mode: DescriptorCallMode) -> AbilityHints {
     let public_name = crate::core::ura::descriptor_public_ability_name(owner_ura, registry_name);
     AbilityHints {
@@ -2778,6 +2899,39 @@ expect_fail \
   "R45_HOSTED_AUTHORITY_ROOTS_AGENT_AGGREGATE_FORK"
 
 make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
+
+fn list_agents_handler(
+    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>,
+) -> anyhow::Result<Value> {
+    let snapshot = registry_provider()?;
+    Ok(json!({ "agents": agent_rows(&snapshot)? }))
+}
+
+fn agent_rows(
+    registry: &AgentRegistry,
+    local_agents: &crate::daemon::persistence::local_agents::LocalAgentsFile,
+) -> anyhow::Result<Vec<Value>> {
+    registry
+        .agents
+        .iter()
+        .map(|(name, _entry)| {
+            let ura = crate::daemon::persistence::local_agents::lookup_hosted_ura(
+                local_agents,
+                "llm",
+                name,
+            );
+            Ok(json!({ "name": name, "ura": ura }))
+        })
+        .collect()
+}
+EOF
+expect_fail \
+  "agent list aggregate row fork" \
+  "R46_AGENT_LIST_AGGREGATE_ROW_FORK"
+
+make_good_fixture
 cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
 enum DescriptorCallMode {
     Rpc,
@@ -3233,6 +3387,60 @@ EOF
 expect_fail \
   "unary cancel signed command fork" \
   "R21_UNARY_CANCEL_SIGNED_COMMAND_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/bidi/session_initiator/prelude.rs" <<'EOF'
+fn run_hosted_agent_advertise_prelude() -> anyhow::Result<()> {
+    let local_agents = crate::daemon::persistence::local_agents::load()?;
+    let entries = collect_advertise_entries(&realm, &user_segment, &local_agents);
+    Ok(())
+}
+
+fn collect_advertise_entries(
+    realm: &str,
+    user_segment: &str,
+    local_agents_file: &crate::daemon::persistence::local_agents::LocalAgentsFile,
+) -> Vec<String> {
+    local_agents_file
+        .hosted_agents
+        .iter()
+        .map(|entry| entry.agent_ura.clone())
+        .collect()
+}
+EOF
+expect_fail \
+  "hosted advertise prelude aggregate fork" \
+  "R47_HOSTED_ADVERTISE_PRELUDE_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/resources/skills/list.rs" <<'EOF'
+fn handle(args: Value) -> anyhow::Result<Value> {
+    let registry = crate::daemon::persistence::agent_registry::load_agents()?;
+    let local_agents = crate::daemon::persistence::local_agents::load().ok();
+    let scope = SkillListScope::from_args(&args, local_agents.as_ref())?;
+    let hosted_agent_index = HostedAgentUraIndex::from_local_agents(local_agents.as_ref());
+    Ok(json!({ "items": [] }))
+}
+
+struct HostedAgentUraIndex;
+
+impl HostedAgentUraIndex {
+    fn from_local_agents(
+        local_agents: Option<&crate::daemon::persistence::local_agents::LocalAgentsFile>,
+    ) -> Self {
+        if let Some(local_agents) = local_agents {
+            let _rows = local_agents
+                .hosted_agents
+                .iter()
+                .map(|entry| (entry.name.clone(), entry.agent_ura.clone()));
+        }
+        Self
+    }
+}
+EOF
+expect_fail \
+  "skill list aggregate identity fork" \
+  "R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

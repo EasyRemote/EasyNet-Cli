@@ -39,7 +39,6 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
-use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 use crate::daemon::ability::dispatch::OwnerKind;
 pub const ABILITY_LIST_AGENTS: &str = crate::daemon::ability::names::agents::AGENT_LIST;
@@ -65,26 +64,18 @@ fn list_agents_handler(
     registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>,
 ) -> anyhow::Result<Value> {
     let snapshot = registry_provider()?;
-    Ok(json!({ "agents": agent_rows(&snapshot.registry, &snapshot.local_agents)? }))
+    Ok(json!({ "agents": agent_rows(&snapshot)? }))
 }
 
-fn agent_rows(
-    registry: &AgentRegistry,
-    local_agents: &crate::daemon::persistence::local_agents::LocalAgentsFile,
-) -> anyhow::Result<Vec<Value>> {
-    let rows: Vec<Value> = registry
-        .agents
-        .iter()
+fn agent_rows(snapshot: &AgentAggregateSnapshot) -> anyhow::Result<Vec<Value>> {
+    let rows: Vec<Value> = snapshot
+        .registered_agents()
         .map(|(name, e)| -> anyhow::Result<Value> {
             let root = e.required_root_path(name, "agent.list")?;
-            let ura = crate::daemon::persistence::local_agents::lookup_hosted_ura(
-                local_agents,
-                "llm",
-                name,
-            );
+            let ura = snapshot.hosted_llm_agent_ura(name);
             Ok(json!({
                 "name": name,
-                "ura": ura.map(Value::String).unwrap_or(Value::Null),
+                "ura": ura.map(|value| Value::String(value.to_string())).unwrap_or(Value::Null),
                 "runtime": e.agent_type.to_string(),
                 "model": e.model.clone().map(Value::String).unwrap_or(Value::Null),
                 "label": e.label.clone().map(Value::String).unwrap_or(Value::Null),
@@ -194,7 +185,7 @@ mod tests {
             "easynet:///r/acme/agent/alice.claude",
         );
 
-        let rows = agent_rows(&registry, &local_agents).unwrap();
+        let rows = agent_rows(&AgentAggregateSnapshot::new(registry, local_agents)).unwrap();
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["ura"], "easynet:///r/acme/agent/alice.claude");
@@ -227,11 +218,7 @@ mod tests {
             registered_entry(AgentType::Codex, None, "minimal"),
         );
 
-        let rows = agent_rows(
-            &registry,
-            &crate::daemon::persistence::local_agents::LocalAgentsFile::default(),
-        )
-        .unwrap();
+        let rows = agent_rows(&snapshot(registry)).unwrap();
 
         assert!(rows[0].get("entry").is_none());
         assert_eq!(rows[0]["runtime"], "codex");
@@ -246,11 +233,8 @@ mod tests {
             AgentEntry::new(AgentType::Codex, None),
         );
 
-        let error = agent_rows(
-            &registry,
-            &crate::daemon::persistence::local_agents::LocalAgentsFile::default(),
-        )
-        .expect_err("steady-state registry rows must not infer root_path");
+        let error = agent_rows(&snapshot(registry))
+            .expect_err("steady-state registry rows must not infer root_path");
 
         assert!(error.to_string().contains("agent.list"));
         assert!(error.to_string().contains("root_path"));

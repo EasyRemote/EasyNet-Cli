@@ -100,6 +100,10 @@ impl AgentAggregateSnapshot {
         AgentHostedIdentityStatus::from_local_agents(&self.local_agents)
     }
 
+    pub(crate) fn hosted_skill_owner_projection(&self) -> AgentHostedSkillOwnerProjection {
+        AgentHostedSkillOwnerProjection::from_local_agents(&self.local_agents)
+    }
+
     pub(crate) fn hosted_llm_agent_identity(&self, agent: &str) -> HostedLlmAgentIdentity<'_> {
         hosted_llm_agent_identity(&self.local_agents, agent)
     }
@@ -254,6 +258,93 @@ impl AgentHostedIdentitySnapshot {
             .map(|entry| entry.agent_ura.clone())
             .collect()
     }
+
+    pub(crate) fn hosted_advertise_entries(
+        &self,
+        realm: &str,
+        user_segment: &str,
+    ) -> Vec<AgentHostedAdvertiseEntry> {
+        let mut entries = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        for hosted in &self.local_agents.hosted_agents {
+            let agent_ura = hosted.agent_ura.trim();
+            if agent_ura.is_empty() || agent_ura.contains("<unjoined>") {
+                continue;
+            }
+            if seen.insert(agent_ura.to_string()) {
+                entries.push(AgentHostedAdvertiseEntry::new(agent_ura));
+            }
+        }
+
+        if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
+            for synthetic in ["pages", "files"] {
+                let agent_ura = crate::core::ura::agent_ura(realm, user_segment, synthetic);
+                if seen.insert(agent_ura.clone()) {
+                    entries.push(AgentHostedAdvertiseEntry {
+                        agent_ura,
+                        short_label: format!("{user_segment}.{synthetic}"),
+                    });
+                }
+            }
+        }
+
+        entries
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentHostedAdvertiseEntry {
+    agent_ura: String,
+    short_label: String,
+}
+
+impl AgentHostedAdvertiseEntry {
+    fn new(agent_ura: &str) -> Self {
+        Self {
+            agent_ura: agent_ura.to_string(),
+            short_label: hosted_agent_short_label(agent_ura),
+        }
+    }
+
+    pub(crate) fn agent_ura(&self) -> &str {
+        &self.agent_ura
+    }
+
+    pub(crate) fn short_label(&self) -> &str {
+        &self.short_label
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AgentHostedSkillOwnerProjection {
+    by_agent_name: BTreeMap<String, String>,
+    owner_by_agent_ura: BTreeMap<String, String>,
+}
+
+impl AgentHostedSkillOwnerProjection {
+    fn from_local_agents(local_agents: &LocalAgentsFile) -> Self {
+        let mut by_agent_name = BTreeMap::new();
+        let mut owner_by_agent_ura = BTreeMap::new();
+        for entry in &local_agents.hosted_agents {
+            by_agent_name.insert(entry.name.clone(), entry.agent_ura.clone());
+            owner_by_agent_ura
+                .entry(entry.agent_ura.clone())
+                .or_insert_with(|| entry.name.clone());
+        }
+        Self {
+            by_agent_name,
+            owner_by_agent_ura,
+        }
+    }
+
+    pub(crate) fn hosted_ura_for(&self, agent_name: &str) -> Option<&str> {
+        self.by_agent_name.get(agent_name).map(String::as_str)
+    }
+
+    pub(crate) fn owner_name_for_agent_ura(&self, agent_ura: &str) -> Option<&str> {
+        self.owner_by_agent_ura.get(agent_ura).map(String::as_str)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -368,6 +459,18 @@ fn hosted_profile_agent_ura<'a>(
     Some(identity.agent_ura.as_str())
 }
 
+fn hosted_agent_short_label(agent_ura: &str) -> String {
+    crate::core::ura::parse_ura(agent_ura)
+        .ok()
+        .filter(|parsed| parsed.kind == crate::core::ura::URAKind::Agent)
+        .and_then(|parsed| {
+            parsed
+                .agent_ids()
+                .map(|(user_id, agent_id)| format!("{user_id}.{agent_id}"))
+        })
+        .unwrap_or_else(|| agent_ura.to_string())
+}
+
 fn trimmed_nonempty(value: &str) -> Option<&str> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed)
@@ -461,8 +564,8 @@ impl AgentAggregateRepository {
         Ok(Self::load_hosted_identity_snapshot()?.hosted_identity_status())
     }
 
-    pub(crate) fn try_load_snapshot(
-    ) -> Result<AgentAggregateSnapshot, AgentAggregateSnapshotLoadError> {
+    pub(crate) fn try_load_snapshot()
+    -> Result<AgentAggregateSnapshot, AgentAggregateSnapshotLoadError> {
         let registry = Self::load_registry_projection()?;
         let local_agents = Self::load_hosted_identity_projection()?;
         Ok(AgentAggregateSnapshot::new(registry, local_agents))
@@ -650,9 +753,11 @@ mod tests {
                 .name,
             "claude"
         );
-        assert!(snapshot
-            .hosted_agent_identity_by_ura("easynet:///r/acme/agent/u1.other")
-            .is_none());
+        assert!(
+            snapshot
+                .hosted_agent_identity_by_ura("easynet:///r/acme/agent/u1.other")
+                .is_none()
+        );
     }
 
     #[test]
@@ -717,6 +822,34 @@ mod tests {
     }
 
     #[test]
+    fn hosted_skill_owner_projection_resolves_names_and_uras() {
+        let snapshot = snapshot(vec![
+            hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
+            hosted_agent("mcp", "tools", "easynet:///r/acme/agent/u1.tools"),
+            hosted_agent("llm", "alias", "easynet:///r/acme/agent/u1.claude"),
+        ]);
+
+        let projection = snapshot.hosted_skill_owner_projection();
+
+        assert_eq!(
+            projection.hosted_ura_for("claude"),
+            Some("easynet:///r/acme/agent/u1.claude")
+        );
+        assert_eq!(
+            projection.hosted_ura_for("tools"),
+            Some("easynet:///r/acme/agent/u1.tools")
+        );
+        assert_eq!(
+            projection.owner_name_for_agent_ura("easynet:///r/acme/agent/u1.claude"),
+            Some("claude")
+        );
+        assert_eq!(
+            projection.owner_name_for_agent_ura("easynet:///r/acme/agent/u1.missing"),
+            None
+        );
+    }
+
+    #[test]
     fn hosted_identity_snapshot_rejects_ambiguous_llm_owner_ura() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
@@ -746,6 +879,50 @@ mod tests {
                 "easynet:///r/acme/agent/u1.mcp".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn hosted_advertise_entries_project_persisted_and_synthetic_agents() {
+        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            hosted_agents: vec![
+                hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
+                hosted_agent("llm", "duplicate", "easynet:///r/acme/agent/u1.claude"),
+                hosted_agent("llm", "pending", "<unjoined>"),
+                hosted_agent("mcp", "blank", "   "),
+            ],
+        });
+
+        let entries = snapshot.hosted_advertise_entries("acme", "u1");
+        let rows = entries
+            .iter()
+            .map(|entry| (entry.agent_ura(), entry.short_label()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            vec![
+                ("easynet:///r/acme/agent/u1.claude", "u1.claude"),
+                ("easynet:///r/acme/agent/u1.pages", "u1.pages"),
+                ("easynet:///r/acme/agent/u1.files", "u1.files"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hosted_advertise_entries_skip_synthetic_self_and_blank_context() {
+        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            hosted_agents: vec![hosted_agent(
+                "llm",
+                "claude",
+                "easynet:///r/acme/agent/u1.claude",
+            )],
+        });
+
+        assert_eq!(snapshot.hosted_advertise_entries("acme", "self").len(), 1);
+        assert_eq!(snapshot.hosted_advertise_entries("", "u1").len(), 1);
+        assert_eq!(snapshot.hosted_advertise_entries("acme", "").len(), 1);
     }
 
     #[test]
@@ -870,13 +1047,15 @@ mod tests {
 
         let projection = snapshot.local_target_projection();
 
-        assert!(projection
-            .hosted_agent_targets
-            .contains(&HostedAgentTarget {
-                realm: "acme".to_string(),
-                user_id: "u1".to_string(),
-                agent_id: "claude".to_string(),
-            }));
+        assert!(
+            projection
+                .hosted_agent_targets
+                .contains(&HostedAgentTarget {
+                    realm: "acme".to_string(),
+                    user_id: "u1".to_string(),
+                    agent_id: "claude".to_string(),
+                })
+        );
         assert_eq!(projection.hosted_agent_targets.len(), 1);
         assert!(projection.registered_agent_ids.contains("claude"));
         assert!(projection.registered_agent_ids.contains("codex"));

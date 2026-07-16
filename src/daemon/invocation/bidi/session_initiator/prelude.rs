@@ -2,16 +2,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
-use tonic::{transport::Channel, Status};
+use easynet_axon::pb::axon::v1::{InvokeRequest, invocation_client::InvocationClient};
+use tonic::{Status, transport::Channel};
 
+use super::SessionError;
 use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
-use super::SessionError;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentHostedAdvertiseEntry,
+};
 
 pub struct SessionPreludeInputs<'a> {
     pub(super) ability_descriptors: &'a [AbilityDescriptor],
@@ -304,13 +307,14 @@ async fn run_hosted_agent_advertise_prelude(
             .unwrap_or_default(),
     };
 
-    let local_agents = crate::daemon::persistence::local_agents::load().map_err(|error| {
-        SessionError::HostedAgentPreludeFailed {
-            endpoint: hub_endpoint.to_string(),
-            reason: format!("load local-agents registry: {error}"),
-        }
-    })?;
-    let entries = collect_advertise_entries(&realm, &user_segment, &local_agents);
+    let hosted_identity =
+        AgentAggregateRepository::load_hosted_identity_snapshot().map_err(|error| {
+            SessionError::HostedAgentPreludeFailed {
+                endpoint: hub_endpoint.to_string(),
+                reason: format!("load hosted Agent identity projection: {error}"),
+            }
+        })?;
+    let entries = hosted_identity.hosted_advertise_entries(&realm, &user_segment);
     if realm.is_empty() || entries.is_empty() {
         return Ok(());
     }
@@ -322,7 +326,10 @@ async fn run_hosted_agent_advertise_prelude(
     let entries_count = entries.len();
     let labels_display = format!(
         "{:?}",
-        entries.iter().map(|e| &e.short_label).collect::<Vec<_>>()
+        entries
+            .iter()
+            .map(AgentHostedAdvertiseEntry::short_label)
+            .collect::<Vec<_>>()
     );
     phase.transition(
         DeviceSessionPhase::Preluding(PreludeStep::Advertise),
@@ -360,71 +367,21 @@ async fn run_hosted_agent_advertise_prelude(
     Ok(())
 }
 
-#[derive(Debug, Clone)]
-struct AdvertiseEntry {
-    agent_ura: String,
-    short_label: String,
-}
-
-fn collect_advertise_entries(
-    realm: &str,
-    user_segment: &str,
-    local_agents_file: &crate::daemon::persistence::local_agents::LocalAgentsFile,
-) -> Vec<AdvertiseEntry> {
-    let mut entries = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-
-    for hosted in &local_agents_file.hosted_agents {
-        if hosted.agent_ura.is_empty() || hosted.agent_ura.contains("<unjoined>") {
-            continue;
-        }
-        if !seen.insert(hosted.agent_ura.clone()) {
-            continue;
-        }
-        let short_label = crate::core::ura::parse_ura(&hosted.agent_ura)
-            .ok()
-            .filter(|p| p.kind == crate::core::ura::URAKind::Agent)
-            .and_then(|p| {
-                p.agent_ids()
-                    .map(|(user_id, agent_id)| format!("{user_id}.{agent_id}"))
-            })
-            .unwrap_or_else(|| hosted.agent_ura.clone());
-        entries.push(AdvertiseEntry {
-            agent_ura: hosted.agent_ura.clone(),
-            short_label,
-        });
-    }
-
-    if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
-        for synthetic in ["pages", "files"] {
-            let ura = crate::core::ura::agent_ura(realm, user_segment, synthetic);
-            if seen.insert(ura.clone()) {
-                entries.push(AdvertiseEntry {
-                    agent_ura: ura,
-                    short_label: format!("{user_segment}.{synthetic}"),
-                });
-            }
-        }
-    }
-
-    entries
-}
-
 async fn advertise_hosted_agent_entry(
     client: &mut InvocationClient<Channel>,
     caller_ura: &str,
     caller_node_id: &Option<String>,
     ability_descriptors: &[AbilityDescriptor],
-    entry: &AdvertiseEntry,
+    entry: &AgentHostedAdvertiseEntry,
     signer: &dyn CanonicalSigner,
 ) -> Result<(), String> {
     let host_for_advertise = caller_node_id.as_deref();
-    send_advertise_agent_prelude(client, &entry.agent_ura, host_for_advertise, signer)
+    send_advertise_agent_prelude(client, entry.agent_ura(), host_for_advertise, signer)
         .await
         .map_err(|error| {
             format!(
                 "advertise hosted agent `{}` failed (code={:?}): {}",
-                entry.agent_ura,
+                entry.agent_ura(),
                 error.code(),
                 error.message()
             )
@@ -449,11 +406,11 @@ struct HostedAgentAbilityAdvertiseContext<'a> {
 
 async fn advertise_hosted_agent_abilities(
     ctx: &mut HostedAgentAbilityAdvertiseContext<'_>,
-    entry: &AdvertiseEntry,
+    entry: &AgentHostedAdvertiseEntry,
 ) -> Result<(), String> {
     let descriptors = committed_owner_ability_descriptors(
         ctx.ability_descriptors,
-        &entry.agent_ura,
+        entry.agent_ura(),
         ctx.caller_node_id,
     );
     if descriptors.is_empty() {
@@ -464,12 +421,12 @@ async fn advertise_hosted_agent_abilities(
     crate::op_event!(
         component = session,
         kind = advertise_hosted_agent_abilities_prelude_sending,
-        agent_ura = entry.agent_ura,
+        agent_ura = entry.agent_ura(),
         ability_count = ability_count,
     );
     send_advertise_abilities_prelude(
         ctx.client,
-        &entry.agent_ura,
+        entry.agent_ura(),
         ctx.caller_ura,
         ctx.signer,
         &descriptors,
@@ -478,7 +435,7 @@ async fn advertise_hosted_agent_abilities(
     .map_err(|error| {
         format!(
             "advertise hosted-agent abilities for `{}` failed (code={:?}): {}",
-            entry.agent_ura,
+            entry.agent_ura(),
             error.code(),
             error.message()
         )
@@ -486,7 +443,7 @@ async fn advertise_hosted_agent_abilities(
     crate::op_event!(
         component = session,
         kind = advertise_hosted_agent_abilities_prelude_ok,
-        agent_ura = entry.agent_ura,
+        agent_ura = entry.agent_ura(),
         ability_count = ability_count,
     );
     Ok(())
@@ -1198,7 +1155,7 @@ pub(super) fn committed_owner_ability_descriptors(
 
 #[cfg(test)]
 mod tests {
-    use super::{paired_user_trust_present, resolved_public_keys, UserTrustSync};
+    use super::{UserTrustSync, paired_user_trust_present, resolved_public_keys};
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use std::sync::Arc;

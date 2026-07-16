@@ -2765,7 +2765,7 @@ if agent_list.exists():
             "agent.list provider contract must be aggregate-snapshot based",
         ),
         (
-            "agent_rows(&snapshot.registry, &snapshot.local_agents)",
+            "agent_rows(&snapshot)",
             "agent.list projection must read from the aggregate snapshot",
         ),
     )
@@ -3572,6 +3572,187 @@ if persistence_facade.exists():
     ):
         if token in production_text:
             add("R45_HOSTED_AUTHORITY_ROOTS_AGENT_AGGREGATE_FORK", persistence_facade, 1, detail)
+
+# Rule 46: agent.list row projection consumes Agent aggregate rows. The ability
+# may format the public JSON row, but it must not split the aggregate back into
+# raw registry and local-agents file shapes for hosted owner lookup.
+agent_list_ability = cli_root / "src/daemon/ability/builtins/agents/list.rs"
+if agent_list_ability.exists():
+    text = source(agent_list_ability)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "fn agent_rows(snapshot: &AgentAggregateSnapshot)",
+            "agent.list rows must take the Agent aggregate snapshot as the row contract",
+        ),
+        (
+            ".registered_agents()",
+            "agent.list rows must enumerate registry rows through the aggregate projection",
+        ),
+        (
+            ".hosted_llm_agent_ura(",
+            "agent.list rows must resolve hosted LLM owner URAs through the aggregate projection",
+        ),
+    ):
+        if token not in production_text:
+            add("R46_AGENT_LIST_AGGREGATE_ROW_FORK", agent_list_ability, 1, detail)
+    for token, detail in (
+        (
+            "LocalAgentsFile",
+            "agent.list production code must not mention the hosted identity file shape",
+        ),
+        (
+            "lookup_hosted_ura",
+            "agent.list production code must not bypass aggregate hosted owner lookup",
+        ),
+        (
+            "snapshot.registry",
+            "agent.list production code must not split registry out of the aggregate row contract",
+        ),
+        (
+            "snapshot.local_agents",
+            "agent.list production code must not split hosted identity out of the aggregate row contract",
+        ),
+    ):
+        if token in production_text:
+            add("R46_AGENT_LIST_AGGREGATE_ROW_FORK", agent_list_ability, 1, detail)
+
+# Rule 47: hosted-Agent session advertisement uses the Agent aggregate hosted
+# identity projection. The bidi session prelude may publish entries, but it must
+# not know the local-agents.json shape or rebuild hosted-agent rows from storage.
+session_prelude = cli_root / "src/daemon/invocation/bidi/session_initiator/prelude.rs"
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    for token, detail in (
+        (
+            "struct AgentHostedAdvertiseEntry",
+            "Agent aggregate must own the hosted-agent advertise entry type",
+        ),
+        (
+            "fn hosted_advertise_entries(",
+            "hosted identity snapshot must expose hosted-agent advertise entries",
+        ),
+        (
+            "fn short_label(&self) -> &str",
+            "hosted-agent advertise entries must expose presentation labels without leaking storage rows",
+        ),
+    ):
+        if token not in text:
+            add("R47_HOSTED_ADVERTISE_PRELUDE_AGENT_AGGREGATE_FORK", agent_aggregate, 1, detail)
+
+if session_prelude.exists():
+    text = source(session_prelude)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "AgentAggregateRepository::load_hosted_identity_snapshot()",
+            "hosted-agent advertise prelude must load hosted identity through the Agent aggregate",
+        ),
+        (
+            ".hosted_advertise_entries(&realm, &user_segment)",
+            "hosted-agent advertise prelude must consume aggregate advertise entries",
+        ),
+        (
+            "AgentHostedAdvertiseEntry",
+            "hosted-agent advertise prelude must use the aggregate advertise entry type",
+        ),
+    ):
+        if token not in production_text:
+            add("R47_HOSTED_ADVERTISE_PRELUDE_AGENT_AGGREGATE_FORK", session_prelude, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            "hosted-agent advertise prelude must not load local-agents.json directly",
+        ),
+        (
+            "LocalAgentsFile",
+            "hosted-agent advertise prelude must not mention the hosted identity file shape",
+        ),
+        (
+            ".hosted_agents",
+            "hosted-agent advertise prelude must not inspect hosted identity rows directly",
+        ),
+        (
+            "collect_advertise_entries",
+            "hosted-agent advertise row collection must live on the Agent aggregate",
+        ),
+    ):
+        if token in production_text:
+            add("R47_HOSTED_ADVERTISE_PRELUDE_AGENT_AGGREGATE_FORK", session_prelude, 1, detail)
+
+# Rule 48: skill.list hosted owner scope consumes an Agent aggregate projection.
+# The ability owns skill inventory traversal and wire shaping, but it must not
+# load or inspect hosted identity persistence rows.
+skill_list_ability = cli_root / "src/daemon/ability/builtins/resources/skills/list.rs"
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    for token, detail in (
+        (
+            "struct AgentHostedSkillOwnerProjection",
+            "Agent aggregate must expose a hosted skill owner projection type",
+        ),
+        (
+            "fn hosted_skill_owner_projection(&self) -> AgentHostedSkillOwnerProjection",
+            "Agent aggregate snapshot must expose the hosted skill owner projection",
+        ),
+        (
+            "fn hosted_ura_for(&self, agent_name: &str) -> Option<&str>",
+            "hosted skill owner projection must resolve owner name to Agent URA",
+        ),
+        (
+            "fn owner_name_for_agent_ura(&self, agent_ura: &str) -> Option<&str>",
+            "hosted skill owner projection must resolve Agent URA to owner name",
+        ),
+    ):
+        if token not in text:
+            add("R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK", agent_aggregate, 1, detail)
+if skill_list_ability.exists():
+    text = source(skill_list_ability)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            "skill.list must load registry and hosted identity through the Agent aggregate snapshot",
+        ),
+        (
+            ".hosted_skill_owner_projection()",
+            "skill.list must consume the aggregate hosted skill owner projection",
+        ),
+        (
+            "AgentHostedSkillOwnerProjection",
+            "skill.list scope helpers must depend on the aggregate projection interface",
+        ),
+        (
+            ".owner_name_for_agent_ura(",
+            "skill.list must resolve Agent URA scopes through the aggregate projection",
+        ),
+        (
+            ".hosted_ura_for(",
+            "skill.list resource URA derivation must resolve hosted owners through the aggregate projection",
+        ),
+    ):
+        if token not in production_text:
+            add("R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK", skill_list_ability, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            "skill.list production code must not load local-agents.json directly",
+        ),
+        (
+            "LocalAgentsFile",
+            "skill.list production code must not mention the hosted identity file shape",
+        ),
+        (
+            ".hosted_agents",
+            "skill.list production code must not inspect hosted identity rows directly",
+        ),
+        (
+            "from_local_agents",
+            "skill.list production code must not rebuild hosted identity projections locally",
+        ),
+    ):
+        if token in production_text:
+            add("R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK", skill_list_ability, 1, detail)
 
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The

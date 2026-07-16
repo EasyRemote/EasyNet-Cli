@@ -31,9 +31,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::daemon::persistence::agent_registry as agents;
+use crate::daemon::persistence::{
+    agent_aggregate::{AgentAggregateRepository, AgentHostedSkillOwnerProjection},
+    agent_registry as agents,
+};
 
 /// Skill inventory handler.
 ///
@@ -61,11 +64,10 @@ use crate::daemon::persistence::agent_registry as agents;
 /// the list stays one row per global skill rather than multiplying by
 /// the number of agents that can consume the pool.
 pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
-    let registry = agents::load_agents()?;
-    let local_agents = crate::daemon::persistence::local_agents::load().ok();
-    let scope = SkillListScope::from_args(&args, local_agents.as_ref())?;
-    let hosted_agent_index = HostedAgentUraIndex::from_local_agents(local_agents.as_ref());
-    let rows = SkillInventoryBuilder::new(&registry, &scope).collect()?;
+    let snapshot = AgentAggregateRepository::load_snapshot()?;
+    let hosted_skill_owners = snapshot.hosted_skill_owner_projection();
+    let scope = SkillListScope::from_args(&args, &hosted_skill_owners)?;
+    let rows = SkillInventoryBuilder::new(&snapshot.registry, &scope).collect()?;
 
     // Serialise InstallRecord directly — its serde derive emits the
     // wire shape backend already speaks (content_hash via
@@ -77,7 +79,7 @@ pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
         .map(|r| {
             let mut value = serde_json::to_value(&r).unwrap_or(Value::Null);
             if let Some(resource_ura) = scoped_skill_resource_ura(
-                &hosted_agent_index,
+                &hosted_skill_owners,
                 scope.agent_ura_for_row(&r.agent_id),
                 &r.agent_id,
                 &r.name,
@@ -299,32 +301,6 @@ impl GlobalSkillPoolCache {
     }
 }
 
-#[derive(Default)]
-struct HostedAgentUraIndex {
-    by_agent_name: BTreeMap<String, String>,
-}
-
-impl HostedAgentUraIndex {
-    fn from_local_agents(
-        local_agents: Option<&crate::daemon::persistence::local_agents::LocalAgentsFile>,
-    ) -> Self {
-        let Some(local_agents) = local_agents else {
-            return Self::default();
-        };
-        Self {
-            by_agent_name: local_agents
-                .hosted_agents
-                .iter()
-                .map(|entry| (entry.name.clone(), entry.agent_ura.clone()))
-                .collect(),
-        }
-    }
-
-    fn hosted_ura_for(&self, agent_name: &str) -> Option<&str> {
-        self.by_agent_name.get(agent_name).map(String::as_str)
-    }
-}
-
 fn managed_skill_dir_for_agent_type(
     root: &std::path::Path,
     agent_type: crate::daemon::persistence::agent_registry::AgentType,
@@ -349,7 +325,7 @@ struct SkillListScope {
 impl SkillListScope {
     fn from_args(
         args: &Value,
-        local_agents: Option<&crate::daemon::persistence::local_agents::LocalAgentsFile>,
+        hosted_skill_owners: &AgentHostedSkillOwnerProjection,
     ) -> anyhow::Result<Self> {
         let object = args
             .as_object()
@@ -387,7 +363,7 @@ impl SkillListScope {
         let scoped_agent_ura = merge_agent_scope(agent_ura, subject.as_ref())?;
         let scoped_owner = scoped_agent_ura
             .as_deref()
-            .map(|ura| owner_name_for_agent_ura(local_agents, ura))
+            .map(|ura| owner_name_for_agent_ura(hosted_skill_owners, ura))
             .transpose()?;
         if let (Some(owner), Some(scoped_owner)) = (&owner_agent_id, &scoped_owner) {
             if owner != scoped_owner {
@@ -462,28 +438,23 @@ fn merge_agent_scope(
 }
 
 fn owner_name_for_agent_ura(
-    local_agents: Option<&crate::daemon::persistence::local_agents::LocalAgentsFile>,
+    hosted_skill_owners: &AgentHostedSkillOwnerProjection,
     agent_ura: &str,
 ) -> anyhow::Result<String> {
-    let Some(local_agents) = local_agents else {
-        anyhow::bail!("skill.list: agent_ura requires local-agents.json to resolve local owner");
-    };
-    local_agents
-        .hosted_agents
-        .iter()
-        .find(|entry| entry.agent_ura == agent_ura)
-        .map(|entry| entry.name.clone())
+    hosted_skill_owners
+        .owner_name_for_agent_ura(agent_ura)
+        .map(str::to_string)
         .ok_or_else(|| anyhow::anyhow!("skill.list: agent_ura {agent_ura:?} is not hosted here"))
 }
 
 fn scoped_skill_resource_ura(
-    hosted_agent_index: &HostedAgentUraIndex,
+    hosted_skill_owners: &AgentHostedSkillOwnerProjection,
     explicit_agent_ura: Option<&str>,
     agent_name: &str,
     skill_name: &str,
 ) -> Option<String> {
     let agent_ura = explicit_agent_ura.map(str::to_string).or_else(|| {
-        hosted_agent_index
+        hosted_skill_owners
             .hosted_ura_for(agent_name)
             .map(str::to_string)
     })?;
@@ -696,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_agent_ura_index_resolves_rows_without_scanning_local_agents_per_row() {
+    fn hosted_skill_owner_projection_resolves_rows_without_scanning_per_row() {
         let local = crate::daemon::persistence::local_agents::LocalAgentsFile {
             host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
@@ -707,12 +678,20 @@ mod tests {
                 first_seen_at: "2026-01-01T00:00:00Z".to_string(),
             }],
         };
-        let index = HostedAgentUraIndex::from_local_agents(Some(&local));
+        let snapshot = crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot::new(
+            crate::daemon::persistence::agent_registry::AgentRegistry::default(),
+            local,
+        );
+        let projection = snapshot.hosted_skill_owner_projection();
 
         assert_eq!(
-            index.hosted_ura_for("claude"),
+            projection.hosted_ura_for("claude"),
             Some("easynet:///r/acme/agent/u1.claude")
         );
-        assert_eq!(index.hosted_ura_for("codex"), None);
+        assert_eq!(
+            projection.owner_name_for_agent_ura("easynet:///r/acme/agent/u1.claude"),
+            Some("claude")
+        );
+        assert_eq!(projection.hosted_ura_for("codex"), None);
     }
 }
