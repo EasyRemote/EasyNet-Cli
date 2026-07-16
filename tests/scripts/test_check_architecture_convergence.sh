@@ -66,6 +66,7 @@ make_good_fixture() {
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/invocation/admission" \
     "$CLI/src/daemon/invocation/dispatch" \
+    "$CLI/src/daemon/invocation/routing" \
     "$CLI/src/daemon/invocation/streams" \
     "$CLI/src/daemon/persistence" \
     "$CLI/ability-descriptors/system/agents" \
@@ -190,6 +191,79 @@ pub fn purge_agent_input_schema() -> Value {
 
 pub fn purge_agent_description() -> &'static str {
     "Destructively remove an LLM sub-agent and the exact canonical root_path stored in its registry row. Requires Manage authority."
+}
+EOF
+  cat >"$CLI/src/daemon/persistence/agent_aggregate.rs" <<'EOF'
+enum AgentAggregateSnapshotLoadError {
+    RegistryUnreadable { source: anyhow::Error },
+    IdentityUnreadable { source: anyhow::Error },
+}
+
+pub(crate) struct AgentAggregateSnapshot {
+    pub(crate) registry: AgentRegistry,
+    pub(crate) local_agents: local_agents::LocalAgentsFile,
+}
+
+enum HostedLlmAgentIdentity<'a> {
+    Missing,
+    Present(&'a HostedAgentEntry),
+    Ambiguous,
+}
+
+impl AgentAggregateSnapshot {
+    fn has_registered_agent(&self, agent: &str) -> bool {
+        self.registry.agents.contains_key(agent)
+    }
+
+    fn host_device_agent_ura(&self) -> &str {
+        &self.local_agents.host_device_agent_ura
+    }
+
+    fn hosted_llm_agent_identity(&self, agent: &str) -> HostedLlmAgentIdentity<'_> {
+        HostedLlmAgentIdentity::Present(&self.local_agents.hosted_agents[0])
+    }
+
+    fn has_hosted_llm_agent_identity(&self, agent: &str) -> bool {
+        self.local_agents.hosted_agents.iter().any(|entry| entry.profile == "llm" && entry.name == agent)
+    }
+}
+
+pub(crate) struct AgentAggregateRepository;
+
+impl AgentAggregateRepository {
+    pub(crate) fn load_snapshot() -> anyhow::Result<AgentAggregateSnapshot> {
+        Self::try_load_snapshot().map_err(Into::into)
+    }
+
+    pub(crate) fn try_load_snapshot() -> Result<AgentAggregateSnapshot, AgentAggregateSnapshotLoadError> {
+        Ok(AgentAggregateSnapshot {
+            registry: agent_registry::load_agents()?,
+            local_agents: local_agents::load()?,
+        })
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
+
+pub fn register<F>(reg: &mut AxonAbilityCatalog, snapshot_provider: F)
+where
+    F: Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync + 'static,
+{
+    let provider: Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync> =
+        Arc::new(snapshot_provider);
+    reg.register_rpc_with_owner(
+        ABILITY_LIST_AGENTS,
+        OwnerKind::Device,
+        Arc::new(move |_args: Value| list_agents_handler(&provider)),
+    );
+}
+
+fn list_agents_handler(
+    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>,
+) -> anyhow::Result<Value> {
+    let snapshot = registry_provider()?;
+    Ok(json!({ "agents": agent_rows(&snapshot.registry, &snapshot.local_agents)? }))
 }
 EOF
   cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
@@ -383,6 +457,82 @@ fn mark_terminal(state: &mut RegistryState, key: &str) {
 #[test]
 fn terminal_retention_order_is_idempotent() {}
 EOF
+  cat >"$CLI/src/daemon/invocation/routing/hub_resolver.rs" <<'EOF'
+pub enum HubResolution {
+    Static { hub_endpoint: String },
+    DirectoryFallback {
+        hub_endpoint: String,
+        target_ura: String,
+    },
+    Offline,
+}
+
+pub struct HubResolver<'a> {
+    static_peers: &'a SharedFederatedPeers,
+    federated_directory: &'a SharedFederatedDirectoryView,
+    allow_directory_fallback: bool,
+}
+
+impl<'a> HubResolver<'a> {
+    pub fn new(
+        static_peers: &'a SharedFederatedPeers,
+        federated_directory: &'a SharedFederatedDirectoryView,
+        allow_directory_fallback: bool,
+    ) -> Self {
+        Self {
+            static_peers,
+            federated_directory,
+            allow_directory_fallback,
+        }
+    }
+
+    pub fn resolve(&self, target_realm: &str, target_ura: &str) -> HubResolution {
+        let peers_snapshot = self.static_peers.snapshot();
+        if let Some(ura) = peers_snapshot.get(target_realm) {
+            return HubResolution::Static {
+                hub_endpoint: ura.clone(),
+            };
+        }
+
+        if self.allow_directory_fallback {
+            if let Some(endpoint) = lookup_in_federated_view(self.federated_directory, target_ura)
+                .and_then(|entry| entry.hub_endpoint)
+            {
+                return HubResolution::DirectoryFallback {
+                    hub_endpoint: endpoint,
+                    target_ura: target_ura.to_string(),
+                };
+            }
+        }
+
+        HubResolution::Offline
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+fn resolve_delegation(peer_source: PeerSource, parsed_owner: ParsedOwner, selector: Selector) {
+    let resolution = HubResolver::new(
+        peer_source.federated_peers,
+        peer_source.federated_directory,
+        peer_source.allow_directory_auto_route,
+    )
+    .resolve(&parsed_owner.realm, &selector.owner_ura);
+    let endpoint = match resolution {
+        HubResolution::Static { hub_endpoint } => {
+            DelegatedPeerEndpoint::new(hub_endpoint, "federated_peers", None)
+        }
+        HubResolution::DirectoryFallback {
+            hub_endpoint,
+            target_ura,
+        } => DelegatedPeerEndpoint::new(
+            hub_endpoint,
+            "federated_directory",
+            Some(target_ura.as_str()),
+        ),
+        HubResolution::Offline => return,
+    };
+}
+EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
 use easynet_axon::{
     VoiceCallState,
@@ -532,6 +682,9 @@ fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool
             voice_call_ability::register(&mut reg, provider.clone());
         }
     }
+    agent_list_ability::register(&mut reg, || {
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+    });
     let evidence = VoiceAssemblyEvidence {
         repository_assembled: voice_provider_assembly.is_some(),
         executable_delivery_evidence: false,
@@ -904,6 +1057,51 @@ fn rollback_enrollment(
 ) -> Result<(), HotAgentAuthorityInventoryError> {
     state.advance_generation(&enrollment.agent)?;
     Ok(())
+}
+
+fn hot_agent_authority_snapshot_error(
+    agent: &str,
+    error: AgentAggregateSnapshotLoadError,
+) -> HotAgentAuthorityInventoryError {
+    HotAgentAuthorityInventoryError::CounterOverflow
+}
+
+struct PersistedHotAgentAuthority;
+
+impl PersistedHotAgentAuthority {
+    fn load(agent: &str) -> Result<(), HotAgentAuthorityInventoryError> {
+        let snapshot = AgentAggregateRepository::try_load_snapshot()
+            .map_err(|error| hot_agent_authority_snapshot_error(agent, error))?;
+        if !snapshot.has_registered_agent(agent) {
+            return Err(HotAgentAuthorityInventoryError::CounterOverflow);
+        }
+        let identity = match snapshot.hosted_llm_agent_identity(agent) {
+            HostedLlmAgentIdentity::Present(identity) => identity,
+            HostedLlmAgentIdentity::Missing => return Err(HotAgentAuthorityInventoryError::CounterOverflow),
+            HostedLlmAgentIdentity::Ambiguous => return Err(HotAgentAuthorityInventoryError::CounterOverflow),
+        };
+        let _host = snapshot.host_device_agent_ura();
+        Ok(())
+    }
+}
+
+struct HotAgentAuthorityInventory;
+
+impl HotAgentAuthorityInventory {
+    fn revoke_after_durable_removal(
+        &self,
+        enrollment: &HotAgentAuthorityEnrollment,
+    ) -> Result<(), HotAgentAuthorityInventoryError> {
+        let snapshot = AgentAggregateRepository::try_load_snapshot()
+            .map_err(|error| hot_agent_authority_snapshot_error(&enrollment.agent, error))?;
+        if snapshot.has_registered_agent(&enrollment.agent) {
+            return Err(HotAgentAuthorityInventoryError::CounterOverflow);
+        }
+        if snapshot.has_hosted_llm_agent_identity(&enrollment.agent) {
+            return Err(HotAgentAuthorityInventoryError::CounterOverflow);
+        }
+        Ok(())
+    }
 }
 
 enum DescriptorCallMode {
@@ -1673,6 +1871,46 @@ expect_fail \
   "R15_AGENT_ROOTPATH_FALLBACK"
 
 make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
+pub fn register<F>(reg: &mut AxonAbilityCatalog, registry_provider: F)
+where
+    F: Fn() -> anyhow::Result<AgentRegistry> + Send + Sync + 'static,
+{
+    let provider: Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync> =
+        Arc::new(registry_provider);
+    reg.register_rpc_with_owner(
+        ABILITY_LIST_AGENTS,
+        OwnerKind::Device,
+        Arc::new(move |_args: Value| list_agents_handler(&provider)),
+    );
+}
+
+fn list_agents_handler(
+    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync>,
+) -> anyhow::Result<Value> {
+    let registry = registry_provider()?;
+    let local_agents = crate::daemon::persistence::local_agents::load()?;
+    Ok(json!({ "agents": agent_rows(&registry, &local_agents)? }))
+}
+EOF
+expect_fail \
+  "agent.list aggregate snapshot fork" \
+  "R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
+fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool) {
+    agent_list_ability::register(&mut reg, || {
+        crate::daemon::persistence::agent_registry::load_agents()
+            .map_err(|error| anyhow::anyhow!("agent.list: load durable agent registry: {error:#}"))
+    });
+}
+EOF
+expect_fail \
+  "agent.list catalog snapshot fork" \
+  "R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK"
+
+make_good_fixture
 mkdir -p "$CLI/src/daemon/invocation/receipts"
 cat >"$CLI/src/daemon/invocation/receipts/finalization_projection.rs" <<'EOF'
 use easynet_axon::invocation::FinalizationCheckpointVerifier;
@@ -1804,6 +2042,57 @@ EOF
 expect_fail \
   "hot authority generation wrapping" \
   "R25_HOT_AUTHORITY_GENERATION_WRAP"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
+enum HotAgentAuthorityInventoryError {
+    CounterOverflow,
+}
+
+struct HotAgentAuthorityEnrollment {
+    agent: String,
+}
+
+impl PersistedHotAgentAuthority {
+    fn load(agent: &str) -> Result<(), HotAgentAuthorityInventoryError> {
+        let registry = crate::daemon::persistence::agent_registry::load_agents()?;
+        if !registry.agents.contains_key(agent) {
+            return Err(HotAgentAuthorityInventoryError::CounterOverflow);
+        }
+        let identities = crate::daemon::persistence::local_agents::load()?;
+        let identity = identities
+            .hosted_agents
+            .iter()
+            .find(|entry| entry.profile == "llm" && entry.name == agent)
+            .ok_or(HotAgentAuthorityInventoryError::CounterOverflow)?;
+        Ok(())
+    }
+}
+
+impl HotAgentAuthorityInventory {
+    fn revoke_after_durable_removal(
+        &self,
+        enrollment: &HotAgentAuthorityEnrollment,
+    ) -> Result<(), HotAgentAuthorityInventoryError> {
+        let registry = crate::daemon::persistence::agent_registry::load_agents()?;
+        if registry.agents.contains_key(&enrollment.agent) {
+            return Err(HotAgentAuthorityInventoryError::CounterOverflow);
+        }
+        let identities = crate::daemon::persistence::local_agents::load()?;
+        if identities
+            .hosted_agents
+            .iter()
+            .any(|entry| entry.profile == "llm" && entry.name == enrollment.agent)
+        {
+            return Err(HotAgentAuthorityInventoryError::CounterOverflow);
+        }
+        Ok(())
+    }
+}
+EOF
+expect_fail \
+  "hot authority aggregate snapshot fork" \
+  "R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
@@ -2061,6 +2350,61 @@ EOF
 expect_fail \
   "principal command actor fallback fork" \
   "R33_PRINCIPAL_COMMAND_ACTOR_FALLBACK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/routing/hub_resolver.rs" <<'EOF'
+pub enum HubResolution {
+    Static { hub_endpoint: String },
+    DirectoryFallback {
+        hub_endpoint: String,
+        target_ura: String,
+    },
+    Offline,
+}
+
+pub struct HubResolver<'a> {
+    static_peers: &'a SharedFederatedPeers,
+    federated_directory: &'a SharedFederatedDirectoryView,
+    allow_directory_fallback: bool,
+}
+
+impl<'a> HubResolver<'a> {
+    pub fn new(
+        static_peers: &'a SharedFederatedPeers,
+        federated_directory: &'a SharedFederatedDirectoryView,
+        allow_directory_fallback: bool,
+    ) -> Self {
+        Self {
+            static_peers,
+            federated_directory,
+            allow_directory_fallback,
+        }
+    }
+
+    pub fn resolve(&self, target_realm: &str, target_ura: &str) -> HubResolution {
+        if let Some(endpoint) = lookup_in_federated_view(self.federated_directory, target_ura)
+            .and_then(|entry| entry.hub_endpoint)
+        {
+            return HubResolution::DirectoryFallback {
+                hub_endpoint: endpoint,
+                target_ura: target_ura.to_string(),
+            };
+        }
+
+        let peers_snapshot = self.static_peers.snapshot();
+        if let Some(ura) = peers_snapshot.get(target_realm) {
+            return HubResolution::Static {
+                hub_endpoint: ura.clone(),
+            };
+        }
+
+        HubResolution::Offline
+    }
+}
+EOF
+expect_fail \
+  "hub resolver route authority fork" \
+  "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'

@@ -38,6 +38,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
 use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -45,14 +46,14 @@ pub const ABILITY_LIST_AGENTS: &str = crate::daemon::ability::names::agents::AGE
 
 /// Register `agent.list` on the registry.
 ///
-/// `registry_provider` runs at handler-call time so a future
-/// hot-reload of `agents.json` is reflected without re-registration.
-pub fn register<F>(reg: &mut AxonAbilityCatalog, registry_provider: F)
+/// `snapshot_provider` runs at handler-call time so a future hot-reload of
+/// hosted Agent state is reflected without re-registration.
+pub(crate) fn register<F>(reg: &mut AxonAbilityCatalog, snapshot_provider: F)
 where
-    F: Fn() -> anyhow::Result<AgentRegistry> + Send + Sync + 'static,
+    F: Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync + 'static,
 {
-    let provider: Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync> =
-        Arc::new(registry_provider);
+    let provider: Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync> =
+        Arc::new(snapshot_provider);
     reg.register_rpc_with_owner(
         ABILITY_LIST_AGENTS,
         OwnerKind::Device,
@@ -61,12 +62,10 @@ where
 }
 
 fn list_agents_handler(
-    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentRegistry> + Send + Sync>,
+    registry_provider: &Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>,
 ) -> anyhow::Result<Value> {
-    let registry = registry_provider()?;
-    let local_agents = crate::daemon::persistence::local_agents::load()
-        .map_err(|error| anyhow::anyhow!("agent.list: load hosted-agent URA index: {error:#}"))?;
-    Ok(json!({ "agents": agent_rows(&registry, &local_agents)? }))
+    let snapshot = registry_provider()?;
+    Ok(json!({ "agents": agent_rows(&snapshot.registry, &snapshot.local_agents)? }))
 }
 
 fn agent_rows(
@@ -118,6 +117,7 @@ pub fn list_agents_description() -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::local_agents::LocalAgentsFile;
     use std::path::PathBuf;
 
     fn registered_entry(agent_type: AgentType, model: Option<String>, name: &str) -> AgentEntry {
@@ -126,17 +126,21 @@ mod tests {
         entry
     }
 
+    fn snapshot(registry: AgentRegistry) -> AgentAggregateSnapshot {
+        AgentAggregateSnapshot::new(registry, LocalAgentsFile::default())
+    }
+
     #[test]
     fn registration_makes_list_agents_dispatchable() {
         let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg, || Ok(AgentRegistry::default()));
+        register(&mut reg, || Ok(snapshot(AgentRegistry::default())));
         assert!(reg.get_rpc(ABILITY_LIST_AGENTS).is_some());
     }
 
     #[test]
     fn list_agents_empty_registry_returns_empty_array() {
         let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg, || Ok(AgentRegistry::default()));
+        register(&mut reg, || Ok(snapshot(AgentRegistry::default())));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
         assert!(resp["agents"].as_array().unwrap().is_empty());
@@ -162,8 +166,8 @@ mod tests {
         registry.agents.insert("claude".to_string(), entry);
 
         let mut reg = AxonAbilityCatalog::new();
-        let snapshot = registry.clone();
-        register(&mut reg, move || Ok(snapshot.clone()));
+        let registry_snapshot = registry.clone();
+        register(&mut reg, move || Ok(snapshot(registry_snapshot.clone())));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
 
@@ -205,8 +209,8 @@ mod tests {
         );
 
         let mut reg = AxonAbilityCatalog::new();
-        let snapshot = registry.clone();
-        register(&mut reg, move || Ok(snapshot.clone()));
+        let registry_snapshot = registry.clone();
+        register(&mut reg, move || Ok(snapshot(registry_snapshot.clone())));
         let handler = reg.get_rpc(ABILITY_LIST_AGENTS).unwrap();
         let resp = handler(json!({})).unwrap();
 

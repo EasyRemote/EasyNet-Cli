@@ -37,6 +37,9 @@ use crate::daemon::ability::{
 #[cfg(test)]
 use crate::daemon::invocation::routing::target::TargetScope;
 use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentAggregateSnapshotLoadError, HostedLlmAgentIdentity,
+};
 
 /// Module-local sync→async bridge for the ability-dispatch registry
 /// path. These calls sit on catalogue construction and discovery,
@@ -1362,40 +1365,27 @@ impl PersistedHotAgentAuthority {
         device: &CanonicalDeviceAuthority,
         agent: &str,
     ) -> Result<Self, HotAgentAuthorityInventoryError> {
-        let registry =
-            crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
-                HotAgentAuthorityInventoryError::DurableRegistryUnreadable {
-                    agent: agent.to_string(),
-                    reason: format!("{error:#}"),
-                }
-            })?;
-        if !registry.agents.contains_key(agent) {
+        let snapshot = AgentAggregateRepository::try_load_snapshot()
+            .map_err(|error| hot_agent_authority_snapshot_error(agent, error))?;
+        if !snapshot.has_registered_agent(agent) {
             return Err(HotAgentAuthorityInventoryError::DurableAgentMissing {
                 agent: agent.to_string(),
             });
         }
 
-        let identities = crate::daemon::persistence::local_agents::load().map_err(|error| {
-            HotAgentAuthorityInventoryError::IdentityRegistryUnreadable {
-                agent: agent.to_string(),
-                reason: format!("{error:#}"),
-            }
-        })?;
-        let mut matches = identities
-            .hosted_agents
-            .iter()
-            .filter(|entry| entry.profile == "llm" && entry.name == agent);
-        let identity =
-            matches
-                .next()
-                .ok_or_else(|| HotAgentAuthorityInventoryError::IdentityMissing {
+        let identity = match snapshot.hosted_llm_agent_identity(agent) {
+            HostedLlmAgentIdentity::Present(identity) => identity,
+            HostedLlmAgentIdentity::Missing => {
+                return Err(HotAgentAuthorityInventoryError::IdentityMissing {
                     agent: agent.to_string(),
-                })?;
-        if matches.next().is_some() {
-            return Err(HotAgentAuthorityInventoryError::IdentityAmbiguous {
-                agent: agent.to_string(),
-            });
-        }
+                })
+            }
+            HostedLlmAgentIdentity::Ambiguous => {
+                return Err(HotAgentAuthorityInventoryError::IdentityAmbiguous {
+                    agent: agent.to_string(),
+                })
+            }
+        };
 
         let invalid = |reason: String| HotAgentAuthorityInventoryError::IdentityInvalid {
             agent: agent.to_string(),
@@ -1420,7 +1410,7 @@ impl PersistedHotAgentAuthority {
         }
 
         let expected_signing_authority = format!("hosted_by:{}", device.ura);
-        if identities.host_device_agent_ura != device.ura
+        if snapshot.host_device_agent_ura() != device.ura
             || identity.signing_authority != expected_signing_authority
         {
             return Err(invalid(
@@ -1432,6 +1422,26 @@ impl PersistedHotAgentAuthority {
             agent: agent.to_string(),
             authority_root: identity.agent_ura.clone(),
         })
+    }
+}
+
+fn hot_agent_authority_snapshot_error(
+    agent: &str,
+    error: AgentAggregateSnapshotLoadError,
+) -> HotAgentAuthorityInventoryError {
+    match error {
+        AgentAggregateSnapshotLoadError::RegistryUnreadable { source } => {
+            HotAgentAuthorityInventoryError::DurableRegistryUnreadable {
+                agent: agent.to_string(),
+                reason: format!("{source:#}"),
+            }
+        }
+        AgentAggregateSnapshotLoadError::IdentityUnreadable { source } => {
+            HotAgentAuthorityInventoryError::IdentityRegistryUnreadable {
+                agent: agent.to_string(),
+                reason: format!("{source:#}"),
+            }
+        }
     }
 }
 
@@ -1658,29 +1668,14 @@ impl HotAgentAuthorityInventory {
         &self,
         enrollment: &HotAgentAuthorityEnrollment,
     ) -> Result<(), HotAgentAuthorityInventoryError> {
-        let registry =
-            crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
-                HotAgentAuthorityInventoryError::DurableRegistryUnreadable {
-                    agent: enrollment.agent.clone(),
-                    reason: format!("{error:#}"),
-                }
-            })?;
-        if registry.agents.contains_key(&enrollment.agent) {
+        let snapshot = AgentAggregateRepository::try_load_snapshot()
+            .map_err(|error| hot_agent_authority_snapshot_error(&enrollment.agent, error))?;
+        if snapshot.has_registered_agent(&enrollment.agent) {
             return Err(HotAgentAuthorityInventoryError::DurableAgentStillPresent {
                 agent: enrollment.agent.clone(),
             });
         }
-        let identities = crate::daemon::persistence::local_agents::load().map_err(|error| {
-            HotAgentAuthorityInventoryError::IdentityRegistryUnreadable {
-                agent: enrollment.agent.clone(),
-                reason: format!("{error:#}"),
-            }
-        })?;
-        if identities
-            .hosted_agents
-            .iter()
-            .any(|entry| entry.profile == "llm" && entry.name == enrollment.agent)
-        {
+        if snapshot.has_hosted_llm_agent_identity(&enrollment.agent) {
             return Err(HotAgentAuthorityInventoryError::IdentityStillPresent {
                 agent: enrollment.agent.clone(),
             });

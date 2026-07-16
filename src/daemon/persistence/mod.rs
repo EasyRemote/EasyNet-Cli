@@ -45,6 +45,7 @@
 // construct `Credentials`. Inner field visibility on the struct
 // itself is already `pub`.
 pub mod access_control;
+pub(crate) mod agent_aggregate;
 pub(crate) mod agent_lifecycle;
 pub mod agent_registry;
 pub mod chat_sessions;

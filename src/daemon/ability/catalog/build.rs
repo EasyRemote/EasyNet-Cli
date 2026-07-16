@@ -1013,8 +1013,8 @@ fn build_registry_with_services_result_inner(
     // sub-agents. Cheap-row projection (name, runtime, model, label);
     // for the protocol agent-card view see a2a.bridge.list_skills.
     agent_list_ability::register(&mut reg, || {
-        crate::daemon::persistence::agent_registry::load_agents()
-            .map_err(|error| anyhow::anyhow!("agent.list: load durable agent registry: {error:#}"))
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+            .map_err(|error| anyhow::anyhow!("agent.list: load aggregate snapshot: {error:#}"))
     });
     // meta.teach / meta.acquire / meta.forget — GET route B
     // (seven-axes T3.3): owner-conferred capability transfer.

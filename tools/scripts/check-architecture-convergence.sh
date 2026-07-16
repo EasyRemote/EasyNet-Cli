@@ -1637,6 +1637,150 @@ if principal_cli.exists():
         )
 
 
+# Rule 34: remote hub routing has one authority boundary. Static
+# `federated_peers` are operator intent and must win first; federated-directory
+# endpoints are observed facts and may route only behind the explicit
+# `allow_directory_fallback` switch. RouteResolver must consume HubResolver's
+# typed outcome instead of rebuilding directory fallback policy inline.
+hub_resolver = cli_root / "src/daemon/invocation/routing/hub_resolver.rs"
+route_resolver = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
+if hub_resolver.exists():
+    text = source(hub_resolver)
+    hub_requirements = (
+        (
+            "pub enum HubResolution",
+            "remote hub routing must expose typed resolution state",
+        ),
+        (
+            "Static { hub_endpoint: String }",
+            "static operator route must be a distinct resolution variant",
+        ),
+        (
+            "DirectoryFallback {\n        hub_endpoint: String,\n        target_ura: String,\n    }",
+            "directory auto-route must be a distinct resolution variant with target evidence",
+        ),
+        (
+            "Offline",
+            "static miss without authorized directory fallback must resolve offline",
+        ),
+        (
+            "allow_directory_fallback: bool",
+            "directory auto-route must be controlled by an explicit resolver switch",
+        ),
+        (
+            "if self.allow_directory_fallback {",
+            "directory lookup must be inside the explicit fallback guard",
+        ),
+        (
+            "lookup_in_federated_view(self.federated_directory, target_ura)",
+            "directory fallback must use the shared federated directory view",
+        ),
+    )
+    for token, detail in hub_requirements:
+        if token not in text:
+            add("R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK", hub_resolver, 1, detail)
+
+    static_lookup = text.find("let peers_snapshot = self.static_peers.snapshot();")
+    fallback_guard = text.find("if self.allow_directory_fallback {")
+    directory_lookup = text.find("lookup_in_federated_view(self.federated_directory, target_ura)")
+    if min(static_lookup, fallback_guard, directory_lookup) < 0:
+        add(
+            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+            hub_resolver,
+            1,
+            "HubResolver must make static lookup, fallback guard and directory lookup visible",
+        )
+    elif not (static_lookup < fallback_guard < directory_lookup):
+        add(
+            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+            hub_resolver,
+            line_number(text, max(0, fallback_guard)),
+            "operator static peer lookup must precede guarded directory fallback",
+        )
+
+    direct_directory_route = re.search(
+        r"pub\s+fn\s+resolve\s*\([^)]*\)[\s\S]{0,900}"
+        r"lookup_in_federated_view\([^)]*\)"
+        r"[\s\S]{0,200}(?:HubResolution::DirectoryFallback|return\s+HubResolution::Static)",
+        text,
+        re.S,
+    )
+    if direct_directory_route and "if self.allow_directory_fallback" not in direct_directory_route.group(0):
+        add(
+            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+            hub_resolver,
+            line_number(text, direct_directory_route.start()),
+            "directory-observed endpoints must not be an unconditional route fallback",
+        )
+else:
+    add(
+        "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+        hub_resolver,
+        1,
+        "HubResolver routing authority owner must exist",
+    )
+
+if route_resolver.exists():
+    text = source(route_resolver)
+    route_requirements = (
+        (
+            "HubResolver::new(",
+            "RouteResolver must delegate remote hub source ordering to HubResolver",
+        ),
+        (
+            "peer_source.allow_directory_auto_route",
+            "RouteResolver must pass the daemon directory auto-route switch",
+        ),
+        (
+            "HubResolution::Static { hub_endpoint }",
+            "RouteResolver must preserve static route evidence",
+        ),
+        (
+            'DelegatedPeerEndpoint::new(hub_endpoint, "federated_peers", None)',
+            "static route evidence source must stay explicit",
+        ),
+    )
+    for token, detail in route_requirements:
+        if token not in text:
+            add("R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK", route_resolver, 1, detail)
+    if not re.search(
+        r"HubResolution::DirectoryFallback\s*\{\s*hub_endpoint,\s*target_ura,\s*\}",
+        text,
+        re.S,
+    ):
+        add(
+            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+            route_resolver,
+            1,
+            "RouteResolver must preserve directory fallback evidence",
+        )
+    if not re.search(
+        r'DelegatedPeerEndpoint::new\s*\(\s*hub_endpoint,\s*"federated_directory",\s*Some\s*\(\s*target_ura\.as_str\s*\(\s*\)\s*\)',
+        text,
+        re.S,
+    ):
+        add(
+            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+            route_resolver,
+            1,
+            "directory fallback route evidence source must stay explicit",
+        )
+    if "lookup_in_federated_view" in text:
+        add(
+            "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+            route_resolver,
+            1,
+            "RouteResolver must not read federated directory endpoints directly",
+        )
+else:
+    add(
+        "R34_HUB_RESOLVER_ROUTE_AUTHORITY_FORK",
+        route_resolver,
+        1,
+        "RouteResolver must consume HubResolver route authority",
+    )
+
+
 # Rule 32: Agent destructive lifecycle has one public boundary. `agent.stop`
 # remains a non-destructive row/authority removal; `agent.purge` is the only
 # destructive root-removal entry point and must be projected as such by catalog
@@ -2493,6 +2637,186 @@ if cli_start.exists():
             1,
             "cli start must not write local-agents.json directly",
         )
+
+# Rule 33: public Agent read surfaces that join agents.json with
+# local-agents.json must use a named aggregate snapshot owner. The first
+# migrated surface is `agent.list`; letting it independently load the identity
+# index would keep the read-side Agent aggregate split across two persistence
+# files at the call site.
+agent_aggregate = cli_root / "src/daemon/persistence/agent_aggregate.rs"
+agent_list = cli_root / "src/daemon/ability/builtins/agents/list.rs"
+catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    aggregate_requirements = (
+        (
+            "struct AgentAggregateSnapshot",
+            "Agent aggregate reads require an immutable snapshot type",
+        ),
+        (
+            "struct AgentAggregateRepository",
+            "Agent aggregate reads require one repository owner",
+        ),
+        (
+            "fn load_snapshot() -> anyhow::Result<AgentAggregateSnapshot>",
+            "Agent aggregate repository must own paired snapshot loading",
+        ),
+        (
+            "enum AgentAggregateSnapshotLoadError",
+            "Agent aggregate repository must preserve registry-vs-identity load sources",
+        ),
+        (
+            "fn try_load_snapshot(",
+            "Agent aggregate repository must expose source-preserving snapshot loading",
+        ),
+        (
+            "fn has_registered_agent(&self, agent: &str) -> bool",
+            "Agent aggregate snapshot must own durable registry membership checks",
+        ),
+        (
+            "fn hosted_llm_agent_identity(&self, agent: &str)",
+            "Agent aggregate snapshot must own hosted LLM identity lookup",
+        ),
+        (
+            "fn has_hosted_llm_agent_identity(&self, agent: &str) -> bool",
+            "Agent aggregate snapshot must own hosted LLM identity presence checks",
+        ),
+        (
+            "agent_registry::load_agents()",
+            "Agent aggregate repository must load the durable registry projection",
+        ),
+        (
+            "local_agents::load()",
+            "Agent aggregate repository must load the hosted-Agent identity projection",
+        ),
+    )
+    for token, detail in aggregate_requirements:
+        if token not in text:
+            add("R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK", agent_aggregate, 1, detail)
+else:
+    add(
+        "R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK",
+        agent_aggregate,
+        1,
+        "Agent aggregate snapshot repository must exist",
+    )
+if agent_list.exists():
+    text = source(agent_list)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    list_requirements = (
+        (
+            "AgentAggregateSnapshot",
+            "agent.list must receive an aggregate snapshot provider",
+        ),
+        (
+            "Fn() -> anyhow::Result<AgentAggregateSnapshot>",
+            "agent.list provider contract must be aggregate-snapshot based",
+        ),
+        (
+            "agent_rows(&snapshot.registry, &snapshot.local_agents)",
+            "agent.list projection must read from the aggregate snapshot",
+        ),
+    )
+    for token, detail in list_requirements:
+        if token not in production_text:
+            add("R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK", agent_list, 1, detail)
+    if "local_agents::load()" in production_text:
+        add(
+            "R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK",
+            agent_list,
+            1,
+            "agent.list production path must not independently load local-agents.json",
+        )
+if catalog_build.exists():
+    text = source(catalog_build)
+    if "agent_list_ability::register" in text and "AgentAggregateRepository::load_snapshot()" not in text:
+        add(
+            "R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK",
+            catalog_build,
+            1,
+            "catalog build must register agent.list with the Agent aggregate snapshot repository",
+        )
+    if "agent.list: load durable agent registry" in text:
+        add(
+            "R33_AGENT_LIST_AGGREGATE_SNAPSHOT_FORK",
+            catalog_build,
+            1,
+            "catalog build must not wire agent.list to a registry-only loader",
+        )
+
+# Rule 34: hosted Agent authority proofs consume the Agent aggregate snapshot.
+# Enrollment and durable-removal revocation both need the same paired
+# agents.json/local-agents.json lifecycle fact. Dispatch may map those facts to
+# authority-domain errors, but it must not reassemble the paired persistence
+# reads inside the proof path.
+ability_dispatch = cli_root / "src/daemon/ability/dispatch.rs"
+if ability_dispatch.exists():
+    text = source(ability_dispatch)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    authority_requirements = (
+        (
+            "AgentAggregateRepository::try_load_snapshot()",
+            "hot Agent authority proofs must load through the aggregate snapshot repository",
+        ),
+        (
+            "fn hot_agent_authority_snapshot_error(",
+            "hot Agent authority proofs must preserve aggregate load source classification",
+        ),
+        (
+            "HostedLlmAgentIdentity::Present(identity)",
+            "hot Agent authority enrollment must consume typed hosted identity lookup",
+        ),
+        (
+            "snapshot.has_registered_agent(agent)",
+            "hot Agent authority enrollment must verify durable registry membership from the snapshot",
+        ),
+        (
+            "snapshot.host_device_agent_ura()",
+            "hot Agent authority enrollment must verify host-device binding from the snapshot",
+        ),
+        (
+            "snapshot.has_registered_agent(&enrollment.agent)",
+            "hot Agent authority revocation must verify durable registry absence from the snapshot",
+        ),
+        (
+            "snapshot.has_hosted_llm_agent_identity(&enrollment.agent)",
+            "hot Agent authority revocation must verify hosted identity absence from the snapshot",
+        ),
+    )
+    for token, detail in authority_requirements:
+        if token not in production_text:
+            add("R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK", ability_dispatch, 1, detail)
+    persisted_start = production_text.find("impl PersistedHotAgentAuthority")
+    persisted_end = production_text.find("/// Receipt proving", persisted_start)
+    if persisted_start >= 0 and persisted_end > persisted_start:
+        persisted_body = production_text[persisted_start:persisted_end]
+        for token, detail in (
+            (
+                "agent_registry::load_agents",
+                "hot Agent authority enrollment must not load agents.json directly",
+            ),
+            (
+                "local_agents::load",
+                "hot Agent authority enrollment must not load local-agents.json directly",
+            ),
+        ):
+            if token in persisted_body:
+                add("R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK", ability_dispatch, 1, detail)
+    revoke_body = rust_method_body(production_text, "revoke_after_durable_removal")
+    if revoke_body is not None:
+        _, body = revoke_body
+        for token, detail in (
+            (
+                "agent_registry::load_agents",
+                "hot Agent authority revocation must not load agents.json directly",
+            ),
+            (
+                "local_agents::load",
+                "hot Agent authority revocation must not load local-agents.json directly",
+            ),
+        ):
+            if token in body:
+                add("R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK", ability_dispatch, 1, detail)
 
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The

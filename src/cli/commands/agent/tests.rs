@@ -88,8 +88,8 @@ fn invoke_agent_command_fixture(
         authority_context,
     );
     crate::daemon::ability::builtins::agents::list::register(&mut catalog, || {
-        crate::daemon::persistence::agent_registry::load_agents()
-            .map_err(|error| anyhow::anyhow!("fixture agent.list registry load: {error:#}"))
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+            .map_err(|error| anyhow::anyhow!("fixture agent.list aggregate load: {error:#}"))
     });
     crate::daemon::ability::builtins::agents::lifecycle::register(
         &mut catalog,
