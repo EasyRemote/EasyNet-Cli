@@ -1284,7 +1284,7 @@ mod tests {
                         .ability_name(ability_name)
                         .descriptor_ref(descriptor_ref)
                         .admission_action(action)
-                        .safe_read(false)
+                        .safe_read(action == "read")
                         .state("completed")
                         .started_unix_ms(1)
                         .args(easynet_axon::invocation::LedgerEventPayload::digest(
@@ -1297,39 +1297,37 @@ mod tests {
                 .expect("put voice record");
         }
 
-        put_voice_record(
-            ledger.as_ref(),
-            "voice-create",
-            "voice.create_call",
-            "invoke",
-            'b',
-        );
-        put_voice_record(
-            ledger.as_ref(),
-            "voice-subscribe",
-            "voice.subscribe",
-            "stream",
-            'c',
-        );
-
         let reader = AdmissionExplainReader {
             ledger: Some(Arc::clone(&ledger)),
         };
-        let create = reader
-            .explain(json!({
-                "observer_ura": "easynet:///r/test/user/alice",
-                "request_id": "voice-create"
-            }))
-            .expect("voice.create_call explain");
-        let subscribe = reader
-            .explain(json!({
-                "observer_ura": "easynet:///r/test/user/alice",
-                "request_id": "voice-subscribe"
-            }))
-            .expect("voice.subscribe explain");
+        let voice_actions = [
+            ("voice.create_call", "invoke", 'b'),
+            ("voice.join_call", "invoke", 'c'),
+            ("voice.leave_call", "invoke", 'd'),
+            ("voice.end_call", "invoke", 'e'),
+            ("voice.report_metrics", "invoke", 'f'),
+            ("voice.show_call", "read", 'a'),
+            ("voice.watch_call", "read", '1'),
+            ("voice.list_calls", "read", '2'),
+            ("voice.subscribe", "stream", '3'),
+            ("voice.transcribe", "stream", '4'),
+        ];
 
-        assert_eq!(create["root_trace"]["action"], "invoke");
-        assert_eq!(subscribe["root_trace"]["action"], "stream");
+        for (ability, action, hash_char) in voice_actions {
+            let request_id = ability.replace('.', "-");
+            put_voice_record(ledger.as_ref(), &request_id, ability, action, hash_char);
+            let explain = reader
+                .explain(json!({
+                    "observer_ura": "easynet:///r/test/user/alice",
+                    "request_id": request_id
+                }))
+                .unwrap_or_else(|error| panic!("{ability} explain failed: {error}"));
+
+            assert_eq!(
+                explain["root_trace"]["action"], action,
+                "{ability} must project the action bound into its signed descriptor ref"
+            );
+        }
     }
 
     #[test]

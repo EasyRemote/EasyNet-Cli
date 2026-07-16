@@ -176,6 +176,27 @@ def line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def rust_method_body(text: str, name: str) -> tuple[int, str] | None:
+    match = re.search(
+        rf"(?:pub\s+)?fn\s+{re.escape(name)}\s*\([^)]*\)\s*(?:->\s*[^\{{]+)?\{{",
+        text,
+    )
+    if not match:
+        return None
+    index = match.end()
+    depth = 1
+    while index < len(text):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return match.start(), text[match.end():index]
+        index += 1
+    return match.start(), text[match.end():]
+
+
 # Rule 1: product orchestration may enter through a registered Invocation
 # handler, but child EAL/Mission/Chat calls must not execute handlers or
 # implementation bindings directly.
@@ -1984,6 +2005,108 @@ if ability_dispatch.exists():
                 line_number(production_text, match.start()),
                 detail,
             )
+
+    # Rule 25b: ability routeability publication is a catalogue transaction
+    # boundary. Public `has_*` checks must require the committed control-plane
+    # mode row plus the execution-index handler; `LocalRuntime` ability options
+    # are proof/dispatch state, not a catalogue source of truth.
+    routeability_helper = rust_method_body(production_text, "routeable_mode_registered")
+    if routeability_helper is None:
+        add(
+            "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+            ability_dispatch,
+            1,
+            "AxonAbilityCatalog must centralize has_* routeability in routeable_mode_registered",
+        )
+    else:
+        helper_offset, helper_body = routeability_helper
+        for token, detail in (
+            (
+                "control_plane_record_for_mode",
+                "routeability must require a committed control-plane mode record",
+            ),
+            (
+                ".has_mode(ability, call_mode)",
+                "routeability must require the execution-index handler for the same mode",
+            ),
+        ):
+            if token not in helper_body:
+                add(
+                    "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                    ability_dispatch,
+                    line_number(production_text, helper_offset),
+                    detail,
+                )
+
+    for method in ("has_rpc", "has_stream", "has_bidi"):
+        body = rust_method_body(production_text, method)
+        if body is None:
+            add(
+                "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                ability_dispatch,
+                1,
+                f"missing AxonAbilityCatalog::{method}",
+            )
+            continue
+        method_offset, method_body = body
+        if "routeable_mode_registered" not in method_body:
+            add(
+                "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                ability_dispatch,
+                line_number(production_text, method_offset),
+                f"AxonAbilityCatalog::{method} must delegate to routeable_mode_registered",
+            )
+        for retired in ("ability_options", "runtime_ability_key_for_mode"):
+            if retired in method_body:
+                add(
+                    "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                    ability_dispatch,
+                    line_number(production_text, method_offset + method_body.find(retired)),
+                    f"AxonAbilityCatalog::{method} must not query LocalRuntime as catalogue fallback",
+                )
+
+    if "fn runtime_ability_key_for_mode" in production_text:
+        match = re.search(r"fn\s+runtime_ability_key_for_mode", production_text)
+        add(
+            "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+            ability_dispatch,
+            line_number(production_text, match.start() if match else 0),
+            "retired runtime-key helper must not remain as a routeability fallback surface",
+        )
+
+    list_rpc_names = rust_method_body(production_text, "list_rpc_names")
+    if list_rpc_names is None:
+        add(
+            "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+            ability_dispatch,
+            1,
+            "missing AxonAbilityCatalog::list_rpc_names",
+        )
+    else:
+        offset, body = list_rpc_names
+        for token, detail in (
+            ("control_plane", "RPC-name publication must read control-plane records"),
+            (".records()", "RPC-name publication must project committed control-plane rows"),
+            (
+                "DescriptorCallMode::Rpc",
+                "RPC-name publication must filter committed RPC-mode records",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                    ability_dispatch,
+                    line_number(production_text, offset),
+                    detail,
+                )
+        for retired in ("execution_index", "extend_rpc_names"):
+            if retired in body:
+                add(
+                    "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK",
+                    ability_dispatch,
+                    line_number(production_text, offset + body.find(retired)),
+                    "RPC-name publication must not enumerate the execution index",
+                )
 
 
 # Rule 26: MCP tools/list is a unary tools/call catalogue. Until the MCP

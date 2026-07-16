@@ -663,6 +663,54 @@ fn rollback_enrollment(
     state.advance_generation(&enrollment.agent)?;
     Ok(())
 }
+
+enum DescriptorCallMode {
+    Rpc,
+    Stream,
+    Bidi,
+}
+
+struct AxonAbilityCatalog {
+    control_plane: ControlPlane,
+    execution_index: ExecutionIndex,
+}
+
+impl AxonAbilityCatalog {
+    fn control_plane_record_for_mode(&self, ability: &str, call_mode: DescriptorCallMode) -> Result<Option<Record>, ()> {
+        Ok(Some(Record))
+    }
+
+    fn routeable_mode_registered(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
+        let has_control_plane_record = self
+            .control_plane_record_for_mode(ability, call_mode)
+            .ok()
+            .flatten()
+            .is_some();
+        has_control_plane_record && self.execution_index.has_mode(ability, call_mode)
+    }
+
+    pub fn has_rpc(&self, ability: &str) -> bool {
+        self.routeable_mode_registered(ability, DescriptorCallMode::Rpc)
+    }
+
+    pub fn has_stream(&self, ability: &str) -> bool {
+        self.routeable_mode_registered(ability, DescriptorCallMode::Stream)
+    }
+
+    pub fn has_bidi(&self, ability: &str) -> bool {
+        self.routeable_mode_registered(ability, DescriptorCallMode::Bidi)
+    }
+
+    pub fn list_rpc_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for record in self.control_plane.read().records() {
+            if record.descriptor().call_mode() == DescriptorCallMode::Rpc {
+                names.push(record.ability().to_string());
+            }
+        }
+        names
+    }
+}
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/request.rs" <<'EOF'
 impl SignedInvocation {
@@ -1293,6 +1341,53 @@ EOF
 expect_fail \
   "hot authority generation wrapping" \
   "R25_HOT_AUTHORITY_GENERATION_WRAP"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
+enum DescriptorCallMode {
+    Rpc,
+    Stream,
+    Bidi,
+}
+
+struct AxonAbilityCatalog {
+    execution_index: ExecutionIndex,
+}
+
+impl AxonAbilityCatalog {
+    fn runtime_ability_key_for_mode(&self, ability: &str, call_mode: DescriptorCallMode) -> Result<Option<String>, ()> {
+        Ok(Some(ability.to_string()))
+    }
+
+    pub fn has_rpc(&self, ability: &str) -> bool {
+        if let Some(runtime_key) = self
+            .runtime_ability_key_for_mode(ability, DescriptorCallMode::Rpc)
+            .ok()
+            .flatten()
+        {
+            return self.runtime.ability_options(&runtime_key).is_some();
+        }
+        self.execution_index.has_rpc(ability)
+    }
+
+    pub fn has_stream(&self, ability: &str) -> bool {
+        self.execution_index.has_stream(ability)
+    }
+
+    pub fn has_bidi(&self, ability: &str) -> bool {
+        self.execution_index.has_bidi(ability)
+    }
+
+    pub fn list_rpc_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        self.execution_index.extend_rpc_names(&mut names);
+        names
+    }
+}
+EOF
+expect_fail \
+  "ability routeability catalog owner fork" \
+  "R25B_ABILITY_ROUTEABILITY_CATALOG_OWNER_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/catalog/profiles/mcp.rs" <<'EOF'
