@@ -19,6 +19,9 @@ use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::axon_bridge::local_runtime_request::AXON_TRACE_CONTEXT_METADATA_KEY;
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, HostedAgentNameLookupError,
+};
 /// One child Invocation requested by Mission orchestration.
 ///
 /// Parent identity, subject, cause, trace, deadline ceiling, and cancellation
@@ -99,30 +102,40 @@ impl MissionChildTargetResolver for PersistedMissionChildTargetResolver {
         if agent_name.is_empty() {
             anyhow::bail!("Mission child hosted Agent name must not be empty");
         }
-        let local_agents = crate::daemon::persistence::local_agents::load()
-            .context("load local hosted Agents for Mission child")?;
-        let entry = crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
-            &local_agents,
-            agent_name,
-        )?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Mission child hosted Agent {agent_name:?} is not registered in local-agents.json"
-            )
-        })?;
-        let parsed = crate::core::ura::parse_ura(&entry.agent_ura).with_context(|| {
-            format!(
-                "Mission child hosted Agent {agent_name:?} has invalid URA {:?}",
-                entry.agent_ura
-            )
-        })?;
-        if parsed.kind != crate::core::ura::URAKind::Agent {
-            anyhow::bail!(
-                "Mission child hosted Agent {agent_name:?} resolved to non-Agent URA {:?}",
-                entry.agent_ura
-            );
-        }
-        Ok(entry.agent_ura.clone())
+        let snapshot = AgentAggregateRepository::try_load_snapshot()
+            .context("load Agent aggregate for Mission child target")?;
+        let agent_ura = snapshot
+            .hosted_agent_ura_by_name(agent_name)
+            .map_err(|error| mission_child_hosted_agent_lookup_error(agent_name, error))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Mission child hosted Agent {agent_name:?} is not registered in the Agent aggregate"
+                )
+            })?;
+        Ok(agent_ura.to_string())
+    }
+}
+
+fn mission_child_hosted_agent_lookup_error(
+    agent_name: &str,
+    error: HostedAgentNameLookupError,
+) -> anyhow::Error {
+    match error {
+        HostedAgentNameLookupError::Ambiguous {
+            first_profile,
+            second_profile,
+            ..
+        } => anyhow::anyhow!(
+            "Mission child hosted Agent {agent_name:?} is ambiguous across profiles {first_profile:?} and {second_profile:?}"
+        ),
+        HostedAgentNameLookupError::InvalidUra {
+            agent_ura, reason, ..
+        } => anyhow::anyhow!(
+            "Mission child hosted Agent {agent_name:?} has invalid URA {agent_ura:?}: {reason}"
+        ),
+        HostedAgentNameLookupError::NonAgentUra { agent_ura, .. } => anyhow::anyhow!(
+            "Mission child hosted Agent {agent_name:?} resolved to non-Agent URA {agent_ura:?}"
+        ),
     }
 }
 
@@ -324,10 +337,10 @@ mod tests {
     use super::*;
 
     use easynet_axon::invocation::{
-        make_ability, AbilityFn, AbilityOptions, AxonError, CausalContext, DescriptorBoundEnvelope,
+        AbilityFn, AbilityOptions, AxonError, CausalContext, DescriptorBoundEnvelope,
         DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest,
         Ed25519InvocationSigningAuthority, InvocationHandle, InvocationSigningAuthority,
-        KeyResolver, SignedEnvelope, StaticInvocationSigningAuthorityProvider,
+        KeyResolver, SignedEnvelope, StaticInvocationSigningAuthorityProvider, make_ability,
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use tokio::sync::mpsc;
@@ -416,6 +429,80 @@ mod tests {
             SCHEMA_HASH,
             IMPL_HASH,
         )
+    }
+
+    fn save_hosted_agents(
+        entries: Vec<crate::daemon::persistence::local_agents::HostedAgentEntry>,
+    ) {
+        crate::daemon::persistence::local_agents::save(
+            &crate::daemon::persistence::local_agents::LocalAgentsFile {
+                host_device_agent_ura: "easynet:///r/mission-test/device/dev-1".to_string(),
+                hosted_agents: entries,
+            },
+        )
+        .expect("save hosted agents");
+    }
+
+    fn hosted_entry(
+        profile: &str,
+        name: &str,
+        agent_ura: &str,
+    ) -> crate::daemon::persistence::local_agents::HostedAgentEntry {
+        crate::daemon::persistence::local_agents::HostedAgentEntry {
+            profile: profile.to_string(),
+            name: name.to_string(),
+            agent_ura: agent_ura.to_string(),
+            signing_authority: "hosted_by:easynet:///r/mission-test/device/dev-1".to_string(),
+            first_seen_at: "2026-07-16T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn persisted_target_resolver_uses_aggregate_hosted_agent_identity() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_hosted_agents(vec![hosted_entry(
+            "llm",
+            "worker",
+            "easynet:///r/mission-test/agent/user.worker",
+        )]);
+        let resolver = PersistedMissionChildTargetResolver;
+
+        let callee = resolver
+            .callee_ura(&MissionInvocationRequest::hosted_agent(
+                "worker",
+                "demo.run",
+                serde_json::json!({}),
+            ))
+            .expect("resolve hosted Mission child");
+
+        assert_eq!(callee, "easynet:///r/mission-test/agent/user.worker");
+    }
+
+    #[test]
+    fn persisted_target_resolver_preserves_ambiguous_hosted_agent_error() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        save_hosted_agents(vec![
+            hosted_entry("llm", "same", "easynet:///r/mission-test/agent/user.same"),
+            hosted_entry(
+                "mcp",
+                "same",
+                "easynet:///r/mission-test/agent/user.same-mcp",
+            ),
+        ]);
+        let resolver = PersistedMissionChildTargetResolver;
+
+        let error = resolver
+            .callee_ura(&MissionInvocationRequest::hosted_agent(
+                "same",
+                "demo.run",
+                serde_json::json!({}),
+            ))
+            .expect_err("ambiguous hosted Agent name must fail");
+
+        assert!(
+            format!("{error}").contains("ambiguous"),
+            "error should preserve ambiguity: {error}"
+        );
     }
 
     fn runtime_with_parent_authority(

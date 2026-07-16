@@ -21,8 +21,6 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashSet;
-
 use tonic::Status;
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
@@ -38,6 +36,9 @@ use crate::daemon::invocation::admission::decision::{SignatureDecisionReason, Tr
 use crate::daemon::invocation::dispatch::deps::{DirectoryPlane, FederationDial, IdentityPlane};
 use crate::daemon::invocation::routing::route_resolver::{
     DaemonRouteResolver, ResolveRouteFailure, SelectedInvokeRoute,
+};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentLocalTargetProjection, HostedAgentTarget,
 };
 use easynet_axon::pb::axon::v1::Envelope;
 
@@ -123,13 +124,13 @@ impl TargetGate {
     ///       the device. Recognise it here so the local fast path
     ///       fires instead of falling through to "target offline".
     ///
-    /// Match for (3) uses the hosted-agent identity, not just the bare
+    /// Match for (3) uses the Agent aggregate projection, not just the bare
     /// `<agentID>`. A daemon treats an Agent URA as local only when the
-    /// target is proven by the local hosted-agent read model:
-    ///   * `local-agents.json` contains the exact `(realm,user,agent)`
-    ///     tuple; or
-    ///   * the tuple matches this daemon's credential identity and the
-    ///     exact bare `agentID` exists in `agents.json`.
+    /// target is proven by that projection:
+    ///   * the hosted-Agent target set contains the exact
+    ///     `(realm,user,agent)` tuple; or
+    ///   * the tuple matches this daemon's credential identity and the exact
+    ///     bare `agentID` is registered in the aggregate projection.
     ///
     /// The predicate intentionally does not scan LocalRuntime ability
     /// names. Ability names prove dispatch bindings for already-selected
@@ -154,7 +155,7 @@ impl TargetGate {
         if crate::daemon::identity::local_invocation::local_device_ura() == target_ura {
             return true;
         }
-        if let Some(agent_target) = parse_agent_target_identity(target_ura) {
+        if let Some(agent_target) = HostedAgentTarget::parse(target_ura) {
             if self.local_agent_targets.hosts_target(&agent_target) {
                 return true;
             }
@@ -179,6 +180,8 @@ impl TargetGate {
             } else {
                 "true"
             };
+            let local_agent_projection_state = self.local_agent_targets.projection_state_label();
+            let local_agent_projection_error = self.local_agent_targets.projection_error();
             crate::op_event!(
                 component = daemon_invocation,
                 kind = self_target_miss_for_agent_ura,
@@ -189,6 +192,8 @@ impl TargetGate {
                 local_agents_miss = "true",
                 credential_identity_miss = credential_identity_miss,
                 agent_registry_miss = agent_registry_miss,
+                local_agent_projection_state = local_agent_projection_state,
+                local_agent_projection_error = local_agent_projection_error,
                 message = "matches_self_target_ura: agent URA not local; \
                           no exact local hosted Agent identity matched. Call \
                           will fall through to PresenceRegistry lookup.",
@@ -196,13 +201,6 @@ impl TargetGate {
         }
         false
     }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct AgentTargetIdentity {
-    realm: String,
-    user_id: String,
-    agent_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,25 +211,28 @@ struct LocalCredentialIdentity {
 
 #[derive(Debug, Clone, Default)]
 struct LocalAgentTargetIndex {
-    hosted_agent_targets: HashSet<AgentTargetIdentity>,
+    projection: LocalAgentTargetProjectionState,
     credential_identity: Option<LocalCredentialIdentity>,
-    registered_agent_ids: HashSet<String>,
 }
 
 impl LocalAgentTargetIndex {
     fn load() -> Self {
         Self {
-            hosted_agent_targets: load_hosted_agent_targets(),
+            projection: LocalAgentTargetProjectionState::load(),
             credential_identity: load_local_credential_identity(),
-            registered_agent_ids: load_registered_agent_ids(),
         }
     }
 
-    fn hosts_target(&self, target: &AgentTargetIdentity) -> bool {
-        self.hosted_agent_targets.contains(target)
+    fn hosts_target(&self, target: &HostedAgentTarget) -> bool {
+        match &self.projection {
+            LocalAgentTargetProjectionState::Available { projection } => {
+                projection.hosted_agent_targets.contains(target)
+            }
+            LocalAgentTargetProjectionState::Unavailable { .. } => false,
+        }
     }
 
-    fn credentials_match_target(&self, target: &AgentTargetIdentity) -> bool {
+    fn credentials_match_target(&self, target: &HostedAgentTarget) -> bool {
         self.credential_identity
             .as_ref()
             .map(|identity| identity.realm == target.realm && identity.user_id == target.user_id)
@@ -239,39 +240,73 @@ impl LocalAgentTargetIndex {
     }
 
     fn has_registered_agent_id(&self, agent_id: &str) -> bool {
-        self.registered_agent_ids.contains(agent_id)
+        match &self.projection {
+            LocalAgentTargetProjectionState::Available { projection } => {
+                projection.registered_agent_ids.contains(agent_id)
+            }
+            LocalAgentTargetProjectionState::Unavailable { .. } => false,
+        }
+    }
+
+    fn projection_state_label(&self) -> &'static str {
+        self.projection.label()
+    }
+
+    fn projection_error(&self) -> &str {
+        self.projection.error()
     }
 }
 
-/// Extract the full hosted-agent identity from an
-/// `agent/<userID>.<agentID>` URA. Returns `None` for any other role
-/// or for malformed URAs.
-fn parse_agent_target_identity(target_ura: &str) -> Option<AgentTargetIdentity> {
-    let parsed = crate::core::ura::parse_ura(target_ura).ok()?;
-    if !matches!(parsed.kind, crate::core::ura::URAKind::Agent) {
-        return None;
-    }
-    let realm = parsed.realm.clone();
-    let (user_id, agent_id) = parsed.agent_ids()?;
-    if realm.is_empty() || user_id.is_empty() || agent_id.is_empty() {
-        return None;
-    }
-    Some(AgentTargetIdentity {
-        realm,
-        user_id: user_id.to_string(),
-        agent_id: agent_id.to_string(),
-    })
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalAgentTargetProjectionState {
+    Available {
+        projection: AgentLocalTargetProjection,
+    },
+    Unavailable {
+        reason: String,
+    },
 }
 
-fn load_hosted_agent_targets() -> HashSet<AgentTargetIdentity> {
-    crate::daemon::persistence::local_agents::load()
-        .map(|file| {
-            file.hosted_agents
-                .into_iter()
-                .filter_map(|entry| parse_agent_target_identity(&entry.agent_ura))
-                .collect()
-        })
-        .unwrap_or_default()
+impl Default for LocalAgentTargetProjectionState {
+    fn default() -> Self {
+        Self::Available {
+            projection: AgentLocalTargetProjection::default(),
+        }
+    }
+}
+
+impl LocalAgentTargetProjectionState {
+    fn load() -> Self {
+        match AgentAggregateRepository::try_load_snapshot() {
+            Ok(snapshot) => Self::Available {
+                projection: snapshot.local_target_projection(),
+            },
+            Err(error) => {
+                let reason = format!("{error:#}");
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = agent_aggregate_target_index_load_failed,
+                    error = reason.as_str(),
+                    message = "target_gate: Agent URA self-target matching failed closed because the Agent aggregate snapshot could not be loaded",
+                );
+                Self::Unavailable { reason }
+            }
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Available { .. } => "available",
+            Self::Unavailable { .. } => "unavailable",
+        }
+    }
+
+    fn error(&self) -> &str {
+        match self {
+            Self::Available { .. } => "",
+            Self::Unavailable { reason } => reason,
+        }
+    }
 }
 
 fn load_local_credential_identity() -> Option<LocalCredentialIdentity> {
@@ -287,10 +322,59 @@ fn load_local_credential_identity() -> Option<LocalCredentialIdentity> {
         })
 }
 
-fn load_registered_agent_ids() -> HashSet<String> {
-    crate::daemon::persistence::agent_registry::load_agents()
-        .map(|registry| registry.agents.into_keys().collect())
-        .unwrap_or_default()
+#[cfg(test)]
+mod local_agent_target_tests {
+    use super::*;
+
+    fn target(realm: &str, user_id: &str, agent_id: &str) -> HostedAgentTarget {
+        HostedAgentTarget {
+            realm: realm.to_string(),
+            user_id: user_id.to_string(),
+            agent_id: agent_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn local_agent_target_index_available_projection_matches_targets() {
+        let hosted_target = target("acme", "u1", "claude");
+        let index = LocalAgentTargetIndex {
+            projection: LocalAgentTargetProjectionState::Available {
+                projection: AgentLocalTargetProjection {
+                    hosted_agent_targets: [hosted_target.clone()].into(),
+                    registered_agent_ids: ["codex".to_string()].into(),
+                },
+            },
+            credential_identity: Some(LocalCredentialIdentity {
+                realm: "acme".to_string(),
+                user_id: "u1".to_string(),
+            }),
+        };
+
+        assert!(index.hosts_target(&hosted_target));
+        assert!(index.credentials_match_target(&target("acme", "u1", "codex")));
+        assert!(index.has_registered_agent_id("codex"));
+        assert_eq!(index.projection_state_label(), "available");
+        assert_eq!(index.projection_error(), "");
+    }
+
+    #[test]
+    fn local_agent_target_index_unavailable_projection_fails_closed() {
+        let index = LocalAgentTargetIndex {
+            projection: LocalAgentTargetProjectionState::Unavailable {
+                reason: "load Agent registry projection: denied".to_string(),
+            },
+            credential_identity: Some(LocalCredentialIdentity {
+                realm: "acme".to_string(),
+                user_id: "u1".to_string(),
+            }),
+        };
+
+        assert!(!index.hosts_target(&target("acme", "u1", "claude")));
+        assert!(index.credentials_match_target(&target("acme", "u1", "codex")));
+        assert!(!index.has_registered_agent_id("codex"));
+        assert_eq!(index.projection_state_label(), "unavailable");
+        assert!(index.projection_error().contains("denied"));
+    }
 }
 
 fn local_runtime_authority_ura(

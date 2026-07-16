@@ -30,8 +30,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::Local;
@@ -778,32 +778,11 @@ struct ImplicitAgentFallback {
 fn find_implicit_agent_fallback(
     ir: &crate::eal::runtime::ir::MissionIr,
 ) -> anyhow::Result<Option<ImplicitAgentFallback>> {
-    use crate::core::agent::id::{AgentId, DEFAULT_TENANT};
     use crate::eal::runtime::ir::IrTarget;
 
-    let registry = crate::daemon::persistence::agent_registry::load_agents()?;
-
-    // Build the set of registered agent identifiers in their canonical
-    // forms, plus the bare-name fallback for default-tenant agents
-    // (so legacy `agents.json` files keyed on `"claude"` still trigger
-    // the conflict check).
-    let mut registered: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for raw_key in registry.agents.into_keys() {
-        // Try to parse the key as an AgentId. Both shorthand and full
-        // form are accepted. Add both surface forms to the set so
-        // either matches a colliding device node id.
-        if let Ok(id) = AgentId::parse(&raw_key) {
-            registered.insert(id.name.clone());
-            if id.tenant != DEFAULT_TENANT {
-                registered.insert(format!("{}/{}", id.tenant, id.name));
-            } else {
-                // For default-tenant agents, full form is also a valid
-                // surface — `default/claude` matches `claude` matches
-                // `default/claude`.
-                registered.insert(format!("{}/{}", DEFAULT_TENANT, id.name));
-            }
-        }
-    }
+    let snapshot =
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()?;
+    let registered = snapshot.registered_agent_surface_names();
 
     // PR-10: the implicit-agent-fallback check only applies to flat
     // `Call` steps. Block variants' targets are resolved inside the
@@ -1066,11 +1045,7 @@ fn sanitize_for_path(name: &str) -> String {
         .collect::<String>()
         .trim_matches('-')
         .to_string();
-    if s.is_empty() {
-        "mission".into()
-    } else {
-        s
-    }
+    if s.is_empty() { "mission".into() } else { s }
 }
 
 #[cfg(test)]

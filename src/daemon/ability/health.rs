@@ -66,6 +66,9 @@ use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::daemon::ability::manifest::{AbilityManifest, BootSpec, CostKind, HealthSpec};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentAggregateSnapshotLoadError,
+};
 
 /// Scan cadence. The tick only *checks due-ness*; per-record cadence
 /// is owned by `next_probe_unix_ms`, so a shorter tick sharpens
@@ -236,16 +239,10 @@ fn scan() -> anyhow::Result<ScanPlan> {
         unmonitored: Vec::new(),
         live: BTreeSet::new(),
     };
-    let registry = crate::daemon::persistence::agent_registry::load_agents().map_err(|error| {
-        anyhow::anyhow!("load durable agent registry for health scan: {error:#}")
-    })?;
-    let local = crate::daemon::persistence::local_agents::load().map_err(|error| {
-        anyhow::anyhow!("load hosted-agent URA index for health scan: {error:#}")
-    })?;
-    for (agent_name, entry) in &registry.agents {
-        let Some(owner_ura) =
-            crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent_name)
-        else {
+    let agent_snapshot =
+        AgentAggregateRepository::try_load_snapshot().map_err(health_scan_snapshot_error)?;
+    for (agent_name, entry) in agent_snapshot.registered_agents() {
+        let Some(owner_ura) = agent_snapshot.hosted_llm_agent_ura(agent_name) else {
             continue;
         };
         for manifest in
@@ -279,6 +276,17 @@ fn scan() -> anyhow::Result<ScanPlan> {
         }
     }
     Ok(plan)
+}
+
+fn health_scan_snapshot_error(error: AgentAggregateSnapshotLoadError) -> anyhow::Error {
+    match error {
+        AgentAggregateSnapshotLoadError::RegistryUnreadable { source } => {
+            anyhow::anyhow!("load durable agent registry for health scan: {source:#}")
+        }
+        AgentAggregateSnapshotLoadError::IdentityUnreadable { source } => {
+            anyhow::anyhow!("load hosted-agent URA index for health scan: {source:#}")
+        }
+    }
 }
 
 // ── Scheduling rules (pure) ─────────────────────────────────────────

@@ -2682,6 +2682,42 @@ if agent_aggregate.exists():
             "Agent aggregate snapshot must own hosted LLM identity presence checks",
         ),
         (
+            "struct AgentLocalTargetProjection",
+            "Agent aggregate snapshot must own local target projection shape",
+        ),
+        (
+            "struct HostedAgentTarget",
+            "Agent aggregate snapshot must own hosted Agent target parsing",
+        ),
+        (
+            "fn local_target_projection(&self) -> AgentLocalTargetProjection",
+            "Agent aggregate snapshot must expose local target projection to admission",
+        ),
+        (
+            "struct AgentHostedPlacementProjection",
+            "Agent aggregate snapshot must own hosted placement projection shape",
+        ),
+        (
+            "struct AgentHostedPlacement",
+            "Agent aggregate snapshot must own hosted placement entries",
+        ),
+        (
+            "fn hosted_agent_placements(&self) -> AgentHostedPlacementProjection",
+            "Agent aggregate snapshot must expose hosted placement projection to routing",
+        ),
+        (
+            "enum HostedAgentNameLookupError",
+            "Agent aggregate snapshot must own hosted Agent display-name lookup errors",
+        ),
+        (
+            "fn registered_agent_surface_names(&self) -> BTreeSet<String>",
+            "Agent aggregate snapshot must expose registered Agent surface names",
+        ),
+        (
+            "fn hosted_agent_ura_by_name(",
+            "Agent aggregate snapshot must expose hosted Agent lookup by display name",
+        ),
+        (
             "agent_registry::load_agents()",
             "Agent aggregate repository must load the durable registry projection",
         ),
@@ -2817,6 +2853,272 @@ if ability_dispatch.exists():
         ):
             if token in body:
                 add("R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK", ability_dispatch, 1, detail)
+
+# Rule 35: admission Agent self-target locality consumes the Agent aggregate
+# snapshot. TargetGate gates unary, stream, and bidi dispatch. If it
+# independently loads agents.json and local-agents.json, an invocation can be
+# accepted or rejected from a split source-of-truth view of hosted Agent
+# identity.
+target_gate = cli_root / "src/daemon/invocation/admission/target_gate.rs"
+if target_gate.exists():
+    text = source(target_gate)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    target_gate_requirements = (
+        (
+            "AgentAggregateRepository::try_load_snapshot()",
+            "TargetGate Agent locality must load through the aggregate snapshot repository",
+        ),
+        (
+            "enum LocalAgentTargetProjectionState",
+            "TargetGate must model Agent projection availability explicitly",
+        ),
+        (
+            "snapshot.local_target_projection()",
+            "TargetGate must consume the aggregate-owned Agent locality projection",
+        ),
+        (
+            "LocalAgentTargetProjectionState::Unavailable",
+            "TargetGate must make aggregate fail-closed behavior observable",
+        ),
+        (
+            "HostedAgentTarget::parse(target_ura)",
+            "TargetGate must parse inbound Agent URAs through the aggregate-owned target identity",
+        ),
+    )
+    for token, detail in target_gate_requirements:
+        if token not in production_text:
+            add("R35_TARGET_GATE_AGENT_AGGREGATE_FORK", target_gate, 1, detail)
+    for token, detail in (
+        (
+            "agent_registry::load_agents",
+            "TargetGate must not load agents.json directly for Agent locality",
+        ),
+        (
+            "local_agents::load",
+            "TargetGate must not load local-agents.json directly for Agent locality",
+        ),
+    ):
+        if token in production_text:
+            add("R35_TARGET_GATE_AGENT_AGGREGATE_FORK", target_gate, 1, detail)
+    for token, detail in (
+        (
+            ".local_agents",
+            "TargetGate must not inspect AgentAggregateSnapshot.local_agents directly",
+        ),
+        (
+            ".registry",
+            "TargetGate must not inspect AgentAggregateSnapshot.registry directly",
+        ),
+    ):
+        if token in production_text:
+            add("R35_TARGET_GATE_AGENT_AGGREGATE_FORK", target_gate, 1, detail)
+
+# Rule 36: ability-health scans consume the Agent aggregate snapshot. Health
+# metadata is public catalog state; the scan must not independently join
+# agents.json and local-agents.json or it can stamp records from a split
+# source-of-truth view.
+ability_health = cli_root / "src/daemon/ability/health.rs"
+if ability_health.exists():
+    text = source(ability_health)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    health_requirements = (
+        (
+            "AgentAggregateRepository::try_load_snapshot()",
+            "ability health scan must load through the Agent aggregate repository",
+        ),
+        (
+            "health_scan_snapshot_error",
+            "ability health scan must preserve aggregate load source classification",
+        ),
+        (
+            "agent_snapshot.registered_agents()",
+            "ability health scan must iterate registry rows through the aggregate snapshot",
+        ),
+        (
+            "agent_snapshot.hosted_llm_agent_ura(agent_name)",
+            "ability health scan must resolve hosted LLM owners through the aggregate snapshot",
+        ),
+    )
+    for token, detail in health_requirements:
+        if token not in production_text:
+            add("R36_ABILITY_HEALTH_AGENT_AGGREGATE_FORK", ability_health, 1, detail)
+    for token, detail in (
+        (
+            "agent_registry::load_agents",
+            "ability health scan must not load agents.json directly",
+        ),
+        (
+            "local_agents::load",
+            "ability health scan must not load local-agents.json directly",
+        ),
+        (
+            "lookup_hosted_ura",
+            "ability health scan must not bypass aggregate hosted LLM owner resolution",
+        ),
+    ):
+        if token in production_text:
+            add("R36_ABILITY_HEALTH_AGENT_AGGREGATE_FORK", ability_health, 1, detail)
+
+# Rule 37: namespace route hosted-Agent placement consumes the Agent aggregate
+# projection. Route resolution is part of invocation proof selection; it must
+# not own the local-agents.json file layout or silently revive a split
+# hosted-Agent placement read model.
+route_resolver = cli_root / "src/daemon/invocation/routing/route_resolver.rs"
+if route_resolver.exists():
+    text = source(route_resolver)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    route_placement_requirements = (
+        (
+            "AgentAggregateRepository::try_load_snapshot()",
+            "route resolver hosted placement must load through the Agent aggregate repository",
+        ),
+        (
+            "AgentHostedPlacementProjection",
+            "route resolver hosted placement must consume the aggregate placement projection",
+        ),
+        (
+            "fn from_projection(projection: AgentHostedPlacementProjection) -> Self",
+            "route resolver hosted placement must convert from the aggregate projection",
+        ),
+        (
+            "enum HostedPlacementProjectionState",
+            "route resolver hosted placement must model projection availability explicitly",
+        ),
+        (
+            "HostedPlacementProjectionState::Unavailable",
+            "route resolver hosted placement must fail closed when projection is unavailable",
+        ),
+        (
+            "snapshot.hosted_agent_placements()",
+            "route resolver hosted placement must use the aggregate-owned placement projection",
+        ),
+    )
+    for token, detail in route_placement_requirements:
+        if token not in production_text:
+            add("R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK", route_resolver, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            "route resolver must not load local-agents.json directly for hosted placement",
+        ),
+        (
+            "LocalAgentsFile",
+            "route resolver must not inspect the local-agents.json file shape",
+        ),
+        (
+            "fn from_file(",
+            "route resolver must not own hosted placement projection from persistence files",
+        ),
+    ):
+        if token in production_text:
+            add("R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK", route_resolver, 1, detail)
+
+# Rule 38: Mission child-target proof consumes Agent aggregate projections.
+# Mission execution creates child Invocations; target proof must not duplicate
+# the Agent persistence file layout while deciding whether EAL device targets
+# collide with Agents or resolving hosted Agent callees.
+mission_orchestration = cli_root / "src/daemon/execution/mission/orchestration.rs"
+mission_gateway = cli_root / "src/daemon/execution/mission/invocation_gateway.rs"
+if mission_orchestration.exists():
+    text = source(mission_orchestration)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    orchestration_requirements = (
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            "Mission implicit-Agent fallback guard must load through the Agent aggregate repository",
+        ),
+        (
+            "snapshot.registered_agent_surface_names()",
+            "Mission implicit-Agent fallback guard must consume aggregate surface names",
+        ),
+    )
+    for token, detail in orchestration_requirements:
+        if token not in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", mission_orchestration, 1, detail)
+    if "agent_registry::load_agents" in production_text:
+        add(
+            "R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK",
+            mission_orchestration,
+            1,
+            "Mission orchestration must not load agents.json directly for target collision proof",
+        )
+if mission_gateway.exists():
+    text = source(mission_gateway)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    gateway_requirements = (
+        (
+            "AgentAggregateRepository::try_load_snapshot()",
+            "Mission child target resolver must load through the Agent aggregate repository",
+        ),
+        (
+            "hosted_agent_ura_by_name(agent_name)",
+            "Mission child target resolver must consume aggregate hosted Agent lookup",
+        ),
+        (
+            "HostedAgentNameLookupError",
+            "Mission child target resolver must preserve hosted Agent lookup error classification",
+        ),
+    )
+    for token, detail in gateway_requirements:
+        if token not in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", mission_gateway, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            "Mission child target resolver must not load local-agents.json directly",
+        ),
+        (
+            "lookup_hosted_agent_by_name",
+            "Mission child target resolver must not bypass aggregate hosted Agent lookup",
+        ),
+    ):
+        if token in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", mission_gateway, 1, detail)
+
+hosted_name_surfaces = (
+    (
+        cli_root / "src/support/platform/local_daemon_grpc.rs",
+        "local daemon hosted delegation callee resolution",
+    ),
+    (
+        cli_root / "src/cli/commands/teach.rs",
+        "CLI teach learner resolution",
+    ),
+)
+for hosted_name_surface, surface_label in hosted_name_surfaces:
+    if not hosted_name_surface.exists():
+        continue
+    text = source(hosted_name_surface)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    hosted_name_requirements = (
+        (
+            "AgentAggregateRepository::try_load_snapshot()",
+            f"{surface_label} must load through the Agent aggregate repository",
+        ),
+        (
+            "hosted_agent_ura_by_name(",
+            f"{surface_label} must use aggregate hosted Agent display-name lookup",
+        ),
+        (
+            "HostedAgentNameLookupError",
+            f"{surface_label} must preserve hosted Agent lookup error classification",
+        ),
+    )
+    for token, detail in hosted_name_requirements:
+        if token not in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", hosted_name_surface, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            f"{surface_label} must not load local-agents.json directly for display-name lookup",
+        ),
+        (
+            "lookup_hosted_agent_by_name",
+            f"{surface_label} must not bypass aggregate hosted Agent display-name lookup",
+        ),
+    ):
+        if token in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", hosted_name_surface, 1, detail)
 
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The

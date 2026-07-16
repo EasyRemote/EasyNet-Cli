@@ -210,9 +210,40 @@ enum HostedLlmAgentIdentity<'a> {
     Ambiguous,
 }
 
+enum HostedAgentNameLookupError {
+    Ambiguous,
+    InvalidUra,
+    NonAgentUra,
+}
+
+struct AgentLocalTargetProjection {
+    hosted_agent_targets: BTreeSet<HostedAgentTarget>,
+    registered_agent_ids: BTreeSet<String>,
+}
+
+struct HostedAgentTarget {
+    realm: String,
+    user_id: String,
+    agent_id: String,
+}
+
+struct AgentHostedPlacementProjection {
+    by_agent_ura: BTreeMap<String, AgentHostedPlacement>,
+}
+
+struct AgentHostedPlacement {
+    agent_ura: String,
+    host_device_ura: String,
+    host_node_id: Option<String>,
+}
+
 impl AgentAggregateSnapshot {
     fn has_registered_agent(&self, agent: &str) -> bool {
         self.registry.agents.contains_key(agent)
+    }
+
+    fn registered_agent_surface_names(&self) -> BTreeSet<String> {
+        BTreeSet::new()
     }
 
     fn host_device_agent_ura(&self) -> &str {
@@ -225,6 +256,27 @@ impl AgentAggregateSnapshot {
 
     fn has_hosted_llm_agent_identity(&self, agent: &str) -> bool {
         self.local_agents.hosted_agents.iter().any(|entry| entry.profile == "llm" && entry.name == agent)
+    }
+
+    fn hosted_llm_agent_ura(&self, agent: &str) -> Option<&str> {
+        Some("easynet:///r/acme/agent/user.claude")
+    }
+
+    fn hosted_agent_ura_by_name(&self, agent: &str) -> Result<Option<&str>, HostedAgentNameLookupError> {
+        Ok(Some("easynet:///r/acme/agent/user.claude"))
+    }
+
+    fn local_target_projection(&self) -> AgentLocalTargetProjection {
+        AgentLocalTargetProjection {
+            hosted_agent_targets: BTreeSet::new(),
+            registered_agent_ids: BTreeSet::new(),
+        }
+    }
+
+    fn hosted_agent_placements(&self) -> AgentHostedPlacementProjection {
+        AgentHostedPlacementProjection {
+            by_agent_ura: BTreeMap::new(),
+        }
     }
 }
 
@@ -371,10 +423,29 @@ fn write_mission_meta(path: &Path, meta: &MissionRunMeta) {
     let tmp_path = path.join(".meta.json.tmp");
     fs::write(tmp_path, serde_json::to_string(meta).unwrap()).unwrap();
 }
+
+fn find_implicit_agent_fallback(ir: &MissionIr) -> anyhow::Result<Option<ImplicitAgentFallback>> {
+    let snapshot = AgentAggregateRepository::load_snapshot()?;
+    let registered = snapshot.registered_agent_surface_names();
+    Ok(None)
+}
 EOF
   cat >"$CLI/src/daemon/execution/mission/invocation_gateway.rs" <<'EOF'
 struct DaemonMissionInvocationGateway {
     parent: AbilityContext,
+}
+
+struct PersistedMissionChildTargetResolver;
+
+impl MissionChildTargetResolver for PersistedMissionChildTargetResolver {
+    fn callee_ura(&self, request: &MissionInvocationRequest) -> anyhow::Result<String> {
+        let snapshot = AgentAggregateRepository::try_load_snapshot()?;
+        let agent_name = request.hosted_agent.as_deref().unwrap();
+        let agent_ura = snapshot
+            .hosted_agent_ura_by_name(agent_name)
+            .map_err(|error: HostedAgentNameLookupError| anyhow::anyhow!("{error}"))?;
+        Ok(agent_ura.unwrap().to_string())
+    }
 }
 
 impl DaemonMissionInvocationGateway {
@@ -510,6 +581,34 @@ impl<'a> HubResolver<'a> {
 }
 EOF
   cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+struct LocalHostedAgentPlacements {
+    state: HostedPlacementProjectionState,
+}
+
+enum HostedPlacementProjectionState {
+    Available,
+    Unavailable { reason: String },
+}
+
+impl LocalHostedAgentPlacements {
+    fn load() -> Self {
+        match AgentAggregateRepository::try_load_snapshot() {
+            Ok(snapshot) => Self::from_projection(snapshot.hosted_agent_placements()),
+            Err(error) => Self {
+                state: HostedPlacementProjectionState::Unavailable {
+                    reason: format!("{error:#}"),
+                },
+            },
+        }
+    }
+
+    fn from_projection(projection: AgentHostedPlacementProjection) -> Self {
+        Self {
+            state: HostedPlacementProjectionState::Available,
+        }
+    }
+}
+
 fn resolve_delegation(peer_source: PeerSource, parsed_owner: ParsedOwner, selector: Selector) {
     let resolution = HubResolver::new(
         peer_source.federated_peers,
@@ -2093,6 +2192,182 @@ EOF
 expect_fail \
   "hot authority aggregate snapshot fork" \
   "R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/target_gate.rs" <<'EOF'
+struct LocalAgentTargetIndex {
+    hosted_agent_targets: HashSet<AgentTargetIdentity>,
+    registered_agent_ids: HashSet<String>,
+}
+
+impl LocalAgentTargetIndex {
+    fn load() -> Self {
+        Self {
+            hosted_agent_targets: load_hosted_agent_targets(),
+            registered_agent_ids: load_registered_agent_ids(),
+        }
+    }
+}
+
+fn load_hosted_agent_targets() -> HashSet<AgentTargetIdentity> {
+    crate::daemon::persistence::local_agents::load()
+        .map(|file| {
+            file.hosted_agents
+                .into_iter()
+                .filter_map(|entry| parse_agent_target_identity(&entry.agent_ura))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn load_registered_agent_ids() -> HashSet<String> {
+    crate::daemon::persistence::agent_registry::load_agents()
+        .map(|registry| registry.agents.into_keys().collect())
+        .unwrap_or_default()
+}
+EOF
+expect_fail \
+  "target gate aggregate snapshot fork" \
+  "R35_TARGET_GATE_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+struct LocalHostedAgentPlacements {
+    by_agent_ura: HashMap<String, HostedAgentPlacement>,
+}
+
+impl LocalHostedAgentPlacements {
+    fn load() -> Self {
+        crate::daemon::persistence::local_agents::load()
+            .map(|file| Self::from_file(&file))
+            .unwrap_or_default()
+    }
+
+    fn from_file(file: &crate::daemon::persistence::local_agents::LocalAgentsFile) -> Self {
+        let host_device_ura = file.host_device_agent_ura.trim();
+        let by_agent_ura = file
+            .hosted_agents
+            .iter()
+            .map(|entry| {
+                (
+                    entry.agent_ura.clone(),
+                    HostedAgentPlacement {
+                        host_device_ura: host_device_ura.to_string(),
+                    },
+                )
+            })
+            .collect();
+        Self { by_agent_ura }
+    }
+}
+EOF
+expect_fail \
+  "route resolver aggregate placement fork" \
+  "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/health.rs" <<'EOF'
+fn scan() -> anyhow::Result<ScanPlan> {
+    let mut plan = ScanPlan {
+        monitored: Vec::new(),
+        unmonitored: Vec::new(),
+        live: BTreeSet::new(),
+    };
+    let registry = crate::daemon::persistence::agent_registry::load_agents()
+        .map_err(|error| anyhow::anyhow!("load durable agent registry for health scan: {error:#}"))?;
+    let local = crate::daemon::persistence::local_agents::load()
+        .map_err(|error| anyhow::anyhow!("load hosted-agent URA index for health scan: {error:#}"))?;
+    for (agent_name, entry) in &registry.agents {
+        let Some(owner_ura) =
+            crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent_name)
+        else {
+            continue;
+        };
+        let _ = (owner_ura, entry);
+    }
+    Ok(plan)
+}
+EOF
+expect_fail \
+  "ability health aggregate snapshot fork" \
+  "R36_ABILITY_HEALTH_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+struct LocalHostedAgentPlacements {
+    by_agent_ura: HashMap<String, HostedAgentPlacement>,
+}
+
+impl LocalHostedAgentPlacements {
+    fn load() -> Self {
+        crate::daemon::persistence::local_agents::load()
+            .map(|file| Self::from_file(&file))
+            .unwrap_or_default()
+    }
+
+    fn from_file(file: &crate::daemon::persistence::local_agents::LocalAgentsFile) -> Self {
+        let host_device_ura = file.host_device_agent_ura.trim();
+        let by_agent_ura = file
+            .hosted_agents
+            .iter()
+            .filter_map(|entry| Some((entry.agent_ura.clone(), HostedAgentPlacement {
+                host_device_ura: host_device_ura.to_string(),
+                host_node_id: None,
+            })))
+            .collect();
+        Self { by_agent_ura }
+    }
+}
+EOF
+expect_fail \
+  "route resolver hosted placement aggregate fork" \
+  "R37_ROUTE_RESOLVER_AGENT_PLACEMENT_AGGREGATE_FORK"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/execution/mission"
+cat >"$CLI/src/daemon/execution/mission/orchestration.rs" <<'EOF'
+fn find_implicit_agent_fallback(ir: &MissionIr) -> anyhow::Result<Option<ImplicitAgentFallback>> {
+    let registry = crate::daemon::persistence::agent_registry::load_agents()?;
+    let registered: HashSet<String> = registry.agents.into_keys().collect();
+    Ok(None)
+}
+EOF
+cat >"$CLI/src/daemon/execution/mission/invocation_gateway.rs" <<'EOF'
+struct PersistedMissionChildTargetResolver;
+
+impl MissionChildTargetResolver for PersistedMissionChildTargetResolver {
+    fn callee_ura(&self, request: &MissionInvocationRequest) -> anyhow::Result<String> {
+        let local_agents = crate::daemon::persistence::local_agents::load()?;
+        let entry = crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
+            &local_agents,
+            request.hosted_agent.as_deref().unwrap(),
+        )?;
+        Ok(entry.unwrap().agent_ura.clone())
+    }
+}
+EOF
+mkdir -p "$CLI/src/support/platform" "$CLI/src/cli/commands"
+cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
+fn canonical_hosted_agent_ura_by_name(agent_name: &str) -> anyhow::Result<String> {
+    let local_agents = crate::daemon::persistence::local_agents::load()?;
+    let entry = crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
+        &local_agents,
+        agent_name,
+    )?;
+    Ok(entry.unwrap().agent_ura.clone())
+}
+EOF
+cat >"$CLI/src/cli/commands/teach.rs" <<'EOF'
+fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
+    let local = crate::daemon::persistence::local_agents::load()?;
+    let entry =
+        crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(&local, learner)?;
+    Ok(entry.unwrap().agent_ura.clone())
+}
+EOF
+expect_fail \
+  "mission child target aggregate fork" \
+  "R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'

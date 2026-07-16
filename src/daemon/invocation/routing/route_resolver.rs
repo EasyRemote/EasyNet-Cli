@@ -40,6 +40,9 @@ use crate::daemon::invocation::dispatch::federation_wrappers::{
     self, ResolveAgentSummary, ResolveRequest,
 };
 use crate::daemon::invocation::routing::hub_resolver::{HubResolution, HubResolver};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentHostedPlacementProjection,
+};
 
 use easynet_axon::pb::axon::v1 as axon_pb;
 
@@ -524,41 +527,47 @@ struct HostedAgentPlacement {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct LocalHostedAgentPlacements {
     by_agent_ura: HashMap<String, HostedAgentPlacement>,
+    state: HostedPlacementProjectionState,
 }
 
 impl LocalHostedAgentPlacements {
     fn load() -> Self {
-        crate::daemon::persistence::local_agents::load()
-            .map(|file| Self::from_file(&file))
-            .unwrap_or_default()
+        match AgentAggregateRepository::try_load_snapshot() {
+            Ok(snapshot) => Self::from_projection(snapshot.hosted_agent_placements()),
+            Err(error) => Self::unavailable(format!("{error:#}")),
+        }
     }
 
-    fn from_file(file: &crate::daemon::persistence::local_agents::LocalAgentsFile) -> Self {
-        let host_device_ura = file.host_device_agent_ura.trim();
-        if host_device_ura.is_empty() {
-            return Self::default();
+    fn from_projection(projection: AgentHostedPlacementProjection) -> Self {
+        Self {
+            by_agent_ura: projection
+                .by_agent_ura
+                .into_iter()
+                .map(|(agent_ura, placement)| {
+                    (
+                        agent_ura,
+                        HostedAgentPlacement {
+                            host_device_ura: placement.host_device_ura,
+                            host_node_id: placement.host_node_id,
+                        },
+                    )
+                })
+                .collect(),
+            state: HostedPlacementProjectionState::Available,
         }
+    }
 
-        let host_node_id = device_id_from_device_ura(host_device_ura);
-        let by_agent_ura = file
-            .hosted_agents
-            .iter()
-            .filter_map(|entry| {
-                let agent_ura = entry.agent_ura.trim();
-                let parsed = crate::core::ura::parse_ura(agent_ura).ok()?;
-                if parsed.kind != crate::core::ura::URAKind::Agent {
-                    return None;
-                }
-                Some((
-                    agent_ura.to_string(),
-                    HostedAgentPlacement {
-                        host_device_ura: host_device_ura.to_string(),
-                        host_node_id: host_node_id.clone(),
-                    },
-                ))
-            })
-            .collect();
-        Self { by_agent_ura }
+    fn unavailable(reason: String) -> Self {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = route_resolver_agent_placement_projection_unavailable,
+            error = reason.as_str(),
+            message = "route_resolver: hosted Agent placement matching failed closed because the Agent aggregate snapshot could not be loaded",
+        );
+        Self {
+            by_agent_ura: HashMap::new(),
+            state: HostedPlacementProjectionState::Unavailable { reason },
+        }
     }
 
     #[cfg(test)]
@@ -573,6 +582,7 @@ impl LocalHostedAgentPlacements {
                     host_node_id,
                 },
             )]),
+            state: HostedPlacementProjectionState::Available,
         }
     }
 
@@ -581,8 +591,26 @@ impl LocalHostedAgentPlacements {
         agent_ura: &str,
         self_device_ura: &str,
     ) -> Option<&HostedAgentPlacement> {
+        if matches!(
+            self.state,
+            HostedPlacementProjectionState::Unavailable { .. }
+        ) {
+            return None;
+        }
         let placement = self.by_agent_ura.get(agent_ura)?;
         (placement.host_device_ura == self_device_ura).then_some(placement)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HostedPlacementProjectionState {
+    Available,
+    Unavailable { reason: String },
+}
+
+impl Default for HostedPlacementProjectionState {
+    fn default() -> Self {
+        Self::Available
     }
 }
 
@@ -1824,6 +1852,7 @@ fn summary_public_name(summary: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::persistence::agent_aggregate::AgentHostedPlacement;
 
     use std::collections::BTreeMap;
 
@@ -2419,7 +2448,7 @@ mod tests {
         // A hosted agent's ability implementation lives on THIS device
         // (D44/D105). The owner is the Agent URA, while the execution
         // host is the device that owns the local runtime. The route must
-        // be proven from local-agents.json placement + runtime bindings,
+        // be proven from aggregate placement + runtime bindings,
         // not from presence or hub ability projection rows.
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
@@ -2456,6 +2485,49 @@ mod tests {
             route.is_authoritative_local_or_better(),
             "ability implemented on this device is device-local authority"
         );
+    }
+
+    #[test]
+    fn hosted_agent_placements_consume_aggregate_projection() {
+        let agent_ura = crate::core::ura::agent_ura("test-realm", "alice", "assistant");
+        let host_ura = device_owner_ura();
+        let placements =
+            LocalHostedAgentPlacements::from_projection(AgentHostedPlacementProjection {
+                by_agent_ura: [(
+                    agent_ura.clone(),
+                    AgentHostedPlacement {
+                        agent_ura: agent_ura.clone(),
+                        host_device_ura: host_ura.clone(),
+                        host_node_id: Some("device-a".to_string()),
+                    },
+                )]
+                .into(),
+            });
+
+        let placement = placements
+            .local_host_for(&agent_ura, &host_ura)
+            .expect("aggregate placement should match local authority");
+
+        assert_eq!(placement.host_device_ura, host_ura);
+        assert_eq!(placement.host_node_id.as_deref(), Some("device-a"));
+    }
+
+    #[test]
+    fn hosted_agent_placements_unavailable_fails_closed() {
+        let agent_ura = crate::core::ura::agent_ura("test-realm", "alice", "assistant");
+        let host_ura = device_owner_ura();
+        let placements = LocalHostedAgentPlacements::unavailable(
+            "load hosted-Agent identity projection: denied".to_string(),
+        );
+
+        assert!(
+            placements.local_host_for(&agent_ura, &host_ura).is_none(),
+            "unavailable aggregate projection must not prove local hosted placement"
+        );
+        assert!(matches!(
+            placements.state,
+            HostedPlacementProjectionState::Unavailable { .. }
+        ));
     }
 
     #[test]
