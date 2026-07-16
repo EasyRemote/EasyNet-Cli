@@ -4296,6 +4296,63 @@ if python_runtime_ability.exists():
             "Python stream lowering must resolve a stream-mode descriptor",
         )
 
+# Rule 60: the generic Go and Python RuntimeClient facades must emit the same
+# descriptor-selection state. An omitted call mode is canonically RPC before
+# crossing the provider seam; transports may not infer an empty selector.
+python_runtime = cli_root / "sdk/python/easynet_sdk/runtime.py"
+if python_runtime.exists():
+    text = source(python_runtime)
+    if 'call_mode = call_mode.strip() or "rpc"' not in text:
+        add(
+            "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK",
+            python_runtime,
+            1,
+            "Python RuntimeClient must normalize blank descriptor call mode to rpc before provider resolution",
+        )
+
+# Rule 61: direct gRPC transports own only unary/stream/bidi wire dispatch.
+# Prepare, signed submit, and invocation-handle lifecycle belong to the
+# explicitly configured Runtime transport. Go and Python must both fail closed
+# when that owner is absent rather than inventing local prepared or terminal
+# handle state.
+go_direct_runtime = cli_root / "sdk/go/direct_runtime.go"
+python_direct_runtime = cli_root / "sdk/python/easynet_sdk/direct_runtime.py"
+if go_direct_runtime.exists():
+    text = source(go_direct_runtime)
+    if "func (t *DirectRuntimeTransport) requireHandleTransport(" not in text:
+        add(
+            "R61_DIRECT_RUNTIME_HANDLE_OWNER_FORK",
+            go_direct_runtime,
+            1,
+            "Go direct runtime must centralize handle-owner acquisition",
+        )
+    for token, detail in (
+        ("Code:      ErrNotImplemented", "Go direct runtime must fail closed without a handle transport"),
+        ("return handle.Prepare(ctx, projectedJSON, optionsJSON)", "Go direct prepare must delegate its projected draft to the handle owner"),
+        ("return handle.SubmitSigned(ctx, signedJSON)", "Go direct signed submit must delegate to the handle owner"),
+        ("return handle.AwaitHandle(ctx, control)", "Go direct await must delegate to the handle owner"),
+    ):
+        if token not in text:
+            add("R61_DIRECT_RUNTIME_HANDLE_OWNER_FORK", go_direct_runtime, 1, detail)
+    for token, detail in (
+        ("directRuntimePrepare", "Go direct runtime must not retain a local prepare fallback"),
+        ("directSignedInvocationDraftJSON", "Go direct runtime must not submit signed calls through direct gRPC"),
+        ("directRuntimeHandleSnapshot", "Go direct runtime must not own synthetic handle state"),
+        ("storeDirectHandle", "Go direct runtime must not mint local invocation handles"),
+    ):
+        if token in text:
+            add("R61_DIRECT_RUNTIME_HANDLE_OWNER_FORK", go_direct_runtime, 1, detail)
+if python_direct_runtime.exists():
+    text = source(python_direct_runtime)
+    for token, detail in (
+        ("def _require_handle_transport(self) -> RuntimeTransport:", "Python direct runtime must centralize handle-owner acquisition"),
+        ("raise _unsupported(\"direct runtime handle transport is not configured\")", "Python direct runtime must fail closed without a handle transport"),
+        ("return handle_transport.prepare(", "Python direct prepare must delegate to the handle owner"),
+        ("return self._require_handle_transport().submit_signed(signed_json)", "Python direct signed submit must delegate to the handle owner"),
+    ):
+        if token not in text:
+            add("R61_DIRECT_RUNTIME_HANDLE_OWNER_FORK", python_direct_runtime, 1, detail)
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the

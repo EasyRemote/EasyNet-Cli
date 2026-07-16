@@ -4,7 +4,6 @@ package easynet
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
@@ -280,17 +279,7 @@ type DirectRuntimeTransport struct {
 	handle               RuntimeTransport
 	addressing           Addressing
 	closeHandleTransport bool
-	nextHandleID         uint64
-	handles              map[uint64]directRuntimeHandleSnapshot
 	closed               bool
-}
-
-type directRuntimeHandleSnapshot struct {
-	handleID uint64
-	state    string
-	terminal bool
-	events   []map[string]any
-	result   json.RawMessage
 }
 
 // OpenDirectRuntimeTransport opens a direct Runtime transport.
@@ -340,7 +329,6 @@ func OpenDirectRuntimeTransport(ctx context.Context, endpoint string, options Di
 		handle:               options.HandleTransport,
 		addressing:           options.Addressing,
 		closeHandleTransport: options.CloseHandleTransport,
-		handles:              map[uint64]directRuntimeHandleSnapshot{},
 	}, nil
 }
 
@@ -426,155 +414,63 @@ func (t *DirectRuntimeTransport) OpenBidi(ctx context.Context, draftJSON []byte,
 }
 
 func (t *DirectRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
-	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
-		return nil, err
-	} else if ok {
-		return handle.Prepare(ctx, draftJSON, optionsJSON)
-	}
-	return directRuntimePrepare(ctx, t.addressing, draftJSON, optionsJSON)
-}
-
-func (t *DirectRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
-	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
-		return nil, err
-	} else if ok {
-		return handle.SubmitSigned(ctx, signedJSON)
-	}
-	draftJSON, err := directSignedInvocationDraftJSON(signedJSON)
+	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
 	}
-	resultJSON, err := t.Invoke(ctx, draftJSON)
-	if err != nil {
-		return nil, err
-	}
-	result, err := NewInvocationResultFromJSON(resultJSON)
-	if err != nil {
-		return nil, err
-	}
-	snapshot := t.storeDirectHandle(result.TerminalState(), true, resultJSON)
-	return directRuntimeHandleSnapshotJSON(snapshot)
-}
-
-func (t *DirectRuntimeTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
-	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
-		return nil, err
-	} else if ok {
-		return handle.AwaitHandle(ctx, control)
-	}
-	handleID := control.adapterHandleID()
-	snapshot, err := t.directHandleSnapshot(ctx, handleID)
-	if err != nil {
-		return nil, err
-	}
-	return append([]byte(nil), snapshot.result...), nil
-}
-
-func (t *DirectRuntimeTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
-	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
-		return nil, err
-	} else if ok {
-		return handle.CancelHandle(ctx, control, reason)
-	}
-	handleID := control.adapterHandleID()
-	snapshot, err := t.directHandleSnapshot(ctx, handleID)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(map[string]any{
-		"handle_id": handleID,
-		"cancelled": false,
-		"state":     snapshot.state,
-		"terminal":  snapshot.terminal,
-	})
-}
-
-func (t *DirectRuntimeTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
-	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
-		return nil, err
-	} else if ok {
-		return handle.HandleEvents(ctx, control)
-	}
-	handleID := control.adapterHandleID()
-	snapshot, err := t.directHandleSnapshot(ctx, handleID)
-	if err != nil {
-		return nil, err
-	}
-	return directRuntimeHandleSnapshotJSON(snapshot)
-}
-
-func (t *DirectRuntimeTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
-	if handle, ok, err := t.optionalHandleTransport(ctx); err != nil {
-		return err
-	} else if ok {
-		return handle.FreeHandle(ctx, control)
-	}
-	handleID := control.adapterHandleID()
-	if ctx == nil {
-		return invalidRuntimeClient("context is required")
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.closed {
-		return invalidRuntimeClient("runtime transport is closed")
-	}
-	delete(t.handles, handleID)
-	return nil
-}
-
-func directRuntimePrepare(ctx context.Context, addressing Addressing, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
 	draft, err := NewInvocationDraftFromJSON(draftJSON)
 	if err != nil {
 		return nil, err
 	}
-	draft, err = directPreparedInvocationDraft(ctx, addressing, draft)
+	projected, err := directPreparedInvocationDraft(ctx, t.addressing, draft)
 	if err != nil {
 		return nil, err
 	}
-	var options PrepareOptions
-	if len(optionsJSON) > 0 && string(optionsJSON) != "null" {
-		if err := json.Unmarshal(optionsJSON, &options); err != nil {
-			return nil, invalidRuntimePayload(fmt.Sprintf("decode prepare options: %v", err), err)
-		}
+	projectedJSON, err := json.Marshal(projected)
+	if err != nil {
+		return nil, invalidRuntimePayload(fmt.Sprintf("encode projected direct prepare draft: %v", err), err)
 	}
-	material, err := signingMaterialForInvocationDraft(draft)
+	return handle.Prepare(ctx, projectedJSON, optionsJSON)
+}
+
+func (t *DirectRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
+	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
 	}
-	expiresIn := time.Duration(options.ExpiresInMS) * time.Millisecond
-	if expiresIn <= 0 {
-		expiresIn = 5 * time.Minute
-	}
-	expiresAtUnixMS := time.Now().Add(expiresIn).UnixMilli()
-	material.expiresAtUnixMS = expiresAtUnixMS
-	if options.LocalDaemonSigning || strings.TrimSpace(options.SignerID) != "" || strings.TrimSpace(options.PolicyRef) != "" {
-		mode := "caller_signing"
-		if options.LocalDaemonSigning {
-			mode = "local_daemon_signing"
-		}
-		material.signerPolicy = &SignerPolicy{
-			mode:            mode,
-			signerID:        strings.TrimSpace(options.SignerID),
-			policyRef:       strings.TrimSpace(options.PolicyRef),
-			expiresAtUnixMS: expiresAtUnixMS,
-		}
-	}
-	canonical, err := decodeCanonicalBytesBase64(material.CanonicalBytesBase64())
+	return handle.SubmitSigned(ctx, signedJSON)
+}
+
+func (t *DirectRuntimeTransport) AwaitHandle(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+	handle, err := t.requireHandleTransport(ctx)
 	if err != nil {
 		return nil, err
 	}
-	canonicalHash := sha256.Sum256(canonical)
-	preparedID := fmt.Sprintf("direct-prepared-%d", time.Now().UnixNano())
-	return json.Marshal(map[string]any{
-		"prepared_id":        preparedID,
-		"request_id":         "req-" + preparedID,
-		"descriptor_ref":     draft.DescriptorRef(),
-		"canonical_hash_hex": hex.EncodeToString(canonicalHash[:]),
-		"expires_at_unix_ms": expiresAtUnixMS,
-		"tuple":              draft,
-		"signing_material":   directRuntimeSigningMaterialJSON(material),
-		"submit_ready":       false,
-	})
+	return handle.AwaitHandle(ctx, control)
+}
+
+func (t *DirectRuntimeTransport) CancelHandle(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error) {
+	handle, err := t.requireHandleTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return handle.CancelHandle(ctx, control, reason)
+}
+
+func (t *DirectRuntimeTransport) HandleEvents(ctx context.Context, control InvocationControlCapability) ([]byte, error) {
+	handle, err := t.requireHandleTransport(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return handle.HandleEvents(ctx, control)
+}
+
+func (t *DirectRuntimeTransport) FreeHandle(ctx context.Context, control InvocationControlCapability) error {
+	handle, err := t.requireHandleTransport(ctx)
+	if err != nil {
+		return err
+	}
+	return handle.FreeHandle(ctx, control)
 }
 
 func directPreparedInvocationDraft(ctx context.Context, addressing Addressing, draft InvocationDraft) (InvocationDraft, error) {
@@ -615,138 +511,6 @@ func invocationDraftWithSubjectURA(draft InvocationDraft, subjectURA string) (In
 		builder.WithArgumentsBase64(draft.ArgumentsBase64())
 	}
 	return builder.Build()
-}
-
-func directRuntimeSigningMaterialJSON(material SigningMaterial) map[string]any {
-	value := map[string]any{
-		"algorithm":              material.Algorithm(),
-		"canonical_bytes_base64": material.CanonicalBytesBase64(),
-		"args_digest_hex":        material.ArgsDigestHex(),
-		"descriptor_ref":         material.DescriptorRef(),
-		"nonce_base64":           material.NonceBase64(),
-		"signed_fields":          material.SignedFields(),
-		"expires_at_unix_ms":     material.ExpiresAtUnixMS(),
-	}
-	if policy := material.SignerPolicy(); policy != nil {
-		value["signer_policy"] = map[string]any{
-			"mode":               policy.Mode(),
-			"signer_id":          policy.SignerID(),
-			"policy_ref":         policy.PolicyRef(),
-			"expires_at_unix_ms": policy.ExpiresAtUnixMS(),
-		}
-	}
-	return value
-}
-
-func directSignedInvocationDraftJSON(signedJSON []byte) ([]byte, error) {
-	var signed struct {
-		Prepared struct {
-			Tuple json.RawMessage `json:"tuple"`
-		} `json:"prepared"`
-		Signature InvocationSignature `json:"signature"`
-	}
-	if err := json.Unmarshal(signedJSON, &signed); err != nil {
-		return nil, invalidRuntimePayload(fmt.Sprintf("decode signed invocation: %v", err), err)
-	}
-	if len(signed.Prepared.Tuple) == 0 || string(signed.Prepared.Tuple) == "null" {
-		return nil, invalidRuntimePayload("signed invocation prepared.tuple is required", nil)
-	}
-	if strings.TrimSpace(signed.Signature.Algorithm) == "" || strings.TrimSpace(signed.Signature.SignatureBase64) == "" {
-		return nil, invalidRuntimePayload("signed invocation signature is required", nil)
-	}
-	draft, err := NewInvocationDraftFromJSON(signed.Prepared.Tuple)
-	if err != nil {
-		return nil, err
-	}
-	builder := NewInvocationBuilder().
-		WithCallerURA(draft.CallerURA()).
-		WithCalleeURA(draft.CalleeURA()).
-		WithDescriptorRef(draft.DescriptorRef()).
-		WithSubjectURA(draft.SubjectURA()).
-		WithNonceBase64(draft.NonceBase64()).
-		WithCausalContext(draft.CausalContext()).
-		WithContentType(draft.ContentType()).
-		WithMetadata(draft.Metadata()).
-		WithCallerSignature(signed.Signature)
-	if draft.HasJSONArgs() {
-		builder.WithJSONArgs(draft.JSONArgs())
-	} else {
-		builder.WithArgumentsBase64(draft.ArgumentsBase64())
-	}
-	signedDraft, err := builder.Build()
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(signedDraft)
-}
-
-func (t *DirectRuntimeTransport) storeDirectHandle(state string, terminal bool, result json.RawMessage) directRuntimeHandleSnapshot {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.nextHandleID++
-	handleID := t.nextHandleID
-	if handleID == 0 {
-		t.nextHandleID++
-		handleID = t.nextHandleID
-	}
-	eventKind := "terminal"
-	if !terminal {
-		eventKind = "submitted"
-	}
-	snapshot := directRuntimeHandleSnapshot{
-		handleID: handleID,
-		state:    state,
-		terminal: terminal,
-		events: []map[string]any{{
-			"sequence": uint64(1),
-			"kind":     eventKind,
-			"state":    state,
-			"terminal": terminal,
-			"result":   json.RawMessage(result),
-		}},
-		result: append(json.RawMessage(nil), result...),
-	}
-	t.handles[handleID] = snapshot
-	return snapshot
-}
-
-func (t *DirectRuntimeTransport) directHandleSnapshot(ctx context.Context, handleID uint64) (directRuntimeHandleSnapshot, error) {
-	if ctx == nil {
-		return directRuntimeHandleSnapshot{}, invalidRuntimeClient("context is required")
-	}
-	if handleID == 0 {
-		return directRuntimeHandleSnapshot{}, invalidRuntimePayload("handle_id is required", nil)
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.closed {
-		return directRuntimeHandleSnapshot{}, invalidRuntimeClient("runtime transport is closed")
-	}
-	snapshot, ok := t.handles[handleID]
-	if !ok {
-		return directRuntimeHandleSnapshot{}, &SDKError{
-			Code:      ErrNotFound,
-			Stage:     "runtime",
-			Retry:     RetryNever,
-			Retryable: RetryableForHint(RetryNever),
-			Message:   fmt.Sprintf("direct runtime handle %d not found", handleID),
-		}
-	}
-	return snapshot, nil
-}
-
-func directRuntimeHandleSnapshotJSON(snapshot directRuntimeHandleSnapshot) ([]byte, error) {
-	result := json.RawMessage("null")
-	if len(snapshot.result) > 0 {
-		result = snapshot.result
-	}
-	return json.Marshal(map[string]any{
-		"handle_id": snapshot.handleID,
-		"state":     snapshot.state,
-		"terminal":  snapshot.terminal,
-		"events":    snapshot.events,
-		"result":    result,
-	})
 }
 
 func (t *DirectRuntimeTransport) Close(ctx context.Context) error {
@@ -801,16 +565,23 @@ func (t *DirectRuntimeTransport) requireOpen(ctx context.Context) (axonpb.Invoca
 	return t.client, t.invokeTimeout, nil
 }
 
-func (t *DirectRuntimeTransport) optionalHandleTransport(ctx context.Context) (RuntimeTransport, bool, error) {
+func (t *DirectRuntimeTransport) requireHandleTransport(ctx context.Context) (RuntimeTransport, error) {
 	if _, _, err := t.requireOpen(ctx); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.handle == nil {
-		return nil, false, nil
+		return nil, &SDKError{
+			Code:      ErrNotImplemented,
+			Stage:     "direct_runtime",
+			Retry:     RetryNever,
+			Retryable: false,
+			Message:   "direct runtime handle transport is not configured",
+			Details:   map[string]any{"transport": defaultDirectRuntimeTransportName},
+		}
 	}
-	return t.handle, true, nil
+	return t.handle, nil
 }
 
 type directRuntimeStreamTransport struct {

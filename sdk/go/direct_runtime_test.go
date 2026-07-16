@@ -4,8 +4,6 @@ package easynet
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -265,113 +263,50 @@ func TestDirectRuntimeTransportProjectsDescriptorRefThroughAddressing(t *testing
 
 func TestDirectRuntimeTransportPrepareProjectsSignedUserSubject(t *testing.T) {
 	identity := directRuntimeUserSubjectIdentity(t)
+	handle := &directRuntimeFakeHandleTransport{}
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
-		DialTimeoutMS: 3000,
-		Addressing:    identity,
+		DialTimeoutMS:   3000,
+		Addressing:      identity,
+		HandleTransport: handle,
 	})
 	defer cleanup()
 	draft := directRuntimeUserSubjectDraft(t)
 
-	preparedJSON, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, draft), []byte(`{"expires_in_ms":60000}`))
-	if err != nil {
+	if _, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, draft), []byte(`{"expires_in_ms":60000}`)); err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	prepared, err := NewPreparedInvocationFromJSON(preparedJSON)
+	prepared, err := NewInvocationDraftFromJSON(handle.preparedDraft)
 	if err != nil {
-		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
+		t.Fatalf("NewInvocationDraftFromJSON: %v", err)
 	}
-	if got := prepared.Tuple().SubjectURA(); got != directRuntimeUserSubjectResourceURA {
-		t.Fatalf("prepared tuple subject = %q, want %q", got, directRuntimeUserSubjectResourceURA)
+	if got := prepared.SubjectURA(); got != directRuntimeUserSubjectResourceURA {
+		t.Fatalf("delegated draft subject = %q, want %q", got, directRuntimeUserSubjectResourceURA)
 	}
-	if draft.SubjectURA() == prepared.Tuple().SubjectURA() {
+	if draft.SubjectURA() == prepared.SubjectURA() {
 		t.Fatalf("prepare did not project user subject: %q", draft.SubjectURA())
 	}
-	expectedMaterial, err := signingMaterialForInvocationDraft(prepared.Tuple())
-	if err != nil {
-		t.Fatalf("signingMaterialForInvocationDraft(projected tuple): %v", err)
-	}
-	if prepared.SigningMaterial().CanonicalBytesBase64() != expectedMaterial.CanonicalBytesBase64() {
-		t.Fatalf("prepared signing material was not built from projected tuple")
+	if handle.prepareCalls != 1 {
+		t.Fatalf("prepare delegation calls = %d, want 1", handle.prepareCalls)
 	}
 }
 
-func TestDirectRuntimeTransportSubmitSignedDispatchesPreparedProjectedSubject(t *testing.T) {
-	identity := directRuntimeUserSubjectIdentity(t)
+func TestDirectRuntimeTransportSubmitSignedDelegatesWithoutDirectDispatch(t *testing.T) {
+	handle := &directRuntimeFakeHandleTransport{}
 	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
-		DialTimeoutMS: 3000,
-		Addressing:    identity,
+		DialTimeoutMS:   3000,
+		HandleTransport: handle,
 	})
 	defer cleanup()
-	preparedJSON, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, directRuntimeUserSubjectDraft(t)), []byte(`{"expires_in_ms":60000,"signer_id":"caller-key"}`))
-	if err != nil {
-		t.Fatalf("Prepare: %v", err)
-	}
-	prepared, err := NewPreparedInvocationFromJSON(preparedJSON)
-	if err != nil {
-		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
-	}
-	seed := [32]byte{}
-	for i := range seed {
-		seed[i] = byte(i + 1)
-	}
-	privateKey := ed25519.NewKeyFromSeed(seed[:])
-	publicKey := privateKey.Public().(ed25519.PublicKey)
-	publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey)
-	canonicalBytes, err := base64.StdEncoding.DecodeString(prepared.SigningMaterial().CanonicalBytesBase64())
-	if err != nil {
-		t.Fatalf("canonical decode: %v", err)
-	}
-	signature := ed25519.Sign(privateKey, canonicalBytes)
-	signed, err := prepared.SignWithCallerSignature(InvocationSignature{
-		Algorithm:             "ed25519",
-		SignatureBase64:       base64.StdEncoding.EncodeToString(signature),
-		SignerPublicKeyBase64: publicKeyBase64,
-	})
-	if err != nil {
-		t.Fatalf("SignWithCallerSignature: %v", err)
-	}
-	signedJSON, err := json.Marshal(signed)
-	if err != nil {
-		t.Fatalf("marshal signed: %v", err)
-	}
+	signedJSON := []byte(`{"signed":true}`)
 
 	if _, err := transport.SubmitSigned(context.Background(), signedJSON); err != nil {
 		t.Fatalf("SubmitSigned: %v", err)
 	}
-	if daemon.seenInvoke == nil {
-		t.Fatal("daemon did not receive signed invocation")
+	if handle.submitCalls != 1 || string(handle.signedInvocation) != string(signedJSON) {
+		t.Fatalf("signed submit delegation = calls %d payload %q", handle.submitCalls, handle.signedInvocation)
 	}
-	if got := daemon.seenInvoke.GetEnvelope().GetSubject().GetUra(); got != prepared.Tuple().SubjectURA() {
-		t.Fatalf("dispatched subject = %q, want prepared tuple subject %q", got, prepared.Tuple().SubjectURA())
-	}
-	if got := daemon.seenInvoke.GetEnvelope().GetSubject().GetUra(); got != directRuntimeUserSubjectResourceURA {
-		t.Fatalf("dispatched subject = %q, want %q", got, directRuntimeUserSubjectResourceURA)
-	}
-	if got := daemon.seenInvoke.GetEnvelope().GetCallerSignature().GetKeyIdHint(); got != publicKeyBase64 {
-		t.Fatalf("caller signature key hint = %q, want user pubkey", got)
-	}
-	wireEnvelope := daemon.seenInvoke.GetEnvelope()
-	wireCanonical, err := CanonicalInvocationBytes(Envelope{
-		Caller:        AgentRef{URA: wireEnvelope.GetCaller().GetUra()},
-		Callee:        AgentRef{URA: wireEnvelope.GetCallee().GetUra()},
-		Subject:       SubjectRef{URA: wireEnvelope.GetSubject().GetUra()},
-		CausalContext: CausalNullWithReason(""),
-		Nonce:         wireEnvelope.GetInvocationNonce(),
-	}, prepared.Tuple().DescriptorRef(), daemon.seenInvoke.GetArguments())
-	if err != nil {
-		t.Fatalf("wire canonical bytes: %v", err)
-	}
-	if !ed25519.Verify(publicKey, wireCanonical, signature) {
-		t.Fatal("daemon wire request must verify against prepare-time caller signature")
-	}
-	if got := daemon.seenInvoke.GetMetadata()[directSignedDescriptorRefMetadata]; got != prepared.Tuple().DescriptorRef() {
-		t.Fatalf("signed descriptor metadata = %q, want %q", got, prepared.Tuple().DescriptorRef())
-	}
-	if got := daemon.seenInvoke.GetFunctionName(); got != prepared.Tuple().DescriptorRef() {
-		t.Fatalf("signed dispatch function_name = %q, want descriptor ref %q", got, prepared.Tuple().DescriptorRef())
-	}
-	if got := daemon.seenInvoke.GetTarget().GetAbilityName(); got != prepared.Tuple().DescriptorRef() {
-		t.Fatalf("signed dispatch target ability_name = %q, want descriptor ref %q", got, prepared.Tuple().DescriptorRef())
+	if daemon.seenInvoke != nil {
+		t.Fatal("signed submission must not bypass the handle owner through direct gRPC")
 	}
 }
 
@@ -539,10 +474,15 @@ func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 		DialTimeoutMS:        3000,
 		HandleTransport:      handle,
 		CloseHandleTransport: true,
+		Addressing:           NewCanonicalAddressing(),
 	})
 	defer cleanup()
 
-	prepared, err := transport.Prepare(context.Background(), []byte(`{"draft":true}`), []byte(`{"expires_in_ms":1000}`))
+	prepared, err := transport.Prepare(
+		context.Background(),
+		mustMarshalDirectRuntimeDraft(t, directRuntimeDraft(t)),
+		[]byte(`{"expires_in_ms":1000}`),
+	)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -585,69 +525,64 @@ func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	}
 }
 
-func TestDirectRuntimeTransportProvidesHandleOperationsWithoutDelegate(t *testing.T) {
-	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
+func TestDirectRuntimeTransportRejectsHandleOperationsWithoutDelegate(t *testing.T) {
+	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{DialTimeoutMS: 3000})
 	defer cleanup()
 
-	preparedJSON, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, directRuntimeDraft(t)), []byte(`{"expires_in_ms":60000,"signer_id":"caller-key"}`))
+	control, err := newRuntimeInvocationControlCapability(1)
 	if err != nil {
-		t.Fatalf("Prepare: %v", err)
+		t.Fatalf("newRuntimeInvocationControlCapability: %v", err)
 	}
-	prepared, err := NewPreparedInvocationFromJSON(preparedJSON)
-	if err != nil {
-		t.Fatalf("NewPreparedInvocationFromJSON: %v", err)
+	operations := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "prepare",
+			call: func() error {
+				_, err := transport.Prepare(context.Background(), mustMarshalDirectRuntimeDraft(t, directRuntimeDraft(t)), []byte(`{}`))
+				return err
+			},
+		},
+		{
+			name: "submit signed",
+			call: func() error {
+				_, err := transport.SubmitSigned(context.Background(), []byte(`{}`))
+				return err
+			},
+		},
+		{
+			name: "await handle",
+			call: func() error {
+				_, err := transport.AwaitHandle(context.Background(), control)
+				return err
+			},
+		},
+		{
+			name: "cancel handle",
+			call: func() error {
+				_, err := transport.CancelHandle(context.Background(), control, "client stop")
+				return err
+			},
+		},
+		{
+			name: "handle events",
+			call: func() error {
+				_, err := transport.HandleEvents(context.Background(), control)
+				return err
+			},
+		},
+		{
+			name: "free handle",
+			call: func() error {
+				return transport.FreeHandle(context.Background(), control)
+			},
+		},
 	}
-	signed, err := prepared.SignWithCallerSignature(InvocationSignature{
-		Algorithm:       "ed25519",
-		SignatureBase64: base64.StdEncoding.EncodeToString([]byte("direct-signature")),
-		KeyIDHint:       "caller-key",
-	})
-	if err != nil {
-		t.Fatalf("SignWithCallerSignature: %v", err)
-	}
-	signedJSON, err := json.Marshal(signed)
-	if err != nil {
-		t.Fatalf("marshal signed: %v", err)
-	}
-	handleJSON, err := transport.SubmitSigned(context.Background(), signedJSON)
-	if err != nil {
-		t.Fatalf("SubmitSigned: %v", err)
-	}
-	handle, err := newRuntimeInvocationHandleFromJSON(handleJSON)
-	if err != nil {
-		t.Fatalf("newRuntimeInvocationHandleFromJSON: %v", err)
-	}
-	if !handle.ControlCapability().valid() || !handle.Terminal() || daemon.seenInvoke.GetEnvelope().GetCallerSignature() == nil {
-		t.Fatalf("direct handle submit did not invoke signed request: handle=%#v request=%#v", handle, daemon.seenInvoke)
-	}
-	control := handle.ControlCapability()
-	resultJSON, err := transport.AwaitHandle(context.Background(), control)
-	if err != nil {
-		t.Fatalf("AwaitHandle: %v", err)
-	}
-	result, err := NewInvocationResultFromJSON(resultJSON)
-	if err != nil {
-		t.Fatalf("NewInvocationResultFromJSON: %v", err)
-	}
-	if !result.OK() {
-		t.Fatalf("await result not ok: %#v", result.Failure())
-	}
-	eventsJSON, err := transport.HandleEvents(context.Background(), control)
-	if err != nil {
-		t.Fatalf("HandleEvents: %v", err)
-	}
-	events, err := NewInvocationHandleFromJSON(eventsJSON)
-	if err != nil {
-		t.Fatalf("events handle decode: %v", err)
-	}
-	if len(events.Events()) != 1 {
-		t.Fatalf("events = %#v", events.Events())
-	}
-	if err := transport.FreeHandle(context.Background(), control); err != nil {
-		t.Fatalf("FreeHandle: %v", err)
-	}
-	if _, err := transport.AwaitHandle(context.Background(), control); !IsCode(err, ErrNotFound) {
-		t.Fatalf("AwaitHandle after free = %v, want %s", err, ErrNotFound)
+	for _, operation := range operations {
+		if err := operation.call(); !IsCode(err, ErrNotImplemented) {
+			t.Fatalf("%s error = %v, want %s", operation.name, err, ErrNotImplemented)
+		}
 	}
 }
 
@@ -760,13 +695,15 @@ func openDirectRuntimeTestTransportWithOptions(t *testing.T, options DirectRunti
 }
 
 type directRuntimeFakeHandleTransport struct {
-	prepareCalls int
-	submitCalls  int
-	awaitCalls   int
-	cancelCalls  int
-	eventsCalls  int
-	freeCalls    int
-	closeCalls   int
+	prepareCalls     int
+	submitCalls      int
+	awaitCalls       int
+	cancelCalls      int
+	eventsCalls      int
+	freeCalls        int
+	closeCalls       int
+	preparedDraft    []byte
+	signedInvocation []byte
 }
 
 func (f *directRuntimeFakeHandleTransport) Invoke(context.Context, []byte) ([]byte, error) {
@@ -781,13 +718,15 @@ func (f *directRuntimeFakeHandleTransport) OpenBidi(context.Context, []byte, []b
 	return nil, nil, errors.New("unexpected OpenBidi on handle transport")
 }
 
-func (f *directRuntimeFakeHandleTransport) Prepare(context.Context, []byte, []byte) ([]byte, error) {
+func (f *directRuntimeFakeHandleTransport) Prepare(_ context.Context, draftJSON []byte, _ []byte) ([]byte, error) {
 	f.prepareCalls++
+	f.preparedDraft = append(f.preparedDraft[:0], draftJSON...)
 	return []byte(preparedFixture), nil
 }
 
-func (f *directRuntimeFakeHandleTransport) SubmitSigned(context.Context, []byte) ([]byte, error) {
+func (f *directRuntimeFakeHandleTransport) SubmitSigned(_ context.Context, signedJSON []byte) ([]byte, error) {
 	f.submitCalls++
+	f.signedInvocation = append(f.signedInvocation[:0], signedJSON...)
 	return []byte(`{"handle_id":7,"state":"Submitted","terminal":false,"events":[],"result":null}`), nil
 }
 

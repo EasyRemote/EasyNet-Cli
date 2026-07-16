@@ -644,6 +644,7 @@ class RuntimeClient:
             raise _invalid_runtime_client(
                 "runtime transport does not expose descriptor resolution"
             )
+        call_mode = call_mode.strip() or "rpc"
         request = {
             "callee_ura": callee_ura,
             "ability": ability,

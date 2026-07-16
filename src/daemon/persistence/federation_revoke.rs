@@ -222,7 +222,7 @@ impl HubHostedAgentInventoryFile {
         let mut agents = std::collections::BTreeSet::new();
         for record in &self.records {
             record.validate()?;
-            if !agents.insert(record.agent_ura.as_str()) {
+            if !agents.insert(inventory_key(record)) {
                 anyhow::bail!("duplicate hosted Agent inventory identity");
             }
         }
@@ -279,10 +279,11 @@ pub(crate) fn register_agent(
         let Some(current) = file
             .records
             .iter_mut()
-            .find(|current| current.agent_ura == record.agent_ura)
+            .find(|current| same_inventory_slot(current, &record))
         else {
             file.records.push(record);
-            file.records.sort_by(|a, b| a.agent_ura.cmp(&b.agent_ura));
+            file.records
+                .sort_by(|a, b| inventory_key(a).cmp(&inventory_key(b)));
             return Ok(RegistrationOutcome::Inserted);
         };
         if record.generation < current.generation {
@@ -435,13 +436,10 @@ pub(crate) fn apply_prepared_revoke(
         let record = file
             .records
             .iter_mut()
-            .find(|record| record.agent_ura == command.agent_ura)
+            .find(|record| record_matches_revoke_command(record, &command))
             .ok_or_else(|| {
                 anyhow::anyhow!("revoke target is absent from durable hosted Agent inventory")
             })?;
-        if record.signing_authority.authority_ura(&record.agent_ura) != command.authority_ura {
-            anyhow::bail!("revoke authority does not match durable registration");
-        }
         let disposition = if record.generation > command.generation {
             FederationRevokeDisposition::SupersededByNewIncarnation
         } else if record.generation < command.generation {
@@ -547,18 +545,44 @@ fn valid_transaction_id(transaction_id: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn inventory_key(record: &HostedAgentInventoryRecord) -> (&str, &str) {
+    (
+        record.agent_ura.as_str(),
+        record.signing_authority.authority_ura(&record.agent_ura),
+    )
+}
+
+fn same_inventory_slot(
+    left: &HostedAgentInventoryRecord,
+    right: &HostedAgentInventoryRecord,
+) -> bool {
+    inventory_key(left) == inventory_key(right)
+}
+
+fn record_matches_revoke_command(
+    record: &HostedAgentInventoryRecord,
+    command: &FederationRevokeCommand,
+) -> bool {
+    record.agent_ura == command.agent_ura
+        && record.signing_authority.authority_ura(&record.agent_ura) == command.authority_ura
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn record(generation: u64) -> HostedAgentInventoryRecord {
+        record_for(generation, "dev-1")
+    }
+
+    fn record_for(generation: u64, host_node_id: &str) -> HostedAgentInventoryRecord {
         HostedAgentInventoryRecord {
             agent_ura: "easynet:///r/test/agent/alice.worker".into(),
             generation,
             public_key_hex: String::new(),
-            host_node_id: Some("dev-1".into()),
+            host_node_id: Some(host_node_id.into()),
             signing_authority: DurableSigningAuthority::HostedBy {
-                host_ura: "easynet:///r/test/device/dev-1".into(),
+                host_ura: format!("easynet:///r/test/device/{host_node_id}"),
             },
             lifecycle: InventoryLifecycle::Active,
         }
@@ -616,6 +640,24 @@ mod tests {
             FederationRevokeDisposition::SupersededByNewIncarnation
         );
         assert_eq!(active_inventory().unwrap(), vec![record(2)]);
+    }
+
+    #[test]
+    fn same_generation_can_register_same_hosted_agent_on_distinct_devices() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let first = record_for(1, "dev-1");
+        let second = record_for(1, "dev-2");
+
+        assert_eq!(
+            register_agent(first.clone()).unwrap(),
+            RegistrationOutcome::Inserted
+        );
+        assert_eq!(
+            register_agent(second.clone()).unwrap(),
+            RegistrationOutcome::Inserted
+        );
+
+        assert_eq!(active_inventory().unwrap(), vec![first, second]);
     }
 
     #[test]

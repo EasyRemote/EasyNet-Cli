@@ -362,6 +362,12 @@ fn resolve_remote_caller_ura(explicit: Option<&str>) -> anyhow::Result<String> {
             .map_err(|err| anyhow!("remote caller URA `{caller}` is invalid: {err}"))?;
         return Ok(caller.to_string());
     }
+    let local_daemon = crate::daemon::identity::local_invocation::local_daemon_ura();
+    if crate::core::ura::parse_ura(&local_daemon).is_ok()
+        && !is_unpaired_local_device_ura(&local_daemon)
+    {
+        return Ok(local_daemon);
+    }
     let credentials = crate::daemon::persistence::config::load_credentials().map_err(|err| {
         anyhow!(
             "remote invocation requires an explicit caller identity and signer; \
@@ -377,6 +383,13 @@ fn resolve_remote_caller_ura(explicit: Option<&str>) -> anyhow::Result<String> {
         );
     }
     Ok(crate::core::ura::device_ura(realm, node_id))
+}
+
+fn is_unpaired_local_device_ura(ura: &str) -> bool {
+    ura == crate::core::ura::device_ura(
+        crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM,
+        crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID,
+    )
 }
 
 fn causal_context_from_parents(
@@ -750,11 +763,11 @@ pub fn invoke_federation_revoke(agent_ura: &str, reason: &str) -> anyhow::Result
     });
     let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
-    let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();
+    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura();
     let request = ProtoEnvelope::targeted(
-        local_device_ura.as_str(),
-        local_device_ura.as_str(),
-        local_device_ura.as_str(),
+        local_daemon_ura.as_str(),
+        local_daemon_ura.as_str(),
+        agent_ura,
     )?
     .invoke_request("federation.revoke", arg_bytes)?;
 
@@ -846,6 +859,38 @@ mod tests {
         };
         assert_eq!(list.prior.len(), 2);
         assert_eq!(list.prior[0].receipt_hash, vec![0x11; 32]);
+    }
+
+    #[test]
+    fn remote_caller_defaults_to_discovered_hub_daemon_identity_without_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let path = crate::daemon::control::discovery::default_path();
+        crate::daemon::control::discovery::write(
+            &path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: None,
+                pipe_name: None,
+                invocation_endpoint: None,
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "hub".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: None,
+                }),
+                pid: std::process::id(),
+                daemon_version: "test".to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    crate::daemon::control::discovery::IPC_VERSION_V1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write hub discovery");
+
+        assert_eq!(
+            resolve_remote_caller_ura(None).expect("hub caller"),
+            crate::core::ura::hub_ura("localhost")
+        );
     }
 
     #[test]

@@ -2,13 +2,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::{InvokeRequest, invocation_client::InvocationClient};
-use tonic::{Status, transport::Channel};
+use easynet_axon::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
+use tonic::{transport::Channel, Status};
 
-use super::SessionError;
 use super::heartbeat::spawn_federation_heartbeat;
 use super::supervisor::{DeviceSessionPhase, PreludeStep, SessionPhaseTracker};
 use super::tasks::AbortOnDrop;
+use super::SessionError;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
 use crate::daemon::identity::self_identity::CanonicalSigner;
@@ -523,6 +523,7 @@ async fn send_advertise_agent_prelude(
     let caller_ura = signer.owner_ura();
     let mut body = serde_json::json!({
         "agent_ura": agent_ura,
+        "generation": 1,
         "signing_authority": {
             "kind": "hosted_by",
             "host_ura": caller_ura,
@@ -569,6 +570,7 @@ async fn send_advertise_abilities_prelude(
     let body = serde_json::json!({
         "owner_ura": projection.owner_ura,
         "host_device_ura": projection.host_device_ura,
+        "generation": projection.generation,
         "projection_revision": projection.projection_revision,
         "projection_digest": projection.projection_digest,
         "lease_expires_unix_ms": projection.lease_expires_unix_ms,
@@ -1155,7 +1157,7 @@ pub(super) fn committed_owner_ability_descriptors(
 
 #[cfg(test)]
 mod tests {
-    use super::{UserTrustSync, paired_user_trust_present, resolved_public_keys};
+    use super::{paired_user_trust_present, resolved_public_keys, UserTrustSync};
     use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use std::sync::Arc;

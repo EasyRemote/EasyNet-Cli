@@ -1849,6 +1849,11 @@ class InvocationHandle:
     def __init__(self, subject_ura: str):
         self.subject_ura = subject_ura
 
+class RuntimeClient:
+    def resolve_descriptor_ref(self, call_mode="rpc"):
+        call_mode = call_mode.strip() or "rpc"
+        return self._transport.resolve_descriptor_ref({"call_mode": call_mode})
+
 # Product words in comments and private symbols do not create public models.
 class _MissionFixture:
     pass
@@ -3760,6 +3765,33 @@ EOF
 expect_fail \
   "SDK runtime descriptor owner fork" \
   "R59_SDK_RUNTIME_DESCRIPTOR_OWNER_FORK"
+
+make_good_fixture
+mkdir -p "$CLI/sdk/python/easynet_sdk"
+cat >"$CLI/sdk/python/easynet_sdk/runtime.py" <<'EOF'
+class RuntimeClient:
+    def resolve_descriptor_ref(self, call_mode="rpc"):
+        return self._transport.resolve_descriptor_ref({"call_mode": call_mode})
+EOF
+expect_fail \
+  "SDK descriptor call mode normalization fork" \
+  "R60_SDK_DESCRIPTOR_CALL_MODE_NORMALIZATION_FORK"
+
+make_good_fixture
+mkdir -p "$CLI/sdk/go"
+cat >"$CLI/sdk/go/direct_runtime.go" <<'EOF'
+func (t *DirectRuntimeTransport) Prepare(ctx context.Context, draftJSON []byte, optionsJSON []byte) ([]byte, error) {
+    return directRuntimePrepare(ctx, t.addressing, draftJSON, optionsJSON)
+}
+
+func (t *DirectRuntimeTransport) SubmitSigned(ctx context.Context, signedJSON []byte) ([]byte, error) {
+    snapshot := t.storeDirectHandle("Completed", true, nil)
+    return directRuntimeHandleSnapshotJSON(snapshot)
+}
+EOF
+expect_fail \
+  "direct runtime handle owner fork" \
+  "R61_DIRECT_RUNTIME_HANDLE_OWNER_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

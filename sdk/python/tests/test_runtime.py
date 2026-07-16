@@ -27,6 +27,7 @@ class MemoryRuntimeTransport:
         self.seen_options: dict[str, object] | None = None
         self.seen_signed: dict[str, object] | None = None
         self.seen_streams: list[dict[str, object]] | None = None
+        self.seen_descriptor_request: dict[str, object] | None = None
         self.prepare_error: BaseException | None = None
         self.seen_await_id = 0
         self.seen_free_id = 0
@@ -58,6 +59,10 @@ class MemoryRuntimeTransport:
             separators=(",", ":"),
             sort_keys=True,
         ).encode("utf-8")
+
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        self.seen_descriptor_request = json.loads(request_json.decode("utf-8"))
+        return b'{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"}'
 
     def open_stream(self, draft_json: bytes):
         self.seen_draft = json.loads(draft_json.decode("utf-8"))
@@ -166,6 +171,29 @@ def signed_fixture():
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_descriptor_resolution_normalizes_blank_call_mode_to_rpc(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        descriptor_ref = client.resolve_descriptor_ref(
+            callee_ura="easynet:///r/example/device/dev-a",
+            ability="observe.health",
+            call_mode="  ",
+        )
+
+        self.assertEqual(
+            descriptor_ref,
+            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+        )
+        self.assertEqual(
+            transport.seen_descriptor_request,
+            {
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "ability": "observe.health",
+                "call_mode": "rpc",
+            },
+        )
+
     def test_invoke_returns_typed_result(self) -> None:
         transport = MemoryRuntimeTransport()
         client = RuntimeClient(transport)
