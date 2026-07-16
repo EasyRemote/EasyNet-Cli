@@ -3900,14 +3900,6 @@ fn remove_stream_for_handle(
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn cancel_invocations_for_handle(owner: EasynetHandle) {
-    let Some(owner) = binding_for_handle(owner) else {
-        return;
-    };
-    cancel_invocations_for_binding(owner);
-}
-
-#[cfg(feature = "axon-pb")]
 pub(crate) fn cancel_invocations_for_binding(owner: ClientSessionBinding) {
     let handles = {
         let registry = invocation_handle_registry();
@@ -3957,9 +3949,6 @@ pub(crate) fn cancel_invocations_for_binding(owner: ClientSessionBinding) {
         session.cancel.cancel();
     }
 }
-
-#[cfg(not(feature = "axon-pb"))]
-pub(crate) fn cancel_invocations_for_handle(_owner: EasynetHandle) {}
 
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn cancel_invocations_for_binding(
@@ -7974,7 +7963,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_invocations_for_handle_removes_only_owned_entries() {
+    fn cancel_invocations_for_binding_removes_only_owned_entries() {
         let (owned_handle, owned_session) = alloc(test_session());
         let owned = owned_session.binding(owned_handle);
         let (other_handle, other_session) = alloc(test_session());
@@ -7995,7 +7984,7 @@ mod tests {
         let owned_bidi_id = insert_bidi(owned_bidi);
         let other_bidi_id = insert_bidi(other_bidi);
 
-        cancel_invocations_for_handle(owned_handle);
+        cancel_invocations_for_binding(owned);
 
         assert!(owned_stream_cancel.is_cancelled());
         assert!(owned_bidi_cancel.is_cancelled());
