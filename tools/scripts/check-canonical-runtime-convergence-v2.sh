@@ -518,6 +518,36 @@ check_axon_proto_ura_vocabulary_contract() {
   fi
 }
 
+check_axon_sdk_product_neutral_ura_error_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for SDK product-neutral URA error contract: $AXON_ROOT"
+  fi
+
+  local sdk_paths=()
+  for path in \
+    "$AXON_ROOT/sdk/go/easynet" \
+    "$AXON_ROOT/sdk/java/src/main/java" \
+    "$AXON_ROOT/sdk/node/src" \
+    "$AXON_ROOT/sdk/python/easynet_axon" \
+    "$AXON_ROOT/sdk/rust/src" \
+    "$AXON_ROOT/sdk/swift/Sources" \
+    "$AXON_ROOT/sdk/react/src"
+  do
+    [[ -d "$path" ]] && sdk_paths+=("$path")
+  done
+  if ((${#sdk_paths[@]} == 0)); then
+    return
+  fi
+  if rg -n '\bEasyNet URA\b|\bEasyNet URAs\b|\bEasyNet URA syntax\b|\bmust be an EasyNet\b|\bmust use EasyNet\b|\bSYSTEM_URI\b' "${sdk_paths[@]}" \
+    --glob '!**/node_modules/**' \
+    --glob '!**/__pycache__/**' \
+    --glob '!**/*.d.ts' \
+    --glob '!**/*.test.*' \
+    --glob '!**/*_test.go'; then
+    fail "Axon SDK active source preserves product-specific URA error vocabulary"
+  fi
+}
+
 check_active_ura_transport_classification_contract() {
   "$PYTHON_BIN" - "$@" <<'PY'
 import re
@@ -976,6 +1006,16 @@ PY
   if ( AXON_ROOT="$tmp/axon-uri-proto"; check_axon_proto_ura_vocabulary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon proto URI terminology gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-sdk-product-ura"
+  mkdir -p "$tmp/axon-sdk-product-ura/sdk/node/src" \
+    "$tmp/axon-sdk-product-ura/sdk/swift/Sources/EasyNetAxon/Invocation"
+  printf 'throw new AxonConfigError(`subject_ura must be an EasyNet URA: ${normalized}`);\n' \
+    > "$tmp/axon-sdk-product-ura/sdk/node/src/index.ts"
+  printf 'private let SYSTEM_URI = "easynet:///r/_system/agents/local@1"\n' \
+    > "$tmp/axon-sdk-product-ura/sdk/swift/Sources/EasyNetAxon/Invocation/LocalRuntime.swift"
+  if ( AXON_ROOT="$tmp/axon-sdk-product-ura"; check_axon_sdk_product_neutral_ura_error_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon SDK product-specific URA error gate to fail"
+  fi
   AXON_ROOT="$tmp/axon"
   check_manifest_contract
   check_active_source_contract
@@ -987,6 +1027,7 @@ PY
   check_axon_protocol_pack_ura_vector_contract
   check_axon_normative_ura_document_contract
   check_axon_proto_ura_vocabulary_contract
+  check_axon_sdk_product_neutral_ura_error_contract
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   check_schema_source_derivation_contract
   check_axon_product_protocol_boundary_contract
@@ -1009,6 +1050,7 @@ check_ura_vocabulary_contract
 check_axon_protocol_pack_ura_vector_contract
 check_axon_normative_ura_document_contract
 check_axon_proto_ura_vocabulary_contract
+check_axon_sdk_product_neutral_ura_error_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
 check_axon_product_protocol_boundary_contract

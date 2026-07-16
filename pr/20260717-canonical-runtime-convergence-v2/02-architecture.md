@@ -988,3 +988,28 @@ fake proto mirror set to prove the gate fails. This slice closes one RF-9
 active-schema terminology defect. It does not complete RF-9 because historical
 document classification, broader active source vocabulary, and final
 generated-schema ownership closure remain separate work.
+
+## Current Slice: Product-Neutral SDK URA Error Contract
+
+Owner: EasyNet-Axon language SDK facades and EasyNet-Cli V2 conformance gate.
+
+Canonical SDK error contracts are part of the runtime model. Several language
+facades rejected invalid `subject_ura` and legacy private `principal_id`
+values with `EasyNet URA` wording. That preserved product-specific naming in
+public SDK behavior even though the SDK should expose generic runtime concepts.
+Swift also kept a local-runtime constant named `SYSTEM_URI`, which violated the
+URA-only naming constraint inside active source.
+
+The Go, Java, Node, Python, Rust, and Swift SDKs now use product-neutral
+messages such as `canonical URA` and `URA syntax`. The Swift system-local
+constant is renamed to `SYSTEM_URA`. This does not change the URA scheme,
+validation rules, invocation fields, or wire behavior; it removes product
+branding and retired URI terminology from the SDK contract surface.
+
+The V2 gate now scans active SDK source roots for `EasyNet URA`,
+`EasyNet URA syntax`, `must be an EasyNet`, `must use EasyNet`, and
+`SYSTEM_URI`, with a self-test that reintroduces both Node error text and the
+Swift constant. This slice advances RF-1 product-neutral SDK surface and RF-9
+URA-only source vocabulary. It does not complete either fork because package
+renaming, broader docs/examples, historical classification, and remaining
+product-owned SDK capabilities still require separate closure work.

@@ -20128,7 +20128,7 @@
       "InvocationObjectAdapter.invoker": "1831aff566b0f1949c5c2c6171bfd3905788b2b42167d68a78e923af002b41c7",
       "InvocationObjectAdapter.stream": "c263b1b1e2b5244b9863272f730d603c8403cf7be4365bdd4412b3a57b5750ee",
       "InvocationObjectAdapter.to_wire_dict": "015beee47d4efb5581bd73906ba9e9972c97716e52892f9e7ee6ed4cbd57e605",
-      "InvocationReceipt": "2eaef38abf718e3c5bd7aac6bc4688dfe0537adb4f986eba03cd43d2f8bed036",
+      "InvocationReceipt": "2b05495946e607ab7beb6eedfdd41b467a0cee3ad73f199341895e67994616de",
       "InvocationReceipt.axiom_binding": "8213949033371791afb9b7b692b94e3422d9e11e70e88b7c5b1fe9670cb64a6e",
       "InvocationReceipt.child_invocation_id": "78f983a3e601e20bdb1bf53b16f6d82ec81a6fa4bb8de22dd60f9aae731d4ae7",
       "InvocationReceipt.cleanup_complete": "53cb25172a77046b5c3b89999fc1747a64157b4249df096ffe11515024827eb9",
@@ -20137,7 +20137,7 @@
       "InvocationReceipt.payload": "5797c0e273da4cd84f997c4581e1a822df34901541853898bc44a79b04a0ec5a",
       "InvocationReceipt.payload_content_type": "b08485e22a6e1f77a464c0bdfa89b3552e3085e06791b49b808d08082358522e",
       "InvocationReceipt.prev_receipt_hash": "72f4f6cb42f3ea801bf80e138cd86939f1b094cb3448b38ee563af165ee74489",
-      "InvocationReceipt.prove_authority": "97ae7ee172dad1f302f37ac773092d4776a9bf81820025e1495707de808f32d3",
+      "InvocationReceipt.prove_authority": "36118ebcea8b580017e4991ac497000c2069467cb613bf94a4444509c37e1704",
       "InvocationReceipt.proven": "5fe2841c94b3a4305ad453a0d4c85785d52d33475746cb3ffaa1b94deea43b58",
       "InvocationReceipt.reason": "c0873f19cf5f3066dbe11826b8ebd693655db904ec98f77d5b87794528be5328",
       "InvocationReceipt.receipt_type": "f9f31a4e4737bb9f549f4224ff62fe2a704a40599798b420612fe49b261a5a0e",
@@ -23135,7 +23135,7 @@
     }
   ],
   "dependency_revisions": {
-    "easynet_axon": "7f1113eada00a01a62c4b2d02892880dc1f37b31"
+    "easynet_axon": "2ff8120c76abe20ec0626bcd749b34b52d88b173"
   },
   "provider_implementations": [
     {
@@ -23154,7 +23154,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "7f1113eada00a01a62c4b2d02892880dc1f37b31",
+      "axon_revision": "2ff8120c76abe20ec0626bcd749b34b52d88b173",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     },
@@ -23174,16 +23174,16 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "7f1113eada00a01a62c4b2d02892880dc1f37b31",
+      "axon_revision": "2ff8120c76abe20ec0626bcd749b34b52d88b173",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     }
   ],
   "inventory_source_revisions": {
-    "rust": "7f1113eada00a01a62c4b2d02892880dc1f37b31",
+    "rust": "2ff8120c76abe20ec0626bcd749b34b52d88b173",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "7f1113eada00a01a62c4b2d02892880dc1f37b31",
+    "python": "2ff8120c76abe20ec0626bcd749b34b52d88b173",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

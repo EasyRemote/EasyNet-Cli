@@ -777,7 +777,11 @@ Commands run on 2026-07-17:
   passed. The self-test now includes an Axon runtime client SDK fixture that
   reintroduces `generate_subject_auth`.
 - `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
-  passed.
+  passed against Axon revision
+  `29d6ec1b1adba9d1db0b2c2b9ff66626cb980b5d`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `29d6ec1b1adba9d1db0b2c2b9ff66626cb980b5d`.
 - `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
   passed and updated `sdk/conformance/canonical-public-api.json` to the
   current Axon revision.
@@ -1278,3 +1282,136 @@ new regression gate for Axon proto URI vocabulary. It does not complete RF-9
 globally because historical document classification, broader active source
 vocabulary, and final generated-schema ownership closure remain separate
 work.
+
+## Product-Neutral SDK URA Error Contract Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n 'EasyNet URA|EasyNet URAs|EasyNet URA syntax|must be an EasyNet|must use EasyNet|SYSTEM_URI' sdk/go/easynet sdk/java/src/main/java sdk/node/src sdk/python/easynet_axon sdk/rust/src sdk/swift/Sources sdk/react/src --glob '!**/node_modules/**' --glob '!**/__pycache__/**'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after the SDK validation error contract update.
+- `npm run verify`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed.
+- `go test ./...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `uv run --project sdk/python pytest -q sdk/python/tests/test_client.py sdk/python/tests/test_federation_conformance.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, 26 tests.
+- `mvn -Dtest=SubjectUraTest test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed, 4 tests.
+- `swift test --filter EasyNetAxonTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/swift`:
+  passed, 126 tests.
+- `cargo check --manifest-path sdk/rust/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed.
+- `mvn test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  failed on five existing `ReceiptAuthorityAnchorTest` receipt-anchor drift
+  assertions. `SubjectUraTest` passed; this failure remains RF-6/RF-3
+  residual verification debt, not evidence of full Java SDK health.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now reintroduces Node `EasyNet URA` error text and
+  Swift `SYSTEM_URI`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+
+This evidence verifies the product-neutral SDK URA validation contract and the
+new V2 regression gate. It does not complete RF-1 or RF-9 because package
+renaming, broader docs/examples, historical classification, and remaining
+product-owned SDK capabilities remain separate work.
+
+## RF-6 Cross-Language Receipt Anchor Fixture Convergence Slice
+
+Commands run on 2026-07-17:
+
+- `cargo test --manifest-path sdk/rust/Cargo.toml strict_receipt_anchor_vectors_match_cross_language_pins`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, 1 test. This pins the Rust SDK strict proof-facts receipt anchors
+  for none, scalar, list, merkle, and hosted receipt forms.
+- `mvn -Dtest=ReceiptAuthorityAnchorTest test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed, 9 tests, after Java adopted the shared strict proof-facts fixture.
+- `uv run --project sdk/python pytest -q sdk/python/tests/test_authority_tail_parity.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, 11 tests. Python now rejects missing receipt authority instead of
+  silently defaulting it.
+- `node --test tests/receipt-authority-anchor.test.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 9 tests.
+- `swift test --filter AuthorityTailParityTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/swift`:
+  passed, 7 tests.
+- `cargo fmt --manifest-path sdk/rust/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed.
+- `mvn test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed, 164 tests. This resolves the previously recorded Java full-suite
+  failure in `ReceiptAuthorityAnchorTest`.
+- `uv run --project sdk/python pytest -q sdk/python/tests/test_authority_tail_parity.py sdk/python/tests/test_cross_language_verify.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, 14 tests.
+- `swift test --filter EasyNetAxonTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/swift`:
+  passed, 126 tests.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed before this slice documentation update.
+
+This evidence verifies only the cross-language receipt anchor fixture
+convergence slice. It does not complete RF-6 globally because examples,
+remaining empty-proof test fixtures, constructor hardening, and descriptor
+proof-binding parity still require separate deletion/migration work.
+
+## RF-6 Python Fluent Receipt Proof-Facts Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `uv run --project sdk/python pytest -q sdk/python/tests/test_authority_idiomatic.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, 14 tests. This includes a negative test that
+  `ReceiptSession(...).call(...)` rejects omitted proof facts.
+- `uv run --project sdk/python pytest -q sdk/python/tests/test_authority_tail_parity.py sdk/python/tests/test_cross_language_verify.py sdk/python/tests/test_admission.py sdk/python/tests/test_audit.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, 35 tests.
+- `uv run --project sdk/python python sdk/python/examples/authority_receipt.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed and completed the call -> receipt -> verify -> trace ->
+  prove-authority flow with explicit descriptor/runtime proof facts.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` plus
+  `sdk/conformance/sdk-parity-matrix.json` to Axon revision
+  `2ff8120c76abe20ec0626bcd749b34b52d88b173`.
+- `uv run --project sdk/python pytest -q sdk/python/tests --ignore=sdk/python/tests/industrial`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, 219 tests and 3 skipped.
+- `uv run --project sdk/python pytest -q sdk/python/tests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  failed, 231 passed, 3 skipped, and 8 failed. The failures are the existing
+  industrial LocalRuntime helper/lifecycle gap: tests still call absent public
+  APIs `LocalRuntime.core`, `children_of`, `send_message`, and `cancel`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `cargo fmt --all -- --check && cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+
+This evidence verifies only the Python fluent receipt proof-facts boundary
+slice. It does not complete RF-6 globally because other language examples,
+remaining empty-proof fixtures, and public empty-proof helper exports still
+need separate migration or removal.

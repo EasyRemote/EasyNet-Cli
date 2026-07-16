@@ -644,6 +644,55 @@
 - [x] Verify proto mirror derivation, V2 gate/self-test, and CLI convergence
       checks before committing this slice.
 
+## Product-Neutral SDK URA Error Contract Slice
+
+- [x] Identify SDK public validation errors that embedded `EasyNet URA`
+      product wording in canonical runtime facades.
+- [x] Replace Go, Java, Node, Python, Rust, and Swift subject/principal URA
+      validation messages with product-neutral `canonical URA` or
+      `URA syntax` wording.
+- [x] Rename Swift local-runtime `SYSTEM_URI` to `SYSTEM_URA`.
+- [x] Update language tests that asserted the old branded error text.
+- [x] Extend the V2 gate and self-test to reject product-specific URA error
+      vocabulary and active `SYSTEM_URI` identifiers in SDK source.
+- [x] Verify focused language tests, V2 gate/self-test, and CLI convergence
+      checks before committing this slice.
+
+## RF-6 Cross-Language Receipt Anchor Fixture Convergence Slice
+
+- [x] Identify Java full-suite failure as a shared receipt-anchor fixture fork,
+      not a Java-only canonical encoder defect.
+- [x] Promote the receipt authority anchor fixture from empty proof facts to a
+      complete language-neutral proof-facts binding.
+- [x] Use one runtime-env string,
+      `axon-receipt-anchor-v2`, across Rust, Java, Python, Node, and Swift so
+      signed receipt bytes do not fork by language.
+- [x] Add the Rust SDK strict proof-facts anchor test as the executable source
+      of truth for the new receipt anchors.
+- [x] Migrate Java, Python, Node, and Swift anchor tests to the same
+      subject-ref, descriptor version, schema hash, impl hash, input hash, and
+      output hash fixture.
+- [x] Remove Python's obsolete assertion that a missing receipt authority
+      silently defaults to self authority; missing authority is now rejected.
+- [x] Verify Rust, Java, Python, Node, and Swift affected suites.
+
+## RF-6 Python Fluent Receipt Proof-Facts Boundary Slice
+
+- [x] Identify Python `ReceiptSession(...).call(...)` as a public fluent path
+      that generated signed receipts with `ReceiptProofFacts()` defaults.
+- [x] Move proof-facts ownership to the call boundary:
+      `.call(payload, proof_facts=...)` now requires explicit proof facts.
+- [x] Remove the obsolete `prove_authority()` dummy `ReceiptBody` construction
+      that preserved a no-proof receipt path inside the authority wrapper.
+- [x] Update Python fluent tests, README guidance, and the authority receipt
+      example to pass complete descriptor/runtime proof facts.
+- [x] Add negative coverage proving fluent receipt construction rejects
+      missing proof facts.
+- [x] Regenerate the canonical public API manifest and SDK parity matrix after
+      the Python public receipt API hash changed.
+- [x] Verify Python authority, audit, admission, cross-language, and example
+      paths.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
@@ -652,8 +701,8 @@
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
 - [ ] RF-4 shared lifecycle matrix, transition vectors, and cross-language
       provider status cutover.
-- [ ] RF-6 remaining examples and tests, and descriptor proof-binding parity
-      closure.
+- [ ] RF-6 remaining examples and tests, receipt constructor hardening in every
+      language, and descriptor proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.
 - [ ] RF-2 Mission/EAL extraction from Axon canonical runtime.
 - [ ] RF-9 URA terminology and generated-schema ownership closure.

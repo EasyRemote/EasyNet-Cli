@@ -343,3 +343,39 @@
 - The V2 RF-9 gate now scans Axon active proto roots for URI identity
   vocabulary because document/vector gates alone cannot prove schema-source
   terminology convergence.
+- SDK validation errors are public contract text. Error messages that say
+  `EasyNet URA` make the canonical runtime facade product-specific even when
+  the underlying value is a generic URA.
+- Product-neutral SDK wording uses `canonical URA` for complete subject values
+  and `URA syntax` for legacy private principal rejection. The scheme literal
+  remains unchanged; this slice changes the contract vocabulary, not wire
+  semantics.
+- Active source identifiers follow the URA-only naming rule. Swift
+  `SYSTEM_URI` is therefore renamed to `SYSTEM_URA` rather than left as a
+  harmless-looking local constant.
+- The V2 gate now rejects product-specific URA error vocabulary in active SDK
+  source because manifest inventory cannot see public error-message contracts.
+- Receipt authority anchor tests are canonical runtime conformance tests, not
+  language-local fixtures. The anchor input must therefore carry the same
+  complete `ReceiptProofFacts` values across Rust, Java, Python, Node, and
+  Swift.
+- `runtime_env` is signed receipt material. Anchor fixtures must use one
+  language-neutral value (`axon-receipt-anchor-v2`) rather than embedding
+  `java-test`, `python-test`, `swift-test`, or similar language names.
+- Empty proof facts remain a transitional defect under RF-6. Anchor tests now
+  pin complete subject-ref, descriptor, schema, implementation, authority,
+  input, and output proof facts instead of preserving the old empty-proof
+  receipt model.
+- A missing receipt authority is not equivalent to self authority. Python's
+  anchor test now asserts `receipt_authority_binding_required`, matching the
+  RF-6 direction that receipt construction must reject omitted authority facts.
+- Python fluent receipt construction is a public receipt producer, not a test
+  fixture. It must therefore require caller-supplied `ReceiptProofFacts` at
+  `.call(payload, proof_facts=...)` instead of synthesizing
+  `ReceiptProofFacts()` internally.
+- The fluent API requires proof facts at `call` time because `input_hash` is a
+  signed receipt fact derived from the payload. `ability(...)` cannot own that
+  fact without guessing future payload bytes.
+- Python `prove_authority()` must read the explicit authority binding already
+  stored on `AxiomBinding`; constructing a dummy `ReceiptBody` preserved an
+  obsolete receipt path and failed once receipt proof facts became mandatory.
