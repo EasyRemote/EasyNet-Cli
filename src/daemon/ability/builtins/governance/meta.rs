@@ -49,7 +49,8 @@ use crate::daemon::ability::catalog as ability_catalog;
 use crate::daemon::ability::descriptors::{AbilityDescriptor, AbilityIdentity};
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
-use serde_json::{json, Value};
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+use serde_json::{Value, json};
 
 pub const ABILITY_DESCRIBE: &str = crate::daemon::ability::names::governance::META_DESCRIBE;
 pub const ABILITY_LIST_ABILITIES: &str =
@@ -178,8 +179,8 @@ fn describe_handler(
     }
 
     let hosted_agent_count = if invocation_callee.kind == crate::core::ura::URAKind::Device {
-        crate::daemon::persistence::local_agents::load()
-            .map(|local| local.hosted_agents.len())
+        AgentAggregateRepository::load_hosted_identity_status()
+            .map(|status| status.hosted_agent_count())
             .unwrap_or_default()
     } else {
         0
@@ -639,9 +640,11 @@ mod tests {
             d("fs.read").with_input_schema(json!({"type": "string"})),
         )
         .expect_err("same identity/version/mode with different schema must fail closed");
-        assert!(error
-            .to_string()
-            .contains("conflicting canonical descriptors"));
+        assert!(
+            error
+                .to_string()
+                .contains("conflicting canonical descriptors")
+        );
     }
 
     fn seed_test_credentials(realm: &str, node_id: &str, username: &str) {
@@ -858,9 +861,10 @@ mod tests {
         let rows = response["abilities"].as_array().expect("ability rows");
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row["owner_ura"] == hub_ura));
-        assert!(rows
-            .iter()
-            .all(|row| row["source"] == "daemon:control-plane"));
+        assert!(
+            rows.iter()
+                .all(|row| row["source"] == "daemon:control-plane")
+        );
         assert!(rows.iter().all(|row| {
             row["ability_ura"].as_str().is_some_and(|ability_ura| {
                 crate::core::ura::AbilitySelector::parse(ability_ura)
@@ -891,12 +895,16 @@ mod tests {
         let hub_rows = hub_response["abilities"].as_array().unwrap();
         assert_eq!(device_rows.len(), 2);
         assert_eq!(hub_rows.len(), 2);
-        assert!(device_rows
-            .iter()
-            .all(|row| row["owner_ura"] == device_ura && row["owner_ura"] != "self"));
-        assert!(hub_rows
-            .iter()
-            .all(|row| row["owner_ura"] == hub_ura && row["owner_ura"] != "self"));
+        assert!(
+            device_rows
+                .iter()
+                .all(|row| row["owner_ura"] == device_ura && row["owner_ura"] != "self")
+        );
+        assert!(
+            hub_rows
+                .iter()
+                .all(|row| row["owner_ura"] == hub_ura && row["owner_ura"] != "self")
+        );
 
         let device_list = device_rows
             .iter()
@@ -1018,9 +1026,11 @@ mod tests {
             .iter()
             .find(|a| a["name"].as_str() == Some("svc_plain"))
             .expect("plain ability row present");
-        assert!(plain["metadata"]
-            .as_object()
-            .is_none_or(|m| !m.contains_key("health_status")));
+        assert!(
+            plain["metadata"]
+                .as_object()
+                .is_none_or(|m| !m.contains_key("health_status"))
+        );
     }
 
     #[test]
@@ -1378,7 +1388,7 @@ mod tests {
         // catalogue backing SchemaForm, so it must read static OR
         // dynamic manifests rather than the static-only map.
         use crate::daemon::ability::dispatch::OwnerKind;
-        use crate::daemon::persistence::local_agents::{save, LocalAgentsFile};
+        use crate::daemon::persistence::local_agents::{LocalAgentsFile, save};
         use std::sync::OnceLock;
 
         let _home = crate::cli::commands::test_support::HomeGuard::new();
@@ -1440,7 +1450,7 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     #[test]
     fn list_abilities_surfaces_remote_desktop_plugin_manifest_schema() {
-        use crate::daemon::persistence::local_agents::{save, LocalAgentsFile};
+        use crate::daemon::persistence::local_agents::{LocalAgentsFile, save};
         use crate::daemon::plugins::{
             DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
             PluginRequirementSet, PluginRuntimeLimits,
@@ -1503,7 +1513,7 @@ mod tests {
     #[test]
     fn list_abilities_includes_hot_added_hosted_agent_from_local_agents_ura() {
         use crate::daemon::persistence::local_agents::{
-            save, upsert_hosted_agent, LocalAgentsFile,
+            LocalAgentsFile, save, upsert_hosted_agent,
         };
         use std::sync::OnceLock;
 
@@ -1592,7 +1602,7 @@ mod tests {
     #[test]
     fn list_abilities_keeps_same_public_ability_name_for_multiple_hosted_agents() {
         use crate::daemon::persistence::local_agents::{
-            save, upsert_hosted_agent, LocalAgentsFile,
+            LocalAgentsFile, save, upsert_hosted_agent,
         };
         use std::sync::OnceLock;
 
@@ -1709,10 +1719,12 @@ mod tests {
         assert_eq!(resp["abilities_summary"]["total"], 0);
         // Empty by_namespace must be an object, not absent — caller
         // shouldn't have to special-case missing key.
-        assert!(resp["abilities_summary"]["by_namespace"]
-            .as_object()
-            .unwrap()
-            .is_empty());
+        assert!(
+            resp["abilities_summary"]["by_namespace"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

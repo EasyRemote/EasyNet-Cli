@@ -24,7 +24,7 @@ pub(crate) fn invoke_remote_device_system_ability(
     let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
     let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
     invoke_target_owned_system_ability(&target_ura, selector, args, caller_ura.as_deref())
-        .with_context(|| format!("invoke {selector} on remote device target={target_ura}"))
+        .with_context(|| format!("forward {selector} to remote device target={target_ura}"))
 }
 
 #[cfg(not(feature = "axon-pb"))]

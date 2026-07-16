@@ -3223,6 +3223,161 @@ if agent_chat.exists():
             "Agent chat provider path must not load agents.json directly",
         )
 
+# Rule 40: governance status surfaces consume Agent aggregate hosted-identity
+# projections. Operator/status reads may expose hosted-Agent identity facts, but
+# they must not learn the LocalAgentsFile persistence shape or create a second
+# source-of-truth beside AgentAggregateRepository.
+governance_status_surfaces = (
+    (
+        cli_root / "src/daemon/ability/builtins/governance/admin_status.rs",
+        "admin.status",
+    ),
+    (
+        cli_root / "src/daemon/ability/builtins/governance/network_health.rs",
+        "observe.network_health",
+    ),
+    (
+        cli_root / "src/daemon/ability/builtins/governance/meta.rs",
+        "meta.describe",
+    ),
+    (
+        cli_root / "src/daemon/ability/builtins/governance/invocation_history.rs",
+        "invocation history",
+    ),
+)
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    aggregate_status_requirements = (
+        (
+            "struct AgentHostedIdentityStatus",
+            "Agent aggregate must own hosted identity status projection shape",
+        ),
+        (
+            "fn hosted_identity_status(&self) -> AgentHostedIdentityStatus",
+            "Agent aggregate snapshot must expose hosted identity status projection",
+        ),
+        (
+            "fn load_hosted_identity_status() -> anyhow::Result<AgentHostedIdentityStatus>",
+            "Agent aggregate repository must expose hosted identity status reads",
+        ),
+        (
+            "fn load_hosted_identity_projection() -> Result<LocalAgentsFile, AgentAggregateSnapshotLoadError>",
+            "Agent aggregate repository must own hosted identity persistence loading",
+        ),
+    )
+    for token, detail in aggregate_status_requirements:
+        if token not in text:
+            add("R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK", agent_aggregate, 1, detail)
+for governance_status_surface, surface_label in governance_status_surfaces:
+    if not governance_status_surface.exists():
+        continue
+    text = source(governance_status_surface)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    if "AgentAggregateRepository::load_hosted_identity_status()" not in production_text:
+        add(
+            "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK",
+            governance_status_surface,
+            1,
+            f"{surface_label} must read hosted identity status through the Agent aggregate repository",
+        )
+    for token, detail in (
+        (
+            "local_agents::load",
+            f"{surface_label} must not load local-agents.json directly",
+        ),
+        (
+            "LocalAgentsFile",
+            f"{surface_label} must not inspect local-agents.json shape",
+        ),
+        (
+            ".host_device_agent_ura.",
+            f"{surface_label} must not inspect host-device Agent URA storage directly",
+        ),
+        (
+            ".hosted_agents",
+            f"{surface_label} must not inspect hosted-Agent storage rows directly",
+        ),
+    ):
+        if token in production_text:
+            add("R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK", governance_status_surface, 1, detail)
+
+# Rule 41: EAL agent dispatch consumes Agent aggregate projections. EAL member
+# calls are execution paths; constructing their dispatcher from a registry-only
+# file read revives a second read owner for Agent dispatch proof.
+eal_dispatch = cli_root / "src/eal/interpreter/dispatch.rs"
+if eal_dispatch.exists():
+    text = source(eal_dispatch)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    eal_requirements = (
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            "EAL AgentAwareDispatcher must load through the Agent aggregate repository",
+        ),
+        (
+            "registered_agent_registry_projection()",
+            "EAL AgentAwareDispatcher must consume aggregate registered-Agent projection",
+        ),
+    )
+    for token, detail in eal_requirements:
+        if token not in production_text:
+            add("R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK", eal_dispatch, 1, detail)
+    if "agent_registry::load_agents" in production_text:
+        add(
+            "R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK",
+            eal_dispatch,
+            1,
+            "EAL AgentAwareDispatcher must not load agents.json directly",
+        )
+
+# Rule 42: hosted owner lookup surfaces consume Agent aggregate projections.
+# CLI ability catalogue filtering and local agent discovery both resolve
+# hosted LLM owner URAs for user-facing discovery. They must not know the
+# local-agents.json file shape or call hosted-URA file helpers directly.
+hosted_owner_lookup_surfaces = (
+    (
+        cli_root / "src/cli/commands/abilities.rs",
+        "CLI abilities --agent resolution",
+    ),
+    (
+        cli_root / "src/daemon/ability/builtins/agents/discover.rs",
+        "agent discover local owner projection",
+    ),
+)
+for hosted_owner_surface, surface_label in hosted_owner_lookup_surfaces:
+    if not hosted_owner_surface.exists():
+        continue
+    text = source(hosted_owner_surface)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    hosted_owner_requirements = (
+        (
+            "AgentAggregateRepository::load_hosted_identity_snapshot()",
+            f"{surface_label} must load hosted owner state through the hosted identity aggregate projection",
+        ),
+        (
+            "hosted_llm_agent_ura(",
+            f"{surface_label} must use the aggregate hosted LLM owner projection",
+        ),
+    )
+    for token, detail in hosted_owner_requirements:
+        if token not in production_text:
+            add("R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK", hosted_owner_surface, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            f"{surface_label} must not load local-agents.json directly for hosted owner lookup",
+        ),
+        (
+            "lookup_hosted_ura",
+            f"{surface_label} must not bypass aggregate hosted owner lookup",
+        ),
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            f"{surface_label} must not require registry readability for hosted owner lookup",
+        ),
+    ):
+        if token in production_text:
+            add("R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK", hosted_owner_surface, 1, detail)
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the

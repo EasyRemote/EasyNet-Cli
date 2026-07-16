@@ -41,11 +41,12 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 pub const ABILITY_ADMIN_STATUS: &str = crate::daemon::ability::names::governance::ADMIN_STATUS;
 
 /// Register `admin.status` on the registry.
@@ -66,11 +67,13 @@ where
 }
 
 fn handler(ability_count_provider: &Arc<dyn Fn() -> usize + Send + Sync>) -> anyhow::Result<Value> {
-    let local = crate::daemon::persistence::local_agents::load()
-        .map_err(|error| anyhow::anyhow!("admin.status: load hosted-agent URA index: {error:#}"))?;
-    let joined = !local.host_device_agent_ura.is_empty();
+    let hosted_identity =
+        AgentAggregateRepository::load_hosted_identity_status().map_err(|error| {
+            anyhow::anyhow!("admin.status: load hosted-Agent identity status: {error:#}")
+        })?;
+    let joined = hosted_identity.is_joined();
     let ability_count = ability_count_provider();
-    let hosted_count = local.hosted_agents.len();
+    let hosted_count = hosted_identity.hosted_agent_count();
 
     let aggregate = if joined && ability_count > 0 {
         "ok"

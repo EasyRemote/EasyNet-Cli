@@ -45,7 +45,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::ability::builtins::agents::discover::{
     DiscoverFederationResolver, SharedDiscoverFederationResolver,
@@ -53,6 +53,7 @@ use crate::daemon::ability::builtins::agents::discover::{
 use crate::daemon::ability::builtins::integrations::federation_probe;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 pub const ABILITY_NETWORK_HEALTH: &str =
     crate::daemon::ability::names::governance::OBSERVE_NETWORK_HEALTH;
@@ -66,15 +67,15 @@ pub fn register(reg: &mut AxonAbilityCatalog, resolver: SharedDiscoverFederation
 }
 
 fn handler(resolver: &dyn DiscoverFederationResolver) -> anyhow::Result<Value> {
-    let local = crate::daemon::persistence::local_agents::load().map_err(|error| {
-        anyhow::anyhow!("observe.network_health: load hosted-agent URA index: {error:#}")
-    })?;
+    let hosted_identity =
+        AgentAggregateRepository::load_hosted_identity_status().map_err(|error| {
+            anyhow::anyhow!("observe.network_health: load hosted-Agent identity status: {error:#}")
+        })?;
     let view = federation_probe::collect_device_view(resolver);
     let self_node = view.nodes.iter().find(|n| n.is_self);
-    let joined =
-        self_node.map(|n| n.paired).unwrap_or(false) || !local.host_device_agent_ura.is_empty();
-    let host_ura: Value = if !local.host_device_agent_ura.is_empty() {
-        Value::String(local.host_device_agent_ura.clone())
+    let joined = self_node.map(|n| n.paired).unwrap_or(false) || hosted_identity.is_joined();
+    let host_ura: Value = if let Some(ura) = hosted_identity.host_device_agent_ura() {
+        Value::String(ura.to_string())
     } else if let Some(ura) = self_node.and_then(|n| n.agent_ura.clone()) {
         Value::String(ura)
     } else {
@@ -120,7 +121,7 @@ fn handler(resolver: &dyn DiscoverFederationResolver) -> anyhow::Result<Value> {
     Ok(json!({
         "joined": joined,
         "host_device_ura": host_ura,
-        "hosted_agent_count": local.hosted_agents.len(),
+        "hosted_agent_count": hosted_identity.hosted_agent_count(),
         "peer_count": peer_count,
         "links": Value::Array(links),
         "latency_ms": resolve_latency_ms,

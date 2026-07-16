@@ -78,6 +78,13 @@ make_good_fixture() {
     "$AXON/sdk/rust/src/invocation"
 
   cat >"$CLI/src/eal/interpreter/dispatch.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn load_registry_or_warn() {
+    AgentAggregateRepository::load_snapshot()
+        .map(|snapshot| snapshot.registered_agent_registry_projection());
+}
+
 fn dispatch_step(client: &InvocationClient, child: ChildInvocation) {
     client.invoke_remote(child);
 }
@@ -92,6 +99,33 @@ fn register(reg: &mut Catalog) {
 
 fn handler(client: &InvocationClient, child: ChildInvocation) {
     client.invoke_child(child);
+}
+EOF
+  cat >"$CLI/src/cli/commands/abilities.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
+    let snapshot = AgentAggregateRepository::load_hosted_identity_snapshot()?;
+    snapshot.hosted_llm_agent_ura(agent).map(str::to_string).ok_or_else(|| anyhow::anyhow!("missing"))
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/agents/discover.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::{AgentAggregateRepository, AgentHostedIdentitySnapshot};
+
+struct LocalAgentAbilityOwners {
+    snapshot: AgentHostedIdentitySnapshot,
+}
+
+impl LocalAgentAbilityOwners {
+    fn load() -> anyhow::Result<Self> {
+        Ok(Self {
+            snapshot: AgentAggregateRepository::load_hosted_identity_snapshot()?,
+        })
+    }
+
+    fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
+        self.snapshot.hosted_llm_agent_ura(agent_name).map(str::to_string)
+    }
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/chat.rs" <<'EOF'
@@ -261,6 +295,19 @@ struct AgentHostedPlacement {
     host_node_id: Option<String>,
 }
 
+struct AgentHostedIdentityStatus {
+    host_device_agent_ura: Option<String>,
+    hosted_agent_count: usize,
+}
+
+struct AgentHostedIdentitySnapshot;
+
+impl AgentHostedIdentitySnapshot {
+    fn hosted_llm_agent_ura(&self, agent: &str) -> Option<&str> {
+        Some("easynet:///r/acme/agent/user.claude")
+    }
+}
+
 impl AgentAggregateSnapshot {
     fn has_registered_agent(&self, agent: &str) -> bool {
         self.registry.agents.contains_key(agent)
@@ -280,6 +327,13 @@ impl AgentAggregateSnapshot {
 
     fn host_device_agent_ura(&self) -> &str {
         &self.local_agents.host_device_agent_ura
+    }
+
+    fn hosted_identity_status(&self) -> AgentHostedIdentityStatus {
+        AgentHostedIdentityStatus {
+            host_device_agent_ura: Some(self.local_agents.host_device_agent_ura.clone()),
+            hosted_agent_count: self.local_agents.hosted_agents.len(),
+        }
     }
 
     fn hosted_llm_agent_identity(&self, agent: &str) -> HostedLlmAgentIdentity<'_> {
@@ -337,11 +391,26 @@ impl AgentAggregateRepository {
         Self::try_load_snapshot().map_err(Into::into)
     }
 
+    pub(crate) fn load_hosted_identity_snapshot() -> anyhow::Result<AgentHostedIdentitySnapshot> {
+        Ok(AgentHostedIdentitySnapshot)
+    }
+
+    pub(crate) fn load_hosted_identity_status() -> anyhow::Result<AgentHostedIdentityStatus> {
+        Ok(AgentHostedIdentityStatus {
+            host_device_agent_ura: Some(Self::load_hosted_identity_projection()?.host_device_agent_ura),
+            hosted_agent_count: 0,
+        })
+    }
+
     pub(crate) fn try_load_snapshot() -> Result<AgentAggregateSnapshot, AgentAggregateSnapshotLoadError> {
         Ok(AgentAggregateSnapshot {
             registry: agent_registry::load_agents()?,
-            local_agents: local_agents::load()?,
+            local_agents: Self::load_hosted_identity_projection()?,
         })
+    }
+
+    fn load_hosted_identity_projection() -> Result<LocalAgentsFile, AgentAggregateSnapshotLoadError> {
+        local_agents::load()
     }
 }
 EOF
@@ -358,6 +427,43 @@ fn authorize_teach(owner: &str, learner_ura: &str) -> anyhow::Result<()> {
         .map_err(hosted_agent_lookup_error)?;
     let learner_identity = snapshot.hosted_agent_identity_by_ura(learner_ura);
     Ok(())
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/governance/admin_status.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn handler() -> anyhow::Result<()> {
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status()?;
+    let _joined = hosted_identity.is_joined();
+    let _count = hosted_identity.hosted_agent_count();
+    Ok(())
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/governance/network_health.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn handler() -> anyhow::Result<()> {
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status()?;
+    let _host = hosted_identity.host_device_agent_ura();
+    let _count = hosted_identity.hosted_agent_count();
+    Ok(())
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/governance/meta.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn describe_handler() -> usize {
+    AgentAggregateRepository::load_hosted_identity_status()
+        .map(|status| status.hosted_agent_count())
+        .unwrap_or_default()
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn ledger_resource_ura() -> Option<String> {
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
+    hosted_identity.host_device_agent_ura().map(str::to_string)
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
@@ -2472,6 +2578,66 @@ EOF
 expect_fail \
   "agent chat aggregate provider fork" \
   "R39_AGENT_CHAT_AGGREGATE_PROVIDER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/governance/admin_status.rs" <<'EOF'
+fn handler() -> anyhow::Result<()> {
+    let local = crate::daemon::persistence::local_agents::load()?;
+    let _joined = !local.host_device_agent_ura.is_empty();
+    let _count = local.hosted_agents.len();
+    Ok(())
+}
+EOF
+expect_fail \
+  "governance status aggregate provider fork" \
+  "R40_GOVERNANCE_STATUS_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/eal/interpreter/dispatch.rs" <<'EOF'
+fn load_registry_or_warn() -> AgentRegistry {
+    crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default()
+}
+
+fn dispatch_step(client: &InvocationClient, child: ChildInvocation) {
+    client.invoke_remote(child);
+}
+EOF
+expect_fail \
+  "EAL agent dispatch aggregate provider fork" \
+  "R41_EAL_AGENT_DISPATCH_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/abilities.rs" <<'EOF'
+fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
+    let local = crate::daemon::persistence::local_agents::load()?;
+    crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent)
+        .ok_or_else(|| anyhow::anyhow!("missing"))
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/agents/discover.rs" <<'EOF'
+struct LocalAgentAbilityOwners {
+    local_agents: crate::daemon::persistence::local_agents::LocalAgentsFile,
+}
+
+impl LocalAgentAbilityOwners {
+    fn load() -> anyhow::Result<Self> {
+        Ok(Self {
+            local_agents: crate::daemon::persistence::local_agents::load()?,
+        })
+    }
+
+    fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
+        crate::daemon::persistence::local_agents::lookup_hosted_ura(
+            &self.local_agents,
+            "llm",
+            agent_name,
+        )
+    }
+}
+EOF
+expect_fail \
+  "hosted owner lookup aggregate fork" \
+  "R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'

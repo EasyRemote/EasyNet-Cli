@@ -995,24 +995,23 @@ struct Candidate {
     diagnostic: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct LocalAgentAbilityOwners {
-    local_agents: crate::daemon::persistence::local_agents::LocalAgentsFile,
+    snapshot: crate::daemon::persistence::agent_aggregate::AgentHostedIdentitySnapshot,
 }
 
 impl LocalAgentAbilityOwners {
     fn load() -> anyhow::Result<Self> {
         Ok(Self {
-            local_agents: crate::daemon::persistence::local_agents::load()?,
+            snapshot:
+                crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_snapshot()?,
         })
     }
 
     fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
-        crate::daemon::persistence::local_agents::lookup_hosted_ura(
-            &self.local_agents,
-            "llm",
-            agent_name,
-        )
+        self.snapshot
+            .hosted_llm_agent_ura(agent_name)
+            .map(str::to_string)
     }
 
     fn ability_ura_for(&self, agent_name: &str, public_name: &str) -> Option<String> {

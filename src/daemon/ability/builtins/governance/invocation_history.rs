@@ -21,12 +21,13 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use serde_json::{json, Value};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde_json::{Value, json};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::daemon_config::{
-    default_config_path, default_ledger_dir, DaemonConfig,
+    DaemonConfig, default_config_path, default_ledger_dir,
 };
 use easynet_axon::invocation::{
     InvocationLedger, InvocationLedgerFetchKey, InvocationLedgerQuery, InvocationLedgerRecord,
@@ -565,8 +566,8 @@ fn ledger_path_from_config() -> PathBuf {
 }
 
 fn ledger_resource_ura() -> Option<String> {
-    let local = crate::daemon::persistence::local_agents::load().ok()?;
-    let parsed = crate::core::ura::parse_ura(&local.host_device_agent_ura).ok()?;
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
+    let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_agent_ura()?).ok()?;
     let owner = match parsed.kind {
         crate::core::ura::URAKind::Device => format!("device.{}", parsed.device_id()?),
         crate::core::ura::URAKind::User => format!("{}.invocations", parsed.user_id()?),
@@ -1084,12 +1085,16 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(query.subject_uras.len(), 2);
-        assert!(query
-            .subject_uras
-            .contains("easynet:///r/test/device/mac-1"));
-        assert!(query
-            .subject_uras
-            .contains("easynet:///r/test/agent/alice.frontend"));
+        assert!(
+            query
+                .subject_uras
+                .contains("easynet:///r/test/device/mac-1")
+        );
+        assert!(
+            query
+                .subject_uras
+                .contains("easynet:///r/test/agent/alice.frontend")
+        );
     }
 
     #[test]

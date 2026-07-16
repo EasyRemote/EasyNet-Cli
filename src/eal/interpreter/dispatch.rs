@@ -33,6 +33,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::*;
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 /// without changing the EAL surface.
 fn dispatch_remote_via_canonical_invoke(
@@ -219,11 +220,13 @@ impl AgentAwareDispatcher {
 /// "empty by design" and "empty by failure" is preserved in operator-
 /// visible logs rather than hidden from the caller.
 fn load_registry_or_warn() -> crate::daemon::persistence::agent_registry::AgentRegistry {
-    match crate::daemon::persistence::agent_registry::load_agents() {
-        Ok(r) => r,
+    match AgentAggregateRepository::load_snapshot()
+        .map(|snapshot| snapshot.registered_agent_registry_projection())
+    {
+        Ok(registry) => registry,
         Err(e) => {
             eprintln!(
-                "[easynet eal] warning: agent registry load failed ({e}); \
+                "[easynet eal] warning: Agent aggregate load failed ({e}); \
                  dispatching with an empty registry. Any agent-target call \
                  will fail with `not_found` until the registry is repaired."
             );
@@ -325,7 +328,7 @@ pub(super) fn dispatch_to_agent(
     // this process would create a second semantic model and can duplicate
     // side effects after an uncertain transport outcome.
     let display_name = format!("{}.{}", agent_id.name, ability.as_str());
-    use crate::support::platform::local_invoke::{classify_invoke_error, LocalInvokeErrorKind};
+    use crate::support::platform::local_invoke::{LocalInvokeErrorKind, classify_invoke_error};
     match crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
         bare_ability,
         arguments.clone(),
@@ -352,7 +355,7 @@ pub(super) fn dispatch_to_agent(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_mode_from_call_mode, LocalDeviceDispatchMode};
+    use super::{LocalDeviceDispatchMode, dispatch_mode_from_call_mode};
     use crate::daemon::ability::CallMode;
 
     #[test]

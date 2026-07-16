@@ -179,15 +179,16 @@ impl AbilityCatalogueQuery {
 }
 
 fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
-    let local = crate::daemon::persistence::local_agents::load()?;
-    crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent).ok_or_else(
-        || {
+    let snapshot = crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_snapshot()?;
+    snapshot
+        .hosted_llm_agent_ura(agent)
+        .map(str::to_string)
+        .ok_or_else(|| {
             anyhow::anyhow!(
                 "agent {agent:?} is not hosted in local-agents.json; use --agent-ura for a \
              canonical remote owner scope"
             )
-        },
-    )
+        })
 }
 
 /// Build owned (Device, Agent, User, Kind) cells for one ability
