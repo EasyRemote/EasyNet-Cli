@@ -67,6 +67,7 @@ make_good_fixture() {
     "$CLI/src/daemon/invocation/dispatch" \
     "$CLI/src/daemon/invocation/streams" \
     "$CLI/src/daemon/persistence" \
+    "$CLI/ability-descriptors/system/agents" \
     "$CLI/docs/spec" \
     "$CLI/sdk/go" \
     "$CLI/sdk/python/easynet_sdk" \
@@ -103,6 +104,16 @@ EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
 struct AgentLifecycleProjectionStore;
 
+pub const ABILITY_PURGE_AGENT: &str = crate::daemon::ability::names::agents::AGENT_PURGE;
+
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner(
+        ABILITY_PURGE_AGENT,
+        OwnerKind::Device,
+        Arc::new(move |args: Value| purge_agent_handler(args, &registrar_for_purge)),
+    );
+}
+
 impl AgentLifecycleProjectionStore {
     fn persist_registry(&self, registry: &AgentRegistry) {
         agents::save_agents(registry);
@@ -138,9 +149,62 @@ impl AgentLifecycleTransaction {
 }
 
 fn stop_agent_locked(registry: &AgentRegistry, identities: &local_agents::LocalAgentsFile) {
+    if args.get("purge").is_some() {
+        anyhow::bail!("agent.stop: `purge` is not accepted; invoke `agent.purge`");
+    }
     transaction.persist_registry_projection(&registry);
     transaction.persist_identity_projection(&identities);
 }
+
+fn purge_agent_handler(args: Value, hot_registrar: &SharedHotRegistrarCell) -> anyhow::Result<Value> {
+    ensure_identity_bound_purge_supported()?;
+    purge_agent_locked(args, hot_registrar)
+}
+
+pub fn purge_agent_input_schema() -> Value {
+    stop_agent_input_schema()
+}
+
+pub fn purge_agent_description() -> &'static str {
+    "Destructively remove an LLM sub-agent and the exact canonical root_path stored in its registry row. Requires Manage authority."
+}
+EOF
+  cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
+fn registration_hints(owner_ura: &str, registry_name: &str, call_mode: DescriptorCallMode) -> AbilityHints {
+    let public_name = crate::core::ura::descriptor_public_ability_name(owner_ura, registry_name);
+    AbilityHints {
+        destructive: public_name == agent_names::AGENT_PURGE,
+        ..Default::default()
+    }
+}
+
+fn description_for(name: &str) -> &'static str {
+    match name {
+        agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_description(),
+        agent_names::AGENT_PURGE_RECONCILE => agent_lifecycle_ability::purge_reconcile_description(),
+        _ => "generic",
+    }
+}
+
+fn input_schema_for(name: &str) -> Value {
+    match name {
+        agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_input_schema(),
+        agent_names::AGENT_PURGE_RECONCILE => agent_lifecycle_ability::purge_reconcile_input_schema(),
+        _ => json!({}),
+    }
+}
+EOF
+  cat >"$CLI/ability-descriptors/system/agents/agent.purge.ability.toml" <<'EOF'
+name = "agent.purge"
+description = "Destructively remove an LLM sub-agent and the exact canonical root_path stored in its registry row. Requires Manage authority."
+admission_action = "manage"
+hints_json = "{\"read_only\":false,\"destructive\":true,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+EOF
+  cat >"$CLI/ability-descriptors/system/agents/agent.stop.ability.toml" <<'EOF'
+name = "agent.stop"
+description = "Remove an LLM sub-agent registry row by name or Agent URA. Idempotent: ack=false when the row didn't exist. The registered root directory is always preserved."
+admission_action = "manage"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
 EOF
   cat >"$CLI/src/cli/commands/start.rs" <<'EOF'
 fn bootstrap_local_agent_projection(creds: &Credentials) {
@@ -1135,6 +1199,61 @@ bash -n "$CHECK"
 make_good_fixture
 expect_pass "canonical fixture"
 
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
+fn registration_hints(owner_ura: &str, registry_name: &str, call_mode: DescriptorCallMode) -> AbilityHints {
+    let public_name = crate::core::ura::descriptor_public_ability_name(owner_ura, registry_name);
+    AbilityHints {
+        destructive: false,
+        ..Default::default()
+    }
+}
+
+fn description_for(name: &str) -> &'static str {
+    match name {
+        agent_names::AGENT_STOP | agent_names::AGENT_PURGE => agent_lifecycle_ability::stop_agent_description(),
+        agent_names::AGENT_PURGE_RECONCILE => agent_lifecycle_ability::purge_reconcile_description(),
+        _ => "generic",
+    }
+}
+
+fn input_schema_for(name: &str) -> Value {
+    match name {
+        agent_names::AGENT_STOP | agent_names::AGENT_PURGE => agent_lifecycle_ability::stop_agent_input_schema(),
+        agent_names::AGENT_PURGE_RECONCILE => agent_lifecycle_ability::purge_reconcile_input_schema(),
+        _ => json!({}),
+    }
+}
+EOF
+expect_fail \
+  "Agent purge public boundary fork" \
+  "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK"
+
+make_good_fixture
+cat >"$CLI/ability-descriptors/system/agents/agent.purge.ability.toml" <<'EOF'
+name = "agent.purge"
+description = "Remove an LLM sub-agent registry row by name or Agent URA."
+admission_action = "invoke"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+EOF
+expect_fail \
+  "Agent purge descriptor boundary fork" \
+  "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
+struct AgentLifecycleProjectionStore;
+
+fn stop_agent_locked(registry: &AgentRegistry, identities: &local_agents::LocalAgentsFile) {
+    transaction.persist_registry_projection(&registry);
+    transaction.persist_identity_projection(&identities);
+}
+EOF
+expect_fail \
+  "Agent purge lifecycle boundary fork" \
+  "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK"
+
+make_good_fixture
 cat >>"$CLI/src/eal/interpreter/dispatch.rs" <<'EOF'
 fn bypass_chat() {
     invoke_direct_with_progress("agent", args);

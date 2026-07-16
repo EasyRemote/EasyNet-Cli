@@ -1575,6 +1575,141 @@ if access_control.exists():
         )
 
 
+# Rule 32: Agent destructive lifecycle has one public boundary. `agent.stop`
+# remains a non-destructive row/authority removal; `agent.purge` is the only
+# destructive root-removal entry point and must be projected as such by catalog
+# metadata. Regressing this boundary revives the old stop/purge semantic fork.
+agent_lifecycle = cli_root / "src/daemon/ability/builtins/agents/lifecycle.rs"
+catalog_metadata = cli_root / "src/daemon/ability/catalog/catalog_metadata.rs"
+agent_purge_descriptor = (
+    cli_root / "ability-descriptors/system/agents/agent.purge.ability.toml"
+)
+agent_stop_descriptor = (
+    cli_root / "ability-descriptors/system/agents/agent.stop.ability.toml"
+)
+if agent_lifecycle.exists():
+    text = source(agent_lifecycle)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    lifecycle_requirements = (
+        (
+            "pub const ABILITY_PURGE_AGENT",
+            "Agent purge must have a named public ability constant",
+        ),
+        (
+            "reg.register_rpc_with_owner(\n        ABILITY_PURGE_AGENT,\n        OwnerKind::Device",
+            "Agent purge must register as a Device-owned lifecycle ability",
+        ),
+        (
+            "fn purge_agent_handler(",
+            "Agent purge must have a dedicated handler separate from stop",
+        ),
+        (
+            "ensure_identity_bound_purge_supported()?",
+            "Agent purge must check identity-bound deletion support before mutation",
+        ),
+        (
+            "fn purge_agent_input_schema() -> Value",
+            "Agent purge must publish a distinct schema owner",
+        ),
+        (
+            "fn purge_agent_description() -> &'static str",
+            "Agent purge must publish a distinct descriptor description",
+        ),
+        (
+            "Requires Manage authority",
+            "Agent purge descriptor text must advertise Manage authority",
+        ),
+        (
+            'if args.get("purge").is_some()',
+            "Agent stop must reject destructive purge input",
+        ),
+        (
+            "invoke `agent.purge`",
+            "Agent stop rejection must direct callers to the destructive boundary",
+        ),
+    )
+    for token, detail in lifecycle_requirements:
+        if token not in production_text:
+            add("R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK", agent_lifecycle, 1, detail)
+if catalog_metadata.exists():
+    text = source(catalog_metadata)
+    metadata_requirements = (
+        (
+            "destructive: public_name == agent_names::AGENT_PURGE",
+            "catalog hints must mark only agent.purge as destructive",
+        ),
+        (
+            "agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_description()",
+            "catalog descriptions must route agent.purge to the purge descriptor owner",
+        ),
+        (
+            "agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_input_schema()",
+            "catalog schemas must route agent.purge to the purge schema owner",
+        ),
+        (
+            "agent_names::AGENT_PURGE_RECONCILE",
+            "catalog metadata must model purge reconciliation as a named ability",
+        ),
+    )
+    for token, detail in metadata_requirements:
+        if token not in text:
+            add("R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK", catalog_metadata, 1, detail)
+if agent_purge_descriptor.exists():
+    text = source(agent_purge_descriptor)
+    descriptor_requirements = (
+        ('name = "agent.purge"', "purge descriptor must name the purge ability"),
+        (
+            'admission_action = "manage"',
+            "purge descriptor must require Manage authority",
+        ),
+        (
+            '\\"destructive\\":true',
+            "purge descriptor hints must mark destructive=true",
+        ),
+        (
+            "Requires Manage authority",
+            "purge descriptor description must state the Manage boundary",
+        ),
+    )
+    for token, detail in descriptor_requirements:
+        if token not in text:
+            add("R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK", agent_purge_descriptor, 1, detail)
+else:
+    add(
+        "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK",
+        agent_purge_descriptor,
+        1,
+        "purge descriptor TOML must exist",
+    )
+if agent_stop_descriptor.exists():
+    text = source(agent_stop_descriptor)
+    descriptor_requirements = (
+        ('name = "agent.stop"', "stop descriptor must name the stop ability"),
+        (
+            'admission_action = "manage"',
+            "stop descriptor must require Manage authority for row removal",
+        ),
+        (
+            '\\"destructive\\":false',
+            "stop descriptor hints must remain destructive=false",
+        ),
+        (
+            "registered root directory is always preserved",
+            "stop descriptor description must preserve root-retention semantics",
+        ),
+    )
+    for token, detail in descriptor_requirements:
+        if token not in text:
+            add("R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK", agent_stop_descriptor, 1, detail)
+else:
+    add(
+        "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK",
+        agent_stop_descriptor,
+        1,
+        "stop descriptor TOML must exist",
+    )
+
+
 # Rule 19: voice call signaling is Hub-owned realm state. Static descriptor
 # contracts may exist without live handlers, but production route registration
 # must require a qualified realm-shared repository provider. A process-local
