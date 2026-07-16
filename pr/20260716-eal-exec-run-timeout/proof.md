@@ -70,3 +70,16 @@ execution path.
 - `bash tests/scripts/test_check_architecture_convergence.sh`
 - `rustfmt --check --edition 2021 src/daemon/execution/mission/executors/eal.rs src/daemon/execution/mission/orchestration.rs src/eal/interpreter/mod.rs src/eal/interpreter/retry.rs src/eal/interpreter/tests.rs src/daemon/ability/builtins/automation/mission.rs src/cli/commands/groups/mission.rs src/cli/commands/agent/send.rs tests/seven_axes_w2_watch_e2e.rs`
 - `git diff --check -- src/daemon/execution/mission/executors/eal.rs src/daemon/execution/mission/orchestration.rs src/eal/interpreter/mod.rs src/eal/interpreter/retry.rs src/eal/interpreter/tests.rs src/daemon/ability/builtins/automation/mission.rs src/cli/commands/groups/mission.rs src/cli/commands/agent/send.rs tests/seven_axes_w2_watch_e2e.rs tools/scripts/check-architecture-convergence.sh tests/scripts/test_check_architecture_convergence.sh pr/20260716-eal-exec-run-timeout/proof.md`
+
+## Addendum: Trace Helper Boundary
+
+Current CodeGraph evidence shows production mission execution enters through
+`execute_with_endpoint_for_trace_with_timeout(...)`, and the non-timeout
+dispatcher helper is only used by interpreter tests. Keeping that helper in the
+non-test build produces a `dead_code` warning and implies a second production
+entrypoint that no lifecycle owner uses.
+
+The cleanup is to keep the timeout-aware production entrypoint unchanged while
+making the non-timeout dispatcher helper test-only. This preserves public
+daemon behavior and removes an obsolete production symbol from the EAL
+interpreter boundary.

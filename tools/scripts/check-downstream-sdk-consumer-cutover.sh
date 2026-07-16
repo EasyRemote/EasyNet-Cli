@@ -111,6 +111,21 @@ def check_backend() -> None:
     ]:
         require_contains(profile_graph, required, "backend:receipt_boot")
 
+    runtime_bridge = require_file(
+        backend,
+        "internal/sdktest/runtime_bridge.go",
+        "backend:runtime_bridge_result_shape",
+    )
+    for required in [
+        '"admission_receipt":',
+        '"terminal_receipt":',
+    ]:
+        require_contains(runtime_bridge, required, "backend:runtime_bridge_result_shape")
+    for forbidden in [
+        '"receipt":',
+    ]:
+        forbid_contains(runtime_bridge, forbidden, "backend:runtime_bridge_result_shape")
+
     events = require_file(backend, "internal/sdkevents/events.go", "backend:events")
     for required in [
         "c.events.Build",
@@ -430,6 +445,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
     "$good_backend/internal/sdkadmin" \
     "$good_backend/internal/sdkaccesscontrol" \
     "$good_backend/internal/sdkprincipal" \
+    "$good_backend/internal/sdktest" \
     "$good_backend/internal/handler" \
     "$good_remote/easyremote/_sdk_transport"
   printf '%s\n' 'module easynet-backend' >"$good_backend/go.mod"
@@ -464,6 +480,14 @@ EOF
 package svc
 
 var _ = []string{"easynetsdk.NewRuntimeReceiptProvider", "easynetsdk.NewReceiptClient", "sdkreceipt.NewClient"}
+EOF
+  cat >"$good_backend/internal/sdktest/runtime_bridge.go" <<'EOF'
+package sdktest
+
+var _ = map[string]any{
+  "admission_receipt": nil,
+  "terminal_receipt": nil,
+}
 EOF
   cat >"$good_backend/internal/sdkevents/events.go" <<'EOF'
 package sdkevents
@@ -632,6 +656,13 @@ EOF
     exit 1
   fi
   grep -Fq "backend:events:forbidden:eventcore.NewRouteCatalog" "$tmp/bad4.out"
+
+  printf '%s\n' 'var _ = map[string]any{"receipt": nil}' >>"$good_backend/internal/sdktest/runtime_bridge.go"
+  if run_audit "$good_backend" "$good_remote" >"$tmp/bad5.out" 2>&1; then
+    echo "self-test expected Backend retired runtime result receipt alias fixture to fail" >&2
+    exit 1
+  fi
+  grep -Fq 'backend:runtime_bridge_result_shape:forbidden:"receipt":' "$tmp/bad5.out"
 
   echo "check-downstream-sdk-consumer-cutover self-test ok"
   exit 0

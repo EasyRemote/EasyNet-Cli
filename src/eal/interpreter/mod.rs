@@ -200,6 +200,7 @@ pub fn execute_with_dispatcher(
 /// depending on `mission_runs` persistence. Production mission runs
 /// call the endpoint variant above so the same trace id reaches the
 /// daemon-lowered child Invocations.
+#[cfg(test)]
 pub fn execute_with_dispatcher_for_trace(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
