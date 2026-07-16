@@ -45,9 +45,13 @@
       convergence runner.
 - [x] Extract Go Axon product SDK files from canonical SDK surface and gate
       their reintroduction from the V2 convergence runner.
+- [x] Extract Python Axon product SDK files from canonical SDK surface and gate
+      their reintroduction from the V2 convergence runner.
+- [x] Extract Node Axon product SDK files from canonical SDK surface and gate
+      their reintroduction from the V2 convergence runner.
 - [x] Gate daemon-owned Mission/EAL execution boundaries from the V2
       convergence runner.
-- [ ] Extract remaining Python, Node, Java, and Swift Axon product SDK
+- [ ] Extract remaining Java and Swift Axon product SDK
       packages from canonical SDK surfaces.
 - [ ] Keep Mission/EAL state in daemon-owned packages only.
 - [ ] Gate Axon/core copied schemas against Mission state reintroduction where

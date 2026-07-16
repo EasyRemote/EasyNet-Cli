@@ -128,7 +128,17 @@ check_axon_product_protocol_boundary_contract() {
     sdk/go/easynet/audio.go \
     sdk/go/easynet/audio_stub.go \
     sdk/go/easynet/tool_adapter.go \
-    sdk/go/easynet/mcp/server.go
+    sdk/go/easynet/mcp/server.go \
+    sdk/python/easynet_axon/audio.py \
+    sdk/python/easynet_axon/tool_adapter.py \
+    sdk/python/easynet_axon/mcp/server.py \
+    sdk/python/easynet_axon/presets/remote_control/descriptor.py \
+    sdk/node/src/audio.ts \
+    sdk/node/src/tool_adapter.ts \
+    sdk/node/src/mcp/server.ts \
+    sdk/node/src/presets/remote_control/descriptor.ts \
+    sdk/node/src/presets/ability_dispatch.ts \
+    sdk/node/src/presets/remote_control_case.ts
   do
     [[ ! -e "$AXON_ROOT/$path" ]] \
       || fail "product-owned file remains in canonical Axon surface: $path"
@@ -137,6 +147,16 @@ check_axon_product_protocol_boundary_contract() {
   if [[ -d "$AXON_ROOT/sdk/go" ]] \
     && (cd "$AXON_ROOT" && git ls-files sdk/go 2>/dev/null | grep -Eq '/(audio|voice|tool_adapter|mcp)([^/]*|/.*)$'); then
     fail "Go SDK tracks a product-owned canonical package"
+  fi
+
+  if [[ -d "$AXON_ROOT/sdk/python" ]] \
+    && (cd "$AXON_ROOT" && git ls-files sdk/python 2>/dev/null | grep -Eq '/(audio|tool_adapter|mcp|presets/(remote_control|ability_dispatch|federation))([^/]*|/.*)$'); then
+    fail "Python SDK tracks a product-owned canonical package"
+  fi
+
+  if [[ -d "$AXON_ROOT/sdk/node" ]] \
+    && (cd "$AXON_ROOT" && git ls-files sdk/node 2>/dev/null | grep -Eq '/(audio|tool_adapter|mcp|presets/(remote_control|ability_dispatch)|remote_control_case)([^/]*|/.*)$'); then
+    fail "Node SDK tracks a product-owned canonical package"
   fi
 
   local rust_lib="$AXON_ROOT/sdk/rust/src/lib.rs"
@@ -383,6 +403,7 @@ PY
   mkdir -p "$tmp/axon/sdk/rust/proto/axon/v1"
   mkdir -p "$tmp/axon/sdk/rust/src"
   mkdir -p "$tmp/axon/sdk/go/easynet"
+  mkdir -p "$tmp/axon/sdk/python/easynet_axon"
   mkdir -p "$tmp/axon/core/runtime-rs" "$tmp/axon/core/runtime-rs/client-sdk"
   printf 'pub mod invocation;\n' > "$tmp/axon/sdk/rust/src/lib.rs"
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/build.rs"
@@ -429,6 +450,10 @@ PY
   touch "$tmp/axon-product/sdk/rust/src/audio.rs"
   mkdir -p "$tmp/axon-product/sdk/go/easynet/mcp"
   touch "$tmp/axon-product/sdk/go/easynet/tool_adapter.go"
+  mkdir -p "$tmp/axon-product/sdk/python/easynet_axon/presets/remote_control"
+  touch "$tmp/axon-product/sdk/python/easynet_axon/audio.py"
+  mkdir -p "$tmp/axon-product/sdk/node/src/mcp"
+  touch "$tmp/axon-product/sdk/node/src/tool_adapter.ts"
   if ( AXON_ROOT="$tmp/axon-product"; check_axon_product_protocol_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon product protocol boundary gate to fail"
   fi

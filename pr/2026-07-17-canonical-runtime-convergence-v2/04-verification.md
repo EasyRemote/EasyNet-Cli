@@ -140,3 +140,37 @@ spawning, EasyRemote raw process/FFI imports, or key-service secret ownership.
 Result: passed. The Axon Go SDK no longer tracks product-owned audio, voice,
 MCP, or tool-adapter packages in the staged index; the Go package tests pass;
 and the V2 runner now rejects Go product package reintroduction.
+
+## 2026-07-17 RF-1 Python Product SDK Extraction
+
+- `rg -n "from \\.mcp|import \\.mcp|from \\.tool_adapter|import \\.tool_adapter|from \\. import audio|easynet_axon\\.tool_adapter|easynet_axon\\.mcp|easynet_axon\\.audio|presets\\.remote_control|presets\\.ability_dispatch|presets\\.federation|AbilityToolAdapter|ToolSpec|StdioMcpServer|McpTool|RemoteControl|FederationCaseKit" sdk/python/easynet_axon sdk/python/tests --glob '!**/__pycache__/**'`
+- `git ls-files sdk/python | rg '(audio|mcp|tool_adapter|presets/remote_control|presets/ability_dispatch|presets/federation)'`
+- `python3 -m py_compile sdk/python/easynet_axon/__init__.py sdk/python/easynet_axon/ability_lifecycle.py sdk/python/tests/test_ability_lifecycle.py`
+- `PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -p test_ability_lifecycle.py`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Python SDK no longer tracks product-owned audio, MCP,
+tool-adapter, remote-control, ability-dispatch, or federation preset packages
+in the staged index; the focused Python compile and lifecycle tests pass; and
+the V2 runner now rejects Python product package reintroduction.
+
+## 2026-07-17 RF-1 Node Product SDK Extraction
+
+- `rg -n "tool_adapter|AbilityToolAdapter|StdioMcpServer|McpTool|MCP|mcp|audio|VoiceActivity|presets/remote_control|presets/ability_dispatch|remote_control_case" sdk/node/src sdk/node/README.md sdk/node/package.json --glob '!**/node_modules/**'`
+- `git ls-files sdk/node | rg '(audio|mcp|tool_adapter|presets/remote_control|presets/ability_dispatch|remote_control_case)'`
+- `npm run check` from `sdk/node`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Node SDK product packages for audio, MCP,
+tool-adapter, remote-control, and ability-dispatch have been removed from the
+canonical package surface; generic provider package descriptor construction and
+neutral `ToolSpec` now live in `ability_lifecycle.ts`; and the V2 runner now
+rejects Node product package reintroduction.

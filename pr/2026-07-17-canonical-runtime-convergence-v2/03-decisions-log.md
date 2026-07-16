@@ -61,3 +61,14 @@
   surfaces. They are removed from Axon's canonical Go SDK rather than wrapped,
   and the V2 runner now rejects tracked Go product package files alongside the
   existing proto/Rust product checks.
+- Treat Python SDK `audio`, `mcp`, `tool_adapter`, and `presets/*` packages as
+  product-owned RF-1 surfaces. They are removed from Axon's canonical Python
+  SDK, with generic ability package descriptor construction retained inside
+  `ability_lifecycle.py`; the V2 runner now rejects tracked Python product
+  package files.
+- Treat Node SDK `audio`, `mcp`, `tool_adapter`, and `presets/*` packages as
+  product-owned RF-1 surfaces. They are removed from Axon's canonical Node SDK
+  rather than re-exported through aliases, with generic provider package
+  descriptor construction and neutral `ToolSpec` retained inside
+  `ability_lifecycle.ts`; the V2 runner now rejects tracked Node product
+  package files.
