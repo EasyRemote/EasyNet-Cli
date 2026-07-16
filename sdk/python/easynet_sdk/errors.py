@@ -70,11 +70,14 @@ class RetryHint(StrEnum):
     UNKNOWN = "unknown"
 
 
+RuntimeFailureCode = ErrorCode | str
+
+
 @dataclass(frozen=True)
 class SDKError(Exception):
     """Typed error boundary used by Python SDK callers."""
 
-    code: ErrorCode
+    code: RuntimeFailureCode
     stage: str
     retry: RetryHint
     message: str
@@ -182,7 +185,13 @@ def retryable_for_hint(retry: RetryHint) -> bool:
 def error_class_for_code(code: ErrorCode | str) -> ErrorClass:
     """Project a canonical error code into a stable language class."""
 
-    normalized = normalize_error_code(code.value if isinstance(code, ErrorCode) else code)
+    raw_code = code.value if isinstance(code, ErrorCode) else code
+    try:
+        normalized = normalize_error_code(raw_code)
+    except SDKError:
+        if _is_canonical_extension_error_code(raw_code):
+            return ErrorClass.GENERIC
+        raise
     match normalized:
         case (
             ErrorCode.INVALID_ARGUMENT
@@ -235,13 +244,17 @@ def normalize_error_code(code: str) -> ErrorCode:
         raise _invalid_daemon_error(f"unknown daemon error code: {code}") from exc
 
 
-def canonical_failure_code(code: str | None = None) -> ErrorCode:
+def canonical_failure_code(code: str | None = None) -> RuntimeFailureCode:
     """Project daemon/wire failure codes into the canonical SDK taxonomy."""
 
+    if code is not None:
+        code = code.strip()
     if code:
         try:
             return normalize_error_code(code)
         except SDKError:
+            if _is_canonical_extension_error_code(code):
+                return code
             return ErrorCode.PROTOCOL_MISMATCH
     return ErrorCode.ADMISSION_DENIED
 
@@ -326,3 +339,17 @@ def _invalid_daemon_error(message: str) -> SDKError:
 def _detail_string(details: Mapping[str, object], key: str) -> str:
     value = details.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _is_canonical_extension_error_code(code: str) -> bool:
+    if code == "DAEMON_DOWN":
+        return False
+    saw_letter = False
+    for char in code:
+        if "A" <= char <= "Z":
+            saw_letter = True
+            continue
+        if char == "_" or "0" <= char <= "9":
+            continue
+        return False
+    return saw_letter

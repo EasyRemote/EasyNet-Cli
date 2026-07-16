@@ -2,6 +2,7 @@ import unittest
 
 from easynet_sdk import ErrorClass, ErrorCode, RetryHint, SDKError, is_code
 from easynet_sdk.errors import (
+    canonical_failure_code,
     error_class_for_code,
     normalize_error_code,
     profile_error_details,
@@ -90,6 +91,32 @@ class ErrorTests(unittest.TestCase):
                         }}"""
                     )
                 self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+    def test_canonical_failure_code_preserves_domain_codes_and_rejects_aliases(
+        self,
+    ) -> None:
+        cases = {
+            "": ErrorCode.ADMISSION_DENIED,
+            "TRANSPORT": ErrorCode.TRANSPORT,
+            " AXON_MEMBERSHIP_REQUIRED ": "AXON_MEMBERSHIP_REQUIRED",
+            "TARGET_NOT_IN_PRESENCE_REGISTRY": "TARGET_NOT_IN_PRESENCE_REGISTRY",
+            "InvalidArgument": ErrorCode.PROTOCOL_MISMATCH,
+            "DAEMON_DOWN": ErrorCode.PROTOCOL_MISMATCH,
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(canonical_failure_code(raw), expected)
+
+    def test_extension_failure_codes_project_to_generic_class(self) -> None:
+        error = SDKError(
+            code="AXON_MEMBERSHIP_REQUIRED",
+            stage="transport",
+            retry=RetryHint.UNKNOWN,
+            message="membership required",
+        )
+
+        self.assertEqual(error.error_class, ErrorClass.GENERIC)
+        self.assertFalse(is_code(error, ErrorCode.PROTOCOL_MISMATCH))
 
     def test_error_class_for_code_projects_stable_classes(self) -> None:
         cases = {

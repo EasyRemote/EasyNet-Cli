@@ -65,6 +65,7 @@ class StreamEvent:
             raise _invalid_stream(f"decode stream event JSON: {exc}", exc) from exc
         if not isinstance(decoded, dict):
             raise _invalid_stream("stream event JSON must be an object")
+        _reject_retired_top_level_receipt_alias(decoded, "stream event")
         kind = _optional_string(decoded.get("kind"), "kind")
         if not kind:
             raise _invalid_stream("stream event kind is required")
@@ -357,6 +358,15 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     if not isinstance(value, str):
         raise _invalid_stream(f"{field_name} must be a string or null")
     return value
+
+
+def _reject_retired_top_level_receipt_alias(
+    decoded: dict[str, object], projection: str
+) -> None:
+    if "receipt" in decoded:
+        raise _invalid_stream(
+            f"{projection} must use terminal_receipt; retired receipt alias is not accepted"
+        )
 
 
 def _required_bool(decoded: dict[str, object], field_name: str) -> bool:

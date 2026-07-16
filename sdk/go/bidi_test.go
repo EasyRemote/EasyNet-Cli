@@ -238,20 +238,9 @@ func TestBidiTerminalFrameProjectsSchemaShape(t *testing.T) {
 	}
 }
 
-func TestBidiFrameIgnoresLegacyReceiptOnlyField(t *testing.T) {
-	frame, err := NewBidiFrameFromJSON([]byte(`{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,"receipt":{"receipt_id":"legacy-only"}}`))
-	if err != nil {
-		t.Fatalf("NewBidiFrameFromJSON: %v", err)
-	}
-	if got := frame.TerminalReceiptJSON(); len(got) != 0 {
-		t.Fatalf("legacy receipt-only field must not populate terminal receipt: %s", got)
-	}
-	terminal, err := NewBidiTerminalFrame("bidi-legacy", frame)
-	if err != nil {
-		t.Fatalf("NewBidiTerminalFrame: %v", err)
-	}
-	if got := terminal.TerminalReceiptJSON(); len(got) != 0 {
-		t.Fatalf("legacy receipt-only field must not project into terminal schema: %s", got)
+func TestBidiFrameRejectsLegacyReceiptOnlyField(t *testing.T) {
+	if _, err := NewBidiFrameFromJSON([]byte(`{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,"receipt":{"receipt_id":"legacy-only"}}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("legacy receipt-only field error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

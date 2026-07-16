@@ -279,9 +279,10 @@ class RuntimeTests(unittest.TestCase):
 
         payload.pop("terminal_receipt")
         payload["receipt"] = {"index": 1, "state": "Completed"}
-        legacy = InvocationResult.from_json(json.dumps(payload))
-        self.assertIsNone(legacy.terminal_receipt)
-        self.assertIsNone(legacy.terminal_receipt_summary)
+        with self.assertRaises(SDKError) as caught:
+            InvocationResult.from_json(json.dumps(payload))
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_invocation_result_preserves_stable_positional_field_prefix(self) -> None:
         self.assertEqual(

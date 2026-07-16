@@ -1920,6 +1920,9 @@ class InvocationHandle:
     def __init__(self, subject_ura: str):
         self.subject_ura = subject_ura
 
+def decode_invocation_result(decoded):
+    _reject_retired_top_level_receipt_alias(decoded, "invocation result")
+
 class RuntimeClient:
     def resolve_descriptor_ref(self, call_mode="rpc"):
         call_mode = call_mode.strip() or "rpc"
@@ -1975,6 +1978,13 @@ class _CABIBidiTransport:
         )
 EOF
   cat >"$CLI/sdk/go/stream.go" <<'EOF'
+func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
+    if err := rejectRetiredTopLevelReceiptAlias(raw, "stream event"); err != nil {
+        return StreamEvent{}, err
+    }
+    return StreamEvent{}, nil
+}
+
 func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
     cancel := decodeCancel()
     if cancel.state != StreamCancelRequested || cancel.terminal || cancel.cancelled {
@@ -1985,6 +1995,13 @@ func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel,
 }
 EOF
   cat >"$CLI/sdk/go/bidi.go" <<'EOF'
+func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
+    if err := rejectRetiredTopLevelReceiptAlias(raw, "bidi frame"); err != nil {
+        return BidiFrame{}, err
+    }
+    return BidiFrame{}, nil
+}
+
 func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, error) {
     outcome := decodeOutcome()
     if outcome.state != BidiCancelRequested || outcome.terminal {
@@ -1995,6 +2012,9 @@ func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, e
 }
 EOF
   cat >"$CLI/sdk/python/easynet_sdk/stream.py" <<'EOF'
+def decode_stream_event(decoded):
+    _reject_retired_top_level_receipt_alias(decoded, "stream event")
+
 def cancel(self, reason: str) -> StreamCancel:
     outcome = StreamCancel.from_json(raw)
     if (
@@ -2009,6 +2029,9 @@ def cancel(self, reason: str) -> StreamCancel:
     return outcome
 EOF
   cat >"$CLI/sdk/python/easynet_sdk/bidi.py" <<'EOF'
+def decode_bidi_frame(decoded):
+    _reject_retired_top_level_receipt_alias(decoded, "bidi frame")
+
 def cancel(self, reason: str) -> BidiOutcome:
     outcome = BidiOutcome.from_json(raw)
     if outcome.state != BidiState.CANCEL_REQUESTED or outcome.terminal:
@@ -2431,6 +2454,39 @@ EOF
 expect_fail \
   "direct runtime stream bidi receipt alias" \
   "R11_STREAM_BIDI_RECEIPT_ALIAS"
+
+make_good_fixture
+cat >"$CLI/sdk/python/easynet_sdk/stream.py" <<'EOF'
+def decode_stream_event(decoded):
+    return decoded.get("terminal_receipt")
+EOF
+expect_fail \
+  "stream frame missing retired receipt alias rejection" \
+  "R64_SDK_RETIRED_RECEIPT_ALIAS_REJECTION"
+
+make_good_fixture
+cat >"$CLI/sdk/go/errors.go" <<'EOF'
+func runtimeFailureCode(code string, fallback ErrorCode) ErrorCode {
+    if code == "" {
+        return fallback
+    }
+    return ErrProtocolMismatch
+}
+EOF
+expect_fail \
+  "Go SDK runtime failure extension code parity" \
+  "R65_SDK_RUNTIME_FAILURE_EXTENSION_CODE_PARITY"
+
+make_good_fixture
+cat >"$CLI/sdk/python/easynet_sdk/errors.py" <<'EOF'
+def canonical_failure_code(code=None):
+    if code:
+        return ErrorCode.PROTOCOL_MISMATCH
+    return ErrorCode.ADMISSION_DENIED
+EOF
+expect_fail \
+  "Python SDK runtime failure extension code parity" \
+  "R65_SDK_RUNTIME_FAILURE_EXTENSION_CODE_PARITY"
 
 make_good_fixture
 mkdir -p "$CLI/src/ffi/invocation"

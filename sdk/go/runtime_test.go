@@ -506,12 +506,8 @@ func TestInvocationResultSeparatesAdmissionAndTerminalReceipts(t *testing.T) {
 	}
 
 	legacyOnly := bytes.Replace(raw, []byte(`"terminal_receipt":{"index":1,"state":"Completed"}`), []byte(`"receipt":{"index":1,"state":"Completed"}`), 1)
-	legacy, err := NewInvocationResultFromJSON(legacyOnly)
-	if err != nil {
-		t.Fatalf("legacy receipt-only field should be ignored, not decoded as canonical terminal receipt: %v", err)
-	}
-	if len(legacy.TerminalReceipt()) != 0 || legacy.TerminalReceiptSummary() != nil {
-		t.Fatalf("legacy receipt-only field must not populate canonical terminal receipt")
+	if _, err := NewInvocationResultFromJSON(legacyOnly); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("legacy receipt-only field error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 

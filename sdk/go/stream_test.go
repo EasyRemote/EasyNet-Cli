@@ -266,7 +266,6 @@ func TestStreamEventPreservesTopLevelCanonicalReceipt(t *testing.T) {
 		"state": "Completed",
 		"terminal": true,
 		"payload_json": {"receipt":{"receipt_id":"payload-copy"}},
-		"receipt": {"receipt_id":"compatibility-copy"},
 		"admission_receipt": {"receipt_id":"canonical-admission"},
 		"terminal_receipt": {"receipt_id":"canonical-terminal"}
 	}`))
@@ -285,25 +284,14 @@ func TestStreamEventPreservesTopLevelCanonicalReceipt(t *testing.T) {
 	}
 }
 
-func TestStreamEventIgnoresLegacyReceiptOnlyField(t *testing.T) {
-	event, err := NewStreamEventFromJSON([]byte(`{
+func TestStreamEventRejectsLegacyReceiptOnlyField(t *testing.T) {
+	if _, err := NewStreamEventFromJSON([]byte(`{
 		"sequence": 10,
 		"kind": "terminal",
 		"state": "Completed",
 		"terminal": true,
 		"receipt": {"receipt_id":"legacy-only"}
-	}`))
-	if err != nil {
-		t.Fatalf("NewStreamEventFromJSON: %v", err)
-	}
-	if got := event.TerminalReceiptJSON(); len(got) != 0 {
-		t.Fatalf("legacy receipt-only field must not populate terminal receipt: %s", got)
-	}
-	terminal, err := NewStreamTerminalEvent("stream-10", event)
-	if err != nil {
-		t.Fatalf("NewStreamTerminalEvent: %v", err)
-	}
-	if got := terminal.TerminalReceiptJSON(); len(got) != 0 {
-		t.Fatalf("legacy receipt-only field must not project into terminal schema: %s", got)
+	}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("legacy receipt-only field error = %v, want %s", err, ErrInvalidArgument)
 	}
 }

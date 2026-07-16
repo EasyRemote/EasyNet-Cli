@@ -639,6 +639,9 @@ func NewBidiFrameFromJSON(raw []byte) (BidiFrame, error) {
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return BidiFrame{}, invalidRuntimePayload(fmt.Sprintf("decode bidi frame JSON: %v", err), err)
 	}
+	if err := rejectRetiredTopLevelReceiptAlias(raw, "bidi frame"); err != nil {
+		return BidiFrame{}, err
+	}
 	if dto.Kind == "" {
 		return BidiFrame{}, invalidRuntimePayload("bidi frame kind is required", nil)
 	}

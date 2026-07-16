@@ -19650,10 +19650,10 @@
       "BidiChannel.close": "db179c5becb54be5a078bc6bd7829851912915915533cb678346e62e4dccecd2",
       "BidiChannel.recv": "dd0bc1f2c8088dafe6de6a2fef910d13b9cc91945a4bf5efa259e32a5f8f40ea",
       "BidiChannel.send": "ccf1d86b267d46b58c68e26ebf786164e341792064b39bd7139ff25f5106076c",
-      "BidiFrame": "4c445182409ed9fac74c51e86793c05e7536b2a60be9dee9c87e9bdfe6f39621",
+      "BidiFrame": "ad15c953861ef6eb45f276b11945056deffd64ef7f22a075bbc7cbfe9da3305b",
       "BidiFrame.admission_receipt": "e715101fc60b1722d8741107781e0dbb251b008266ad2af7ea75ac5783ab8e57",
       "BidiFrame.error": "3d4a076f74d0eaf1c6ed0e4a1b4f56da3e457c808dfdd966beb4aca7aeca222b",
-      "BidiFrame.from_json": "ce3aee6bab30c11c27feb64f2c24ad6e2cbd7f9e19ba6076eedb1d7dd95bac6f",
+      "BidiFrame.from_json": "12840dd68ae28d48512be7248fc05a1e18ef84f3e287e8aac0ba5dcac3a5c8e8",
       "BidiFrame.kind": "15429ccf94202083863c2bd6a269d4f4479c9cacec15732b39d0ccc1368674c5",
       "BidiFrame.payload_base64": "9fc441fe911388856f36f71f2f55bdcb95d7d17321702c8ecad196ecbf02a257",
       "BidiFrame.payload_content_type": "b08485e22a6e1f77a464c0bdfa89b3552e3085e06791b49b808d08082358522e",
@@ -20234,12 +20234,12 @@
       "InvocationReceiptChainSummary.to_dict": "8eb9ac90d6db8a7627a438bea08e119e275351fb8311c5adb7e4c60c9c8c4518",
       "InvocationReceiptChainSummary.verification_detail": "a5b3df3b29fcd5384d7309562173a389322ba591871a616c6af8a0323bb15ad1",
       "InvocationReceiptChainSummary.verified": "b8d1d74833d51ab772e03cd90e6b07eac122babef800825d41092b3e6402cafc",
-      "InvocationResult": "0f89ff23399db964ced3d01a8e81251dae44cb4b1ab1a3f749e5e0d57f1c5a0a",
+      "InvocationResult": "4b31bab6514290ef1552efc50f0c24b315a7fee0ab80777b6b1a51ca59309eca",
       "InvocationResult.admission_receipt": "f8b24e7dca201dda154b4744c0b3a3c42b6fa4185c956b1b9f0601498a9c24cb",
       "InvocationResult.admission_receipt_summary": "bcad2723e6a07582670d89a06761823f3671f90a0f566f44bcdcf246b1d1b2d9",
       "InvocationResult.elapsed_ms": "bf99f3c66c074dc596054bb88ae7a88a0948294e97c31bd47700b25f58017136",
       "InvocationResult.error": "298b5d6aa6eccb103b60498314a37096b343ba75b2e37f433013ffd6d0def73b",
-      "InvocationResult.from_json": "dc3bc674dd69f1d44171ebd54749e882a36de4f6232ece7f0da7563792bc8833",
+      "InvocationResult.from_json": "5ca791aa8414784c84c8c90d398f6ccac80178b931ef61edc9a1bf923f6becfe",
       "InvocationResult.ok": "28a89ea57c8d3ff011e407f80c3ae60fb494a641d805640eddebcfa2704a4b4e",
       "InvocationResult.output_base64": "239889cfa96fe923a28af0424fc38c3617a20fc3d6fb82d682b294b62ace5442",
       "InvocationResult.output_content_type": "6a7234bc9f3fd323a1e5aacb239471779cbfd9501a949cb003dfe59a4fc29c84",
@@ -20935,9 +20935,9 @@
       "RuntimeTransport.open_stream": "3c74d7f57e59a0117174c88c66d60e524855819913bc943639735d01258d8c05",
       "RuntimeTransport.prepare": "b9ee2b0fcb344491a97149562fc2b63506255a8bfdbe16397e724ff8e2f730f0",
       "RuntimeTransport.submit_signed": "a0ea16731c86fbe66d3c0f33965dcd1ecf3e423c31289264749eeac12327a4cb",
-      "SDKError": "94407be9c669681f84e855c65dcb54344f72f860c77a1db4faba0da05b022600",
+      "SDKError": "87262076044df1d24db0f29d555b4afc4bfb4fa47779e528cb21acd363202458",
       "SDKError.cause": "2601c3c3d20146441f321a8da60032c0377e6a61b7b8b5f475cfffd01e92c334",
-      "SDKError.code": "6224af65c12c33781e408f23027f839236c5394040066519982c00c01dcb1884",
+      "SDKError.code": "4e7e0256c6834ea2a96124173c6a55d1f2fd4dce1c9e0458dd455483e6da64cf",
       "SDKError.details": "3543a0c95c7e38cdcb365d87be035289bc6c07a63f989e3f328a658a667b7e55",
       "SDKError.error_class": "3ed1504602c0ed7a6f35fd97e97adff5ec487bb965385aa66704b536971506b1",
       "SDKError.from_json": "8be84e03dce89f4658773b88f5069c9db3226b3ad5b70a88269baf57ecdcc839",
@@ -21081,11 +21081,11 @@
       "StreamCancel.state": "70fc2bd9aac424bdc641cb604ddb957354a2288f82eb3bc623e41b89deac1892",
       "StreamCancel.stream_id": "9c3c109f14f24a7add6d723e6b06ffc33976d6178a9bf940a89505f238ec1001",
       "StreamCancel.terminal": "ccd86c152453f4c8a471b4fd57e6650646f622a56f30b5463209b0cf9cc069c4",
-      "StreamEvent": "85af9d58596e4729e934864897ec292bf9f1f2f71c86eb687b8db680ad122e98",
+      "StreamEvent": "a35b5ad92ae5553c7a4850ec5b58ceb9ca56856eb0ab1c362e3efc099ea7b85f",
       "StreamEvent.admission_receipt": "e715101fc60b1722d8741107781e0dbb251b008266ad2af7ea75ac5783ab8e57",
       "StreamEvent.elapsed_ms": "bf99f3c66c074dc596054bb88ae7a88a0948294e97c31bd47700b25f58017136",
       "StreamEvent.error": "3d4a076f74d0eaf1c6ed0e4a1b4f56da3e457c808dfdd966beb4aca7aeca222b",
-      "StreamEvent.from_json": "31e5905f534a654cd2060cd2beb2b9608fd70a4b216754502367eca0dea4fe94",
+      "StreamEvent.from_json": "1897bb9dedd967fbf881d220606fefb0217b9d63d3ab803e85e6a06db05284b2",
       "StreamEvent.kind": "15429ccf94202083863c2bd6a269d4f4479c9cacec15732b39d0ccc1368674c5",
       "StreamEvent.payload_base64": "9fc441fe911388856f36f71f2f55bdcb95d7d17321702c8ecad196ecbf02a257",
       "StreamEvent.payload_content_type": "b08485e22a6e1f77a464c0bdfa89b3552e3085e06791b49b808d08082358522e",
@@ -21157,7 +21157,7 @@
       "attach_daemon": "19b4a0d15923b24e19e24ca9028189403fa3875aa356f14191e2fa4d79593f09",
       "attach_runtime_host": "888155492269653aee1108e43b0afd9de35336203af845a3fad2ef92a5b7f45a",
       "canonical_ability_descriptor_ref": "3176fb35459122c40eb2f3ec555a1c9b98123a84d4fdd581bd654257d883571f",
-      "canonical_failure_code": "3739c0dd2f0704cc431bdc160468816a94d1805b030ac0fc6ac8b1e0c55af877",
+      "canonical_failure_code": "3ca9e6c39ad5d0a31d6dd7ab04b1191092ea8b690d10648c399c1ebafef18c82",
       "canonical_terminal_state_code": "6ab0dbc770bbbcb12523db7093e5fc7b516854a75991b83d5e9ba0557b842c9b",
       "connect_local": "9b737e76c3869f98b0175b2925b47cac45bc1a387a84e8009b6890727b35f76f",
       "connect_runtime_local": "9907baeff8fbb2efd7801f774820408fc4e3ae210e123c86f9b50dec42bd8863",
@@ -21169,7 +21169,7 @@
       "discover_daemon": "eb04781fe37451dea8e05dc004c3dc6bfc0a903bf2949a6e73fce45fb1531f81",
       "discover_runtime_host": "0ca53b7b3bd46fc37a8db29d955dd09733c87b619c19309bf9697a17f8af7d55",
       "ensure_runtime_signing_identity": "e71afc027c02a11937f81fca38323a213f4dbe23ddb6cefca011388eecda2e61",
-      "error_class_for_code": "a9f726197a4ba2f2b052d51344174400f80182b825835c8fae32f842281b8bab",
+      "error_class_for_code": "be9068fa204b5174a65c398c4502263fa9860f849744820e9c457fa66389d872",
       "grant_actions": "2cdf7407095863e522ab58c7fb3e51d9e85a8a09a693f6474940010ed3d582e1",
       "hub_ura": "0f79f7a97416d8556db2c73d6358405b45438f377396d2bed1f453391a1833d0",
       "is_code": "17b6d58c7d46910f8877e437b9c29ef9d57086cdbc17101c127385645d59f855",
@@ -22763,7 +22763,7 @@
       "item": "BidiFrame.from_json",
       "parent_capability": "bidi",
       "role": "serialization_projection",
-      "shape_sha256": "ce3aee6bab30c11c27feb64f2c24ad6e2cbd7f9e19ba6076eedb1d7dd95bac6f",
+      "shape_sha256": "12840dd68ae28d48512be7248fc05a1e18ef84f3e287e8aac0ba5dcac3a5c8e8",
       "shape_group": "serialization_projection:bidiframe.deserializejson"
     },
     {
@@ -22961,7 +22961,7 @@
       "item": "InvocationResult.from_json",
       "parent_capability": "unary_invoke",
       "role": "serialization_projection",
-      "shape_sha256": "dc3bc674dd69f1d44171ebd54749e882a36de4f6232ece7f0da7563792bc8833",
+      "shape_sha256": "5ca791aa8414784c84c8c90d398f6ccac80178b931ef61edc9a1bf923f6becfe",
       "shape_group": "serialization_projection:invocationresult.deserializejson"
     },
     {
@@ -23069,7 +23069,7 @@
       "item": "StreamEvent.from_json",
       "parent_capability": "stream",
       "role": "serialization_projection",
-      "shape_sha256": "31e5905f534a654cd2060cd2beb2b9608fd70a4b216754502367eca0dea4fe94",
+      "shape_sha256": "1897bb9dedd967fbf881d220606fefb0217b9d63d3ab803e85e6a06db05284b2",
       "shape_group": "serialization_projection:streamevent.deserializejson"
     },
     {
@@ -23687,7 +23687,7 @@
           "language": "python",
           "section": "members",
           "item": "BidiFrame.from_json",
-          "shape_sha256": "ce3aee6bab30c11c27feb64f2c24ad6e2cbd7f9e19ba6076eedb1d7dd95bac6f"
+          "shape_sha256": "12840dd68ae28d48512be7248fc05a1e18ef84f3e287e8aac0ba5dcac3a5c8e8"
         }
       ],
       "present_languages": [
@@ -24211,7 +24211,7 @@
           "language": "python",
           "section": "members",
           "item": "InvocationResult.from_json",
-          "shape_sha256": "dc3bc674dd69f1d44171ebd54749e882a36de4f6232ece7f0da7563792bc8833"
+          "shape_sha256": "5ca791aa8414784c84c8c90d398f6ccac80178b931ef61edc9a1bf923f6becfe"
         }
       ],
       "present_languages": [
@@ -24493,7 +24493,7 @@
           "language": "python",
           "section": "members",
           "item": "StreamEvent.from_json",
-          "shape_sha256": "31e5905f534a654cd2060cd2beb2b9608fd70a4b216754502367eca0dea4fe94"
+          "shape_sha256": "1897bb9dedd967fbf881d220606fefb0217b9d63d3ab803e85e6a06db05284b2"
         }
       ],
       "present_languages": [

@@ -945,6 +945,9 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return InvocationResult{}, invalidRuntimePayload(fmt.Sprintf("decode invocation result JSON: %v", err), err)
 	}
+	if err := rejectRetiredTopLevelReceiptAlias(raw, "invocation result"); err != nil {
+		return InvocationResult{}, err
+	}
 	if dto.OK == nil {
 		return InvocationResult{}, invalidRuntimePayload("ok is required", nil)
 	}
@@ -1046,6 +1049,17 @@ func cloneOptionalJSON(raw json.RawMessage) json.RawMessage {
 		return nil
 	}
 	return append(json.RawMessage(nil), raw...)
+}
+
+func rejectRetiredTopLevelReceiptAlias(raw []byte, projection string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return invalidRuntimePayload(fmt.Sprintf("decode %s JSON: %v", projection, err), err)
+	}
+	if _, ok := fields["receipt"]; ok {
+		return invalidRuntimePayload(projection+" must use terminal_receipt; retired receipt alias is not accepted", nil)
+	}
+	return nil
 }
 
 func decodeInvocationFailure(raw json.RawMessage) (*InvocationFailure, error) {

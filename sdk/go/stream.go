@@ -478,6 +478,9 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	if err := json.Unmarshal(raw, &dto); err != nil {
 		return StreamEvent{}, invalidRuntimePayload(fmt.Sprintf("decode stream event JSON: %v", err), err)
 	}
+	if err := rejectRetiredTopLevelReceiptAlias(raw, "stream event"); err != nil {
+		return StreamEvent{}, err
+	}
 	if dto.ElapsedMS < 0 {
 		return StreamEvent{}, invalidRuntimePayload("elapsed_ms must be non-negative", nil)
 	}

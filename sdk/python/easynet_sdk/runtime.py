@@ -512,6 +512,7 @@ class InvocationResult:
             ) from exc
         if not isinstance(decoded, dict):
             raise _invalid_runtime("invocation result JSON must be an object")
+        _reject_retired_top_level_receipt_alias(decoded, "invocation result")
         ok = _required_bool(decoded, "ok")
         tuple_value = _required_mapping(decoded, "tuple")
         draft = InvocationDraft.from_json(json.dumps(tuple_value))
@@ -953,6 +954,15 @@ def _optional_string(value: object, field_name: str) -> Optional[str]:
     if not isinstance(value, str):
         raise _invalid_runtime(f"{field_name} must be a string or null")
     return value
+
+
+def _reject_retired_top_level_receipt_alias(
+    decoded: Mapping[str, object], projection: str
+) -> None:
+    if "receipt" in decoded:
+        raise _invalid_runtime(
+            f"{projection} must use terminal_receipt; retired receipt alias is not accepted"
+        )
 
 
 def _optional_runtime_summary_text(value: object, field_name: str) -> Optional[str]:

@@ -12,6 +12,7 @@ from easynet_sdk import (
     BidiState,
     DaemonInvocationTransport,
     BidiSessionAdapter,
+    ErrorClass,
     StreamValueAdapter,
     InvocationResultAdapter,
     UnaryDispatchPool,
@@ -206,6 +207,37 @@ class DaemonInvocationTransportTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.ABILITY_FAILED))
         self.assertEqual(caught.exception.message, "ability failed")
+
+    def test_invocation_result_adapter_preserves_extension_failure_code(self) -> None:
+        class FailedRuntimeTransport(MemoryRuntimeTransport):
+            def invoke(self, draft_json: bytes) -> bytes:
+                draft = json.loads(draft_json.decode("utf-8"))
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "tuple": draft,
+                        "terminal_state": "Failed",
+                        "error": {
+                            "code": "AXON_MEMBERSHIP_REQUIRED",
+                            "stage": "runtime",
+                            "message": "membership required",
+                            "retryable": False,
+                        },
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+
+        adapter = InvocationResultAdapter.from_runtime_client(
+            RuntimeClient(FailedRuntimeTransport())
+        )
+
+        with self.assertRaises(SDKError) as caught:
+            adapter.invoke(complete_draft())
+
+        self.assertEqual(caught.exception.code, "AXON_MEMBERSHIP_REQUIRED")
+        self.assertEqual(caught.exception.error_class, ErrorClass.GENERIC)
+        self.assertEqual(caught.exception.message, "membership required")
 
     def test_connect_owns_runtime_connection_lifecycle(self) -> None:
         raw = FakeRawCABI()

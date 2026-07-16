@@ -128,17 +128,14 @@ class StreamTests(unittest.TestCase):
         self.assertIn(b'"terminal_receipt":', terminal.to_json())
         self.assertNotIn(b'"receipt":', terminal.to_json())
 
-    def test_stream_event_ignores_legacy_receipt_only_field(self) -> None:
-        event = StreamEvent.from_json(
-            b'{"sequence":1,"kind":"terminal","state":"Completed",'
-            b'"terminal":true,"receipt":{"receipt_id":"legacy-only"}}'
-        )
+    def test_stream_event_rejects_legacy_receipt_only_field(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            StreamEvent.from_json(
+                b'{"sequence":1,"kind":"terminal","state":"Completed",'
+                b'"terminal":true,"receipt":{"receipt_id":"legacy-only"}}'
+            )
 
-        terminal = StreamTerminalEvent.from_event("stream-legacy", event)
-
-        self.assertIsNone(event.terminal_receipt)
-        self.assertFalse(hasattr(event, "receipt"))
-        self.assertIsNone(terminal.terminal_receipt)
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_stream_event_rejects_legacy_event_alias(self) -> None:
         with self.assertRaises(SDKError) as caught:

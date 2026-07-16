@@ -775,6 +775,78 @@ for path, pattern in frame_receipt_alias_patterns:
             "stream/bidi SDK wire models must use terminal_receipt, not the retired receipt alias",
         )
 
+retired_receipt_alias_rejection_markers = (
+    (
+        cli_root / "sdk/go/runtime.go",
+        'rejectRetiredTopLevelReceiptAlias(raw, "invocation result")',
+    ),
+    (
+        cli_root / "sdk/go/stream.go",
+        'rejectRetiredTopLevelReceiptAlias(raw, "stream event")',
+    ),
+    (
+        cli_root / "sdk/go/bidi.go",
+        'rejectRetiredTopLevelReceiptAlias(raw, "bidi frame")',
+    ),
+    (
+        cli_root / "sdk/python/easynet_sdk/runtime.py",
+        '_reject_retired_top_level_receipt_alias(decoded, "invocation result")',
+    ),
+    (
+        cli_root / "sdk/python/easynet_sdk/stream.py",
+        '_reject_retired_top_level_receipt_alias(decoded, "stream event")',
+    ),
+    (
+        cli_root / "sdk/python/easynet_sdk/bidi.py",
+        '_reject_retired_top_level_receipt_alias(decoded, "bidi frame")',
+    ),
+)
+for path, marker in retired_receipt_alias_rejection_markers:
+    if not path.exists():
+        continue
+    text = source(path)
+    if marker not in text:
+        add(
+            "R64_SDK_RETIRED_RECEIPT_ALIAS_REJECTION",
+            path,
+            1,
+            "SDK runtime result/frame decoders must reject the retired top-level receipt alias",
+        )
+
+runtime_failure_extension_markers = (
+    (
+        cli_root / "sdk/go/errors.go",
+        (
+            "func runtimeFailureCode(",
+            "isCanonicalExtensionErrorCode(code)",
+            'return ErrorCode(code)',
+            'case "DAEMON_DOWN":',
+        ),
+    ),
+    (
+        cli_root / "sdk/python/easynet_sdk/errors.py",
+        (
+            "def canonical_failure_code(",
+            "_is_canonical_extension_error_code(code)",
+            "return code",
+            'code == "DAEMON_DOWN"',
+        ),
+    ),
+)
+for path, markers in runtime_failure_extension_markers:
+    if not path.exists():
+        continue
+    text = source(path)
+    for marker in markers:
+        if marker not in text:
+            add(
+                "R65_SDK_RUNTIME_FAILURE_EXTENSION_CODE_PARITY",
+                path,
+                1,
+                "SDK runtime failure classifiers must preserve canonical extension codes and reject retired aliases",
+            )
+            break
+
 
 # Rule 30: C ABI stream/bidi callback JSON has one owner and one DTO shape.
 # Rust FFI emits canonical callback fields; Go/Python C ABI adapters may order

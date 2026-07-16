@@ -179,17 +179,14 @@ class BidiTests(unittest.TestCase):
         self.assertIn(b'"terminal_receipt":', terminal.to_json())
         self.assertNotIn(b'"receipt":', terminal.to_json())
 
-    def test_bidi_frame_ignores_legacy_receipt_only_field(self) -> None:
-        frame = BidiFrame.from_json(
-            b'{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,'
-            b'"receipt":{"receipt_id":"legacy-only"}}'
-        )
+    def test_bidi_frame_rejects_legacy_receipt_only_field(self) -> None:
+        with self.assertRaises(SDKError) as caught:
+            BidiFrame.from_json(
+                b'{"sequence":2,"kind":"terminal","stream_id":1,"terminal":true,'
+                b'"receipt":{"receipt_id":"legacy-only"}}'
+            )
 
-        terminal = BidiTerminalFrame.from_frame("bidi-legacy", frame)
-
-        self.assertIsNone(frame.terminal_receipt)
-        self.assertFalse(hasattr(frame, "receipt"))
-        self.assertIsNone(terminal.terminal_receipt)
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_cancel_is_non_terminal_request(self) -> None:
         transport = MemoryBidiTransport()
