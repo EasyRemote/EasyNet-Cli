@@ -228,3 +228,35 @@
 - The V2 RF-3 gate now checks Go source and API mapping for the capitalized
   plain helper group because Go export semantics are name-based and cannot be
   inferred from manifest inventory alone.
+- Node root and invocation entry points must not export camelCase plain proof
+  helpers. Generated declarations are part of the public boundary, so removing
+  TypeScript exports without rebuilding declarations is incomplete.
+- Node historical plain vector coverage is retained only through explicitly
+  named `legacyPlain*` fixture helpers. The name makes the non-canonical role
+  visible and prevents tests from teaching the old public API shape.
+- Node cross-language bundle production must sign descriptor-bound canonical
+  bytes and use descriptor-ref ability names. Rust `easynet-verify` rejecting
+  plain-signed Node bundles is correct RF-3 behavior, not a compatibility
+  problem to relax.
+- The V2 RF-3 gate now scans Node source, generated JS, and generated
+  declarations for the retired plain helper names because Node package exports
+  alone are too indirect to prove the public proof boundary.
+- Java public static methods are SDK public API. Plain proof/admission helpers
+  may remain only as package-private `legacyPlain*` fixtures for same-package
+  historical vector tests.
+- Java cross-language bundle production must use descriptor-ref ability names
+  and sign descriptor-bound canonical bytes. A Java bundle accepted only by a
+  plain verifier would preserve RF-3's second proof model.
+- The V2 RF-3 gate now scans Java production invocation classes for public
+  static retired helper names because Java package-private fixture methods are
+  valid test internals but public static methods are facade API.
+- Swift top-level `public func` declarations are SDK public API. Plain
+  proof/admission helpers may remain only as internal `legacyPlain*` fixtures
+  for same-module historical vector tests.
+- Swift cross-language bundle production must use descriptor-ref ability names
+  and sign descriptor-bound canonical bytes. A Swift bundle accepted only by a
+  plain verifier would preserve RF-3's second proof model.
+- Swift public examples and README snippets are part of the effective SDK
+  surface because users copy them as integration contracts. The V2 RF-3 gate
+  therefore scans Swift production invocation source, README, and examples for
+  retired plain helper usage.

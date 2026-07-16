@@ -805,3 +805,108 @@ This evidence verifies the Go public plain proof helper removal and V2
 regression coverage for the Go surface. It does not complete RF-3 because
 remaining language surfaces, examples, and vector documentation still require
 audit.
+
+## RF-3 Node Public Plain Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `npm run build`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed and regenerated Node JS/declaration outputs.
+- `node ./scripts/run-axiom-vectors.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 14/14 vectors.
+- `node --test tests/axiom-vectors.test.mjs tests/admission.test.mjs tests/cross-language-verify.test.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 38 passed, 3 skipped, 0 failed. The cross-language bundle test now
+  signs descriptor-bound invocation bytes and is accepted by Rust
+  `easynet-verify`.
+- `rg -n '\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' sdk/node/src sdk/node/tests sdk/node/scripts -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no old public helper names after the Node build.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Node invocation package fixture that
+  reintroduces `canonicalInvocationBytes`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed; no additional public API manifest delta was required after Node type
+  declarations removed the plain helper names.
+
+This evidence verifies the Node public plain proof helper removal, descriptor
+bound cross-language bundle production, and V2 regression coverage for the
+Node surface. It does not complete RF-3 because remaining language surfaces,
+package exports, examples, and vector documentation still require audit.
+
+## RF-3 Java Public Plain Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `mvn -q -Dtest=run.easynet.axon.invocation.AxiomVectorsTest,run.easynet.axon.invocation.AdmissionTest,run.easynet.axon.invocation.CrossLanguageVerifyTest test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed. The Java cross-language bundle test now signs descriptor-bound
+  invocation bytes and is accepted by Rust `easynet-verify` when the verifier
+  binary is available.
+- `mvn -q test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  failed in existing receipt anchor tests:
+  `ReceiptAuthorityAnchorTest.receiptAnchorFormNone`,
+  `receiptAnchorFormScalar`, `receiptAnchorFormList`,
+  `receiptAnchorFormMerkle`, and `receiptAnchorHostedNone`.
+  This RF-3 Java slice does not modify receipt canonical bytes; the failure is
+  recorded as broader Java receipt parity debt, not proof of RF-3 regression.
+- `rg -n 'public static [^{;=]+ (canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b|\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' sdk/java/src/main/java/run/easynet/axon/invocation -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after Java production helper migration.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Java invocation package fixture that
+  reintroduces public static `canonicalInvocationBytes`.
+
+This evidence verifies the Java public plain proof helper removal, descriptor
+bound cross-language bundle production, and V2 regression coverage for the
+Java surface. It does not complete RF-3 because Swift and remaining
+package/export/vector cleanup still require audit.
+
+## RF-3 Swift Public Plain Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `swift test --filter EasyNetAxonTests.AxiomVectorsTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/swift`:
+  passed, 2 tests.
+- `swift test --filter EasyNetAxonTests.AdmissionTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/swift`:
+  passed, 24 tests.
+- `swift test --filter EasyNetAxonTests.CrossLanguageVerifyTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/swift`:
+  passed, 3 tests. The Swift cross-language bundle now signs
+  descriptor-bound invocation bytes and is accepted by Rust `easynet-verify`.
+- `swift test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/swift`:
+  passed, 145 tests.
+- `rg -n 'public func (canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b|\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' sdk/swift/Sources/EasyNetAxon/Invocation sdk/swift/README.md sdk/swift/Examples -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after Swift production helper and public example
+  migration.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Swift invocation source fixture that
+  reintroduces public `canonicalInvocationBytes`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `0d461370e7038575b99ac0327d798e8bfc165c04`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies the Swift public plain proof helper removal,
+descriptor-bound cross-language bundle production, public example migration,
+and V2 regression coverage for the Swift surface. It does not complete the
+whole SPEC; RF-1 through RF-9 acceptance gates still require full closure.

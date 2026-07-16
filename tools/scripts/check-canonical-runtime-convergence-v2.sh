@@ -305,6 +305,35 @@ check_axon_plain_proof_public_boundary_contract() {
     && rg -n '^func (CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b|\b(CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b' "${go_plain_paths[@]}"; then
     fail "Axon Go exposes plain proof/admission helpers"
   fi
+
+  local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
+  local node_plain_paths=()
+  [[ -d "$node_invocation" ]] && node_plain_paths+=("$node_invocation")
+  [[ -f "$AXON_ROOT/sdk/node/src/index.ts" ]] && node_plain_paths+=("$AXON_ROOT/sdk/node/src/index.ts")
+  [[ -f "$AXON_ROOT/sdk/node/src/index.js" ]] && node_plain_paths+=("$AXON_ROOT/sdk/node/src/index.js")
+  [[ -f "$AXON_ROOT/sdk/node/src/index.d.ts" ]] && node_plain_paths+=("$AXON_ROOT/sdk/node/src/index.d.ts")
+  if ((${#node_plain_paths[@]} > 0)) \
+    && rg -n '\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' "${node_plain_paths[@]}" \
+      --glob '!**/tests/**' \
+      --glob '!**/*.test.*'; then
+    fail "Axon Node exposes plain proof/admission helpers"
+  fi
+
+  local java_invocation="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation"
+  if [[ -d "$java_invocation" ]] \
+    && rg -n 'public static [^{;=]+ (canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' "$java_invocation"; then
+    fail "Axon Java exposes plain proof/admission helpers"
+  fi
+
+  local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
+  local swift_plain_paths=()
+  [[ -d "$swift_invocation" ]] && swift_plain_paths+=("$swift_invocation")
+  [[ -f "$AXON_ROOT/sdk/swift/README.md" ]] && swift_plain_paths+=("$AXON_ROOT/sdk/swift/README.md")
+  [[ -d "$AXON_ROOT/sdk/swift/Examples" ]] && swift_plain_paths+=("$AXON_ROOT/sdk/swift/Examples")
+  if ((${#swift_plain_paths[@]} > 0)) \
+    && rg -n 'public func (canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b|\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' "${swift_plain_paths[@]}"; then
+    fail "Axon Swift exposes plain proof/admission helpers"
+  fi
 }
 
 check_axon_rust_local_fast_signer_boundary_contract() {
@@ -723,6 +752,27 @@ PY
     > "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation/axiom.go"
   if ( AXON_ROOT="$tmp/axon-go-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Go plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-node-plain-proof"
+  mkdir -p "$tmp/axon-node-plain-proof/sdk/node/src/invocation"
+  printf 'export function canonicalInvocationBytes(env) { return Buffer.alloc(0); }\n' \
+    > "$tmp/axon-node-plain-proof/sdk/node/src/invocation/axiom.ts"
+  if ( AXON_ROOT="$tmp/axon-node-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Node plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-java-plain-proof"
+  mkdir -p "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation"
+  printf 'package run.easynet.axon.invocation; public final class Axiom { public static byte[] canonicalInvocationBytes(Object env) { return new byte[0]; } }\n' \
+    > "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+  if ( AXON_ROOT="$tmp/axon-java-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Java plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-swift-plain-proof"
+  mkdir -p "$tmp/axon-swift-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation"
+  printf 'import Foundation\npublic func canonicalInvocationBytes(_ env: Any) -> Data { Data() }\n' \
+    > "$tmp/axon-swift-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+  if ( AXON_ROOT="$tmp/axon-swift-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Swift plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-rust-local-fast"
   printf 'local-fast-probes = []\n' >> "$tmp/axon-rust-local-fast/sdk/rust/Cargo.toml"

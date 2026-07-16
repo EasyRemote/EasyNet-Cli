@@ -283,6 +283,24 @@
 - [x] Verify Python public-surface smoke, repo-managed pytest for admission and
       axiom vectors, Axon Rust format/check, and V2 gate/self-test.
 
+## RF-3 Swift Public Plain Proof Helper Removal Slice
+
+- [x] Identify Swift public plain proof/admission helpers:
+      `canonicalInvocationBytes`, `signInvocation`,
+      `verifyInvocationSignature`, `verifySignature`, and `runAdmission`.
+- [x] Rename Swift plain helper logic to internal `legacyPlain*` fixture
+      functions.
+- [x] Migrate Swift historical axiom/admission tests to the internal legacy
+      fixture names through `@testable import`.
+- [x] Migrate Swift cross-language bundle production to descriptor-bound
+      signing and descriptor-ref ability names.
+- [x] Migrate Swift README and runnable receipt-authority example away from
+      plain signing.
+- [x] Extend the V2 gate and self-test to reject Swift public plain helper
+      definitions and public example usage.
+- [x] Verify Swift focused tests, V2 gate/self-test, and public API manifest
+      refresh before committing this slice.
+
 ## RF-6 Java LocalRuntime Receipt Proof Facts Slice
 
 - [x] Identify that Java receipt constructors reject omitted proof facts but
@@ -435,6 +453,44 @@
       gate/self-test.
 - [x] Record that RF-3 remains open for remaining language surfaces and
       examples/vector audit.
+
+## RF-3 Node Public Plain Proof Helper Removal Slice
+
+- [x] Identify Node public plain proof/admission helpers:
+      `canonicalInvocationBytes`, `signInvocation`,
+      `verifyInvocationSignature`, `verifySignature`, and `runAdmission`.
+- [x] Remove those helper names from Node root and invocation public exports.
+- [x] Rename retained historical plain vector helpers to explicit
+      `legacyPlain*` internal fixture names.
+- [x] Regenerate Node JS and declaration outputs so public type declarations
+      expose descriptor-bound proof/admission only.
+- [x] Migrate the Node cross-language bundle producer to descriptor-bound
+      signatures and descriptor-ref ability names.
+- [x] Extend the V2 gate and self-test to reject Node public plain helper
+      reintroduction.
+- [x] Verify Node axiom/admission/cross-language tests, Node axiom vector
+      runner, Node build, and V2 gate.
+- [x] Record that RF-3 remains open for remaining language/export/vector
+      cleanup.
+
+## RF-3 Java Public Plain Proof Helper Removal Slice
+
+- [x] Identify Java public static plain proof/admission helpers:
+      `canonicalInvocationBytes`, `signInvocation`,
+      `verifyInvocationSignature`, `verifySignature`, and `runAdmission`.
+- [x] Rename the Java plain helper group to package-private `legacyPlain*`
+      fixture methods.
+- [x] Preserve descriptor-bound Java proof/admission methods as the public
+      runtime proof surface.
+- [x] Migrate Java same-package vector/admission tests to the explicit legacy
+      fixture names.
+- [x] Migrate the Java cross-language bundle producer to descriptor-bound
+      signatures and descriptor-ref ability names.
+- [x] Extend the V2 gate and self-test to reject Java public static plain
+      helper reintroduction.
+- [x] Verify Java axiom/admission/cross-language tests and V2 gate/self-test.
+- [x] Record that RF-3 remains open for Swift and remaining package/export
+      cleanup.
 
 ## Still Required Before Completion
 

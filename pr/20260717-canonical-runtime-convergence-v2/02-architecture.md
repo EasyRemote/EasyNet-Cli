@@ -658,3 +658,91 @@ API mapping document.
 This slice closes the Go public plain proof helper surface. RF-3 remains open
 for remaining language package/vector/example audit and any other public
 plain proof surfaces.
+
+## Current Slice: RF-3 Node Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Node invocation facade and EasyNet-Cli V2 conformance
+gate.
+
+The Node SDK still exposed the plain proof helper group from its root and
+invocation entry points: `canonicalInvocationBytes`, `signInvocation`,
+`verifyInvocationSignature`, `verifySignature`, and `runAdmission`. Those
+helpers signed or verified the legacy plain envelope bytes and therefore made
+the Node facade another public entry into the second proof model.
+
+The Node public surface now exports only the descriptor-bound proof/admission
+helpers. Historical plain vector and admission tests use explicitly named
+`legacyPlain*` internal fixture helpers, and generated declarations no longer
+publish those fixture names. This keeps old byte-layout regression tests
+available without presenting the plain path as the SDK runtime proof API.
+
+The Node cross-language bundle producer now signs invocation JSON with
+`signDescriptorBoundInvocation` and descriptor-ref ability names, so Rust
+`easynet-verify` accepts the Node bundle through the descriptor-bound verifier
+instead of rejecting it as missing descriptor binding. The V2 source gate now
+rejects the old Node plain helper names in Node source, generated JS, and
+generated declarations.
+
+This slice closes the Node public plain proof helper surface. RF-3 remains
+open for remaining language surfaces, package export audits, and vector/example
+documentation cleanup.
+
+## Current Slice: RF-3 Java Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Java invocation facade and EasyNet-Cli V2 conformance
+gate.
+
+The Java SDK still exposed the plain proof helper group as public static
+methods on the invocation facade: `canonicalInvocationBytes`,
+`signInvocation`, `verifyInvocationSignature`, `verifySignature`, and
+`runAdmission`. Those methods signed or verified the legacy plain envelope and
+therefore gave downstream Java callers a public route around the
+descriptor-bound admission model.
+
+The Java facade now keeps the plain helper group as package-private
+`legacyPlain*` fixture methods. Existing same-package vector and admission
+tests can still assert historical byte-layout stability, but downstream SDK
+callers cannot consume the plain proof path as public API. The public Java
+proof/admission surface remains descriptor-bound through
+`canonicalDescriptorBoundInvocationBytes`, `signDescriptorBoundInvocation`,
+`verifyDescriptorBoundInvocationSignature`, `verifyDescriptorBoundSignature`,
+and `runDescriptorBoundAdmission`.
+
+The Java cross-language bundle producer now signs invocation JSON with
+`signDescriptorBoundInvocation` and descriptor-ref ability names, so Rust
+`easynet-verify` validates the Java bundle through descriptor-bound signature
+verification. The V2 gate now rejects Java production invocation classes that
+reintroduce public static plain proof/admission helpers.
+
+This slice closes the Java public plain proof helper surface. RF-3 remains open
+for Swift and any remaining package/export/vector/example cleanup.
+
+## Current Slice: RF-3 Swift Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Swift SDK invocation facade and EasyNet-Cli V2
+conformance gate.
+
+Swift public API must expose only descriptor-bound invocation proof and
+admission helpers. Plain canonical bytes, plain invocation signing, plain
+signature verification, and plain admission are not canonical SDK surfaces
+because they omit descriptor binding from the proof boundary.
+
+The Swift facade now keeps the plain helper group as internal `legacyPlain*`
+fixture functions. Same-module `@testable` vector and admission tests can
+still assert historical byte-layout stability, but downstream SDK callers
+cannot consume the plain proof path as public API. The public Swift
+proof/admission surface remains descriptor-bound through
+`canonicalDescriptorBoundInvocationBytes`, `signDescriptorBoundInvocation`,
+`verifyDescriptorBoundInvocationSignature`, `verifyDescriptorBoundSignature`,
+and `runDescriptorBoundAdmission`.
+
+The Swift cross-language bundle producer now signs invocation JSON with
+`signDescriptorBoundInvocation` and descriptor-ref ability names. Public
+examples and README snippets now demonstrate descriptor-bound signing. The V2
+gate now rejects Swift production invocation source, README examples, and
+runnable examples that reintroduce public plain proof/admission helpers or old
+helper usage.
+
+This slice closes the Swift public plain proof helper surface. It does not
+complete RF-3 globally until the remaining public-surface manifest and
+language/package audits are clean across all SDKs.
