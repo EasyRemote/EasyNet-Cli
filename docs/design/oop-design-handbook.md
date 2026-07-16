@@ -533,10 +533,10 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `MissionRunStore` | mission-run 持久化 facade，锚定 `~/.easynet/missions/runs/` | `src/cli/mission_runs.rs:51` |
-| `MissionRunDir` | 打开的运行目录句柄；持 `PathBuf` + 可选 `HeartbeatPump`；`Drop` 停心跳 | `mission_runs.rs:142` |
+| `MissionRunStore` | daemon-owned mission-run 持久化对象，锚定 `~/.easynet/missions/runs/` | `src/daemon/execution/mission/orchestration.rs` |
+| `MissionRunDir` | 打开的运行目录句柄；持 `PathBuf` + 可选 `HeartbeatPump`；`Drop` 停心跳 | `src/daemon/execution/mission/orchestration.rs` |
 
-**F-022 liveness：** 用 heartbeat 文件 mtime 新鲜度替代 pid-file 存在性（< 15s = 存活）。`MissionRunStatus`：Running → {Completed | Failed | Aborted}。
+**F-022 liveness：** 用 heartbeat 文件 mtime 新鲜度替代 pid-file 存在性（< 15s = 存活）。`MissionRunStatus`：Running → {Ok | Partial | Error | Cancelled}。
 
 ### 6.7 CLI facade（薄）
 
@@ -544,7 +544,9 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 |---|---|---|
 | `App` | 顶层 clap Parser；noun-first 命令组：agent / ability / device / mission / runtime / mcp + 横切 doctor / completion | `src/cli/mod.rs:198` |
 
-facade 极薄：`mission` 子命令 → `mission_runs.rs::run_mission_inproc()` → `eal::planner::compile` + `eal::interpreter::execute_*`。
+facade 极薄：`mission` 子命令 → daemon-owned
+`mission::orchestration::run_mission_inproc()` → `eal::planner::compile` +
+`eal::interpreter::execute_*`。
 
 ---
 
@@ -594,7 +596,7 @@ facade 极薄：`mission` 子命令 → `mission_runs.rs::run_mission_inproc()` 
 
 **TYPESTATE（编译期 gated，两仓）：**
 - Axon：`UnaryInvokeAdmissionState`（Unsigned→Verified→Admitted）；`TerminalProofState`（NotRequired|Emitted|ConstructionFailed）；`DescriptorBoundEnvelope`（构造时 validate()）；`IdempotencyOwnerState`（Replayable|Expired|InflightPendingPublication|Orphaned）
-- CLI：`AbilityControlPlaneRegistrationStage`（Planned→Materialized→Committed，快照-恢复回滚，`registry.rs:138`）；`TargetKind`/`IrTarget`（Agent|Device，parse 时定，编码"无隐式 agent 回退"不变量）；EAL `MissionOutcome`（Completed|Partial|Aborted）/ `StepOutcome`（Completed|Failed|Skipped|Internal）/ `VerifyDone`（True|False|Malformed）；`DescriptorImportState`（Acquiring→{Active|rollback}，Active→Forgetting→{removed|restored}，持久 tombstone，`teach_grants.rs:251`）；`MissionRunStatus`（Running→{Completed|Failed|Aborted}，heartbeat-mtime liveness，F-022）
+- CLI / daemon product runtime：`AbilityControlPlaneRegistrationStage`（Planned→Materialized→Committed，快照-恢复回滚，`registry.rs:138`）；`TargetKind`/`IrTarget`（Agent|Device，parse 时定，编码"无隐式 agent 回退"不变量）；EAL `MissionOutcome`（Completed|Partial|Aborted）/ `StepOutcome`（Completed|Failed|Skipped|Internal）/ `VerifyDone`（True|False|Malformed）；`DescriptorImportState`（Acquiring→{Active|rollback}，Active→Forgetting→{removed|restored}，持久 tombstone，`teach_grants.rs:251`）；daemon-owned `MissionRunStatus`（Running→{Ok|Partial|Error|Cancelled}，heartbeat-mtime liveness，F-022）
 
 **LIVENESS/RECLAIM（Axon client-sdk，最防御）：** Node-ID Lock Lifecycle（Unacquired→Locked→{Reclaimed→Removed|Restored}，两阶段 pre/post 策略）；`ProcessLiveness`（Alive|Dead|Unknown，保守默认 Unknown ⇒ 不回收除非 force+host 匹配）。
 

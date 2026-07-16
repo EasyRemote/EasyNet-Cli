@@ -58,6 +58,7 @@ check_root_contract() {
     packaging
     plugins
     pr
+    provider_routes
     schemas
     sdk
     skills
@@ -146,6 +147,18 @@ require_only_files() {
   done
 }
 
+require_no_dirs() {
+  local parent="$1"
+  require_dir "$parent"
+  [[ -d "$ROOT/$parent" ]] || return 0
+
+  local actual name
+  while IFS= read -r actual; do
+    name="$(basename "$actual")"
+    fail "unexpected directory under $parent: $name"
+  done < <(find "$ROOT/$parent" -mindepth 1 -maxdepth 1 -type d | sort)
+}
+
 require_file Cargo.toml
 require_file Cargo.lock
 require_file README.md
@@ -162,7 +175,8 @@ require_only_files src/bin \
   easynet-daemon.rs \
   easynet-keyring.rs \
   gen-ability-tomls.rs \
-  real-user-smoke.rs
+  real-user-smoke.rs \
+  verify-voice-contract.rs
 
 require_only_dirs src \
   bin core daemon cli ffi eal support
@@ -207,7 +221,19 @@ require_only_dirs sdk/conformance \
   cases fixtures runner
 
 require_only_dirs ability-descriptors/system \
-  agents device_control resources automation integrations governance
+  agents federation device_control resources automation integrations governance
+
+require_no_dirs provider_routes
+require_only_files provider_routes \
+  easynet-access-control-routes.v1.json \
+  easynet-principal-lifecycle-routes.v1.json \
+  easynet-receipt-routes.v1.json \
+  easynet-runtime-admin-routes.v1.json \
+  generate_access_control_routes.py \
+  generate_principal_routes.py \
+  generate_receipt_routes.py \
+  generate_runtime_admin_routes.py \
+  route_generator.py
 
 require_dir schemas/descriptor
 require_dir schemas/receipt
@@ -221,6 +247,9 @@ require_dir gallery
 require_dir docs
 require_dir tools
 require_dir tools/benches
+require_dir tools/sdk-conformance-runner
+require_file tools/sdk-conformance-runner/Cargo.toml
+require_file tools/sdk-conformance-runner/src/main.rs
 require_dir packaging/docker
 require_dir packaging/release
 require_dir .github/workflows

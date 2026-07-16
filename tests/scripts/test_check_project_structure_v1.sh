@@ -24,7 +24,8 @@ mkfinal() {
     "$dir/src/bin/easynet-daemon.rs" \
     "$dir/src/bin/easynet-keyring.rs" \
     "$dir/src/bin/gen-ability-tomls.rs" \
-    "$dir/src/bin/real-user-smoke.rs"
+    "$dir/src/bin/real-user-smoke.rs" \
+    "$dir/src/bin/verify-voice-contract.rs"
 
   mkdir -p \
     "$dir/src/core/agent" \
@@ -95,6 +96,7 @@ mkfinal() {
     "$dir/sdk/go" "$dir/sdk/python" "$dir/sdk/node" "$dir/sdk/java" "$dir/sdk/swift" \
     "$dir/sdk/schemas" "$dir/sdk/conformance/cases" "$dir/sdk/conformance/fixtures" "$dir/sdk/conformance/runner" \
     "$dir/ability-descriptors/system/agents" \
+    "$dir/ability-descriptors/system/federation" \
     "$dir/ability-descriptors/system/device_control" \
     "$dir/ability-descriptors/system/resources" \
     "$dir/ability-descriptors/system/automation" \
@@ -103,9 +105,22 @@ mkfinal() {
     "$dir/schemas/descriptor" "$dir/schemas/receipt" \
     "$dir/plugins" "$dir/skills" "$dir/examples" "$dir/gallery" "$dir/docs" \
     "$dir/tests/e2e" "$dir/tests/conformance" "$dir/tests/fixtures" "$dir/tests/scripts" "$dir/tests/support" \
-    "$dir/tools/benches" "$dir/packaging/docker" "$dir/packaging/release" \
+    "$dir/tools/benches" "$dir/tools/sdk-conformance-runner/src" \
+    "$dir/provider_routes" \
+    "$dir/packaging/docker" "$dir/packaging/release" \
     "$dir/.github/workflows"
   touch "$dir/schemas/control_plane.proto" "$dir/schemas/common.proto"
+  touch "$dir/tools/sdk-conformance-runner/Cargo.toml" "$dir/tools/sdk-conformance-runner/src/main.rs"
+  touch \
+    "$dir/provider_routes/easynet-access-control-routes.v1.json" \
+    "$dir/provider_routes/easynet-principal-lifecycle-routes.v1.json" \
+    "$dir/provider_routes/easynet-receipt-routes.v1.json" \
+    "$dir/provider_routes/easynet-runtime-admin-routes.v1.json" \
+    "$dir/provider_routes/generate_access_control_routes.py" \
+    "$dir/provider_routes/generate_principal_routes.py" \
+    "$dir/provider_routes/generate_receipt_routes.py" \
+    "$dir/provider_routes/generate_runtime_admin_routes.py" \
+    "$dir/provider_routes/route_generator.py"
 }
 
 expect_fail() {
@@ -145,6 +160,11 @@ expect_fail "$SB/missing-readme-pdf"
 cp -R "$SB/pass" "$SB/flat-descriptor"
 touch "$SB/flat-descriptor/ability-descriptors/system/fs.read.ability.toml"
 expect_fail "$SB/flat-descriptor"
+
+cp -R "$SB/pass" "$SB/provider-pycache"
+mkdir -p "$SB/provider-pycache/provider_routes/__pycache__"
+touch "$SB/provider-pycache/provider_routes/__pycache__/route_generator.cpython-312.pyc"
+expect_fail "$SB/provider-pycache"
 
 cp -R "$SB/pass" "$SB/missing-invocation"
 rm -rf "$SB/missing-invocation/src/daemon/invocation/admission"

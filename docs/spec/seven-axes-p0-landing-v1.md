@@ -14,7 +14,8 @@
 > **v1.1 修订记录(对 v1.0 的自审,2026-06-13)**:① 清除 3 处发明的 URA 形状,改为
 > builder 引用 + 占位符,新增测试作者规则(§3.0);② trust 边界归属重写(执法门在 Axon
 > resilience.rs:711-717,CLI 只 host 目录 ability);③ 新增 T2.0(mission run 输出
-> root_invocation_id——原 W2-E2E-2 的 root-id 无来源,核查 mission_runs.rs 零命中);
+> root_invocation_id——原 W2-E2E-2 的 root-id 无来源,核查 daemon orchestration
+> source 零命中);
 > ④ 新增七元组完整性断言(0.1-7 护栏 + 各 e2e);⑤ T3.2 当时曾补 ura-rs family 段解析前置;
 > ⑥ T3.1 声明 usage 是 receipt 输出非第八元组参数;⑦ 当时新增决策 D8(trust 主体
 > agent vs node)、D9(联邦降级退出码);⑧ receipt 引用一律按 invocation_id,不写
@@ -183,7 +184,7 @@
 | C8 | receipt usage/cost | ✅ **已收口**:本仓 terminal receipt 的 usage 逐字进入 ledger row,watch terminal 事件聚合展示,W3 usage e2e 已绿;相邻 Axon 工作树已把 `InvocationUsage` 放入 signed receipt tail,`usage_tail_is_signed_material` 已绿;cost 明确不做(D4) | `src/services/invocation_transport/ledger_projection.rs`;`src/cli/invocation_watch.rs`;`tests/seven_axes_w3_usage_e2e.rs`;`EasyNet-Axon/sdk/rust/src/invocation/axiom.rs` |
 | C9 | teach/learn handler | ✅ 已落地:`meta.teach` / `meta.acquire`(CLI `ability learn`) / `meta.forget` 走 owner 主动授权,learn 后新 URA 独立归属 learner,forget 只删 learned copy | `src/runtime/agents/teach_ability.rs`;`src/cli/teach.rs`;`tests/seven_axes_w3_teach_learn_e2e.rs` |
 | C10 | TUI 数据底座 | ✅ 已落地:`invocation watch` 从 ledger/trace 投影 state + terminal + local liveness;TUI 由同一 snapshot engine 渲染 | `src/cli/invocation_watch.rs`;`tests/seven_axes_w2_watch_e2e.rs` |
-| C11 | mission→invocation 锚点 | ✅ 已落地:`MissionRunMeta.trace_id == run_id`,mission runner 将同一 trace_id 注入每个 daemon-lowered child Invocation;三步 mission watch e2e 验证 ledger trace 可回读 | `src/cli/mission_runs.rs`;`src/eal/interpreter/mod.rs`;`tests/seven_axes_w2_watch_e2e.rs` |
+| C11 | mission→invocation 锚点 | ✅ 已落地:`MissionRunMeta.trace_id == run_id`,mission runner 将同一 trace_id 注入每个 daemon-lowered child Invocation;三步 mission watch e2e 验证 ledger trace 可回读 | `src/daemon/execution/mission/orchestration.rs`;`src/eal/interpreter/mod.rs`;`tests/seven_axes_w2_watch_e2e.rs` |
 | C12 | TUI 渲染依赖 | ✅ 已引入:`ratatui` snapshot renderer(无 crossterm 运行时事件循环;一期 one-shot/follow 重绘即可) | `Cargo.toml`;`src/cli/invocation_watch.rs` |
 | C13 | URA builder 真源 | ✅ 齐备:`Ura::ability` :389 / `device_ability` :395 / `hub_ability` :401 + `parse_ura` round-trip;e2e fixture 有真源可依 | `EasyNet-Axon/core/ura-rs/src/lib.rs` |
 | C14 | e2e 基建 | ✅ 成熟:双 daemon 真 TLS、cross-device invoke、cross-realm 目录轮询/流式等模板齐备 | `tests/cross_hub_two_daemon_real_tls_e2e.rs` 等 |
@@ -228,7 +229,7 @@ CLI 发起的 run 没有根 Invocation——运行时身份是 **trace**(每个�
 (在飞 meta 即携带,`#[serde(default)]` 保旧 meta 反序列化)+
 `mission run --format json` 输出 `{run_id, trace_id, status, duration_ms,
 steps_*, run_dir}`(与 `--trace` 互斥,stdout 归属唯一)。
-- 改动面:`src/cli/mission_runs.rs` + `groups/mission.rs` ✅ 已落地
+- 改动面:`src/daemon/execution/mission/orchestration.rs` + `groups/mission.rs` ✅ 已落地
 - 护栏:记录的是已存在的 envelope 事实,**不**给 mission 造任何运行时状态(0.1-1);
   不伪造根 invocation——EalExec 路径下父 invocation 才是天然根
 
@@ -267,7 +268,8 @@ realm trust anchor(`easynet trust show`)。如果未来需要"接受之后能做
 | permission(命中规则) | **无数据**(求值器未建) | 留位显示 `–`,W3 后点亮 |
 
 - 改动面:`src/cli/`(新 `invocation_watch.rs`)、`Cargo.toml`(+ratatui)、
-  复用 `mission_runs.rs` heartbeat/状态机;依赖 T2.0
+  复用 daemon-owned `src/daemon/execution/mission/orchestration.rs`
+  heartbeat/状态机;依赖 T2.0
 - 护栏:渲染 **Invocation 因果树**,不是 workflow graph;禁止为 TUI 引入任何
   mission 级运行时状态(0.1-1);`p pause` 一期**不做**(D5)
 
