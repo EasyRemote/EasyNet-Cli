@@ -438,6 +438,12 @@ impl Kernel {
     }
 }
 
+impl Default for Kernel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn block_on_axon_dispatch<F, Fut>(f: F) -> anyhow::Result<KernelDispatchOutcome>
 where
     F: FnOnce() -> Fut + Send,

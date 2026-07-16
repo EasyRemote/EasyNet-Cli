@@ -356,6 +356,7 @@ impl StreamDispatcher {
             while let Some(event) = handle.recv().await {
                 match event {
                     DispatchStreamEvent::Admission(receipt) => {
+                        let receipt = *receipt;
                         if let Err(status) = finalization.admit(receipt.clone()) {
                             let _ = tx.send(Err(status)).await;
                             break;

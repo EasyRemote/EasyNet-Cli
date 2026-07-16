@@ -2,6 +2,16 @@ use super::*;
 
 const TEST_BIDI_ABILITY: &str = "test.bidi";
 
+fn forwarded_binary_chunk(frame: LocalBidiHandlerFrame) -> BinaryChunk {
+    match frame {
+        LocalBidiHandlerFrame::Forward(frame) => match (*frame).payload {
+            Some(DownPayload::BinaryChunk(chunk)) => chunk,
+            other => panic!("expected forwarded BinaryChunk, got {other:?}"),
+        },
+        other => panic!("expected forwarded BinaryChunk, got {other:?}"),
+    }
+}
+
 #[test]
 fn remote_bidi_target_ura_preserves_canonical_device_ura() {
     let open = make_envelope_open_with_callee("  easynet:///r/test-realm/device/dev-B  ");
@@ -124,16 +134,9 @@ fn map_local_bidi_handler_stdout_decodes_to_binary_chunk() {
         }),
         7,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 7);
-            assert_eq!(chunk.data, b"hello");
-        }
-        other => panic!("expected stdout → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 7);
+    assert_eq!(chunk.data, b"hello");
 }
 
 #[test]
@@ -146,18 +149,11 @@ fn map_local_bidi_handler_exit_remains_data_until_runtime_terminal() {
         }),
         1,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            let payload: serde_json::Value =
-                serde_json::from_slice(&chunk.data).expect("exit JSON payload");
-            assert_eq!(payload["type"], "exit");
-            assert_eq!(payload["status"], 23);
-        }
-        other => panic!("expected exit data frame, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&chunk.data).expect("exit JSON payload");
+    assert_eq!(payload["type"], "exit");
+    assert_eq!(payload["status"], 23);
 }
 
 #[test]
@@ -172,16 +168,9 @@ fn map_local_bidi_handler_file_transfer_chunk_decodes_to_binary_chunk() {
         }),
         11,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 11);
-            assert_eq!(chunk.data, b"file-bytes");
-        }
-        other => panic!("expected file_transfer chunk → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 11);
+    assert_eq!(chunk.data, b"file-bytes");
 }
 
 #[test]
@@ -195,18 +184,10 @@ fn map_local_bidi_handler_file_transfer_complete_remains_data_until_runtime_term
         }),
         1,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            let payload: serde_json::Value =
-                serde_json::from_slice(&chunk.data).expect("json payload");
-            assert_eq!(payload["sha256"], "deadbeef");
-            assert_eq!(payload["bytes"], 9);
-        }
-        other => panic!("expected file_transfer completion data, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["sha256"], "deadbeef");
+    assert_eq!(payload["bytes"], 9);
 }
 
 #[test]
@@ -220,18 +201,10 @@ fn map_local_bidi_handler_file_transfer_error_remains_data_until_runtime_termina
         }),
         1,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            let payload: serde_json::Value =
-                serde_json::from_slice(&chunk.data).expect("json payload");
-            assert_eq!(payload["type"], "error");
-            assert_eq!(payload["code"], "disk_full");
-        }
-        other => panic!("expected file_transfer error data, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["type"], "error");
+    assert_eq!(payload["code"], "disk_full");
 }
 
 #[test]
@@ -295,20 +268,13 @@ fn map_local_bidi_handler_json_frames_preserves_json_payload() {
         }),
         3,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 3);
-            let payload: serde_json::Value =
-                serde_json::from_slice(&chunk.data).expect("json frame payload");
-            assert_eq!(payload["type"], "frame");
-            assert_eq!(payload["seq"], 7);
-            assert_eq!(payload["image_bytes_b64"], "abc");
-        }
-        other => panic!("expected JSON frame → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 3);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&chunk.data).expect("json frame payload");
+    assert_eq!(payload["type"], "frame");
+    assert_eq!(payload["seq"], 7);
+    assert_eq!(payload["image_bytes_b64"], "abc");
 }
 
 #[test]
@@ -322,18 +288,10 @@ fn map_local_bidi_handler_json_error_remains_data_until_runtime_terminal() {
         }),
         3,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            let payload: serde_json::Value =
-                serde_json::from_slice(&chunk.data).expect("json payload");
-            assert_eq!(payload["type"], "error");
-            assert_eq!(payload["code"], "permission_denied");
-        }
-        other => panic!("expected JSON error data, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["type"], "error");
+    assert_eq!(payload["code"], "permission_denied");
 }
 
 #[test]
@@ -346,17 +304,9 @@ fn map_local_bidi_handler_json_closed_remains_data_until_runtime_terminal() {
         }),
         3,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            let payload: serde_json::Value =
-                serde_json::from_slice(&chunk.data).expect("json payload");
-            assert_eq!(payload["type"], "closed");
-        }
-        other => panic!("expected JSON closed data, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["type"], "closed");
 }
 
 #[test]
@@ -370,16 +320,9 @@ fn map_local_bidi_ability_json_frames_forwards_raw_binary_payload() {
         },
         9,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 9);
-            assert_eq!(chunk.data, b"\xff\xd8raw-jpeg\xff\xd9");
-        }
-        other => panic!("expected raw binary JsonFrames payload → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 9);
+    assert_eq!(chunk.data, b"\xff\xd8raw-jpeg\xff\xd9");
 }
 
 #[test]

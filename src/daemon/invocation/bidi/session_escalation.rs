@@ -91,7 +91,7 @@ pub enum EscalationInvocation {
 /// while daemon-owned control requests keep their separate JSON outcome.
 #[derive(Debug, Clone)]
 pub enum EscalationReply {
-    Canonical(easynet_axon::pb::axon::v1::InvokeResponse),
+    Canonical(Box<easynet_axon::pb::axon::v1::InvokeResponse>),
     Control(RequestOutcome),
     Error(SessionRequestError),
 }
@@ -120,7 +120,7 @@ impl SessionEscalationHandle {
             )
             .await
         {
-            EscalationReply::Canonical(response) => Ok(response),
+            EscalationReply::Canonical(response) => Ok(*response),
             EscalationReply::Error(error) => Err(error),
             EscalationReply::Control(_) => Err(SessionRequestError::UpstreamFailure {
                 reason: "canonical escalation received a daemon-control reply".to_string(),
@@ -310,8 +310,11 @@ impl EscalationCorrelation {
 #[derive(Clone, Default)]
 pub struct SharedSessionOutbox {
     inner: Arc<Mutex<Option<SessionUpSender>>>,
-    ready_hooks: Arc<Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>>,
+    ready_hooks: SessionReadyHooks,
 }
+
+pub type SessionReadyHook = Arc<dyn Fn() + Send + Sync>;
+type SessionReadyHooks = Arc<Mutex<Vec<SessionReadyHook>>>;
 
 impl std::fmt::Debug for SharedSessionOutbox {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -359,7 +362,7 @@ impl SharedSessionOutbox {
     /// sender is published. The hook runs after the sender is visible and
     /// outside all outbox locks. Registering against an already-ready outbox
     /// invokes the hook immediately.
-    pub fn register_ready_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+    pub fn register_ready_hook(&self, hook: SessionReadyHook) {
         {
             let mut hooks = match self.ready_hooks.lock() {
                 Ok(guard) => guard,

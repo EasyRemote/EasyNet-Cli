@@ -21,6 +21,38 @@
 - [x] Migrate mission run completion and failure callers.
 - [x] Verify mission orchestration tests and lib build.
 
+## Kernel Default Lifecycle Slice
+
+- [x] Identify the daemon kernel default lifecycle constructor.
+- [x] Add `Default` as a standard object lifecycle entry that delegates to
+      `Kernel::new()`.
+- [x] Preserve `new_with_subscriber_broker()` as an explicit daemon boot
+      policy constructor.
+- [x] Verify kernel tests and lib build.
+
+## Bidi Event Payload Ownership Slice
+
+- [x] Identify stream/bidi lifecycle event enums whose large payload variants
+      inflated every queued event.
+- [x] Box local bidi forwarded down-frames at the handler event boundary.
+- [x] Box carrier-v1 admission and terminal events at classification output.
+- [x] Box pending stream admission events to match existing boxed terminal
+      results.
+- [x] Migrate dispatchers and tests without changing admission/chunk/terminal
+      ordering semantics.
+- [x] Verify bidi and service-bidi tests plus lib build.
+
+## Session Escalation Reply Ownership Slice
+
+- [x] Identify reverse-session escalation reply variants that inflated every
+      correlation slot.
+- [x] Box canonical `InvokeResponse` replies while preserving one-reply
+      correlation semantics.
+- [x] Name ready-hook callback and hook-list types at the shared session outbox
+      boundary.
+- [x] Verify session escalation and local session dispatcher tests plus lib
+      build.
+
 ## Still Required Before Completion
 
 - [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.

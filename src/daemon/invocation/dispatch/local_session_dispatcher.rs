@@ -1794,12 +1794,12 @@ impl SessionFrameDispatcher for LocalAxonSessionDispatcher {
             let outcome = match result.failure.as_ref() {
                 None => {
                     crate::daemon::invocation::bidi::session_escalation::EscalationReply::Canonical(
-                        easynet_axon::pb::axon::v1::InvokeResponse {
+                        Box::new(easynet_axon::pb::axon::v1::InvokeResponse {
                             result: result.payload.clone(),
                             admission_receipt: result.admission_receipt.clone(),
                             terminal_receipt: result.terminal_receipt.clone(),
                             ..easynet_axon::pb::axon::v1::InvokeResponse::default()
-                        },
+                        }),
                     )
                 }
                 Some(failure) => {

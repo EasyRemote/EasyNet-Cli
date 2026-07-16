@@ -49,3 +49,45 @@ The terminal transition now separates:
 
 This keeps the mission lifecycle transition explicit without turning Mission
 state into a second invocation/proof model.
+
+## Current Slice: Kernel Default Lifecycle Construction
+
+Owner: EasyNet-Cli daemon boot/runtime kernel.
+
+`Kernel` is the daemon-local execution entry point that owns admission,
+permission gating, LocalRuntime dispatch, and receipt projection for internal
+kernel calls. The default kernel lifecycle is the fresh-subservice,
+allow-all-broker variant already exposed as `Kernel::new()`.
+
+`Default` now delegates to `Kernel::new()` so generic lifecycle construction
+uses the same domain constructor instead of leaving `new()` as an isolated
+custom path. The subscriber-broker constructor remains explicit because it is a
+daemon boot policy choice, not the object default.
+
+## Current Slice: Bidi Event Payload Ownership
+
+Owner: EasyNet-Cli daemon invocation stream/bidi dispatch.
+
+Pending stream and bidi carrier events are bounded lifecycle signals: admission,
+data chunks, and exactly one terminal result. Large protobuf receipt/result
+payloads should not inflate every queued event variant because these events
+flow through bounded channels and session drain loops.
+
+The large admission, terminal, and local-bidi down-frame payloads now use boxed
+ownership at the event boundary. This preserves the event state machine while
+keeping queue element size bounded by pointer-sized large variants.
+
+## Current Slice: Session Escalation Reply Ownership
+
+Owner: EasyNet-Cli daemon reverse session escalation.
+
+Session escalation correlates one device-originated request with exactly one
+hub reply. Canonical product replies carry full `InvokeResponse` proof material,
+while daemon-control replies carry a smaller control outcome. The enum now boxes
+the canonical response so the correlation table and oneshot channel do not make
+every reply slot the size of the largest proof-carrying variant.
+
+The session outbox ready-hook list is named as `SessionReadyHook` and
+`SessionReadyHooks`; the outbox still owns hook execution after a live sender is
+published, but the public lifecycle field no longer exposes nested collection
+mechanics as its type identity.

@@ -384,6 +384,7 @@ impl BidiDispatcher {
             while let Some(event) = handle.recv().await {
                 match event {
                     DispatchStreamEvent::Admission(receipt) => {
+                        let receipt = *receipt;
                         if let Err(status) = finalization.admit(receipt.clone()) {
                             let _ = down_tx_for_results.send(Err(status)).await;
                             break;
@@ -796,7 +797,7 @@ impl BidiDispatcher {
                 let mapped = map_local_bidi_ability_frame(wire_kind, frame, stdout_stream_id);
                 match mapped {
                     LocalBidiHandlerFrame::Forward(frame) => {
-                        if down_tx_for_handler.send(Ok(frame)).await.is_err() {
+                        if down_tx_for_handler.send(Ok(*frame)).await.is_err() {
                             break;
                         }
                         if terminal {
@@ -1085,10 +1086,16 @@ fn local_bidi_stdout_stream_id(envelope_open: &EnvelopeOpen) -> u32 {
 
 #[derive(Debug)]
 pub(crate) enum LocalBidiHandlerFrame {
-    Forward(InvokeBidiDown),
+    Forward(Box<InvokeBidiDown>),
     Terminal,
     Ignore,
     ProtocolFailure(String),
+}
+
+impl LocalBidiHandlerFrame {
+    fn forward(frame: InvokeBidiDown) -> Self {
+        Self::Forward(Box::new(frame))
+    }
 }
 
 #[derive(Debug)]
@@ -1180,7 +1187,7 @@ pub(crate) fn map_local_bidi_ability_frame(
         && !frame.content_type.is_empty()
         && frame.content_type != "application/json"
     {
-        return LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+        return LocalBidiHandlerFrame::forward(InvokeBidiDown {
             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
                 stream_id: stdout_stream_id,
                 data: frame.payload,
@@ -1202,7 +1209,7 @@ fn forward_json_bidi_frame(
     stdout_stream_id: u32,
 ) -> LocalBidiHandlerFrame {
     match serde_json::to_vec(value) {
-        Ok(payload) => LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+        Ok(payload) => LocalBidiHandlerFrame::forward(InvokeBidiDown {
             payload: Some(DownPayload::BinaryChunk(BinaryChunk {
                 stream_id: stdout_stream_id,
                 data: payload,
@@ -1239,7 +1246,7 @@ pub(crate) fn map_local_bidi_handler_frame(
                         ));
                     }
                 };
-                LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                LocalBidiHandlerFrame::forward(InvokeBidiDown {
                     payload: Some(DownPayload::BinaryChunk(BinaryChunk {
                         stream_id: stdout_stream_id,
                         data: raw,
@@ -1279,7 +1286,7 @@ pub(crate) fn map_local_bidi_handler_frame(
                         ));
                     }
                 };
-                LocalBidiHandlerFrame::Forward(InvokeBidiDown {
+                LocalBidiHandlerFrame::forward(InvokeBidiDown {
                     payload: Some(DownPayload::BinaryChunk(BinaryChunk {
                         stream_id: stdout_stream_id,
                         data: raw,
@@ -1842,9 +1849,9 @@ pub(crate) fn pending_result_from_carrier_v1(
 
 #[derive(Debug)]
 enum CarrierDispatchEvent {
-    Admission(easynet_axon::pb::axon::v1::InvocationReceipt),
+    Admission(Box<easynet_axon::pb::axon::v1::InvocationReceipt>),
     Chunk(Vec<u8>),
-    Terminal(DispatchResult),
+    Terminal(Box<DispatchResult>),
 }
 
 fn classify_carrier_v1_result(
@@ -1880,7 +1887,7 @@ fn classify_carrier_v1_result(
         }
         return Ok((
             call_id,
-            CarrierDispatchEvent::Terminal(pending_result_from_carrier_v1(&result)),
+            CarrierDispatchEvent::Terminal(Box::new(pending_result_from_carrier_v1(&result))),
         ));
     }
 
@@ -1899,7 +1906,7 @@ fn classify_carrier_v1_result(
         }
         return Ok((
             call_id,
-            CarrierDispatchEvent::Terminal(pending_result_from_carrier_v1(&result)),
+            CarrierDispatchEvent::Terminal(Box::new(pending_result_from_carrier_v1(&result))),
         ));
     }
 
@@ -1922,7 +1929,10 @@ fn classify_carrier_v1_result(
                 "CANONICAL_ADMISSION_INVALID",
             ));
         }
-        return Ok((call_id, CarrierDispatchEvent::Admission(admission)));
+        return Ok((
+            call_id,
+            CarrierDispatchEvent::Admission(Box::new(admission)),
+        ));
     }
     if result.failure.is_some() {
         return Err((call_id, pending_result_from_carrier_v1(&result)));
@@ -2209,6 +2219,7 @@ async fn drain_session_up_stream(
             Some(UpPayload::DispatchResult(result)) => {
                 match classify_carrier_v1_result(result) {
                     Ok((call_id, CarrierDispatchEvent::Admission(receipt))) => {
+                        let receipt = *receipt;
                         crate::op_event!(
                             component = session_accept,
                             kind = carrier_v1_admission_receipt_received,
@@ -2233,8 +2244,17 @@ async fn drain_session_up_stream(
                             );
                         }
                     }
-                    Ok((call_id, CarrierDispatchEvent::Terminal(mapped)))
-                    | Err((call_id, mapped)) => {
+                    Ok((call_id, CarrierDispatchEvent::Terminal(mapped))) => {
+                        settle_terminal_result(
+                            &pending,
+                            &pending_stream,
+                            &caller_ura,
+                            call_id,
+                            *mapped,
+                        )
+                        .await;
+                    }
+                    Err((call_id, mapped)) => {
                         settle_terminal_result(
                             &pending,
                             &pending_stream,
@@ -2794,6 +2814,7 @@ mod tests {
         else {
             panic!("unary result must classify as terminal");
         };
+        let mapped = *mapped;
         assert!(mapped.error.is_none());
         assert!(mapped.admission_receipt.is_some());
         assert!(mapped.terminal_receipt.is_some());

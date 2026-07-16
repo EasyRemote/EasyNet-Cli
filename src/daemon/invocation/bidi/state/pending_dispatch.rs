@@ -267,7 +267,7 @@ impl PendingDispatchMap {
 /// `Terminal`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DispatchStreamEvent {
-    Admission(DispatchReceipt),
+    Admission(Box<DispatchReceipt>),
     Chunk(Vec<u8>),
     Terminal(Box<DispatchResult>),
 }
@@ -454,7 +454,7 @@ impl PendingStreamDispatchMap {
         };
         match delivery_policy {
             StreamDeliveryPolicy::BoundedNoWait => {
-                match sender.try_send(DispatchStreamEvent::Admission(receipt)) {
+                match sender.try_send(DispatchStreamEvent::Admission(Box::new(receipt))) {
                     Ok(()) => StreamDeliver::Delivered,
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         self.inner.entries.remove(&call_id);
@@ -464,7 +464,10 @@ impl PendingStreamDispatchMap {
                 }
             }
             StreamDeliveryPolicy::LosslessBackpressure => {
-                match sender.send(DispatchStreamEvent::Admission(receipt)).await {
+                match sender
+                    .send(DispatchStreamEvent::Admission(Box::new(receipt)))
+                    .await
+                {
                     Ok(()) => StreamDeliver::Delivered,
                     Err(_) => {
                         self.inner.entries.remove(&call_id);

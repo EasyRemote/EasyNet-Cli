@@ -15,3 +15,12 @@
   product orchestration. The refactor keeps that lifecycle explicit as daemon
   state while avoiding any new Axon Mission ontology or alternate invocation
   proof path.
+- `Kernel::default()` delegates to `Kernel::new()` because the allow-all local
+  service graph is the default object lifecycle. Subscriber-broker construction
+  remains a named daemon boot policy path.
+- Stream/bidi event enums use boxed large payloads at channel and classifier
+  boundaries. This keeps the admission/chunk/terminal state machine unchanged
+  while bounding queue element size.
+- Reverse session escalation boxes canonical `InvokeResponse` replies because
+  they carry proof material and should not define the fixed size of every
+  control reply slot. Ready hooks are named as session outbox lifecycle types.
