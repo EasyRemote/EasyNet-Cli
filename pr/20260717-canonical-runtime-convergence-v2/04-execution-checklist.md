@@ -217,26 +217,77 @@
       architecture convergence gate, and absence of crate-internal
       `target: Some(InvocationTarget { ... })` literals.
 
-## RF-5 Public Surface Signer Fallback Quarantine Slice
+## RF-5 Rust Public Surface Signer Fallback Removal Slice
 
 - [x] Identify `generate_subject_auth` and
       `runtime_admin.generate_subject_auth` as Rust public-surface evidence
       still counted in the canonical SDK capability graph.
+- [x] Remove `GeneratedSubjectAuth`, `generate_subject_auth`,
+      `generate_private_agent_auth`, and `generate_private_hub_auth` from the
+      Axon Rust SDK runtime-admin public surface.
+- [x] Replace the generated-auth unit test with a pure subject-identifier
+      helper test so runtime-admin no longer validates process-local secret
+      generation.
 - [x] Extend public-surface policy to classify generated/default subject auth,
-      process-local signer, and private-key authenticator symbols as RF-5
-      non-canonical signer fallback defects.
+      generated private agent/hub auth, process-local signer, and private-key
+      authenticator symbols as RF-5 non-canonical signer fallback defects.
 - [x] Extend the V2 manifest gate to reject fallback signer helpers in
       canonical language/member graphs.
 - [x] Regenerate the canonical public API manifest and SDK parity matrix with
-      `generate_subject_auth` moved to legacy quarantine.
-- [x] Verify the V2 convergence script, canonical public API script, focused
-      Cargo script-check wrapper, formatting, and lib build.
-- [x] Record that upstream implementation removal remains open; this slice
-      fixes conformance ownership, not the full RF-5 cutover.
+      the generated auth group absent.
+- [x] Verify Axon runtime-admin tests, V2 convergence script, conformance
+      policy self-test, architecture convergence gates, formatting, and lib
+      build.
+- [x] Record that cross-language signer-handle/KeyService convergence remains
+      open; this slice removes the Rust public fallback root but is not the
+      full RF-5 cutover.
+
+## RF-3 Public Plain Proof Helper Removal Slice
+
+- [x] Identify Rust package-root exports for plain canonical/admission helpers:
+      `canonical_invocation_bytes`, `sign_invocation`,
+      `verify_invocation_signature`, `verify_phase`, `verify_signature`, and
+      `run_admission`.
+- [x] Remove plain helper re-exports from the Axon Rust invocation package
+      root.
+- [x] Restrict the underlying Rust plain helpers to crate-internal test-only
+      functions so they disappear from rustdoc public inventory.
+- [x] Migrate runtime-admin resolver tests to descriptor-bound signing and
+      verification.
+- [x] Remove plain helper exports from the Axon Python invocation package root
+      and expose descriptor-bound admission replacements.
+- [x] Extend EasyNet-Cli conformance policy/self-tests to classify the complete
+      plain helper group as RF-3 defects.
+- [x] Upgrade the V2 convergence gate so plain helpers fail even when they
+      appear only in legacy quarantine.
+- [x] Regenerate public API artifacts and verify exact absence from manifest
+      and parity matrix.
+- [x] Verify Axon admission/axiom/runtime-admin tests, Python public-surface
+      smoke, V2 gate/self-test, EasyNet-Cli formatting, and lib build.
+
+## RF-3 Python Submodule Plain Proof Hardening Slice
+
+- [x] Identify that Python package-root cleanup still left plain helpers as
+      non-underscore submodule functions in `axiom.py` and `admission.py`.
+- [x] Rename Python plain helper functions to private fixture names:
+      `_canonical_invocation_bytes`, `_sign_invocation`,
+      `_verify_invocation_signature`, `_verify_signature`, and
+      `_run_admission`.
+- [x] Remove unused plain helper imports from Python runtime admission tests.
+- [x] Migrate historical axiom vector and cross-language bundle tests to call
+      the private fixture names explicitly.
+- [x] Add a direct Axon source-level V2 gate for public Rust/Python plain
+      proof/admission helper definitions and re-exports.
+- [x] Add a self-test fixture proving the new source-level gate fails when an
+      Axon Python submodule exposes a public plain proof helper.
+- [x] Verify Python public-surface smoke, repo-managed pytest for admission and
+      axiom vectors, Axon Rust format/check, and V2 gate/self-test.
 
 ## Still Required Before Completion
 
-- [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.
+- [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
+- [ ] RF-3 remaining language package/vector/example audit for
+      descriptor-bound-only public proof.
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
 - [ ] RF-4 shared lifecycle matrix and transition vectors.
 - [ ] RF-6 receipt proof-fact constructor closure.

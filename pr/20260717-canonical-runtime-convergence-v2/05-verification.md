@@ -366,41 +366,115 @@ Commands run on 2026-07-17:
 This evidence verifies only the protobuf transport target projection slice. It
 does not prove RF-8/RF-7, receipt cutover, SDK convergence, or SPEC completion.
 
-## RF-5 Public Surface Signer Fallback Quarantine Slice
+## RF-5 Rust Public Surface Signer Fallback Removal Slice
 
 Commands run on 2026-07-17:
 
-- `rg -n 'generate_subject_auth|GenerateSubjectAuth|default_auth_for_subject' sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`:
-  initially showed `generate_subject_auth` and
-  `runtime_admin.generate_subject_auth` in Rust canonical public API and SDK
-  parity evidence.
+- `rg -n 'GeneratedSubjectAuth|generate_subject_auth|generate_private_agent_auth|generate_private_hub_auth' /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/src/invocation/runtime_admin.rs /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/src/invocation/mod.rs`:
+  passed with no matches after removing the Rust public fallback root.
+- `cargo fmt --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml -- --check`:
+  passed.
+- `cargo test -q --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml runtime_admin`:
+  passed, 7 tests.
 - `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
   regenerated public API artifacts using the baseline Python AST parser.
 - Manifest inspection after regeneration:
-  `generate_subject_auth` and `runtime_admin.generate_subject_auth` are absent
-  from Rust canonical symbols/members and present in Rust `non_canonical` with
-  reason `Process-local signer fallback is prohibited; canonical SDK signing
-  uses an explicit signer handle or daemon KeyService authority.`
-- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 python3 sdk/conformance/sdk_concepts.py --self-test --tmp target/sdk-concepts-rf5-self-test`:
+  `GeneratedSubjectAuth`, `generate_subject_auth`,
+  `generate_private_agent_auth`, `generate_private_hub_auth`, and matching
+  `runtime_admin.*` exports are absent from
+  `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json`.
+- `/Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 pre-existing lint errors; no generated-auth or conformance/policy finding
+  was reported.
+
+This evidence verifies the RF-5 Rust public fallback root removal and
+conformance enforcement. It does not prove cross-language signer-handle parity,
+daemon KeyService cutover, or full RF-5 completion.
+
+## RF-3 Public Plain Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "pub use (admission|axiom)::\\{.*(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|run_admission|verify_signature)|\\\"(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|run_admission|verify_signature)\\\"" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/src/invocation/mod.rs /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python/easynet_axon/invocation/__init__.py`:
+  no plain helper exports were reported.
+- `rg -n "pub(\\([^)]*\\))? fn (canonical_invocation_bytes|sign_invocation|verify_invocation_signature|run_admission|verify_signature)" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/src/invocation/axiom.rs /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/src/invocation/admission.rs`:
+  reported only `pub(crate)` test/internal functions, not public Rust API.
+- `cargo fmt --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml -- --check`:
+  passed.
+- `cargo check --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml`:
+  passed.
+- `cargo test -q --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml runtime_admin`:
+  passed, 7 tests.
+- `cargo test -q --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml admission`:
+  passed, 24 tests.
+- `cargo test -q --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml axiom`:
+  passed, 51 tests.
+- `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python /Users/macbook.silan.tech/.local/bin/python3.12 - <<'PY' ...`:
+  passed; `canonical_invocation_bytes`, `sign_invocation`,
+  `verify_invocation_signature`, `run_admission`, and `verify_signature` are
+  absent from `easynet_axon.invocation`, while descriptor-bound replacements
+  are present.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  regenerated public API artifacts from the current Axon checkout.
+- Exact recursive JSON scan over
+  `sdk/conformance/canonical-public-api.json` and
+  `sdk/conformance/sdk-parity-matrix.json`: passed; the plain helper set is
+  absent from canonical and non-canonical public graphs.
+- `/Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-rf3-self-test`:
   passed.
 - `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
   passed.
 - `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
   passed.
-- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-sdk-canonical-public-api.sh --self-test`:
-  passed.
-- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-sdk-canonical-public-api.sh`:
-  passed.
-- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
-  passed.
-- `cargo test -q --test script_checks canonical_runtime_convergence_v2_script_contract_holds`:
-  passed, 1 test.
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --lib --features axon-pb`: passed.
 - `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
-  15 pre-existing lint errors; no migrated conformance/policy file finding was
+  15 pre-existing lint errors; no RF-3 conformance or Axon public-surface
+  finding was reported.
+
+This evidence verifies the RF-3 public plain proof helper removal for the
+Rust/Python Axon package roots and EasyNet-Cli public-surface gate. It does not
+prove the remaining cross-language descriptor-bound vector/example audit or
+full RF-3 completion.
+
+## RF-3 Python Submodule Plain Proof Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `rg --pcre2 -n "(?<!_)\\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|run_admission)\\b" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python/easynet_axon /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python/tests --glob '!**/__pycache__/**'`:
+  no matches after renaming the Python plain helper group to private fixture
+  names.
+- `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python /Users/macbook.silan.tech/.local/bin/python3.12 - <<'PY' ...`:
+  passed; `easynet_axon.invocation` does not expose plain helper names and
+  does expose descriptor-bound replacements.
+- `uv run --project /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python pytest -q tests/test_admission.py tests/test_axiom_vectors.py`:
+  passed, 24 tests and 3 skips.
+- `cargo fmt --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml -- --check`:
+  passed.
+- `cargo check --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 pre-existing lint errors; no RF-3 Python hardening or V2 gate finding was
   reported.
 
-This evidence verifies only the RF-5 public-surface conformance quarantine. It
-does not delete the upstream signer fallback implementation or prove full RF-5
-completion.
+This evidence verifies that Axon Python no longer exposes plain proof helpers
+as normal submodule APIs and that the V2 gate now checks the source-level
+boundary directly. It does not complete the remaining RF-3 vector/example audit
+for all languages.

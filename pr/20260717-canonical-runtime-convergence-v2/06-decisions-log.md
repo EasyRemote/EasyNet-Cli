@@ -85,7 +85,39 @@
   to explicit signer-handle or daemon KeyService authority, so the conformance
   model must quarantine them instead of classifying them under normal
   capability ownership.
-- Public-surface quarantine is not implementation cutover. It prevents false
-  readiness claims and new canonical capability evidence for fallback signers;
-  the upstream fallback implementation still needs removal in the RF-5 root
-  fork.
+- Public-surface quarantine alone is not implementation cutover. It prevents
+  false readiness claims and new canonical capability evidence for fallback
+  signers; after the Rust public fallback root removal, RF-5 still requires
+  cross-language signer-handle parity and daemon KeyService authority cutover.
+- The Rust Axon SDK runtime-admin public surface must not mint process-local
+  signing secrets. `GeneratedSubjectAuth` and the generated private
+  agent/hub/subject auth helpers are removed instead of retained behind a
+  compatibility layer because they define the wrong authority model. Subject
+  identifier helpers remain only as pure string construction.
+- Fallback signer detection is a class-level conformance rule, not a single
+  symbol rule. The V2 gate now rejects generated subject auth and generated
+  private agent/hub auth if any language reintroduces them into canonical
+  symbols or members.
+- Plain invocation bytes and plain admission helpers are not compatibility
+  surfaces inside the canonical SDK domain. They may exist only as
+  crate-internal test fixtures for historical vector stability; any public
+  Rust/Python export must use descriptor-bound proof.
+- Public-surface quarantine is too weak for RF-3 after the Rust/Python public
+  removal. The V2 gate now fails if plain proof helpers appear anywhere in the
+  public manifest, including `non_canonical`, because the clean target is
+  absence rather than documented legacy.
+- Runtime-admin resolver tests should verify bootstrapped keys through
+  `DescriptorBoundEnvelope` and descriptor-bound signature verification. A
+  resolver test that signs plain invocation bytes preserves the wrong proof
+  boundary as an example for future code.
+- Python submodule functions are SDK surface unless marked private. Removing a
+  name from package-root `__all__` is insufficient for RF-3 when
+  `easynet_axon.invocation.axiom.sign_invocation` remains importable as a
+  normal function.
+- Historical plain axiom vectors may keep private fixture helpers while the
+  vector migration is still open. The naming must make the boundary explicit:
+  private fixtures prove legacy byte stability; descriptor-bound helpers are
+  the public proof path.
+- Manifest inventory is necessary but not sufficient for Python proof-boundary
+  convergence. The V2 gate must also scan Axon source for public plain helper
+  definitions and re-exports.

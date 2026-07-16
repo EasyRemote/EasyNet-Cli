@@ -46,18 +46,31 @@ for name, document in (("manifest", manifest), ("matrix", matrix)):
 plain_helpers = {
     "canonical_invocation_bytes",
     "run_admission",
+    "sign_invocation",
+    "verify_invocation_signature",
+    "verify_phase",
     "verify_signature",
     "axiom.canonical_invocation_bytes",
+    "axiom.sign_invocation",
+    "axiom.verify_invocation_signature",
     "admission.run_admission",
+    "admission.verify_phase",
     "admission.verify_signature",
 }
 fallback_signer_helpers = {
     "default_auth_for_subject",
+    "GeneratedSubjectAuth",
+    "generate_private_agent_auth",
+    "generate_private_hub_auth",
     "generate_subject_auth",
     "DefaultAuthForSubject",
     "GenerateSubjectAuth",
     "ProcessLocalSigner",
     "PrivateKeyAuthenticator",
+    "runtime_admin.GeneratedSubjectAuth",
+    "runtime_admin.generate_private_agent_auth",
+    "runtime_admin.generate_private_hub_auth",
+    "runtime_admin.generate_subject_auth",
 }
 for section in ("languages", "members"):
     graph = manifest.get(section, {})
@@ -73,13 +86,14 @@ for section in ("languages", "members"):
 
 quarantine = manifest.get("non_canonical", {})
 metadata = manifest.get("legacy_quarantine", {})
-for helper in plain_helpers:
-    section = "members" if "." in helper else "languages"
-    if helper not in quarantine.get(section, {}).get("rust", []):
-        raise SystemExit(f"plain_helper_not_quarantined:{section}:{helper}")
-    reason = metadata.get(section, {}).get("rust", {}).get(helper, {}).get("reason", "")
-    if "descriptor-bound proof" not in reason:
-        raise SystemExit(f"plain_helper_reason_not_bound:{section}:{helper}")
+for section in ("languages", "members"):
+    graph = quarantine.get(section, {})
+    for language, values in graph.items():
+        legacy_plain = sorted(plain_helpers & set(values))
+        if legacy_plain:
+            raise SystemExit(
+                f"plain_helper_legacy_export:{language}:{section}:{','.join(legacy_plain)}"
+            )
 for section in ("languages", "members"):
     graph = quarantine.get(section, {})
     for language, values in graph.items():
@@ -266,6 +280,24 @@ check_axon_product_protocol_boundary_contract() {
   fi
 }
 
+check_axon_plain_proof_public_boundary_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for plain proof boundary contract: $AXON_ROOT"
+  fi
+
+  local rust_invocation="$AXON_ROOT/sdk/rust/src/invocation"
+  if [[ -d "$rust_invocation" ]] \
+    && rg -n 'pub fn (canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b|pub use (admission|axiom)::\{[^}]*\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b' "$rust_invocation"; then
+    fail "Axon Rust exposes plain proof/admission helpers"
+  fi
+
+  local python_invocation="$AXON_ROOT/sdk/python/easynet_axon/invocation"
+  if [[ -d "$python_invocation" ]] \
+    && rg -n '^def (canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|run_admission)\b|from \.axiom import \([^)]*\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature)\b|from \.admission import \([^)]*\b(verify_signature|run_admission)\b|"(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|run_admission)"' "$python_invocation"; then
+    fail "Axon Python exposes plain proof/admission helpers"
+  fi
+}
+
 check_ura_vocabulary_contract() {
   # This gate intentionally delegates SDK surface scanning to the canonical
   # SDK naming script, then adds active SPEC coverage for the V2 document.
@@ -437,6 +469,29 @@ PY
   then
     fail "self-test expected canonical helper leak to fail"
   fi
+  cp "$MANIFEST" "$tmp/plain-legacy-manifest.json"
+  "$PYTHON_BIN" - "$tmp/plain-legacy-manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["non_canonical"]["members"]["rust"].append("axiom.sign_invocation")
+data["non_canonical"]["members"]["rust"].sort()
+path.write_text(json.dumps(data))
+PY
+  if "$PYTHON_BIN" - "$tmp/plain-legacy-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
+import json
+import sys
+from pathlib import Path
+manifest = json.loads(Path(sys.argv[1]).read_text())
+plain = {"axiom.sign_invocation"}
+if plain & set(manifest["non_canonical"]["members"]["rust"]):
+    raise SystemExit("plain_helper_legacy_export")
+PY
+  then
+    fail "self-test expected legacy plain helper export to fail"
+  fi
   cp "$MANIFEST" "$tmp/fallback-manifest.json"
   "$PYTHON_BIN" - "$tmp/fallback-manifest.json" <<'PY'
 import json
@@ -444,7 +499,7 @@ import sys
 from pathlib import Path
 path = Path(sys.argv[1])
 data = json.loads(path.read_text())
-data["languages"]["go"].append("GenerateSubjectAuth")
+data["languages"]["go"].append("GeneratedSubjectAuth")
 data["languages"]["go"].sort()
 path.write_text(json.dumps(data))
 PY
@@ -453,7 +508,7 @@ import json
 import sys
 from pathlib import Path
 manifest = json.loads(Path(sys.argv[1]).read_text())
-fallback = {"GenerateSubjectAuth"}
+fallback = {"GeneratedSubjectAuth"}
 if fallback & set(manifest["languages"]["go"]):
     raise SystemExit("fallback_signer_helper_leak")
 PY
@@ -528,6 +583,12 @@ PY
   if ( AXON_ROOT="$tmp/axon-product"; check_axon_product_protocol_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon product protocol boundary gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-plain-proof"
+  printf 'def canonical_invocation_bytes(env):\n  return b""\n' \
+    > "$tmp/axon-plain-proof/sdk/python/easynet_axon/invocation/axiom.py"
+  if ( AXON_ROOT="$tmp/axon-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon plain proof boundary gate to fail"
+  fi
   printf '%s\n' \
     'use tonic::transport::{Channel, Endpoint, Uri};' \
     'let _ = endpoint.connect_with_connector(tower::service_fn(move |_: Uri| async {}));' \
@@ -554,6 +615,7 @@ PY
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   check_schema_source_derivation_contract
   check_axon_product_protocol_boundary_contract
+  check_axon_plain_proof_public_boundary_contract
   check_receipt_proof_fact_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
@@ -569,5 +631,6 @@ check_ura_vocabulary_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
 check_axon_product_protocol_boundary_contract
+check_axon_plain_proof_public_boundary_contract
 check_receipt_proof_fact_contract
 echo "canonical-runtime-convergence-v2: OK"

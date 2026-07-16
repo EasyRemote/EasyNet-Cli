@@ -329,23 +329,87 @@ themselves. External integration tests may still hand-build raw protobuf input
 when they intentionally model an outside client; that is fixture input, not an
 internal construction path.
 
-## Current Slice: RF-5 Public Surface Signer Fallback Quarantine
+## Current Slice: RF-5 Rust Public Surface Signer Fallback Removal
 
-Owner: EasyNet-Cli SDK conformance model and public-surface policy.
+Owner: EasyNet-Axon Rust SDK runtime-admin public surface and EasyNet-Cli SDK
+conformance model.
 
 The canonical SDK capability matrix must not count process-local signer
-fallback helpers as evidence for a generic runtime capability. The Rust Axon
-inventory still exposes `generate_subject_auth` through the imported public
-surface model, which previously let that host-generated auth path appear in the
-canonical capability graph beside explicit signer-handle and daemon KeyService
-flows.
+fallback helpers as evidence for a generic runtime capability, and the canonical
+Rust Axon SDK must not expose process-local generated auth as public runtime
+administration.
 
-The public-surface policy now classifies default/generated subject auth,
-process-local signer, and private-key authenticator symbols as non-canonical
-RF-5 defects. The generated manifest moves `generate_subject_auth` and
-`runtime_admin.generate_subject_auth` from Rust canonical capability evidence
-to legacy quarantine with the explicit replacement direction: canonical SDK
-signing uses an explicit signer handle or daemon KeyService authority. This
-does not delete the upstream Axon implementation yet; it prevents the
-conformance model from treating that fallback as a valid canonical runtime
-capability while RF-5 implementation cutover remains open.
+The Axon Rust SDK no longer exports `GeneratedSubjectAuth`,
+`generate_subject_auth`, `generate_private_agent_auth`, or
+`generate_private_hub_auth` from `invocation::runtime_admin`. The remaining
+runtime-admin subject helpers are pure identifier helpers; they do not mint
+secret material or define a local signing authority.
+
+The EasyNet-Cli public-surface policy now classifies default/generated subject
+auth, generated private agent/hub auth, process-local signer, and private-key
+authenticator symbols as RF-5 non-canonical signer fallback defects. The
+regenerated manifest and parity matrix contain no generated auth symbols. If
+any SDK reintroduces this class of helper, the V2 gate fails before the symbol
+can be counted as canonical capability evidence.
+
+This slice removes the Rust public fallback root and closes its conformance
+evidence path. Full RF-5 remains open until all SDK languages converge on the
+same explicit signer-handle/daemon KeyService authority model and the remaining
+plain proof helper cutover is complete.
+
+## Current Slice: RF-3 Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Rust/Python invocation public surface and EasyNet-Cli SDK
+conformance gates.
+
+The descriptor-bound envelope is the only canonical admission/proof boundary.
+The plain encoder and plain admission helpers remain useful only as internal
+test fixtures for historical vector stability; they must not be public SDK
+entry points because they sign or admit an envelope without binding an
+`AbilityDescriptorRef` and derived `EntityRef`.
+
+The Axon Rust SDK no longer exports the plain helper group from
+`invocation::*`, and the underlying Rust helpers are crate-internal
+`#[cfg(test)]` functions instead of rustdoc-visible public API:
+`canonical_invocation_bytes`, `sign_invocation`,
+`verify_invocation_signature`, `verify_phase`, `verify_signature`, and
+`run_admission`. Runtime-admin resolver tests were migrated to
+`DescriptorBoundEnvelope`, `sign_descriptor_bound_invocation`, and
+`verify_descriptor_bound_invocation_signature` so test fixtures no longer
+teach the obsolete proof boundary.
+
+The Axon Python invocation package root no longer exports the same plain helper
+group. It instead exposes descriptor-bound admission replacements:
+`run_descriptor_bound_admission` and `verify_descriptor_bound_signature`,
+alongside the existing descriptor-bound canonical bytes and signature helpers.
+
+The EasyNet-Cli V2 conformance gate now rejects plain proof helpers anywhere in
+the public manifest, including `non_canonical` quarantine. This changes RF-3
+from "legacy public export is documented" to "legacy public export is a gate
+failure." Full RF-3 remains open until all language packages and old
+vectors/examples are audited against the same descriptor-bound-only public
+contract.
+
+## Current Slice: RF-3 Python Submodule Plain Proof Hardening
+
+Owner: EasyNet-Axon Python invocation implementation and EasyNet-Cli V2 source
+gate.
+
+Removing package-root exports was not sufficient for Python because SDK users
+can still import non-underscore functions from submodules. The plain proof
+helpers in `easynet_axon.invocation.axiom` and
+`easynet_axon.invocation.admission` therefore remained discoverable as normal
+Python module API even though the canonical proof boundary is descriptor-bound.
+
+The Python plain helper group is now private by name:
+`_canonical_invocation_bytes`, `_sign_invocation`,
+`_verify_invocation_signature`, `_verify_signature`, and `_run_admission`.
+Runtime admission tests no longer import the plain helpers. Historical axiom
+vector tests and cross-language bundle producer tests use the private fixtures
+explicitly, which documents that they are vector fixtures rather than public
+SDK proof APIs.
+
+The V2 convergence script now performs a direct Axon source scan for public
+Rust and Python plain proof/admission helpers. This closes the gap where the
+manifest proved the EasyNet-Cli facade surface was clean but could not detect
+an Axon Python submodule exposing the obsolete proof boundary.

@@ -12,6 +12,9 @@ def is_fallback_signer_item(item: str) -> bool:
     compact = re.sub(r"[^a-z0-9]", "", lowered)
     explicit_names = {
         "defaultauthforsubject",
+        "generatedsubjectauth",
+        "generateprivateagentauth",
+        "generateprivatehubauth",
         "generatesubjectauth",
         "generatedefaultauth",
         "defaultauthenticator",
@@ -24,8 +27,13 @@ def is_fallback_signer_item(item: str) -> bool:
     return (
         compact in explicit_names
         or lowered.endswith(".default_auth_for_subject")
+        or lowered.endswith(".generate_private_agent_auth")
+        or lowered.endswith(".generate_private_hub_auth")
         or lowered.endswith(".generate_subject_auth")
         or {"default", "auth", "subject"}.issubset(tokens)
+        or {"generated", "subject", "auth"}.issubset(tokens)
+        or {"generate", "private", "agent", "auth"}.issubset(tokens)
+        or {"generate", "private", "hub", "auth"}.issubset(tokens)
         or {"generate", "subject", "auth"}.issubset(tokens)
         or {"process", "local", "signer"}.issubset(tokens)
         or {"private", "key", "auth"}.issubset(tokens)
@@ -69,9 +77,19 @@ def canonical_quarantine_reason(item: str) -> str | None:
         return "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
     if root in {
         "canonical_invocation_bytes",
+        "sign_invocation",
+        "verify_invocation_signature",
+        "verify_phase",
         "verify_signature",
         "run_admission",
-    } or lowered.endswith(".canonical_invocation_bytes") or lowered.endswith(".verify_signature") or lowered.endswith(".run_admission"):
+    } or lowered.endswith((
+        ".canonical_invocation_bytes",
+        ".sign_invocation",
+        ".verify_invocation_signature",
+        ".verify_phase",
+        ".verify_signature",
+        ".run_admission",
+    )):
         return "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
     if public_root(item) in DOWNSTREAM_ITEMS:
         return "EasyNet federation payload is a downstream provider carrier, not a canonical SDK capability."

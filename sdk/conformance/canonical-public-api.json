@@ -178,7 +178,6 @@
       "FileKeyResolver",
       "FinalizationCheckpointVerifier",
       "FinalizedInvocation",
-      "GeneratedSubjectAuth",
       "HostedAgentReceiptHeader",
       "HostedAttestation",
       "HostedReceiptError",
@@ -344,7 +343,6 @@
       "federation_join_payload",
       "federation_resolve_payload",
       "fresh_nonce",
-      "generate_private_agent_auth",
       "handle",
       "invocation",
       "invocation_tools",
@@ -370,7 +368,6 @@
       "sha256",
       "sign_descriptor_bound_invocation",
       "sign_host_attestation",
-      "sign_invocation",
       "sign_receipt",
       "sign_receipt_with_hosted",
       "signing",
@@ -389,8 +386,6 @@
       "verify_descriptor_bound_invocation_signature",
       "verify_descriptor_bound_signature",
       "verify_host_attestation",
-      "verify_invocation_signature",
-      "verify_phase",
       "verify_phase_descriptor_bound",
       "verify_receipt_chain",
       "verify_receipt_signature",
@@ -1437,7 +1432,6 @@
       "admission.validate_envelope",
       "admission.validate_signature_structure",
       "admission.verify_descriptor_bound_signature",
-      "admission.verify_phase",
       "admission.verify_phase_descriptor_bound",
       "audit.AuthorityProof",
       "audit.AxiomBinding",
@@ -1508,7 +1502,6 @@
       "axiom.sha256",
       "axiom.sign_descriptor_bound_invocation",
       "axiom.sign_host_attestation",
-      "axiom.sign_invocation",
       "axiom.sign_receipt",
       "axiom.sign_receipt_with_hosted",
       "axiom.signing_key_from_bytes",
@@ -1516,7 +1509,6 @@
       "axiom.validate_hosted_attestation_authority",
       "axiom.verify_descriptor_bound_invocation_signature",
       "axiom.verify_host_attestation",
-      "axiom.verify_invocation_signature",
       "axiom.verify_receipt_signature",
       "axiom.verify_receipt_signature_with_hosted",
       "backpressure.BackpressurePolicy",
@@ -1668,9 +1660,7 @@
       "runtime_admin.BootstrapSelfIdentityArgs",
       "runtime_admin.BootstrapSelfIdentityKeyResolver",
       "runtime_admin.BootstrapSelfIdentityReceipt",
-      "runtime_admin.GeneratedSubjectAuth",
       "runtime_admin.MAX_BOOTSTRAP_KEYS_PER_NODE",
-      "runtime_admin.generate_private_agent_auth",
       "runtime_admin.private_agent_subject_id",
       "server.ServerConfig",
       "server.ServerHandle",
@@ -5992,13 +5982,8 @@
     "languages": {
       "rust": [
         "DeviceJoinCredentialEnvelope",
-        "canonical_invocation_bytes",
         "easynet_axon",
-        "generate_private_hub_auth",
-        "generate_subject_auth",
-        "private_hub_subject_id",
-        "run_admission",
-        "verify_signature"
+        "private_hub_subject_id"
       ],
       "c_abi": [
         "EasynetDaemonHandle",
@@ -6169,9 +6154,6 @@
     },
     "members": {
       "rust": [
-        "admission.run_admission",
-        "admission.verify_signature",
-        "axiom.canonical_invocation_bytes",
         "easynet_axon.canonical_json",
         "easynet_axon.dendrite_bridge",
         "easynet_axon.error",
@@ -6184,8 +6166,6 @@
         "easynet_axon.streams",
         "easynet_axon.ura",
         "federation_directory.DeviceJoinCredentialEnvelope",
-        "runtime_admin.generate_private_hub_auth",
-        "runtime_admin.generate_subject_auth",
         "runtime_admin.private_hub_subject_id"
       ],
       "c_abi": [],
@@ -6382,14 +6362,6 @@
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
         },
-        "canonical_invocation_bytes": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
-        },
         "easynet_axon": {
           "canonical_replacement": [
             "capability_inventory.runtime_connection"
@@ -6398,22 +6370,6 @@
           "removal_phase": "quarantined",
           "reason": "Product-branded public compatibility surface; the canonical SDK runtime model must stay product-neutral."
         },
-        "generate_private_hub_auth": {
-          "canonical_replacement": [
-            "capability_inventory.authority_metadata"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "generate_subject_auth": {
-          "canonical_replacement": [
-            "capability_inventory.authority_metadata"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
-        },
         "private_hub_subject_id": {
           "canonical_replacement": [
             "capability_inventory.complete_invocation_draft"
@@ -6421,22 +6377,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "run_admission": {
-          "canonical_replacement": [
-            "capability_inventory.access_control"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
-        },
-        "verify_signature": {
-          "canonical_replacement": [
-            "capability_inventory.prepare_sign_submit"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
         }
       },
       "c_abi": {
@@ -7707,30 +7647,6 @@
     },
     "members": {
       "rust": {
-        "admission.run_admission": {
-          "canonical_replacement": [
-            "capability_inventory.access_control"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
-        },
-        "admission.verify_signature": {
-          "canonical_replacement": [
-            "capability_inventory.access_control"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
-        },
-        "axiom.canonical_invocation_bytes": {
-          "canonical_replacement": [
-            "capability_inventory.complete_invocation_draft"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
-        },
         "easynet_axon.canonical_json": {
           "canonical_replacement": [
             "capability_inventory.complete_invocation_draft"
@@ -7826,22 +7742,6 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "runtime_admin.generate_private_hub_auth": {
-          "canonical_replacement": [
-            "capability_inventory.authority_metadata"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
-        },
-        "runtime_admin.generate_subject_auth": {
-          "canonical_replacement": [
-            "capability_inventory.authority_metadata"
-          ],
-          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
-          "removal_phase": "quarantined",
-          "reason": "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
         },
         "runtime_admin.private_hub_subject_id": {
           "canonical_replacement": [
@@ -9932,7 +9832,6 @@
           "admission.validate_envelope",
           "admission.validate_signature_structure",
           "admission.verify_descriptor_bound_signature",
-          "admission.verify_phase",
           "admission.verify_phase_descriptor_bound",
           "invocation.admission"
         ]
@@ -10535,7 +10434,6 @@
           "AuthorityJson",
           "AuthorityProof",
           "DelegationProofBody",
-          "GeneratedSubjectAuth",
           "HostedAttestation",
           "InvocationAuthorityProof",
           "InvocationAuthorityProofJson",
@@ -10550,7 +10448,6 @@
           "canonical_authority_bytes",
           "canonical_authority_proof_bytes",
           "canonical_host_attestation_bytes",
-          "generate_private_agent_auth",
           "normalize_authority_proof_hash",
           "sign_host_attestation",
           "validate_hosted_attestation_authority",
@@ -10577,8 +10474,6 @@
           "bundle.AuthorityJson",
           "bundle.InvocationAuthorityProofJson",
           "federation_directory.SigningAuthority",
-          "runtime_admin.GeneratedSubjectAuth",
-          "runtime_admin.generate_private_agent_auth",
           "signing.InvocationSigningAuthority",
           "signing.InvocationSigningAuthorityProvider",
           "signing.ReceiptSigningAuthority",
@@ -12705,13 +12600,11 @@
           "SigningModel",
           "jcs_sign_args",
           "sha256",
-          "sign_invocation",
           "sign_receipt",
           "sign_receipt_with_hosted",
           "signing",
           "signing_key_from_bytes",
-          "validate_signature_structure",
-          "verify_invocation_signature"
+          "validate_signature_structure"
         ],
         "members": [
           "audit.SignedInvocationReceipt",
@@ -12719,11 +12612,9 @@
           "axiom.CalleeSignature",
           "axiom.CallerSignature",
           "axiom.sha256",
-          "axiom.sign_invocation",
           "axiom.sign_receipt",
           "axiom.sign_receipt_with_hosted",
           "axiom.signing_key_from_bytes",
-          "axiom.verify_invocation_signature",
           "bundle.PubkeyMap",
           "invocation.signing"
         ]
@@ -13770,7 +13661,6 @@
           "VerifiedReceipt",
           "VerifiedReceiptChain",
           "compute_receipt_hash",
-          "verify_phase",
           "verify_phase_descriptor_bound",
           "verify_receipt_chain",
           "verify_receipt_signature",
@@ -16517,7 +16407,6 @@
       "FileKeyResolver": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
       "FinalizationCheckpointVerifier": "14410464b95940ce4fc67d018255f1c6a1c9b8c25db33c8267230d9472fde23b",
       "FinalizedInvocation": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
-      "GeneratedSubjectAuth": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "HostedAgentReceiptHeader": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "HostedAttestation": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3",
       "HostedReceiptError": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31",
@@ -16659,14 +16548,11 @@
       "admission.REASON_ENVELOPE_INCOMPLETE": "42271849f3b50617672c0f00c33eb9b8245765ec6d58e6db679972c86e842af7",
       "admission.REASON_NONCE_REPLAY": "a4f670506fe1d6d92e768a26c8d6ade5ab12921b82d29291214c397eef740cbf",
       "admission.now_ms": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea",
-      "admission.run_admission": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482",
       "admission.run_descriptor_bound_admission": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819",
       "admission.validate_envelope": "39aaf8a5023389d571b66a9b14e7a076ddd8bea95e51e6362a2187c32065fc29",
       "admission.validate_signature_structure": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4",
       "admission.verify_descriptor_bound_signature": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7",
-      "admission.verify_phase": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b",
       "admission.verify_phase_descriptor_bound": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec",
-      "admission.verify_signature": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2",
       "admission_action_from_descriptor_ref": "20fe233c647279fe1c59caa5c580a0d430b1efb294d885d5c2f8c5bfc5e65169",
       "audit": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "audit.AuthorityProof": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31",
@@ -16731,7 +16617,6 @@
       "axiom.canonical_descriptor_bound_invocation_bytes": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107",
       "axiom.canonical_entity_ref": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1",
       "axiom.canonical_host_attestation_bytes": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200",
-      "axiom.canonical_invocation_bytes": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1",
       "axiom.canonical_receipt_bytes": "326a4dd631104b26a5163918fe25328281ea252451fdc6652afe3a5222fec527",
       "axiom.canonical_receipt_bytes_with_hosted": "103100b6ad9765add9dde884a6bc5210373d4a7fe2f0ed85c69c4969840e6592",
       "axiom.canonical_receipt_proof_facts": "b706a38978a4cac5263253b6c7e42565feaac2e4fc14762e2fa41d5a74fcfe37",
@@ -16742,7 +16627,6 @@
       "axiom.sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea",
       "axiom.sign_descriptor_bound_invocation": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a",
       "axiom.sign_host_attestation": "22835db997358363e107310b9a860a22f9b0b80aa6e7491ccacb6948e17fc074",
-      "axiom.sign_invocation": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64",
       "axiom.sign_receipt": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71",
       "axiom.sign_receipt_with_hosted": "5f1f0a317de185884013b4b677509f854c8f1e188e73f7ea7a7984ad2ca0c8c1",
       "axiom.signing_key_from_bytes": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72",
@@ -16750,7 +16634,6 @@
       "axiom.validate_hosted_attestation_authority": "2ee4d3e175a1112f0f1e219a907d1d306afdbf4e5363d7665b486cb66d32f29c",
       "axiom.verify_descriptor_bound_invocation_signature": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b",
       "axiom.verify_host_attestation": "679e648c816b29f742f8e3c25a1f717ede0c589bce47a89957b2ac079fbecb9f",
-      "axiom.verify_invocation_signature": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b",
       "axiom.verify_receipt_signature": "e74428e999b8301bb2136bd9a09048731873d7ab780ec3ed078863f5519de3de",
       "axiom.verify_receipt_signature_with_hosted": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0",
       "backpressure": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
@@ -16787,7 +16670,6 @@
       "canonical_descriptor_bound_invocation_bytes": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107",
       "canonical_entity_ref": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1",
       "canonical_host_attestation_bytes": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200",
-      "canonical_invocation_bytes": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1",
       "canonical_json": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "canonical_json.jcs_sign_args": "bd3aa10cd5eb72cb98d8e5dcc2b828aee4f9126e77531df4d2eb45efb9f2a94f",
       "canonical_json.to_jcs_bytes": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2",
@@ -16866,9 +16748,6 @@
       "federation_join_payload": "195317cb0ec1e17d5d2f3140826fb918febea941687cfe575b098f4256ed5c81",
       "federation_resolve_payload": "5200c16b879b5751abc29402c36105c73b066002408c6294f4e09412aa9243ca",
       "fresh_nonce": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8",
-      "generate_private_agent_auth": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261",
-      "generate_private_hub_auth": "cf408d07c3040e320b60a28d86801ba3d4cffa90a2679cd84295c77d4e2fd175",
-      "generate_subject_auth": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8",
       "handle": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "handle.AXON_ERROR_PAYLOAD_CONTENT_TYPE": "3cbc08d5bd58fc95174f82cfbf84b34f8e51d1bca1cb2e8901f6201c3bbcc50d",
       "handle.EmitExtras": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
@@ -16967,18 +16846,13 @@
       "reconnect.ReconnectConfig": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "reconnect.ReconnectHook": "ac05550c368f41446744cbfe237a4f816e32c68727c88b579b5d8c9e3edd442b",
       "reconnect.ReconnectingBridge": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
-      "run_admission": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482",
       "run_descriptor_bound_admission": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819",
       "runtime_admin": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
       "runtime_admin.ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY": "8960f84fb94ae6eb44d00485a561083cbc47e801004444f9f9758ddd303f9a28",
       "runtime_admin.BootstrapSelfIdentityArgs": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "runtime_admin.BootstrapSelfIdentityKeyResolver": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092",
       "runtime_admin.BootstrapSelfIdentityReceipt": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
-      "runtime_admin.GeneratedSubjectAuth": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29",
       "runtime_admin.MAX_BOOTSTRAP_KEYS_PER_NODE": "627f8e009f74eb243de7fb7f8c1ec29d9f5cac96fc79d0363abf9592446b3a68",
-      "runtime_admin.generate_private_agent_auth": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261",
-      "runtime_admin.generate_private_hub_auth": "cf408d07c3040e320b60a28d86801ba3d4cffa90a2679cd84295c77d4e2fd175",
-      "runtime_admin.generate_subject_auth": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8",
       "runtime_admin.private_agent_subject_id": "f861f7199d7dd8560cbe2b1fb041e323bec48362b0d4e78fe03183cf6397e682",
       "runtime_admin.private_hub_subject_id": "aa0c5d3a685f22907ecbd295ce914ef970f5d4d3dcd96ab84c9b92ca3746f333",
       "server": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
@@ -16988,7 +16862,6 @@
       "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea",
       "sign_descriptor_bound_invocation": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a",
       "sign_host_attestation": "22835db997358363e107310b9a860a22f9b0b80aa6e7491ccacb6948e17fc074",
-      "sign_invocation": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64",
       "sign_receipt": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71",
       "sign_receipt_with_hosted": "5f1f0a317de185884013b4b677509f854c8f1e188e73f7ea7a7984ad2ca0c8c1",
       "signing": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f",
@@ -17034,13 +16907,10 @@
       "verify_descriptor_bound_invocation_signature": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b",
       "verify_descriptor_bound_signature": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7",
       "verify_host_attestation": "679e648c816b29f742f8e3c25a1f717ede0c589bce47a89957b2ac079fbecb9f",
-      "verify_invocation_signature": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b",
-      "verify_phase": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b",
       "verify_phase_descriptor_bound": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec",
       "verify_receipt_chain": "0529d89c602b6b8df91b91f7b08d146283a1dda458c534649397b43203923f78",
       "verify_receipt_signature": "e74428e999b8301bb2136bd9a09048731873d7ab780ec3ed078863f5519de3de",
-      "verify_receipt_signature_with_hosted": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0",
-      "verify_signature": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
+      "verify_receipt_signature_with_hosted": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0"
     },
     "c_abi": {
       "EasynetDaemonHandle": "b42fdc33bbdd2035243bc4c514ae8859266d8944ba502990f53bf9616b5e1680",
@@ -23265,7 +23135,7 @@
     }
   ],
   "dependency_revisions": {
-    "easynet_axon": "5702e0e85e1b50e1d5a875104b74897c367d8215"
+    "easynet_axon": "6afa52adf5f834395634f1428cd1dd174bcd8da9"
   },
   "provider_implementations": [
     {
@@ -23284,7 +23154,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "5702e0e85e1b50e1d5a875104b74897c367d8215",
+      "axon_revision": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     },
@@ -23304,16 +23174,16 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "5702e0e85e1b50e1d5a875104b74897c367d8215",
+      "axon_revision": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     }
   ],
   "inventory_source_revisions": {
-    "rust": "5702e0e85e1b50e1d5a875104b74897c367d8215",
+    "rust": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "5702e0e85e1b50e1d5a875104b74897c367d8215",
+    "python": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

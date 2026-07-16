@@ -6461,10 +6461,6 @@
           "sha256": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7"
         },
         {
-          "item": "admission.verify_phase",
-          "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
-        },
-        {
           "item": "admission.verify_phase_descriptor_bound",
           "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
         },
@@ -6534,10 +6530,6 @@
             {
               "item": "admission.verify_descriptor_bound_signature",
               "sha256": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7"
-            },
-            {
-              "item": "admission.verify_phase",
-              "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
             },
             {
               "item": "admission.verify_phase_descriptor_bound",
@@ -6611,10 +6603,6 @@
               "sha256": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7"
             },
             {
-              "item": "admission.verify_phase",
-              "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
-            },
-            {
               "item": "admission.verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
             },
@@ -6684,10 +6672,6 @@
             {
               "item": "admission.verify_descriptor_bound_signature",
               "sha256": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7"
-            },
-            {
-              "item": "admission.verify_phase",
-              "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
             },
             {
               "item": "admission.verify_phase_descriptor_bound",
@@ -6761,10 +6745,6 @@
               "sha256": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7"
             },
             {
-              "item": "admission.verify_phase",
-              "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
-            },
-            {
               "item": "admission.verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
             },
@@ -6834,10 +6814,6 @@
             {
               "item": "admission.verify_descriptor_bound_signature",
               "sha256": "87a4ceb1220bf6f7dcb708ff7c52bb1699b583b0050e577de277bd142f67bca7"
-            },
-            {
-              "item": "admission.verify_phase",
-              "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
             },
             {
               "item": "admission.verify_phase_descriptor_bound",
@@ -20476,10 +20452,6 @@
           "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
         },
         {
-          "item": "GeneratedSubjectAuth",
-          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-        },
-        {
           "item": "HostedAttestation",
           "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
         },
@@ -20534,10 +20506,6 @@
         {
           "item": "canonical_host_attestation_bytes",
           "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-        },
-        {
-          "item": "generate_private_agent_auth",
-          "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
         },
         {
           "item": "normalize_authority_proof_hash",
@@ -20636,14 +20604,6 @@
           "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
         },
         {
-          "item": "runtime_admin.GeneratedSubjectAuth",
-          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-        },
-        {
-          "item": "runtime_admin.generate_private_agent_auth",
-          "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-        },
-        {
           "item": "signing.InvocationSigningAuthority",
           "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
         },
@@ -20688,10 +20648,6 @@
             },
             {
               "item": "DelegationProofBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "GeneratedSubjectAuth",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -20749,10 +20705,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -20849,14 +20801,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -20906,10 +20850,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -20964,10 +20904,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -21064,14 +21000,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21121,10 +21049,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -21179,10 +21103,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -21279,14 +21199,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21336,10 +21248,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -21394,10 +21302,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -21494,14 +21398,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21551,10 +21447,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -21609,10 +21501,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -21709,14 +21597,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21766,10 +21646,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -21824,10 +21700,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -21924,14 +21796,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21981,10 +21845,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -22039,10 +21899,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -22139,14 +21995,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -22196,10 +22044,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -22254,10 +22098,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -22354,14 +22194,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -22411,10 +22243,6 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "HostedAttestation",
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
@@ -22469,10 +22297,6 @@
             {
               "item": "canonical_host_attestation_bytes",
               "sha256": "aae8026919eddb1b6a7eb17d3d3d9e9e8d8f64aeef440a923a62baf1689a7200"
-            },
-            {
-              "item": "generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "normalize_authority_proof_hash",
@@ -22569,14 +22393,6 @@
             {
               "item": "federation_directory.SigningAuthority",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
-            },
-            {
-              "item": "runtime_admin.GeneratedSubjectAuth",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
-              "item": "runtime_admin.generate_private_agent_auth",
-              "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -102091,10 +101907,6 @@
           "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
         },
         {
-          "item": "sign_invocation",
-          "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-        },
-        {
           "item": "sign_receipt",
           "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
         },
@@ -102113,10 +101925,6 @@
         {
           "item": "validate_signature_structure",
           "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-        },
-        {
-          "item": "verify_invocation_signature",
-          "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
         },
         {
           "item": "audit.SignedInvocationReceipt",
@@ -102139,10 +101947,6 @@
           "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
         },
         {
-          "item": "axiom.sign_invocation",
-          "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-        },
-        {
           "item": "axiom.sign_receipt",
           "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
         },
@@ -102153,10 +101957,6 @@
         {
           "item": "axiom.signing_key_from_bytes",
           "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-        },
-        {
-          "item": "axiom.verify_invocation_signature",
-          "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
         },
         {
           "item": "bundle.PubkeyMap",
@@ -102210,10 +102010,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102232,10 +102028,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102258,10 +102050,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102272,10 +102060,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -102329,10 +102113,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102351,10 +102131,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102377,10 +102153,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102391,10 +102163,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -102448,10 +102216,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102470,10 +102234,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102496,10 +102256,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102510,10 +102266,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -102567,10 +102319,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102589,10 +102337,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102615,10 +102359,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102629,10 +102369,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -102686,10 +102422,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102708,10 +102440,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102734,10 +102462,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102748,10 +102472,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -102805,10 +102525,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102827,10 +102543,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102853,10 +102565,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102867,10 +102575,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -102924,10 +102628,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102946,10 +102646,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102972,10 +102668,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -102986,10 +102678,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -103043,10 +102731,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -103065,10 +102749,6 @@
             {
               "item": "validate_signature_structure",
               "sha256": "85975432697faee6489f4d6b03a020269d267992aab4dd68a092acf4c51602d4"
-            },
-            {
-              "item": "verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -103091,10 +102771,6 @@
               "sha256": "b6997e074b35d495e4711db6fec94d905378b2940501c73f822c5b045641afea"
             },
             {
-              "item": "axiom.sign_invocation",
-              "sha256": "10f2c733b44f01f7bcb64e4c310e60d431c220242559e26c08d064d53eccda64"
-            },
-            {
               "item": "axiom.sign_receipt",
               "sha256": "cdaf86a2494154f7484d688479137c9ed480359ebab262a7618899021438df71"
             },
@@ -103105,10 +102781,6 @@
             {
               "item": "axiom.signing_key_from_bytes",
               "sha256": "1d3d60d6b28b430af3e6aee8648a595adec7c58bd3330b390d5aef3e6fbc0b72"
-            },
-            {
-              "item": "axiom.verify_invocation_signature",
-              "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
               "item": "bundle.PubkeyMap",
@@ -139747,10 +139419,6 @@
           "sha256": "2547f25175d873666ce952939fa432077166f12f12dd762edcd523a8906d545a"
         },
         {
-          "item": "verify_phase",
-          "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
-        },
-        {
           "item": "verify_phase_descriptor_bound",
           "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
         },
@@ -139850,10 +139518,6 @@
               "sha256": "2547f25175d873666ce952939fa432077166f12f12dd762edcd523a8906d545a"
             },
             {
-              "item": "verify_phase",
-              "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
-            },
-            {
               "item": "verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
             },
@@ -139951,10 +139615,6 @@
             {
               "item": "compute_receipt_hash",
               "sha256": "2547f25175d873666ce952939fa432077166f12f12dd762edcd523a8906d545a"
-            },
-            {
-              "item": "verify_phase",
-              "sha256": "d30fdb6dde6d08f46f980bb6501c6c4c55e4edf47e423845956e2cf9306af99b"
             },
             {
               "item": "verify_phase_descriptor_bound",
