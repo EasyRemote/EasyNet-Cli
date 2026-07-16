@@ -42,7 +42,7 @@ cat >>"$A2A_TOML" <<'TOML'
 
 [input_schema.properties.target_node_uri]
 type = "string"
-description = "Deprecated alias for target_node_ura; accepted during the URI-to-URA migration window."
+description = "Deprecated non-URA alias for target_node_ura accepted during a retired migration window."
 TOML
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?

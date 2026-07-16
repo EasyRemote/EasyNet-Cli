@@ -25,7 +25,7 @@ export const DEVICE_URI = "easynet:///r/example/device/dev-a";
 EOF
   sdk_ura_naming_scan_files "$good"
   if sdk_ura_naming_scan_files "$bad" >"$tmp/out" 2>&1; then
-    echo "check-node-sdk-seam: self-test expected URI-era naming to fail" >&2
+    echo "check-node-sdk-seam: self-test expected retired address-token naming to fail" >&2
     exit 1
   fi
   for expected in AgentURI AbilityUri agentUri DEVICE_URI; do
@@ -45,14 +45,14 @@ fi
 npm test --prefix "$ROOT/sdk/node" >/dev/null
 node --check "$ROOT/sdk/node/index.js" >/dev/null
 
-uri_scan="$(mktemp)"
-trap 'rm -f "$uri_scan"' EXIT
-if grep -RInE "$SDK_URA_NAMING_PATTERN" "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' --exclude-dir='node_modules' >"$uri_scan" 2>/dev/null; then
-  echo "check-node-sdk-seam: URI-era naming found in Node SDK" >&2
-  cat "$uri_scan" >&2
+retired_name_scan="$(mktemp)"
+trap 'rm -f "$retired_name_scan"' EXIT
+if grep -RInE "$SDK_URA_NAMING_PATTERN" "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' --exclude-dir='node_modules' >"$retired_name_scan" 2>/dev/null; then
+  echo "check-node-sdk-seam: retired address-token naming found in Node SDK" >&2
+  cat "$retired_name_scan" >&2
   exit 1
 fi
-rm -f "$uri_scan"
+rm -f "$retired_name_scan"
 trap - EXIT
 
 if grep -RInE '\bbackend_ura\b|\buser_ura\b|backendURA|userURA' "$ROOT/sdk/node" --include='*.js' --include='*.ts' --include='*.md' >/tmp/easynet-node-authority-scan.out 2>/dev/null; then

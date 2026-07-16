@@ -859,6 +859,141 @@ if python_cabi.exists():
                 )
 
 
+# Rule 31: file-resource ownership has one authority split. Host filesystem
+# abilities are Device-owned `fs.*`; user blob resources are owner-local
+# `files.*` abilities executed by the daemon-native `<user>.files` Agent. The
+# OpenAI facade may project `openai.files.*`, but must invoke the user-owned
+# file surface through that explicit authority root instead of reviving
+# `<user>.files.get`-style dispatch names.
+files_store = cli_root / "src/daemon/ability/builtins/resources/files_store/mod.rs"
+if files_store.exists():
+    text = source(files_store)
+    for token, detail in (
+        (
+            'agent_ura(realm, user, "files")',
+            "Files resource surface must declare an explicit daemon-native files executor root",
+        ),
+        (
+            "OwnerKind::User(config.user.clone())",
+            "files.put/get/list must be user-owned resource abilities, not Device system abilities",
+        ),
+        (
+            "ControlPlaneImplementation::native_daemon()",
+            "files.put/get/list must be bound to the daemon-native implementation root",
+        ),
+        (
+            '"files.put"',
+            "Files resource surface must register owner-local files.put",
+        ),
+        (
+            '"files.get"',
+            "Files resource surface must register owner-local files.get",
+        ),
+        (
+            '"files.list"',
+            "Files resource surface must register owner-local files.list",
+        ),
+    ):
+        if token not in text:
+            add("R31_FILE_RESOURCE_OWNERSHIP_FORK", files_store, 1, detail)
+    match = re.search(r"\bOwnerKind::Device\b", text)
+    if match:
+        add(
+            "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+            files_store,
+            line_number(text, match.start()),
+            "user blob files must not be registered as Device-owned system abilities",
+        )
+
+device_files = cli_root / "src/daemon/ability/builtins/device_control/files.rs"
+if device_files.exists():
+    text = source(device_files)
+    for token, detail in (
+        ('"fs.read"', "Device filesystem surface must keep fs.read under device control"),
+        ('"fs.write"', "Device filesystem surface must keep fs.write under device control"),
+        ('"fs.stat"', "Device filesystem surface must keep fs.stat under device control"),
+        ('"fs.list"', "Device filesystem surface must keep fs.list under device control"),
+        ("OwnerKind::Device", "Device filesystem surface must remain Device-owned"),
+    ):
+        if token not in text:
+            add("R31_FILE_RESOURCE_OWNERSHIP_FORK", device_files, 1, detail)
+    for match in re.finditer(r'"files\.(?:put|get|list)"|management_agent_ura', text):
+        add(
+            "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+            device_files,
+            line_number(text, match.start()),
+            "Device filesystem module must not own user blob files.* abilities",
+        )
+
+openai_compat = cli_root / "src/daemon/ability/builtins/integrations/openai_compat.rs"
+if openai_compat.exists():
+    text = source(openai_compat)
+    for method, required_tokens in (
+        (
+            "handle_file_upload_with_context",
+            ("files_store::management_agent_ura", '"files.put"', "invoke_user_owned_rpc"),
+        ),
+        (
+            "handle_file_retrieve_with_context",
+            ("files_store::management_agent_ura", '"files.get"', "invoke_user_owned_rpc"),
+        ),
+        (
+            "deref_to_data_url",
+            ("files_store::management_agent_ura", '"files.get"', "invoke_user_owned_rpc"),
+        ),
+    ):
+        body = rust_method_body(text, method)
+        if body is None:
+            add(
+                "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+                openai_compat,
+                1,
+                f"OpenAI compatibility must keep `{method}` as an explicit files authority adapter",
+            )
+            continue
+        offset, method_body = body
+        for token in required_tokens:
+            if token not in method_body:
+                add(
+                    "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+                    openai_compat,
+                    line_number(text, offset),
+                    f"`{method}` must invoke owner-local files abilities through the files executor root",
+                )
+    legacy_files_dispatch = re.compile(
+        r'["\'][A-Za-z0-9_{}.-]+\.files\.(?:put|get|list)["\']|'
+        r'format!\s*\([^)]*\.files\.(?:put|get|list)'
+    )
+    for match in legacy_files_dispatch.finditer(text):
+        add(
+            "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+            openai_compat,
+            line_number(text, match.start()),
+            "OpenAI compatibility must not revive legacy <user>.files.* dispatch names",
+        )
+
+catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
+if catalog_build.exists():
+    text = source(catalog_build)
+    body = rust_method_body(text, "declare_daemon_native_agent_authorities")
+    if body is None:
+        add(
+            "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+            catalog_build,
+            1,
+            "catalog assembly must declare daemon-native resource executor authorities",
+        )
+    else:
+        offset, method_body = body
+        if "files::management_agent_ura(realm, user)" not in method_body:
+            add(
+                "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+                catalog_build,
+                line_number(text, offset),
+                "catalog assembly must declare the Files executor authority before registration",
+            )
+
+
 # Rule 8: public FFI error JSON must not expose migration/legacy state.
 ffi_root = cli_root / "src/ffi"
 if ffi_root.exists():

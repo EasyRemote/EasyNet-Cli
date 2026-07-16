@@ -107,7 +107,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_bidi.py",
-          "sha256": "ad23496874fcc1fd17d93902e72b9a44866b4e5f2d96aa92c83f7e89a2e20a5f"
+          "sha256": "ccfbf6dba329540503f1afa4dd275cfd5025c399e025b2ef537557184bbe9081"
         }
       ],
       "profile": "runtime_core"
@@ -371,7 +371,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_stream.py",
-          "sha256": "41cf0f98775012c8c408c2b222bcd0e5a9a47cb9b936d41c988408c06e4db872"
+          "sha256": "625f7a873b812ec939f4bed40424aac53277b812d5adb88856ff4a2fcea9a026"
         }
       ],
       "profile": "runtime_core"

@@ -54,10 +54,13 @@ make_good_fixture() {
     "$CLI/src/eal/interpreter" \
     "$CLI/src/daemon/ability/builtins/automation" \
     "$CLI/src/daemon/ability/builtins/agents" \
+    "$CLI/src/daemon/ability/builtins/device_control" \
+    "$CLI/src/daemon/ability/builtins/integrations" \
     "$CLI/src/daemon/execution/mission" \
     "$CLI/src/daemon/execution/mcp" \
     "$CLI/src/daemon/ability/builtins/governance" \
     "$CLI/src/daemon/ability/builtins/resources" \
+    "$CLI/src/daemon/ability/builtins/resources/files_store" \
     "$CLI/src/daemon/ability/catalog/profiles" \
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/invocation/admission" \
@@ -403,6 +406,114 @@ fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool
         repository_assembled: voice_provider_assembly.is_some(),
         executable_delivery_evidence: false,
     };
+}
+
+fn declare_daemon_native_agent_authorities(
+    mut authority_context: AbilityAuthorityContext,
+    identity: &PagesIdentity,
+) -> anyhow::Result<AbilityAuthorityContext> {
+    let Some(user) = identity.user.as_deref() else {
+        return Ok(authority_context);
+    };
+    let realm = identity.realm.as_deref().unwrap_or(crate::core::ura::REALM_EASYNET);
+    let declared_roots = [
+        ("Pages", pages::management_agent_ura(realm, user)),
+        ("Files", files::management_agent_ura(realm, user)),
+    ];
+    for (_executor, authority_root) in declared_roots {
+        authority_context = authority_context.with_declared_agent_authority_root(authority_root)?;
+    }
+    Ok(authority_context)
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/device_control/files.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("fs.read", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("fs.write", OwnerKind::Device, handler_write);
+    reg.register_rpc_with_owner("fs.stat", OwnerKind::Device, handler_stat);
+    reg.register_rpc_with_owner("fs.list", OwnerKind::Device, handler_list);
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/resources/files_store/mod.rs" <<'EOF'
+pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
+    crate::core::ura::agent_ura(realm, user, "files")
+}
+
+fn register_files_rpc(
+    reg: &mut AxonAbilityCatalog,
+    ability: &'static str,
+    owner: OwnerKind,
+    authority_scope: AuthorityScope,
+    manifest: AbilityManifest,
+    handler: LocalRpcHandler,
+) {
+    reg.register_rpc_with_spec_impl_and_authority_scope(
+        ability,
+        owner,
+        authority_scope,
+        manifest,
+        handler,
+        ControlPlaneImplementation::native_daemon(),
+    );
+}
+
+pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
+    let owner = OwnerKind::User(config.user.clone());
+    register_files_rpc(reg, "files.put", owner.clone(), scope(), manifest(), put_handler);
+    register_files_rpc(reg, "files.get", owner.clone(), scope(), manifest(), get_handler);
+    register_files_rpc(reg, "files.list", owner, scope(), manifest(), list_handler);
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/integrations/openai_compat.rs" <<'EOF'
+fn handle_file_upload_with_context(
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let files_authority_root =
+        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
+            &realm, &user,
+        );
+    invoke_user_owned_rpc(
+        registry.as_ref(),
+        &files_authority_root,
+        "files.put",
+        files_subject,
+        store_args,
+    )
+}
+
+fn handle_file_retrieve_with_context(
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let files_authority_root =
+        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
+            &realm, &user,
+        );
+    invoke_user_owned_rpc(
+        registry.as_ref(),
+        &files_authority_root,
+        "files.get",
+        file_subject,
+        json!({ "sha256": file_id }),
+    )
+}
+
+fn deref_to_data_url(
+    ura: &str,
+    dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+) -> anyhow::Result<String> {
+    let (authority_root, ability, args) = (
+        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
+            &parsed.realm,
+            user,
+        ),
+        "files.get".to_string(),
+        json!({ "ura": ura, "path": path }),
+    );
+    invoke_user_owned_rpc(registry.as_ref(), &authority_root, ability, subject, args)
 }
 EOF
   cat >>"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
@@ -1264,6 +1375,33 @@ EOF
 expect_fail \
   "Python C ABI callback repair alias" \
   "R30_SDK_STREAM_BIDI_CALLBACK_ALIAS"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/ability/builtins/integrations/openai_compat.rs" <<'EOF'
+fn legacy_files_dispatch(user: &str) -> String {
+    format!("{user}.files.get")
+}
+EOF
+expect_fail \
+  "OpenAI legacy files dispatch" \
+  "R31_FILE_RESOURCE_OWNERSHIP_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/resources/files_store/mod.rs" <<'EOF'
+pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
+    crate::core::ura::agent_ura(realm, user, "files")
+}
+
+pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
+    let owner = OwnerKind::Device;
+    reg.register_rpc_with_owner("files.put", owner, put_handler);
+    reg.register_rpc_with_owner("files.get", owner, get_handler);
+    reg.register_rpc_with_owner("files.list", owner, list_handler);
+}
+EOF
+expect_fail \
+  "Device-owned files resource surface" \
+  "R31_FILE_RESOURCE_OWNERSHIP_FORK"
 
 make_good_fixture
 mkdir -p "$CLI/src/ffi"
