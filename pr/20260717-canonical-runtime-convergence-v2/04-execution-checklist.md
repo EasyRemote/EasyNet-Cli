@@ -301,6 +301,38 @@
 - [x] Verify Swift focused tests, V2 gate/self-test, and public API manifest
       refresh before committing this slice.
 
+## RF-3 Go Legacy Plain Fixture Naming Hardening Slice
+
+- [x] Identify Go production invocation source that still used retired plain
+      helper names after public export removal.
+- [x] Rename Go plain helper logic to package-private `legacyPlain*` fixture
+      functions.
+- [x] Migrate Go axiom, vector, and admission tests to the explicit legacy
+      fixture names.
+- [x] Update comments and internal error naming so production source does not
+      describe plain helpers as the canonical proof path.
+- [x] Extend the V2 gate and self-test to reject retired Go plain helper names
+      in non-test invocation source.
+- [x] Verify Go invocation/full SDK tests, V2 gate/self-test, and public API
+      manifest refresh before committing this slice.
+
+## RF-3 Rust Legacy Plain Fixture Naming Hardening Slice
+
+- [x] Identify Rust invocation source that still used retired plain helper
+      names after public export removal.
+- [x] Rename Rust plain helper logic to explicit `legacy_plain*` fixture
+      functions.
+- [x] Preserve descriptor-bound public proof/admission helpers and keep the
+      shared signature-bytes verifier neutral.
+- [x] Migrate Rust axiom, bundle, and admission tests to the explicit legacy
+      fixture names.
+- [x] Update comments and internal error naming so Rust production source does
+      not describe plain helpers as the canonical proof path.
+- [x] Extend the V2 gate and self-test to reject retired Rust plain helper
+      names in invocation source.
+- [x] Verify Rust focused/full SDK tests, V2 gate/self-test, and public API
+      manifest refresh before committing this slice.
+
 ## RF-6 Java LocalRuntime Receipt Proof Facts Slice
 
 - [x] Identify that Java receipt constructors reject omitted proof facts but

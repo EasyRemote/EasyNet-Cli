@@ -260,3 +260,23 @@
   surface because users copy them as integration contracts. The V2 RF-3 gate
   therefore scans Swift production invocation source, README, and examples for
   retired plain helper usage.
+- Go package-private names are still architecture signals inside the canonical
+  SDK package. Keeping `canonicalInvocationBytes`, `signInvocation`,
+  `verifyInvocationSignature`, `verifySignature`, or `runAdmission` as normal
+  production helper names preserves RF-3's second proof model even when those
+  symbols are not exported.
+- Go historical plain vector coverage may remain only through explicit
+  `legacyPlain*` fixture names. The V2 RF-3 gate now rejects retired Go plain
+  helper names in non-test invocation source while allowing tests to exercise
+  the renamed legacy fixtures.
+- Rust `cfg(test)` helper names still shape the canonical package vocabulary.
+  Retired plain proof/admission helpers must therefore use explicit
+  `legacy_plain*` names rather than ordinary proof/admission names, even when
+  the functions are not public exports.
+- The Rust signature-bytes verifier remains neutral because descriptor-bound
+  verification and legacy plain fixture verification both need the same
+  Ed25519/key-resolver mechanics. The legacy boundary is the bytes selected
+  for verification, not the generic signature checker.
+- The V2 RF-3 gate now rejects retired Rust plain helper names anywhere under
+  `sdk/rust/src/invocation`; this is stricter than public-surface inventory
+  because package-internal names are architecture examples for future code.

@@ -910,3 +910,87 @@ This evidence verifies the Swift public plain proof helper removal,
 descriptor-bound cross-language bundle production, public example migration,
 and V2 regression coverage for the Swift surface. It does not complete the
 whole SPEC; RF-1 through RF-9 acceptance gates still require full closure.
+
+## RF-3 Go Legacy Plain Fixture Naming Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' sdk/go/easynet/invocation -S --glob '!**/*_test.go'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after the Go production source rename.
+- `go test ./easynet/invocation`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Go production invocation fixture that
+  reintroduces both exported and package-private retired plain helper names.
+- `git diff --check`: passed in EasyNet-Axon before commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `a6a034c5db8b978c9a70eb61aa4305907a7a42ed`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `git diff --check`: passed in EasyNet-Cli.
+
+This evidence verifies that Go production invocation source no longer
+normalizes retired plain proof/admission helper names. It does not complete
+RF-3 globally because final package/export/vector/example audit and legacy
+implementation deletion remain separate closure work.
+
+## RF-3 Rust Legacy Plain Fixture Naming Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b' sdk/rust/src/invocation -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after the Rust invocation source rename.
+- `cargo test -q invocation::axiom --lib`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust`:
+  passed, 50 tests.
+- `cargo test -q invocation::admission --lib`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust`:
+  passed, 22 tests.
+- `cargo test -q invocation::bundle --lib`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust`:
+  passed, 6 tests.
+- `cargo test -q --lib`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust`:
+  passed, 222 tests.
+- `cargo check --all-targets`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust`:
+  passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust`:
+  passed.
+- `git diff --check` from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed before commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `b95ae265fa30ec3b04c98b6b23d05bc2c8043dd4`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Rust invocation source fixture that
+  reintroduces a retired plain helper name.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `git diff --check`: passed in EasyNet-Cli.
+
+This evidence verifies that Rust invocation source no longer normalizes
+retired plain proof/admission helper names, while descriptor-bound proof and
+admission helpers remain the canonical runtime boundary. It does not complete
+RF-3 globally because final package/export/vector/example audit and legacy
+implementation deletion remain separate closure work.

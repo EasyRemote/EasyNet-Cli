@@ -290,6 +290,10 @@ check_axon_plain_proof_public_boundary_contract() {
     && rg -n 'pub fn (canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b|pub use (admission|axiom)::\{[^}]*\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b' "$rust_invocation"; then
     fail "Axon Rust exposes plain proof/admission helpers"
   fi
+  if [[ -d "$rust_invocation" ]] \
+    && rg -n '\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b' "$rust_invocation"; then
+    fail "Axon Rust invocation source preserves retired plain proof/admission helper names"
+  fi
 
   local python_invocation="$AXON_ROOT/sdk/python/easynet_axon/invocation"
   if [[ -d "$python_invocation" ]] \
@@ -304,6 +308,11 @@ check_axon_plain_proof_public_boundary_contract() {
   if ((${#go_plain_paths[@]} > 0)) \
     && rg -n '^func (CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b|\b(CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b' "${go_plain_paths[@]}"; then
     fail "Axon Go exposes plain proof/admission helpers"
+  fi
+  if [[ -d "$go_invocation" ]] \
+    && rg -n '\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' "$go_invocation" \
+      --glob '!**/*_test.go'; then
+    fail "Axon Go production invocation source preserves retired plain proof/admission helper names"
   fi
 
   local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
@@ -741,6 +750,8 @@ PY
     fail "self-test expected Axon product protocol boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-plain-proof"
+  printf 'pub(crate) fn canonical_invocation_bytes() {}\n' \
+    > "$tmp/axon-plain-proof/sdk/rust/src/invocation/axiom.rs"
   printf 'def canonical_invocation_bytes(env):\n  return b""\n' \
     > "$tmp/axon-plain-proof/sdk/python/easynet_axon/invocation/axiom.py"
   if ( AXON_ROOT="$tmp/axon-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
@@ -748,7 +759,7 @@ PY
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-plain-proof"
   mkdir -p "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation"
-  printf 'package invocation\nfunc CanonicalInvocationBytes() []byte { return nil }\n' \
+  printf 'package invocation\nfunc CanonicalInvocationBytes() []byte { return nil }\nfunc canonicalInvocationBytes() []byte { return nil }\n' \
     > "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation/axiom.go"
   if ( AXON_ROOT="$tmp/axon-go-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Go plain proof boundary gate to fail"

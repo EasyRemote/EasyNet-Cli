@@ -746,3 +746,49 @@ helper usage.
 This slice closes the Swift public plain proof helper surface. It does not
 complete RF-3 globally until the remaining public-surface manifest and
 language/package audits are clean across all SDKs.
+
+## Current Slice: RF-3 Go Legacy Plain Fixture Naming Hardening
+
+Owner: EasyNet-Axon Go invocation package and EasyNet-Cli V2 conformance gate.
+
+The Go public plain proof helper removal made the helpers package-private, but
+the production invocation package still named the retired plain byte/sign/verify
+and admission functions as if they were ordinary package internals:
+`canonicalInvocationBytes`, `signInvocation`, `verifyInvocationSignature`,
+`verifySignature`, and `runAdmission`. That left the wrong proof model
+semantically normalized inside the canonical package even though it was no
+longer exported.
+
+The Go package now uses explicit `legacyPlain*` names for the retired fixture
+path. Descriptor-bound helpers remain the public proof/admission boundary.
+Historical Go tests can still cover old plain vector stability, but production
+source can no longer reintroduce the retired helper names without failing the
+V2 gate.
+
+This slice removes a Go-internal RF-3 naming seam. It does not complete RF-3
+globally because remaining package/export/vector/example audit and final
+legacy deletion still require separate closure evidence.
+
+## Current Slice: RF-3 Rust Legacy Plain Fixture Naming Hardening
+
+Owner: EasyNet-Axon Rust invocation package and EasyNet-Cli V2 conformance
+gate.
+
+The Rust public plain proof helper removal restricted plain helpers to
+`cfg(test)`, but the production invocation modules still carried retired names
+such as `canonical_invocation_bytes`, `sign_invocation`,
+`verify_invocation_signature`, `verify_signature`, `verify_phase`, and
+`run_admission`. Even test-only helpers inside the canonical Rust package
+should not read as the normal proof/admission model.
+
+The Rust package now names the retired plain path as `legacy_plain_*`,
+`sign_legacy_plain_invocation`, `verify_legacy_plain_invocation_signature`,
+`verify_legacy_plain_signature`, `verify_phase_legacy_plain`, and
+`run_legacy_plain_admission`. Descriptor-bound helpers remain the normal
+runtime proof/admission boundary, and the common signature-bytes verifier keeps
+a neutral name because it is shared by descriptor-bound verification.
+
+The V2 gate now rejects retired Rust plain helper names anywhere in the Rust
+invocation source. This removes another RF-3 semantic naming seam; it does not
+complete RF-3 because final legacy deletion and remaining package/vector audit
+still require closure evidence.
