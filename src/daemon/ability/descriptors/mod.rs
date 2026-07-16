@@ -350,27 +350,29 @@ impl AbilityDescriptorRegistry {
     }
 }
 
-pub fn governed_schema_summary(
-    input: &Value,
-    output: &Value,
-    access_policy: Value,
-    hints: Value,
-    receipt_semantics: Value,
-    admission_action: Value,
-    description: &str,
-    source: &str,
-    metadata: Value,
-) -> Value {
+pub(crate) struct GovernedSchemaProjection<'a> {
+    pub(crate) input: &'a Value,
+    pub(crate) output: &'a Value,
+    pub(crate) access_policy: Value,
+    pub(crate) hints: Value,
+    pub(crate) receipt_semantics: Value,
+    pub(crate) admission_action: Value,
+    pub(crate) description: &'a str,
+    pub(crate) source: &'a str,
+    pub(crate) metadata: Value,
+}
+
+pub(crate) fn governed_schema_summary(projection: GovernedSchemaProjection<'_>) -> Value {
     serde_json::json!({
-        "input": input,
-        "output": output,
-        "access_policy": access_policy,
-        "hints": hints,
-        "receipt_semantics": receipt_semantics,
-        "admission_action": admission_action,
-        "description": description,
-        "source": source,
-        "metadata": metadata,
+        "input": projection.input,
+        "output": projection.output,
+        "access_policy": projection.access_policy,
+        "hints": projection.hints,
+        "receipt_semantics": projection.receipt_semantics,
+        "admission_action": projection.admission_action,
+        "description": projection.description,
+        "source": projection.source,
+        "metadata": projection.metadata,
     })
 }
 

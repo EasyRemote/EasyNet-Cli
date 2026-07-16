@@ -418,88 +418,83 @@ impl MissionRunAggregate {
 }
 
 #[derive(Debug, Clone)]
-struct MissionRunTerminalTransition {
+struct MissionRunTerminalContext {
     name: String,
     source_file: Option<String>,
     trace_id: String,
     started_at: String,
     duration_ms: u64,
+    invocation_context: Option<ParentInvocationContext>,
+}
+
+#[derive(Debug, Clone)]
+struct MissionRunCompletion {
+    steps_total: usize,
+    steps_completed: usize,
+    steps_failed: usize,
+    ability_graph_traces: Option<Vec<serde_json::Value>>,
+}
+
+impl MissionRunCompletion {
+    fn status(&self) -> MissionRunStatus {
+        if self.steps_failed > 0 {
+            MissionRunStatus::Partial
+        } else {
+            MissionRunStatus::Ok
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MissionRunFailure {
+    steps_total: usize,
+    error: String,
+}
+
+#[derive(Debug, Clone)]
+struct MissionRunTerminalTransition {
+    context: MissionRunTerminalContext,
     status: MissionRunStatus,
     error: Option<String>,
     steps_total: usize,
     steps_completed: usize,
     steps_failed: usize,
     ability_graph_traces: Option<Vec<serde_json::Value>>,
-    invocation_context: Option<ParentInvocationContext>,
 }
 
 impl MissionRunTerminalTransition {
-    fn completed(
-        name: String,
-        source_file: Option<String>,
-        trace_id: String,
-        started_at: String,
-        duration_ms: u64,
-        steps_total: usize,
-        steps_completed: usize,
-        steps_failed: usize,
-        ability_graph_traces: Option<Vec<serde_json::Value>>,
-        invocation_context: Option<ParentInvocationContext>,
-    ) -> Self {
+    fn completed(context: MissionRunTerminalContext, completion: MissionRunCompletion) -> Self {
         Self {
-            name,
-            source_file,
-            trace_id,
-            started_at,
-            duration_ms,
-            status: if steps_failed > 0 {
-                MissionRunStatus::Partial
-            } else {
-                MissionRunStatus::Ok
-            },
+            context,
+            status: completion.status(),
             error: None,
-            steps_total,
-            steps_completed,
-            steps_failed,
-            ability_graph_traces,
-            invocation_context,
+            steps_total: completion.steps_total,
+            steps_completed: completion.steps_completed,
+            steps_failed: completion.steps_failed,
+            ability_graph_traces: completion.ability_graph_traces,
         }
     }
 
-    fn failed(
-        name: String,
-        source_file: Option<String>,
-        trace_id: String,
-        started_at: String,
-        duration_ms: u64,
-        steps_total: usize,
-        error: String,
-        invocation_context: Option<ParentInvocationContext>,
-    ) -> Self {
+    fn failed(context: MissionRunTerminalContext, failure: MissionRunFailure) -> Self {
         Self {
-            name,
-            source_file,
-            trace_id,
-            started_at,
-            duration_ms,
+            context,
             status: MissionRunStatus::Error,
-            error: Some(error),
-            steps_total,
+            error: Some(failure.error),
+            steps_total: failure.steps_total,
             steps_completed: 0,
             steps_failed: 0,
             ability_graph_traces: None,
-            invocation_context,
         }
     }
 
     fn running_projection(&self) -> MissionRunMeta {
         MissionRunMeta {
-            name: self.name.clone(),
-            source_file: self.source_file.clone(),
-            trace_id: self.trace_id.clone(),
-            started_at: self.started_at.clone(),
+            name: self.context.name.clone(),
+            source_file: self.context.source_file.clone(),
+            trace_id: self.context.trace_id.clone(),
+            started_at: self.context.started_at.clone(),
             status: MissionRunStatus::Running,
-            invocation_context: self.invocation_context.clone(),
+            invocation_context: self.context.invocation_context.clone(),
             ..Default::default()
         }
     }
@@ -507,18 +502,18 @@ impl MissionRunTerminalTransition {
     fn into_meta(self) -> MissionRunMeta {
         debug_assert!(self.status.is_terminal());
         MissionRunMeta {
-            name: self.name,
-            source_file: self.source_file,
-            trace_id: self.trace_id,
-            started_at: self.started_at,
-            duration_ms: self.duration_ms,
+            name: self.context.name,
+            source_file: self.context.source_file,
+            trace_id: self.context.trace_id,
+            started_at: self.context.started_at,
+            duration_ms: self.context.duration_ms,
             status: self.status,
             error: self.error,
             steps_total: self.steps_total,
             steps_completed: self.steps_completed,
             steps_failed: self.steps_failed,
             ability_graph_traces: self.ability_graph_traces,
-            invocation_context: self.invocation_context,
+            invocation_context: self.context.invocation_context,
         }
     }
 
@@ -529,18 +524,20 @@ impl MissionRunTerminalTransition {
             "test helper requires terminal meta"
         );
         Self {
-            name: meta.name,
-            source_file: meta.source_file,
-            trace_id: meta.trace_id,
-            started_at: meta.started_at,
-            duration_ms: meta.duration_ms,
+            context: MissionRunTerminalContext {
+                name: meta.name,
+                source_file: meta.source_file,
+                trace_id: meta.trace_id,
+                started_at: meta.started_at,
+                duration_ms: meta.duration_ms,
+                invocation_context: meta.invocation_context,
+            },
             status: meta.status,
             error: meta.error,
             steps_total: meta.steps_total,
             steps_completed: meta.steps_completed,
             steps_failed: meta.steps_failed,
             ability_graph_traces: meta.ability_graph_traces,
-            invocation_context: meta.invocation_context,
         }
     }
 }
@@ -920,16 +917,20 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
             }
             let (meta, meta_write) =
                 run_dir.record_terminal(MissionRunTerminalTransition::completed(
-                    ir.name.clone(),
-                    opts.source_label.clone(),
-                    run_id.clone(),
-                    started_at,
-                    report.total_elapsed_ms,
-                    total_steps,
-                    report.steps_completed,
-                    steps_failed,
-                    ability_graph_traces,
-                    opts.invocation_context.clone(),
+                    MissionRunTerminalContext {
+                        name: ir.name.clone(),
+                        source_file: opts.source_label.clone(),
+                        trace_id: run_id.clone(),
+                        started_at,
+                        duration_ms: report.total_elapsed_ms,
+                        invocation_context: opts.invocation_context.clone(),
+                    },
+                    MissionRunCompletion {
+                        steps_total: total_steps,
+                        steps_completed: report.steps_completed,
+                        steps_failed,
+                        ability_graph_traces,
+                    },
                 ));
             if let Err(e) = meta_write {
                 eprintln!(
@@ -969,14 +970,18 @@ pub fn run_mission_inproc(source: &str, opts: MissionRunOpts) -> anyhow::Result<
             let error = e.to_string();
             let (_meta, meta_write) =
                 run_dir.record_terminal(MissionRunTerminalTransition::failed(
-                    ir.name.clone(),
-                    opts.source_label.clone(),
-                    run_id,
-                    started_at,
-                    duration_ms,
-                    total_steps,
-                    error.clone(),
-                    opts.invocation_context.clone(),
+                    MissionRunTerminalContext {
+                        name: ir.name.clone(),
+                        source_file: opts.source_label.clone(),
+                        trace_id: run_id,
+                        started_at,
+                        duration_ms,
+                        invocation_context: opts.invocation_context.clone(),
+                    },
+                    MissionRunFailure {
+                        steps_total: total_steps,
+                        error: error.clone(),
+                    },
                 ));
             if let Err(write_err) = meta_write {
                 eprintln!(

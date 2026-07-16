@@ -295,27 +295,6 @@ impl MaterializedAbilityControlPlaneRegistration {
 }
 
 impl AbilityControlPlaneRegistry {
-    pub fn register(
-        &mut self,
-        ability: impl Into<String>,
-        call_mode: CallMode,
-        admission_action: AdmissionAction,
-        manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
-        authority_scope: AuthorityScope,
-        runtime_env: RuntimeEnv,
-        impl_source: AbilityImplSource,
-    ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
-        self.register_registration(AbilityControlPlaneRegistration::new(
-            ability,
-            call_mode,
-            admission_action,
-            manifest,
-            authority_scope,
-            runtime_env,
-            impl_source,
-        ))
-    }
-
     pub fn register_registration(
         &mut self,
         registration: AbilityControlPlaneRegistration<'_>,
@@ -764,19 +743,37 @@ mod tests {
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
     const LOCAL_AGENT_URA: &str = "easynet:///r/default/agent/user.assistant";
 
+    fn native_registration<'a>(
+        ability: impl Into<String>,
+        call_mode: CallMode,
+        admission_action: AdmissionAction,
+        manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
+        authority_scope: AuthorityScope,
+        runtime_env: RuntimeEnv,
+    ) -> AbilityControlPlaneRegistration<'a> {
+        AbilityControlPlaneRegistration::new(
+            ability,
+            call_mode,
+            admission_action,
+            manifest,
+            authority_scope,
+            runtime_env,
+            AbilityImplSource::NativeDaemon,
+        )
+    }
+
     #[test]
     fn register_writes_descriptor_authority_and_impl() {
         let mut registry = AbilityControlPlaneRegistry::default();
         let record = registry
-            .register(
+            .register_registration(native_registration(
                 "fs.read",
                 CallMode::Rpc,
                 AdmissionAction::Read,
                 None,
                 AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         assert_eq!(record.descriptor().version.as_str(), "1.0.0");
         assert!(record.authority().predicate().governs_advertise());
@@ -803,15 +800,14 @@ mod tests {
         .unwrap();
         let mut registry = AbilityControlPlaneRegistry::default();
         let record = registry
-            .register(
+            .register_registration(native_registration(
                 "agent.search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 Some(&manifest),
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:manifest").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert_eq!(record.descriptor().version.as_str(), "2.3.4");
@@ -878,15 +874,14 @@ mod tests {
     fn register_persists_owner_local_ability_ura_without_execution_prefix() {
         let mut registry = AbilityControlPlaneRegistry::default();
         let record = registry
-            .register(
+            .register_registration(native_registration(
                 "assistant.chat",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert_eq!(record.ability(), "assistant.chat");
@@ -1000,26 +995,24 @@ mod tests {
     fn register_keeps_same_ability_version_modes_distinct() {
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Stream,
                 AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:stream").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         let rpc = registry
@@ -1049,26 +1042,24 @@ mod tests {
     fn keys_and_records_enumerate_every_authority_mode_row() {
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Stream,
                 AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:stream").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         let records = registry.records();
@@ -1098,26 +1089,24 @@ mod tests {
     fn register_keeps_same_public_name_distinct_across_authority_roots() {
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", "easynet:///r/default/agent/user.a").unwrap(),
                 RuntimeEnv::new("env:a").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", "easynet:///r/default/agent/user.b").unwrap(),
                 RuntimeEnv::new("env:b").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         let err = registry
@@ -1137,26 +1126,24 @@ mod tests {
         let owner_a = "easynet:///r/default/agent/user.a";
         let owner_b = "easynet:///r/default/agent/user.b";
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", owner_b).unwrap(),
                 RuntimeEnv::new("env:b").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert_eq!(
@@ -1196,37 +1183,34 @@ mod tests {
         let owner_a = "easynet:///r/default/agent/user.a";
         let owner_b = "easynet:///r/default/agent/user.b";
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a-rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Stream,
                 AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a-stream").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", owner_b).unwrap(),
                 RuntimeEnv::new("env:b-rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert!(registry.remove_for_authority(owner_a, "search"));
@@ -1260,15 +1244,14 @@ mod tests {
         .unwrap();
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
                 AdmissionAction::Invoke,
                 Some(&manifest),
                 AuthorityScope::new("agent:a", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:v2").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert_eq!(

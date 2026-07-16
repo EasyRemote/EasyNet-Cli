@@ -1010,17 +1010,21 @@ impl AbilityDescriptor {
     }
 
     fn governed_schema_summary(&self) -> Value {
-        let access_policy = self.governed_access_policy_summary();
         crate::daemon::ability::descriptors::governed_schema_summary(
-            &self.schema_summary.input,
-            &self.schema_summary.output_receipt_body,
-            access_policy,
-            serde_json::to_value(&self.hints).expect("ability hints serialize"),
-            serde_json::to_value(&self.receipt_semantics).expect("receipt semantics serialize"),
-            serde_json::to_value(self.admission_action).expect("admission action serializes"),
-            &self.description,
-            &self.source,
-            serde_json::to_value(&self.metadata).expect("descriptor metadata serializes"),
+            crate::daemon::ability::descriptors::GovernedSchemaProjection {
+                input: &self.schema_summary.input,
+                output: &self.schema_summary.output_receipt_body,
+                access_policy: self.governed_access_policy_summary(),
+                hints: serde_json::to_value(&self.hints).expect("ability hints serialize"),
+                receipt_semantics: serde_json::to_value(&self.receipt_semantics)
+                    .expect("receipt semantics serialize"),
+                admission_action: serde_json::to_value(self.admission_action)
+                    .expect("admission action serializes"),
+                description: &self.description,
+                source: &self.source,
+                metadata: serde_json::to_value(&self.metadata)
+                    .expect("descriptor metadata serializes"),
+            },
         )
     }
 
