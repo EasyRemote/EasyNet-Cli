@@ -36,11 +36,6 @@
 % Companion (page sibling):       AXON-RFC-006-A-easynet-pages.tex
 % Companion (URA + ontology):     AXON-RFC-001-plan-v4.1.5.md
 % Companion (ontology theorem):   EasyNet-Axon/document/concepts/ONTOLOGY_AGENT_ABILITY.md
-% Backups:
-%   AXON-RFC-006-B-easynet-webapp.v0.3.tex.bak     (state-type detour)
-%   AXON-RFC-006-B-easynet-webapp.v0.4.tex.bak     (resource-as-state-type)
-%   AXON-RFC-006-B-easynet-webapp.v0.5.tex.bak     (project-as-resource, dot-only)
-%   AXON-RFC-006-B-easynet-webapp.v0.5.1.tex.bak   (feature-design last form)
 % ──────────────────────────────────────────────────────────────────────────
 
 \usepackage[margin=1in]{geometry}
@@ -765,11 +760,10 @@ the Go-backend Hub for production, the
 \texttt{forward\_invoke} dispatch path, the bounded operational
 receipt ring buffer.
 
-The v0.5.1 backup file is canonical for those details:
-\texttt{AXON-RFC-006-B-easynet-webapp.v0.5.1.tex.bak} in
-\texttt{docs/rfc/}. Where v0.5.1 contradicts v0.6's invariants
-(it does not, in any place this author has identified, but
-future readers should verify), v0.6 wins.
+The implementation details retained from v0.5.1 are consolidated
+below. This v0.6 document is the only canonical specification;
+deleted historical snapshots are not normative inputs to an
+implementation or conformance review.
 
 \subsection{The MVP: a witness, not a deliverable}
 

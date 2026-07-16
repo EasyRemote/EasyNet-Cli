@@ -521,8 +521,8 @@ func TestCABIRuntimeTransportDrivesStreamAndBidiCallbacks(t *testing.T) {
 
 func TestCABICallbackInboxOverflowIsBounded(t *testing.T) {
 	inbox := newCABICallbackInbox(1)
-	inbox.push([]byte(`{"sequence":1,"kind":"chunk","terminal":false}`))
-	inbox.push([]byte(`{"sequence":2,"kind":"chunk","terminal":false}`))
+	inbox.push([]byte(`{"sequence":1,"kind":"data","terminal":false}`))
+	inbox.push([]byte(`{"sequence":2,"kind":"data","terminal":false}`))
 
 	_, err := inbox.recv(context.Background())
 
@@ -659,7 +659,7 @@ int32_t easynet_signed_invocation_free(uint64_t signed_id) { (void)signed_id; re
 int32_t easynet_invocation_stream_open(uint64_t handle, const char *invocation_json, stream_callback_t on_chunk, void *user_data, uint64_t *out_stream_id) {
 	(void)handle; (void)invocation_json;
 	*out_stream_id = 404;
-	on_chunk(user_data, "{\"sequence\":1,\"kind\":\"chunk\",\"state\":\"Open\",\"terminal\":false,\"payload_json\":{\"step\":1}}");
+	on_chunk(user_data, "{\"sequence\":1,\"kind\":\"data\",\"state\":\"Open\",\"terminal\":false,\"payload_json\":{\"step\":1}}");
 	on_chunk(user_data, "{\"sequence\":2,\"kind\":\"terminal\",\"state\":\"Completed\",\"terminal\":true}");
 	return 0;
 }

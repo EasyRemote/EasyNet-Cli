@@ -1769,7 +1769,7 @@ func directStreamEventKind(terminal bool) string {
 	if terminal {
 		return "terminal"
 	}
-	return "chunk"
+	return "data"
 }
 
 func directOutputJSON(payload []byte, contentType string) any {

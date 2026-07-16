@@ -136,7 +136,7 @@ def _stream(events: list[dict[str, object]]) -> StreamHandle:
 def _stream_event(sequence: int, payload: dict[str, object]) -> dict[str, object]:
     return {
         "sequence": sequence,
-        "kind": "chunk",
+        "kind": "data",
         "state": "Open",
         "terminal": False,
         "payload_content_type": "application/json",

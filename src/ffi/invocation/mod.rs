@@ -5467,7 +5467,7 @@ fn stream_chunk_json(
     let proven_terminal = terminal_receipt.is_some();
     Ok(serde_json::json!({
         "ok": chunk.error.is_none(),
-        "kind": "chunk",
+        "kind": if proven_terminal { "terminal" } else { "data" },
         "invocation_id": chunk.invocation_id,
         "selected_node_id": chunk.selected_node_id,
         "scheduling_reason": chunk.scheduling_reason,
@@ -8118,7 +8118,7 @@ mod tests {
         };
         let value = stream_chunk_json(&mut InboundReceiptCheckpointVerifier::new(), chunk).unwrap();
         assert_eq!(value["ok"], true);
-        assert_eq!(value["kind"], "chunk");
+        assert_eq!(value["kind"], "data");
         assert_eq!(value["sequence"], 7);
         assert_eq!(value["terminal"], false);
         assert_eq!(value["payload_content_type"], "application/json");
@@ -8150,13 +8150,13 @@ mod tests {
 
         rt.block_on(async {
             let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
-            tx.try_send(br#"{"sequence":1,"kind":"chunk"}"#.to_vec())
+            tx.try_send(br#"{"sequence":1,"kind":"data"}"#.to_vec())
                 .unwrap();
 
             let sender = tokio::spawn(async move {
                 send_callback_frame_or_backpressure(
                     &tx,
-                    br#"{"sequence":2,"kind":"chunk"}"#.to_vec(),
+                    br#"{"sequence":2,"kind":"data"}"#.to_vec(),
                     stream_callback_backpressure_event(2, 1),
                 )
                 .await
@@ -8165,7 +8165,7 @@ mod tests {
 
             assert_eq!(
                 rx.recv().await.unwrap(),
-                br#"{"sequence":1,"kind":"chunk"}"#.to_vec()
+                br#"{"sequence":1,"kind":"data"}"#.to_vec()
             );
             assert!(!sender.await.unwrap());
             let value =

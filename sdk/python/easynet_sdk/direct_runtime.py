@@ -1082,7 +1082,7 @@ def _stream_chunk_json(chunk: Any) -> bytes:
     error = _stream_chunk_error(chunk)
     event: dict[str, object] = {
         "sequence": int(chunk.sequence) + 1,
-        "kind": "terminal" if _stream_chunk_terminal(chunk) else "chunk",
+        "kind": "terminal" if _stream_chunk_terminal(chunk) else "data",
         "state": _state_name(chunk.state),
         "terminal": _stream_chunk_terminal(chunk),
         "payload_content_type": content_type,

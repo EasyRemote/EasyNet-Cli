@@ -336,8 +336,8 @@ func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next first: %v", err)
 	}
-	if first.Sequence() != 1 || first.Terminal() {
-		t.Fatalf("first = seq %d terminal %v", first.Sequence(), first.Terminal())
+	if first.Sequence() != 1 || first.Kind() != "data" || first.Terminal() {
+		t.Fatalf("first = seq %d kind %s terminal %v", first.Sequence(), first.Kind(), first.Terminal())
 	}
 	terminal, err := stream.Next(context.Background())
 	if err != nil {

@@ -92,8 +92,8 @@ func TestDirectoryHelpersRejectUnboundedCursorAndSurfaceNegativeDetail(t *testin
 
 func TestDirectorySubscriptionRequiresSnapshotThenLiveDeltas(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"kind":"chunk","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"type":"snapshot","agents":[],"snapshot_unix_ms":1}}`,
-		`{"sequence":2,"kind":"chunk","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"type":"agent_advertised","agent_ura":"easynet:///r/example/agent/alice.worker","signing_authority":{"kind":"self_signed"},"replaced_prior":false,"unix_ms":2}}`,
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"type":"snapshot","agents":[],"snapshot_unix_ms":1}}`,
+		`{"sequence":2,"kind":"data","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"type":"agent_advertised","agent_ura":"easynet:///r/example/agent/alice.worker","signing_authority":{"kind":"self_signed"},"replaced_prior":false,"unix_ms":2}}`,
 	}}
 	handle, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"directory-1","state":"Opening","max_buffered_events":8}`))
 	if err != nil {
@@ -118,7 +118,7 @@ func TestDirectorySubscriptionRequiresSnapshotThenLiveDeltas(t *testing.T) {
 
 func TestDirectorySubscriptionFailsOnDeltaBeforeSnapshot(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"kind":"chunk","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"type":"heartbeat","unix_ms":1}}`,
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"type":"heartbeat","unix_ms":1}}`,
 	}}
 	handle, _ := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"directory-1","state":"Opening","max_buffered_events":8}`))
 	subscription := newDirectorySubscription(handle)

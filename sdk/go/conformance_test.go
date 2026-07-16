@@ -40,8 +40,8 @@ func TestConformanceSevenLanguageCapabilityMatrix(t *testing.T) {
 
 func TestConformanceStreamAndBidiBackpressureBounds(t *testing.T) {
 	streamTransport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"kind":"chunk","state":"Open","terminal":false}`,
-		`{"sequence":2,"kind":"chunk","state":"Open","terminal":false}`,
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false}`,
+		`{"sequence":2,"kind":"data","state":"Open","terminal":false}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(streamTransport, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":1}`))
 	if err != nil {

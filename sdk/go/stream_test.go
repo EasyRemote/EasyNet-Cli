@@ -37,7 +37,7 @@ func (m *memoryStreamTransport) Close(ctx context.Context) error {
 
 func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"kind":"chunk","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"step":1},"selected_node_id":"node-a","scheduling_reason":"direct","elapsed_ms":11}`,
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"step":1},"selected_node_id":"node-a","scheduling_reason":"direct","elapsed_ms":11}`,
 		`{"sequence":2,"kind":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true}}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}`))
@@ -81,12 +81,22 @@ func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 }
 
 func TestStreamEventDoesNotAcceptLegacyContentTypeAlias(t *testing.T) {
-	event, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"chunk","content_type":"application/json"}`))
+	event, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"data","content_type":"application/json"}`))
 	if err != nil {
 		t.Fatalf("NewStreamEventFromJSON: %v", err)
 	}
 	if event.PayloadContentType() != "" {
 		t.Fatalf("legacy content_type alias populated payload content type: %q", event.PayloadContentType())
+	}
+}
+
+func TestStreamEventRejectsLegacyChunkKind(t *testing.T) {
+	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"chunk","state":"Open","terminal":false}`))
+	if err == nil {
+		t.Fatalf("NewStreamEventFromJSON accepted legacy chunk kind")
+	}
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -210,8 +220,8 @@ func TestStreamHandleRejectsTerminalCancelOutcome(t *testing.T) {
 
 func TestStreamHandleEnforcesBufferBound(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"kind":"chunk","state":"Open","terminal":false}`,
-		`{"sequence":2,"kind":"chunk","state":"Open","terminal":false}`,
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false}`,
+		`{"sequence":2,"kind":"data","state":"Open","terminal":false}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":1}`))
 	if err != nil {
@@ -230,7 +240,7 @@ func TestStreamHandleEnforcesBufferBound(t *testing.T) {
 }
 
 func TestStreamEventRejectsNegativeElapsed(t *testing.T) {
-	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"chunk","state":"Open","terminal":false,"elapsed_ms":-1}`))
+	_, err := NewStreamEventFromJSON([]byte(`{"sequence":1,"kind":"data","state":"Open","terminal":false,"elapsed_ms":-1}`))
 	if err == nil {
 		t.Fatalf("NewStreamEventFromJSON succeeded with negative elapsed")
 	}

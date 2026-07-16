@@ -2,7 +2,7 @@
 
 % ──────────────────────────────────────────────────────────────────────────
 % AXON-RFC-006 Appendix C — OpenAI Compatibility as Agent Dispatch View.
-%                            Capability-URI API keys.
+%                            Capability-URA API keys.
 % Status: Draft v0.1.
 %
 %   RFC-006-C is the second reference realisation of the paradigm
@@ -36,7 +36,7 @@
 %                                 cached state; no canonical-
 %                                 receipt mutation outside the
 %                                 single auth-trail entry.
-%     INV-2  Capability-URI Key — API keys are minted by keyring
+%     INV-2  Capability-URA Key — API keys are minted by keyring
 %                                 abilities, addressed as
 %                                 `resource/api_key.<id>`,
 %                                 and self-authoritative
@@ -115,7 +115,7 @@
     keywordstyle=\color{blue!70!black}\bfseries,
     commentstyle=\color{green!40!black}\itshape,
     stringstyle=\color{red!60!black},
-    morekeywords={ability,resource,user,agent,hub,kind,realm,owner,uri,subject,caller,callee,receipt,call,let,mission,with,timeout,on,fn,struct,impl,pub,async,await,assume,axiom,invariant,capability},
+    morekeywords={ability,resource,user,agent,hub,kind,realm,owner,ura,subject,caller,callee,receipt,call,let,mission,with,timeout,on,fn,struct,impl,pub,async,await,assume,axiom,invariant,capability},
     columns=fullflexible,
     keepspaces=true,
     aboveskip=0.6em,
@@ -177,7 +177,7 @@
     \vspace{-2em}
     \textbf{\Large AXON-RFC-006 Appendix C (v0.1):}\\[0.2em]
     \textbf{\Large OpenAI Compatibility as Agent Dispatch View,}\\[0.1em]
-    \textbf{\Large Capability-URI API Keys}\\[0.4em]
+    \textbf{\Large Capability-URA API Keys}\\[0.4em]
     \large LLM endpoints are not a new ontology.\\
     \large Every \texttt{<agent>.chat} ability is an OpenAI-shape\\
     \large \texttt{/v1/chat/completions} model after one stream filter.
@@ -210,7 +210,7 @@ minted by keyring abilities and addressed as
 the boundary is presence of a capability, and revocation is a
 single keyring call. Four normative invariants centre v0.1:
 Adapter Purity (the OpenAI surface mutates nothing it would not
-have mutated through the regular dispatch path), Capability-URI
+have mutated through the regular dispatch path), Capability-URA
 Key (API keys are URAs, not OAuth tokens), Filter Determinism
 (the stream-json $\to$ SSE projection is deterministic over the
 dispatch sequence), and Auth Receipt Trail (every request mints
@@ -436,7 +436,7 @@ wire-shape transformation has stopped being an adapter and is
 now an authority. INV-1 forbids it at the specification layer,
 not at the implementation layer.
 
-\subsection{INV-2 --- Capability-URI Key}
+\subsection{INV-2 --- Capability-URA Key}
 
 \begin{invariant}[INV-2: API Key as Capability Resource]
 Every API key issued for OpenAI compatibility \textbf{MUST}
@@ -524,10 +524,10 @@ Every OpenAI request received at \texttt{/v1/chat/completions}
 \begin{enumerate}[leftmargin=2em,itemsep=0.1em]
     \item Mint one canonical receipt with:
     \begin{itemize}[leftmargin=1.5em,itemsep=0.05em]
-        \item \texttt{ability\_uri = ability/01HUB.openai.chat\_completions}
-        \item \texttt{caller\_uri = hub/01HUB}
-        \item \texttt{callee\_uri = hub/01HUB}
-        \item \texttt{subject\_uri = resource/api\_key.<id>}
+        \item \texttt{ability\_ura = ability/01HUB.openai.chat\_completions}
+        \item \texttt{caller\_ura = hub/01HUB}
+        \item \texttt{callee\_ura = hub/01HUB}
+        \item \texttt{subject\_ura = resource/api\_key.<id>}
         \item \texttt{state\_transition.body\_hash = sha256(canonicalised
         request body)}
         \item \texttt{state\_transition.usage = \{ prompt\_tokens,
@@ -589,8 +589,8 @@ address; removing any one collapses the model.
 API key for that user. Canonical, state-changing.
 
 \begin{lstlisting}
-caller   = caller_agent_uri
-callee   = caller_agent_uri                   (self-call)
+caller   = caller_agent_ura
+callee   = caller_agent_ura                   (self-call)
 ability  = ability/<user>.keyring.mint_api_key
 subject  = user/<user>                         (the user the key acts as)
 args     = {
@@ -664,8 +664,8 @@ The dispatch's own typed-frame stream is what the filter projects to OpenAI SSE.
 \normsv{} Revocation primitive. Canonical, state-changing.
 
 \begin{lstlisting}
-caller   = caller_agent_uri
-callee   = caller_agent_uri
+caller   = caller_agent_ura
+callee   = caller_agent_ura
 ability  = ability/<user>.keyring.revoke
 subject  = resource/api_key.<id>
 args     = { reason: "user-initiated" | "compromised" | ... }
@@ -898,7 +898,7 @@ hits the Hub, authenticates against an EasyNet-issued API key,
 forwards to \texttt{web-builder.chat}, and returns the agent's
 real reply with byte-equivalent OpenAI wire framing. This
 discharges all four invariants simultaneously: Adapter Purity
-(the Hub did not invent the reply), Capability-URI Key (the
+(the Hub did not invent the reply), Capability-URA Key (the
 Bearer matched a \texttt{resource/api\_key.<id>} URA),
 Filter Determinism (a second Cursor request with identical body
 returned identical SSE), Auth Receipt Trail (the receipt store

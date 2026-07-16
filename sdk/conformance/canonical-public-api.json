@@ -21081,11 +21081,11 @@
       "StreamCancel.state": "70fc2bd9aac424bdc641cb604ddb957354a2288f82eb3bc623e41b89deac1892",
       "StreamCancel.stream_id": "9c3c109f14f24a7add6d723e6b06ffc33976d6178a9bf940a89505f238ec1001",
       "StreamCancel.terminal": "ccd86c152453f4c8a471b4fd57e6650646f622a56f30b5463209b0cf9cc069c4",
-      "StreamEvent": "c3d528c78b1cc856575d0c985b551241ca4887c06bbde7be78f4a2175a76b419",
+      "StreamEvent": "85af9d58596e4729e934864897ec292bf9f1f2f71c86eb687b8db680ad122e98",
       "StreamEvent.admission_receipt": "e715101fc60b1722d8741107781e0dbb251b008266ad2af7ea75ac5783ab8e57",
       "StreamEvent.elapsed_ms": "bf99f3c66c074dc596054bb88ae7a88a0948294e97c31bd47700b25f58017136",
       "StreamEvent.error": "3d4a076f74d0eaf1c6ed0e4a1b4f56da3e457c808dfdd966beb4aca7aeca222b",
-      "StreamEvent.from_json": "407ca665051afed78116c63466075bc5d1674d66fa32dbc45195bd5612fbba02",
+      "StreamEvent.from_json": "31e5905f534a654cd2060cd2beb2b9608fd70a4b216754502367eca0dea4fe94",
       "StreamEvent.kind": "15429ccf94202083863c2bd6a269d4f4479c9cacec15732b39d0ccc1368674c5",
       "StreamEvent.payload_base64": "9fc441fe911388856f36f71f2f55bdcb95d7d17321702c8ecad196ecbf02a257",
       "StreamEvent.payload_content_type": "b08485e22a6e1f77a464c0bdfa89b3552e3085e06791b49b808d08082358522e",
@@ -23069,7 +23069,7 @@
       "item": "StreamEvent.from_json",
       "parent_capability": "stream",
       "role": "serialization_projection",
-      "shape_sha256": "407ca665051afed78116c63466075bc5d1674d66fa32dbc45195bd5612fbba02",
+      "shape_sha256": "31e5905f534a654cd2060cd2beb2b9608fd70a4b216754502367eca0dea4fe94",
       "shape_group": "serialization_projection:streamevent.deserializejson"
     },
     {
@@ -23218,7 +23218,7 @@
       "production_owner": "EasyNet daemon provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "3f85b9ad1a2d15ccb50ccfd0a57cc052a361653ad94575920bfebcb272c1c4dd",
+      "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "8a81c30b8f3d50915a70ff45ee9d81ee363ac4a4c0a34fec50040c56c6f15e8a",
@@ -23238,7 +23238,7 @@
       "production_owner": "EasyNet daemon provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "4bc416a35cc3556300f80ce3254b2e016de5e2aa949a9bbc37f57c519399486e",
+      "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
       "interface_sha256": "a398d78c51607f79260e73d3c7bb73f37243a67bbb18dd6b15d68cb3d5bb5f5a",
@@ -24493,7 +24493,7 @@
           "language": "python",
           "section": "members",
           "item": "StreamEvent.from_json",
-          "shape_sha256": "407ca665051afed78116c63466075bc5d1674d66fa32dbc45195bd5612fbba02"
+          "shape_sha256": "31e5905f534a654cd2060cd2beb2b9608fd70a4b216754502367eca0dea4fe94"
         }
       ],
       "present_languages": [

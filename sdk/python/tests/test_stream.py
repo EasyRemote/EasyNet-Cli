@@ -56,7 +56,7 @@ class StreamTests(unittest.TestCase):
     def test_stream_orders_events_and_closes_after_terminal(self) -> None:
         transport = MemoryStreamTransport(
             [
-                b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false,'
+                b'{"sequence":1,"kind":"data","state":"Open","terminal":false,'
                 b'"payload_content_type":"application/json","payload_json":{"step":1}}',
                 b'{"sequence":2,"kind":"terminal","state":"Completed","terminal":true,'
                 b'"payload_content_type":"application/json","payload_json":{"ok":true}}',
@@ -84,10 +84,18 @@ class StreamTests(unittest.TestCase):
 
     def test_stream_event_does_not_accept_legacy_content_type_alias(self) -> None:
         event = StreamEvent.from_json(
-            b'{"sequence":1,"kind":"chunk","content_type":"application/json"}'
+            b'{"sequence":1,"kind":"data","content_type":"application/json"}'
         )
 
         self.assertEqual(event.payload_content_type, "")
+
+    def test_stream_event_rejects_legacy_chunk_kind(self) -> None:
+        with self.assertRaises(SDKError) as ctx:
+            StreamEvent.from_json(
+                b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false}'
+            )
+
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_ARGUMENT)
 
     def test_stream_terminal_event_projects_terminal_receipt(self) -> None:
         transport = MemoryStreamTransport(
@@ -212,8 +220,8 @@ class StreamTests(unittest.TestCase):
     def test_stream_enforces_buffer_bound(self) -> None:
         transport = MemoryStreamTransport(
             [
-                b'{"sequence":1,"kind":"chunk","state":"Open","terminal":false}',
-                b'{"sequence":2,"kind":"chunk","state":"Open","terminal":false}',
+                b'{"sequence":1,"kind":"data","state":"Open","terminal":false}',
+                b'{"sequence":2,"kind":"data","state":"Open","terminal":false}',
             ]
         )
         stream = StreamHandle.from_json(

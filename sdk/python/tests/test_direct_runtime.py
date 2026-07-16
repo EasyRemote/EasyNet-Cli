@@ -570,7 +570,7 @@ class DirectRuntimeTests(unittest.TestCase):
             DESCRIPTOR_REF,
         )
 
-    def test_direct_transport_streams_daemon_chunks_over_axon_grpc_uds(self) -> None:
+    def test_direct_transport_projects_daemon_stream_events_over_axon_grpc_uds(self) -> None:
         servicer = RecordingInvocationServicer()
         with _fake_daemon(servicer) as endpoint:
             transport = DaemonInvocationTransport.connect_direct(
@@ -590,7 +590,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 transport.close()
 
         self.assertEqual(first["sequence"], 1)
-        self.assertEqual(first["kind"], "chunk")
+        self.assertEqual(first["kind"], "data")
         self.assertEqual(first["payload_json"], {"chunk": 1})
         self.assertFalse(first["terminal"])
         self.assertEqual(terminal["sequence"], 2)
@@ -638,7 +638,7 @@ class DirectRuntimeTests(unittest.TestCase):
                 transport.close()
 
         self.assertEqual(event["sequence"], 1)
-        self.assertEqual(event["kind"], "chunk")
+        self.assertEqual(event["kind"], "data")
         self.assertFalse(event["terminal"])
 
     def test_direct_transport_opens_bidi_over_axon_grpc_uds(self) -> None:

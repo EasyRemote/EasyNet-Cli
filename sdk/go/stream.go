@@ -484,6 +484,9 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 	if dto.Kind == "" {
 		return StreamEvent{}, invalidRuntimePayload("stream event kind is required", nil)
 	}
+	if !isValidStreamEventKind(dto.Kind) {
+		return StreamEvent{}, invalidRuntimePayload(fmt.Sprintf("unsupported stream event kind: %s", dto.Kind), nil)
+	}
 	return StreamEvent{
 		sequence:             dto.Sequence,
 		kind:                 dto.Kind,
@@ -500,6 +503,15 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		admissionReceiptJSON: append(json.RawMessage(nil), dto.AdmissionReceipt...),
 		terminalReceiptJSON:  append(json.RawMessage(nil), dto.TerminalReceipt...),
 	}, nil
+}
+
+func isValidStreamEventKind(kind string) bool {
+	switch kind {
+	case "data", "terminal", "error", "cancelled", "timeout":
+		return true
+	default:
+		return false
+	}
 }
 
 func streamTerminalEventType(event StreamEvent) string {

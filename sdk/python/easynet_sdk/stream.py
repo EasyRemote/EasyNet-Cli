@@ -68,6 +68,8 @@ class StreamEvent:
         kind = _optional_string(decoded.get("kind"), "kind")
         if not kind:
             raise _invalid_stream("stream event kind is required")
+        if kind not in {"data", "terminal", "error", "cancelled", "timeout"}:
+            raise _invalid_stream(f"unsupported stream event kind: {kind}")
         return cls(
             sequence=_required_positive_int(decoded, "sequence"),
             kind=kind,
