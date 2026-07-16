@@ -323,3 +323,23 @@
 - RFC-002 keyring and KeyResolver examples are also active authority-boundary
   contracts. Peer-table projections and resolver pseudocode must therefore use
   `peer_ura` and `find_peer_by_ura` rather than preserving URI vocabulary.
+- React `useAbilityTools` is a product tool-provider bridge, not a canonical
+  runtime primitive. Removing it from source, root exports, README, and skill
+  guidance is required; keeping a hook shim would preserve RF-1 inside the SDK.
+- Generated declarations are part of the public SDK surface. The React type
+  build now clears `dist/types` before generation so stale `tool_adapter`
+  declarations cannot survive after the source and export are deleted.
+- RF-1 product-surface gates must cover every language facade. React was
+  missing from the earlier product-boundary inventory, so the V2 gate now
+  rejects tracked React `tool_adapter` artifacts and public React
+  `useAbilityTools` documentation.
+- Active proto comments are schema-source vocabulary, not incidental prose.
+  The `federation.list_user_devices` comment must say device URAs because the
+  field is a URA realm and downstream generated SDKs inherit that contract.
+- Proto mirrors must be synchronized from `core/proto/axon/v1` rather than
+  manually edited. The RF-9 proto terminology fix therefore updates the
+  canonical source first and derives the runtime client-sdk and Rust SDK
+  mirrors through the existing syncer.
+- The V2 RF-9 gate now scans Axon active proto roots for URI identity
+  vocabulary because document/vector gates alone cannot prove schema-source
+  terminology convergence.

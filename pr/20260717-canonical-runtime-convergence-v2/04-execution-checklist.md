@@ -617,6 +617,33 @@
 - [x] Verify focused document scan, V2 gate/self-test, and CLI convergence
       checks before committing this slice.
 
+## RF-1 React Tool Adapter Product Surface Removal Slice
+
+- [x] Identify React `tool_adapter` as an uncovered public SDK RF-1 surface.
+- [x] Delete React `tool_adapter` TypeScript, JavaScript, and declaration
+      source files instead of retaining a compatibility hook.
+- [x] Remove `useAbilityTools` from React root exports, export tests, README,
+      and SDK skill guidance.
+- [x] Make the React type build clear stale generated declarations before
+      regenerating package types.
+- [x] Extend the V2 Axon product-boundary gate and self-test to reject React
+      tool-adapter artifacts and public source/docs.
+- [x] Verify React package tests/types, V2 gate/self-test, and CLI convergence
+      checks before committing this slice.
+
+## RF-9 Active Proto URA Vocabulary Slice
+
+- [x] Identify active Axon proto comments that still used URI terminology for
+      canonical device URA enumeration.
+- [x] Update the canonical `core/proto/axon/v1/federation.proto` source from
+      device `URIs` to device `URAs`.
+- [x] Regenerate the runtime client-sdk and Rust SDK proto mirrors through
+      `scripts/proto/sync_axon_v1.sh --write`.
+- [x] Extend the V2 gate and self-test to reject URI terminology in Axon
+      active proto schema roots.
+- [x] Verify proto mirror derivation, V2 gate/self-test, and CLI convergence
+      checks before committing this slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

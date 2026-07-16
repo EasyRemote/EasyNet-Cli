@@ -941,3 +941,50 @@ The V2 normative-document gate now includes RFC-002 and rejects `peer_uri` and
 This slice closes another RF-9 active-document defect. It does not complete
 RF-9 because historical document classification and generated-schema ownership
 remain separate closure work.
+
+## Current Slice: RF-1 React Tool Adapter Product Surface Removal
+
+Owner: EasyNet-Axon React SDK and EasyNet-Cli V2 conformance gate.
+
+The React SDK still exported `useAbilityTools` from `tool_adapter` as a public
+hook. That hook delegated to the Node `AbilityToolAdapter`, which is a product
+tool-provider bridge rather than a canonical runtime primitive. Keeping it in
+React preserved RF-1 through a second public SDK surface even after other
+language packages started removing tool-adapter files.
+
+The React package now exposes ability invocation and receipt audit hooks only.
+The `tool_adapter` source, generated declaration, public root exports,
+export-surface test expectation, README example, and agent skill entry were
+removed together so the package no longer teaches or publishes the product
+tool-adapter contract. The type build now clears stale declaration output
+before regeneration so deleted public declarations cannot survive locally.
+
+The V2 gate now covers React alongside Go, Python, Node, Java, Swift, and Rust
+for RF-1 product-surface scans. It rejects tracked React `tool_adapter`
+artifacts and public React source/docs that reintroduce `useAbilityTools` or
+the `AbilityTool*` family. This slice does not complete RF-1 because package
+renaming, remaining product-flavoured SDK docs, audio/MCP/preset inventory, and
+downstream provider extraction remain separate closure work.
+
+## Current Slice: RF-9 Active Proto URA Vocabulary
+
+Owner: EasyNet-Axon canonical proto source and generated proto mirrors, with
+EasyNet-Cli V2 conformance gate enforcement.
+
+Axon proto definitions are active schema contracts, not historical prose. The
+canonical `federation.proto` and its two checked-in mirrors still described
+`federation.list_user_devices` as enumerating canonical device `URIs`. That
+kept the retired address vocabulary inside the schema source even though the
+field is a URA realm and the architecture has URA only.
+
+The canonical proto comment now says device `URAs`, and the mirror copies were
+updated through `scripts/proto/sync_axon_v1.sh --write` rather than independent
+manual edits. No field names, field numbers, messages, services, or wire
+semantics changed.
+
+The V2 gate now scans Axon active proto roots for URI terminology tied to URA
+identity data, and the self-test reintroduces `canonical device URIs` in a
+fake proto mirror set to prove the gate fails. This slice closes one RF-9
+active-schema terminology defect. It does not complete RF-9 because historical
+document classification, broader active source vocabulary, and final
+generated-schema ownership closure remain separate work.

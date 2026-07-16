@@ -723,7 +723,11 @@ Commands run on 2026-07-17:
   passed. The self-test now includes a failing Rust `local-fast-probes`
   fixture.
 - `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
-  passed.
+  passed against Axon revision
+  `7f1113eada00a01a62c4b2d02892880dc1f37b31`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `7f1113eada00a01a62c4b2d02892880dc1f37b31`.
 - `cargo check --bin real-user-smoke` from EasyNet-Cli:
   passed after removing the downstream feature requirement and migrating the
   binary to an explicit local smoke receipt provider.
@@ -1202,3 +1206,75 @@ This evidence verifies that RFC-002 keyring/keyresolver examples now use URA
 vocabulary for identity fields, peer-table projections, and peer key lookup.
 It does not complete RF-9 globally because historical document classification
 and generated-schema ownership remain separate closure work.
+
+## RF-1 React Tool Adapter Product Surface Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\b(tool_adapter|useAbilityTools|AbilityTool(Renderer|Invocation|Result|Options)?|AbilityTools)\b' sdk/react/src sdk/react/README.md sdk/react/SKILL.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after removing the React tool-adapter surface.
+- `rg -n '\buri\b|\bURI\b|uris|URIs|easynet:///' sdk/react/README.md sdk/react/SKILL.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after replacing React public examples with
+  `resourceUra` wording.
+- `npm test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/react`:
+  passed, 5 tests.
+- `npm run types`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/react`:
+  passed. `types:verify` now confirms `dist/types/tool_adapter.d.ts` is absent
+  and `dist/types/index.d.ts` does not export `useAbilityTools`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a React SDK fixture that reintroduces
+  `tool_adapter.ts` and `useAbilityTools`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed against Axon revision
+  `745a9f442a94a4b832908df6ef0efce4a9ff6b37`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `745a9f442a94a4b832908df6ef0efce4a9ff6b37`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies that the React SDK no longer publishes the
+tool-adapter product surface and that the V2 RF-1 gate covers React
+reintroduction. It does not complete RF-1 globally because package naming,
+remaining product-flavoured docs, audio/MCP/preset inventory, and downstream
+provider extraction remain separate work.
+
+## RF-9 Active Proto URA Vocabulary Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\bURI\b|\bURIs\b|<uri>|\b(canonical|device|agent|resource|subject|caller|callee|payload|receipt)[^[:cntrl:]]*\bURI\b|\bURI[^[:cntrl:]]*\b(canonical|device|agent|resource|subject|caller|callee|payload|receipt)\b|_[Uu][Rr][Ii]\b|\b[A-Za-z0-9]+URI\b' core/proto/axon/v1 core/runtime-rs/client-sdk/proto/axon/v1 sdk/rust/proto/axon/v1 --glob '*.proto'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after replacing the active proto comment with URA
+  vocabulary.
+- `bash scripts/proto/sync_axon_v1.sh --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed, proving the runtime client-sdk and Rust SDK proto mirrors match the
+  canonical source.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a proto fixture that reintroduces
+  `canonical device URIs`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies the RF-9 active proto terminology correction and the
+new regression gate for Axon proto URI vocabulary. It does not complete RF-9
+globally because historical document classification, broader active source
+vocabulary, and final generated-schema ownership closure remain separate
+work.

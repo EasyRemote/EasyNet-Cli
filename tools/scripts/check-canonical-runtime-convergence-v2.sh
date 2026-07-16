@@ -174,6 +174,10 @@ check_axon_product_protocol_boundary_contract() {
     sdk/node/src/presets/remote_control/descriptor.ts \
     sdk/node/src/presets/ability_dispatch.ts \
     sdk/node/src/presets/remote_control_case.ts \
+    sdk/react/src/tool_adapter.ts \
+    sdk/react/src/tool_adapter.js \
+    sdk/react/src/tool_adapter.d.ts \
+    sdk/react/dist/types/tool_adapter.d.ts \
     sdk/java/src/main/java/run/easynet/axon/Audio.java \
     sdk/java/src/main/java/run/easynet/axon/AbilityToolAdapter.java \
     sdk/java/src/main/java/run/easynet/axon/AxonMcpException.java \
@@ -205,6 +209,23 @@ check_axon_product_protocol_boundary_contract() {
   if [[ -d "$AXON_ROOT/sdk/node" ]] \
     && (cd "$AXON_ROOT" && git ls-files sdk/node 2>/dev/null | grep -Eq '/(audio|tool_adapter|mcp|presets/(remote_control|ability_dispatch)|remote_control_case)([^/]*|/.*)$'); then
     fail "Node SDK tracks a product-owned canonical package"
+  fi
+
+  if [[ -d "$AXON_ROOT/sdk/react" ]] \
+    && (cd "$AXON_ROOT" && git ls-files sdk/react 2>/dev/null | grep -Eq '/tool_adapter(\.[^/]+)?$'); then
+    fail "React SDK tracks a product-owned canonical package"
+  fi
+  local react_product_paths=()
+  for path in \
+    "$AXON_ROOT/sdk/react/src" \
+    "$AXON_ROOT/sdk/react/README.md" \
+    "$AXON_ROOT/sdk/react/SKILL.md"
+  do
+    [[ -e "$path" ]] && react_product_paths+=("$path")
+  done
+  if ((${#react_product_paths[@]} > 0)) \
+    && rg -n '\b(tool_adapter|useAbilityTools|AbilityTool(Renderer|Invocation|Result|Options)?|AbilityTools)\b' "${react_product_paths[@]}"; then
+    fail "React SDK exposes product-owned tool-adapter surface"
   fi
 
   if [[ -d "$AXON_ROOT/sdk/java" ]] \
@@ -473,6 +494,27 @@ check_axon_normative_ura_document_contract() {
   fi
   if rg -n '\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding)\.uri\b|\bstring uri\b|\bpeer_uri\b|find_peer_by_uri|uri_profile|resolver\.resolve\(uri\)|canonical URI format' "${docs[@]}"; then
     fail "Axon active normative documents preserve URI terminology for URA identity data"
+  fi
+}
+
+check_axon_proto_ura_vocabulary_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for proto URA vocabulary contract: $AXON_ROOT"
+  fi
+
+  local proto_roots=()
+  for path in \
+    "$AXON_ROOT/core/proto/axon/v1" \
+    "$AXON_ROOT/core/runtime-rs/client-sdk/proto/axon/v1" \
+    "$AXON_ROOT/sdk/rust/proto/axon/v1"
+  do
+    [[ -d "$path" ]] && proto_roots+=("$path")
+  done
+  if ((${#proto_roots[@]} == 0)); then
+    return
+  fi
+  if rg -n '\bURI\b|\bURIs\b|<uri>|\b(canonical|device|agent|resource|subject|caller|callee|payload|receipt)[^[:cntrl:]]*\bURI\b|\bURI[^[:cntrl:]]*\b(canonical|device|agent|resource|subject|caller|callee|payload|receipt)\b|_[Uu][Rr][Ii]\b|\b[A-Za-z0-9]+URI\b' "${proto_roots[@]}" --glob '*.proto'; then
+    fail "Axon active proto schemas preserve URI terminology for URA identity data"
   fi
 }
 
@@ -797,6 +839,10 @@ PY
   touch "$tmp/axon-product/sdk/python/easynet_axon/audio.py"
   mkdir -p "$tmp/axon-product/sdk/node/src/mcp"
   touch "$tmp/axon-product/sdk/node/src/tool_adapter.ts"
+  mkdir -p "$tmp/axon-product/sdk/react/src"
+  touch "$tmp/axon-product/sdk/react/src/tool_adapter.ts"
+  printf 'export { useAbilityTools } from "./tool_adapter.js";\n' \
+    > "$tmp/axon-product/sdk/react/src/index.ts"
   mkdir -p "$tmp/axon-product/sdk/java/src/main/java/run/easynet/axon/mcp"
   touch "$tmp/axon-product/sdk/java/src/main/java/run/easynet/axon/AbilityToolAdapter.java"
   mkdir -p "$tmp/axon-product/sdk/swift/Sources/EasyNetAxon"
@@ -917,6 +963,19 @@ PY
   if ( AXON_ROOT="$tmp/axon-uri-docs"; check_axon_normative_ura_document_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon normative URI document gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-uri-proto"
+  mkdir -p "$tmp/axon-uri-proto/core/proto/axon/v1" \
+    "$tmp/axon-uri-proto/core/runtime-rs/client-sdk/proto/axon/v1" \
+    "$tmp/axon-uri-proto/sdk/rust/proto/axon/v1"
+  printf 'syntax = "proto3";\n// canonical device URIs should be enumerated.\nmessage DeviceList {}\n' \
+    > "$tmp/axon-uri-proto/core/proto/axon/v1/federation.proto"
+  cp "$tmp/axon-uri-proto/core/proto/axon/v1/federation.proto" \
+    "$tmp/axon-uri-proto/core/runtime-rs/client-sdk/proto/axon/v1/federation.proto"
+  cp "$tmp/axon-uri-proto/core/proto/axon/v1/federation.proto" \
+    "$tmp/axon-uri-proto/sdk/rust/proto/axon/v1/federation.proto"
+  if ( AXON_ROOT="$tmp/axon-uri-proto"; check_axon_proto_ura_vocabulary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon proto URI terminology gate to fail"
+  fi
   AXON_ROOT="$tmp/axon"
   check_manifest_contract
   check_active_source_contract
@@ -927,6 +986,7 @@ PY
   check_ura_vocabulary_contract
   check_axon_protocol_pack_ura_vector_contract
   check_axon_normative_ura_document_contract
+  check_axon_proto_ura_vocabulary_contract
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   check_schema_source_derivation_contract
   check_axon_product_protocol_boundary_contract
@@ -948,6 +1008,7 @@ check_daemon_mission_eal_boundary_contract
 check_ura_vocabulary_contract
 check_axon_protocol_pack_ura_vector_contract
 check_axon_normative_ura_document_contract
+check_axon_proto_ura_vocabulary_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
 check_axon_product_protocol_boundary_contract
