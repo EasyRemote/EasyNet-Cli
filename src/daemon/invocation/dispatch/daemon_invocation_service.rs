@@ -397,6 +397,10 @@ pub struct DaemonInvocationService {
     /// this service. The cell transitions once from uninitialized to either a
     /// fully registered owner or a terminal installation failure.
     daemon_unary_route_registration: Arc<tokio::sync::OnceCell<Result<String, String>>>,
+    /// Exact stream-route provider installation lifecycle. Kept separate from
+    /// unary registration so a failed stream cutover cannot be mistaken for a
+    /// partially valid all-route runtime surface.
+    daemon_stream_route_registration: Arc<tokio::sync::OnceCell<Result<String, String>>>,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -503,6 +507,7 @@ impl DaemonInvocationService {
                 cancellations: Default::default(),
             },
             daemon_unary_route_registration: Arc::new(tokio::sync::OnceCell::new()),
+            daemon_stream_route_registration: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -642,9 +647,10 @@ impl DaemonInvocationService {
     }
 
     /// Install the complete exact unary route family into the shared runtime.
-    /// Boot calls this only after all product planes have reached their final
-    /// configuration and before either listener becomes reachable.
-    pub(crate) async fn register_daemon_unary_routes(
+    /// Boot and integration harnesses call this only after all product planes
+    /// have reached their final configuration and before either listener
+    /// becomes reachable.
+    pub async fn register_daemon_unary_routes(
         &self,
         owner_ura: &str,
     ) -> Result<(), easynet_axon::invocation::AxonError> {
@@ -683,6 +689,51 @@ impl DaemonInvocationService {
             )),
             Err(error) => Err(easynet_axon::invocation::AxonError::internal(format!(
                 "daemon unary route registration failed: {error}"
+            ))),
+        }
+    }
+
+    /// Install the complete exact server-stream route family into the shared
+    /// runtime before invocation listeners become reachable.
+    pub async fn register_daemon_stream_routes(
+        &self,
+        owner_ura: &str,
+    ) -> Result<(), easynet_axon::invocation::AxonError> {
+        let owner_ura = owner_ura.trim();
+        if owner_ura.is_empty() {
+            return Err(easynet_axon::invocation::AxonError::invalid_argument(
+                "daemon stream route owner URA must not be empty",
+            ));
+        }
+        let registration = self
+            .daemon_stream_route_registration
+            .get_or_init(|| async {
+                let runtime = self.runtime.local_runtime.as_ref().ok_or_else(|| {
+                    "daemon stream route registration requires shared LocalRuntime".to_string()
+                })?;
+                let catalog = self.directory.local_ability_catalog.as_ref().ok_or_else(|| {
+                    "daemon stream route registration requires live ability catalog".to_string()
+                })?;
+                let streams = self.stream_dispatcher();
+                crate::daemon::invocation::dispatch::daemon_route_runtime::DaemonRouteRuntimeAdapter::new(
+                    Arc::clone(runtime),
+                    self.runtime.cancellations.clone(),
+                )
+                .register_streams(owner_ura, catalog.as_ref(), streams.daemon_route_provider())
+                .await
+                .map_err(|error| error.to_string())?;
+                Ok(owner_ura.to_string())
+            })
+            .await;
+        match registration {
+            Ok(registered_owner) if registered_owner == owner_ura => Ok(()),
+            Ok(registered_owner) => Err(easynet_axon::invocation::AxonError::invalid_argument(
+                format!(
+                    "daemon stream routes are registered for `{registered_owner}`, not `{owner_ura}`"
+                ),
+            )),
+            Err(error) => Err(easynet_axon::invocation::AxonError::internal(format!(
+                "daemon stream route registration failed: {error}"
             ))),
         }
     }
@@ -1157,12 +1208,7 @@ impl Invocation for DaemonInvocationService {
 
         let streams = self.stream_dispatcher();
         match DaemonStreamRoute::from_function(&route_function) {
-            Some(DaemonStreamRoute::FederationSubscribeDirectory) => {
-                streams.dispatch_subscribe_directory_initial()
-            }
-            Some(DaemonStreamRoute::FederationSubscribeDirectoryV2) => {
-                streams.dispatch_subscribe_directory_v2(&inner.arguments)
-            }
+            Some(route) => streams.dispatch_daemon_route_runtime(route, &inner).await,
             None => streams.dispatch_selected_route(&inner).await,
         }
     }

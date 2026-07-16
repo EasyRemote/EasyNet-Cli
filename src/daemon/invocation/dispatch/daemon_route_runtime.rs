@@ -1,25 +1,25 @@
-// EasyNet CLI - daemon unary route runtime adapter
+// EasyNet CLI - daemon exact route runtime adapter
 // =================================================
 //
 // File: src/daemon/invocation/dispatch/daemon_route_runtime.rs
-// Description: Registers daemon-owned exact unary routes in the shared Axon
-//              LocalRuntime and dispatches admitted gRPC requests through the
-//              descriptor-bound runtime API.
+// Description: Registers daemon-owned exact routes in the shared Axon
+//              LocalRuntime and dispatches admitted gRPC requests through
+//              the descriptor-bound runtime API.
 //
 // Protocol Responsibility:
 // - Preserve the caller's descriptor-bound seven-tuple at the runtime boundary.
 // - Make Axon LocalRuntime the sole owner of admission and terminal receipts.
 //
 // Implementation Approach:
-// - Register all DaemonUnaryRoute handlers atomically as owner-bound RPC
-//   abilities backed by one DaemonUnaryRouteProvider.
+// - Register all DaemonUnaryRoute and DaemonStreamRoute handlers atomically
+//   as owner-bound abilities backed by route-family providers.
 // - Resolve registration proof facts once, then drain only Axon's canonical
-//   finalized handle when projecting an InvokeResponse.
+//   finalized handles when projecting transport responses.
 //
 // Usage Contract:
 // - Boot must call register before exposing either invocation listener.
-// - Product handlers return payload bytes or AxonError; they never construct
-//   receipt or terminal state.
+// - Product handlers return payload bytes, stream values, or AxonError; they
+//   never construct receipt or terminal state.
 //
 // Architectural Position:
 // - Daemon transport/runtime adapter. Product behavior remains in
@@ -29,15 +29,20 @@ use std::sync::Arc;
 
 use easynet_axon::invocation::{
     make_ability, AbilityCallModes, AbilityOptions, AbilityRegistration, AuthorityBinding,
-    AxonError, CallMode, CallerSignature, LocalRuntime,
+    AxonError, CallMode, CallerSignature, LocalRuntime, StreamingInvocationHandle,
 };
-use easynet_axon::pb::axon::v1::{Envelope, InvokeRequest, InvokeResponse};
+use easynet_axon::pb::axon::v1::{
+    Envelope, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
+};
 use sha2::{Digest as _, Sha256};
 use tonic::{Response, Status};
 
+use crate::daemon::ability::dispatch::stream_env_ability_with_options;
 use crate::daemon::invocation::admission::hosted_agent_delegation::HostedAgentDelegationIssuer;
 use crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry;
-use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
+use crate::daemon::invocation::dispatch::daemon_invocation_service::{
+    DaemonStreamRoute, DaemonUnaryRoute,
+};
 use crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility;
 use crate::daemon::invocation::dispatch::invocation_wire::{
     status_from_axon_invoke_error, SIGNED_DESCRIPTOR_REF_METADATA_KEY,
@@ -45,6 +50,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
 use crate::daemon::invocation::dispatch::unary_dispatcher::{
     rpc_dispatch_outcome_response, DaemonUnaryRouteProvider,
 };
+use crate::daemon::invocation::streams::stream_dispatcher::DaemonStreamRouteProvider;
 
 const PRODUCT_GRPC_CODE_CONTEXT: &str = "easynet.daemon.product.grpc_code";
 
@@ -207,6 +213,34 @@ impl DaemonRouteRuntimeAdapter {
         self.runtime.register_many(registrations).await
     }
 
+    /// Atomically install the complete exact server-stream route family. The
+    /// registered ability functions return product stream values; Axon owns
+    /// admission, progress framing, terminal state, and receipts.
+    pub(crate) async fn register_streams(
+        &self,
+        owner_ura: &str,
+        catalog: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
+        provider: DaemonStreamRouteProvider,
+    ) -> Result<(), AxonError> {
+        let mut registrations = Vec::with_capacity(DaemonStreamRoute::ALL.len());
+        for route in DaemonStreamRoute::ALL.iter().copied() {
+            let ability_ura = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+                owner_ura,
+                route.name(),
+            )?;
+            let route_provider = provider.clone();
+            let handler =
+                Arc::new(move |_envelope, arguments| route_provider.invoke(route, arguments));
+            let (function, _options) = stream_env_ability_with_options(handler);
+            registrations.push(
+                AbilityRegistration::new(ability_ura, function).with_options(
+                    stream_route_registration_options(catalog, owner_ura, route)?,
+                ),
+            );
+        }
+        self.runtime.register_many(registrations).await
+    }
+
     /// Execute one exact route through the same descriptor-bound runtime path
     /// used by normal local abilities. The returned response is only a
     /// projection of Axon's finalized outcome.
@@ -351,6 +385,90 @@ impl DaemonRouteRuntimeAdapter {
         )
         .await;
         daemon_route_outcome_response(route.name(), outcome)
+    }
+
+    /// Open one exact server-stream route through the descriptor-bound runtime
+    /// path. The caller owns transport chunk projection after Axon returns the
+    /// streaming handle.
+    pub(crate) async fn open_stream(
+        &self,
+        route: DaemonStreamRoute,
+        request: &InvokeServerStreamRequest,
+        local_self_admitted: bool,
+    ) -> Result<StreamingInvocationHandle, Status> {
+        let envelope = request.envelope.clone().ok_or_else(|| {
+            Status::invalid_argument(format!("{}: envelope is required", route.name()))
+        })?;
+        let callee_ura = envelope
+            .callee
+            .as_ref()
+            .map(|identity| identity.ura.trim())
+            .filter(|ura| !ura.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(format!("{}: envelope callee is required", route.name()))
+            })?;
+        let bound = RuntimeBoundAbility::from_wire_target(
+            "daemon exact stream route",
+            self.runtime.as_ref(),
+            callee_ura,
+            route.name(),
+        )
+        .await?;
+        let registered_ref = bound
+            .descriptor_ref_for_mode(
+                "daemon exact stream route",
+                callee_ura,
+                CallMode::Stream,
+                None,
+            )?
+            .into_descriptor_ref();
+
+        let wire = if local_self_admitted {
+            let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
+                &request.metadata,
+                &envelope,
+                true,
+                route.name(),
+            )?;
+            crate::daemon::axon_bridge::dispatch_shim::local_system_from_wire_parts(
+                envelope,
+                registered_ref,
+                request.arguments.clone(),
+                metadata,
+            )
+        } else {
+            let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
+                &request.metadata,
+                &envelope,
+                false,
+                route.name(),
+            )?;
+            let signed_ref = bound
+                .signed_descriptor_ref_from_metadata(
+                    "daemon exact stream route",
+                    callee_ura,
+                    CallMode::Stream,
+                    &metadata,
+                )?
+                .ok_or_else(|| {
+                    Status::invalid_argument(format!(
+                        "{}: signed public InvokeStream is missing `{SIGNED_DESCRIPTOR_REF_METADATA_KEY}`",
+                        route.name()
+                    ))
+                })?
+                .into_descriptor_ref();
+            crate::daemon::axon_bridge::dispatch_shim::external_signed_from_wire_parts(
+                envelope,
+                signed_ref,
+                request.arguments.clone(),
+                metadata,
+            )
+        }
+        .map_err(|error| status_from_axon_invoke_error("InvokeStream", route.name(), *error))?;
+
+        crate::daemon::axon_bridge::dispatch_shim::open_stream_admitted(&self.runtime, wire)
+            .await
+            .map_err(|err| status_from_axon_invoke_error("InvokeStream", route.name(), err))
     }
 }
 
@@ -672,6 +790,49 @@ fn route_registration_options(
     let implementation = record.implementation();
     Ok(AbilityOptions::default()
         .with_modes(AbilityCallModes::RPC)
+        .with_descriptor_proof(
+            descriptor.version.as_str(),
+            descriptor.admission_action().as_str(),
+            descriptor.descriptor_hash_bytes(),
+            descriptor.schema_hash_bytes(),
+            implementation.impl_hash(),
+        ))
+}
+
+fn stream_route_registration_options(
+    catalog: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
+    owner_ura: &str,
+    route: DaemonStreamRoute,
+) -> Result<AbilityOptions, AxonError> {
+    let record = catalog
+        .control_plane_record_for_authority_mode(owner_ura, route.name(), route.call_mode())
+        .map_err(|error| {
+            AxonError::invalid_argument(format!(
+                "daemon route `{}` has ambiguous descriptor proof facts for owner `{owner_ura}` in {:?}: {error}",
+                route.name(),
+                route.call_mode()
+            ))
+        })?
+        .ok_or_else(|| {
+            AxonError::invalid_argument(format!(
+                "daemon route `{}` has no live catalog descriptor proof for owner `{owner_ura}` in {:?}",
+                route.name(),
+                route.call_mode()
+            ))
+        })?;
+    let descriptor = record
+        .descriptor()
+        .clone()
+        .rebind_owner_ura(owner_ura)
+        .map_err(|error| {
+            AxonError::invalid_argument(format!(
+                "daemon route `{}` descriptor cannot bind to owner `{owner_ura}`: {error}",
+                route.name()
+            ))
+        })?;
+    let implementation = record.implementation();
+    Ok(AbilityOptions::default()
+        .with_modes(AbilityCallModes::STREAM)
         .with_descriptor_proof(
             descriptor.version.as_str(),
             descriptor.admission_action().as_str(),

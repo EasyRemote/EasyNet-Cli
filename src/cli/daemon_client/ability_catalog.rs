@@ -8,10 +8,9 @@
 // target. Cross-device aggregate fan-out belongs in a named daemon ability, not
 // in a facade loop.
 
-#[cfg(feature = "axon-pb")]
-use anyhow::Context;
 use serde_json::Value;
 
+use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
 use crate::support::platform::local_invoke::invoke_local_ability;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -96,31 +95,10 @@ impl AbilityCatalogueClient {
     }
 }
 
-#[cfg(feature = "axon-pb")]
 fn invoke_remote_catalogue(
     node: &str,
     request: Value,
-    _action_label: &str,
-) -> anyhow::Result<Value> {
-    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &target_ura,
-        "meta.list_abilities",
-    )?;
-    crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
-        &target_call,
-        request,
-        caller_ura.as_deref(),
-    )
-    .with_context(|| format!("forward meta.list_abilities to target={target_ura}"))
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn invoke_remote_catalogue(
-    _node: &str,
-    _request: Value,
     action_label: &str,
 ) -> anyhow::Result<Value> {
-    Err(crate::support::platform::local_invoke::federation_not_wired_error(action_label))
+    invoke_remote_device_system_ability(node, "meta.list_abilities", request, action_label)
 }

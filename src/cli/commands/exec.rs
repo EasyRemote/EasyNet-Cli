@@ -27,8 +27,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde_json::{json, Value};
 
-#[cfg(not(feature = "axon-pb"))]
-use crate::support::platform::local_invoke::federation_not_wired_error;
+use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
 use crate::support::platform::local_invoke::invoke_local_ability;
 use crate::support::platform::{output, timeouts};
 
@@ -112,27 +111,13 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
         .unwrap_or_else(|_| raw.as_bytes().to_vec())
 }
 
-#[cfg(feature = "axon-pb")]
 fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
-    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &target_ura,
+    invoke_remote_device_system_ability(
+        node,
         "process.exec",
-    )?;
-    crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
-        &target_call,
         payload,
-        caller_ura.as_deref(),
+        &format!("running a one-shot command on remote node {node:?}"),
     )
-    .with_context(|| format!("invoke process.exec via canonical Invoke target={target_ura}"))
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn invoke_remote_process_exec(node: &str, _payload: Value) -> anyhow::Result<Value> {
-    Err(federation_not_wired_error(&format!(
-        "running a one-shot command on remote node {node:?}"
-    )))
 }
 
 #[cfg(test)]

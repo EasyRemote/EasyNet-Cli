@@ -4,3 +4,4 @@ pub(crate) mod ability_catalog;
 pub(crate) mod agent_gateway;
 pub(crate) mod agent_view;
 pub(crate) mod bridge_lib;
+pub(crate) mod remote_system_ability;

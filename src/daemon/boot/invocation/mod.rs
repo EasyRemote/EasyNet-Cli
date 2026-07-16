@@ -636,6 +636,8 @@ pub fn start_daemon_invocation_transport(
     })?;
     futures::executor::block_on(service.register_daemon_unary_routes(daemon_route_owner))
         .context("register daemon exact unary routes in shared Axon LocalRuntime")?;
+    futures::executor::block_on(service.register_daemon_stream_routes(daemon_route_owner))
+        .context("register daemon exact stream routes in shared Axon LocalRuntime")?;
 
     // **PR-N3 commit N3-3.1**. Spawn the polling task that
     // populates the federated directory cell by calling each

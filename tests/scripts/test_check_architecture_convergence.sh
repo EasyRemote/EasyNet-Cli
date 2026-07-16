@@ -62,6 +62,7 @@ make_good_fixture() {
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/invocation/admission" \
     "$CLI/src/daemon/invocation/dispatch" \
+    "$CLI/src/daemon/invocation/streams" \
     "$CLI/src/daemon/persistence" \
     "$CLI/docs/spec" \
     "$CLI/sdk/go" \
@@ -486,10 +487,35 @@ impl DaemonRouteRuntimeAdapter {
         self.runtime.register_many(registrations).await;
     }
 
+    async fn register_streams(&self, registrations: Vec<AbilityRegistration>) {
+        let _ = stream_env_ability_with_options(handler);
+        self.runtime.register_many(registrations).await;
+    }
+
     async fn dispatch(&self, route: DaemonUnaryRoute, request: &InvokeRequest, ingress: DaemonRouteIngress) {
         dispatch_rpc_admitted(&self.runtime, route, request, ingress).await;
     }
+
+    async fn open_stream(&self, route: DaemonStreamRoute, request: &InvokeServerStreamRequest) {
+        open_stream_admitted(&self.runtime, route, request).await;
+    }
 }
+EOF
+  cat >"$CLI/src/daemon/invocation/streams/stream_dispatcher.rs" <<'EOF'
+impl StreamDispatcher {
+    pub(crate) async fn dispatch_daemon_route_runtime(
+        &self,
+        route: DaemonStreamRoute,
+        request: &InvokeServerStreamRequest,
+    ) {
+        let local_self_admitted = true;
+        DaemonRouteRuntimeAdapter::new(runtime, cancellations)
+            .open_stream(route, request, local_self_admitted)
+            .await;
+    }
+}
+
+pub(crate) struct DaemonStreamRouteProvider;
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
 impl UnaryDispatcher {
@@ -528,10 +554,24 @@ impl DaemonInvocationService {
             .await;
     }
 
+    pub(crate) async fn register_daemon_stream_routes(&self, owner_ura: &str) {
+        DaemonRouteRuntimeAdapter::new(runtime, cancellations)
+            .register_streams(owner_ura, catalog.as_ref(), provider)
+            .await;
+    }
+
     async fn dispatch_daemon_unary_route(&self, route: DaemonUnaryRoute, request: &InvokeRequest, ingress: DaemonRouteIngress) {
         self.unary_dispatcher()
             .dispatch_daemon_route_runtime(route, request, ingress)
             .await;
+    }
+
+    async fn invoke_stream(&self, inner: InvokeServerStreamRequest) {
+        let streams = self.stream_dispatcher();
+        match DaemonStreamRoute::from_function(&inner.function_name) {
+            Some(route) => streams.dispatch_daemon_route_runtime(route, &inner).await,
+            None => streams.dispatch_selected_route(&inner).await,
+        }
     }
 }
 EOF
@@ -1155,6 +1195,17 @@ EOF
 expect_fail \
   "daemon exact route runtime owner fork" \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/remote_exec.rs" <<'EOF'
+fn invoke_remote_exec(target: &str, payload: Value) -> Result<Value> {
+    let call = RemoteAbilityInvocationTarget::for_target_owned_selector(target, "process.exec")?;
+    remote_invoke::invoke_remote_target(&call, payload, None)
+}
+EOF
+expect_fail \
+  "cli remote system ability facade fork" \
+  "R23_CLI_REMOTE_SYSTEM_ABILITY_FACADE_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'

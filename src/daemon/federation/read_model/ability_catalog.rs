@@ -167,6 +167,34 @@ impl AbilityCatalogStore {
         Self::default()
     }
 
+    /// Upsert a projection that has already passed transport/publication
+    /// admission. This keeps external integration harnesses on the same
+    /// integrity and revision-fence path as `federation.advertise_abilities`
+    /// without exposing the internal row type.
+    pub fn upsert_admitted_projection_json(
+        &self,
+        publication: serde_json::Value,
+    ) -> Result<bool, String> {
+        let mut publication: crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication =
+            serde_json::from_value(publication)
+                .map_err(|error| format!("decode owner projection publication: {error}"))?;
+        if publication.projection_digest.is_empty() {
+            publication.projection_digest = publication.canonical_digest();
+        }
+        publication.validate_integrity()?;
+        Ok(self
+            .upsert_projection(OwnerAbilityProjectionRow::new(
+                publication.owner_ura,
+                publication.host_device_ura,
+                publication.generation,
+                publication.projection_revision,
+                publication.projection_digest,
+                publication.lease_expires_unix_ms,
+                publication.ability_summaries,
+            ))
+            .is_stored())
+    }
+
     /// Upsert the owner projection row behind a per-owner revision fence.
     ///
     /// This is read-model protection, not namespace authority: signature,

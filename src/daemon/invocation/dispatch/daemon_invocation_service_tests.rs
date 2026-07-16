@@ -96,6 +96,33 @@ fn make_service_with_test_runtime(
     make_service_with_runtime(TEST_DAEMON_URA, runtime)
 }
 
+fn make_service_with_presence(presence: Arc<PresenceRegistry>) -> DaemonInvocationService {
+    make_service_with_presence_and_heartbeat(presence, None)
+}
+
+fn make_service_with_presence_and_heartbeat(
+    presence: Arc<PresenceRegistry>,
+    heartbeat_interval_ms: Option<std::num::NonZeroU64>,
+) -> DaemonInvocationService {
+    let anchor = test_trust_anchor();
+    let cell = SharedTrustAnchor::new(Arc::new(anchor));
+    let runtime = test_local_runtime(cell.clone());
+    let local_ability_catalog = test_catalog_for_route_owner(TEST_DAEMON_URA, Arc::clone(&runtime));
+    let admission = AdmissionFacade::with_trust_anchor_cell(
+        cell,
+        test_admission_daemon_ura_for_route_owner(TEST_DAEMON_URA),
+    )
+    .with_ability_catalog(Arc::clone(&local_ability_catalog));
+    let mut service = DaemonInvocationService::new(presence, admission)
+        .with_hub_signer(test_hub_signer("test-realm"))
+        .with_local_ability_catalog(local_ability_catalog)
+        .with_local_runtime(runtime);
+    if let Some(interval) = heartbeat_interval_ms {
+        service = service.with_subscribe_v2_heartbeat_interval_ms(interval);
+    }
+    register_test_daemon_routes(service, TEST_DAEMON_URA)
+}
+
 fn make_service_with_runtime_trust_route_owner(
     route_owner_ura: &str,
     daemon_realm: impl Into<String>,
@@ -128,6 +155,8 @@ fn register_test_daemon_routes(
     service = service.with_local_ability_catalog(catalog);
     futures::executor::block_on(service.register_daemon_unary_routes(route_owner_ura))
         .expect("explicitly assemble daemon exact routes for test service");
+    futures::executor::block_on(service.register_daemon_stream_routes(route_owner_ura))
+        .expect("explicitly assemble daemon exact stream routes for test service");
     service
 }
 

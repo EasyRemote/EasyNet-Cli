@@ -911,13 +911,14 @@ for path in production_files(cli_root / "src", {".rs"}):
                 detail,
             )
 
-# Rule 16: exact daemon unary routes must enter Axon LocalRuntime through one
-# adapter owner. The tonic service may classify transport ingress, and
-# UnaryDispatcher may own product behavior behind a provider object, but neither
-# may reintroduce a direct exact-route execution table outside
-# DaemonRouteRuntimeAdapter.
+# Rule 16: exact daemon unary and server-stream routes must enter Axon
+# LocalRuntime through one adapter owner. The tonic service may classify
+# transport ingress, and dispatchers may own product behavior behind provider
+# objects, but neither may reintroduce a direct exact-route execution table
+# outside DaemonRouteRuntimeAdapter.
 daemon_service = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
 unary_dispatcher = cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs"
+stream_dispatcher = cli_root / "src/daemon/invocation/streams/stream_dispatcher.rs"
 daemon_route_runtime = cli_root / "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
 if daemon_service.exists():
     service_text = source(daemon_service)
@@ -938,10 +939,34 @@ if daemon_service.exists():
             ".dispatch_daemon_route_runtime(",
             "exact route dispatch must delegate to the LocalRuntime route path",
         ),
+        (
+            "register_daemon_stream_routes",
+            "daemon service must expose exact stream route registration",
+        ),
+        (
+            ".register_streams(owner_ura",
+            "exact stream route registration must install routes into LocalRuntime",
+        ),
+        (
+            "streams.dispatch_daemon_route_runtime(route, &inner).await",
+            "exact stream route dispatch must delegate to the LocalRuntime route path",
+        ),
     )
     for token, detail in service_requirements:
         if token not in service_text:
             add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", daemon_service, 1, detail)
+    direct_stream_calls = (
+        "dispatch_subscribe_directory_initial(",
+        "dispatch_subscribe_directory_v2(",
+    )
+    for token in direct_stream_calls:
+        if token in service_text:
+            add(
+                "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                daemon_service,
+                line_number(service_text, service_text.find(token)),
+                f"daemon service must not call direct exact stream helper `{token}`",
+            )
 
 if unary_dispatcher.exists():
     dispatcher_text = source(unary_dispatcher)
@@ -963,6 +988,42 @@ if unary_dispatcher.exists():
         if token not in dispatcher_text:
             add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", unary_dispatcher, 1, detail)
 
+if stream_dispatcher.exists():
+    dispatcher_text = source(stream_dispatcher)
+    dispatcher_requirements = (
+        (
+            "fn dispatch_daemon_route_runtime",
+            "StreamDispatcher must expose only the daemon stream route runtime adapter path",
+        ),
+        (
+            "DaemonRouteRuntimeAdapter::new",
+            "StreamDispatcher exact route path must construct the runtime adapter",
+        ),
+        (
+            ".open_stream(route, request, local_self_admitted)",
+            "StreamDispatcher exact route path must open streams through the runtime adapter",
+        ),
+        (
+            "pub(crate) struct DaemonStreamRouteProvider",
+            "exact stream product behavior must be behind a route provider object",
+        ),
+    )
+    for token, detail in dispatcher_requirements:
+        if token not in dispatcher_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", stream_dispatcher, 1, detail)
+    obsolete_helpers = (
+        "fn dispatch_subscribe_directory_initial",
+        "fn dispatch_subscribe_directory_v2",
+    )
+    for token in obsolete_helpers:
+        if token in dispatcher_text:
+            add(
+                "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+                stream_dispatcher,
+                line_number(dispatcher_text, dispatcher_text.find(token)),
+                f"obsolete exact stream direct helper remains: `{token}`",
+            )
+
 if daemon_route_runtime.exists():
     adapter_text = source(daemon_route_runtime)
     adapter_requirements = (
@@ -979,6 +1040,18 @@ if daemon_route_runtime.exists():
             "dispatch_rpc_admitted",
             "exact route adapter must drain Axon's admitted runtime path",
         ),
+        (
+            "register_streams",
+            "exact route adapter must install stream route registrations",
+        ),
+        (
+            "stream_env_ability_with_options",
+            "exact stream routes must register as Axon stream-mode abilities",
+        ),
+        (
+            "open_stream_admitted",
+            "exact stream route adapter must open Axon's admitted stream path",
+        ),
     )
     for token, detail in adapter_requirements:
         if token not in adapter_text:
@@ -990,6 +1063,34 @@ elif daemon_service.exists() or unary_dispatcher.exists():
         1,
         "exact daemon routes require a dedicated LocalRuntime adapter owner",
     )
+
+# Rule 23: CLI command modules may not own target-owned remote system ability
+# routing. They map user input into payloads; the CLI daemon-client facade owns
+# remote device/hub selector projection and caller identity selection. The
+# descriptor-bound `ability invoke --node` path remains separate because it
+# carries explicit origin-proof and subject semantics.
+remote_system_ability_facade = (
+    cli_root / "src/cli/daemon_client/remote_system_ability.rs"
+)
+cli_remote_system_fork_patterns = (
+    re.compile(r"RemoteAbilityInvocationTarget::for_target_owned_selector"),
+    re.compile(r"remote_invoke::invoke_remote_target\s*\("),
+    re.compile(r"daemon::invocation::routing::remote_invoke::invoke_remote_target\s*\("),
+)
+cli_root_dir = cli_root / "src/cli"
+if cli_root_dir.exists():
+    for path in production_files(cli_root_dir, {".rs"}):
+        if path == remote_system_ability_facade:
+            continue
+        text = source(path)
+        for pattern in cli_remote_system_fork_patterns:
+            for match in pattern.finditer(text):
+                add(
+                    "R23_CLI_REMOTE_SYSTEM_ABILITY_FACADE_FORK",
+                    path,
+                    line_number(text, match.start()),
+                    "CLI target-owned remote system ability dispatch must route through cli::daemon_client::remote_system_ability",
+                )
 
 
 # Rule 17: device-capable daemon modes must declare exactly one purge

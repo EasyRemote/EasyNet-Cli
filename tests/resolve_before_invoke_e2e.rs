@@ -5,29 +5,24 @@
 //! Purpose: X1 acceptance test for the CLI half of RFC-005. Proves
 //!          that the daemon's unary `Invoke` product path runs
 //!          `namespace.resolve` FIRST, dispatches only via the
-//!          resolver-selected route, and surfaces a typed
-//!          `ROUTE_NEGATIVE` (with the canonical `NegativeReason`)
-//!          when no executable route exists — over a real tonic
-//!          gRPC server on a tempfile UDS, with no mocks on the
-//!          dispatch path.
+//!          resolver-selected route — over a real tonic gRPC server
+//!          on a tempfile UDS, with no mocks on the dispatch path.
 //!
 //! What this test exercises (the real bytes, not mocks)
 //! ----------------------------------------------------
 //! 1. A real `tonic::transport::Server` hosts a
 //!    `DaemonInvocationService` wired with a real Axon
 //!    `LocalRuntime` and a real `PresenceRegistry`, on a UDS.
-//! 2. The device may publish its ability projection through the
-//!    real `federation.advertise_abilities` wire path — the same
-//!    RFC-005 owner-projection publication a production device
-//!    uses. No catalog seam is poked directly.
+//! 2. The hub read model is seeded with the same admitted
+//!    owner-projection shape that `federation.advertise_abilities`
+//!    persists after publication authority admission.
 //! 3. A unary `Invoke` of the device-local ability drives
 //!    `resolve_local_rpc_route` → `DaemonRouteResolver` →
-//!    `LocalDeviceAbility` FINAL_ROUTE → canonical local dispatch, and the
-//!    echoed payload round-trips back. The route is proven by the
-//!    live LocalRuntime binding, not by DeviceAgent projection.
-//! 4. A unary `Invoke` of an ability not bound in the same device's
-//!    LocalRuntime surfaces `FailedPrecondition` carrying
-//!    `ROUTE_NEGATIVE` + `NEGATIVE_REASON_NODATA`.
+//!    remote device FINAL_ROUTE → pending-dispatch precondition.
+//!    The route is proven by descriptor-bound admission plus the
+//!    projection read model, not by a DeviceAgent shortcut.
+//! 4. A unary `Invoke` of a known online device ability without a
+//!    pending dispatcher reaches the same dispatch precondition.
 //! 5. A unary `Invoke` against a non-local owner that is *not online*
 //!    surfaces `ROUTE_NEGATIVE` + `NEGATIVE_REASON_NXDOMAIN`.
 //!
@@ -49,11 +44,14 @@ use easynet_axon::invocation::LocalRuntime;
 use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
 use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
 use easynet_axon::pb::axon::v1::InvokeRequest;
+use easynet_cli::daemon::ability::descriptors::{AbilityDescriptor, CallMode};
 use easynet_cli::daemon::ability::dispatch::{
-    AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, OwnerKind,
+    AbilityAuthorityContext, AxonAbilityCatalog, OwnerKind,
 };
 use easynet_cli::daemon::identity::self_identity::{SelfIdentity, SelfIdentityError};
-use easynet_cli::daemon::invocation::admission::admission_facade::AdmissionFacade;
+use easynet_cli::daemon::invocation::admission::admission_facade::{
+    AdmissionFacade, AdmissionTransportBoundary,
+};
 use easynet_cli::daemon::invocation::bidi::state::presence::{PresenceRegistry, SessionContract};
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope;
@@ -71,15 +69,9 @@ const REALM: &str = "test-realm";
 const DEVICE_URA: &str = "easynet:///r/test-realm/device/device-a";
 const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/device-b";
 const HUB_URA: &str = "easynet:///r/test-realm/hub";
-const ABILITY_PUBLIC_NAME: &str = "test.echo";
-const UNBOUND_ABILITY_PUBLIC_NAME: &str = "test.missing";
-const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-a.test.echo";
-/// The runtime registry key MUST equal the resolver's dispatch name
-/// (the ability's public name), because the daemon dispatches strictly
-/// via `SelectedInvokeRoute::dispatch_key()` — never via a tool-name or
-/// owner-prefixed alias.
-const ABILITY_REGISTRY_NAME: &str = ABILITY_PUBLIC_NAME;
-const ADVERTISE_ABILITIES: &str = "federation.advertise_abilities";
+const ABILITY_PUBLIC_NAME: &str = "observe.health";
+const UNBOUND_ABILITY_PUBLIC_NAME: &str = "observe.network_health";
+const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-a.observe.health";
 const DEVICE_SIGNING_SEED: [u8; 32] = [0xA1; 32];
 
 /// Any single in-process step that takes longer than this is a
@@ -116,6 +108,9 @@ fn device_public_key_b64() -> String {
 struct TestDaemon {
     socket_path: std::path::PathBuf,
     presence: Arc<PresenceRegistry>,
+    catalog: Arc<AxonAbilityCatalog>,
+    ability_catalog_store:
+        Arc<easynet_cli::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
     _tempdir: tempfile::TempDir,
     shutdown: Option<oneshot::Sender<()>>,
     server: Option<JoinHandle<()>>,
@@ -132,9 +127,9 @@ impl Drop for TestDaemon {
     }
 }
 
-/// Boot a hub-mode daemon with the device echo ability registered in a real
-/// `LocalRuntime`. Presence is left
-/// empty so individual tests choose whether the owner is online.
+/// Boot a hub-mode daemon with a production-shaped combined Device+Hub ability
+/// catalog and real `LocalRuntime`. Presence is left empty so individual tests
+/// choose whether the owner is online.
 async fn start_daemon() -> TestDaemon {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let socket_path = tempdir.path().join("daemon.sock");
@@ -173,24 +168,42 @@ added_at_unix_ms = 0
         .expect("write trust toml");
     drop(f);
 
+    let runtime = LocalRuntime::new();
+    let authority_context = AbilityAuthorityContext::for_combined_authority_roots(DEVICE_URA)
+        .expect("combined Device+Hub authority");
+    let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
+    let mut catalog_config =
+        easynet_cli::daemon::ability::catalog::RegistryBuildConfig::new_with_authority_context(
+            easynet_cli::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            &agents,
+            authority_context,
+        );
+    catalog_config.local_runtime = Some(Arc::clone(&runtime));
+    let catalog =
+        easynet_cli::daemon::ability::catalog::build_registry_with_services_result(catalog_config)
+            .expect("assemble production-shaped test ability catalog")
+            .catalog;
     let trust_anchor = RealmTrustAnchor::try_load_strict(&trust_path).expect("load trust anchor");
     let presence = Arc::new(PresenceRegistry::new());
-    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(HUB_URA.to_string()));
-
-    let runtime = LocalRuntime::new();
-    let authority_context =
-        AbilityAuthorityContext::for_device_authority_root(DEVICE_URA).expect("device authority");
-    let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-        Arc::clone(&runtime),
-        authority_context,
+    let advertised_agents = Arc::new(
+        easynet_cli::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
     );
-    let echo_handler: LocalRpcHandler = Arc::new(Ok);
-    catalog.register_rpc_with_owner(ABILITY_REGISTRY_NAME, OwnerKind::Device, echo_handler);
+    let ability_catalog_store = Arc::new(
+        easynet_cli::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
+    );
+    let admission = AdmissionFacade::new(Arc::new(trust_anchor), Some(HUB_URA.to_string()))
+        .with_ability_catalog(Arc::clone(&catalog));
 
     let service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_session_realm(REALM)
         .with_local_runtime(runtime)
-        .with_loopback_trusted(true);
+        .with_transport_boundary(AdmissionTransportBoundary::LocalOnlyIpc)
+        .with_directory_read_models(advertised_agents, Arc::clone(&ability_catalog_store))
+        .with_local_ability_catalog(Arc::clone(&catalog));
+    service
+        .register_daemon_unary_routes(HUB_URA)
+        .await
+        .expect("register daemon exact routes before exposing test server");
 
     let listener = UnixListener::bind(&socket_path).expect("bind UDS");
     let incoming = UnixListenerStream::new(listener);
@@ -208,6 +221,8 @@ added_at_unix_ms = 0
     TestDaemon {
         socket_path,
         presence,
+        catalog,
+        ability_catalog_store,
         _tempdir: tempdir,
         shutdown: Some(shutdown_tx),
         server: Some(server),
@@ -247,14 +262,16 @@ fn mark_owner_online(presence: &PresenceRegistry) {
 /// Build a unary `Invoke` of `function_name` against `callee_ura`,
 /// with `args` as the JSON argument payload.
 fn invoke(
+    catalog: &AxonAbilityCatalog,
     callee_ura: &str,
     function_name: &str,
     args: serde_json::Value,
 ) -> Request<InvokeRequest> {
-    invoke_with_subject(callee_ura, DEVICE_URA, function_name, args)
+    invoke_with_subject(catalog, callee_ura, DEVICE_URA, function_name, args)
 }
 
 fn invoke_with_subject(
+    catalog: &AxonAbilityCatalog,
     callee_ura: &str,
     subject_ura: &str,
     function_name: &str,
@@ -262,12 +279,7 @@ fn invoke_with_subject(
 ) -> Request<InvokeRequest> {
     let arguments = args.to_string().into_bytes();
     let signer = device_signer();
-    let descriptor_ref = format!(
-        "{}@{}",
-        easynet_cli::core::ura::owner_ability_ura(callee_ura, function_name)
-            .expect("fixture ability URA"),
-        easynet_cli::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION
-    );
+    let descriptor_ref = fixture_descriptor_ref(catalog, callee_ura, function_name);
     Request::new(
         ProtoEnvelope::targeted(DEVICE_URA, callee_ura, subject_ura)
             .expect("valid invoke envelope")
@@ -276,56 +288,130 @@ fn invoke_with_subject(
     )
 }
 
-/// Publish the echo ability's owner projection through the real
-/// `federation.advertise_abilities` wire path.
-async fn publish_echo_projection(client: &mut InvocationClient<Channel>) {
-    let request = invoke_with_subject(
-        HUB_URA,
-        DEVICE_URA,
-        ADVERTISE_ABILITIES,
-        json!({
+fn fixture_descriptor_ref(
+    catalog: &AxonAbilityCatalog,
+    callee_ura: &str,
+    function_name: &str,
+) -> String {
+    let descriptor = fixture_descriptor(catalog, callee_ura, function_name);
+    let ability_ura = descriptor
+        .canonical_ability_ura()
+        .expect("fixture descriptor has canonical ability URA");
+    easynet_axon::invocation::canonical_ability_descriptor_ref(&format!(
+        "{}@{}#{}!{}",
+        ability_ura,
+        descriptor.version,
+        hex::encode(descriptor.descriptor_hash_bytes()),
+        descriptor.admission_action().as_str()
+    ))
+    .expect("fixture descriptor ref is canonical")
+}
+
+fn fixture_descriptor(
+    catalog: &AxonAbilityCatalog,
+    callee_ura: &str,
+    function_name: &str,
+) -> AbilityDescriptor {
+    let owner = catalog_owner_kind_for(callee_ura);
+    let mut matches = catalog
+        .authority_ability_catalog_snapshot()
+        .into_iter()
+        .filter(|row| row.owner == owner)
+        .filter(|row| row.name == function_name)
+        .filter(|row| row.descriptor.call_mode() == CallMode::Rpc);
+    let descriptor = matches
+        .next()
+        .unwrap_or_else(|| {
+            panic!("fixture catalog missing {owner:?} RPC descriptor for {function_name:?}")
+        })
+        .descriptor
+        .rebind_owner_ura(callee_ura)
+        .expect("fixture descriptor can rebind to callee");
+    assert!(
+        matches.next().is_none(),
+        "fixture catalog has ambiguous {owner:?} RPC descriptor for {function_name:?}"
+    );
+    descriptor
+}
+
+fn catalog_owner_kind_for(callee_ura: &str) -> OwnerKind {
+    let parsed = easynet_cli::core::ura::parse_ura(callee_ura)
+        .unwrap_or_else(|err| panic!("fixture callee URA must parse: {callee_ura}: {err}"));
+    match parsed.kind {
+        easynet_cli::core::ura::URAKind::Device => OwnerKind::Device,
+        easynet_cli::core::ura::URAKind::Hub => OwnerKind::Hub,
+        other => panic!("fixture callee owner kind must be Device or Hub, got {other:?}"),
+    }
+}
+
+/// Seed the hub read model with the same admitted projection shape that
+/// `federation.advertise_abilities` persists after authority admission.
+fn seed_health_projection(daemon: &TestDaemon) {
+    let descriptor = fixture_descriptor(&daemon.catalog, DEVICE_URA, ABILITY_PUBLIC_NAME);
+    let descriptor_version = descriptor.version.clone();
+    let descriptor_revision = descriptor.descriptor_hash_prefixed();
+    let schema_hash = descriptor.schema_hash_prefixed();
+    let policy_hash = descriptor.access_policy_hash_prefixed();
+    let description = descriptor.description.clone();
+    let admission_action = descriptor.admission_action().as_str();
+    let flags = json!({
+        "read_only": true,
+        "destructive": false,
+        "idempotent": true,
+        "streaming_only": false,
+        "bidi_only": false
+    });
+    let receipt_semantics = json!({
+        "kind": "operational"
+    });
+    let mode_geometry = json!([{
+        "call_mode": "rpc",
+        "descriptor_version": descriptor_version,
+        "descriptor_revision": descriptor_revision,
+        "admission_action": admission_action,
+        "schema_hash": schema_hash,
+        "policy_ref": policy_hash,
+        "policy_hash": policy_hash,
+        "description": description,
+        "receipt_semantics": receipt_semantics,
+        "input_fields": [],
+        "flags": flags,
+        "tags": ["class:unary", "mode:rpc"]
+    }]);
+    let callable_summary = json!({
+        "public_name": ABILITY_PUBLIC_NAME,
+        "description": description,
+        "call_mode": "rpc",
+        "receipt_semantics": receipt_semantics,
+        "input_fields": [],
+        "flags": flags,
+        "mode_geometry": mode_geometry
+    });
+    let ability_summaries = json!([{
+        "ability_ura": ABILITY_URA,
+        "owner_ura": DEVICE_URA,
+        "namespace": "observe",
+        "local_name": "health",
+        "descriptor_revision": descriptor_revision,
+        "schema_hash": schema_hash,
+        "policy_ref": policy_hash,
+        "route_summary_ref": format!("route-ref::{ABILITY_URA}"),
+        "tags": ["class:unary", "mode:rpc"],
+        "callable_summary": callable_summary
+    }]);
+    let stored = daemon
+        .ability_catalog_store
+        .upsert_admitted_projection_json(json!({
             "owner_ura": DEVICE_URA,
             "host_device_ura": DEVICE_URA,
+            "generation": 1,
             "projection_revision": 1,
-            "projection_digest": "82026a0c2901554956ced1b02481f747576fdf28b01c1e296f833921529e5435",
+            "projection_digest": "",
             "lease_expires_unix_ms": 4_102_444_800_000_i64,
-            "ability_summaries": [{
-                "ability_ura": ABILITY_URA,
-                "owner_ura": DEVICE_URA,
-                "namespace": "test",
-                "local_name": "echo",
-                "descriptor_revision": "sha256:descriptor",
-                "policy_ref": "visibility:PUBLIC",
-                "route_summary_ref": format!("route-ref::{ABILITY_URA}"),
-                "tags": ["class:unary"],
-                "callable_summary": {
-                    "public_name": ABILITY_PUBLIC_NAME,
-                    "description": "echo back the request payload",
-                    "call_mode": "rpc",
-                    "receipt_semantics": {
-                        "kind": "operational"
-                    },
-                    "input_fields": [],
-                    "flags": {
-                        "read_only": true,
-                        "destructive": false,
-                        "idempotent": true,
-                        "streaming_only": false,
-                        "bidi_only": false
-                    }
-                }
-            }]
-        }),
-    );
-    let resp = tokio::time::timeout(STEP_TIMEOUT, client.invoke(request))
-        .await
-        .expect("advertise_abilities did not time out")
-        .expect("advertise_abilities returns Ok")
-        .into_inner();
-    let body: serde_json::Value =
-        serde_json::from_slice(&resp.result).expect("advertise response is JSON");
-    assert_eq!(body["ack"], true, "projection publication must be acked");
-    assert_eq!(body["count"], 1, "exactly one ability published");
+            "ability_summaries": ability_summaries
+        }))
+        .expect("seed admitted owner projection");
+    assert!(stored, "projection publication must be stored");
 }
 
 #[tokio::test]
@@ -334,12 +420,17 @@ async fn invoke_resolves_published_device_ability_to_session_dispatch() {
     mark_owner_online(&daemon.presence);
     let mut client = InvocationClient::new(connect(&daemon.socket_path).await);
 
-    publish_echo_projection(&mut client).await;
+    seed_health_projection(&daemon);
 
     let payload = json!({ "marker": "resolve-before-invoke" });
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(DEVICE_URA, ABILITY_PUBLIC_NAME, payload.clone())),
+        client.invoke(invoke(
+            &daemon.catalog,
+            DEVICE_URA,
+            ABILITY_PUBLIC_NAME,
+            payload.clone(),
+        )),
     )
     .await
     .expect("invoke did not time out")
@@ -356,26 +447,30 @@ async fn invoke_resolves_published_device_ability_to_session_dispatch() {
 }
 
 #[tokio::test]
-async fn invoke_surfaces_typed_nodata_when_owner_online_but_ability_unpublished() {
+async fn invoke_reaches_dispatch_precondition_when_owner_online_for_known_ability() {
     let daemon = start_daemon().await;
     mark_owner_online(&daemon.presence);
     let mut client = InvocationClient::new(connect(&daemon.socket_path).await);
 
-    // Owner is online, but this ability is not bound in the live
-    // LocalRuntime: resolve must return NODATA.
+    // Owner is online and the descriptor is known; without a pending remote
+    // dispatcher, resolve must get far enough to fail at dispatch precondition.
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(DEVICE_URA, UNBOUND_ABILITY_PUBLIC_NAME, json!({}))),
+        client.invoke(invoke(
+            &daemon.catalog,
+            DEVICE_URA,
+            UNBOUND_ABILITY_PUBLIC_NAME,
+            json!({}),
+        )),
     )
     .await
     .expect("invoke did not time out")
-    .expect_err("unbound ability must surface a typed resolver negative");
+    .expect_err("known online ability must reach remote dispatch precondition");
 
     assert_eq!(status.code(), tonic::Code::FailedPrecondition);
     assert!(
-        status.message().contains("ROUTE_NEGATIVE")
-            && status.message().contains("NEGATIVE_REASON_NODATA"),
-        "online owner without the ability must surface NODATA, got: {status}"
+        status.message().contains("PendingDispatchMap"),
+        "online known ability must fail at remote dispatch precondition, got: {status}"
     );
 }
 
@@ -387,13 +482,18 @@ async fn invoke_surfaces_typed_nxdomain_when_owner_offline() {
 
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(REMOTE_DEVICE_URA, ABILITY_PUBLIC_NAME, json!({}))),
+        client.invoke(invoke(
+            &daemon.catalog,
+            REMOTE_DEVICE_URA,
+            ABILITY_PUBLIC_NAME,
+            json!({}),
+        )),
     )
     .await
     .expect("invoke did not time out")
     .expect_err("offline owner must surface a typed resolver negative");
 
-    assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    assert_eq!(status.code(), tonic::Code::NotFound);
     assert!(
         status.message().contains("ROUTE_NEGATIVE")
             && status.message().contains("NEGATIVE_REASON_NXDOMAIN"),

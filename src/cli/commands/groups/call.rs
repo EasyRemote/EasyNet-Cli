@@ -24,6 +24,7 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
+use crate::cli::daemon_client::remote_system_ability::invoke_current_realm_hub_system_ability;
 use crate::support::platform::local_invoke::invoke_local_ability;
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -160,24 +161,8 @@ pub fn run(args: CallArgs) -> anyhow::Result<()> {
 }
 
 fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
-    #[cfg(feature = "axon-pb")]
-    if let Ok(creds) = crate::daemon::persistence::config::load_credentials() {
-        let realm = creds.realm_str().trim();
-        let node_id = creds.node_id.trim();
-        if !realm.is_empty() && !node_id.is_empty() {
-            let hub_ura = crate::core::ura::hub_ura(realm);
-            let caller_ura = crate::core::ura::device_ura(realm, node_id);
-            let target_call =
-                crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-                    &hub_ura, ability,
-                )?;
-            return crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
-                &target_call,
-                args,
-                Some(&caller_ura),
-            )
-            .with_context(|| format!("invoke {ability} against realm hub"));
-        }
+    if let Some(value) = invoke_current_realm_hub_system_ability(ability, args.clone())? {
+        return Ok(value);
     }
 
     invoke_local_ability(ability, args).with_context(|| format!("invoke {ability} locally"))

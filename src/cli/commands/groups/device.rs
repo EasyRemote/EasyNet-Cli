@@ -41,6 +41,7 @@ use serde_json::{json, Value};
 
 use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
 use crate::cli::commands::{config_cmd, devices, join, reset};
+use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_system_ability;
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -373,8 +374,6 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
         .as_ref()
         .map(|c| c.node_id.clone())
         .unwrap_or_default();
-    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
-
     let is_local = trimmed.is_empty()
         || trimmed.eq_ignore_ascii_case("local")
         || (!local_node.is_empty() && trimmed == local_node);
@@ -387,32 +386,14 @@ fn describe_target(node_id: &str) -> anyhow::Result<Value> {
         .context("invoke node.describe (local)");
     }
 
-    invoke_remote_describe(trimmed, &local_tenant)
+    invoke_remote_describe(trimmed)
 }
 
-#[cfg(feature = "axon-pb")]
-fn invoke_remote_describe(node: &str, local_tenant: &str) -> anyhow::Result<Value> {
-    let _ = local_tenant;
-    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &target_ura,
+fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
+    invoke_remote_device_system_ability(
+        node,
         "node.describe",
-    )?;
-    crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(
-        &target_call,
         serde_json::json!({"node_id": "local"}),
-        caller_ura.as_deref(),
-    )
-    .with_context(|| format!("forward node.describe to target={target_ura}"))
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn invoke_remote_describe(node: &str, _local_tenant: &str) -> anyhow::Result<Value> {
-    Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(&format!(
-            "describing remote device {node:?}"
-        )),
+        &format!("describing remote device {node:?}"),
     )
 }
