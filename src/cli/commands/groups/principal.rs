@@ -540,8 +540,10 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     let request = principal_create_request(
         &args.principal_ura,
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -558,8 +560,10 @@ fn run_issue_enrollment(args: IssueEnrollmentArgs) -> anyhow::Result<()> {
         &args.issuer_ura,
         &args.subject_principal_ura,
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.issuer_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.issuer_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -578,8 +582,10 @@ fn run_revoke_enrollment(args: RevokeEnrollmentArgs) -> anyhow::Result<()> {
         &args.issuer_ura,
         &args.enrollment_id,
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.issuer_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.issuer_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -598,8 +604,10 @@ fn run_bind_first_key(args: BindFirstKeyArgs) -> anyhow::Result<()> {
         key.public_key_b64.as_str(),
         args.key_id.as_deref().unwrap_or(key.key_id.as_str()),
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -636,8 +644,10 @@ fn run_add_key(args: KeyMutationArgs) -> anyhow::Result<()> {
         key.public_key_b64.as_str(),
         key.key_id.as_str(),
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -666,8 +676,10 @@ fn run_rotate_key(args: RotateKeyArgs) -> anyhow::Result<()> {
     )?;
     let idempotency_key = command_id(args.idempotency_key);
     let command = principal_command(
-        args.actor_ura.as_deref(),
-        &args.principal_ura,
+        PrincipalCommandActor::supplied_or_subject_self(
+            args.actor_ura.as_deref(),
+            &args.principal_ura,
+        ),
         &idempotency_key,
         args.expected_version,
         args.proof_kind,
@@ -696,8 +708,10 @@ fn run_revoke_key(args: BindingMutationArgs) -> anyhow::Result<()> {
         &args.principal_ura,
         &args.binding_id,
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -714,8 +728,10 @@ fn run_configure_recovery(args: ConfigureRecoveryArgs) -> anyhow::Result<()> {
         &args.principal_ura,
         &args.policy_ref,
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -738,8 +754,10 @@ fn run_recover(args: RecoverArgs) -> anyhow::Result<()> {
     )?;
     let idempotency_key = command_id(args.idempotency_key);
     let command = principal_command(
-        args.actor_ura.as_deref(),
-        &args.principal_ura,
+        PrincipalCommandActor::supplied_or_subject_self(
+            args.actor_ura.as_deref(),
+            &args.principal_ura,
+        ),
         &idempotency_key,
         args.expected_version,
         args.proof_kind,
@@ -766,8 +784,10 @@ fn run_state_mutation(ability: &str, label: &str, args: StateMutationArgs) -> an
     let request = principal_state_request(
         &args.principal_ura,
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -784,8 +804,10 @@ fn run_issue_grant(args: IssueGrantArgs) -> anyhow::Result<()> {
         &args.principal_ura,
         args.actions.as_slice(),
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -804,8 +826,10 @@ fn run_revoke_grant(args: RevokeGrantArgs) -> anyhow::Result<()> {
         &args.principal_ura,
         &args.grant_id,
         principal_command(
-            args.actor_ura.as_deref(),
-            &args.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(
+                args.actor_ura.as_deref(),
+                &args.principal_ura,
+            ),
             &idempotency_key,
             args.expected_version,
             args.proof_kind,
@@ -858,20 +882,41 @@ fn principal_ability_realm_source(args: &Value) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow!("principal.lifecycle request missing principal_ura"))
 }
 
+#[derive(Clone, Copy)]
+enum PrincipalCommandActor<'a> {
+    Supplied(&'a str),
+    SubjectSelf(&'a str),
+}
+
+impl<'a> PrincipalCommandActor<'a> {
+    fn supplied_or_subject_self(actor_ura: Option<&'a str>, principal_ura: &'a str) -> Self {
+        actor_ura
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(Self::Supplied)
+            .unwrap_or(Self::SubjectSelf(principal_ura))
+    }
+
+    fn subject_self(principal_ura: &'a str) -> Self {
+        Self::SubjectSelf(principal_ura)
+    }
+
+    fn actor_ura(self) -> &'a str {
+        match self {
+            Self::Supplied(actor_ura) | Self::SubjectSelf(actor_ura) => actor_ura.trim(),
+        }
+    }
+}
+
 fn principal_command(
-    actor_ura: Option<&str>,
-    principal_ura: &str,
+    actor: PrincipalCommandActor<'_>,
     idempotency_key: &str,
     expected_version: Option<u64>,
     proof_kind: ProofKindArg,
     proof_ref: &str,
 ) -> Value {
-    let actor = actor_ura
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| principal_ura.trim());
     let mut command = json!({
-        "actor_ura": actor,
+        "actor_ura": actor.actor_ura(),
         "idempotency_key": idempotency_key,
         "proof": {
             "kind": proof_kind.as_wire(),
@@ -926,8 +971,7 @@ fn principal_create_and_bind_first_key_requests(
     let create_request = principal_create_request(
         input.principal_ura,
         principal_command(
-            input.actor_ura,
-            input.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(input.actor_ura, input.principal_ura),
             input.create_idempotency_key,
             None,
             proof_kind,
@@ -939,8 +983,7 @@ fn principal_create_and_bind_first_key_requests(
         input.public_key_b64,
         input.key_id,
         principal_command(
-            input.actor_ura,
-            input.principal_ura,
+            PrincipalCommandActor::supplied_or_subject_self(input.actor_ura, input.principal_ura),
             input.bind_idempotency_key,
             Some(1),
             proof_kind,
@@ -1016,8 +1059,7 @@ fn principal_rotate_key_request(
         public_key_b64,
         key_id,
         principal_command(
-            None,
-            principal_ura,
+            PrincipalCommandActor::subject_self(principal_ura),
             "replacement",
             None,
             ProofKindArg::ActiveKey,
@@ -1071,8 +1113,7 @@ fn principal_recover_request(
         public_key_b64,
         key_id,
         principal_command(
-            None,
-            principal_ura,
+            PrincipalCommandActor::subject_self(principal_ura),
             "replacement",
             None,
             ProofKindArg::Recovery,
@@ -1358,8 +1399,7 @@ mod tests {
     #[test]
     fn create_request_keeps_explicit_command_boundary() {
         let command = principal_command(
-            None,
-            " easynet:///r/realm/user/alice ",
+            PrincipalCommandActor::subject_self(" easynet:///r/realm/user/alice "),
             "idem-1",
             Some(1),
             ProofKindArg::Bootstrap,
@@ -1386,8 +1426,7 @@ mod tests {
     #[test]
     fn principal_ability_target_uses_hub_owner_from_principal_realm() {
         let command = principal_command(
-            None,
-            "easynet:///r/realm/user/alice",
+            PrincipalCommandActor::subject_self("easynet:///r/realm/user/alice"),
             "idem-1",
             Some(1),
             ProofKindArg::Bootstrap,
@@ -1586,8 +1625,7 @@ mod tests {
             "easynet:///r/realm/user/admin",
             "easynet:///r/realm/user/bob",
             principal_command(
-                Some("easynet:///r/realm/user/admin"),
-                "easynet:///r/realm/user/admin",
+                PrincipalCommandActor::Supplied("easynet:///r/realm/user/admin"),
                 "idem-issue",
                 None,
                 ProofKindArg::ActiveKey,
@@ -1617,8 +1655,7 @@ mod tests {
             "PUB",
             "key-2",
             principal_command(
-                Some("easynet:///r/realm/user/alice"),
-                "easynet:///r/realm/user/alice",
+                PrincipalCommandActor::Supplied("easynet:///r/realm/user/alice"),
                 "idem-rotate",
                 Some(3),
                 ProofKindArg::ActiveKey,
@@ -1648,8 +1685,7 @@ mod tests {
             "PUB2",
             "key-3",
             principal_command(
-                None,
-                "easynet:///r/realm/user/alice",
+                PrincipalCommandActor::subject_self("easynet:///r/realm/user/alice"),
                 "idem-recover",
                 Some(4),
                 ProofKindArg::Recovery,
@@ -1679,8 +1715,7 @@ mod tests {
                 "  principal.lifecycle.recover  ".into(),
             ],
             principal_command(
-                None,
-                "easynet:///r/realm/user/admin",
+                PrincipalCommandActor::subject_self("easynet:///r/realm/user/admin"),
                 "idem-grant",
                 None,
                 ProofKindArg::ActiveKey,
@@ -1702,8 +1737,7 @@ mod tests {
         let request = principal_state_request(
             " easynet:///r/realm/user/alice ",
             principal_command(
-                None,
-                "easynet:///r/realm/user/alice",
+                PrincipalCommandActor::subject_self("easynet:///r/realm/user/alice"),
                 "idem-state",
                 Some(9),
                 ProofKindArg::Grant,

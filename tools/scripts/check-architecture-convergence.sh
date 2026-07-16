@@ -1575,6 +1575,68 @@ if access_control.exists():
         )
 
 
+# Rule 33: PrincipalLifecycle CLI may preserve source-compatible subject-self
+# behavior, but actor source must be an explicit command-state boundary before
+# JSON construction. The command serializer must not choose a missing actor_ura
+# fallback itself; otherwise audit actor authority becomes a hidden convenience
+# branch in the CLI facade.
+principal_cli = cli_root / "src/cli/commands/groups/principal.rs"
+if principal_cli.exists():
+    text = source(principal_cli)
+    principal_actor_requirements = (
+        (
+            "enum PrincipalCommandActor",
+            "PrincipalLifecycle CLI actor source must be a typed boundary",
+        ),
+        (
+            "fn supplied_or_subject_self(actor_ura: Option<&'a str>, principal_ura: &'a str) -> Self",
+            "source-compatible subject-self behavior must be named at actor selection",
+        ),
+        (
+            "fn subject_self(principal_ura: &'a str) -> Self",
+            "internal subject-self commands must be explicit",
+        ),
+        (
+            "fn actor_ura(self) -> &'a str",
+            "actor projection must be owned by the typed actor boundary",
+        ),
+        (
+            "fn principal_command(\n    actor: PrincipalCommandActor<'_>,",
+            "principal command serializer must receive a selected actor state",
+        ),
+    )
+    for token, detail in principal_actor_requirements:
+        if token not in text:
+            add("R33_PRINCIPAL_COMMAND_ACTOR_FALLBACK", principal_cli, 1, detail)
+
+    old_signature = re.search(
+        r"fn\s+principal_command\s*\(\s*actor_ura\s*:\s*Option\s*<\s*&str\s*>\s*,"
+        r"\s*principal_ura\s*:\s*&str",
+        text,
+    )
+    if old_signature:
+        add(
+            "R33_PRINCIPAL_COMMAND_ACTOR_FALLBACK",
+            principal_cli,
+            line_number(text, old_signature.start()),
+            "principal command serializer must not accept actor_ura Option plus principal fallback source",
+        )
+
+    hidden_fallback = re.search(
+        r"fn\s+principal_command[\s\S]{0,900}"
+        r"(?:unwrap_or|unwrap_or_else)\s*\([\s\S]{0,120}principal_ura\s*\.trim",
+        text,
+        re.S,
+    )
+    if hidden_fallback:
+        add(
+            "R33_PRINCIPAL_COMMAND_ACTOR_FALLBACK",
+            principal_cli,
+            line_number(text, hidden_fallback.start()),
+            "principal command serializer must not fall back from actor_ura to principal_ura",
+        )
+
+
 # Rule 32: Agent destructive lifecycle has one public boundary. `agent.stop`
 # remains a non-destructive row/authority removal; `agent.purge` is the only
 # destructive root-removal entry point and must be projected as such by catalog
@@ -1604,8 +1666,16 @@ if agent_lifecycle.exists():
             "Agent purge must have a dedicated handler separate from stop",
         ),
         (
-            "ensure_identity_bound_purge_supported()?",
-            "Agent purge must check identity-bound deletion support before mutation",
+            "struct PlatformTreeDeletion;",
+            "Agent purge platform deletion must have one named owner",
+        ),
+        (
+            "PlatformTreeDeletion::require_supported()?",
+            "Agent purge must check platform deletion support before mutation",
+        ),
+        (
+            "PlatformTreeDeletion::remove_quarantined_directory_identity_bound(",
+            "Agent purge finalization must delete quarantine through the platform deletion owner",
         ),
         (
             "fn purge_agent_input_schema() -> Value",
@@ -1631,6 +1701,20 @@ if agent_lifecycle.exists():
     for token, detail in lifecycle_requirements:
         if token not in production_text:
             add("R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK", agent_lifecycle, 1, detail)
+    if "ensure_identity_bound_purge_supported" in production_text:
+        add(
+            "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK",
+            agent_lifecycle,
+            1,
+            "Agent purge support probing must not regress to a standalone helper",
+        )
+    if re.search(r"(?m)^fn\s+remove_quarantined_directory_identity_bound\s*\(", production_text):
+        add(
+            "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK",
+            agent_lifecycle,
+            1,
+            "Agent purge quarantine deletion must remain owned by PlatformTreeDeletion",
+        )
 if catalog_metadata.exists():
     text = source(catalog_metadata)
     metadata_requirements = (

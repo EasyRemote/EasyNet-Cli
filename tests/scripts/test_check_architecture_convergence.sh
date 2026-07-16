@@ -51,6 +51,7 @@ make_good_fixture() {
   rm -rf "$CLI" "$AXON"
   mkdir -p \
     "$CLI/src/cli/commands" \
+    "$CLI/src/cli/commands/groups" \
     "$CLI/src/eal/interpreter" \
     "$CLI/src/daemon/ability/builtins/automation" \
     "$CLI/src/daemon/ability/builtins/agents" \
@@ -156,9 +157,31 @@ fn stop_agent_locked(registry: &AgentRegistry, identities: &local_agents::LocalA
     transaction.persist_identity_projection(&identities);
 }
 
+struct PlatformTreeDeletion;
+
+impl PlatformTreeDeletion {
+    fn require_supported() -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn remove_quarantined_directory_identity_bound(
+        quarantine: &std::path::Path,
+        expected_identity: &AgentRootIdentity,
+    ) -> anyhow::Result<()> {
+        delete_identity_bound_quarantine(quarantine, expected_identity)
+    }
+}
+
 fn purge_agent_handler(args: Value, hot_registrar: &SharedHotRegistrarCell) -> anyhow::Result<Value> {
-    ensure_identity_bound_purge_supported()?;
+    PlatformTreeDeletion::require_supported()?;
     purge_agent_locked(args, hot_registrar)
+}
+
+fn finalize_committed_purge(journal: &AgentPurgeJournal) -> anyhow::Result<()> {
+    PlatformTreeDeletion::remove_quarantined_directory_identity_bound(
+        &journal.quarantine_path,
+        journal.root_identity.as_ref().unwrap(),
+    )
 }
 
 pub fn purge_agent_input_schema() -> Value {
@@ -210,6 +233,49 @@ EOF
 fn bootstrap_local_agent_projection(creds: &Credentials) {
     let plan = build_bootstrap_plan(creds)?;
     lifecycle::bootstrap_local_agent_projection(&plan)
+}
+EOF
+  cat >"$CLI/src/cli/commands/groups/principal.rs" <<'EOF'
+enum PrincipalCommandActor<'a> {
+    Supplied(&'a str),
+    SubjectSelf(&'a str),
+}
+
+impl<'a> PrincipalCommandActor<'a> {
+    fn supplied_or_subject_self(actor_ura: Option<&'a str>, principal_ura: &'a str) -> Self {
+        actor_ura
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(Self::Supplied)
+            .unwrap_or(Self::SubjectSelf(principal_ura))
+    }
+
+    fn subject_self(principal_ura: &'a str) -> Self {
+        Self::SubjectSelf(principal_ura)
+    }
+
+    fn actor_ura(self) -> &'a str {
+        match self {
+            Self::Supplied(actor_ura) | Self::SubjectSelf(actor_ura) => actor_ura.trim(),
+        }
+    }
+}
+
+fn principal_command(
+    actor: PrincipalCommandActor<'_>,
+    idempotency_key: &str,
+    expected_version: Option<u64>,
+    proof_kind: ProofKindArg,
+    proof_ref: &str,
+) -> Value {
+    json!({
+        "actor_ura": actor.actor_ura(),
+        "idempotency_key": idempotency_key,
+        "proof": {
+            "kind": proof_kind.as_wire(),
+            "reference": proof_ref.trim(),
+        }
+    })
 }
 EOF
   cat >"$CLI/src/daemon/execution/mission/orchestration.rs" <<'EOF'
@@ -1254,6 +1320,23 @@ expect_fail \
   "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK"
 
 make_good_fixture
+cat >>"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
+fn ensure_identity_bound_purge_supported() -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn remove_quarantined_directory_identity_bound(
+    quarantine: &std::path::Path,
+    expected_identity: &AgentRootIdentity,
+) -> anyhow::Result<()> {
+    PlatformTreeDeletion::remove_quarantined_directory_identity_bound(quarantine, expected_identity)
+}
+EOF
+expect_fail \
+  "Agent purge platform deletion owner fork" \
+  "R32_AGENT_PURGE_PUBLIC_BOUNDARY_FORK"
+
+make_good_fixture
 cat >>"$CLI/src/eal/interpreter/dispatch.rs" <<'EOF'
 fn bypass_chat() {
     invoke_direct_with_progress("agent", args);
@@ -1950,6 +2033,34 @@ EOF
 expect_fail \
   "access-control actor URA fork" \
   "R18_ACCESS_CONTROL_ACTOR_URA_FORK"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/groups/principal.rs" <<'EOF'
+fn principal_command(
+    actor_ura: Option<&str>,
+    principal_ura: &str,
+    idempotency_key: &str,
+    expected_version: Option<u64>,
+    proof_kind: ProofKindArg,
+    proof_ref: &str,
+) -> Value {
+    let actor = actor_ura
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| principal_ura.trim());
+    json!({
+        "actor_ura": actor,
+        "idempotency_key": idempotency_key,
+        "proof": {
+            "kind": proof_kind.as_wire(),
+            "reference": proof_ref.trim(),
+        }
+    })
+}
+EOF
+expect_fail \
+  "principal command actor fallback fork" \
+  "R33_PRINCIPAL_COMMAND_ACTOR_FALLBACK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'

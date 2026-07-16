@@ -1307,17 +1307,21 @@ struct PurgePlatformUnsupported {
     target: &'static str,
 }
 
-#[cfg(unix)]
-fn ensure_identity_bound_purge_supported() -> anyhow::Result<()> {
-    Ok(())
-}
+struct PlatformTreeDeletion;
 
-#[cfg(not(unix))]
-fn ensure_identity_bound_purge_supported() -> anyhow::Result<()> {
-    Err(PurgePlatformUnsupported {
-        target: std::env::consts::OS,
+impl PlatformTreeDeletion {
+    #[cfg(unix)]
+    fn require_supported() -> anyhow::Result<()> {
+        Ok(())
     }
-    .into())
+
+    #[cfg(not(unix))]
+    fn require_supported() -> anyhow::Result<()> {
+        Err(PurgePlatformUnsupported {
+            target: std::env::consts::OS,
+        }
+        .into())
+    }
 }
 
 #[cfg(test)]
@@ -1725,64 +1729,68 @@ fn restore_uncommitted_purge_root(journal: &AgentPurgeJournal) -> anyhow::Result
 }
 
 #[cfg(unix)]
-fn remove_quarantined_directory_identity_bound(
-    quarantine: &std::path::Path,
-    expected_identity: &AgentRootIdentity,
-) -> anyhow::Result<()> {
-    use rustix::fs::{openat, unlinkat, AtFlags, Mode, OFlags, CWD};
+impl PlatformTreeDeletion {
+    fn remove_quarantined_directory_identity_bound(
+        quarantine: &std::path::Path,
+        expected_identity: &AgentRootIdentity,
+    ) -> anyhow::Result<()> {
+        use rustix::fs::{openat, unlinkat, AtFlags, Mode, OFlags, CWD};
 
-    let parent = quarantine.parent().ok_or_else(|| {
-        anyhow::anyhow!(
-            "identity-bound purge path {} has no parent",
-            quarantine.display()
+        let parent = quarantine.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "identity-bound purge path {} has no parent",
+                quarantine.display()
+            )
+        })?;
+        let name = quarantine.file_name().ok_or_else(|| {
+            anyhow::anyhow!(
+                "identity-bound purge path {} has no basename",
+                quarantine.display()
+            )
+        })?;
+        let parent_fd = openat(
+            CWD,
+            parent,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
         )
-    })?;
-    let name = quarantine.file_name().ok_or_else(|| {
-        anyhow::anyhow!(
-            "identity-bound purge path {} has no basename",
-            quarantine.display()
+        .map_err(|error| anyhow::anyhow!("open purge parent {}: {error}", parent.display()))?;
+        let claimed_fd = openat(
+            &parent_fd,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
         )
-    })?;
-    let parent_fd = openat(
-        CWD,
-        parent,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|error| anyhow::anyhow!("open purge parent {}: {error}", parent.display()))?;
-    let claimed_fd = openat(
-        &parent_fd,
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|error| anyhow::anyhow!("open claimed purge directory: {error}"))?;
-    let claimed = std::fs::File::from(claimed_fd);
-    let claimed_metadata = claimed.metadata()?;
-    if !expected_identity.matches_metadata(&claimed_metadata) {
-        anyhow::bail!("claimed purge directory identity changed before descriptor-bound deletion");
-    }
+        .map_err(|error| anyhow::anyhow!("open claimed purge directory: {error}"))?;
+        let claimed = std::fs::File::from(claimed_fd);
+        let claimed_metadata = claimed.metadata()?;
+        if !expected_identity.matches_metadata(&claimed_metadata) {
+            anyhow::bail!(
+                "claimed purge directory identity changed before descriptor-bound deletion"
+            );
+        }
 
-    run_purge_pre_finalize_hook(quarantine);
-    remove_open_directory_contents(&claimed)?;
+        run_purge_pre_finalize_hook(quarantine);
+        remove_open_directory_contents(&claimed)?;
 
-    // Re-open the name immediately before unlinkat. If an attacker moved the
-    // claimed inode while its descriptor was being drained, the replacement
-    // path is preserved and recovery reports the residual instead of deleting
-    // a different tree.
-    let current_fd = openat(
-        &parent_fd,
-        name,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map_err(|error| anyhow::anyhow!("re-open claimed purge directory: {error}"))?;
-    let current = std::fs::File::from(current_fd);
-    if !expected_identity.matches_metadata(&current.metadata()?) {
-        anyhow::bail!("claimed purge directory identity changed before unlinkat");
+        // Re-open the name immediately before unlinkat. If an attacker moved the
+        // claimed inode while its descriptor was being drained, the replacement
+        // path is preserved and recovery reports the residual instead of deleting
+        // a different tree.
+        let current_fd = openat(
+            &parent_fd,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| anyhow::anyhow!("re-open claimed purge directory: {error}"))?;
+        let current = std::fs::File::from(current_fd);
+        if !expected_identity.matches_metadata(&current.metadata()?) {
+            anyhow::bail!("claimed purge directory identity changed before unlinkat");
+        }
+        unlinkat(&parent_fd, name, AtFlags::REMOVEDIR)
+            .map_err(|error| anyhow::anyhow!("unlinkat claimed purge directory: {error}"))
     }
-    unlinkat(&parent_fd, name, AtFlags::REMOVEDIR)
-        .map_err(|error| anyhow::anyhow!("unlinkat claimed purge directory: {error}"))
 }
 
 #[cfg(unix)]
@@ -1877,11 +1885,13 @@ impl UnixDirectoryEntryIdentity {
 }
 
 #[cfg(not(unix))]
-fn remove_quarantined_directory_identity_bound(
-    _quarantine: &std::path::Path,
-    _expected_identity: &AgentRootIdentity,
-) -> anyhow::Result<()> {
-    ensure_identity_bound_purge_supported()
+impl PlatformTreeDeletion {
+    fn remove_quarantined_directory_identity_bound(
+        _quarantine: &std::path::Path,
+        _expected_identity: &AgentRootIdentity,
+    ) -> anyhow::Result<()> {
+        Self::require_supported()
+    }
 }
 
 fn finalize_committed_purge(journal: &AgentPurgeJournal) -> anyhow::Result<PurgeFinalizeOutcome> {
@@ -1919,15 +1929,17 @@ fn finalize_committed_purge(journal: &AgentPurgeJournal) -> anyhow::Result<Purge
             None,
             QuarantineValidation::CommittedFinalize,
         )?;
-        remove_quarantined_directory_identity_bound(&journal.quarantine_path, identity).map_err(
-            |error| {
-                anyhow::anyhow!(
-                    "agent.purge: delete committed quarantine {}: {error}; residual_path={}",
-                    journal.quarantine_path.display(),
-                    journal.quarantine_path.display()
-                )
-            },
-        )?;
+        PlatformTreeDeletion::remove_quarantined_directory_identity_bound(
+            &journal.quarantine_path,
+            identity,
+        )
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "agent.purge: delete committed quarantine {}: {error}; residual_path={}",
+                journal.quarantine_path.display(),
+                journal.quarantine_path.display()
+            )
+        })?;
         config::sync_parent_dir(&journal.quarantine_path)?;
     }
     Ok(PurgeFinalizeOutcome {
@@ -2375,7 +2387,7 @@ fn purge_agent_handler(
     args: Value,
     hot_registrar: &SharedHotRegistrarCell,
 ) -> anyhow::Result<Value> {
-    ensure_identity_bound_purge_supported()?;
+    PlatformTreeDeletion::require_supported()?;
     let mut committed = {
         let _mutation_guard = AgentLifecycleMutationGuard::acquire().map_err(|error| {
             anyhow::anyhow!("agent.purge: acquire lifecycle transaction: {error:#}")
