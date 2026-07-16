@@ -86,7 +86,7 @@ use crate::daemon::ability::builtins::{
 use crate::daemon::ability::catalog::{build_registry, is_publishable_catalog_name};
 use crate::daemon::ability::conformance::{BaselineSurface, HubBaseline};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -330,21 +330,9 @@ fn dispatcher_for(reg: Arc<AxonAbilityCatalog>) -> Arc<AxonAbilityCatalog> {
 }
 
 fn target(name: &str, args: Value) -> InvocationTarget {
-    InvocationTarget {
-        scope: TargetScope::Local,
-        ability: name.to_string(),
-        normalized_args: args,
-        call_mode: CallMode::Rpc,
-        // Test helper: legacy callers that don't need a subject
-        // get None. The `with_subject` builder lets per-test code
-        // attach one when exercising INV-SUBJECT-ENVELOPE paths.
-        subject:
-            crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-        causal_context:
-            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
-            ),
-        request_metadata: std::collections::HashMap::new(),
-    }
+    // Test helper: default smoke calls use the named daemon-system policy.
+    // Per-test code can still attach explicit subjects with `with_subject`.
+    InvocationTarget::local_daemon_system(name, args, CallMode::Rpc)
 }
 
 fn terminal_followup_target(

@@ -262,3 +262,48 @@ dispatch fixtures now use named constructors for local RPC, stream, bidi, and
 remote guard targets. This removes a high-visibility set of obsolete tuple
 assembly examples from the registry tests while leaving protobuf transport
 targets and other remaining inventory for separate RF-8/RF-7 slices.
+
+## Current Slice: LocalRuntime Invoker Target Fixture Boundary
+
+Owner: EasyNet-Cli daemon Axon bridge tests.
+
+`local_runtime_invoker` is the daemon adapter that lowers routing targets into
+descriptor-bound Axon `LocalRuntime` requests. Its production path now consumes
+resolved target tuple facts, but the module tests still used a hand-written
+`InvocationTarget` fixture that repeated local scope, daemon-system subject
+policy, root causal context, and empty metadata.
+
+The test helper now constructs explicit-subject and daemon-system targets
+through the `InvocationTarget` constructors. This keeps the LocalRuntime
+adapter tests focused on envelope lowering and finalized result projection
+rather than preserving a second example of target assembly.
+
+## Current Slice: Builtins Smoke Target Fixture Boundary
+
+Owner: EasyNet-Cli daemon built-in ability test fixtures.
+
+`real_invoke_tests` and catalog assembly tests are broad smoke coverage for
+daemon built-in abilities and registry assembly. Their local invocation helpers
+are copied into many tests, so a hand-written `InvocationTarget` literal there
+keeps the obsolete tuple assembly style highly visible.
+
+The shared smoke helper and catalog assembly loop now use
+`InvocationTarget::local_daemon_system`. Per-test subject and metadata
+overrides still attach through the target value object's builder methods, but
+the default system/root tuple policy is no longer repeated in these fixtures.
+
+## Current Slice: CLI Agent Command Target Fixture Boundary
+
+Owner: EasyNet-Cli CLI agent command tests.
+
+The CLI agent command fixture builds an in-process daemon ability catalog and
+invokes agent-management abilities through the same local routing target shape
+used by the daemon. The fixture is not a public daemon invocation surface, but
+it is a command-layer adapter test; keeping a hand-written local
+`InvocationTarget` literal there preserves a second target assembly idiom at
+the CLI/daemon boundary.
+
+The fixture now calls `InvocationTarget::local_daemon_system` when it dispatches
+ordinary agent command abilities. The special envelope-aware branch still uses
+its explicit `EnvelopeContext` helper because that path tests envelope handler
+behavior, not routing target construction.

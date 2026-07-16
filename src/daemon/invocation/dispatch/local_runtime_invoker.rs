@@ -335,16 +335,15 @@ mod tests {
         subject: Option<String>,
         normalized_args: Value,
     ) -> InvocationTarget {
-        InvocationTarget {
-            scope: TargetScope::Local,
-            ability,
-            normalized_args,
-            call_mode: CallMode::Rpc,
-            subject: subject
-                .map(crate::daemon::invocation::routing::target::InvocationSubject::explicit)
-                .unwrap_or_else(crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
+        if let Some(subject) = subject {
+            InvocationTarget::local_daemon_system_with_subject(
+                ability,
+                normalized_args,
+                CallMode::Rpc,
+                subject,
+            )
+        } else {
+            InvocationTarget::local_daemon_system(ability, normalized_args, CallMode::Rpc)
         }
     }
 

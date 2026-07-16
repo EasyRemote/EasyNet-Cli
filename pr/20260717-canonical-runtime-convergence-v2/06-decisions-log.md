@@ -61,3 +61,14 @@
   surface. They should construct local and remote daemon-system targets through
   `InvocationTarget` constructors so the test suite does not teach future
   adapters to restate tuple policy by hand.
+- LocalRuntime invoker tests verify Axon request lowering, not routing target
+  construction. Their fixtures should call `InvocationTarget` constructors so
+  the adapter module does not preserve a parallel target assembly example.
+- Broad built-in smoke tests and catalog assembly tests should not expose
+  handwritten local target literals because those helpers become examples for
+  future adapter tests. The target value object remains the owner of
+  daemon-system tuple policy.
+- CLI command fixtures that dispatch into the daemon ability catalog should
+  also use routing target constructors. Envelope-aware handler tests may keep
+  explicit `EnvelopeContext` fixtures because they validate handler context,
+  not target construction.

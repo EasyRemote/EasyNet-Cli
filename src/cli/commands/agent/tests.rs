@@ -149,15 +149,11 @@ fn invoke_agent_command_fixture(
         );
     }
     catalog.invoke_rpc_target_json(
-        crate::daemon::invocation::routing::target::InvocationTarget {
-            scope: crate::daemon::invocation::routing::target::TargetScope::Local,
-            ability: ability.to_string(),
-            normalized_args: args,
-            call_mode: crate::daemon::invocation::routing::target::CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        },
+        crate::daemon::invocation::routing::target::InvocationTarget::local_daemon_system(
+            ability,
+            args,
+            crate::daemon::invocation::routing::target::CallMode::Rpc,
+        ),
     )
 }
 

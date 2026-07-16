@@ -164,6 +164,42 @@
 - [x] Verify routing target tests, ability dispatch tests, lib build,
       architecture convergence gate, and absence of dispatch target literals.
 
+## LocalRuntime Invoker Target Fixture Boundary Slice
+
+- [x] Identify `local_runtime_invoker` tests that still hand-assembled local
+      `InvocationTarget` fixtures.
+- [x] Preserve production remote rejection through `TargetScope` matching.
+- [x] Migrate explicit-subject and daemon-system test helper paths to
+      `InvocationTarget` constructors.
+- [x] Verify LocalRuntime invoker tests, routing target tests, lib build,
+      architecture convergence gate, and absence of target literal remnants in
+      `local_runtime_invoker.rs`.
+
+## Builtins Smoke Target Fixture Boundary Slice
+
+- [x] Identify broad built-in smoke and catalog assembly fixtures that still
+      hand-assembled local `InvocationTarget` values.
+- [x] Migrate `real_invoke_tests` shared target helper to
+      `InvocationTarget::local_daemon_system`.
+- [x] Preserve per-test subject and metadata overrides through target builder
+      methods.
+- [x] Migrate catalog assembly read-only smoke dispatch targets to
+      `InvocationTarget::local_daemon_system`.
+- [x] Verify real-invoke tests, catalog assembly tests, lib build, architecture
+      convergence gate, and absence of target literal remnants in the migrated
+      files.
+
+## CLI Agent Command Target Fixture Boundary Slice
+
+- [x] Identify the CLI agent command fixture as a remaining local
+      `InvocationTarget` assembly point.
+- [x] Preserve the explicit envelope-aware handler branch as an
+      `EnvelopeContext` test path.
+- [x] Migrate ordinary agent command fixture dispatch to
+      `InvocationTarget::local_daemon_system`.
+- [x] Verify focused CLI agent command tests, lib build, architecture
+      convergence gate, and absence of target literal remnants in the file.
+
 ## Still Required Before Completion
 
 - [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.

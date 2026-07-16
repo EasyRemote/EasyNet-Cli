@@ -275,3 +275,64 @@ Commands run on 2026-07-17:
 
 This evidence verifies only the ability dispatch target-fixture slice. It does
 not prove RF-8/RF-7 or SPEC completion.
+
+## LocalRuntime Invoker Target Fixture Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "InvocationTarget \\{|InvocationSubject|InvocationCausalContext" src/daemon/invocation/dispatch/local_runtime_invoker.rs`:
+  only reported helper function signatures; no target literal or target enum
+  construction remains in the file.
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -q daemon::invocation::dispatch::local_runtime_invoker --lib --features axon-pb`:
+  passed, 4 tests.
+- `cargo test -q daemon::invocation::routing::target --lib --features axon-pb`:
+  passed, 15 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `local_runtime_invoker.rs` finding was
+  reported.
+
+This evidence verifies only the LocalRuntime invoker target-fixture slice. It
+does not prove RF-8/RF-7 or SPEC completion.
+
+## Builtins Smoke Target Fixture Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "InvocationTarget \\{|TargetScope|InvocationSubject|InvocationCausalContext" src/daemon/ability/builtins/real_invoke_tests.rs src/daemon/ability/catalog/assembly_tests.rs`:
+  only reported helper function signatures in `real_invoke_tests.rs`; no
+  target literal or target enum construction remains in the migrated files.
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -q daemon::ability::catalog::assembly_tests --lib --features axon-pb`:
+  passed, 38 tests.
+- `cargo test -q daemon::ability::builtins::real_invoke_tests --lib --features axon-pb`:
+  passed, 138 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `real_invoke_tests.rs` or
+  `assembly_tests.rs` finding was reported.
+
+This evidence verifies only the builtins smoke target-fixture slice. It does
+not prove RF-8/RF-7 or SPEC completion.
+
+## CLI Agent Command Target Fixture Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "InvocationTarget \\{|TargetScope|InvocationSubject|InvocationCausalContext" src/cli/commands/agent/tests.rs`:
+  no matches.
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -q cli::commands::agent::tests --lib --features axon-pb`:
+  passed, 51 tests.
+- `cargo test -q cli::commands::agent --lib --features axon-pb`: passed,
+  68 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `agent/tests.rs` finding was reported.
+
+This evidence verifies only the CLI agent command target-fixture slice. It
+does not prove RF-8/RF-7 or SPEC completion.
