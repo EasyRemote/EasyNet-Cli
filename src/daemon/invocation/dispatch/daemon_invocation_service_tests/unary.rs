@@ -82,9 +82,9 @@ async fn invoke_dispatches_federation_join_to_wrapper() {
         trust_path,
         cell.clone(),
     );
-    let signing_seed = [0x42; 32];
+    let test_seed = [0x42; 32];
     let public_key_hex = hex::encode(
-        ed25519_dalek::SigningKey::from_bytes(&signing_seed)
+        ed25519_dalek::SigningKey::from_bytes(&test_seed)
             .verifying_key()
             .to_bytes(),
     );
@@ -93,8 +93,7 @@ async fn invoke_dispatches_federation_join_to_wrapper() {
         r#"{{"membership_ura":"{membership_ura}","realm":"realm","public_key_hex":"{public_key_hex}"}}"#
     );
     let request =
-        signed_federation_join_request("realm", membership_ura, args.into_bytes(), signing_seed)
-            .await;
+        signed_federation_join_request("realm", membership_ura, args.into_bytes(), test_seed).await;
     let resp = svc
         .invoke(Request::new(request))
         .await
@@ -245,9 +244,9 @@ async fn federation_join_with_principal_proof_binds_device_owner_in_runtime_trus
         trust_path,
         cell.clone(),
     );
-    let signing_seed = [0x42; 32];
+    let test_seed = [0x42; 32];
     let public_key_hex = hex::encode(
-        ed25519_dalek::SigningKey::from_bytes(&signing_seed)
+        ed25519_dalek::SigningKey::from_bytes(&test_seed)
             .verifying_key()
             .to_bytes(),
     );
@@ -262,7 +261,7 @@ async fn federation_join_with_principal_proof_binds_device_owner_in_runtime_trus
         }
     }))
     .expect("join args");
-    let request = signed_federation_join_request("realm", membership_ura, args, signing_seed).await;
+    let request = signed_federation_join_request("realm", membership_ura, args, test_seed).await;
 
     svc.invoke(Request::new(request))
         .await

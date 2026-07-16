@@ -161,7 +161,7 @@ Single-owner topology: both repos are yours, coordination is a git branch, not a
 
 Order matters only to keep the Frontend from rendering an empty agents list for the gap between the two merges. In practice the gap is minutes. No tolerant parser, no dual-write, no alternate label key — every one of those fallbacks would be paying the cost of cross-team coordination that doesn't apply.
 
-The byte-for-byte contract between the two PRs is `tests/fixtures/a2a-v2/golden.json` in this repo, copied into `backend/internal/axon/testdata/a2a-v2-golden.json` during the backend PR. Both CIs assert against their own copy; a diff between the two fixture files is a three-way merge mistake and is caught by a one-line check script in `scripts/` that hashes both files.
+The byte-for-byte contract between the two PRs is `tests/fixtures/a2a-v2/golden.json` in this repo, copied into `backend/internal/runtimecontract/testdata/a2a-v2-golden.json` during the backend PR. Both CIs assert against their own copy; a diff between the two fixture files is a three-way merge mistake and is caught by a one-line check script in `scripts/` that hashes both files.
 
 ### Cost estimate
 

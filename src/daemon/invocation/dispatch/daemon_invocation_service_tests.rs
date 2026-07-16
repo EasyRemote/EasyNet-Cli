@@ -783,14 +783,14 @@ async fn signed_federation_join_request(
     realm: &str,
     membership_ura: &str,
     join_args: Vec<u8>,
-    signing_seed: [u8; 32],
+    test_seed: [u8; 32],
 ) -> InvokeRequest {
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&test_seed);
     let public_key = signing_key.verifying_key().to_bytes();
     let provisional = crate::core::ura::provisional::provisional_ura_for_pubkey(&public_key);
     let hub_ura = crate::core::ura::hub_ura(realm);
     let descriptor_ref = test_descriptor_ref(&hub_ura, ABILITY_FEDERATION_JOIN);
-    let signer = TestCanonicalSigner::new(provisional.clone(), signing_seed);
+    let signer = TestCanonicalSigner::new(provisional.clone(), test_seed);
     crate::daemon::invocation::ProtoEnvelope::federation_join_genesis(
         provisional,
         hub_ura,
