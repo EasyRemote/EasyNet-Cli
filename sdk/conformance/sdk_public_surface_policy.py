@@ -38,6 +38,13 @@ def is_ura_grammar_item(item: str) -> bool:
 def canonical_quarantine_reason(item: str) -> str | None:
     root = public_root(item)
     tokens = semantic_tokens(item)
+    lowered = item.lower()
+    if root in {
+        "canonical_invocation_bytes",
+        "verify_signature",
+        "run_admission",
+    } or lowered.endswith(".canonical_invocation_bytes") or lowered.endswith(".verify_signature") or lowered.endswith(".run_admission"):
+        return "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
     if public_root(item) in DOWNSTREAM_ITEMS:
         return "EasyNet federation payload is a downstream provider carrier, not a canonical SDK capability."
     if root in {

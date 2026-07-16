@@ -227,8 +227,12 @@ fn send_task_handler(
         ability: target.ability_ura().to_string(),
         normalized_args: task_args,
         call_mode: CallMode::Rpc,
-        subject: Some(target.default_subject_ura().to_string()),
-        causal_context: None,
+        subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+            target.default_subject_ura().to_string(),
+        ),
+        causal_context:
+            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
+            ),
         request_metadata: std::collections::HashMap::new(),
     };
     match local.invoke_rpc_target_json(invocation_target) {

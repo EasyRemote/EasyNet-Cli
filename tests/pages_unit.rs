@@ -222,8 +222,8 @@ fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
         ability: ability.to_string(),
         normalized_args: args,
         call_mode: CallMode::Rpc,
-        subject: None,
-        causal_context: None,
+        subject: easynet_cli::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+        causal_context: easynet_cli::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
         request_metadata: Default::default(),
     }
 }

@@ -240,8 +240,11 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                 ability: selector.local_registry_ability().to_string(),
                 normalized_args: invoke_args,
                 call_mode: CallMode::Rpc,
-                subject: Some(selector.owner_ura().to_string()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    selector.owner_ura().to_string(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             };
             let result = registry.invoke_rpc_target_json(target).map_err(|e| {

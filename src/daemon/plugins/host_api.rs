@@ -552,8 +552,11 @@ mod tests {
                 ability: "test.declarative_echo".to_string(),
                 normalized_args: json!({"message": "hello"}),
                 call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    "easynet:///r/acme/resource/test".to_string(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .expect("declarative exec rpc");
@@ -588,8 +591,11 @@ mod tests {
                 ability: "test.declarative_echo".to_string(),
                 normalized_args: json!({"message": "hot"}),
                 call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    "easynet:///r/acme/resource/test".to_string(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .expect("hot declarative exec rpc");
@@ -606,8 +612,11 @@ mod tests {
                 ability: "test.declarative_echo".to_string(),
                 normalized_args: json!({"message": "after"}),
                 call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    "easynet:///r/acme/resource/test".to_string(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .expect_err("hot-unregistered plugin ability must not remain invokable");
@@ -651,8 +660,9 @@ mod tests {
                 ability: "fs.read".to_string(),
                 normalized_args: json!({}),
                 call_mode: CallMode::Rpc,
-                subject: None,
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .expect("static system handler remains invokable after rejected reload");
@@ -683,8 +693,11 @@ mod tests {
                 ability: "test.declarative_eal".to_string(),
                 normalized_args: json!({}),
                 call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    "easynet:///r/acme/resource/test".to_string(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .expect_err("missing EAL template argument should surface through handler");
@@ -722,8 +735,11 @@ mod tests {
                 ability: "test.declarative_mcp".to_string(),
                 normalized_args: json!([1, 2]),
                 call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    "easynet:///r/acme/resource/test".to_string(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .expect_err("non-object MCP args should be rejected by mcp executor");

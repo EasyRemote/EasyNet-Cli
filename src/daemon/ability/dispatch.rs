@@ -5888,8 +5888,8 @@ mod tests {
             ability: "observe.health".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         }
     }
@@ -5904,8 +5904,8 @@ mod tests {
             ability: ability.to_string(),
             normalized_args: args,
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         })
     }
@@ -6722,8 +6722,8 @@ mod tests {
             ability: "media.x.snapshot".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01CAM".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01CAM"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
@@ -6777,8 +6777,8 @@ mod tests {
             ability: "x.optional".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
@@ -6811,8 +6811,8 @@ mod tests {
             ability: "x.subscribe".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Stream,
-            subject: Some("easynet:///r/x/resource/01MIC".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/x/resource/01MIC"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let src = dispatcher.execute_stream(target).unwrap();
@@ -6865,8 +6865,8 @@ mod tests {
             ability: "observe.health".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
@@ -7291,8 +7291,8 @@ mod tests {
             ability: "device.test.echo".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
 
@@ -7322,8 +7322,8 @@ mod tests {
             ability: "terminal.attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
@@ -7354,8 +7354,8 @@ mod tests {
             ability: "device.test.bad".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();
@@ -7376,8 +7376,8 @@ mod tests {
             ability: "terminal.attach".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Bidi,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_bidi(target).unwrap_err();

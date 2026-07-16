@@ -129,6 +129,15 @@ fn daemon_invocation_migration_script_contract_holds() {
 }
 
 #[test]
+fn canonical_runtime_convergence_v2_script_contract_holds() {
+    // Pins the SPEC V2 convergence gates that are local to this repository:
+    // plain admission helpers remain quarantined, lifecycle states share one
+    // canonical matrix vocabulary, URA terminology is active, and Mission/EAL
+    // state stays out of generic SDK/runtime surfaces.
+    run_bash_script("tests/scripts/test_check_canonical_runtime_convergence_v2.sh");
+}
+
+#[test]
 fn kernel_boundary_script_contract_holds() {
     // Pins the final project-structure daemon boundary: retired source
     // roots/namespaces cannot return, daemon internals do not depend on

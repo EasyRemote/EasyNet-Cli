@@ -196,8 +196,11 @@ pub fn dispatch(
             ability: qualified.to_string(),
             normalized_args: parsed.args.clone(),
             call_mode: CallMode::Rpc,
-            subject: Some(parsed.owner_ura.clone()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                parsed.owner_ura.clone(),
+            ),
+            causal_context:
+                crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         registry.invoke_rpc_target_json(target).map_err(|err| {

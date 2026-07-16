@@ -210,8 +210,8 @@ async fn reflective_path_directly_through_mcp_service_round_trip() {
             ability: weather_lookup_ura,
             normalized_args: serde_json::json!({"location": "Berlin"}),
             call_mode: CallMode::Stream,
-            subject: None,
-            causal_context: None,
+            subject: easynet_cli::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: easynet_cli::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: Default::default(),
         },
     )

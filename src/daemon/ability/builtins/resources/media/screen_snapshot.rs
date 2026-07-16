@@ -982,8 +982,8 @@ mod tests {
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: Some(ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
@@ -1019,8 +1019,8 @@ mod tests {
             ability: ABILITY_SCREEN_SUBSCRIBE.to_string(),
             normalized_args: json!({"fps": 5, "resolution": "320x180"}),
             call_mode: CallMode::Stream,
-            subject: Some(ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let frames = dispatcher.execute_stream(target).unwrap().into_snapshot();
@@ -1061,8 +1061,8 @@ mod tests {
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
@@ -1094,8 +1094,8 @@ mod tests {
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: Some(cam_ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(cam_ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
@@ -1114,8 +1114,8 @@ mod tests {
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01NEVER".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01NEVER"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
@@ -1133,8 +1133,8 @@ mod tests {
             ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
             normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
             call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01SCR".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01SCR"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();

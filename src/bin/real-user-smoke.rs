@@ -58,8 +58,11 @@ fn target(ability: &str, args: Value) -> InvocationTarget {
         ability: ability.to_string(),
         normalized_args: args,
         call_mode: CallMode::Rpc,
-        subject: None,
-        causal_context: None,
+        subject:
+            crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+        causal_context:
+            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
+            ),
         request_metadata: Default::default(),
     }
 }
@@ -446,8 +449,8 @@ fn main() -> anyhow::Result<()> {
                         "stream": false,
                     }),
                     call_mode: CallMode::Rpc,
-                    subject: None,
-                    causal_context: None,
+                    subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+                    causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                     request_metadata: Default::default(),
                 })
             })
@@ -489,8 +492,8 @@ fn main() -> anyhow::Result<()> {
                     ability: "claude.audit-test-ability".to_string(),
                     normalized_args: json!({}),
                     call_mode: CallMode::Rpc,
-                    subject: None,
-                    causal_context: None,
+                    subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+                    causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                     request_metadata: Default::default(),
                 })
             })
@@ -525,8 +528,8 @@ fn main() -> anyhow::Result<()> {
                     "stream": true,
                 }),
                 call_mode: CallMode::Stream,
-                subject: None,
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: Default::default(),
             };
             match dispatcher_for_codex.execute_stream(codex_target) {
@@ -550,8 +553,8 @@ fn main() -> anyhow::Result<()> {
                 "stream": true,
             }),
             call_mode: CallMode::Stream,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: Default::default(),
         };
         {

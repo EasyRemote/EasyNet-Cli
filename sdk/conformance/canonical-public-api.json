@@ -326,7 +326,6 @@
       "canonical_descriptor_bound_invocation_bytes",
       "canonical_entity_ref",
       "canonical_host_attestation_bytes",
-      "canonical_invocation_bytes",
       "canonical_json",
       "canonical_receipt_bytes",
       "canonical_receipt_bytes_with_hosted",
@@ -366,7 +365,6 @@
       "private_agent_subject_id",
       "reap_orphans",
       "reconnect",
-      "run_admission",
       "run_descriptor_bound_admission",
       "runtime_admin",
       "server",
@@ -397,8 +395,7 @@
       "verify_phase_descriptor_bound",
       "verify_receipt_chain",
       "verify_receipt_signature",
-      "verify_receipt_signature_with_hosted",
-      "verify_signature"
+      "verify_receipt_signature_with_hosted"
     ],
     "c_abi": [],
     "go": [
@@ -1437,14 +1434,12 @@
       "admission.REASON_ENVELOPE_INCOMPLETE",
       "admission.REASON_NONCE_REPLAY",
       "admission.now_ms",
-      "admission.run_admission",
       "admission.run_descriptor_bound_admission",
       "admission.validate_envelope",
       "admission.validate_signature_structure",
       "admission.verify_descriptor_bound_signature",
       "admission.verify_phase",
       "admission.verify_phase_descriptor_bound",
-      "admission.verify_signature",
       "audit.AuthorityProof",
       "audit.AxiomBinding",
       "audit.ChainCheckResult",
@@ -1504,7 +1499,6 @@
       "axiom.canonical_descriptor_bound_invocation_bytes",
       "axiom.canonical_entity_ref",
       "axiom.canonical_host_attestation_bytes",
-      "axiom.canonical_invocation_bytes",
       "axiom.canonical_receipt_bytes",
       "axiom.canonical_receipt_bytes_with_hosted",
       "axiom.canonical_receipt_proof_facts",
@@ -6000,9 +5994,12 @@
     "languages": {
       "rust": [
         "DeviceJoinCredentialEnvelope",
+        "canonical_invocation_bytes",
         "easynet_axon",
         "generate_private_hub_auth",
-        "private_hub_subject_id"
+        "private_hub_subject_id",
+        "run_admission",
+        "verify_signature"
       ],
       "c_abi": [
         "EasynetDaemonHandle",
@@ -6173,6 +6170,9 @@
     },
     "members": {
       "rust": [
+        "admission.run_admission",
+        "admission.verify_signature",
+        "axiom.canonical_invocation_bytes",
         "easynet_axon.canonical_json",
         "easynet_axon.dendrite_bridge",
         "easynet_axon.error",
@@ -6382,6 +6382,14 @@
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
         },
+        "canonical_invocation_bytes": {
+          "canonical_replacement": [
+            "capability_inventory.complete_invocation_draft"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
+        },
         "easynet_axon": {
           "canonical_replacement": [
             "capability_inventory.runtime_connection"
@@ -6405,6 +6413,22 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
+        },
+        "run_admission": {
+          "canonical_replacement": [
+            "capability_inventory.access_control"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
+        },
+        "verify_signature": {
+          "canonical_replacement": [
+            "capability_inventory.prepare_sign_submit"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
         }
       },
       "c_abi": {
@@ -7675,6 +7699,30 @@
     },
     "members": {
       "rust": {
+        "admission.run_admission": {
+          "canonical_replacement": [
+            "capability_inventory.access_control"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
+        },
+        "admission.verify_signature": {
+          "canonical_replacement": [
+            "capability_inventory.access_control"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
+        },
+        "axiom.canonical_invocation_bytes": {
+          "canonical_replacement": [
+            "capability_inventory.complete_invocation_draft"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Plain canonical/admission helpers are transitional defects; canonical runtime entry is descriptor-bound proof."
+        },
         "easynet_axon.canonical_json": {
           "canonical_replacement": [
             "capability_inventory.complete_invocation_draft"
@@ -9855,7 +9903,6 @@
           "NonceReplayStore",
           "REASON_NONCE_REPLAY",
           "admission",
-          "run_admission",
           "run_descriptor_bound_admission"
         ],
         "members": [
@@ -9865,14 +9912,12 @@
           "admission.REASON_ENVELOPE_INCOMPLETE",
           "admission.REASON_NONCE_REPLAY",
           "admission.now_ms",
-          "admission.run_admission",
           "admission.run_descriptor_bound_admission",
           "admission.validate_envelope",
           "admission.validate_signature_structure",
           "admission.verify_descriptor_bound_signature",
           "admission.verify_phase",
           "admission.verify_phase_descriptor_bound",
-          "admission.verify_signature",
           "invocation.admission"
         ]
       },
@@ -11672,7 +11717,6 @@
           "canonical_causal_context",
           "canonical_descriptor_bound_invocation_bytes",
           "canonical_entity_ref",
-          "canonical_invocation_bytes",
           "canonical_json",
           "fresh_nonce",
           "private_agent_subject_id",
@@ -11697,7 +11741,6 @@
           "axiom.canonical_causal_context",
           "axiom.canonical_descriptor_bound_invocation_bytes",
           "axiom.canonical_entity_ref",
-          "axiom.canonical_invocation_bytes",
           "axiom.fresh_nonce",
           "axiom.sign_descriptor_bound_invocation",
           "axiom.try_canonical_descriptor_bound_invocation_bytes",
@@ -12654,8 +12697,7 @@
           "signing",
           "signing_key_from_bytes",
           "validate_signature_structure",
-          "verify_invocation_signature",
-          "verify_signature"
+          "verify_invocation_signature"
         ],
         "members": [
           "audit.SignedInvocationReceipt",
@@ -24560,5 +24602,22 @@
         "swift"
       ]
     }
-  }
+  },
+  "status_canonical_names": {
+    "unsupported": "Unsupported",
+    "seam": "Seam",
+    "provider-backed": "ProviderBacked",
+    "cutover-ready": "CutoverReady"
+  },
+  "lifecycle_actions": [
+    "bidi_open",
+    "cancel",
+    "child_dispatch",
+    "deadline",
+    "dispatch",
+    "restart_recover",
+    "start",
+    "stream_open",
+    "terminal_receipt"
+  ]
 }

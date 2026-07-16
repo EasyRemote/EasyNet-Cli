@@ -559,8 +559,8 @@ mod tests {
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
             normalized_args: json!({"sample_rate": 48000, "channels": 1, "codec": "opus"}),
             call_mode: CallMode::Stream,
-            subject: Some(ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let src = dispatcher.execute_stream(target).unwrap();
@@ -633,8 +633,8 @@ mod tests {
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Stream,
-            subject: Some(cam_ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(cam_ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_stream(target).unwrap_err();
@@ -654,8 +654,8 @@ mod tests {
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
             normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
             call_mode: CallMode::Stream,
-            subject: Some("easynet:///r/acme/resource/01MIC".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01MIC"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_stream(target).unwrap_err();
@@ -680,8 +680,8 @@ mod tests {
             ability: ABILITY_MIC_SUBSCRIBE.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Stream,
-            subject: Some("easynet:///r/acme/resource/01MIC".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01MIC"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
 

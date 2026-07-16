@@ -154,8 +154,8 @@ fn invoke_agent_command_fixture(
             ability: ability.to_string(),
             normalized_args: args,
             call_mode: crate::daemon::invocation::routing::target::CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         },
     )

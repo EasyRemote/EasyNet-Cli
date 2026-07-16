@@ -86,6 +86,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "backend route-family coverage self-test" bash "$SELF_DIR/check-backend-route-family-coverage.sh" --self-test
   run_gate "SDK completion matrix self-test" bash "$SELF_DIR/check-sdk-completion-audit.sh" --self-test
   run_gate "SDK URA naming self-test" bash "$SELF_DIR/check-sdk-ura-naming.sh" --self-test
+  run_gate "canonical runtime convergence V2 self-test" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" --self-test
   run_gate "SDK product-neutrality syntax" bash -n "$SELF_DIR/check-sdk-product-neutrality.sh"
   run_gate "SDK conformance reports self-test" bash "$SELF_DIR/check-sdk-conformance-reports.sh" --self-test
   run_gate "generic FFI ABI v5 exact-surface self-test" bash "$REPO_ROOT/tests/scripts/test_check_ffi_abi_v5_header.sh"
@@ -180,6 +181,7 @@ run_sdk_conformance_live_gates "$CUTOVER_LIVE_RESULTS_DIR" || status=1
 run_gate "generic FFI ABI v5 exact surface" bash "$SELF_DIR/check-ffi-abi-v5-header.sh" || status=1
 run_gate "SDK package metadata" bash "$SELF_DIR/check-sdk-package-metadata.sh" || status=1
 run_gate "SDK URA naming" bash "$SELF_DIR/check-sdk-ura-naming.sh" || status=1
+run_gate "canonical runtime convergence V2" bash "$SELF_DIR/check-canonical-runtime-convergence-v2.sh" || status=1
 run_gate "SDK receipt URA boundary" bash "$SELF_DIR/check-sdk-receipt-ura-boundary.sh" || status=1
 run_gate "Python SDK static contract" bash "$SELF_DIR/check-python-sdk-static-contract.sh" || status=1
 run_gate "daemon latest input boundary" bash "$SELF_DIR/check-daemon-latest-input-boundary.sh" || status=1

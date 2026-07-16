@@ -21,6 +21,23 @@ CONCEPTS = ROOT / "sdk/conformance/canonical-public-api.json"
 LANGUAGES = ["rust", "c_abi", "go", "python", "node", "java", "swift"]
 PUBLIC_LANGUAGES = LANGUAGES
 STATUSES = ["unsupported", "seam", "provider-backed", "cutover-ready"]
+STATUS_CANONICAL_NAMES = {
+    "unsupported": "Unsupported",
+    "seam": "Seam",
+    "provider-backed": "ProviderBacked",
+    "cutover-ready": "CutoverReady",
+}
+LIFECYCLE_ACTIONS = {
+    "start",
+    "dispatch",
+    "stream_open",
+    "bidi_open",
+    "child_dispatch",
+    "cancel",
+    "deadline",
+    "terminal_receipt",
+    "restart_recover",
+}
 PACKAGE_CATEGORIES = {
     "canonical_axon_sdk",
     "easynet_provider",
@@ -134,6 +151,11 @@ def validate_schema(
         fail("matrix_languages")
     if concepts.get("status_order") != STATUSES:
         fail("status_order")
+    if concepts.get("status_canonical_names") != STATUS_CANONICAL_NAMES:
+        fail("status_canonical_names")
+    lifecycle_actions = concepts.get("lifecycle_actions")
+    if lifecycle_actions != sorted(LIFECYCLE_ACTIONS):
+        fail("lifecycle_actions")
     source_revisions = concepts.get("inventory_source_revisions")
     if not isinstance(source_revisions, dict) or set(source_revisions) != set(PUBLIC_LANGUAGES):
         fail("inventory_source_revisions")
@@ -693,6 +715,10 @@ def self_test(tmp: Path) -> None:
     expect(product_leak, "canonical_inventory_product_leak")
 
     quarantine_cases = {
+        "canonical_invocation_bytes": "Plain canonical/admission helpers",
+        "axiom.canonical_invocation_bytes": "Plain canonical/admission helpers",
+        "verify_signature": "Plain canonical/admission helpers",
+        "run_admission": "Plain canonical/admission helpers",
         "start_daemon": "Daemon-bound provider",
         "ModeDevice": "Non-URA device/hub",
         "RuntimeModeHub": "Non-URA device/hub",
@@ -705,6 +731,14 @@ def self_test(tmp: Path) -> None:
             fail(f"self_test_quarantine_policy:{item}:{reason}")
     if canonical_quarantine_reason("ParsedURA.DeviceID") is not None:
         fail("self_test_ura_grammar_quarantine")
+
+    bad_status_names = copy.deepcopy(concepts)
+    bad_status_names["status_canonical_names"]["seam"] = "PublicSeam"
+    expect(bad_status_names, "status_canonical_names")
+
+    bad_lifecycle_actions = copy.deepcopy(concepts)
+    bad_lifecycle_actions["lifecycle_actions"].remove("restart_recover")
+    expect(bad_lifecycle_actions, "lifecycle_actions")
 
     unapproved_quarantine = copy.deepcopy(concepts)
     unapproved_value = next(

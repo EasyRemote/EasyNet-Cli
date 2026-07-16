@@ -309,8 +309,9 @@ impl MissionInvocationGateway for CatalogMissionInvocationGateway {
             ability: ability.clone(),
             normalized_args: request.args,
             call_mode: crate::daemon::invocation::routing::target::CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context:
+                crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: HashMap::new(),
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -337,10 +338,10 @@ mod tests {
     use super::*;
 
     use easynet_axon::invocation::{
-        AbilityFn, AbilityOptions, AxonError, CausalContext, DescriptorBoundEnvelope,
+        make_ability, AbilityFn, AbilityOptions, AxonError, CausalContext, DescriptorBoundEnvelope,
         DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest,
         Ed25519InvocationSigningAuthority, InvocationHandle, InvocationSigningAuthority,
-        KeyResolver, SignedEnvelope, StaticInvocationSigningAuthorityProvider, make_ability,
+        KeyResolver, SignedEnvelope, StaticInvocationSigningAuthorityProvider,
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use tokio::sync::mpsc;

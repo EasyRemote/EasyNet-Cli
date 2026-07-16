@@ -194,8 +194,12 @@ fn call_tool_handler(
         ability: ability_name.clone(),
         normalized_args: arguments,
         call_mode: CallMode::Rpc,
-        subject: Some(target.default_subject_ura().to_string()),
-        causal_context: None,
+        subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+            target.default_subject_ura().to_string(),
+        ),
+        causal_context:
+            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
+            ),
         request_metadata: std::collections::HashMap::new(),
     };
 

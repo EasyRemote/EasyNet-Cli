@@ -554,8 +554,8 @@ fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
             ability: name.clone(),
             normalized_args: serde_json::json!({}),
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         match dispatcher.execute_rpc(target) {

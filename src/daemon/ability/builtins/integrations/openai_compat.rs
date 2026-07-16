@@ -377,8 +377,12 @@ fn handle_chat_completions_with_handle(
         ability: target.local_dispatch_key.clone(),
         normalized_args: ability_args,
         call_mode: CallMode::Rpc,
-        subject: Some(target.owner_ura.clone()),
-        causal_context: None,
+        subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+            target.owner_ura.clone(),
+        ),
+        causal_context:
+            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
+            ),
         request_metadata: std::collections::HashMap::new(),
     };
     let dispatch_result = registry

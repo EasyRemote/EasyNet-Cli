@@ -1413,8 +1413,8 @@ mod tests {
             ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: Some(ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();
@@ -1464,8 +1464,8 @@ mod tests {
             ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Stream,
-            subject: Some(ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let source = dispatcher.execute_stream(target).unwrap();
@@ -1505,8 +1505,8 @@ mod tests {
                 ability: ABILITY_CAMERA_RECORD_START.to_string(),
                 normalized_args: json!({"fps": 5, "max_duration_ms": 5000}),
                 call_mode: CallMode::Rpc,
-                subject: Some(ura.clone()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura.clone()),
+                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
@@ -1519,8 +1519,8 @@ mod tests {
                 ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
                 normalized_args: json!({"recording_session_id": session_id}),
                 call_mode: CallMode::Rpc,
-                subject: Some(ura),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
+                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
@@ -1559,8 +1559,8 @@ mod tests {
                 ability: ABILITY_CAMERA_RECORD_START.to_string(),
                 normalized_args: start_args.clone(),
                 call_mode: CallMode::Rpc,
-                subject: Some(ura.clone()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura.clone()),
+                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
@@ -1572,8 +1572,8 @@ mod tests {
                 ability: ABILITY_CAMERA_RECORD_START.to_string(),
                 normalized_args: start_args,
                 call_mode: CallMode::Rpc,
-                subject: Some(ura.clone()),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura.clone()),
+                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap_err()
@@ -1600,8 +1600,8 @@ mod tests {
                 ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
                 normalized_args: json!({"recording_session_id": session_id}),
                 call_mode: CallMode::Rpc,
-                subject: Some(ura),
-                causal_context: None,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
+                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
@@ -1620,8 +1620,8 @@ mod tests {
             ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Stream,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_stream(target).unwrap_err().to_string();
@@ -1637,7 +1637,7 @@ mod tests {
     }
 
     /// INV-SUBJECT-ENVELOPE positive half: invocation with no
-    /// envelope subject (`subject: None`) MUST fail with
+    /// envelope subject (`subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived()`) MUST fail with
     /// reason="subject_required". Without this the handler would
     /// either crash or silently capture from "the first camera",
     /// either of which makes auditing a lie.
@@ -1652,8 +1652,8 @@ mod tests {
             ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: None, // no envelope subject
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(), // no envelope subject
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
@@ -1681,8 +1681,8 @@ mod tests {
             ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01NEVER-EXISTED".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01NEVER-EXISTED"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
@@ -1722,8 +1722,8 @@ mod tests {
             ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: Some(mic_ura),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(mic_ura),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();
@@ -1749,8 +1749,8 @@ mod tests {
             ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
             normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
             call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01CAM".into()),
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01CAM"),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let err = dispatcher.execute_rpc(target).unwrap_err();

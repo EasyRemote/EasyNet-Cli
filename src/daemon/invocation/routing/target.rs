@@ -36,6 +36,7 @@
 use std::collections::HashMap;
 
 use crate::core::domain::NodeId;
+use easynet_axon::invocation::CausalContext;
 use serde_json::Value;
 
 /// Descriptor-bound local invocation target for a canonical Ability URA.
@@ -159,16 +160,84 @@ pub struct InvocationPlan {
     pub call_mode: CallMode,
 
     /// AXIOM 7-tuple `subject` — the resource URA the invocation
-    /// acts on. `None` means the local runtime adapter must provide
-    /// the degenerate `subject = callee` envelope subject; handlers
-    /// that require a real resource URA must still reject that
-    /// degenerate subject themselves. Per **INV-SUBJECT-ENVELOPE**:
+    /// acts on. Public ingress reads this from signed envelope material when
+    /// available; daemon-local system calls that need descriptor-derived
+    /// subjects use the explicit resolved-target policy state. Per
+    /// **INV-SUBJECT-ENVELOPE**:
     /// when set, this MUST come from the invocation envelope (signed
     /// cross-process bytes), NEVER from args. The IPC translator that
     /// builds this plan reads the signed envelope's subject field;
     /// future in-process callers supply it explicitly via the
     /// `with_subject` builder on the resolved target.
     pub subject: Option<String>,
+}
+
+/// Explicit subject binding state for a daemon-local runtime dispatch.
+///
+/// Public ingress may arrive with a signed envelope subject. Daemon-internal
+/// system calls may instead select the descriptor-derived system subject
+/// policy. This type makes that choice inspectable before Axon dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvocationSubject {
+    Explicit(String),
+    DaemonSystemDerived,
+}
+
+impl InvocationSubject {
+    #[must_use]
+    pub fn explicit(subject: impl Into<String>) -> Self {
+        Self::Explicit(subject.into())
+    }
+
+    #[must_use]
+    pub fn daemon_system_derived() -> Self {
+        Self::DaemonSystemDerived
+    }
+
+    #[must_use]
+    pub fn from_public_ingress(subject: Option<String>) -> Self {
+        subject
+            .map(Self::Explicit)
+            .unwrap_or(Self::DaemonSystemDerived)
+    }
+
+    #[must_use]
+    pub fn as_deref(&self) -> Option<&str> {
+        match self {
+            Self::Explicit(subject) => Some(subject.as_str()),
+            Self::DaemonSystemDerived => None,
+        }
+    }
+}
+
+/// Explicit causal-context binding state for a daemon-local runtime dispatch.
+///
+/// `DaemonSystemRoot` is a named derivation policy for system/root calls; it is
+/// not a hidden default at public ingress.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvocationCausalContext {
+    Explicit(CausalContext),
+    DaemonSystemRoot,
+}
+
+impl InvocationCausalContext {
+    #[must_use]
+    pub fn explicit(causal_context: CausalContext) -> Self {
+        Self::Explicit(causal_context)
+    }
+
+    #[must_use]
+    pub fn daemon_system_root() -> Self {
+        Self::DaemonSystemRoot
+    }
+
+    #[must_use]
+    pub fn as_axon(&self) -> CausalContext {
+        match self {
+            Self::Explicit(causal_context) => causal_context.clone(),
+            Self::DaemonSystemRoot => CausalContext::None,
+        }
+    }
 }
 
 /// Resolved target. Feature PR handlers consume this type; they are
@@ -186,15 +255,12 @@ pub struct InvocationTarget {
     /// need a subject MUST consume it from this field; they MUST
     /// NOT accept a `subject` key in `normalized_args`. The
     /// `reject_subject_in_args` guard in resources::media enforces
-    /// the negative half. `None` is not an implicit missing tuple:
-    /// the LocalRuntime adapter resolves it through its typed
-    /// `LocalRuntimeSubjectPolicy` as a descriptor default. Resource
-    /// scoped abilities must still provide an explicit subject.
-    pub subject: Option<String>,
-    /// Optional AXIOM causal context for local/runtime calls that need to bind
-    /// the invocation to a prior receipt. This is how local callers represent
-    /// product consent receipts without smuggling protocol state through args.
-    pub causal_context: Option<easynet_axon::invocation::CausalContext>,
+    /// the negative half. Daemon-internal descriptor defaults are represented
+    /// by the explicit `DaemonSystemDerived` state, never by absence.
+    pub subject: InvocationSubject,
+    /// AXIOM causal context binding. Root system calls are represented by the
+    /// explicit `DaemonSystemRoot` state, never by absence.
+    pub causal_context: InvocationCausalContext,
     /// Transport metadata admitted before local dispatch. Authority semantics
     /// remain owned by the admission layer; this field is only the carrier.
     pub request_metadata: HashMap<String, String>,
@@ -203,20 +269,15 @@ pub struct InvocationTarget {
 impl InvocationTarget {
     /// Builder: attach a subject to the resolved target. Used by
     /// callers that have envelope context (the IPC translator, or a
-    /// future planner). In-process tests construct the literal
-    /// directly with `subject: None`; the LocalRuntime adapter maps
-    /// that through a typed descriptor-default policy.
+    /// future planner).
     pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
-        self.subject = Some(subject.into());
+        self.subject = InvocationSubject::explicit(subject);
         self
     }
 
     /// Builder: attach a causal context to the resolved target.
-    pub fn with_causal_context(
-        mut self,
-        causal_context: easynet_axon::invocation::CausalContext,
-    ) -> Self {
-        self.causal_context = Some(causal_context);
+    pub fn with_causal_context(mut self, causal_context: CausalContext) -> Self {
+        self.causal_context = InvocationCausalContext::explicit(causal_context);
         self
     }
 
@@ -288,8 +349,8 @@ impl TargetResolver for LocalNodeResolver {
             ability: plan.ability,
             normalized_args: plan.args,
             call_mode: plan.call_mode,
-            subject: plan.subject,
-            causal_context: None,
+            subject: InvocationSubject::from_public_ingress(plan.subject),
+            causal_context: InvocationCausalContext::daemon_system_root(),
             request_metadata: HashMap::new(),
         })
     }
@@ -417,8 +478,8 @@ mod tests {
             ability: "camera.snapshot".into(),
             normalized_args: json!({}),
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: InvocationSubject::daemon_system_derived(),
+            causal_context: InvocationCausalContext::daemon_system_root(),
             request_metadata: HashMap::new(),
         };
         let with = t.with_subject("easynet:///r/acme/resource/01CAM");

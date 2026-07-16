@@ -111,7 +111,7 @@ impl LocalRuntimeInvocationPolicy {
     fn from_target(target: &InvocationTarget, callee_ura: &str) -> Result<Self, String> {
         Ok(Self {
             subject: LocalRuntimeSubjectPolicy::from_target(target, callee_ura)?,
-            causal_context: target.causal_context.clone().unwrap_or(CausalContext::None),
+            causal_context: target.causal_context.as_axon(),
         })
     }
 
@@ -383,8 +383,10 @@ mod tests {
             ability,
             normalized_args,
             call_mode: CallMode::Rpc,
-            subject,
-            causal_context: None,
+            subject: subject
+                .map(crate::daemon::invocation::routing::target::InvocationSubject::explicit)
+                .unwrap_or_else(crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         }
     }

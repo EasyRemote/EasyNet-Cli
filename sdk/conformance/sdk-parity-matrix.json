@@ -16,6 +16,23 @@
     "provider-backed",
     "cutover-ready"
   ],
+  "status_canonical_names": {
+    "unsupported": "Unsupported",
+    "seam": "Seam",
+    "provider-backed": "ProviderBacked",
+    "cutover-ready": "CutoverReady"
+  },
+  "lifecycle_actions": [
+    "bidi_open",
+    "cancel",
+    "child_dispatch",
+    "deadline",
+    "dispatch",
+    "restart_recover",
+    "start",
+    "stream_open",
+    "terminal_receipt"
+  ],
   "capability_ids": [
     "abi_version_discovery",
     "ability_descriptor_projection",
@@ -6400,10 +6417,6 @@
           "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
         },
         {
-          "item": "run_admission",
-          "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-        },
-        {
           "item": "run_descriptor_bound_admission",
           "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
         },
@@ -6432,10 +6445,6 @@
           "sha256": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea"
         },
         {
-          "item": "admission.run_admission",
-          "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-        },
-        {
           "item": "admission.run_descriptor_bound_admission",
           "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
         },
@@ -6458,10 +6467,6 @@
         {
           "item": "admission.verify_phase_descriptor_bound",
           "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
-        },
-        {
-          "item": "admission.verify_signature",
-          "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
         },
         {
           "item": "invocation.admission",
@@ -6487,10 +6492,6 @@
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
             {
-              "item": "run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6519,10 +6520,6 @@
               "sha256": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea"
             },
             {
-              "item": "admission.run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "admission.run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6545,10 +6542,6 @@
             {
               "item": "admission.verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
-            },
-            {
-              "item": "admission.verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "invocation.admission",
@@ -6574,10 +6567,6 @@
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
             {
-              "item": "run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6606,10 +6595,6 @@
               "sha256": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea"
             },
             {
-              "item": "admission.run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "admission.run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6632,10 +6617,6 @@
             {
               "item": "admission.verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
-            },
-            {
-              "item": "admission.verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "invocation.admission",
@@ -6661,10 +6642,6 @@
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
             {
-              "item": "run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6693,10 +6670,6 @@
               "sha256": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea"
             },
             {
-              "item": "admission.run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "admission.run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6719,10 +6692,6 @@
             {
               "item": "admission.verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
-            },
-            {
-              "item": "admission.verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "invocation.admission",
@@ -6748,10 +6717,6 @@
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
             {
-              "item": "run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6780,10 +6745,6 @@
               "sha256": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea"
             },
             {
-              "item": "admission.run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "admission.run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6806,10 +6767,6 @@
             {
               "item": "admission.verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
-            },
-            {
-              "item": "admission.verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "invocation.admission",
@@ -6835,10 +6792,6 @@
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
             {
-              "item": "run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6867,10 +6820,6 @@
               "sha256": "990af7e783877dbdcba14bc58ba08170b994503a940632c4e3434fc9ba1571ea"
             },
             {
-              "item": "admission.run_admission",
-              "sha256": "3d0e1f0e4512bb843312381c60ce021ad6248e4f476b8184c6cf5c957c3c8482"
-            },
-            {
               "item": "admission.run_descriptor_bound_admission",
               "sha256": "23f4ea542e30cfd1da507b29571f439aa67559963edd6c0d6c819883edc98819"
             },
@@ -6893,10 +6842,6 @@
             {
               "item": "admission.verify_phase_descriptor_bound",
               "sha256": "45183bfeb4bd2647c302827b8f4b0aec5be87e82f1b64b00929cf652eb25f6ec"
-            },
-            {
-              "item": "admission.verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "invocation.admission",
@@ -57630,10 +57575,6 @@
           "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
         },
         {
-          "item": "canonical_invocation_bytes",
-          "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-        },
-        {
           "item": "canonical_json",
           "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
         },
@@ -57720,10 +57661,6 @@
         {
           "item": "axiom.canonical_entity_ref",
           "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-        },
-        {
-          "item": "axiom.canonical_invocation_bytes",
-          "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
         },
         {
           "item": "axiom.fresh_nonce",
@@ -57865,10 +57802,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -57955,10 +57888,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -58100,10 +58029,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -58190,10 +58115,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -58335,10 +58256,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -58425,10 +58342,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -58570,10 +58483,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -58660,10 +58569,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -58805,10 +58710,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -58895,10 +58796,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -59040,10 +58937,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -59130,10 +59023,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -59275,10 +59164,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -59365,10 +59250,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -59510,10 +59391,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -59600,10 +59477,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -59745,10 +59618,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -59835,10 +59704,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -59980,10 +59845,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -60070,10 +59931,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -60215,10 +60072,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -60305,10 +60158,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -60450,10 +60299,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -60540,10 +60385,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -60685,10 +60526,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -60775,10 +60612,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -60920,10 +60753,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -61010,10 +60839,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -61155,10 +60980,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -61245,10 +61066,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -61390,10 +61207,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -61480,10 +61293,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -61625,10 +61434,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -61715,10 +61520,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -61860,10 +61661,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -61950,10 +61747,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -62095,10 +61888,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -62185,10 +61974,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -62330,10 +62115,6 @@
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
-              "item": "canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
-            },
-            {
               "item": "canonical_json",
               "sha256": "b3a7a9f8e8333d4277abc0df2440fdcdd38860267cd9ff3f56e8212fb634d75f"
             },
@@ -62420,10 +62201,6 @@
             {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
-            },
-            {
-              "item": "axiom.canonical_invocation_bytes",
-              "sha256": "ff5d9910bd0ed20c0c701ea4178d9054082680dd4c77d2fb4a93ab18e32a6ac1"
             },
             {
               "item": "axiom.fresh_nonce",
@@ -102422,10 +102199,6 @@
           "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
         },
         {
-          "item": "verify_signature",
-          "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
-        },
-        {
           "item": "audit.SignedInvocationReceipt",
           "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
         },
@@ -102545,10 +102318,6 @@
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
-            },
-            {
               "item": "audit.SignedInvocationReceipt",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -102666,10 +102435,6 @@
             {
               "item": "verify_invocation_signature",
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
-            },
-            {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -102791,10 +102556,6 @@
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
-            },
-            {
               "item": "audit.SignedInvocationReceipt",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -102912,10 +102673,6 @@
             {
               "item": "verify_invocation_signature",
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
-            },
-            {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -103037,10 +102794,6 @@
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
-            },
-            {
               "item": "audit.SignedInvocationReceipt",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -103158,10 +102911,6 @@
             {
               "item": "verify_invocation_signature",
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
-            },
-            {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "audit.SignedInvocationReceipt",
@@ -103283,10 +103032,6 @@
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
             },
             {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
-            },
-            {
               "item": "audit.SignedInvocationReceipt",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -103404,10 +103149,6 @@
             {
               "item": "verify_invocation_signature",
               "sha256": "b7a20b935c87c53a74c27d4db80a118bb59a4f11d85f291dd02e163783bd917b"
-            },
-            {
-              "item": "verify_signature",
-              "sha256": "b24b62d257b96f0454c2f174725f0b9d80eba03f7e144ffd3f19ef4f44b9d8b2"
             },
             {
               "item": "audit.SignedInvocationReceipt",

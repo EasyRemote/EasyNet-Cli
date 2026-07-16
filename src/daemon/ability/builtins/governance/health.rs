@@ -124,8 +124,8 @@ mod tests {
             ability: ABILITY_NAME.into(),
             normalized_args: json!({"hello": "world"}),
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
             request_metadata: std::collections::HashMap::new(),
         };
         let resp = dispatcher.execute_rpc(target).unwrap();

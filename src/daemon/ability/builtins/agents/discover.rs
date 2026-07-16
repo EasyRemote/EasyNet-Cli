@@ -633,8 +633,13 @@ impl DiscoverProviderTarget {
             ability: self.ability_ura,
             normalized_args: args,
             call_mode: CallMode::Rpc,
-            subject: Some(self.subject_ura),
-            causal_context: Some(easynet_axon::invocation::CausalContext::None),
+            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                self.subject_ura,
+            ),
+            causal_context:
+                crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                    easynet_axon::invocation::CausalContext::None,
+                ),
             request_metadata: std::collections::HashMap::new(),
         }
     }
@@ -2065,10 +2070,12 @@ mod tests {
                 .is_some_and(|subject| { crate::core::ura::parse_ura(subject).is_ok() }),
             "provider delegation must not rely on a missing subject default"
         );
-        assert!(
-            invocation_target.causal_context.is_some(),
-            "provider delegation must state a causal context, even when it is none"
-        );
+        assert!(matches!(
+            invocation_target.causal_context,
+            crate::daemon::invocation::routing::target::InvocationCausalContext::Explicit(
+                easynet_axon::invocation::CausalContext::None
+            )
+        ));
     }
 
     #[test]

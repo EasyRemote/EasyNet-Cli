@@ -16,6 +16,7 @@ from sdk_public_surface_policy import (
     canonical_quarantine_reason,
     public_root,
 )
+from sdk_concepts import LIFECYCLE_ACTIONS, STATUS_CANONICAL_NAMES, STATUSES
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = ROOT / "sdk/conformance/canonical-public-api.json"
@@ -266,6 +267,9 @@ def main() -> int:
             )
 
     model["schema_version"] = 4
+    model["status_order"] = STATUSES
+    model["status_canonical_names"] = STATUS_CANONICAL_NAMES
+    model["lifecycle_actions"] = sorted(LIFECYCLE_ACTIONS)
     model["inventory_parsers"] = {language: inventories[language]["parser"] for language in LANGUAGES}
     model["inventory_source_revisions"] = {
         language: inventories[language].get("source_revision", "current_checkout")

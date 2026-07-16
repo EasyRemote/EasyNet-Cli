@@ -14,7 +14,9 @@ from sdk_concepts import (
     CONCEPTS,
     LANGUAGES,
     PUBLIC_LANGUAGES,
+    STATUS_CANONICAL_NAMES,
     STATUSES,
+    LIFECYCLE_ACTIONS,
     case_contracts,
     self_test as concepts_self_test,
     validate_schema,
@@ -178,6 +180,8 @@ def generate() -> dict[str, Any]:
         "source": "sdk/conformance/canonical-public-api.json",
         "languages": LANGUAGES,
         "status_order": STATUSES,
+        "status_canonical_names": STATUS_CANONICAL_NAMES,
+        "lifecycle_actions": sorted(LIFECYCLE_ACTIONS),
         "capability_ids": capability_ids,
         "cells": cells,
     }

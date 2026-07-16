@@ -174,8 +174,13 @@ mod tests {
                     "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
                 }),
                 call_mode: CallMode::Rpc,
-                subject: Some(ura.clone()),
-                causal_context: Some(test_consent_causal_context()),
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    ura.clone(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                        test_consent_causal_context(),
+                    ),
                 request_metadata: std::collections::HashMap::new(),
             };
             let created = dispatcher.execute_rpc(create_target).unwrap();
@@ -194,8 +199,13 @@ mod tests {
                     "resolution": "320x180"
                 }),
                 call_mode: CallMode::Bidi,
-                subject: Some(ura),
-                causal_context: Some(test_consent_causal_context()),
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    ura,
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                        test_consent_causal_context(),
+                    ),
                 request_metadata: std::collections::HashMap::new(),
             };
             let mut bidi = dispatcher.execute_bidi(attach_target).unwrap();
@@ -395,8 +405,13 @@ mod tests {
                     "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
                 }),
                 call_mode: CallMode::Rpc,
-                subject: Some(ura),
-                causal_context: Some(test_consent_causal_context()),
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    ura,
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                        test_consent_causal_context(),
+                    ),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
@@ -411,8 +426,13 @@ mod tests {
                     "session_token": token,
                 }),
                 call_mode: CallMode::Bidi,
-                subject: Some(other_ura),
-                causal_context: Some(test_consent_causal_context()),
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    other_ura,
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                        test_consent_causal_context(),
+                    ),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap_err();
@@ -440,8 +460,13 @@ mod tests {
                     "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
                 }),
                 call_mode: CallMode::Rpc,
-                subject: Some(ura),
-                causal_context: Some(test_consent_causal_context()),
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    ura,
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                        test_consent_causal_context(),
+                    ),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap();
@@ -456,8 +481,8 @@ mod tests {
                     "session_token": token,
                 }),
                 call_mode: CallMode::Bidi,
-                subject: None,
-                causal_context: Some(test_consent_causal_context()),
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(test_consent_causal_context()),
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap_err();
