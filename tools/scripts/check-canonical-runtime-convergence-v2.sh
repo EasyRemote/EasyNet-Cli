@@ -296,6 +296,81 @@ check_axon_plain_proof_public_boundary_contract() {
     && rg -n '^def (canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|run_admission)\b|from \.axiom import \([^)]*\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature)\b|from \.admission import \([^)]*\b(verify_signature|run_admission)\b|"(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|run_admission)"' "$python_invocation"; then
     fail "Axon Python exposes plain proof/admission helpers"
   fi
+
+  local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
+  local go_plain_paths=()
+  [[ -d "$go_invocation" ]] && go_plain_paths+=("$go_invocation")
+  [[ -f "$AXON_ROOT/sdk/API_MAPPING.md" ]] && go_plain_paths+=("$AXON_ROOT/sdk/API_MAPPING.md")
+  if ((${#go_plain_paths[@]} > 0)) \
+    && rg -n '^func (CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b|\b(CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b' "${go_plain_paths[@]}"; then
+    fail "Axon Go exposes plain proof/admission helpers"
+  fi
+}
+
+check_axon_rust_local_fast_signer_boundary_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for Rust local-fast signer boundary contract: $AXON_ROOT"
+  fi
+
+  local rust_manifest="$AXON_ROOT/sdk/rust/Cargo.toml"
+  if [[ -f "$rust_manifest" ]] && rg -n '\blocal-fast-probes\b' "$rust_manifest"; then
+    fail "Axon Rust SDK still exposes local-fast signer probe feature"
+  fi
+
+  local rust_invocation="$AXON_ROOT/sdk/rust/src/invocation"
+  if [[ -d "$rust_invocation" ]] && rg -n 'feature = "local-fast-probes"' "$rust_invocation"; then
+    fail "Axon Rust SDK still gates signer fallback helpers behind a public feature"
+  fi
+
+  local rust_external_consumers=()
+  [[ -d "$AXON_ROOT/sdk/rust/examples" ]] && rust_external_consumers+=("$AXON_ROOT/sdk/rust/examples")
+  [[ -d "$AXON_ROOT/sdk/rust/tests" ]] && rust_external_consumers+=("$AXON_ROOT/sdk/rust/tests")
+  if ((${#rust_external_consumers[@]} > 0)) \
+    && rg -n '\b(LocalReceiptSigningAuthorityProvider|Ed25519ReceiptSigningAuthority|StaticReceiptSigningAuthorityProvider|Ed25519InvocationSigningAuthority|StaticInvocationSigningAuthorityProvider|new_local_fast|new_local_fast_with_limits)\b' "${rust_external_consumers[@]}" \
+      --glob '!signed_receipt_api_gate.rs'; then
+    fail "Axon Rust examples/tests still consume process-local signer fallback helpers"
+  fi
+}
+
+check_axon_process_local_signer_fallback_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for process-local signer fallback contract: $AXON_ROOT"
+  fi
+
+  local fallback_paths=()
+  for path in \
+    "$AXON_ROOT/core/runtime-rs/client-sdk/src" \
+    "$AXON_ROOT/sdk" \
+    "$AXON_ROOT/core/runtime-rs/src"
+  do
+    [[ -e "$path" ]] && fallback_paths+=("$path")
+  done
+
+  if ((${#fallback_paths[@]} > 0)) \
+    && rg -n '\b(default_auth_for_subject|generate_subject_auth|generate_private_agent_auth|generate_private_hub_auth|GeneratedSubjectAuth|ProcessLocalSigner|PrivateKeyAuthenticator|DefaultAuthForSubject|GenerateSubjectAuth|defaultAuthForSubject)\b' "${fallback_paths[@]}" \
+      --glob '!**/tests/**' \
+      --glob '!**/*_test.go' \
+      --glob '!**/*.test.*'; then
+    fail "Axon source still exposes process-local signer fallback helpers"
+  fi
+}
+
+check_cli_rust_local_fast_signer_boundary_contract() {
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local cli_paths=()
+  for path in \
+    "$cli_root/Cargo.toml" \
+    "$cli_root/src" \
+    "$cli_root/tests" \
+    "$cli_root/plugins"
+  do
+    [[ -e "$path" ]] && cli_paths+=("$path")
+  done
+
+  if ((${#cli_paths[@]} > 0)) \
+    && rg -n '\b(local-fast-probes|LocalReceiptSigningAuthorityProvider|Ed25519ReceiptSigningAuthority|StaticReceiptSigningAuthorityProvider|Ed25519InvocationSigningAuthority|StaticInvocationSigningAuthorityProvider|new_local_fast|new_local_fast_with_limits)\b' "${cli_paths[@]}"; then
+    fail "EasyNet-Cli still requests or consumes Rust local-fast signer fallback helpers"
+  fi
 }
 
 check_ura_vocabulary_contract() {
@@ -544,10 +619,15 @@ PY
   mkdir -p "$tmp/axon/core/runtime-rs/client-sdk/proto/axon/v1"
   mkdir -p "$tmp/axon/sdk/rust/proto/axon/v1"
   mkdir -p "$tmp/axon/sdk/rust/src"
+  mkdir -p "$tmp/axon/sdk/rust/src/invocation/local_runtime"
   mkdir -p "$tmp/axon/sdk/go/easynet"
   mkdir -p "$tmp/axon/sdk/python/easynet_axon"
   mkdir -p "$tmp/axon/core/runtime-rs" "$tmp/axon/core/runtime-rs/client-sdk"
+  printf '[package]\nname = "axon-rust-test"\nversion = "0.0.0"\n\n[features]\n' \
+    > "$tmp/axon/sdk/rust/Cargo.toml"
   printf 'pub mod invocation;\n' > "$tmp/axon/sdk/rust/src/lib.rs"
+  touch "$tmp/axon/sdk/rust/src/invocation/mod.rs"
+  touch "$tmp/axon/sdk/rust/src/invocation/local_runtime/mod.rs"
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/build.rs"
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/client-sdk/build.rs"
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/sdk/rust/build.rs"
@@ -637,6 +717,37 @@ PY
   if ( AXON_ROOT="$tmp/axon-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon plain proof boundary gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-go-plain-proof"
+  mkdir -p "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation"
+  printf 'package invocation\nfunc CanonicalInvocationBytes() []byte { return nil }\n' \
+    > "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation/axiom.go"
+  if ( AXON_ROOT="$tmp/axon-go-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Go plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-rust-local-fast"
+  printf 'local-fast-probes = []\n' >> "$tmp/axon-rust-local-fast/sdk/rust/Cargo.toml"
+  printf '#[cfg(feature = "local-fast-probes")]\npub fn new_local_fast() {}\n' \
+    > "$tmp/axon-rust-local-fast/sdk/rust/src/invocation/local_runtime/mod.rs"
+  mkdir -p "$tmp/axon-rust-local-fast/sdk/rust/examples"
+  printf 'use axon::invocation::LocalReceiptSigningAuthorityProvider;\n' \
+    > "$tmp/axon-rust-local-fast/sdk/rust/examples/local_fast.rs"
+  if ( AXON_ROOT="$tmp/axon-rust-local-fast"; check_axon_rust_local_fast_signer_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Rust local-fast signer boundary gate to fail"
+  fi
+  mkdir -p "$tmp/axon-fallback/core/runtime-rs/client-sdk/src/domain/easynet"
+  printf 'impl AxonClient { pub fn generate_subject_auth() -> EasyNetUserAuth { todo!() } }\n' \
+    > "$tmp/axon-fallback/core/runtime-rs/client-sdk/src/domain/easynet/semantic.rs"
+  if ( AXON_ROOT="$tmp/axon-fallback"; check_axon_process_local_signer_fallback_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon process-local signer fallback gate to fail"
+  fi
+  mkdir -p "$tmp/cli-local-fast/src"
+  printf '[features]\nlocal-fast-probes = ["easynet-axon/local-fast-probes"]\n' \
+    > "$tmp/cli-local-fast/Cargo.toml"
+  printf 'let runtime = LocalRuntime::new_local_fast();\n' \
+    > "$tmp/cli-local-fast/src/probe.rs"
+  if ( CLI_ROOT="$tmp/cli-local-fast"; check_cli_rust_local_fast_signer_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected CLI Rust local-fast signer consumer gate to fail"
+  fi
   printf '%s\n' \
     'use tonic::transport::{Channel, Endpoint, Uri};' \
     'let _ = endpoint.connect_with_connector(tower::service_fn(move |_: Uri| async {}));' \
@@ -664,6 +775,9 @@ PY
   check_schema_source_derivation_contract
   check_axon_product_protocol_boundary_contract
   check_axon_plain_proof_public_boundary_contract
+  check_axon_rust_local_fast_signer_boundary_contract
+  check_axon_process_local_signer_fallback_contract
+  check_cli_rust_local_fast_signer_boundary_contract
   check_receipt_proof_fact_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
@@ -680,5 +794,8 @@ check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$R
 check_schema_source_derivation_contract
 check_axon_product_protocol_boundary_contract
 check_axon_plain_proof_public_boundary_contract
+check_axon_rust_local_fast_signer_boundary_contract
+check_axon_process_local_signer_fallback_contract
+check_cli_rust_local_fast_signer_boundary_contract
 check_receipt_proof_fact_contract
 echo "canonical-runtime-convergence-v2: OK"

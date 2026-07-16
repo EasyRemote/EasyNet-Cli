@@ -2111,6 +2111,13 @@ mod local_mission_subject_owner_tests {
 mod tests {
     use super::*;
 
+    use easynet_axon::invocation::{
+        AgentIdentity, AxonError, CalleeSignature, ReceiptSigningAuthority,
+        ReceiptSigningAuthorityProvider, UraProfile,
+    };
+    use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, SIGNATURE_LENGTH};
+    use std::sync::Arc;
+
     #[test]
     fn loopback_invoke_request_does_not_pre_resolve_descriptor_ref() {
         let invocation = local_daemon_loopback_invocation_from_subject_policy(
@@ -2171,12 +2178,9 @@ mod tests {
         ed25519_dalek::SigningKey,
     ) {
         use easynet_axon::invocation::{
-            make_ability, AbilityCallModes, AbilityOptions, AgentIdentity,
-            Ed25519ReceiptSigningAuthority, InvocationState, ReceiptSigningAuthority,
-            StaticReceiptSigningAuthorityProvider, UraProfile,
+            make_ability, AbilityCallModes, AbilityOptions, InvocationState,
         };
         use easynet_axon::pb::axon::v1::InvokeResponse;
-        use ed25519_dalek::SigningKey;
 
         let invocation = local_daemon_loopback_invocation_from_subject_policy(
             "job.run",
@@ -2200,18 +2204,11 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[seed; 32]);
 
         let runtime = {
-            let authority: std::sync::Arc<dyn ReceiptSigningAuthority> =
-                std::sync::Arc::new(Ed25519ReceiptSigningAuthority::self_signed(
+            easynet_axon::invocation::LocalRuntime::new_with_receipt_signing_authority_provider(
+                Arc::new(FixtureReceiptSigningAuthorityProvider::new(
                     callee.clone(),
                     signing_key.clone(),
-                    "local-daemon-grpc-fixture",
-                ));
-            let mut provider = StaticReceiptSigningAuthorityProvider::new();
-            provider
-                .insert(authority)
-                .expect("insert fixture receipt authority");
-            easynet_axon::invocation::LocalRuntime::new_with_receipt_signing_authority_provider(
-                std::sync::Arc::new(provider),
+                )),
             )
         };
         crate::daemon::axon_bridge::runtime_factory::configure_local_runtime(&runtime, None, None);
@@ -2296,6 +2293,115 @@ mod tests {
                 }
             });
         (submitted, response, signing_key)
+    }
+
+    struct FixtureReceiptSigningAuthorityProvider {
+        authority: Arc<dyn ReceiptSigningAuthority>,
+        signer_ura: String,
+        verifying_key: VerifyingKey,
+    }
+
+    impl FixtureReceiptSigningAuthorityProvider {
+        fn new(callee: AgentIdentity, signing_key: SigningKey) -> Self {
+            let authority = Arc::new(FixtureReceiptSigningAuthority::self_signed(
+                callee.clone(),
+                signing_key,
+            ));
+            Self {
+                signer_ura: callee.ura,
+                verifying_key: authority.verifying_key(),
+                authority,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReceiptSigningAuthorityProvider for FixtureReceiptSigningAuthorityProvider {
+        async fn resolve(
+            &self,
+            callee: &AgentIdentity,
+        ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+            if callee.ura != self.signer_ura {
+                return Err(AxonError::permission_denied(
+                    "local_daemon_grpc_fixture_callee_mismatch",
+                ));
+            }
+            Ok(Arc::clone(&self.authority))
+        }
+
+        fn resolve_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+            Ok((signer_ura == self.signer_ura).then_some(self.verifying_key))
+        }
+    }
+
+    struct FixtureReceiptSigningAuthority {
+        callee_identity: AgentIdentity,
+        signing_key: SigningKey,
+    }
+
+    impl FixtureReceiptSigningAuthority {
+        fn self_signed(callee_identity: AgentIdentity, signing_key: SigningKey) -> Self {
+            Self {
+                callee_identity,
+                signing_key,
+            }
+        }
+
+        fn verifying_key(&self) -> VerifyingKey {
+            self.signing_key.verifying_key()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ReceiptSigningAuthority for FixtureReceiptSigningAuthority {
+        fn callee_identity(&self) -> &AgentIdentity {
+            &self.callee_identity
+        }
+
+        fn signer_identity(&self) -> &AgentIdentity {
+            &self.callee_identity
+        }
+
+        fn host_attestation(&self) -> &[u8] {
+            &[]
+        }
+
+        fn verifying_key(&self) -> VerifyingKey {
+            self.verifying_key()
+        }
+
+        async fn sign_canonical_receipt(
+            &self,
+            canonical_receipt: &[u8],
+        ) -> Result<CalleeSignature, AxonError> {
+            let signature: Signature = self.signing_key.sign(canonical_receipt);
+            Ok(CalleeSignature {
+                algorithm: "ed25519".to_string(),
+                signature: signature.to_bytes().to_vec(),
+                key_id_hint: "local-daemon-grpc-fixture".to_string(),
+            })
+        }
+
+        fn verify_canonical_receipt(
+            &self,
+            canonical_receipt: &[u8],
+            signature: &CalleeSignature,
+        ) -> Result<(), AxonError> {
+            if signature.algorithm != "ed25519" {
+                return Err(AxonError::invalid_argument(format!(
+                    "unsupported_algorithm:{}",
+                    signature.algorithm
+                )));
+            }
+            let bytes: [u8; SIGNATURE_LENGTH] = signature
+                .signature
+                .as_slice()
+                .try_into()
+                .map_err(|_| AxonError::invalid_argument("callee_signature_wrong_length"))?;
+            self.verifying_key()
+                .verify(canonical_receipt, &Signature::from_bytes(&bytes))
+                .map_err(|_| AxonError::invalid_argument("callee_signature_invalid"))
+        }
     }
 
     struct FixedReceiptKeyResolver {

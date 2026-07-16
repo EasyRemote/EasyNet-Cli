@@ -567,3 +567,94 @@ facts, while event emission owns output facts.
 This slice removes the Node LocalRuntime empty proof-fact production path and
 adds a V2 gate/self-test for that exact regression. RF-6 remains open for
 remaining examples/tests and full descriptor proof-binding parity.
+
+## Current Slice: RF-5 Rust Local-Fast Signer Feature Removal
+
+Owner: EasyNet-Axon Rust SDK signer boundary and EasyNet-Cli V2 conformance
+gate.
+
+The Rust SDK still exposed a public `local-fast-probes` Cargo feature that
+made process-local receipt and invocation signing helpers available outside
+crate tests. That feature was a convenience probe, but architecturally it
+kept a public path where consumers could build receipt authority and
+invocation signing state without an explicit provider or downstream
+KeyService boundary.
+
+The Rust SDK now removes the `local-fast-probes` feature entirely. Local-fast
+constructors and process-local signer helpers are restricted to `cfg(test)`
+crate internals, while integration tests and examples construct explicit
+test/example signing providers at their own boundary. This preserves test
+ergonomics without publishing a canonical fallback authority model.
+
+The `receipt_closure` example now demonstrates the intended provider-backed
+shape by passing an explicit receipt signing authority provider into
+`LocalRuntime`. Integration fixtures use `descriptor_bound_support` test
+providers rather than SDK public fallback helpers. The EasyNet-Cli V2 gate now
+rejects reintroducing the feature, public feature cfg, or external
+example/test consumption of the fallback helper group.
+
+EasyNet-Cli no longer requests a downstream `local-fast-probes` feature from
+Axon. The maintainer `real-user-smoke` binary now owns an explicit local smoke
+receipt provider, and the Pages integration test owns a bounded Pages test
+provider. Both callers construct providers directly at their own test/probe
+boundary instead of depending on SDK-published fallback constructors.
+The V2 gate now checks both sides of this boundary: Axon must not publish the
+feature/helper consumption path, and EasyNet-Cli must not request or consume
+it downstream.
+
+This slice removes one Rust public fallback signer seam. RF-5 remains open for
+cross-language signer-handle parity and daemon KeyService authority cutover.
+
+## Current Slice: RF-5 Runtime Client Subject Auth Generator Removal
+
+Owner: EasyNet-Axon runtime client SDK signing boundary and EasyNet-Cli V2
+conformance gate.
+
+The Axon runtime client SDK still exposed `AxonClient::generate_subject_auth`,
+which created process-local Ed25519 secret material and returned it as
+`EasyNetUserAuth`. Even though authenticated calls already fail closed without
+`AbilityCallOptions::auth`, this helper made the SDK a signing-material
+generator instead of a consumer of host-managed authority.
+
+The generator is removed. `EasyNetUserAuth` remains as an explicit
+host-supplied DTO because current authenticated call paths still need a
+concrete signing input while signer-handle parity is unfinished. Tests now use
+a local `host_auth_fixture` with fixed material so fixture ownership is
+visible and cannot be mistaken for SDK authority generation.
+
+The V2 gate now performs a source-level RF-5 scan across Axon runtime client
+SDK, canonical SDK packages, and runtime source so process-local fallback
+helpers such as `generate_subject_auth`, `default_auth_for_subject`, generated
+private agent/hub auth, `ProcessLocalSigner`, and `PrivateKeyAuthenticator`
+cannot re-enter outside tests.
+
+This slice removes another public process-local signer fallback. RF-5 remains
+open until host auth DTOs converge to signer handles or daemon KeyService
+authority across language facades.
+
+## Current Slice: RF-3 Go Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Go invocation facade and EasyNet-Cli V2 conformance gate.
+
+The Go invocation package still exported the plain proof helper group:
+`CanonicalInvocationBytes`, `SignInvocation`, `VerifyInvocationSignature`,
+`VerifySignature`, and `RunAdmission`. These helpers sign or verify the legacy
+plain envelope bytes and therefore expose the second proof model that RF-3 is
+removing.
+
+The Go package now keeps those helpers as package-private fixture functions.
+Existing Go package tests can still use them for historical plain vector
+stability, but downstream callers cannot import them as SDK proof APIs. The
+descriptor-bound public proof path remains exported through
+`CanonicalDescriptorBoundInvocationBytes`, `SignDescriptorBoundInvocation`,
+`VerifyDescriptorBoundInvocationSignature`, `VerifyDescriptorBoundSignature`,
+and `RunDescriptorBoundAdmission`.
+
+`sdk/API_MAPPING.md` now documents the descriptor-bound public names instead
+of the legacy plain proof names. The V2 source gate now rejects the Go
+capitalized plain helper group in both the Go invocation package and the SDK
+API mapping document.
+
+This slice closes the Go public plain proof helper surface. RF-3 remains open
+for remaining language package/vector/example audit and any other public
+plain proof surfaces.

@@ -24,8 +24,8 @@
 // daemon::ability::builtins::real_invoke_tests for the deterministic
 // CI-runnable subset.
 //
-//   cargo run --features local-fast-probes --bin real-user-smoke
-//   EASYNET_REAL_CHAT_OK=1 cargo run --features local-fast-probes --bin real-user-smoke
+//   cargo run --bin real-user-smoke
+//   EASYNET_REAL_CHAT_OK=1 cargo run --bin real-user-smoke
 //
 // Author: Silan.Hu
 // Email: silan.hu@u.nus.edu
@@ -33,9 +33,14 @@
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
+use easynet_axon::invocation::{
+    sha256, AgentIdentity, AxonError, CalleeSignature, LocalRuntime, ReceiptSigningAuthority,
+    ReceiptSigningAuthorityProvider, StreamingInvocationHandle,
+};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, SIGNATURE_LENGTH};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use easynet_cli::daemon::ability::builtins::agents::chat::ContextLoader;
 use easynet_cli::daemon::ability::catalog::{
@@ -46,24 +51,118 @@ use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
 use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::{
     invoke_local_rpc_sync, open_local_stream,
 };
-use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget};
 use easynet_cli::daemon::resources::files::{
     resource_ref_for_local_path, FilesystemResourceCapability,
 };
 use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {
-    InvocationTarget {
-        scope: TargetScope::Local,
-        ability: ability.to_string(),
-        normalized_args: args,
-        call_mode: CallMode::Rpc,
-        subject:
-            crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-        causal_context:
-            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
-            ),
-        request_metadata: Default::default(),
+    InvocationTarget::local_daemon_system(ability, args, CallMode::Rpc)
+}
+
+fn smoke_local_runtime() -> Arc<LocalRuntime> {
+    LocalRuntime::new_with_receipt_signing_authority_provider(Arc::new(
+        SmokeReceiptSigningAuthorityProvider::default(),
+    ))
+}
+
+#[derive(Default)]
+struct SmokeReceiptSigningAuthorityProvider {
+    seen_signers: Mutex<HashMap<String, VerifyingKey>>,
+}
+
+#[async_trait::async_trait]
+impl ReceiptSigningAuthorityProvider for SmokeReceiptSigningAuthorityProvider {
+    async fn resolve(
+        &self,
+        callee: &AgentIdentity,
+    ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+        let authority = SmokeReceiptSigningAuthority::self_signed(callee.clone());
+        self.seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("smoke_receipt_authority_lock_poisoned"))?
+            .insert(callee.ura.clone(), authority.verifying_key());
+        Ok(Arc::new(authority))
+    }
+
+    fn resolve_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+        Ok(self
+            .seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("smoke_receipt_authority_lock_poisoned"))?
+            .get(signer_ura)
+            .copied())
+    }
+}
+
+struct SmokeReceiptSigningAuthority {
+    callee_identity: AgentIdentity,
+    signing_key: SigningKey,
+}
+
+impl SmokeReceiptSigningAuthority {
+    fn self_signed(callee_identity: AgentIdentity) -> Self {
+        Self {
+            signing_key: SigningKey::from_bytes(&sha256(callee_identity.ura.as_bytes())),
+            callee_identity,
+        }
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+}
+
+#[async_trait::async_trait]
+impl ReceiptSigningAuthority for SmokeReceiptSigningAuthority {
+    fn callee_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn signer_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn host_attestation(&self) -> &[u8] {
+        &[]
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.verifying_key()
+    }
+
+    async fn sign_canonical_receipt(
+        &self,
+        canonical_receipt: &[u8],
+    ) -> Result<CalleeSignature, AxonError> {
+        let signature: Signature = self.signing_key.sign(canonical_receipt);
+        Ok(CalleeSignature {
+            algorithm: "ed25519".to_string(),
+            signature: signature.to_bytes().to_vec(),
+            key_id_hint: "real-user-smoke-receipt-key".to_string(),
+        })
+    }
+
+    fn verify_canonical_receipt(
+        &self,
+        canonical_receipt: &[u8],
+        signature: &CalleeSignature,
+    ) -> Result<(), AxonError> {
+        if signature.algorithm != "ed25519" {
+            return Err(AxonError::invalid_argument(format!(
+                "unsupported_algorithm:{}",
+                signature.algorithm
+            )));
+        }
+        let bytes: [u8; SIGNATURE_LENGTH] = signature
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| AxonError::invalid_argument("callee_signature_wrong_length"))?;
+        self.verifying_key()
+            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
+            .map_err(|_| AxonError::invalid_argument("callee_signature_invalid"))
     }
 }
 
@@ -74,7 +173,7 @@ struct RuntimeSmoke {
 
 impl RuntimeSmoke {
     fn system() -> Self {
-        let runtime = LocalRuntime::new_local_fast();
+        let runtime = smoke_local_runtime();
         let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
         let mut config = RegistryBuildConfig::new(RegistryBuildServices::fresh(), &agents);
         config.local_runtime = Some(Arc::clone(&runtime));
@@ -85,7 +184,7 @@ impl RuntimeSmoke {
     }
 
     fn daemon(loaders: Option<Arc<Vec<Arc<dyn ContextLoader>>>>) -> Self {
-        let runtime = LocalRuntime::new_local_fast();
+        let runtime = smoke_local_runtime();
         let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
         config.loaders = loaders;
         config.pages_identity =
@@ -440,19 +539,15 @@ fn main() -> anyhow::Result<()> {
                     ctx_mission_id,
                     ctx_mission_dir,
                 );
-                ctx_runtime.execute_rpc(InvocationTarget {
-                    scope: TargetScope::Local,
-                    ability: chat_for_ctx,
-                    normalized_args: json!({
+                ctx_runtime.execute_rpc(InvocationTarget::local_daemon_system(
+                    chat_for_ctx,
+                    json!({
                         "prompt": "What single all-caps token from the previous discussion contains the substring `CANARY-`? Reply with that token only, no other text.",
                         "context": format!("In this session the agreed-upon canary token is `{canary_for_thread}`. Remember it for any future verification."),
                         "stream": false,
                     }),
-                    call_mode: CallMode::Rpc,
-                    subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-                    causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                    request_metadata: Default::default(),
-                })
+                    CallMode::Rpc,
+                ))
             })
             .await
             .unwrap()
@@ -487,15 +582,11 @@ fn main() -> anyhow::Result<()> {
         let ability_runtime = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
         let direct_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
-                ability_runtime.execute_rpc(InvocationTarget {
-                    scope: TargetScope::Local,
-                    ability: "claude.audit-test-ability".to_string(),
-                    normalized_args: json!({}),
-                    call_mode: CallMode::Rpc,
-                    subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-                    causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                    request_metadata: Default::default(),
-                })
+                ability_runtime.execute_rpc(InvocationTarget::local_daemon_system(
+                    "claude.audit-test-ability",
+                    json!({}),
+                    CallMode::Rpc,
+                ))
             })
             .await
             .unwrap()
@@ -520,18 +611,14 @@ fn main() -> anyhow::Result<()> {
         if advertised.iter().any(|n| n == "codex.chat") {
             println!("\n=== codex.chat STREAM mode (frame-by-frame) ===");
             let dispatcher_for_codex = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
-            let codex_target = InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "codex.chat".to_string(),
-                normalized_args: json!({
+            let codex_target = InvocationTarget::local_daemon_system(
+                "codex.chat",
+                json!({
                     "prompt": "Count from 1 to 5, one number per line.",
                     "stream": true,
                 }),
-                call_mode: CallMode::Stream,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: Default::default(),
-            };
+                CallMode::Stream,
+            );
             match dispatcher_for_codex.execute_stream(codex_target) {
                 Ok(stream) => print_stream_frames(&rt, "Codex", stream),
                 Err(e) => {
@@ -545,18 +632,14 @@ fn main() -> anyhow::Result<()> {
         // ── streaming reality check (claude) ──────────────────
         println!("\n=== claude.chat STREAM mode (frame-by-frame) ===");
         let dispatcher_for_stream = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
-        let stream_target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: chat_ability.clone(),
-            normalized_args: json!({
+        let stream_target = InvocationTarget::local_daemon_system(
+            chat_ability.clone(),
+            json!({
                 "prompt": "Count from 1 to 5, one number per line.",
                 "stream": true,
             }),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: Default::default(),
-        };
+            CallMode::Stream,
+        );
         {
             let _mission_ctx =
                 easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(

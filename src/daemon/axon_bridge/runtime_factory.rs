@@ -19,12 +19,14 @@ use std::{collections::HashMap, sync::Mutex};
 
 #[cfg(test)]
 use easynet_axon::invocation::{
-    sha256, AgentIdentity, Ed25519ReceiptSigningAuthority, ReceiptSigningAuthority,
+    sha256, AgentIdentity, CalleeSignature, ReceiptSigningAuthority,
     ReceiptSigningAuthorityProvider,
 };
 use easynet_axon::invocation::{
     AxiomBinding, AxonError, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
 };
+#[cfg(test)]
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, SIGNATURE_LENGTH};
 
 use crate::daemon::identity::local_invocation::LocalSystemKeyResolver;
 use crate::daemon::identity::receipt_signing::load_runtime_signing_authority_providers;
@@ -99,13 +101,9 @@ impl ReceiptSigningAuthorityProvider for EphemeralTestReceiptSigningAuthorityPro
         if let Some(authority) = authorities.get(callee) {
             return Ok(Arc::clone(authority));
         }
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&sha256(callee.ura.as_bytes()));
-        let authority: Arc<dyn ReceiptSigningAuthority> =
-            Arc::new(Ed25519ReceiptSigningAuthority::self_signed(
-                callee.clone(),
-                signing_key,
-                "cli-test-runtime",
-            ));
+        let authority: Arc<dyn ReceiptSigningAuthority> = Arc::new(
+            EphemeralTestReceiptSigningAuthority::self_signed(callee.clone()),
+        );
         authorities.insert(callee.clone(), Arc::clone(&authority));
         Ok(authority)
     }
@@ -122,6 +120,79 @@ impl ReceiptSigningAuthorityProvider for EphemeralTestReceiptSigningAuthorityPro
             .values()
             .find(|authority| authority.signer_identity().ura == signer_ura)
             .map(|authority| authority.verifying_key()))
+    }
+}
+
+#[cfg(test)]
+struct EphemeralTestReceiptSigningAuthority {
+    callee_identity: AgentIdentity,
+    signing_key: SigningKey,
+}
+
+#[cfg(test)]
+impl EphemeralTestReceiptSigningAuthority {
+    fn self_signed(callee_identity: AgentIdentity) -> Self {
+        Self {
+            signing_key: SigningKey::from_bytes(&sha256(callee_identity.ura.as_bytes())),
+            callee_identity,
+        }
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+}
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl ReceiptSigningAuthority for EphemeralTestReceiptSigningAuthority {
+    fn callee_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn signer_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn host_attestation(&self) -> &[u8] {
+        &[]
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.verifying_key()
+    }
+
+    async fn sign_canonical_receipt(
+        &self,
+        canonical_receipt: &[u8],
+    ) -> Result<CalleeSignature, AxonError> {
+        let signature: Signature = self.signing_key.sign(canonical_receipt);
+        Ok(CalleeSignature {
+            algorithm: "ed25519".to_string(),
+            signature: signature.to_bytes().to_vec(),
+            key_id_hint: "cli-test-runtime".to_string(),
+        })
+    }
+
+    fn verify_canonical_receipt(
+        &self,
+        canonical_receipt: &[u8],
+        signature: &CalleeSignature,
+    ) -> Result<(), AxonError> {
+        if signature.algorithm != "ed25519" {
+            return Err(AxonError::invalid_argument(format!(
+                "unsupported_algorithm:{}",
+                signature.algorithm
+            )));
+        }
+        let bytes: [u8; SIGNATURE_LENGTH] = signature
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| AxonError::invalid_argument("callee_signature_wrong_length"))?;
+        self.verifying_key()
+            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
+            .map_err(|_| AxonError::invalid_argument("callee_signature_invalid"))
     }
 }
 

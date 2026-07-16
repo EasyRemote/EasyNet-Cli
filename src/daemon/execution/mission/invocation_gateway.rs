@@ -333,11 +333,12 @@ impl MissionInvocationGateway for CatalogMissionInvocationGateway {
 mod tests {
     use super::*;
 
+    use easynet_axon::invocation::axiom::sign_descriptor_bound_invocation;
     use easynet_axon::invocation::{
-        make_ability, AbilityFn, AbilityOptions, AxonError, CausalContext, DescriptorBoundEnvelope,
-        DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest,
-        Ed25519InvocationSigningAuthority, InvocationHandle, InvocationSigningAuthority,
-        KeyResolver, SignedEnvelope, StaticInvocationSigningAuthorityProvider,
+        make_ability, AbilityFn, AbilityOptions, AxonError, CallerSignature, CausalContext,
+        DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest,
+        InvocationHandle, InvocationSigningAuthority, InvocationSigningAuthorityProvider,
+        KeyResolver, SignedEnvelope,
     };
     use ed25519_dalek::{SigningKey, VerifyingKey};
     use tokio::sync::mpsc;
@@ -506,18 +507,61 @@ mod tests {
         parent: &AgentIdentity,
         parent_key: SigningKey,
     ) -> Arc<LocalRuntime> {
-        let authority: Arc<dyn InvocationSigningAuthority> =
-            Arc::new(Ed25519InvocationSigningAuthority::self_signed(
-                parent.clone(),
-                parent_key,
-                "mission-parent-key",
-            ));
-        let mut provider = StaticInvocationSigningAuthorityProvider::new();
-        provider.insert(authority).expect("insert parent authority");
+        let provider = MissionTestInvocationSigningAuthorityProvider {
+            authorities: HashMap::from([(
+                parent.ura.clone(),
+                Arc::new(MissionTestInvocationSigningAuthority {
+                    owner: parent.clone(),
+                    signing_key: parent_key,
+                }) as Arc<dyn InvocationSigningAuthority>,
+            )]),
+        };
         LocalRuntime::new_with_signing_authority_providers(
             Some(Arc::new(provider)),
             crate::daemon::axon_bridge::runtime_factory::ephemeral_test_receipt_signing_authority_provider(),
         )
+    }
+
+    struct MissionTestInvocationSigningAuthority {
+        owner: AgentIdentity,
+        signing_key: SigningKey,
+    }
+
+    #[async_trait::async_trait]
+    impl InvocationSigningAuthority for MissionTestInvocationSigningAuthority {
+        fn owner_identity(&self) -> &AgentIdentity {
+            &self.owner
+        }
+
+        async fn sign_descriptor_bound_invocation(
+            &self,
+            envelope: &DescriptorBoundEnvelope,
+        ) -> Result<CallerSignature, AxonError> {
+            if envelope.envelope().caller != self.owner {
+                return Err(AxonError::permission_denied(
+                    "mission_test_invocation_signer_caller_mismatch",
+                ));
+            }
+            Ok(sign_descriptor_bound_invocation(
+                &self.signing_key,
+                envelope,
+                "mission-parent-key",
+            ))
+        }
+    }
+
+    struct MissionTestInvocationSigningAuthorityProvider {
+        authorities: HashMap<String, Arc<dyn InvocationSigningAuthority>>,
+    }
+
+    #[async_trait::async_trait]
+    impl InvocationSigningAuthorityProvider for MissionTestInvocationSigningAuthorityProvider {
+        async fn resolve(
+            &self,
+            caller_ura: &str,
+        ) -> Result<Option<Arc<dyn InvocationSigningAuthority>>, AxonError> {
+            Ok(self.authorities.get(caller_ura).cloned())
+        }
     }
 
     async fn register_rpc(

@@ -688,3 +688,120 @@ This evidence verifies the Node LocalRuntime empty proof-fact production-path
 removal and the EasyNet-Cli V2 regression gate for that path. It does not
 complete RF-6 for remaining examples/tests or full descriptor proof-binding
 parity.
+
+## RF-5 Rust Local-Fast Signer Feature Removal Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml -- --check`:
+  passed.
+- `cargo check --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml`:
+  passed.
+- `cargo check --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml --features proto`:
+  passed.
+- `cargo check --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml --examples`:
+  passed.
+- `cargo test --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml --features proto --no-run`:
+  passed and compiled all Rust SDK test targets.
+- `cargo test --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml --features proto --test signed_receipt_api_gate`:
+  passed, 2 tests. The gate asserts `local-fast-probes` is absent from
+  `Cargo.toml`, public feature cfg is absent from invocation sources, and
+  local-fast helper declarations are `cfg(test)` only.
+- `cargo test --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml --features proto --test ability_context_child_rpc`:
+  passed, 13 tests. These fixtures now use explicit test providers instead of
+  SDK public fallback helpers.
+- `cargo test --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml --features proto --test ledger_sink_and_external_signed public_invocation_core_cannot_emit_terminal_receipt`:
+  passed, 1 test.
+- `cargo run --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/Cargo.toml --example receipt_closure`:
+  passed. The example now constructs an explicit receipt signing authority
+  provider.
+- `rg -n 'local-fast-probes|feature = "local-fast-probes"' /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust -S`:
+  reported only negative assertions in `signed_receipt_api_gate.rs`.
+- `rg -n 'LocalReceiptSigningAuthorityProvider|new_local_fast|Ed25519InvocationSigningAuthority|StaticInvocationSigningAuthorityProvider|Ed25519ReceiptSigningAuthority|StaticReceiptSigningAuthorityProvider' /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/tests /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/rust/examples -S --glob '!signed_receipt_api_gate.rs'`:
+  passed with no matches.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a failing Rust `local-fast-probes`
+  fixture.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `cargo check --bin real-user-smoke` from EasyNet-Cli:
+  passed after removing the downstream feature requirement and migrating the
+  binary to an explicit local smoke receipt provider.
+- `cargo test --test pages_unit u14_pages_management_abilities_are_in_local_runtime --features axon-pb`:
+  passed after migrating the Pages integration runtime fixture to an explicit
+  Pages-owned test receipt provider.
+- `cargo fmt --all -- --check` from EasyNet-Cli: passed.
+- `cargo check --lib --features axon-pb` from EasyNet-Cli: passed.
+- `cargo check --all-targets --features axon-pb` from EasyNet-Cli:
+  passed after replacing CLI lib-test usage of Axon `cfg(test)` signer helper
+  re-exports with explicit CLI test providers.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo test -q daemon::execution::mission::invocation_gateway --lib --features axon-pb`:
+  passed, 4 tests.
+- `cargo test -q support::platform::local_daemon_grpc --lib --features axon-pb`:
+  passed, 10 tests.
+- `rg -n 'local-fast-probes|new_local_fast|LocalReceiptSigningAuthorityProvider|Ed25519InvocationSigningAuthority|StaticInvocationSigningAuthorityProvider|Ed25519ReceiptSigningAuthority|StaticReceiptSigningAuthorityProvider' Cargo.toml src tests tools plugins -S --glob '!tools/scripts/check-canonical-runtime-convergence-v2.sh'`:
+  passed with no matches after removing downstream feature/helper consumption.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 existing lint errors outside this RF-5 local-fast slice. `cargo clippy
+  --bin real-user-smoke -- -D warnings` also failed before bin-specific
+  analysis because Cargo lints the same library first.
+
+This evidence verifies removal of the Rust SDK public local-fast signer
+fallback feature, migration of external Rust SDK tests/examples to explicit
+providers, removal of EasyNet-Cli's downstream local-fast feature request,
+and EasyNet-Cli V2 regression coverage for that boundary. It does not complete
+RF-5 because signer-handle parity and daemon KeyService authority cutover
+remain open.
+
+## RF-5 Runtime Client Subject Auth Generator Removal Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/core/runtime-rs/client-sdk/Cargo.toml -- --check`:
+  passed.
+- `cargo check --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/core/runtime-rs/client-sdk/Cargo.toml`:
+  passed.
+- `cargo test --manifest-path /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/core/runtime-rs/client-sdk/Cargo.toml`:
+  passed, 58 unit tests plus 5 `invocation_envelope_interop` tests.
+- `rg -n 'default_auth_for_subject|generate_subject_auth|generate_private_agent_auth|generate_private_hub_auth|GeneratedSubjectAuth|ProcessLocalSigner|PrivateKeyAuthenticator|DefaultAuthForSubject|GenerateSubjectAuth|defaultAuthForSubject' /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/core/runtime-rs/client-sdk/src /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/core/runtime-rs/src -S --glob '!**/tests/**' --glob '!**/*_test.go' --glob '!**/*.test.*'`:
+  passed with no matches.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes an Axon runtime client SDK fixture that
+  reintroduces `generate_subject_auth`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and updated `sdk/conformance/canonical-public-api.json` to the
+  current Axon revision.
+
+This evidence verifies removal of the runtime client SDK public subject auth
+generator and source-level V2 regression coverage for process-local signer
+fallback helpers. It does not complete RF-5 because host auth DTOs still need
+cross-language signer-handle or daemon KeyService convergence.
+
+## RF-3 Go Public Plain Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `go test ./easynet/invocation -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `rg -n '^func (CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b|\b(CanonicalInvocationBytes|SignInvocation|VerifyInvocationSignature|VerifySignature|RunAdmission)\b' /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go/easynet/invocation /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/API_MAPPING.md -S`:
+  passed with no matches.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Go invocation package fixture that
+  reintroduces `CanonicalInvocationBytes`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and updated `sdk/conformance/canonical-public-api.json` to the
+  current Axon revision.
+
+This evidence verifies the Go public plain proof helper removal and V2
+regression coverage for the Go surface. It does not complete RF-3 because
+remaining language surfaces, examples, and vector documentation still require
+audit.

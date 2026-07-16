@@ -29,11 +29,16 @@
 #[path = "key_service_fixture.rs"]
 mod key_service_fixture;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use easynet_axon::invocation::LocalRuntime;
+use easynet_axon::invocation::{
+    sha256, AgentIdentity, AxonError, CalleeSignature, LocalRuntime, ReceiptSigningAuthority,
+    ReceiptSigningAuthorityProvider,
+};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey, SIGNATURE_LENGTH};
 use serde_json::{json, Value};
 
 use easynet_cli::core::ura;
@@ -48,7 +53,6 @@ use easynet_cli::daemon::ability::builtins::resources::pages::state::{
 use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
 use easynet_cli::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
 use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
-use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project
 /// id so concurrent test runs do not collide in the global
@@ -119,12 +123,126 @@ fn registry_for_pages_owner(
     AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority_context)
 }
 
-fn configured_local_runtime() -> Arc<LocalRuntime> {
-    let runtime = LocalRuntime::new_local_fast();
+fn configured_local_runtime(realm: &str, user: &str) -> Arc<LocalRuntime> {
+    let pages_agent = ura::agent_ura(realm, user, "pages");
+    let runtime = LocalRuntime::new_with_receipt_signing_authority_provider(Arc::new(
+        PagesReceiptSigningAuthorityProvider::for_owner(pages_agent),
+    ));
     easynet_cli::daemon::axon_bridge::runtime_factory::configure_local_runtime(
         &runtime, None, None,
     );
     runtime
+}
+
+struct PagesReceiptSigningAuthorityProvider {
+    allowed_owner: String,
+    seen_signers: Mutex<HashMap<String, VerifyingKey>>,
+}
+
+impl PagesReceiptSigningAuthorityProvider {
+    fn for_owner(owner: String) -> Self {
+        Self {
+            allowed_owner: owner,
+            seen_signers: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ReceiptSigningAuthorityProvider for PagesReceiptSigningAuthorityProvider {
+    async fn resolve(
+        &self,
+        callee: &AgentIdentity,
+    ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+        if callee.ura != self.allowed_owner {
+            return Err(AxonError::permission_denied("pages_test_callee_not_owned"));
+        }
+        let authority = PagesReceiptSigningAuthority::self_signed(callee.clone());
+        self.seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("pages_test_receipt_authority_lock_poisoned"))?
+            .insert(callee.ura.clone(), authority.verifying_key());
+        Ok(Arc::new(authority))
+    }
+
+    fn resolve_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+        Ok(self
+            .seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("pages_test_receipt_authority_lock_poisoned"))?
+            .get(signer_ura)
+            .copied())
+    }
+}
+
+struct PagesReceiptSigningAuthority {
+    callee_identity: AgentIdentity,
+    signing_key: SigningKey,
+}
+
+impl PagesReceiptSigningAuthority {
+    fn self_signed(callee_identity: AgentIdentity) -> Self {
+        Self {
+            signing_key: SigningKey::from_bytes(&sha256(callee_identity.ura.as_bytes())),
+            callee_identity,
+        }
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+}
+
+#[async_trait::async_trait]
+impl ReceiptSigningAuthority for PagesReceiptSigningAuthority {
+    fn callee_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn signer_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn host_attestation(&self) -> &[u8] {
+        &[]
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.verifying_key()
+    }
+
+    async fn sign_canonical_receipt(
+        &self,
+        canonical_receipt: &[u8],
+    ) -> Result<CalleeSignature, AxonError> {
+        let signature: Signature = self.signing_key.sign(canonical_receipt);
+        Ok(CalleeSignature {
+            algorithm: "ed25519".to_string(),
+            signature: signature.to_bytes().to_vec(),
+            key_id_hint: "pages-integration-test-receipt-key".to_string(),
+        })
+    }
+
+    fn verify_canonical_receipt(
+        &self,
+        canonical_receipt: &[u8],
+        signature: &CalleeSignature,
+    ) -> Result<(), AxonError> {
+        if signature.algorithm != "ed25519" {
+            return Err(AxonError::invalid_argument(format!(
+                "unsupported_algorithm:{}",
+                signature.algorithm
+            )));
+        }
+        let bytes: [u8; SIGNATURE_LENGTH] = signature
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| AxonError::invalid_argument("callee_signature_wrong_length"))?;
+        self.verifying_key()
+            .verify(canonical_receipt, &Signature::from_bytes(&bytes))
+            .map_err(|_| AxonError::invalid_argument("callee_signature_invalid"))
+    }
 }
 
 impl Fixture {
@@ -154,7 +272,7 @@ impl Fixture {
         let user = format!("alice-{pid}");
         let realm = "easynet.run".to_string();
         let registry = Arc::new(registry_for_pages_owner(
-            configured_local_runtime(),
+            configured_local_runtime(&realm, &user),
             &realm,
             &user,
         ));
@@ -476,9 +594,9 @@ fn u13_file_size_cap_enforced() {
 fn u14_pages_management_abilities_are_in_local_runtime() {
     let _home = TestHomeGuard::new();
     key_service_fixture::install();
-    let runtime = configured_local_runtime();
-    let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
     let user = "alice-runtime";
+    let runtime = configured_local_runtime("easynet.run", user);
+    let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
     let pages_agent = ura::agent_ura("easynet.run", user, "pages");
     let mut reg = registry_for_pages_owner(Arc::clone(&runtime), "easynet.run", user);
 

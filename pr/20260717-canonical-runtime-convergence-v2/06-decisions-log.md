@@ -177,3 +177,54 @@
 - The V2 RF-6 gate must reject `EMPTY_RECEIPT_PROOF_FACTS` in Node production
   LocalRuntime code; the sentinel may remain only as an explicit fixture value
   for tests and non-production construction audits.
+- Rust `local-fast-probes` is not a canonical SDK capability. It exposes a
+  process-local signer fallback through a public Cargo feature, so it must be
+  removed rather than documented as a compatibility surface.
+- Test-only signer convenience belongs in test fixtures, not in SDK public
+  architecture. Rust integration tests now own explicit descriptor-bound test
+  providers in `descriptor_bound_support`, while crate-local helpers remain
+  `cfg(test)` only.
+- Examples should demonstrate the provider-backed runtime model. The
+  `receipt_closure` example now constructs an explicit receipt signing
+  authority provider instead of relying on `new_local_fast`.
+- The V2 RF-5 gate must reject both the public Rust feature and external
+  consumption of local fallback helpers. Source-level absence is required
+  because API manifest inventory alone cannot see Cargo feature gates or
+  examples/tests that preserve the wrong authority model.
+- EasyNet-Cli must not keep a downstream `local-fast-probes` feature after the
+  Axon SDK removes it. A compatibility feature would preserve the wrong
+  architecture even if production binaries did not enable it.
+- The manual `real-user-smoke` binary may own a local explicit receipt
+  provider because it is a downstream maintainer probe, not SDK architecture.
+  The provider stays file-local so it cannot become a reusable fallback
+  surface.
+- Pages integration tests should not force an Agent owner into
+  `ProductionReceiptAuthorityConfig`; production self-signed owners are Hub or
+  Device roots. The Pages test therefore owns a bounded Pages-agent test
+  provider instead of misusing production owner configuration.
+- EasyNet-Cli lib tests cannot import Axon's `cfg(test)` helper re-exports
+  because dependency crates are not compiled with the downstream crate's test
+  cfg. CLI test runtime, Mission child signing, and local-daemon gRPC receipt
+  fixtures now define their own explicit providers at the fixture boundary.
+- `AxonClient::generate_subject_auth` is removed because SDK-generated
+  subject secrets are a process-local signer fallback, not a canonical runtime
+  authority model. Keeping it as a wrapper would preserve the wrong ownership
+  even if callers were encouraged not to use it.
+- `EasyNetUserAuth` remains only as an explicit host-supplied DTO while RF-5
+  signer-handle convergence is still open. The clean target is signer handles
+  or daemon KeyService authority, not an SDK helper that mints private keys.
+- Runtime client SDK tests use fixed `host_auth_fixture` material so the test
+  authority is local to the test and visibly injected, rather than generated
+  by public SDK API.
+- The V2 RF-5 source gate scans runtime client SDK source in addition to the
+  canonical SDK manifest because process-local signer fallback helpers can
+  live outside the language package inventory.
+- Go plain proof helpers are package-private fixtures, not SDK proof APIs.
+  Keeping package-local historical vector coverage is acceptable only because
+  exported descriptor-bound helpers are the public proof path.
+- The SDK API mapping must document descriptor-bound proof names. Leaving
+  plain helper names in the mapping would preserve the wrong public contract
+  even after source exports were removed.
+- The V2 RF-3 gate now checks Go source and API mapping for the capitalized
+  plain helper group because Go export semantics are name-based and cannot be
+  inferred from manifest inventory alone.

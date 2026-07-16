@@ -375,6 +375,67 @@
 - [x] Verify Node invocation tests, Node package verify, and V2
       gate/self-test.
 
+## RF-5 Rust Local-Fast Signer Feature Removal Slice
+
+- [x] Identify `local-fast-probes` as a public Rust SDK feature that exposed
+      process-local signer fallback helpers outside crate tests.
+- [x] Remove the Cargo feature and all Rust SDK `feature = "local-fast-probes"`
+      cfg gates.
+- [x] Restrict local-fast constructors and fallback signer helpers to
+      crate-internal `cfg(test)` use.
+- [x] Move integration tests to explicit descriptor-bound test providers
+      owned by `tests/common/descriptor_bound_support.rs`.
+- [x] Move the `receipt_closure` example to an explicit receipt signing
+      authority provider instead of `new_local_fast`.
+- [x] Remove EasyNet-Cli's downstream `local-fast-probes` feature and Axon
+      dev-dependency feature request.
+- [x] Migrate `real-user-smoke` and the Pages integration runtime fixture away
+      from `LocalRuntime::new_local_fast`.
+- [x] Extend the EasyNet-Cli V2 gate and self-test to reject reintroduced
+      `local-fast-probes` public feature/cfg and external helper consumption.
+- [x] Extend the V2 gate and self-test to reject EasyNet-Cli downstream
+      reintroduction of the deleted feature or old local-fast helper
+      consumption.
+- [x] Verify Rust SDK checks, targeted tests, example execution, full test
+      target compilation, and V2 gate/self-test.
+- [x] Record that RF-5 remains open for cross-language signer-handle parity
+      and daemon KeyService authority cutover.
+
+## RF-5 Runtime Client Subject Auth Generator Removal Slice
+
+- [x] Identify `AxonClient::generate_subject_auth` in
+      `core/runtime-rs/client-sdk` as a public process-local signing material
+      generator.
+- [x] Remove the generator instead of retaining a compatibility wrapper.
+- [x] Keep `EasyNetUserAuth` only as an explicit host-supplied signing input
+      for current authenticated call paths.
+- [x] Migrate runtime client SDK tests to a local fixed `host_auth_fixture`.
+- [x] Remove the test that asserted fresh SDK-generated subject secrets.
+- [x] Extend the V2 gate and self-test with a source-level Axon process-local
+      signer fallback scan covering runtime client SDK, canonical SDK
+      packages, and runtime source.
+- [x] Verify runtime client SDK check/test, fallback source scan, and V2
+      gate/self-test.
+- [x] Record that RF-5 remains open for signer-handle or daemon KeyService
+      authority convergence across language facades.
+
+## RF-3 Go Public Plain Proof Helper Removal Slice
+
+- [x] Identify Go exported plain proof/admission helpers:
+      `CanonicalInvocationBytes`, `SignInvocation`,
+      `VerifyInvocationSignature`, `VerifySignature`, and `RunAdmission`.
+- [x] Rename the Go plain helper group to package-private functions while
+      preserving package-local historical vector tests.
+- [x] Preserve exported descriptor-bound Go proof/admission replacements.
+- [x] Update `sdk/API_MAPPING.md` to document descriptor-bound proof names
+      instead of plain proof names.
+- [x] Extend the V2 gate and self-test to reject Go public plain helper
+      reintroduction.
+- [x] Verify Go invocation package tests, public-symbol scan, and V2
+      gate/self-test.
+- [x] Record that RF-3 remains open for remaining language surfaces and
+      examples/vector audit.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

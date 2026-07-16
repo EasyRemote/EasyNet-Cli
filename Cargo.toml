@@ -44,10 +44,6 @@ axon-pb = [
 # `daemon::invocation::boot::presence_seed::maybe_seed_demo_presence`.
 demo-fixture = []
 
-# Explicit opt-in for shipped maintainer probes that need an in-process,
-# ephemeral receipt signer. Production binaries never enable this feature.
-local-fast-probes = ["easynet-axon/local-fast-probes"]
-
 # Compile the in-tree remote desktop plugin package and its media transport
 # stack. This is part of the current product surface: Frontend remote desktop,
 # plugin discovery, and typed remote_desktop.* receipts all depend on these
@@ -116,7 +112,6 @@ path = "src/bin/gen-ability-tomls.rs"
 [[bin]]
 name = "real-user-smoke"
 path = "src/bin/real-user-smoke.rs"
-required-features = ["local-fast-probes"]
 
 [dependencies]
 anyhow = "1"
@@ -399,7 +394,7 @@ objc2-video-toolbox = { version = "0.3", features = [
 ], optional = true }
 
 [dev-dependencies]
-easynet-axon = { path = "../EasyNet-Axon/sdk/rust", features = ["local-fast-probes"] }
+easynet-axon = { path = "../EasyNet-Axon/sdk/rust" }
 # Paused-clock tests (`#[tokio::test(start_paused = true)]`) let the
 # invocation-transport reply-deadline tests fire the 60s timer
 # instantly instead of sleeping it for real. Test builds only.
