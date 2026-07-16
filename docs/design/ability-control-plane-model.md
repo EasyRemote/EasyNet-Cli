@@ -269,5 +269,5 @@ outside them:
 - `src/daemon/ability/control_plane.rs` — atomic aggregate registration.
 - `src/daemon/plugins/` — product plugin lifecycle and descriptor projections.
 - `src/daemon/invocation/` — daemon policy around Axon's canonical Invocation.
-- `src/daemon/control/runtime_dispatch.rs` — private, lossless Axon execution bridge.
+- `src/daemon/control/` — lifecycle and diagnostics only; no product dispatch.
 - `ability-descriptors/system/*.ability.toml`

@@ -52,9 +52,9 @@ mode. Stage 2 executes the resolved Invocation. Ability handlers consume the
 resolved target; they do not derive locality from node identifiers or rebuild
 identity from ability names.
 
-`control.sock` owns process lifecycle and diagnostics only. The private
-runtime-dispatch socket is an Axon-to-daemon execution bridge and accepts the
-already-admitted envelope plus descriptor reference; it is not a product API.
+`control.sock` owns process lifecycle and diagnostics only. `daemon.sock` owns
+canonical Invocation ingress, and admitted local calls execute directly in the
+daemon's embedded Axon `LocalRuntime`.
 
 ## 4. Signing and receipts
 

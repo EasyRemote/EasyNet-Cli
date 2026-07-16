@@ -37,8 +37,8 @@ construct one form by string-formatting another. In particular:
 
 ```rust
 // FORBIDDEN
-let uri = format!("easynet:///{}", agent_id);
-let id  = uri.strip_prefix("easynet:///").unwrap();
+let ura = format!("easynet:///{}", agent_id);
+let id  = ura.strip_prefix("easynet:///").unwrap();
 ```
 
 L1 ↔ L2 ↔ L3 transitions go through **typed converters** (when L3

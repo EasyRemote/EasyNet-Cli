@@ -2,7 +2,7 @@
 
 **Document status:** Step 6 implementation evidence for demoting JSON control to boot/status only.
 **Baseline:** current working tree on `codex/f07-hub-device-unify-2026-06-05`.
-**Updated:** 2026-06-05 after daemon SDK, complete Invocation FFI, public control-schema shrink, and runtime-dispatch adapter cleanup.
+**Updated:** 2026-07-14 after daemon lifecycle and Invocation ingress convergence.
 
 ## 1. Purpose
 
@@ -14,10 +14,10 @@ This document proves that EasyNet-Cli no longer uses the public JSON control soc
 - cancellation of retained boot/status subscriptions;
 - protocol diagnostics for malformed frames and unknown control subscriptions.
 
-Product calls use:
-
-- daemon Invocation over `daemon.sock` for CLI, FFI, and backend-facing product paths;
-- the separate runtime-dispatch socket only when Axon owns an incoming Invocation and delegates to a daemon-local registered tool.
+Product calls use daemon Invocation over `daemon.sock` for CLI, FFI, and
+backend-facing product paths. Admitted local calls execute directly in the
+daemon's embedded Axon `LocalRuntime`; no callback socket or runtime-local-tool
+registration path participates in the product lifecycle.
 
 ## 2. Current public control schema
 
@@ -62,9 +62,8 @@ Production JSON-control product callers remaining: **0**.
 |---|---|---|---|
 | Public control socket | `src/daemon/control/server.rs` | Serve `system.watch_boot`, handle `Cancel`, return `not_found` for unknown control subscriptions, recover from malformed frames. | No. |
 | Control frame schema | `src/daemon/control/frames.rs` | Boot/status-only frame model and codec tests. | No. |
-| Runtime dispatch responder | `src/daemon/control/runtime_dispatch.rs` | Separate newline-delimited socket consumed by Axon runtime-local-tool dispatch. | No; separate internal protocol. |
-| Runtime dispatch adapter | `src/daemon/control/runtime_dispatch_adapter.rs` | Convert runtime-dispatch requests into daemon-hosted `LocalRuntime` calls. | No; constructs no `IncomingFrame`/`OutgoingFrame`. |
 | Daemon Invocation SDK | `src/daemon/mod.rs` | Lifecycle, endpoint discovery, unary invoke, stream invoke. | Product transport over daemon Invocation. |
+| Embedded local runtime | `easynet_axon::invocation::LocalRuntime` | Execute admitted local calls in process behind daemon Invocation. | No separate transport. |
 
 ## 5. Test inventory
 
@@ -72,8 +71,6 @@ Production JSON-control product callers remaining: **0**.
 |---|---|
 | `src/daemon/control/frames.rs` | `Subscribe`/`Cancel` round trips, `Frame`/`Terminal` output, retired raw `invoke` parse rejection. |
 | `src/daemon/control/server.rs` | Boot watch delivery, cancellation, malformed-frame recovery, unknown control subscription `not_found`. |
-| `src/daemon/control/runtime_dispatch.rs` | Runtime-dispatch request parsing, response shape, stream output, and socket handling. |
-| `src/daemon/control/runtime_dispatch_adapter.rs` | Adapter dispatch to live local runtime and node hint parsing. |
 | `src/ffi/client.rs` | Retained boot/status round trip against a real control server. |
 | `tools/scripts/check-daemon-invocation-migration.sh` | Mechanical guard that rejects restored product control frames, direct `DaemonInvocation` construction outside `src/daemon/invocation/request.rs`, and reintroduced CLI-owned `Invocation`/`canonical_bytes`/`invocation_id_of` semantics. |
 

@@ -55,9 +55,9 @@ current project layout by [`spec/project-structure-v1.md`](spec/project-structur
 
 Every product call submitted to the daemon carries the complete signed
 Invocation tuple. `daemon.sock` is the product Invocation surface;
-`control.sock` is lifecycle/diagnostics only. The runtime-dispatch socket is a
-private Axon-to-daemon execution bridge and must preserve, rather than replace,
-the calling Invocation context.
+`control.sock` is lifecycle/diagnostics only. The daemon's embedded Axon
+`LocalRuntime` executes admitted local calls in process; there is no second
+runtime-local-tool callback socket in the product lifecycle.
 
 Cross-shard Axon transport uses `InvocationRelay` and forwards one complete
 `InvokeRequest` unchanged. Product-shaped forwarding wrappers, inner JSON

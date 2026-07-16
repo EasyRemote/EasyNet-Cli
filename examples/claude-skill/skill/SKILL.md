@@ -5,7 +5,7 @@ compatibility: Requires easynet CLI installed and a running Axon runtime
 metadata:
   author: easynet
   version: "1.0.0"
-  axon-resource-uri: "easynet:///r/org/device-control"
+  axon-resource-ura: "easynet:///r/org/device-control"
 allowed-tools: Bash(*)
 ---
 
@@ -172,5 +172,5 @@ Each agent sees only its bound device's tools, preventing cross-device interfere
 
 ## Axon Resource
 
-- **URI**: `easynet:///r/org/device-control`
+- **URA**: `easynet:///r/org/device-control`
 - **Version**: 1.0.0
