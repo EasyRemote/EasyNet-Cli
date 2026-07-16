@@ -994,3 +994,126 @@ retired plain proof/admission helper names, while descriptor-bound proof and
 admission helpers remain the canonical runtime boundary. It does not complete
 RF-3 globally because final package/export/vector/example audit and legacy
 implementation deletion remain separate closure work.
+
+## RF-3 Python Legacy Plain Fixture Naming and Producer Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\b(_canonical_invocation_bytes|_sign_invocation|_verify_invocation_signature|_verify_signature|_run_admission|canonical_invocation_bytes_empty)\b' sdk/python -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after the Python source and test rename.
+- `python3 -m compileall -q sdk/python/easynet_axon/invocation sdk/python/tests/test_axiom_vectors.py sdk/python/tests/test_cross_language_verify.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed.
+- `/Users/macbook.silan.tech/.local/bin/uv run --extra dev pytest tests/test_axiom_vectors.py -q`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python`:
+  passed, 13 tests passed and 3 skipped.
+- `/Users/macbook.silan.tech/.local/bin/uv run --extra dev pytest tests/test_cross_language_verify.py -q`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python`:
+  passed, 3 tests. The Python producer is accepted by the Rust verifier with
+  descriptor-bound invocation signatures.
+- `/Users/macbook.silan.tech/.local/bin/uv run --extra dev pytest tests -q`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python`:
+  failed with 17 failed, 221 passed, and 3 skipped. Failures are existing
+  broader Python SDK parity debt in industrial LocalRuntime helper tests and
+  authority/proof-fact parity tests, not this RF-3 Python proof-boundary slice.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Python private plain proof fixture that
+  reintroduces `_canonical_invocation_bytes`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `468a230090f2921059dd89c3b1678000d2b4bc32`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies that Python SDK source no longer normalizes retired
+plain proof/admission helper names and that the Python cross-language producer
+uses descriptor-bound invocation signatures. It does not complete RF-3
+globally because final package/export/vector/example audit and legacy
+implementation deletion remain separate closure work.
+
+## RF-3 Node Production Legacy Plain Export Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\b(legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission)\b|canonical_invocation_bytes_empty' sdk/node/src -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after deleting Node production legacy plain helpers.
+- `npm run build`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed.
+- `node --test tests/admission.test.mjs tests/axiom-vectors.test.mjs tests/cross-language-verify.test.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 38 tests passed and 3 skipped.
+- `npm run axiom:vectors`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 14/14 vectors.
+- `npm run verify`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Node production source fixture that
+  reintroduces `legacyPlainInvocationBytes`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `dee7bea46fc262db30eb8639bb4b055f38f50473`.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies that Node production invocation source no longer hosts
+the legacy plain proof/admission implementation and that retained historical
+plain vector coverage is isolated to an explicit fixture. It does not complete
+RF-3 globally because final package/export/vector/example audit and legacy
+implementation deletion remain separate closure work.
+
+## RF-3 Go Production Legacy Plain Implementation Removal Slice
+
+Commands run on 2026-07-17:
+
+- `go test ./easynet/invocation`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `rg -n '\b(legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission)\b|legacy_plain_invocation_bytes_empty' sdk/go/easynet/invocation --glob '!**/*_test.go'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after deleting Go production legacy plain helpers.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed before commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `b56fea0140e1e4bd3fe0f4cb8f444625252b70b8`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Go production invocation fixture that
+  reintroduces `legacyPlainInvocationBytes`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `git diff --check`: passed in EasyNet-Cli and EasyNet-Axon.
+
+This evidence verifies that Go production invocation source no longer hosts
+the legacy plain proof/admission implementation and that retained historical
+plain vector coverage is isolated to a test-only fixture. It does not complete
+RF-3 globally because final package/export/vector/example audit and legacy
+fixture closure remain separate work.

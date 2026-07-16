@@ -524,6 +524,59 @@
 - [x] Record that RF-3 remains open for Swift and remaining package/export
       cleanup.
 
+## RF-3 Python Legacy Plain Fixture Naming and Producer Hardening Slice
+
+- [x] Identify Python private plain proof/admission helpers that still used
+      retired canonical names after public export removal.
+- [x] Rename Python private plain helper logic to explicit
+      `_legacy_plain*` fixture functions without keeping old aliases.
+- [x] Preserve descriptor-bound Python proof/admission helpers as the public
+      runtime proof surface.
+- [x] Migrate Python axiom vector tests to the explicit legacy fixture names.
+- [x] Migrate the Python cross-language bundle producer to descriptor-bound
+      signatures, descriptor-ref ability names, and descriptor-derived proof
+      facts.
+- [x] Extend the V2 gate and self-test to reject retired Python private plain
+      helper names in SDK source.
+- [x] Verify Python focused tests, V2 gate/self-test, and public API manifest
+      refresh before committing this slice.
+
+## RF-3 Node Production Legacy Plain Export Removal Slice
+
+- [x] Identify that Node `legacyPlain*` proof/admission helpers still lived in
+      production invocation modules after public plain helper removal.
+- [x] Delete Node production `legacyPlainInvocationBytes`,
+      `signLegacyPlainInvocation`,
+      `verifyLegacyPlainInvocationSignature`, `verifyLegacyPlainSignature`,
+      and `runLegacyPlainAdmission`.
+- [x] Move historical plain vector coverage to an explicit
+      `scripts/legacy-plain-fixtures.mjs` fixture outside production SDK
+      source.
+- [x] Migrate Node admission tests to descriptor-bound signing and
+      `runDescriptorBoundAdmission`.
+- [x] Extend the V2 gate and self-test to reject Node production reintroduction
+      of legacy plain proof/admission names.
+- [x] Verify Node focused tests, package verify, V2 gate/self-test, and public
+      API manifest refresh before committing this slice.
+
+## RF-3 Go Production Legacy Plain Implementation Removal Slice
+
+- [x] Identify that Go `legacyPlain*` proof/admission helpers still lived in
+      production invocation modules after public helper removal and fixture
+      renaming.
+- [x] Delete Go production `legacyPlainInvocationBytes`,
+      `signLegacyPlainInvocation`,
+      `verifyLegacyPlainInvocationSignature`, `verifyLegacyPlainSignature`,
+      and `runLegacyPlainAdmission`.
+- [x] Move historical plain vector coverage to
+      `legacy_plain_fixtures_test.go` so it is compiled only for tests.
+- [x] Migrate Go module-level admission tests to descriptor-bound signing and
+      `RunDescriptorBoundAdmission`.
+- [x] Extend the V2 gate and self-test to reject Go production
+      reintroduction of legacy plain proof/admission names.
+- [x] Verify Go focused/all package tests, V2 gate/self-test, and public API
+      manifest refresh before committing this slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

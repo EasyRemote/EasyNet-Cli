@@ -792,3 +792,80 @@ The V2 gate now rejects retired Rust plain helper names anywhere in the Rust
 invocation source. This removes another RF-3 semantic naming seam; it does not
 complete RF-3 because final legacy deletion and remaining package/vector audit
 still require closure evidence.
+
+## Current Slice: RF-3 Python Legacy Plain Fixture Naming and Producer Hardening
+
+Owner: EasyNet-Axon Python invocation package and EasyNet-Cli V2 conformance
+gate.
+
+The Python public plain proof helper hardening removed direct public exports,
+but private invocation modules and vector tests still used retired names such
+as `_canonical_invocation_bytes`, `_sign_invocation`,
+`_verify_invocation_signature`, `_verify_signature`, and `_run_admission`.
+Those names kept plain proof vocabulary normalized inside the canonical Python
+package.
+
+The Python package now names the retired private fixture path as
+`_legacy_plain_invocation_bytes`, `_sign_legacy_plain_invocation`,
+`_verify_legacy_plain_invocation_signature`,
+`_verify_legacy_plain_signature`, and `_run_legacy_plain_admission`.
+Descriptor-bound signing and admission remain the public proof boundary.
+
+The Python cross-language bundle producer now signs invocation JSON with
+`sign_descriptor_bound_invocation` over `DescriptorBoundEnvelope` and uses
+descriptor-ref ability names. Receipt proof facts derive their subject ref and
+descriptor version from the same descriptor-bound invocation fields. The V2
+gate now rejects retired Python private plain helper names anywhere under the
+Python SDK source.
+
+This slice removes another RF-3 semantic naming seam and converts the Python
+cross-language producer away from plain signatures. It does not complete RF-3
+because final package/export/vector/example audit and legacy implementation
+deletion still require closure evidence.
+
+## Current Slice: RF-3 Node Production Legacy Plain Export Removal
+
+Owner: EasyNet-Axon Node invocation package and EasyNet-Cli V2 conformance
+gate.
+
+The Node public plain proof helper removal renamed the retired path to
+`legacyPlain*`, but the legacy encoder, signer, verifier, and admission
+pipeline still lived in production `sdk/node/src/invocation` modules. Since
+Node module exports are public within the SDK package source, this preserved a
+second proof/admission model even though the root package surface pointed users
+toward descriptor-bound helpers.
+
+The Node production invocation source now contains only descriptor-bound
+signing, verification, and admission. Historical plain vector coverage moved
+to an explicit test/vector fixture under `sdk/node/scripts`, and Node admission
+tests now exercise `runDescriptorBoundAdmission` with descriptor-ref ability
+names. The V2 gate rejects `legacyPlain*` proof/admission names in Node
+production invocation source while allowing the explicit fixture boundary.
+
+This slice removes a production legacy implementation from the Node SDK. It
+does not complete RF-3 because other language fixture boundaries, package
+exports, examples, and final legacy deletion still require closure evidence.
+
+## Current Slice: RF-3 Go Production Legacy Plain Implementation Removal
+
+Owner: EasyNet-Axon Go invocation package and EasyNet-Cli V2 conformance gate.
+
+The Go public plain proof helper removal and fixture renaming still left the
+retired plain encoder, signer, verifier, and admission runner in production
+`sdk/go/easynet/invocation` files under explicit `legacyPlain*` names. That
+kept a second proof/admission implementation inside the canonical runtime
+package even though the public facade had moved to descriptor-bound helpers.
+
+The Go production invocation source now contains descriptor-bound signing,
+verification, and admission only. Historical plain vector coverage is isolated
+to `legacy_plain_fixtures_test.go`, so the old byte layout can still be
+verified as a fixture without remaining in the SDK runtime build. Go admission
+tests now construct `DescriptorBoundEnvelope` values and call
+`RunDescriptorBoundAdmission` with descriptor-ref ability names.
+
+The V2 gate now rejects Go `legacyPlain*` proof/admission names in non-test
+production invocation source, with a self-test that reintroduces
+`legacyPlainInvocationBytes` in a fake Go production package. This slice
+removes the Go production legacy plain implementation. It does not complete
+RF-3 globally because final package/export/vector/example audit and legacy
+fixture closure still require separate evidence.

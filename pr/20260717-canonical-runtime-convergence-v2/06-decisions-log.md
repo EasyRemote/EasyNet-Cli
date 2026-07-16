@@ -280,3 +280,30 @@
 - The V2 RF-3 gate now rejects retired Rust plain helper names anywhere under
   `sdk/rust/src/invocation`; this is stricter than public-surface inventory
   because package-internal names are architecture examples for future code.
+- Python private helper names are also architecture signals inside the
+  canonical SDK package. Retired plain proof/admission helpers must therefore
+  use explicit `_legacy_plain*` names rather than ordinary proof/admission
+  names, even when they are not exported from the package.
+- Python cross-language bundle production must sign descriptor-bound canonical
+  bytes and use descriptor-ref ability names. A Python bundle accepted only by
+  a plain verifier would preserve RF-3's second proof model.
+- The V2 RF-3 gate now scans all Python SDK source for retired private plain
+  helper names because public inventory alone cannot prove package-internal
+  proof vocabulary convergence.
+- Node `legacyPlain*` functions are not acceptable in production invocation
+  source even when the package root does not re-export them. Source-level
+  module exports are still SDK contract surface for package consumers and
+  future internal code.
+- Historical plain vector coverage may remain in Node only behind an explicit
+  test/vector fixture boundary. The canonical Node invocation modules now host
+  descriptor-bound proof and admission only.
+- Go `legacyPlain*` functions are not acceptable in production invocation
+  source either. Package-private production helpers still shape the canonical
+  runtime model and would preserve RF-3's second proof/admission
+  implementation.
+- Historical plain vector coverage in Go may remain only in `_test.go`
+  fixtures. The Go runtime package now hosts descriptor-bound signing,
+  verification, and admission as its only production proof boundary.
+- The V2 RF-3 gate now rejects Go legacy plain proof/admission names in
+  non-test invocation source because public API inventory cannot detect
+  package-private production implementation residue.
