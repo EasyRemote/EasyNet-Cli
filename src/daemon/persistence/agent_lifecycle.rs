@@ -487,8 +487,11 @@ impl AgentPurgePublicationRetry {
             }
         } else {
             let delay_epochs = Self::checked_delay_epochs(self.attempts)?;
+            // `delay_epochs` counts complete future drains to defer. The
+            // following epoch is therefore the first epoch eligible to claim.
             let eligible_drain_epoch = drain_epoch
                 .checked_add(delay_epochs)
+                .and_then(|last_deferred_epoch| last_deferred_epoch.checked_add(1))
                 .ok_or_else(|| anyhow::anyhow!("publication retry epoch overflow"))?;
             AgentPurgePublicationRetryState::BackingOff {
                 eligible_drain_epoch,
@@ -1126,6 +1129,24 @@ mod tests {
             entry.retry.state,
             AgentPurgePublicationRetryState::Claimed { .. }
         ));
+    }
+
+    #[test]
+    fn first_backoff_defers_one_complete_scheduled_drain() {
+        let mut entry = publication_entry("00000000000000000000000000000009", "agent-backoff");
+        entry.claim(10, false, "claim-1".to_string()).unwrap();
+        entry
+            .record_claim_failure("claim-1", 1_000, "revoke unavailable".to_string())
+            .unwrap();
+
+        assert!(matches!(
+            entry.retry.state,
+            AgentPurgePublicationRetryState::BackingOff {
+                eligible_drain_epoch: 12
+            }
+        ));
+        assert!(!entry.claim(11, false, "claim-2".to_string()).unwrap());
+        assert!(entry.claim(12, false, "claim-3".to_string()).unwrap());
     }
 
     fn publication_entry(transaction_id: &str, name: &str) -> AgentPurgePublicationEntry {

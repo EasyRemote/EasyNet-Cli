@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # dev-install-local.sh — build the current EasyNet-Cli checkout and
 # overwrite the system-installed binaries in place. Same shape as
-# `packaging/release/install.sh` lays down — `easynet` + `easynet-daemon` in
-# /usr/local/bin, `libaxon_dendrite_bridge.{dylib|so}` in
+# `packaging/release/install.sh` lays down — `easynet`, `easynet-daemon`,
+# and `easynet-keyring` in /usr/local/bin, `libaxon_dendrite_bridge.{dylib|so}` in
 # ~/.easynet/dendrite-bridge/native — but pulls bytes from `cargo build`
 # instead of the production tarball server.
 #
@@ -19,7 +19,7 @@
 # minimum to put your local commit in front of you:
 #   1. cargo build (release by default; --debug flag for faster turnaround)
 #   2. cargo build the dendrite bridge .dylib/.so
-#   3. sudo install the three artefacts to the same paths packaging/release/install.sh uses
+#   3. sudo install the runtime artefacts to the same paths packaging/release/install.sh uses
 #   4. remove any stale `axon-runtime` binary that previous installs left
 #   5. print version so you can confirm the new bytes are live
 #
@@ -94,14 +94,14 @@ else
 fi
 native_dir="$real_home/.easynet/dendrite-bridge/native"
 
-cargo_args_cli=(--bin easynet --bin easynet-daemon)
+cargo_args_cli=(--bin easynet --bin easynet-daemon --bin easynet-keyring)
 cargo_args_bridge=(--lib)
 if [ "$build_profile" = "release" ]; then
     cargo_args_cli+=(--release)
     cargo_args_bridge+=(--release)
 fi
 
-echo "==> [1/3] cargo build easynet + easynet-daemon ($build_profile)"
+echo "==> [1/3] cargo build easynet + easynet-daemon + easynet-keyring ($build_profile)"
 (
     cd "$cli_root"
     cargo build "${cargo_args_cli[@]}"
@@ -122,9 +122,10 @@ fi
 
 cli_bin="$cli_root/target/$build_profile/easynet"
 daemon_bin="$cli_root/target/$build_profile/easynet-daemon"
+keyring_bin="$cli_root/target/$build_profile/easynet-keyring"
 bridge_lib="$bridge_crate/target/$build_profile/libaxon_dendrite_bridge.${lib_ext}"
 
-for path in "$cli_bin" "$daemon_bin"; do
+for path in "$cli_bin" "$daemon_bin" "$keyring_bin"; do
     if [ ! -f "$path" ]; then
         echo "dev-install-local.sh: build artefact missing: $path" >&2
         exit 1
@@ -136,6 +137,7 @@ if [ "$do_install" -eq 0 ]; then
     echo "  ✓ Build complete. Artefacts:"
     echo "      $cli_bin"
     echo "      $daemon_bin"
+    echo "      $keyring_bin"
     [ -f "$bridge_lib" ] && echo "      $bridge_lib"
     echo ""
     echo "  Run directly without installing:"
@@ -161,6 +163,7 @@ echo "    installing to $install_dir + $native_dir"
 
 $SUDO install -m 755 "$cli_bin"    "$install_dir/easynet"
 $SUDO install -m 755 "$daemon_bin" "$install_dir/easynet-daemon"
+$SUDO install -m 755 "$keyring_bin" "$install_dir/easynet-keyring"
 
 if [ -f "$bridge_lib" ]; then
     # native_dir lives under the real user's $HOME, not root's — so

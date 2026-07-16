@@ -69,9 +69,11 @@ if [[ "${1:-}" == "--self-test" ]]; then
   run_gate "runtime events cross-repo gate self-test" bash "$SELF_DIR/runtime-events-cross-repo-e2e.sh" --self-test
   run_gate "runtime events live daemon E2E self-test" bash "$SELF_DIR/runtime-events-live-daemon-e2e.sh" --self-test
   run_gate "standalone Hub PrincipalLifecycle E2E self-test" bash "$SELF_DIR/standalone-hub-principal-lifecycle-e2e.sh" --self-test
+  run_gate "CLI Hub/Device daemon E2E self-test" bash "$SELF_DIR/cli-hub-device-daemon-e2e.sh" --self-test
   run_gate "Python SDK live smoke self-test" bash "$SELF_DIR/python-sdk-live-smoke.sh" --self-test
   run_gate "Go SDK live smoke self-test" bash "$SELF_DIR/go-sdk-live-smoke.sh" --self-test
   run_gate "Python SDK static contract self-test" bash "$SELF_DIR/check-python-sdk-static-contract.sh" --self-test
+  run_gate "release package contract self-test" bash "$REPO_ROOT/tests/scripts/test_check_release_package_contract.sh"
 
   easyremote_good="$tmp/EasyRemoteGood"
   backend_bad="$tmp/EasyNetBad"
@@ -110,6 +112,7 @@ run_gate "SDK receipt URA boundary" bash "$SELF_DIR/check-sdk-receipt-ura-bounda
 run_gate "Python SDK static contract" bash "$SELF_DIR/check-python-sdk-static-contract.sh" || status=1
 run_gate "daemon latest input boundary" bash "$SELF_DIR/check-daemon-latest-input-boundary.sh" || status=1
 run_gate "daemon Invocation migration" bash "$SELF_DIR/check-daemon-invocation-migration.sh" || status=1
+run_gate "release package contract" bash "$SELF_DIR/check-release-package-contract.sh" || status=1
 run_gate "EasyRemote SDK boundary" bash "$SELF_DIR/check-easyremote-sdk-boundary.sh" "$EASYREMOTE_ROOT" || status=1
 run_gate "backend route-family coverage" bash "$SELF_DIR/check-backend-route-family-coverage.sh" || status=1
 run_gate "backend SDK-only boundary" bash "$SELF_DIR/check-backend-sdk-only-boundary.sh" "$BACKEND_ROOT" || status=1
