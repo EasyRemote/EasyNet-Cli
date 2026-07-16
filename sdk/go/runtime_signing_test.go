@@ -36,7 +36,7 @@ func TestRuntimeSigningTransportSignsUnsignedInvokeDraft(t *testing.T) {
 				"output_base64": "e30=",
 				"output_json": {},
 				"elapsed_ms": 1,
-				"receipt": null,
+				"terminal_receipt": null,
 				"error": null
 			}`), nil
 		},
@@ -111,7 +111,7 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 				"output_base64": "e30=",
 				"output_json": {},
 				"elapsed_ms": 1,
-				"receipt": null,
+				"terminal_receipt": null,
 				"error": null
 			}`), nil
 		},

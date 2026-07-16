@@ -30,7 +30,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "0d14201400b22f27a235118caedb3d74a7f5d45287827cde3d2a9f080bbb84c2"
+          "sha256": "98844ab1376dfe87c2662a714567c4fac1e0fde029f4df9e129a0ee03686f5c7"
         }
       ],
       "profile": "runtime_core"
@@ -74,7 +74,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/access_control_test.go",
-          "sha256": "1d1e584ab1bfccfab9192739624a829ac042f15eba84710f1202886f04b1c261"
+          "sha256": "adba050894ae9d9413dd6c51215dde8e32ef72b473a702e7a50696257d70b975"
         }
       ],
       "profile": "access_control"
@@ -338,7 +338,7 @@
         {
           "kind": "go_test",
           "ref_path": "sdk/go/runtime_test.go",
-          "sha256": "0d14201400b22f27a235118caedb3d74a7f5d45287827cde3d2a9f080bbb84c2"
+          "sha256": "98844ab1376dfe87c2662a714567c4fac1e0fde029f4df9e129a0ee03686f5c7"
         }
       ],
       "profile": "runtime_core"

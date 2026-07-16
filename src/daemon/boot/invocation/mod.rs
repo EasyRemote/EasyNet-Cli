@@ -9,7 +9,11 @@
 // What this module does
 // ---------------------
 // `boot::start_daemon_invocation_transport(...)` is the one function
-// the daemon binary calls to bring the Invocation transport online. It:
+// the daemon binary calls to bring the Invocation transport online. Its
+// caller supplies one `InvocationTransportDependencies` value so the
+// runtime, catalogue, ledger, registrar, plugin, and discovery ownership
+// stays explicit instead of being reconstructed from positional arguments.
+// It:
 //
 // 1. Loads the required `~/.easynet/daemon-config.toml` via
 //    `DaemonConfig::load`. Missing or malformed configuration fails
@@ -216,22 +220,45 @@ impl SessionShutdown {
     }
 }
 
-pub fn start_daemon_invocation_transport(
-    local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
-    local_ability_catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
-    invocation_cancellations: crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
-    invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
-    hot_agent_registrar_cell: Arc<
-        crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
-    >,
-    plugin_runtime_manager: Option<Arc<crate::daemon::plugins::PluginRuntimeManager>>,
-    hub_published_abilities: Arc<
+/// Runtime dependencies required to expose the daemon Invocation transport.
+///
+/// This object is intentionally dependency-only: configuration, identity,
+/// trust anchors, endpoints, and mode policy are still loaded by transport boot
+/// from the daemon-owned config files so there is one authority for lifecycle
+/// readiness. The fields here are already-constructed runtime capabilities that
+/// must be shared with the rest of daemon boot.
+#[derive(Clone)]
+pub struct InvocationTransportDependencies {
+    pub local_runtime: Arc<easynet_axon::invocation::LocalRuntime>,
+    pub local_ability_catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
+    pub invocation_cancellations:
+        crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
+    pub invocation_ledger: Option<Arc<easynet_axon::invocation::InvocationLedger>>,
+    pub hot_agent_registrar_cell:
+        Arc<crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell>,
+    pub plugin_runtime_manager: Option<Arc<crate::daemon::plugins::PluginRuntimeManager>>,
+    pub hub_published_abilities: Arc<
         crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore,
     >,
-    discover_federation_resolver: Option<
+    pub discover_federation_resolver: Option<
         Arc<crate::daemon::ability::builtins::agents::discover::DeferredDiscoverFederationResolver>,
     >,
+}
+
+pub fn start_daemon_invocation_transport(
+    dependencies: InvocationTransportDependencies,
 ) -> anyhow::Result<SessionShutdown> {
+    let InvocationTransportDependencies {
+        local_runtime,
+        local_ability_catalog,
+        invocation_cancellations,
+        invocation_ledger,
+        hot_agent_registrar_cell,
+        plugin_runtime_manager,
+        hub_published_abilities,
+        discover_federation_resolver,
+    } = dependencies;
+
     let config_path = expand_home(DEFAULT_DAEMON_CONFIG_PATH);
     let config = DaemonConfig::load(&config_path).with_context(|| {
         format!(
@@ -1522,6 +1549,24 @@ mod tests {
 
     use super::*;
 
+    fn test_invocation_transport_dependencies() -> InvocationTransportDependencies {
+        InvocationTransportDependencies {
+            local_runtime: easynet_axon::invocation::LocalRuntime::new(),
+            local_ability_catalog: Arc::new(
+                crate::daemon::ability::dispatch::AxonAbilityCatalog::new(),
+            ),
+            invocation_cancellations: Default::default(),
+            invocation_ledger: None,
+            hot_agent_registrar_cell: Arc::new(
+                crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
+            ),
+            plugin_runtime_manager: None,
+            hub_published_abilities:
+                crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
+            discover_federation_resolver: None,
+        }
+    }
+
     #[test]
     fn expand_home_with_tilde_uses_home_env() {
         // HomeGuard serialises HOME mutation across the suite.
@@ -1807,18 +1852,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", temp.path());
 
-        let result = start_daemon_invocation_transport(
-            easynet_axon::invocation::LocalRuntime::new(),
-            Arc::new(crate::daemon::ability::dispatch::AxonAbilityCatalog::new()),
-            Default::default(),
-            None,
-            Arc::new(
-                crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
-            ),
-            None,
-            crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
-            None,
-        );
+        let result = start_daemon_invocation_transport(test_invocation_transport_dependencies());
         assert!(
             result.is_err(),
             "missing daemon-config.toml must fail before endpoint readiness"
@@ -1842,18 +1876,7 @@ mod tests {
         )
         .expect("write broken config");
 
-        let result = start_daemon_invocation_transport(
-            easynet_axon::invocation::LocalRuntime::new(),
-            Arc::new(crate::daemon::ability::dispatch::AxonAbilityCatalog::new()),
-            Default::default(),
-            None,
-            Arc::new(
-                crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
-            ),
-            None,
-            crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
-            None,
-        );
+        let result = start_daemon_invocation_transport(test_invocation_transport_dependencies());
         assert!(
             result.is_err(),
             "a present-but-broken daemon-config.toml must fail fast, not soft-skip the listener",
@@ -1990,18 +2013,7 @@ tls_key_pem = {key:?}
             // Errors from the TLS bind are acceptable — what
             // matters is that the federation client + peers
             // wire-up did not panic before we got there.
-            let _ = start_daemon_invocation_transport(
-                easynet_axon::invocation::LocalRuntime::new(),
-                Arc::new(crate::daemon::ability::dispatch::AxonAbilityCatalog::new()),
-                Default::default(),
-                None,
-                Arc::new(
-                    crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell::new(),
-                ),
-                None,
-                crate::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore::new(),
-                None,
-            );
+            let _ = start_daemon_invocation_transport(test_invocation_transport_dependencies());
         }));
         // futures::FutureExt::catch_unwind would be nicer; we
         // use std::panic::catch_unwind via a synchronous wrapper

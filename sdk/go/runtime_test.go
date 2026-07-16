@@ -596,7 +596,7 @@ func TestInvocationResultRejectsInconsistentFailure(t *testing.T) {
 		"output_base64": "",
 		"output_json": null,
 		"elapsed_ms": 3,
-		"receipt": null,
+		"terminal_receipt": null,
 		"error": null
 	}`, draftJSON)))
 	if err == nil {
@@ -638,7 +638,7 @@ func TestRuntimeClientHandleObservationDelegatesToTransport(t *testing.T) {
 				"output_base64": "e30=",
 				"output_json": {},
 				"elapsed_ms": 8,
-				"receipt": null,
+				"terminal_receipt": null,
 				"error": null
 			}`, draftJSON)), nil
 		},

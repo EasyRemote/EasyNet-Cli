@@ -405,16 +405,22 @@ pub fn invoke_local_ability_target_with_invocation_meta(
     step_timeout: Option<std::time::Duration>,
     trace_id: Option<&str>,
 ) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
-    let (value, metadata) = crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta(
-        target.dispatch_name(),
-        args,
-        target.callee_ura(),
-        target.default_subject_ura(),
-        subject,
-        causal_parents,
-        step_timeout,
-        trace_id,
-    )?;
+    let request =
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            target:
+                crate::support::platform::local_daemon_grpc::LocalDaemonCanonicalInvocationTarget {
+                    callee_ura: target.callee_ura(),
+                    default_subject_ura: target.default_subject_ura(),
+                },
+            subject,
+            causal_parents,
+            step_timeout,
+            trace_id,
+        };
+    let (value, metadata) =
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta(request)?;
     Ok((value, VerifiedLocalInvocationMeta(metadata)))
 }
 

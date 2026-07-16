@@ -85,7 +85,7 @@
         {
           "kind": "python_test",
           "ref_path": "sdk/python/tests/test_access_control.py",
-          "sha256": "ec2c8a69b622a38cbb03efa577159e562b43fa2a3fdcb6a08115d8e4a9db9310"
+          "sha256": "117b3861545d225f4ea80b064db5f9a3bc22845a27d74088bdc3e90e91c423bf"
         }
       ],
       "profile": "access_control"

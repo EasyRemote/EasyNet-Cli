@@ -532,16 +532,17 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(feature = "axon-pb")]
     let session_shutdown = {
         boot_bus.emit_started("daemon-invocation-transport");
-        match easynet_cli::daemon::invocation::start_daemon_invocation_transport(
-            Arc::clone(&local_runtime),
-            Arc::clone(&registry),
-            built_registry.invocation_cancellations.clone(),
+        let dependencies = easynet_cli::daemon::invocation::InvocationTransportDependencies {
+            local_runtime: Arc::clone(&local_runtime),
+            local_ability_catalog: Arc::clone(&registry),
+            invocation_cancellations: built_registry.invocation_cancellations.clone(),
             invocation_ledger,
-            Arc::clone(&hot_agent_registrar_cell),
-            Some(Arc::clone(&built_registry.plugin_runtime_manager)),
-            Arc::clone(&hub_published_abilities),
-            Some(Arc::clone(&discover_federation_resolver_cell)),
-        ) {
+            hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
+            plugin_runtime_manager: Some(Arc::clone(&built_registry.plugin_runtime_manager)),
+            hub_published_abilities: Arc::clone(&hub_published_abilities),
+            discover_federation_resolver: Some(Arc::clone(&discover_federation_resolver_cell)),
+        };
+        match easynet_cli::daemon::invocation::start_daemon_invocation_transport(dependencies) {
             Ok(handle) => {
                 boot_bus.emit_ok("daemon-invocation-transport");
                 handle

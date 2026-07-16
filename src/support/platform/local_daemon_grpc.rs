@@ -963,28 +963,36 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
     })
 }
 
+pub(crate) struct LocalDaemonCanonicalInvocationTarget<'a> {
+    pub(crate) callee_ura: &'a str,
+    pub(crate) default_subject_ura: &'a str,
+}
+
+pub(crate) struct LocalDaemonTargetedInvocationMetaRequest<'a> {
+    pub(crate) function_name: &'a str,
+    pub(crate) payload_json: serde_json::Value,
+    pub(crate) target: LocalDaemonCanonicalInvocationTarget<'a>,
+    pub(crate) subject: Option<String>,
+    pub(crate) causal_parents: &'a [serde_json::Value],
+    pub(crate) step_timeout: Option<Duration>,
+    pub(crate) trace_id: Option<&'a str>,
+}
+
 #[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    callee_ura: &str,
-    default_subject_ura: &str,
-    subject: Option<String>,
-    causal_parents: &[serde_json::Value],
-    step_timeout: Option<Duration>,
-    trace_id: Option<&str>,
+    request: LocalDaemonTargetedInvocationMetaRequest<'_>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
     invoke_local_daemon_ability_with_invocation_meta_inner(LocalDaemonInvocationMetaRequest {
-        function_name,
-        payload_json,
-        subject,
-        causal_parents,
-        step_timeout,
-        trace_id,
+        function_name: request.function_name,
+        payload_json: request.payload_json,
+        subject: request.subject,
+        causal_parents: request.causal_parents,
+        step_timeout: request.step_timeout,
+        trace_id: request.trace_id,
         delegation: None,
         target: LocalDaemonInvocationMetaTarget::Canonical {
-            callee_ura,
-            default_subject_ura,
+            callee_ura: request.target.callee_ura,
+            default_subject_ura: request.target.default_subject_ura,
         },
     })
 }
@@ -1879,15 +1887,21 @@ pub(crate) fn invoke_local_daemon_ability_with_invocation_meta(
 
 #[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
-    function_name: &str,
-    _payload_json: serde_json::Value,
-    _callee_ura: &str,
-    _default_subject_ura: &str,
-    _subject: Option<String>,
-    _causal_parents: &[serde_json::Value],
-    _step_timeout: Option<std::time::Duration>,
-    _trace_id: Option<&str>,
+    request: LocalDaemonTargetedInvocationMetaRequest<'_>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
+    let LocalDaemonTargetedInvocationMetaRequest {
+        function_name,
+        payload_json: _,
+        target:
+            LocalDaemonCanonicalInvocationTarget {
+                callee_ura: _,
+                default_subject_ura: _,
+            },
+        subject: _,
+        causal_parents: _,
+        step_timeout: _,
+        trace_id: _,
+    } = request;
     anyhow::bail!(
         "invoking targeted `{}` with invocation metadata requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",

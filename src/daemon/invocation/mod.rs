@@ -81,7 +81,9 @@ pub mod routing;
 pub mod streams;
 
 #[cfg(feature = "axon-pb")]
-pub use crate::daemon::boot::invocation::{start_daemon_invocation_transport, SessionShutdown};
+pub use crate::daemon::boot::invocation::{
+    start_daemon_invocation_transport, InvocationTransportDependencies, SessionShutdown,
+};
 #[cfg(feature = "axon-pb")]
 pub use admission::admission_facade::AdmissionFacade;
 #[cfg(feature = "axon-pb")]
