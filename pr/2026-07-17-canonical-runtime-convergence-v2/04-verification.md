@@ -50,3 +50,42 @@ Known unrelated suite failures observed while broad-checking EasyNet-Axon:
 Result: passed. The V2 convergence gate now verifies Axon's canonical
 `core/proto/axon/v1` proto source against its runtime client-sdk and Rust SDK
 mirrors through Axon's own syncer.
+
+## 2026-07-17 RF-9 Active URA Transport Classification
+
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The V2 convergence gate now rejects semantic URI naming in
+active CLI source/test/include roots while allowing HTTP/gRPC transport
+library `Uri` and `.uri()` APIs.
+
+## 2026-07-17 RF-1 Product Boundary Gates
+
+- `bash tools/scripts/check-sdk-product-neutrality.sh --self-test`
+- `bash tools/scripts/check-sdk-product-neutrality.sh`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The V2 convergence runner now includes EasyNet-Cli runtime SDK
+product-neutrality and Axon canonical proto/Rust product-protocol boundary
+checks. Non-Rust Axon product SDK extraction remains open.
+
+## 2026-07-17 RF-7/RF-8 Daemon Tuple Route Gate
+
+- `bash tools/scripts/check-daemon-invocation-migration.sh`
+- `bash tests/scripts/test_check_daemon_invocation_migration.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+- `cargo test --test script_checks daemon_invocation_migration_script_contract_holds`
+
+Result: passed. The canonical V2 runner now includes the daemon invocation
+migration guard for complete tuple builder usage, JSON control demotion, and
+runtime-record adapter boundaries.

@@ -33,3 +33,18 @@
   `scripts/proto/sync_axon_v1.sh --check` instead of duplicating byte-for-byte
   mirror logic locally. This preserves a single schema ownership point while
   making RF-9 observable from the cross-repo conformance runner.
+- Classify `Uri`/`.uri()` as a transport-library term only for HTTP/gRPC
+  request routing and connector setup. A variable, type, function, test name,
+  schema field, or error message that represents caller, callee, agent,
+  ability, subject, receipt, resource, principal, or invocation identity must
+  use URA naming.
+- Treat RF-1 enforcement as layered. EasyNet-Cli's runtime SDK neutrality gate
+  is now part of the canonical V2 runner. Axon proto/Rust product extraction is
+  also checked from the V2 runner, while non-Rust Axon package extraction
+  remains a separate migration because live Python, Go, Node, Java, and Swift
+  product packages still require caller movement and deletion.
+- Treat `tools/scripts/check-daemon-invocation-migration.sh` as the local
+  RF-7/RF-8 daemon route evidence until the remaining direct response synthesis
+  deletion is complete. It pins JSON control demotion, complete
+  `DaemonInvocation` builder usage, and daemon-local runtime-record adapter
+  boundaries.

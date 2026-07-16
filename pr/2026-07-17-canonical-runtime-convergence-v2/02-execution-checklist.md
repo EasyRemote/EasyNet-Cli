@@ -16,6 +16,8 @@
       fields.
 - [x] Ensure route handlers enter LocalRuntime through descriptor-bound
       requests.
+- [x] Gate daemon tuple/route migration from the canonical V2 convergence
+      runner.
 - [ ] Delete obsolete direct envelope/response synthesis for ability calls.
 
 ## RF-4 Lifecycle Parity
@@ -35,6 +37,11 @@
 ## RF-1 / RF-2 Product and Mission Boundary
 
 - [x] Scan canonical SDK packages for product feature families.
+- [x] Gate EasyNet-Cli runtime SDK product-neutrality from the V2 convergence
+      runner.
+- [x] Gate Axon canonical proto/Rust product-protocol extraction from the V2
+      convergence runner.
+- [ ] Extract non-Rust Axon product SDK packages from canonical SDK surfaces.
 - [ ] Keep Mission/EAL state in daemon-owned packages only.
 - [ ] Gate Axon/core copied schemas against Mission state reintroduction where
       visible in this repository.
@@ -42,7 +49,7 @@
 ## RF-9 URA and Schema Ownership
 
 - [x] Add active-source terminology gate.
-- [ ] Classify transport-library `uri()` usages outside runtime identity.
+- [x] Classify transport-library `uri()` usages outside runtime identity.
 - [x] Add deterministic schema-copy check by delegating to Axon's
       `scripts/proto/sync_axon_v1.sh --check` from the canonical runtime
       convergence gate.

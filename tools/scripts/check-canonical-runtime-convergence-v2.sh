@@ -89,6 +89,99 @@ check_active_source_contract() {
   fi
 }
 
+check_sdk_product_neutrality_contract() {
+  bash "$ROOT/tools/scripts/check-sdk-product-neutrality.sh" >/dev/null
+}
+
+check_daemon_tuple_route_contract() {
+  bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
+}
+
+check_axon_product_protocol_boundary_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for product protocol boundary contract: $AXON_ROOT"
+  fi
+
+  local path
+  for path in \
+    core/proto/axon/v1/voice.proto \
+    core/proto/axon/v1/remote_desktop.proto \
+    core/runtime-rs/client-sdk/proto/axon/v1/voice.proto \
+    core/runtime-rs/client-sdk/proto/axon/v1/remote_desktop.proto \
+    sdk/rust/proto/axon/v1/voice.proto \
+    sdk/rust/proto/axon/v1/remote_desktop.proto \
+    sdk/rust/src/audio.rs \
+    sdk/rust/src/mcp.rs \
+    sdk/rust/src/voice.rs \
+    sdk/rust/src/remote_desktop.rs
+  do
+    [[ ! -e "$AXON_ROOT/$path" ]] \
+      || fail "product-owned file remains in canonical Axon protocol/Rust surface: $path"
+  done
+
+  local rust_lib="$AXON_ROOT/sdk/rust/src/lib.rs"
+  if [[ -f "$rust_lib" ]] \
+    && grep -Eq 'pub (mod|use) (audio|mcp|voice|remote_desktop|presets|tool_adapter)\b' "$rust_lib"; then
+    fail "Rust SDK exports a product-owned module"
+  fi
+
+  local proto_root="$AXON_ROOT/core/proto/axon/v1"
+  if [[ -d "$proto_root" ]] \
+    && grep -R -nE '^[[:space:]]*(message|service|enum)[[:space:]]+(Mcp|MCP|Voice|RemoteDesktop|EasyNet)' "$proto_root"; then
+    fail "canonical Axon proto declares a product protocol type"
+  fi
+
+  local proto_mirrors=(
+    "$AXON_ROOT/core/proto/axon/v1"
+    "$AXON_ROOT/core/runtime-rs/client-sdk/proto/axon/v1"
+    "$AXON_ROOT/sdk/rust/proto/axon/v1"
+  )
+  existing_proto_mirrors=()
+  for path in "${proto_mirrors[@]}"; do
+    [[ -d "$path" ]] && existing_proto_mirrors+=("$path")
+  done
+  if ((${#existing_proto_mirrors[@]} > 0)) \
+    && grep -R -nE '\b(McpToolSpec|McpToolTarget|EasyNetContext|EasyNetHook|ObjectiveWeights)\b' "${existing_proto_mirrors[@]}"; then
+    fail "canonical Axon proto mirrors contain a product protocol type"
+  fi
+
+  local dendrite_paths=(
+    "$AXON_ROOT/core/runtime-rs/dendrite-bridge/src"
+    "$AXON_ROOT/core/runtime-rs/dendrite-bridge/include"
+    "$AXON_ROOT/packaging/sdk-pack/build_sdk_packs.sh"
+  )
+  existing_dendrite_paths=()
+  for path in "${dendrite_paths[@]}"; do
+    [[ -e "$path" ]] && existing_dendrite_paths+=("$path")
+  done
+  if ((${#existing_dendrite_paths[@]} > 0)) \
+    && grep -R -n 'axon_dendrite_voice_' "${existing_dendrite_paths[@]}"; then
+    fail "Dendrite exports a voice product client"
+  fi
+
+  for path in \
+    core/runtime-rs/build.rs \
+    core/runtime-rs/client-sdk/build.rs \
+    sdk/rust/build.rs
+  do
+    if [[ -f "$AXON_ROOT/$path" ]]; then
+      grep -q 'CANONICAL_AXON_PROTO_FILES' "$AXON_ROOT/$path" \
+        || fail "$path does not use the canonical proto allowlist"
+    fi
+  done
+
+  local rfc004="$AXON_ROOT/document/rfcs/004-mcp-binding.md"
+  if [[ -f "$rfc004" ]]; then
+    grep -q 'Withdrawn from Axon canonical protocol' "$rfc004" \
+      || fail "RFC 004 still claims Axon MCP ownership"
+  fi
+  local sdk_parity="$AXON_ROOT/sdk/SDK_PARITY.md"
+  if [[ -f "$sdk_parity" ]]; then
+    grep -q 'Product-Owned Surfaces' "$sdk_parity" \
+      || fail "SDK parity does not declare the product ownership boundary"
+  fi
+}
+
 check_ura_vocabulary_contract() {
   # This gate intentionally delegates SDK surface scanning to the canonical
   # SDK naming script, then adds active SPEC coverage for the V2 document.
@@ -97,6 +190,90 @@ check_ura_vocabulary_contract() {
     "$ROOT/docs/spec/canonical-runtime-convergence-v2.md"; then
     fail "canonical-runtime-convergence-v2 SPEC uses retired address terminology"
   fi
+}
+
+check_active_ura_transport_classification_contract() {
+  "$PYTHON_BIN" - "$@" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+roots = [Path(arg) for arg in sys.argv[1:]]
+if not roots:
+    raise SystemExit("active_ura_transport_classification:missing_roots")
+
+retired = re.compile(
+    r"(^|[^A-Za-z0-9])(URI|Uri|uri)([A-Z0-9]|[^A-Za-z0-9]|$)"
+    r"|[a-z0-9](URI|Uri)([A-Z0-9]|[^A-Za-z0-9]|$)"
+)
+transport = re.compile(
+    r"\b(?:hyper::Uri|http::Uri|tonic::transport::Uri|url::Url)\b"
+    r"|use\s+(?:hyper|tonic::transport)::\{[^}]*\bUri\b[^}]*\}"
+    r"|\bconnect_with_connector\b"
+    r"|\btower::service_fn\(move \|_:\s*Uri\|"
+    r"|\breq\.uri\(\)"
+    r"|\.uri\("
+)
+transport_target = re.compile(r"\btarget_uri\b|\brequest_uri\b")
+semantic = re.compile(
+    r"\b(?:ability|agent|callee|caller|device|invocation|owner|principal|receipt|resource|subject)"
+    r"[A-Za-z0-9_]*(?:uri|url|address)\b"
+    r"|\b(?:uri|url|address)[A-Za-z0-9_]*(?:ability|agent|callee|caller|device|invocation|owner|principal|receipt|resource|subject)\b",
+    re.IGNORECASE,
+)
+ura = re.compile(r"ura", re.IGNORECASE)
+skip_parts = {
+    ".git",
+    "target",
+    "node_modules",
+    "__pycache__",
+}
+
+def iter_files(root: Path):
+    if root.is_file():
+        yield root
+        return
+    if not root.exists():
+        return
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        parts = set(path.parts)
+        if parts & skip_parts:
+            continue
+        if "/tests/scripts/" in path.as_posix():
+            continue
+        if path.suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".wasm", ".lock"}:
+            continue
+        yield path
+
+violations = []
+for root in roots:
+    for path in iter_files(root):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if not retired.search(line):
+                continue
+            if transport.search(line):
+                continue
+            if transport_target.search(line) and "easynet:///" not in line:
+                continue
+            match = semantic.search(line)
+            if match and ura.search(match.group(0)):
+                continue
+            violations.append(f"{path}:{line_number}:{line.strip()}")
+
+if violations:
+    print(
+        "active source still uses URI terminology outside transport-library APIs:",
+        file=sys.stderr,
+    )
+    print("\n".join(violations), file=sys.stderr)
+    raise SystemExit(1)
+PY
 }
 
 check_schema_source_derivation_contract() {
@@ -181,6 +358,18 @@ PY
   mkdir -p "$tmp/axon/sdk/python/easynet_axon/invocation"
   mkdir -p "$tmp/axon/sdk/swift/Sources/EasyNetAxon/Invocation"
   mkdir -p "$tmp/axon/sdk/go/easynet/invocation"
+  mkdir -p "$tmp/axon/core/proto/axon/v1"
+  mkdir -p "$tmp/axon/core/runtime-rs/client-sdk/proto/axon/v1"
+  mkdir -p "$tmp/axon/sdk/rust/proto/axon/v1"
+  mkdir -p "$tmp/axon/sdk/rust/src"
+  mkdir -p "$tmp/axon/core/runtime-rs" "$tmp/axon/core/runtime-rs/client-sdk"
+  printf 'pub mod invocation;\n' > "$tmp/axon/sdk/rust/src/lib.rs"
+  printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/build.rs"
+  printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/client-sdk/build.rs"
+  printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/sdk/rust/build.rs"
+  mkdir -p "$tmp/axon/document/rfcs" "$tmp/axon/sdk"
+  printf 'Withdrawn from Axon canonical protocol\n' > "$tmp/axon/document/rfcs/004-mcp-binding.md"
+  printf '## Product-Owned Surfaces\n' > "$tmp/axon/sdk/SDK_PARITY.md"
   touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
   touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
   touch "$tmp/axon/sdk/python/easynet_axon/invocation/axiom.py"
@@ -210,11 +399,40 @@ PY
   if ( AXON_ROOT="$tmp/axon-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
     fail "self-test expected schema-source derivation gate to fail"
   fi
+  mkdir -p "$tmp/axon-product/sdk/rust/src"
+  cp -R "$tmp/axon/core" "$tmp/axon-product/core"
+  cp -R "$tmp/axon/document" "$tmp/axon-product/document"
+  cp -R "$tmp/axon/sdk/SDK_PARITY.md" "$tmp/axon-product/sdk/SDK_PARITY.md"
+  cp "$tmp/axon/sdk/rust/build.rs" "$tmp/axon-product/sdk/rust/build.rs"
+  printf 'pub mod audio;\n' > "$tmp/axon-product/sdk/rust/src/lib.rs"
+  touch "$tmp/axon-product/sdk/rust/src/audio.rs"
+  if ( AXON_ROOT="$tmp/axon-product"; check_axon_product_protocol_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon product protocol boundary gate to fail"
+  fi
+  printf '%s\n' \
+    'use tonic::transport::{Channel, Endpoint, Uri};' \
+    'let _ = endpoint.connect_with_connector(tower::service_fn(move |_: Uri| async {}));' \
+    'let path = req.uri().path().to_string();' \
+    'let request = hyper::Request::builder().uri("/v1/models");' \
+    'let target_uri: hyper::Uri = "http://127.0.0.1/mcp".parse().unwrap();' \
+    > "$tmp/transport-uri.rs"
+  printf '%s\n' \
+    'const caller_uri: &str = "easynet:///r/example/agent/alice";' \
+    'fn rejects_empty_callee_URI() {}' \
+    > "$tmp/semantic-uri.rs"
+  check_active_ura_transport_classification_contract "$tmp/transport-uri.rs"
+  if check_active_ura_transport_classification_contract "$tmp/semantic-uri.rs" >/dev/null 2>&1; then
+    fail "self-test expected semantic URI terminology to fail"
+  fi
   AXON_ROOT="$tmp/axon"
   check_manifest_contract
   check_active_source_contract
+  check_sdk_product_neutrality_contract
+  check_daemon_tuple_route_contract
   check_ura_vocabulary_contract
+  check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   check_schema_source_derivation_contract
+  check_axon_product_protocol_boundary_contract
   check_receipt_proof_fact_contract
   echo "canonical-runtime-convergence-v2 self-test ok"
   exit 0
@@ -222,7 +440,11 @@ fi
 
 check_manifest_contract
 check_active_source_contract
+check_sdk_product_neutrality_contract
+check_daemon_tuple_route_contract
 check_ura_vocabulary_contract
+check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
+check_axon_product_protocol_boundary_contract
 check_receipt_proof_fact_contract
 echo "canonical-runtime-convergence-v2: OK"
