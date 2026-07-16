@@ -41,7 +41,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "legacy scan language should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/fn managed_skill_dir_for_agent_type/fn retired_managed_skill_dir_for_agent_type/' "$SB/src/daemon/ability/builtins/resources/skills/list.rs"
+perl -0pi -e 's/fn managed_skill_dir_for_layout/fn retired_managed_skill_dir_for_layout/' "$SB/src/daemon/ability/builtins/resources/skills/list.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

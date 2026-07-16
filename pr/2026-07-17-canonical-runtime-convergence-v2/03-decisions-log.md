@@ -83,3 +83,13 @@
   SDK, with generic provider package descriptor construction and neutral
   `ToolSpec` retained inside `AbilityLifecycle.swift`; the V2 runner now
   rejects tracked Swift product package files.
+- Treat `AgentSkillLayout` as the current source of truth for managed skill
+  directory selection. The skill-list boundary gate must validate that layout
+  selector directly rather than referring back to the retired `AgentType`
+  selector name.
+- Treat committed adapter reports as coverage manifests only. SDK parity live
+  validation consumes generated `language.json` result files from
+  `check-sdk-conformance-reports.sh`; missing live results must fail closed.
+- Treat Go invocation result fixtures that still emit `receipt` as RF-6
+  regressions. Normal unary result fixtures must use `terminal_receipt`;
+  legacy `receipt` remains only in explicit rejection tests.

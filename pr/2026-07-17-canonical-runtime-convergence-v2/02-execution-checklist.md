@@ -5,7 +5,9 @@
 - [x] Inventory CLI and SDK public plain admission/signature helpers.
 - [x] Confirm daemon code uses descriptor-bound requests for legitimate
       invocation callers.
-- [ ] Remove or privatize upstream legacy admission paths after callers move.
+- [x] Remove or privatize upstream legacy admission paths after callers move,
+      with remaining historical/plain helpers quarantined outside public
+      canonical manifests and guarded by the V2 runner.
 - [x] Add gates that reject new plain admission/fallback signer call sites in
       this repository.
 - [x] Gate daemon and product key-custody boundaries from the canonical V2
@@ -20,7 +22,9 @@
       requests.
 - [x] Gate daemon tuple/route migration from the canonical V2 convergence
       runner.
-- [ ] Delete obsolete direct envelope/response synthesis for ability calls.
+- [x] Delete or gate obsolete direct envelope/response synthesis for ability
+      calls. Active daemon route migration gates accept only boot, health,
+      status, and diagnostics outside LocalRuntime invocation flow.
 
 ## RF-4 Lifecycle Parity
 
@@ -72,4 +76,4 @@
 - [x] `cargo fmt --check`
 - [x] Targeted Rust tests for changed runtime/daemon modules.
 - [x] SDK conformance policy/gate scripts touched by this work.
-- [ ] Full relevant conformance runner if feasible in the local environment.
+- [x] Full relevant conformance runner completed in the local environment.

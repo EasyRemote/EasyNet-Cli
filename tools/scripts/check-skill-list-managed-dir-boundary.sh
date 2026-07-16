@@ -16,15 +16,15 @@ SKILL_RS="src/daemon/ability/builtins/resources/skills/list.rs"
 
 [[ -f "$SKILL_RS" ]] || fail "missing $SKILL_RS"
 
-grep -q 'fn managed_skill_dir_for_agent_type' "$SKILL_RS" \
+grep -q 'fn managed_skill_dir_for_layout' "$SKILL_RS" \
     || fail "skill list must centralize managed directory selection"
 
 managed_dir_selector="$(
-    sed -n '/^fn managed_skill_dir_for_agent_type/,/^struct SkillListScope/p' "$SKILL_RS"
+    sed -n '/^fn managed_skill_dir_for_layout/,/^struct SkillListScope/p' "$SKILL_RS"
 )"
 
 printf '%s\n' "$managed_dir_selector" | awk '
-    /AgentType::ClaudeCode/ { in_arm = 1; seen = 0 }
+    /AgentSkillLayout::ClaudeCode/ { in_arm = 1; seen = 0 }
     in_arm {
         if ($0 ~ /root\.join\("\.claude"\)\.join\("skills"\)/) {
             found = 1
