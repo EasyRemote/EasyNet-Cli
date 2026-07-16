@@ -10,6 +10,7 @@ type memoryStreamTransport struct {
 	events       []string
 	closed       bool
 	cancelReason string
+	cancelReply  string
 }
 
 func (m *memoryStreamTransport) Recv(ctx context.Context) ([]byte, error) {
@@ -23,7 +24,10 @@ func (m *memoryStreamTransport) Recv(ctx context.Context) ([]byte, error) {
 
 func (m *memoryStreamTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
 	m.cancelReason = reason
-	return []byte(`{"stream_id":"stream-1","cancelled":true,"state":"Cancelled","terminal":true}`), nil
+	if m.cancelReply != "" {
+		return []byte(m.cancelReply), nil
+	}
+	return []byte(`{"stream_id":"stream-1","cancelled":false,"state":"CancelRequested","terminal":false}`), nil
 }
 
 func (m *memoryStreamTransport) Close(ctx context.Context) error {
@@ -168,7 +172,7 @@ func TestStreamTransportTerminalFailsHandleWithoutRuntimeTerminal(t *testing.T) 
 	}
 }
 
-func TestStreamHandleCancelsNonTerminalStream(t *testing.T) {
+func TestStreamHandleCancelIsNonTerminalRequest(t *testing.T) {
 	transport := &memoryStreamTransport{}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
 	if err != nil {
@@ -179,11 +183,28 @@ func TestStreamHandleCancelsNonTerminalStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if !cancel.Cancelled() || !cancel.Terminal() || stream.State() != StreamCancelled {
+	if cancel.Cancelled() || cancel.Terminal() || cancel.State() != StreamCancelRequested || stream.State() != StreamCancelRequested {
 		t.Fatalf("unexpected cancel: %#v state=%s", cancel, stream.State())
 	}
 	if transport.cancelReason != "client stop" {
 		t.Fatalf("reason = %q", transport.cancelReason)
+	}
+}
+
+func TestStreamHandleRejectsTerminalCancelOutcome(t *testing.T) {
+	transport := &memoryStreamTransport{
+		cancelReply: `{"stream_id":"stream-1","cancelled":true,"state":"Cancelled","terminal":true}`,
+	}
+	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+
+	if _, err := stream.Cancel(context.Background(), "client stop"); err == nil {
+		t.Fatalf("terminal cancel outcome was accepted")
+	}
+	if stream.State() != StreamFailed {
+		t.Fatalf("terminal cancel outcome must fail the stream facade, got %s", stream.State())
 	}
 }
 

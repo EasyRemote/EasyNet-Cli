@@ -2029,8 +2029,30 @@ async fn invoke_dispatches_selected_route_to_axon_runtime_when_wired() {
 
     let svc = make_service_with_test_runtime(Arc::clone(&rt));
     publish_test_route(&svc, TEST_DAEMON_URA, ability);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
+    let mut request = invoke_request(ability, r#"{"hello":"world"}"#).into_inner();
+    let descriptor_ref = catalog_test_descriptor_ref(
+        svc.directory.local_ability_catalog.as_ref().unwrap(),
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    );
+    bind_invoke_request_to_descriptor_ref(
+        &mut request,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
+        descriptor_ref,
+        &test_device_signing_key(),
+    );
     let resp = svc
-        .invoke(invoke_request(ability, r#"{"hello":"world"}"#))
+        .invoke(Request::new(request))
         .await
         .expect("selected-route dispatch succeeds");
     let body: serde_json::Value = parse_response_body(resp);

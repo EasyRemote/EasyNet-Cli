@@ -22,6 +22,14 @@ terminality.
    `terminal=False`.
 7. The Rust C ABI stream/bidi cancel path must not synthesize
    `InvocationState::Cancelled` or terminal JSON.
+8. Go SDK direct stream/bidi cancel facades accept only `CancelRequested` with
+   `terminal=false` from their transport `Cancel` method.
+9. Python SDK direct stream/bidi cancel facades accept only `CancelRequested`
+   with `terminal=False` from their transport `cancel` method.
+10. Go/Python direct runtime transports project local stream/bidi cancel as
+    `CancelRequested` with `terminal=false`.
+11. Terminal stream/bidi states are still valid as runtime terminal frame
+    observations, but not as the immediate outcome of provider-local cancel.
 
 ## Effect
 

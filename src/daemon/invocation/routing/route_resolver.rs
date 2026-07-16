@@ -127,6 +127,41 @@ pub(crate) struct SelectedInvokeRoute {
 }
 
 impl SelectedInvokeRoute {
+    #[cfg(test)]
+    pub(crate) fn test_local_runtime(callee_ura: &str, ability: &str, dispatch_name: &str) -> Self {
+        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, ability)
+            .expect("test ability URA must be canonical");
+        let route_ura = format!("route-ref::{ability_ura}");
+        let now_unix_ms = 0;
+        Self {
+            query_name: ability.to_string(),
+            owner_ura: callee_ura.to_string(),
+            callee_ura: callee_ura.to_string(),
+            execution_host_ura: callee_ura.to_string(),
+            host_node_id: None,
+            ability_ura: ability_ura.clone(),
+            route_ura: route_ura.clone(),
+            dispatch_name: dispatch_name.to_string(),
+            release_profile: axon_pb::ResolverReleaseProfile::AuthoritativeLocal,
+            kind: SelectedRouteKind::LocalDevice,
+            ability_record: device_local_ability_record(
+                &ability_ura,
+                callee_ura,
+                ability,
+                now_unix_ms,
+            ),
+            route_record: route_record(
+                &route_ura,
+                &ability_ura,
+                dispatch_name,
+                callee_ura,
+                None,
+                now_unix_ms,
+            ),
+            owner_record: id_record(callee_ura, now_unix_ms),
+        }
+    }
+
     #[must_use]
     pub(crate) fn is_authoritative_local_or_better(&self) -> bool {
         matches!(

@@ -329,6 +329,13 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     .unwrap();
     let svc = make_service_with_test_runtime(Arc::clone(&rt));
     publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ABILITY,
+        crate::daemon::ability::CallMode::Stream,
+    )
+    .await;
 
     let function_name = ABILITY.to_string();
     let arguments = br#"{"session_ura":"easynet:///r/local/resource/daemon.browser/s1"}"#.to_vec();
@@ -442,9 +449,21 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
 
     let svc = make_service_with_test_runtime(Arc::clone(&rt));
     publish_test_stream_route(&svc, TEST_DAEMON_URA, ability);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Stream,
+    )
+    .await;
 
     let arguments = br#"{"descriptor":"stream-function-name"}"#.to_vec();
-    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ability);
+    let descriptor_ref = catalog_test_descriptor_ref(
+        svc.directory.local_ability_catalog.as_ref().unwrap(),
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Stream,
+    );
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
@@ -588,6 +607,13 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     .unwrap();
     let svc = make_service_with_test_runtime(Arc::clone(&rt));
     publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ABILITY,
+        crate::daemon::ability::CallMode::Stream,
+    )
+    .await;
 
     let function_name = ABILITY.to_string();
     let arguments = br#"{}"#.to_vec();

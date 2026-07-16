@@ -683,9 +683,14 @@ impl BidiDispatcher {
                 selected_route.dispatch_name
             )));
         };
-        let bound_ability =
-            RuntimeBoundAbility::from_selected_route("InvokeBidi", runtime, &selected_route)
-                .await?;
+        let bound_ability = RuntimeBoundAbility::from_selected_route(
+            "InvokeBidi",
+            runtime,
+            self.directory.local_ability_catalog.as_deref(),
+            &selected_route,
+            call_mode,
+        )
+        .await?;
         let dispatch_descriptor_ref = bound_ability
             .descriptor_ref_for_mode(
                 "InvokeBidi",

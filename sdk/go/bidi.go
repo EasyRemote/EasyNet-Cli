@@ -360,6 +360,10 @@ func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, e
 		s.state = BidiFailed
 		return BidiOutcome{}, err
 	}
+	if outcome.state != BidiCancelRequested || outcome.terminal {
+		s.state = BidiFailed
+		return BidiOutcome{}, invalidRuntimePayload("bidi cancel transport must return CancelRequested with terminal=false", nil)
+	}
 	s.state = outcome.state
 	return outcome, nil
 }

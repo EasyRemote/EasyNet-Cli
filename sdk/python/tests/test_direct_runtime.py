@@ -770,6 +770,31 @@ class DirectRuntimeTests(unittest.TestCase):
         receipt = cast(dict[str, object], terminal["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-stream")
 
+    def test_direct_runtime_stream_cancel_projects_non_terminal_request(
+        self,
+    ) -> None:
+        servicer = RecordingInvocationServicer()
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                stream_transport, _ = transport.open_stream(
+                    complete_draft().to_json().encode("utf-8")
+                )
+                raw_cancel = stream_transport.cancel("client stop")
+            finally:
+                transport.close()
+
+        cancel = json.loads(raw_cancel.decode("utf-8"))
+        self.assertEqual(cancel["state"], "CancelRequested")
+        self.assertFalse(cancel["terminal"])
+        self.assertFalse(cancel["cancelled"])
+        self.assertEqual(cancel["reason"], "client stop")
+
     def test_direct_runtime_bidi_provider_json_uses_terminal_receipt(self) -> None:
         servicer = RecordingInvocationServicer()
         streams_json = json.dumps(
@@ -804,6 +829,35 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertNotIn("receipt", payload)
         receipt = cast(dict[str, object], terminal["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-bidi")
+
+    def test_direct_runtime_bidi_cancel_projects_non_terminal_request(
+        self,
+    ) -> None:
+        servicer = RecordingInvocationServicer()
+        streams_json = json.dumps(
+            [{"stream_id": 1, "content_type": "application/json"}],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=1,
+                identity=_identity(),
+            )
+            try:
+                bidi_transport, _ = transport.open_bidi(
+                    complete_draft().to_json().encode("utf-8"),
+                    streams_json,
+                )
+                raw_cancel = bidi_transport.cancel("client stop")
+            finally:
+                transport.close()
+
+        cancel = json.loads(raw_cancel.decode("utf-8"))
+        self.assertEqual(cancel["state"], "CancelRequested")
+        self.assertFalse(cancel["terminal"])
+        self.assertEqual(cancel["reason"], "client stop")
 
     def test_direct_transport_rejects_non_contiguous_bidi_up_sequence(self) -> None:
         servicer = RecordingInvocationServicer()

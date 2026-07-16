@@ -242,6 +242,10 @@ func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel,
 		s.state = StreamFailed
 		return StreamCancel{}, err
 	}
+	if cancel.state != StreamCancelRequested || cancel.terminal || cancel.cancelled {
+		s.state = StreamFailed
+		return StreamCancel{}, invalidRuntimePayload("stream cancel transport must return CancelRequested with terminal=false", nil)
+	}
 	s.state = cancel.state
 	return cancel, nil
 }

@@ -178,7 +178,7 @@ def line_number(text: str, offset: int) -> int:
 
 def rust_method_body(text: str, name: str) -> tuple[int, str] | None:
     match = re.search(
-        rf"(?:pub\s+)?fn\s+{re.escape(name)}\s*\([^)]*\)\s*(?:->\s*[^\{{]+)?\{{",
+        rf"(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+{re.escape(name)}\s*\([^)]*\)\s*(?:->\s*[^\{{]+)?\{{",
         text,
     )
     if not match:
@@ -1466,6 +1466,18 @@ ffi_v5_spec = cli_root / "docs/spec/ffi-abi-v5.md"
 ffi_invocation = cli_root / "src/ffi/invocation/mod.rs"
 go_cabi_runtime = cli_root / "sdk/go/cabi_runtime.go"
 python_cabi_runtime = cli_root / "sdk/python/easynet_sdk/_cabi.py"
+go_direct_runtime = cli_root / "sdk/go/direct_runtime.go"
+python_direct_runtime = cli_root / "sdk/python/easynet_sdk/direct_runtime.py"
+go_stream_facade = cli_root / "sdk/go/stream.go"
+go_bidi_facade = cli_root / "sdk/go/bidi.go"
+python_stream_facade = cli_root / "sdk/python/easynet_sdk/stream.py"
+python_bidi_facade = cli_root / "sdk/python/easynet_sdk/bidi.py"
+go_stream_tests = cli_root / "sdk/go/stream_test.go"
+go_bidi_tests = cli_root / "sdk/go/bidi_test.go"
+go_direct_runtime_tests = cli_root / "sdk/go/direct_runtime_test.go"
+python_stream_tests = cli_root / "sdk/python/tests/test_stream.py"
+python_bidi_tests = cli_root / "sdk/python/tests/test_bidi.py"
+python_direct_runtime_tests = cli_root / "sdk/python/tests/test_direct_runtime.py"
 
 if ffi_v5_spec.exists():
     text = ffi_v5_spec.read_text(encoding="utf-8", errors="replace")
@@ -1590,6 +1602,144 @@ if python_cabi_runtime.exists():
                 1,
                 detail,
             )
+
+if go_direct_runtime.exists():
+    text = source(go_direct_runtime)
+    go_direct_cancel_contracts = (
+        (
+            r"func\s+\(t\s+\*directRuntimeStreamTransport\)\s+Cancel\b.*?CancelRequested.*?terminal\"\s*:\s*false",
+            "Go direct runtime stream cancel must project CancelRequested with terminal=false",
+        ),
+        (
+            r"func\s+\(t\s+\*directRuntimeBidiTransport\)\s+Cancel\b.*?CancelRequested.*?terminal\"\s*:\s*false",
+            "Go direct runtime bidi cancel must project CancelRequested with terminal=false",
+        ),
+    )
+    for pattern, detail in go_direct_cancel_contracts:
+        if not re.search(pattern, text, flags=re.S):
+            add(
+                "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+                go_direct_runtime,
+                1,
+                detail,
+            )
+
+if python_direct_runtime.exists():
+    text = source(python_direct_runtime)
+    python_direct_cancel_contracts = (
+        (
+            r"class\s+DirectRuntimeStreamTransport\b.*?def\s+cancel\b.*?\"state\"\s*:\s*\"CancelRequested\".*?\"terminal\"\s*:\s*False",
+            "Python direct runtime stream cancel must project CancelRequested with terminal=False",
+        ),
+        (
+            r"class\s+DirectRuntimeBidiTransport\b.*?def\s+cancel\b.*?\"state\"\s*:\s*\"CancelRequested\".*?\"terminal\"\s*:\s*False",
+            "Python direct runtime bidi cancel must project CancelRequested with terminal=False",
+        ),
+    )
+    for pattern, detail in python_direct_cancel_contracts:
+        if not re.search(pattern, text, flags=re.S):
+            add(
+                "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+                python_direct_runtime,
+                1,
+                detail,
+            )
+
+direct_facade_contracts = (
+    (
+        go_stream_facade,
+        r"func\s+\(s\s+\*StreamHandle\)\s+Cancel\b.*?cancel\.state\s*!=\s*StreamCancelRequested.*?cancel\.terminal.*?cancel\.cancelled.*?stream cancel transport must return CancelRequested with terminal=false",
+        "Go stream facade must reject terminal or cancelled provider-local cancel outcomes",
+    ),
+    (
+        go_bidi_facade,
+        r"func\s+\(s\s+\*BidiSession\)\s+Cancel\b.*?outcome\.state\s*!=\s*BidiCancelRequested.*?outcome\.terminal.*?bidi cancel transport must return CancelRequested with terminal=false",
+        "Go bidi facade must reject terminal provider-local cancel outcomes",
+    ),
+    (
+        python_stream_facade,
+        r"def\s+cancel\b.*?outcome\.state\s*!=\s*StreamState\.CANCEL_REQUESTED.*?outcome\.terminal.*?outcome\.cancelled.*?stream cancel transport must return CancelRequested with terminal=false",
+        "Python stream facade must reject terminal or cancelled provider-local cancel outcomes",
+    ),
+    (
+        python_bidi_facade,
+        r"def\s+cancel\b.*?outcome\.state\s*!=\s*BidiState\.CANCEL_REQUESTED.*?outcome\.terminal.*?bidi cancel transport must return CancelRequested with terminal=false",
+        "Python bidi facade must reject terminal provider-local cancel outcomes",
+    ),
+)
+for path, pattern, detail in direct_facade_contracts:
+    if not path.exists():
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            path,
+            1,
+            detail,
+        )
+        continue
+    text = source(path)
+    if not re.search(pattern, text, flags=re.S):
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            path,
+            1,
+            detail,
+        )
+
+sdk_cancel_tests = (
+    (
+        go_stream_tests,
+        "TestStreamHandleCancelIsNonTerminalRequest",
+        "TestStreamHandleRejectsTerminalCancelOutcome",
+        "Go stream facade tests must prove non-terminal request and terminal rejection",
+    ),
+    (
+        go_bidi_tests,
+        "TestBidiCancelIsNonTerminalRequest",
+        "TestBidiCancelRejectsTerminalOutcome",
+        "Go bidi facade tests must prove non-terminal request and terminal rejection",
+    ),
+    (
+        python_stream_tests,
+        "test_stream_cancel_is_non_terminal_request",
+        "test_stream_cancel_rejects_terminal_outcome",
+        "Python stream facade tests must prove non-terminal request and terminal rejection",
+    ),
+    (
+        python_bidi_tests,
+        "test_cancel_is_non_terminal_request",
+        "test_cancel_rejects_terminal_outcome",
+        "Python bidi facade tests must prove non-terminal request and terminal rejection",
+    ),
+    (
+        go_direct_runtime_tests,
+        "TestDirectRuntimeStreamCancelProjectsNonTerminalRequest",
+        "TestDirectRuntimeBidiCancelProjectsNonTerminalRequest",
+        "Go direct runtime tests must prove stream/bidi cancel request projection",
+    ),
+    (
+        python_direct_runtime_tests,
+        "test_direct_runtime_stream_cancel_projects_non_terminal_request",
+        "test_direct_runtime_bidi_cancel_projects_non_terminal_request",
+        "Python direct runtime tests must prove stream/bidi cancel request projection",
+    ),
+)
+for path, first_test, second_test, detail in sdk_cancel_tests:
+    if not path.exists():
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            path,
+            1,
+            detail,
+        )
+        continue
+    text = source(path)
+    if first_test not in text or second_test not in text:
+        add(
+            "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK",
+            path,
+            1,
+            detail,
+        )
 
 
 # Rule 21: unary cancellation is an independently signed lifecycle-control
@@ -2333,6 +2483,148 @@ if unary_dispatcher.exists():
             unary_dispatcher,
             1,
             "UnaryDispatcher must pass AdmissionFacade transport boundary into IdentityWriteGate",
+        )
+
+
+# Rule 29: resolver-selected dispatch binds descriptor refs from the selected
+# route's live control-plane publication, not from LocalRuntime options alone.
+# LocalRuntime remains the execution-installation check; descriptor
+# version/hash/action facts must come from the catalog row that made the route
+# callable.
+descriptor_binding = cli_root / "src/daemon/invocation/dispatch/descriptor_binding.rs"
+stream_dispatcher = cli_root / "src/daemon/invocation/streams/stream_dispatcher.rs"
+bidi_dispatcher = cli_root / "src/daemon/invocation/bidi/bidi_dispatcher.rs"
+if descriptor_binding.exists():
+    raw_text = descriptor_binding.read_text(encoding="utf-8", errors="replace")
+    text = source(descriptor_binding)
+    from_selected = rust_method_body(text, "from_selected_route")
+    if from_selected is None:
+        add(
+            "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+            descriptor_binding,
+            1,
+            "RuntimeBoundAbility must expose from_selected_route for resolver-selected dispatch",
+        )
+    else:
+        offset, body = from_selected
+        for token, detail in (
+            (
+                "selected_route_descriptor_ref_from_catalog",
+                "selected route binding must derive descriptor ref from catalog proof",
+            ),
+            (
+                "selected_route_descriptor_ref: Some",
+                "selected route binding must store the catalog-derived descriptor ref",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+                    descriptor_binding,
+                    line_number(text, offset),
+                    detail,
+                )
+    for token, detail in (
+        (
+            "catalog: Option<&AxonAbilityCatalog>",
+            "selected route binding must receive the live ability catalog",
+        ),
+        (
+            "mode: CallMode",
+            "selected route binding must receive the concrete dispatch call mode",
+        ),
+    ):
+        if token not in text:
+            add(
+                "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+                descriptor_binding,
+                1,
+                detail,
+            )
+    catalog_helper = rust_method_body(text, "selected_route_descriptor_ref_from_catalog")
+    if catalog_helper is None:
+        add(
+            "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+            descriptor_binding,
+            1,
+            "selected route descriptor proof must have one catalog helper",
+        )
+    else:
+        offset, body = catalog_helper
+        for token, detail in (
+            (
+                "control_plane_record_for_authority_mode",
+                "selected route proof must read the live authority+mode control-plane row",
+            ),
+            (
+                "options.proof_for_mode(mode)",
+                "selected route proof must compare LocalRuntime installation proof for the same mode",
+            ),
+            (
+                "proof.descriptor_version != descriptor.version.as_str()",
+                "selected route proof must compare descriptor version",
+            ),
+            (
+                "proof.descriptor_hash != expected_descriptor_hash",
+                "selected route proof must compare descriptor hash",
+            ),
+            (
+                "proof.schema_hash != expected_schema_hash",
+                "selected route proof must compare schema hash",
+            ),
+            (
+                "proof.impl_hash != expected_impl_hash",
+                "selected route proof must compare implementation hash",
+            ),
+            (
+                "proof.admission_action != descriptor.admission_action().as_str()",
+                "selected route proof must compare admission action",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+                    descriptor_binding,
+                    line_number(text, offset),
+                    detail,
+                )
+    descriptor_ref_for_mode = rust_method_body(text, "descriptor_ref_for_mode")
+    if descriptor_ref_for_mode is None or "selected_route_descriptor_ref" not in descriptor_ref_for_mode[1]:
+        add(
+            "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+            descriptor_binding,
+            1,
+            "descriptor_ref_for_mode must return selected-route catalog proof before runtime fallback",
+        )
+    for token in (
+        "selected_route_descriptor_ref_comes_from_live_catalog_for_all_modes",
+        "selected_route_rejects_missing_catalog_descriptor_proof",
+        "selected_route_rejects_runtime_proof_that_drifted_from_catalog",
+    ):
+        if token not in raw_text:
+            add(
+                "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+                descriptor_binding,
+                1,
+                f"missing selected-route descriptor proof test: {token}",
+            )
+
+for path, surface in (
+    (unary_dispatcher, "unary"),
+    (stream_dispatcher, "stream"),
+    (bidi_dispatcher, "bidi"),
+):
+    if not path.exists():
+        continue
+    text = source(path)
+    if "RuntimeBoundAbility::from_selected_route" not in text:
+        continue
+    if "local_ability_catalog.as_deref()" not in text or "call_mode" not in text:
+        add(
+            "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK",
+            path,
+            1,
+            f"{surface} selected-route dispatch must pass live catalog and call mode into RuntimeBoundAbility",
         )
 
 

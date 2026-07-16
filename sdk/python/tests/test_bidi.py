@@ -18,6 +18,10 @@ class MemoryBidiTransport:
         self.sent_frames: list[dict[str, object]] = []
         self.closed = False
         self.cancel_reason = ""
+        self.cancel_reply = (
+            b'{"session_id":"bidi-1","state":"CancelRequested",'
+            b'"terminal":false,"reason":"client stop"}'
+        )
 
     def send(self, frame_json: bytes) -> bytes:
         self.sent_frames.append(json.loads(frame_json.decode("utf-8")))
@@ -36,7 +40,7 @@ class MemoryBidiTransport:
 
     def cancel(self, reason: str) -> bytes:
         self.cancel_reason = reason
-        return b'{"session_id":"bidi-1","state":"Cancelled","terminal":true,"reason":"client stop"}'
+        return self.cancel_reply
 
 
 def new_session(transport: MemoryBidiTransport) -> BidiSession:
@@ -187,17 +191,29 @@ class BidiTests(unittest.TestCase):
         self.assertFalse(hasattr(frame, "receipt"))
         self.assertIsNone(terminal.terminal_receipt)
 
-    def test_cancel_is_terminal(self) -> None:
+    def test_cancel_is_non_terminal_request(self) -> None:
         transport = MemoryBidiTransport()
         session = new_session(transport)
 
         outcome = session.cancel("client stop")
 
-        self.assertEqual(outcome.state, BidiState.CANCELLED)
-        self.assertTrue(outcome.terminal)
+        self.assertEqual(outcome.state, BidiState.CANCEL_REQUESTED)
+        self.assertFalse(outcome.terminal)
         self.assertEqual(transport.cancel_reason, "client stop")
         with self.assertRaises(SDKError):
             session.close_send()
+
+    def test_cancel_rejects_terminal_outcome(self) -> None:
+        transport = MemoryBidiTransport()
+        transport.cancel_reply = (
+            b'{"session_id":"bidi-1","state":"Cancelled",'
+            b'"terminal":true,"reason":"client stop"}'
+        )
+        session = new_session(transport)
+
+        with self.assertRaises(SDKError):
+            session.cancel("client stop")
+        self.assertEqual(session.state, BidiState.FAILED)
 
     def test_receive_buffer_bound(self) -> None:
         transport = MemoryBidiTransport(

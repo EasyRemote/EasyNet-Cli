@@ -16,6 +16,10 @@ class MemoryStreamTransport:
         self.events = list(events or [])
         self.closed = False
         self.cancel_reason = ""
+        self.cancel_reply = (
+            b'{"stream_id":"stream-1","cancelled":false,'
+            b'"state":"CancelRequested","terminal":false}'
+        )
 
     def recv(self, timeout: float | None = None) -> bytes:
         if not self.events:
@@ -24,7 +28,7 @@ class MemoryStreamTransport:
 
     def cancel(self, reason: str) -> bytes:
         self.cancel_reason = reason
-        return b'{"stream_id":"stream-1","cancelled":true,"state":"Cancelled","terminal":true}'
+        return self.cancel_reply
 
     def close(self) -> None:
         self.closed = True
@@ -175,7 +179,7 @@ class StreamTests(unittest.TestCase):
         with self.assertRaises(SDKError):
             stream.terminal_event()
 
-    def test_stream_cancels_non_terminal_stream(self) -> None:
+    def test_stream_cancel_is_non_terminal_request(self) -> None:
         transport = MemoryStreamTransport()
         stream = StreamHandle.from_json(
             transport,
@@ -184,10 +188,26 @@ class StreamTests(unittest.TestCase):
 
         outcome = stream.cancel("client stop")
 
-        self.assertTrue(outcome.cancelled)
-        self.assertTrue(outcome.terminal)
-        self.assertEqual(stream.state, StreamState.CANCELLED)
+        self.assertFalse(outcome.cancelled)
+        self.assertFalse(outcome.terminal)
+        self.assertEqual(outcome.state, StreamState.CANCEL_REQUESTED)
+        self.assertEqual(stream.state, StreamState.CANCEL_REQUESTED)
         self.assertEqual(transport.cancel_reason, "client stop")
+
+    def test_stream_cancel_rejects_terminal_outcome(self) -> None:
+        transport = MemoryStreamTransport()
+        transport.cancel_reply = (
+            b'{"stream_id":"stream-1","cancelled":true,'
+            b'"state":"Cancelled","terminal":true}'
+        )
+        stream = StreamHandle.from_json(
+            transport,
+            b'{"stream_id":"stream-1","state":"Open","max_buffered_events":4}',
+        )
+
+        with self.assertRaises(SDKError):
+            stream.cancel("client stop")
+        self.assertEqual(stream.state, StreamState.FAILED)
 
     def test_stream_enforces_buffer_bound(self) -> None:
         transport = MemoryStreamTransport(

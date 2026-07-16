@@ -12,6 +12,7 @@ type memoryBidiTransport struct {
 	sentFrames   []map[string]any
 	closed       bool
 	cancelReason string
+	cancelReply  string
 }
 
 func (m *memoryBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {
@@ -43,7 +44,10 @@ func (m *memoryBidiTransport) Close(ctx context.Context) error {
 
 func (m *memoryBidiTransport) Cancel(ctx context.Context, reason string) ([]byte, error) {
 	m.cancelReason = reason
-	return []byte(`{"session_id":"bidi-1","state":"Cancelled","terminal":true,"reason":"client stop"}`), nil
+	if m.cancelReply != "" {
+		return []byte(m.cancelReply), nil
+	}
+	return []byte(`{"session_id":"bidi-1","state":"CancelRequested","terminal":false,"reason":"client stop"}`), nil
 }
 
 func newTestBidiSession(t *testing.T, transport *memoryBidiTransport) *BidiSession {
@@ -251,7 +255,7 @@ func TestBidiFrameIgnoresLegacyReceiptOnlyField(t *testing.T) {
 	}
 }
 
-func TestBidiCancelIsTerminal(t *testing.T) {
+func TestBidiCancelIsNonTerminalRequest(t *testing.T) {
 	transport := &memoryBidiTransport{}
 	session := newTestBidiSession(t, transport)
 
@@ -260,11 +264,25 @@ func TestBidiCancelIsTerminal(t *testing.T) {
 		t.Fatalf("Cancel: %v", err)
 	}
 
-	if outcome.State() != BidiCancelled || !outcome.Terminal() || transport.cancelReason != "client stop" {
+	if outcome.State() != BidiCancelRequested || outcome.Terminal() || transport.cancelReason != "client stop" {
 		t.Fatalf("unexpected cancel: %#v reason=%q", outcome, transport.cancelReason)
 	}
 	if _, err := session.CloseSend(context.Background()); err == nil {
 		t.Fatalf("CloseSend succeeded after cancel")
+	}
+}
+
+func TestBidiCancelRejectsTerminalOutcome(t *testing.T) {
+	transport := &memoryBidiTransport{
+		cancelReply: `{"session_id":"bidi-1","state":"Cancelled","terminal":true,"reason":"client stop"}`,
+	}
+	session := newTestBidiSession(t, transport)
+
+	if _, err := session.Cancel(context.Background(), "client stop"); err == nil {
+		t.Fatalf("terminal cancel outcome was accepted")
+	}
+	if session.State() != BidiFailed {
+		t.Fatalf("terminal cancel outcome must fail the bidi facade, got %s", session.State())
 	}
 }
 

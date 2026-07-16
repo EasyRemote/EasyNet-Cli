@@ -179,9 +179,14 @@ impl StreamDispatcher {
                  is not wired at boot"
             )));
         };
-        let bound_ability =
-            RuntimeBoundAbility::from_selected_route("InvokeStream", runtime, &selected_route)
-                .await?;
+        let bound_ability = RuntimeBoundAbility::from_selected_route(
+            "InvokeStream",
+            runtime,
+            self.directory.local_ability_catalog.as_deref(),
+            &selected_route,
+            call_mode,
+        )
+        .await?;
         let selected_descriptor_ref = bound_ability
             .descriptor_ref_for_mode(
                 "InvokeStream",

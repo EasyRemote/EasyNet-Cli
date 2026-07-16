@@ -356,6 +356,11 @@ class BidiSession:
             self.state = BidiState.FAILED
             raise _transport_error("bidi cancel transport failed", exc) from exc
         outcome = BidiOutcome.from_json(raw)
+        if outcome.state != BidiState.CANCEL_REQUESTED or outcome.terminal:
+            self.state = BidiState.FAILED
+            raise _invalid_bidi(
+                "bidi cancel transport must return CancelRequested with terminal=false"
+            )
         self.state = outcome.state
         return outcome
 

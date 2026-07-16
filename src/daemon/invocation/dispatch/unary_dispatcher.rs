@@ -784,7 +784,9 @@ impl UnaryDispatcher {
         let bound_ability = match RuntimeBoundAbility::from_selected_route(
             "easynet-daemon",
             runtime,
+            self.directory.local_ability_catalog.as_deref(),
             &selected_route,
+            call_mode,
         )
         .await
         {

@@ -256,6 +256,15 @@ class StreamHandle:
             self.state = StreamState.FAILED
             raise _transport_error("stream cancel transport failed", exc) from exc
         outcome = StreamCancel.from_json(raw)
+        if (
+            outcome.state != StreamState.CANCEL_REQUESTED
+            or outcome.terminal
+            or outcome.cancelled
+        ):
+            self.state = StreamState.FAILED
+            raise _invalid_stream(
+                "stream cancel transport must return CancelRequested with terminal=false"
+            )
         self.state = outcome.state
         return outcome
 

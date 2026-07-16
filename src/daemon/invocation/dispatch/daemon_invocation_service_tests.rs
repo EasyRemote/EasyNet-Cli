@@ -693,6 +693,92 @@ fn catalog_test_descriptor_ref(
     .expect("catalog descriptor ref for test")
 }
 
+fn bind_invoke_request_to_descriptor_ref(
+    request: &mut InvokeRequest,
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    descriptor_ref: String,
+    signing_key: &ed25519_dalek::SigningKey,
+) {
+    request.envelope = Some(signed_test_envelope_with_descriptor_ref(
+        caller_ura,
+        callee_ura,
+        subject_ura,
+        descriptor_ref.clone(),
+        &request.arguments,
+        signing_key,
+    ));
+    request.function_name = descriptor_ref.clone();
+    request.metadata.insert(
+        crate::daemon::invocation::dispatch::invocation_wire::SIGNED_DESCRIPTOR_REF_METADATA_KEY
+            .to_string(),
+        descriptor_ref,
+    );
+}
+
+async fn sync_runtime_proof_from_catalog(
+    svc: &DaemonInvocationService,
+    owner_ura: &str,
+    ability: &str,
+    call_mode: crate::daemon::ability::CallMode,
+) {
+    use easynet_axon::invocation::{AbilityCallModes, AbilityOptions, CallMode as AxonCallMode};
+
+    let catalog = svc
+        .directory
+        .local_ability_catalog
+        .as_ref()
+        .expect("test service has local ability catalog");
+    let record = catalog
+        .control_plane_record_for_authority_mode(owner_ura, ability, call_mode)
+        .expect("catalog proof lookup is unambiguous")
+        .unwrap_or_else(|| panic!("catalog proof row exists for {owner_ura}#{ability}"));
+    let descriptor = record.descriptor();
+    let implementation = record.implementation();
+    let options = match call_mode {
+        crate::daemon::ability::CallMode::Rpc => AbilityOptions::default()
+            .with_modes(AbilityCallModes::RPC)
+            .with_descriptor_proof(
+                descriptor.version.as_str(),
+                descriptor.admission_action().as_str(),
+                descriptor.descriptor_hash_bytes(),
+                descriptor.schema_hash_bytes(),
+                implementation.impl_hash(),
+            ),
+        crate::daemon::ability::CallMode::Stream => AbilityOptions::streaming()
+            .with_mode_descriptor_proof(
+                AxonCallMode::Stream,
+                descriptor.version.as_str(),
+                descriptor.admission_action().as_str(),
+                descriptor.descriptor_hash_bytes(),
+                descriptor.schema_hash_bytes(),
+                implementation.impl_hash(),
+            ),
+        crate::daemon::ability::CallMode::Bidi => AbilityOptions::bidi()
+            .with_mode_descriptor_proof(
+                AxonCallMode::Bidi,
+                descriptor.version.as_str(),
+                descriptor.admission_action().as_str(),
+                descriptor.descriptor_hash_bytes(),
+                descriptor.schema_hash_bytes(),
+                implementation.impl_hash(),
+            ),
+    };
+    let runtime_ability =
+        crate::core::ura::owner_ability_ura(owner_ura, ability).expect("test runtime ability URA");
+    let runtime = svc
+        .runtime
+        .local_runtime
+        .as_ref()
+        .expect("test service has local runtime");
+    runtime
+        .update_ability_options(&runtime_ability, options)
+        .await
+        .expect("runtime option update succeeds")
+        .unwrap_or_else(|| panic!("runtime row exists for {runtime_ability}"));
+}
+
 async fn signed_federation_join_request(
     realm: &str,
     membership_ura: &str,

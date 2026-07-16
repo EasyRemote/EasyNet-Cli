@@ -67,6 +67,7 @@ make_good_fixture() {
     "$CLI/docs/spec" \
     "$CLI/sdk/go" \
     "$CLI/sdk/python/easynet_sdk" \
+    "$CLI/sdk/python/tests" \
     "$AXON/core/runtime-rs/src/services/invocation" \
     "$AXON/sdk/rust/src/invocation"
 
@@ -900,6 +901,83 @@ class _CABIBidiTransport:
             }
         )
 EOF
+  cat >"$CLI/sdk/go/stream.go" <<'EOF'
+func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
+    cancel := decodeCancel()
+    if cancel.state != StreamCancelRequested || cancel.terminal || cancel.cancelled {
+        s.state = StreamFailed
+        return StreamCancel{}, invalidRuntimePayload("stream cancel transport must return CancelRequested with terminal=false", nil)
+    }
+    return cancel, nil
+}
+EOF
+  cat >"$CLI/sdk/go/bidi.go" <<'EOF'
+func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, error) {
+    outcome := decodeOutcome()
+    if outcome.state != BidiCancelRequested || outcome.terminal {
+        s.state = BidiFailed
+        return BidiOutcome{}, invalidRuntimePayload("bidi cancel transport must return CancelRequested with terminal=false", nil)
+    }
+    return outcome, nil
+}
+EOF
+  cat >"$CLI/sdk/python/easynet_sdk/stream.py" <<'EOF'
+def cancel(self, reason: str) -> StreamCancel:
+    outcome = StreamCancel.from_json(raw)
+    if (
+        outcome.state != StreamState.CANCEL_REQUESTED
+        or outcome.terminal
+        or outcome.cancelled
+    ):
+        self.state = StreamState.FAILED
+        raise _invalid_stream(
+            "stream cancel transport must return CancelRequested with terminal=false"
+        )
+    return outcome
+EOF
+  cat >"$CLI/sdk/python/easynet_sdk/bidi.py" <<'EOF'
+def cancel(self, reason: str) -> BidiOutcome:
+    outcome = BidiOutcome.from_json(raw)
+    if outcome.state != BidiState.CANCEL_REQUESTED or outcome.terminal:
+        self.state = BidiState.FAILED
+        raise _invalid_bidi(
+            "bidi cancel transport must return CancelRequested with terminal=false"
+        )
+    return outcome
+EOF
+  cat >"$CLI/sdk/go/stream_test.go" <<'EOF'
+func TestStreamHandleCancelIsNonTerminalRequest(t *testing.T) {}
+func TestStreamHandleRejectsTerminalCancelOutcome(t *testing.T) {}
+EOF
+  cat >"$CLI/sdk/go/bidi_test.go" <<'EOF'
+func TestBidiCancelIsNonTerminalRequest(t *testing.T) {}
+func TestBidiCancelRejectsTerminalOutcome(t *testing.T) {}
+EOF
+  cat >"$CLI/sdk/go/direct_runtime_test.go" <<'EOF'
+func TestDirectRuntimeStreamCancelProjectsNonTerminalRequest(t *testing.T) {}
+func TestDirectRuntimeBidiCancelProjectsNonTerminalRequest(t *testing.T) {}
+EOF
+  cat >"$CLI/sdk/python/tests/test_stream.py" <<'EOF'
+def test_stream_cancel_is_non_terminal_request() -> None:
+    pass
+
+def test_stream_cancel_rejects_terminal_outcome() -> None:
+    pass
+EOF
+  cat >"$CLI/sdk/python/tests/test_bidi.py" <<'EOF'
+def test_cancel_is_non_terminal_request() -> None:
+    pass
+
+def test_cancel_rejects_terminal_outcome() -> None:
+    pass
+EOF
+  cat >"$CLI/sdk/python/tests/test_direct_runtime.py" <<'EOF'
+def test_direct_runtime_stream_cancel_projects_non_terminal_request() -> None:
+    pass
+
+def test_direct_runtime_bidi_cancel_projects_non_terminal_request() -> None:
+    pass
+EOF
 
   cat >"$AXON/core/runtime-rs/src/services/invocation/terminal_finalization.rs" <<'EOF'
 struct TerminalFinalizationService<'a> {
@@ -1452,6 +1530,40 @@ expect_fail \
   "R28_IDENTITY_WRITE_LOCAL_SELF_BOUNDARY_FORK"
 
 make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/descriptor_binding.rs" <<'EOF'
+struct RuntimeBoundAbility {
+    runtime_ability_ura: String,
+    options: AbilityOptions,
+}
+
+impl RuntimeBoundAbility {
+    pub(crate) async fn from_selected_route(
+        surface: &'static str,
+        runtime: &LocalRuntime,
+        route: &SelectedInvokeRoute,
+    ) -> Result<Self, Status> {
+        let runtime_ability_ura = runtime_ability_ura(surface, &route.callee_ura, &route.ability_ura)?;
+        let options = runtime.ability_options(&runtime_ability_ura).await.unwrap();
+        Ok(Self { runtime_ability_ura, options })
+    }
+
+    pub(crate) fn descriptor_ref_for_mode(
+        &self,
+        surface: &'static str,
+        callee_ura: &str,
+        mode: CallMode,
+        route_ura: Option<&str>,
+    ) -> Result<DescriptorBoundAbilityRef, Status> {
+        let proof_binding = self.options.proof_for_mode(mode);
+        Ok(DescriptorBoundAbilityRef { descriptor_ref: proof_binding.descriptor_version.to_string() })
+    }
+}
+EOF
+expect_fail \
+  "selected route descriptor proof owner fork" \
+  "R29_SELECTED_ROUTE_DESCRIPTOR_PROOF_OWNER_FORK"
+
+make_good_fixture
 cat >"$CLI/src/daemon/boot/invocation/mod.rs" <<'EOF'
 enum PublicationRecoveryOwner {
     None,
@@ -1600,6 +1712,51 @@ class _CABIBidiTransport:
 EOF
 expect_fail \
   "stream bidi cancel terminal authority fork" \
+  "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK"
+
+make_good_fixture
+cat >"$CLI/sdk/go/stream.go" <<'EOF'
+func (s *StreamHandle) Cancel(ctx context.Context, reason string) (StreamCancel, error) {
+    cancel := decodeCancel()
+    s.state = StreamCancelled
+    return cancel, nil
+}
+EOF
+cat >"$CLI/sdk/go/bidi.go" <<'EOF'
+func (s *BidiSession) Cancel(ctx context.Context, reason string) (BidiOutcome, error) {
+    outcome := decodeOutcome()
+    s.state = BidiCancelled
+    return outcome, nil
+}
+EOF
+cat >"$CLI/sdk/python/easynet_sdk/stream.py" <<'EOF'
+def cancel(self, reason: str) -> StreamCancel:
+    outcome = StreamCancel.from_json(raw)
+    self.state = StreamState.CANCELLED
+    return outcome
+EOF
+cat >"$CLI/sdk/python/easynet_sdk/bidi.py" <<'EOF'
+def cancel(self, reason: str) -> BidiOutcome:
+    outcome = BidiOutcome.from_json(raw)
+    self.state = BidiState.CANCELLED
+    return outcome
+EOF
+cat >"$CLI/sdk/go/stream_test.go" <<'EOF'
+func TestStreamHandleCancelsNonTerminalStream(t *testing.T) {}
+EOF
+cat >"$CLI/sdk/go/bidi_test.go" <<'EOF'
+func TestBidiCancelIsTerminal(t *testing.T) {}
+EOF
+cat >"$CLI/sdk/python/tests/test_stream.py" <<'EOF'
+def test_stream_cancels_non_terminal_stream() -> None:
+    pass
+EOF
+cat >"$CLI/sdk/python/tests/test_bidi.py" <<'EOF'
+def test_cancel_is_terminal() -> None:
+    pass
+EOF
+expect_fail \
+  "direct SDK stream bidi cancel terminal authority fork" \
   "R20_STREAM_BIDI_CANCEL_TERMINAL_AUTHORITY_FORK"
 
 make_good_fixture

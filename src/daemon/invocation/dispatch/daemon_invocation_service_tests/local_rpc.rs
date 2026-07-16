@@ -254,18 +254,31 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
 
     let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, "demo.unary_via_axon");
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        "demo.unary_via_axon",
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
 
     let mut request = invoke_request("demo.unary_via_axon", r#"{"k":"v"}"#).into_inner();
     let external_caller = "easynet:///r/test-realm/device/client-1";
     let signing_key = test_device_signing_key();
-    request.envelope = Some(signed_test_envelope(
+    let descriptor_ref = catalog_test_descriptor_ref(
+        svc.directory.local_ability_catalog.as_ref().unwrap(),
+        TEST_DAEMON_URA,
+        "demo.unary_via_axon",
+        crate::daemon::ability::CallMode::Rpc,
+    );
+    bind_invoke_request_to_descriptor_ref(
+        &mut request,
         external_caller,
         TEST_DAEMON_URA,
         "easynet:///r/test-realm/resource/camera-1",
-        &request.function_name,
-        &request.arguments,
+        descriptor_ref.clone(),
         &signing_key,
-    ));
+    );
     let (result, runtime_started) = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         svc.unary_dispatcher()
@@ -315,10 +328,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         1,
         "Axon-routed unary call must land exactly one ledger row"
     );
-    assert_eq!(
-        records[0].ability_name,
-        test_descriptor_ref(TEST_DAEMON_URA, "demo.unary_via_axon")
-    );
+    assert_eq!(records[0].ability_name, descriptor_ref);
     assert_eq!(records[0].state, "completed");
     assert_eq!(
         records[0].caller_ura, external_caller,
@@ -355,15 +365,28 @@ async fn dispatch_local_rpc_terminal_failure_stays_in_band_with_receipts() {
 
     let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, ability);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
     let mut request = invoke_request(ability, r#"{}"#).into_inner();
-    request.envelope = Some(signed_test_envelope(
+    let descriptor_ref = catalog_test_descriptor_ref(
+        svc.directory.local_ability_catalog.as_ref().unwrap(),
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    );
+    bind_invoke_request_to_descriptor_ref(
+        &mut request,
         "easynet:///r/test-realm/device/client-1",
         TEST_DAEMON_URA,
         "easynet:///r/test-realm/resource/failure-probe",
-        &request.function_name,
-        &request.arguments,
+        descriptor_ref,
         &test_device_signing_key(),
-    ));
+    );
 
     let (result, runtime_started) = svc
         .unary_dispatcher()
@@ -411,9 +434,29 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
 
     let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, ability);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
 
-    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ability);
-    let request = invoke_request(&descriptor_ref, r#"{"descriptor":"function-name"}"#).into_inner();
+    let descriptor_ref = catalog_test_descriptor_ref(
+        svc.directory.local_ability_catalog.as_ref().unwrap(),
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    );
+    let mut request = invoke_request(ability, r#"{"descriptor":"function-name"}"#).into_inner();
+    bind_invoke_request_to_descriptor_ref(
+        &mut request,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
+        TEST_DAEMON_URA,
+        descriptor_ref,
+        &test_device_signing_key(),
+    );
     let (result, axon_took_it) = svc
         .unary_dispatcher()
         .dispatch_local_rpc_selected_route(&request)
@@ -459,6 +502,13 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
 
     let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
     publish_test_route(&svc, TEST_DAEMON_URA, "demo.loopback_unsigned");
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        "demo.loopback_unsigned",
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
 
     let arguments = br#"{"k":"v"}"#.to_vec();
     let request = InvokeRequest {
@@ -471,7 +521,12 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
             .expect("valid loopback envelope")
             .into_inner(),
         ),
-        function_name: test_descriptor_ref(TEST_DAEMON_URA, "demo.loopback_unsigned"),
+        function_name: catalog_test_descriptor_ref(
+            svc.directory.local_ability_catalog.as_ref().unwrap(),
+            TEST_DAEMON_URA,
+            "demo.loopback_unsigned",
+            crate::daemon::ability::CallMode::Rpc,
+        ),
         arguments,
         ..InvokeRequest::default()
     };
@@ -510,7 +565,12 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     );
     assert_eq!(
         records[0].ability_name,
-        test_descriptor_ref(TEST_DAEMON_URA, "demo.loopback_unsigned")
+        catalog_test_descriptor_ref(
+            svc.directory.local_ability_catalog.as_ref().unwrap(),
+            TEST_DAEMON_URA,
+            "demo.loopback_unsigned",
+            crate::daemon::ability::CallMode::Rpc,
+        )
     );
     assert_eq!(
         records[0].caller_ura,
@@ -556,6 +616,13 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
     let svc =
         std::sync::Arc::new(make_service_with_test_runtime(rt).with_session_realm("test-realm"));
     publish_test_route(svc.as_ref(), TEST_DAEMON_URA, ability);
+    sync_runtime_proof_from_catalog(
+        svc.as_ref(),
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
 
     let mut tasks = JoinSet::new();
     let started = std::time::Instant::now();
@@ -692,6 +759,13 @@ async fn simple_uds_invocation_concurrency_probe() {
     .await;
     let service = make_service_with_test_runtime(rt).with_session_realm("test-realm");
     publish_test_route(&service, TEST_DAEMON_URA, ability);
+    sync_runtime_proof_from_catalog(
+        &service,
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
 
     let temp = tempfile::tempdir().expect("temp UDS dir");
     let socket_path = temp.path().join("invocation-probe.sock");
@@ -852,6 +926,82 @@ async fn dispatch_local_rpc_selected_route_rejects_when_runtime_misses() {
                 .message()
                 .contains("not registered in Axon LocalRuntime"),
         "error must name the stale route and missing runtime binding, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn selected_route_binding_rejects_removed_control_plane_record_even_with_runtime_row() {
+    use easynet_axon::invocation::{make_ability, CallMode};
+
+    let _hg = crate::cli::commands::test_support::HomeGuard::new();
+    let rt = test_runtime_with_default_trust();
+    let ability = "demo.stale_catalog_proof";
+    let runtime_ability =
+        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).expect("runtime ability URA");
+    rt.register_ability_with_options(
+        runtime_ability.clone(),
+        make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
+        test_rpc_options(),
+    )
+    .await
+    .unwrap();
+
+    let svc = make_service_with_test_runtime(Arc::clone(&rt)).with_session_realm("test-realm");
+    publish_test_route(&svc, TEST_DAEMON_URA, ability);
+    sync_runtime_proof_from_catalog(
+        &svc,
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    )
+    .await;
+    let selection = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_canonical_route(TEST_DAEMON_URA, &runtime_ability, CallMode::Rpc)
+        .expect("selected route resolves before catalog removal");
+    let selected_route = match selection.into_dispatch() {
+        crate::daemon::invocation::routing::route_resolver::CanonicalRouteDispatch::Local(
+            route,
+        ) => route,
+        crate::daemon::invocation::routing::route_resolver::CanonicalRouteDispatch::Peer(_) => {
+            panic!("test route should dispatch locally")
+        }
+    };
+    let catalog = svc
+        .directory
+        .local_ability_catalog
+        .as_ref()
+        .expect("test service has local ability catalog");
+    assert!(catalog.remove_control_plane_record_for_authority_mode(
+        TEST_DAEMON_URA,
+        ability,
+        crate::daemon::ability::CallMode::Rpc,
+    ));
+    assert!(
+        rt.ability_options(&runtime_ability).await.is_some(),
+        "runtime row remains installed after live catalog row removal"
+    );
+
+    let err =
+        crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility::from_selected_route(
+            "test selected route",
+            rt.as_ref(),
+            Some(catalog.as_ref()),
+            &selected_route,
+            CallMode::Rpc,
+        )
+        .await
+        .expect_err("selected route binding must fail without live catalog proof");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("selected route")
+            && err
+                .message()
+                .contains("no live control-plane descriptor proof")
+            && err.message().contains(ability),
+        "error must name missing live control-plane proof, got: {err}"
     );
 }
 
