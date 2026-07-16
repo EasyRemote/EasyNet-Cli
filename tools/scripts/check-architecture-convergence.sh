@@ -1490,6 +1490,83 @@ if boot_invocation_routes.exists():
             "exact stream routes must be registered before invocation listeners are spawned",
         )
 
+# Rule 16b: local daemon loopback request construction is daemon Invocation
+# wire ownership, not support-layer transport ownership. The support adapter
+# may resolve target policy and carry requests over tonic, but it must not
+# define a second request object or rebuild Axon envelopes directly.
+local_daemon_grpc = cli_root / "src/support/platform/local_daemon_grpc.rs"
+invocation_wire = cli_root / "src/daemon/invocation/dispatch/invocation_wire.rs"
+if local_daemon_grpc.exists():
+    support_text = source(local_daemon_grpc)
+    for token, detail in (
+        (
+            "struct LocalDaemonLoopbackInvocation",
+            "support/platform must not define the local loopback request owner",
+        ),
+        (
+            "ProtoEnvelope::targeted(",
+            "support/platform must not assemble local loopback Axon envelopes directly",
+        ),
+        (
+            "InvokeRequest {",
+            "support/platform must not construct local loopback unary request protobufs directly",
+        ),
+        (
+            "InvokeServerStreamRequest {",
+            "support/platform must not construct local loopback stream request protobufs directly",
+        ),
+    ):
+        offset = support_text.find(token)
+        if offset >= 0:
+            add(
+                "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK",
+                local_daemon_grpc,
+                line_number(support_text, offset),
+                detail,
+            )
+    if "LocalDaemonLoopbackInvocation" in support_text and not invocation_wire.exists():
+        add(
+            "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK",
+            invocation_wire,
+            1,
+            "daemon invocation wire owner for local loopback requests is missing",
+        )
+
+if invocation_wire.exists():
+    wire_text = source(invocation_wire)
+    for token, detail in (
+        (
+            "pub(crate) struct LocalDaemonLoopbackInvocation",
+            "daemon invocation wire module must own the local loopback request object",
+        ),
+        (
+            "pub(crate) fn invoke_request",
+            "local loopback owner must build unary InvokeRequest projections",
+        ),
+        (
+            "pub(crate) fn stream_request",
+            "local loopback owner must build stream InvokeServerStreamRequest projections",
+        ),
+        (
+            "pub(crate) fn envelope",
+            "local loopback owner must build the Axon envelope projection",
+        ),
+        (
+            "pub(crate) fn with_causal_context",
+            "local loopback owner must preserve causal-context projection",
+        ),
+        (
+            "pub(crate) fn with_trace_id",
+            "local loopback owner must preserve trace-id projection",
+        ),
+        (
+            "ProtoEnvelope::targeted(",
+            "local loopback owner must use the daemon Invocation wire envelope builder",
+        ),
+    ):
+        if token not in wire_text:
+            add("R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK", invocation_wire, 1, detail)
+
 # Rule 23: CLI command modules may not own target-owned remote system ability
 # routing. They map user input into payloads; the CLI daemon-client facade owns
 # remote device/hub selector projection and caller identity selection. The

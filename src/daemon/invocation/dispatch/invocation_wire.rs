@@ -36,6 +36,8 @@
 // descriptor-bound canonical bytes so production daemon IPC has one
 // wire-shape construction point.
 
+use std::time::Duration;
+
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rand::RngCore;
 
@@ -45,7 +47,7 @@ use tonic::{Response, Status};
 use easynet_axon::invocation::DescriptorBoundEnvelope;
 use easynet_axon::pb::axon::v1::{
     causal_context, AgentIdentity, CallerSignature, CausalContext, Empty, EntityRef, EntityRefKind,
-    Envelope, InvokeRequest, InvokeResponse, SubjectIdentity,
+    Envelope, InvokeRequest, InvokeResponse, InvokeServerStreamRequest, SubjectIdentity,
 };
 
 use crate::daemon::axon_bridge::wire_descriptor::{
@@ -60,6 +62,118 @@ pub(crate) const SIGNED_DESCRIPTOR_REF_METADATA_KEY: &str = "x-easynet-signed-de
 #[derive(Debug, Clone)]
 pub struct ProtoEnvelope {
     inner: Envelope,
+}
+
+/// Daemon-owned local loopback request projection.
+///
+/// This value is intentionally not the public `DaemonInvocation` SDK builder:
+/// local CLI loopback submits route names and lets the daemon dispatch boundary
+/// resolve descriptor refs. It still owns the complete wire envelope shape so
+/// support-layer socket adapters do not mirror Axon protobuf construction.
+#[derive(Debug, Clone)]
+pub(crate) struct LocalDaemonLoopbackInvocation {
+    function_name: String,
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+    arguments: Vec<u8>,
+    timeout: Duration,
+    causal_context: Option<CausalContext>,
+    trace_id: Option<String>,
+}
+
+impl LocalDaemonLoopbackInvocation {
+    pub(crate) fn from_target(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        caller_ura: impl Into<String>,
+        callee_ura: impl Into<String>,
+        subject_ura: impl Into<String>,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let function_name = checked_function_name(function_name)?;
+        let arguments = serde_json::to_vec(&payload_json)
+            .map_err(|err| anyhow::anyhow!("encode {function_name} args: {err}"))?;
+        Ok(Self {
+            function_name,
+            caller_ura: checked_ura(caller_ura.into(), "caller_ura")?,
+            callee_ura: checked_ura(callee_ura.into(), "callee_ura")?,
+            subject_ura: checked_ura(subject_ura.into(), "subject_ura")?,
+            arguments,
+            timeout,
+            causal_context: None,
+            trace_id: None,
+        })
+    }
+
+    pub(crate) fn function_name(&self) -> &str {
+        &self.function_name
+    }
+
+    pub(crate) fn caller_ura(&self) -> &str {
+        &self.caller_ura
+    }
+
+    pub(crate) fn arguments(&self) -> &[u8] {
+        &self.arguments
+    }
+
+    #[must_use]
+    pub(crate) fn with_causal_context(mut self, causal_context: CausalContext) -> Self {
+        self.causal_context = Some(causal_context);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_trace_id(mut self, trace_id: Option<&str>) -> Self {
+        self.trace_id = trace_id
+            .map(str::trim)
+            .filter(|trace_id| !trace_id.is_empty())
+            .map(str::to_string);
+        self
+    }
+
+    pub(crate) fn invoke_request(&self) -> anyhow::Result<InvokeRequest> {
+        Ok(InvokeRequest {
+            envelope: Some(self.envelope()?),
+            function_name: self.function_name.clone(),
+            arguments: self.arguments.clone(),
+            content_type: "application/json".to_string(),
+            timeout_seconds: self.timeout_seconds(),
+            ..InvokeRequest::default()
+        })
+    }
+
+    pub(crate) fn stream_request(&self) -> anyhow::Result<InvokeServerStreamRequest> {
+        Ok(InvokeServerStreamRequest {
+            envelope: Some(self.envelope()?),
+            function_name: self.function_name.clone(),
+            arguments: self.arguments.clone(),
+            content_type: "application/json".to_string(),
+            timeout_seconds: self.timeout_seconds(),
+            ..InvokeServerStreamRequest::default()
+        })
+    }
+
+    pub(crate) fn envelope(&self) -> anyhow::Result<Envelope> {
+        let mut envelope = ProtoEnvelope::targeted(
+            self.caller_ura.clone(),
+            self.callee_ura.clone(),
+            self.subject_ura.clone(),
+        )?;
+        if let Some(causal_context) = self.causal_context.clone() {
+            envelope = envelope.with_causal_context(causal_context);
+        }
+        let mut envelope = envelope.into_inner();
+        if let Some(trace_id) = self.trace_id.as_ref() {
+            envelope.trace_id = trace_id.clone();
+        }
+        Ok(envelope)
+    }
+
+    fn timeout_seconds(&self) -> i32 {
+        i32::try_from(self.timeout.as_secs()).unwrap_or(i32::MAX)
+    }
 }
 
 impl ProtoEnvelope {
@@ -306,6 +420,14 @@ impl ProtoEnvelope {
         .map(|wire| wire.envelope)
         .map_err(|err| anyhow::anyhow!("{err}"))
     }
+}
+
+fn checked_function_name(function_name: &str) -> anyhow::Result<String> {
+    let function_name = function_name.trim();
+    if function_name.is_empty() {
+        anyhow::bail!("function_name must not be empty");
+    }
+    Ok(function_name.to_string())
 }
 
 fn checked_ura(ura: String, field: &str) -> anyhow::Result<String> {

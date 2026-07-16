@@ -27,8 +27,10 @@ use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "axon-pb")]
 use crate::daemon::ability::{
-    HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY, HostedAgentDelegationRequest,
+    HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
+#[cfg(feature = "axon-pb")]
+use crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation;
 #[cfg(feature = "axon-pb")]
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, HostedAgentNameLookupError,
@@ -214,144 +216,33 @@ impl LocalDaemonSubjectPolicy {
 }
 
 #[cfg(feature = "axon-pb")]
-#[derive(Debug, Clone)]
-struct LocalDaemonLoopbackInvocation {
-    function_name: String,
-    caller_ura: String,
-    callee_ura: String,
-    subject_ura: String,
-    arguments: Vec<u8>,
-    timeout: Duration,
-    causal_context: Option<easynet_axon::pb::axon::v1::CausalContext>,
-    trace_id: Option<String>,
-}
-
-#[cfg(feature = "axon-pb")]
-impl LocalDaemonLoopbackInvocation {
-    fn from_subject_policy(
-        function_name: &str,
-        payload_json: serde_json::Value,
-        callee_override: Option<&str>,
-        subject_policy: LocalDaemonSubjectPolicy,
-        timeout: Duration,
-    ) -> anyhow::Result<Self> {
-        let default_callee_ura = local_daemon_default_callee_ura();
-        let callee_ura = callee_override
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(default_callee_ura.as_str())
-            .to_string();
-        let subject_ura = subject_policy.resolve(&callee_ura)?;
-        Self::from_target(
-            function_name,
-            payload_json,
-            callee_ura,
-            subject_ura,
-            timeout,
-        )
-    }
-
-    fn from_target(
-        function_name: &str,
-        payload_json: serde_json::Value,
-        callee_ura: String,
-        subject_ura: String,
-        timeout: Duration,
-    ) -> anyhow::Result<Self> {
-        let function_name = normalized_local_daemon_function_name(function_name)?;
-        let arguments = serde_json::to_vec(&payload_json)
-            .map_err(|err| anyhow::anyhow!("encode {function_name} args: {err}"))?;
-        Ok(Self {
-            function_name,
-            caller_ura: local_daemon_loopback_caller_ura()?,
-            callee_ura: normalized_local_daemon_ura(&callee_ura, "callee_ura")?,
-            subject_ura: normalized_local_daemon_ura(&subject_ura, "subject_ura")?,
-            arguments,
-            timeout,
-            causal_context: None,
-            trace_id: None,
-        })
-    }
-
-    #[must_use]
-    fn with_causal_context(
-        mut self,
-        causal_context: easynet_axon::pb::axon::v1::CausalContext,
-    ) -> Self {
-        self.causal_context = Some(causal_context);
-        self
-    }
-
-    #[must_use]
-    fn with_trace_id(mut self, trace_id: Option<&str>) -> Self {
-        self.trace_id = trace_id
-            .map(str::trim)
-            .filter(|trace_id| !trace_id.is_empty())
-            .map(str::to_string);
-        self
-    }
-
-    fn invoke_request(&self) -> anyhow::Result<easynet_axon::pb::axon::v1::InvokeRequest> {
-        let request = easynet_axon::pb::axon::v1::InvokeRequest {
-            envelope: Some(self.envelope()?),
-            function_name: self.function_name.clone(),
-            arguments: self.arguments.clone(),
-            content_type: "application/json".to_string(),
-            timeout_seconds: self.timeout_seconds(),
-            ..easynet_axon::pb::axon::v1::InvokeRequest::default()
-        };
-        if request.function_name.trim().is_empty() {
-            anyhow::bail!("function_name must not be empty");
-        }
-        Ok(request)
-    }
-
-    fn stream_request(
-        &self,
-    ) -> anyhow::Result<easynet_axon::pb::axon::v1::InvokeServerStreamRequest> {
-        Ok(easynet_axon::pb::axon::v1::InvokeServerStreamRequest {
-            envelope: Some(self.envelope()?),
-            function_name: self.function_name.clone(),
-            arguments: self.arguments.clone(),
-            content_type: "application/json".to_string(),
-            timeout_seconds: self.timeout_seconds(),
-            ..easynet_axon::pb::axon::v1::InvokeServerStreamRequest::default()
-        })
-    }
-
-    fn envelope(&self) -> anyhow::Result<easynet_axon::pb::axon::v1::Envelope> {
-        let mut envelope = crate::daemon::invocation::ProtoEnvelope::targeted(
-            self.caller_ura.clone(),
-            self.callee_ura.clone(),
-            self.subject_ura.clone(),
-        )?;
-        if let Some(causal_context) = self.causal_context.clone() {
-            envelope = envelope.with_causal_context(causal_context);
-        }
-        let mut envelope = envelope.into_inner();
-        if let Some(trace_id) = self.trace_id.as_ref() {
-            envelope.trace_id = trace_id.clone();
-        }
-        Ok(envelope)
-    }
-
-    fn timeout_seconds(&self) -> i32 {
-        i32::try_from(self.timeout.as_secs()).unwrap_or(i32::MAX)
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-fn normalized_local_daemon_function_name(function_name: &str) -> anyhow::Result<String> {
-    let function_name = function_name.trim();
-    if function_name.is_empty() {
-        anyhow::bail!("function_name must not be empty");
-    }
-    Ok(function_name.to_string())
-}
-
-#[cfg(feature = "axon-pb")]
 fn normalized_local_daemon_ura(value: &str, field: &str) -> anyhow::Result<String> {
     LocalDaemonSubjectPolicy::normalized_ura(value, field)
+}
+
+#[cfg(feature = "axon-pb")]
+fn local_daemon_loopback_invocation_from_subject_policy(
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_override: Option<&str>,
+    subject_policy: LocalDaemonSubjectPolicy,
+    timeout: Duration,
+) -> anyhow::Result<LocalDaemonLoopbackInvocation> {
+    let default_callee_ura = local_daemon_default_callee_ura();
+    let callee_ura = callee_override
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_callee_ura.as_str())
+        .to_string();
+    let subject_ura = subject_policy.resolve(&callee_ura)?;
+    LocalDaemonLoopbackInvocation::from_target(
+        function_name,
+        payload_json,
+        local_daemon_loopback_caller_ura()?,
+        callee_ura,
+        subject_ura,
+        timeout,
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -629,14 +520,14 @@ fn invoke_local_daemon_ability_stream_with_target(
         ));
     }
 
-    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+    let invocation = local_daemon_loopback_invocation_from_subject_policy(
         function_name,
         payload_json,
         callee_override,
         subject_policy,
         timeout,
     )?;
-    let function_name = invocation.function_name.clone();
+    let function_name = invocation.function_name().to_string();
     let request = invocation.stream_request()?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -697,11 +588,11 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     use anyhow::Context;
-    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use easynet_axon::pb::axon::v1::{
+        invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
         BinaryChunk, ContentEnvelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
-        StreamDescriptor, invoke_bidi_down::Payload as DownPayload,
-        invoke_bidi_up::Payload as UpPayload,
+        StreamDescriptor,
     };
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
@@ -717,21 +608,21 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
         ));
     }
 
-    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+    let invocation = local_daemon_loopback_invocation_from_subject_policy(
         function_name,
         payload_json,
         callee_override,
         subject_policy,
         timeout,
     )?;
-    let function_name = invocation.function_name.clone();
+    let function_name = invocation.function_name().to_string();
     let envelope_open = EnvelopeOpen {
         envelope: Some(invocation.envelope()?),
         target: Some(InvocationTarget {
             ability_name: function_name.clone(),
             ..InvocationTarget::default()
         }),
-        initial_args: invocation.arguments.clone(),
+        initial_args: invocation.arguments().to_vec(),
         args_content_type: "application/json".to_string(),
         streams: vec![StreamDescriptor {
             stream_id: 1,
@@ -944,14 +835,14 @@ fn invoke_local_daemon_ability_with_callee_and_subject(
         ));
     }
 
-    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+    let invocation = local_daemon_loopback_invocation_from_subject_policy(
         function_name,
         payload_json,
         callee_override,
         subject_policy,
         timeout,
     )?;
-    let function_name = invocation.function_name.clone();
+    let function_name = invocation.function_name().to_string();
     let request = invocation.invoke_request()?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -999,14 +890,14 @@ fn invoke_local_daemon_ability_stream_first_payload_with_target(
         ));
     }
 
-    let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+    let invocation = local_daemon_loopback_invocation_from_subject_policy(
         function_name,
         payload_json,
         callee_override,
         subject_policy,
         timeout,
     )?;
-    let function_name = invocation.function_name.clone();
+    let function_name = invocation.function_name().to_string();
     let stream_request = invocation.stream_request()?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1737,7 +1628,7 @@ async fn invoke_local_daemon_first_stream_payload(
     request: easynet_axon::pb::axon::v1::InvokeServerStreamRequest,
     function_name: &str,
 ) -> anyhow::Result<LocalDaemonStreamProjection> {
-    use anyhow::{Context, bail};
+    use anyhow::{bail, Context};
 
     let mut stream = client
         .invoke_stream(request)
@@ -1773,7 +1664,7 @@ async fn invoke_local_daemon_first_stream_payload(
 fn invoke_local_daemon_ability_with_invocation_meta_inner(
     request: LocalDaemonInvocationMetaRequest<'_>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
-    use anyhow::{Context, anyhow, bail};
+    use anyhow::{anyhow, bail, Context};
     use easynet_axon::pb::axon::v1 as pb;
     use serde_json::Value;
 
@@ -1815,6 +1706,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     let invocation = LocalDaemonLoopbackInvocation::from_target(
         &function_name,
         payload_json,
+        local_daemon_loopback_caller_ura()?,
         callee_ura.clone(),
         subject_ura.clone(),
         step_timeout.unwrap_or_else(|| Duration::from_secs(30)),
@@ -1824,7 +1716,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
     })
     .with_trace_id(trace_id);
     let mut request = invocation.invoke_request()?;
-    let wire_caller_ura = invocation.caller_ura.clone();
+    let wire_caller_ura = invocation.caller_ura().to_string();
     let nonce_hex = request
         .envelope
         .as_ref()
@@ -2209,7 +2101,7 @@ mod tests {
 
     #[test]
     fn loopback_invoke_request_does_not_pre_resolve_descriptor_ref() {
-        let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+        let invocation = local_daemon_loopback_invocation_from_subject_policy(
             "discover",
             serde_json::json!({"query": "capabilities"}),
             Some("easynet:///r/default/agent/dev.worker"),
@@ -2267,14 +2159,14 @@ mod tests {
         ed25519_dalek::SigningKey,
     ) {
         use easynet_axon::invocation::{
-            AbilityCallModes, AbilityOptions, AgentIdentity, Ed25519ReceiptSigningAuthority,
-            InvocationState, ReceiptSigningAuthority, StaticReceiptSigningAuthorityProvider,
-            UraProfile, make_ability,
+            make_ability, AbilityCallModes, AbilityOptions, AgentIdentity,
+            Ed25519ReceiptSigningAuthority, InvocationState, ReceiptSigningAuthority,
+            StaticReceiptSigningAuthorityProvider, UraProfile,
         };
         use easynet_axon::pb::axon::v1::InvokeResponse;
         use ed25519_dalek::SigningKey;
 
-        let invocation = LocalDaemonLoopbackInvocation::from_subject_policy(
+        let invocation = local_daemon_loopback_invocation_from_subject_policy(
             "job.run",
             serde_json::json!({"job": 1}),
             Some("easynet:///r/acme/device/edge-1"),
@@ -2499,12 +2391,10 @@ mod tests {
             projection.receipt["anchor"]["receipt_hash"],
             serde_json::json!(expected_hash)
         );
-        assert!(
-            projection.receipt["anchor"]["receipt_ura"]
-                .as_str()
-                .expect("receipt URA")
-                .ends_with(&expected_anchor_suffix)
-        );
+        assert!(projection.receipt["anchor"]["receipt_ura"]
+            .as_str()
+            .expect("receipt URA")
+            .ends_with(&expected_anchor_suffix));
         assert_eq!(
             projection.receipt["cryptographic_verification"],
             "finalization_checkpoints_verified"
@@ -2545,11 +2435,9 @@ mod tests {
         let error = unverified
             .verify(&resolver, "job.run")
             .expect_err("tampered signature must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("terminal receipt signature is invalid")
-        );
+        assert!(error
+            .to_string()
+            .contains("terminal receipt signature is invalid"));
     }
 
     #[test]
@@ -2572,11 +2460,9 @@ mod tests {
 
         let error = verified_receipt_refs_from_causal_parents(&[parent])
             .expect_err("unverified anchor must not enter causal context");
-        assert!(
-            error
-                .to_string()
-                .contains("was not cryptographically verified")
-        );
+        assert!(error
+            .to_string()
+            .contains("was not cryptographically verified"));
     }
 
     #[test]

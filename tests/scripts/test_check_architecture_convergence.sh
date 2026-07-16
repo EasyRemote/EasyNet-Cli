@@ -75,6 +75,7 @@ make_good_fixture() {
     "$CLI/src/daemon/persistence" \
     "$CLI/src/daemon/resources/context" \
     "$CLI/src/daemon/resources/skills" \
+    "$CLI/src/support/platform" \
     "$CLI/ability-descriptors/system/agents" \
     "$CLI/docs/spec" \
     "$CLI/sdk/go" \
@@ -2127,6 +2128,49 @@ fn collect_owner_catalog() -> anyhow::Result<()> {
     Ok(())
 }
 EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/invocation_wire.rs" <<'EOF'
+pub(crate) struct LocalDaemonLoopbackInvocation;
+
+impl LocalDaemonLoopbackInvocation {
+    pub(crate) fn invoke_request(&self) {
+        let _request = InvokeRequest {};
+    }
+
+    pub(crate) fn stream_request(&self) {
+        let _request = InvokeServerStreamRequest {};
+    }
+
+    pub(crate) fn envelope(&self) {
+        let _envelope = ProtoEnvelope::targeted(caller, callee, subject);
+    }
+
+    pub(crate) fn with_causal_context(self, causal_context: CausalContext) -> Self {
+        self
+    }
+
+    pub(crate) fn with_trace_id(self, trace_id: Option<&str>) -> Self {
+        self
+    }
+}
+EOF
+  cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, HostedAgentNameLookupError,
+};
+use crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation;
+
+fn canonical_hosted_agent_ura_by_name(agent_name: &str) -> anyhow::Result<String> {
+    let snapshot = AgentAggregateRepository::try_load_snapshot()?;
+    snapshot
+        .hosted_agent_ura_by_name(agent_name)
+        .map(str::to_string)
+        .ok_or(HostedAgentNameLookupError::NotFound)?
+}
+
+fn local_daemon_loopback_invocation_from_subject_policy() -> LocalDaemonLoopbackInvocation {
+    LocalDaemonLoopbackInvocation::from_target()
+}
+EOF
 }
 
 bash -n "$CHECK"
@@ -2717,6 +2761,28 @@ PY
 expect_fail \
   "daemon exact stream boot registration owner fork" \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
+struct LocalDaemonLoopbackInvocation {
+    caller_ura: String,
+    callee_ura: String,
+    subject_ura: String,
+}
+EOF
+expect_fail \
+  "local loopback support request owner fork" \
+  "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/support/platform/local_daemon_grpc.rs" <<'EOF'
+fn rebuild_loopback_envelope(caller: String, callee: String, subject: String) {
+    let _envelope = crate::daemon::invocation::ProtoEnvelope::targeted(caller, callee, subject);
+}
+EOF
+expect_fail \
+  "local loopback support envelope owner fork" \
+  "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK"
 
 make_good_fixture
 cat >"$CLI/src/cli/commands/remote_exec.rs" <<'EOF'

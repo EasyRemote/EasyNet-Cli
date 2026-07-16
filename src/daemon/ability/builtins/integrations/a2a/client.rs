@@ -54,8 +54,10 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+#[cfg(feature = "axon-pb")]
+use crate::daemon::ability::builtins::agents::discover::DiscoverFederationResolveError;
 use crate::daemon::ability::builtins::agents::discover::{
-    DiscoverFederationResolveError, DiscoverFederationResolver, SharedDiscoverFederationResolver,
+    DiscoverFederationResolver, SharedDiscoverFederationResolver,
 };
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
@@ -93,6 +95,7 @@ pub fn register(
 /// `{"kind":"list","receipts":[..]}` (see `ability_dispatch::causal_context_to_json`).
 /// Returns the parent list to chain onto the forward hop; empty for a root
 /// invocation.
+#[cfg(any(feature = "axon-pb", test))]
 fn causal_parents_from_env(env: &crate::daemon::ability::dispatch::EnvelopeContext) -> Vec<Value> {
     let cc = env.causal_context();
     match cc.get("kind").and_then(Value::as_str) {
@@ -128,7 +131,7 @@ fn causal_parents_from_env(env: &crate::daemon::ability::dispatch::EnvelopeConte
 /// that handles the inbound shape handles the outbound shape too.
 fn send_task_handler(
     args: Value,
-    env: &crate::daemon::ability::dispatch::EnvelopeContext,
+    _env: &crate::daemon::ability::dispatch::EnvelopeContext,
     federation_resolver: &dyn DiscoverFederationResolver,
 ) -> anyhow::Result<Value> {
     let target_node = match target_node_field(&args) {
@@ -177,7 +180,7 @@ fn send_task_handler(
         if let Some(message) = local_daemon_transport_error() {
             return Ok(error_response(&message));
         }
-        let resolve_caller = caller_ura.as_deref().unwrap_or_else(|| env.caller());
+        let resolve_caller = caller_ura.as_deref().unwrap_or_else(|| _env.caller());
         let target_call = match resolve_a2a_target(
             &target_ura,
             &agent_name,
@@ -191,7 +194,7 @@ fn send_task_handler(
         // Chain the inbound invocation's causal parents onto the forward
         // hop so an A2A relay preserves the receipt DAG instead of re-rooting
         // it (SPEC §15.1-1, bug-1 Slice B). Root invocations yield no parents.
-        let causal_parents = causal_parents_from_env(env);
+        let causal_parents = causal_parents_from_env(_env);
         match crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_causal_parents(
             &target_call,
             task_args,
