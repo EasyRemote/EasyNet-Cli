@@ -48,3 +48,16 @@
   deletion is complete. It pins JSON control demotion, complete
   `DaemonInvocation` builder usage, and daemon-local runtime-record adapter
   boundaries.
+- Treat Mission/EAL boundary enforcement in EasyNet-Cli as daemon-owned
+  execution policy evidence, not as Axon protocol evidence. The canonical V2
+  runner now requires hard mission-context failure, manifest-only ability
+  publication, and explicit orchestration service ownership; RF-2 remains open
+  until Axon Mission schema/runtime state is migrated out and gated.
+- Treat key custody as a cross-boundary property, not only an SDK source-scan.
+  The V2 runner now requires daemon key-service custody and product repository
+  custody checks so backend/EasyRemote code cannot regain private key material,
+  raw process spawning, or daemon vault/passphrase ownership.
+- Treat Go SDK `audio`, `mcp`, and `tool_adapter` as product-owned RF-1
+  surfaces. They are removed from Axon's canonical Go SDK rather than wrapped,
+  and the V2 runner now rejects tracked Go product package files alongside the
+  existing proto/Rust product checks.

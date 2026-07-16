@@ -89,3 +89,54 @@ checks. Non-Rust Axon product SDK extraction remains open.
 Result: passed. The canonical V2 runner now includes the daemon invocation
 migration guard for complete tuple builder usage, JSON control demotion, and
 runtime-record adapter boundaries.
+
+## 2026-07-17 RF-2/RF-8 Daemon Mission/EAL Boundary Gate
+
+- `bash tools/scripts/check-dispatch-mission-context-boundary.sh`
+- `bash tools/scripts/check-runtime-abilities-manifest-boundary.sh`
+- `bash tools/scripts/check-orchestration-service-boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+- `cargo test --test script_checks dispatch_mission_context_boundary_script_holds`
+- `cargo test --test script_checks runtime_abilities_manifest_boundary_script_holds`
+- `cargo test --test script_checks orchestration_service_boundary_script_holds`
+
+Result: passed. The canonical V2 runner now treats daemon-owned Mission/EAL
+execution policy as part of the convergence acceptance surface: dispatch must
+hard-fail missing or forged mission context, runtime ability publication must
+consume committed manifests only, and orchestration state must remain owned by
+`OrchestrationService`.
+
+## 2026-07-17 RF-5 Key Custody Boundary Gate
+
+- `bash tools/scripts/check-daemon-key-service-boundary.sh`
+- `bash tools/scripts/check-product-key-custody-boundary.sh --self-test`
+- `bash tools/scripts/check-product-key-custody-boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+- `cargo test --test script_checks daemon_key_service_boundary_script_contract_holds`
+- `cargo test --test script_checks product_key_custody_boundary_script_contract_holds`
+
+Result: passed. The canonical V2 runner now includes daemon and product
+key-custody gates, so process-local signing fallback cannot re-enter through
+daemon inventory paths, Go/Python SDK private signing material, backend process
+spawning, EasyRemote raw process/FFI imports, or key-service secret ownership.
+
+## 2026-07-17 RF-1 Go Product SDK Extraction
+
+- `rg -n "DefaultMCPToolStreamTimeoutMs|McpProtocolVersion|ToToolSpec\\(|ToolSpec|AbilityToolAdapter|NewToolAdapter|McpTool|StdioMcpServer|OpenMic|MicConfig|VoiceActivityDetector|ErrAudioUnavailable" sdk/go`
+- `git ls-files sdk/go | rg '(audio|voice|mcp|tool_adapter|presets/remote_control|presets/ability_dispatch)'`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `cd /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go && go test ./easynet`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Go SDK no longer tracks product-owned audio, voice,
+MCP, or tool-adapter packages in the staged index; the Go package tests pass;
+and the V2 runner now rejects Go product package reintroduction.

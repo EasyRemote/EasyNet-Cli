@@ -8,6 +8,8 @@
 - [ ] Remove or privatize upstream legacy admission paths after callers move.
 - [x] Add gates that reject new plain admission/fallback signer call sites in
       this repository.
+- [x] Gate daemon and product key-custody boundaries from the canonical V2
+      convergence runner.
 
 ## RF-8 / RF-7 Tuple Ingress and LocalRuntime Routes
 
@@ -41,7 +43,12 @@
       runner.
 - [x] Gate Axon canonical proto/Rust product-protocol extraction from the V2
       convergence runner.
-- [ ] Extract non-Rust Axon product SDK packages from canonical SDK surfaces.
+- [x] Extract Go Axon product SDK files from canonical SDK surface and gate
+      their reintroduction from the V2 convergence runner.
+- [x] Gate daemon-owned Mission/EAL execution boundaries from the V2
+      convergence runner.
+- [ ] Extract remaining Python, Node, Java, and Swift Axon product SDK
+      packages from canonical SDK surfaces.
 - [ ] Keep Mission/EAL state in daemon-owned packages only.
 - [ ] Gate Axon/core copied schemas against Mission state reintroduction where
       visible in this repository.

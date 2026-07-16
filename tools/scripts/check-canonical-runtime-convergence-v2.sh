@@ -97,6 +97,17 @@ check_daemon_tuple_route_contract() {
   bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
 }
 
+check_key_custody_boundary_contract() {
+  bash "$ROOT/tools/scripts/check-daemon-key-service-boundary.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-product-key-custody-boundary.sh" >/dev/null
+}
+
+check_daemon_mission_eal_boundary_contract() {
+  bash "$ROOT/tools/scripts/check-dispatch-mission-context-boundary.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-runtime-abilities-manifest-boundary.sh" >/dev/null
+  bash "$ROOT/tools/scripts/check-orchestration-service-boundary.sh" >/dev/null
+}
+
 check_axon_product_protocol_boundary_contract() {
   if [[ ! -d "$AXON_ROOT" ]]; then
     fail "EasyNet-Axon root not found for product protocol boundary contract: $AXON_ROOT"
@@ -113,11 +124,20 @@ check_axon_product_protocol_boundary_contract() {
     sdk/rust/src/audio.rs \
     sdk/rust/src/mcp.rs \
     sdk/rust/src/voice.rs \
-    sdk/rust/src/remote_desktop.rs
+    sdk/rust/src/remote_desktop.rs \
+    sdk/go/easynet/audio.go \
+    sdk/go/easynet/audio_stub.go \
+    sdk/go/easynet/tool_adapter.go \
+    sdk/go/easynet/mcp/server.go
   do
     [[ ! -e "$AXON_ROOT/$path" ]] \
-      || fail "product-owned file remains in canonical Axon protocol/Rust surface: $path"
+      || fail "product-owned file remains in canonical Axon surface: $path"
   done
+
+  if [[ -d "$AXON_ROOT/sdk/go" ]] \
+    && (cd "$AXON_ROOT" && git ls-files sdk/go 2>/dev/null | grep -Eq '/(audio|voice|tool_adapter|mcp)([^/]*|/.*)$'); then
+    fail "Go SDK tracks a product-owned canonical package"
+  fi
 
   local rust_lib="$AXON_ROOT/sdk/rust/src/lib.rs"
   if [[ -f "$rust_lib" ]] \
@@ -362,6 +382,7 @@ PY
   mkdir -p "$tmp/axon/core/runtime-rs/client-sdk/proto/axon/v1"
   mkdir -p "$tmp/axon/sdk/rust/proto/axon/v1"
   mkdir -p "$tmp/axon/sdk/rust/src"
+  mkdir -p "$tmp/axon/sdk/go/easynet"
   mkdir -p "$tmp/axon/core/runtime-rs" "$tmp/axon/core/runtime-rs/client-sdk"
   printf 'pub mod invocation;\n' > "$tmp/axon/sdk/rust/src/lib.rs"
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/build.rs"
@@ -406,6 +427,8 @@ PY
   cp "$tmp/axon/sdk/rust/build.rs" "$tmp/axon-product/sdk/rust/build.rs"
   printf 'pub mod audio;\n' > "$tmp/axon-product/sdk/rust/src/lib.rs"
   touch "$tmp/axon-product/sdk/rust/src/audio.rs"
+  mkdir -p "$tmp/axon-product/sdk/go/easynet/mcp"
+  touch "$tmp/axon-product/sdk/go/easynet/tool_adapter.go"
   if ( AXON_ROOT="$tmp/axon-product"; check_axon_product_protocol_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon product protocol boundary gate to fail"
   fi
@@ -429,6 +452,8 @@ PY
   check_active_source_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
+  check_key_custody_boundary_contract
+  check_daemon_mission_eal_boundary_contract
   check_ura_vocabulary_contract
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   check_schema_source_derivation_contract
@@ -442,6 +467,8 @@ check_manifest_contract
 check_active_source_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
+check_key_custody_boundary_contract
+check_daemon_mission_eal_boundary_contract
 check_ura_vocabulary_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
