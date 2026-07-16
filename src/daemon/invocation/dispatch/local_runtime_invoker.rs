@@ -56,62 +56,19 @@ fn local_invocation_callee_ura(target: &InvocationTarget) -> String {
     local_device_ura()
 }
 
-fn explicit_subject_ura(target: &InvocationTarget) -> Option<String> {
-    target
-        .subject
-        .as_deref()
-        .map(str::trim)
-        .filter(|subject| !subject.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum LocalRuntimeSubjectPolicy {
-    Explicit(String),
-    DescriptorDefault(String),
-}
-
-impl LocalRuntimeSubjectPolicy {
-    fn from_target(target: &InvocationTarget, callee_ura: &str) -> Result<Self, String> {
-        if let Some(subject) = explicit_subject_ura(target) {
-            return Self::checked(subject, "InvocationTarget.subject").map(Self::Explicit);
-        }
-        let descriptor_default = crate::core::ura::AbilitySelector::parse(&target.ability)
-            .ok()
-            .filter(|selector| selector.owner_kind() == "hub")
-            .map(|selector| selector.ability_ura().to_string())
-            .unwrap_or_else(|| callee_ura.to_string());
-        Self::checked(descriptor_default, "descriptor default subject").map(Self::DescriptorDefault)
-    }
-
-    fn into_subject_identity(self) -> SubjectIdentity {
-        match self {
-            Self::Explicit(subject) | Self::DescriptorDefault(subject) => local_subject(subject),
-        }
-    }
-
-    fn checked(value: String, field: &str) -> Result<String, String> {
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(format!("{field} must not be empty"));
-        }
-        crate::core::ura::parse_ura(value)
-            .map_err(|err| format!("{field} is not a valid URA: {err}"))?;
-        Ok(value.to_string())
-    }
-}
-
 #[derive(Debug, Clone)]
 struct LocalRuntimeInvocationPolicy {
-    subject: LocalRuntimeSubjectPolicy,
+    subject_ura: String,
     causal_context: CausalContext,
 }
 
 impl LocalRuntimeInvocationPolicy {
     fn from_target(target: &InvocationTarget, callee_ura: &str) -> Result<Self, String> {
         Ok(Self {
-            subject: LocalRuntimeSubjectPolicy::from_target(target, callee_ura)?,
-            causal_context: target.causal_context.as_axon(),
+            subject_ura: target
+                .resolved_subject_ura(callee_ura)
+                .map_err(|err| err.to_string())?,
+            causal_context: target.resolved_causal_context(),
         })
     }
 
@@ -125,7 +82,7 @@ impl LocalRuntimeInvocationPolicy {
             caller: system_agent_identity(),
             callee: local_identity(&callee_ura),
             ability,
-            subject: self.subject.into_subject_identity(),
+            subject: local_subject(self.subject_ura),
             invocation_nonce: fresh_nonce(),
             causal_context: self.causal_context,
             args_bytes: payload,

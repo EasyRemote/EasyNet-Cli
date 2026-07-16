@@ -218,13 +218,25 @@ impl InvocationPlanIngress {
 }
 
 fn checked_public_subject(subject: String) -> anyhow::Result<String> {
+    checked_subject_ura(&subject, "public invocation ingress subject")
+}
+
+fn checked_subject_ura(subject: &str, field: &str) -> anyhow::Result<String> {
     let subject = subject.trim();
     if subject.is_empty() {
-        anyhow::bail!("public invocation ingress subject must not be empty");
+        anyhow::bail!("{field} must not be empty");
     }
     crate::core::ura::parse_ura(subject)
-        .map_err(|err| anyhow::anyhow!("public invocation ingress subject is not a URA: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("{field} is not a URA: {err}"))?;
     Ok(subject.to_string())
+}
+
+fn daemon_system_default_subject_ura(ability: &str, callee_ura: &str) -> String {
+    crate::core::ura::AbilitySelector::parse(ability)
+        .ok()
+        .filter(|selector| selector.owner_kind() == "hub")
+        .map(|selector| selector.ability_ura().to_string())
+        .unwrap_or_else(|| callee_ura.to_string())
 }
 
 /// Explicit subject binding state for a daemon-local runtime dispatch.
@@ -254,6 +266,16 @@ impl InvocationSubject {
         match self {
             Self::Explicit(subject) => Some(subject.as_str()),
             Self::DaemonSystemDerived => None,
+        }
+    }
+
+    fn resolve_for_callee(&self, ability: &str, callee_ura: &str) -> anyhow::Result<String> {
+        match self {
+            Self::Explicit(subject) => checked_subject_ura(subject, "InvocationTarget.subject"),
+            Self::DaemonSystemDerived => {
+                let default_subject = daemon_system_default_subject_ura(ability, callee_ura);
+                checked_subject_ura(&default_subject, "daemon system default subject")
+            }
         }
     }
 }
@@ -404,6 +426,21 @@ impl InvocationTarget {
     pub fn with_request_metadata(mut self, request_metadata: HashMap<String, String>) -> Self {
         self.request_metadata = request_metadata;
         self
+    }
+
+    /// Resolve the target's tuple subject against the selected callee.
+    ///
+    /// Public ingress has an explicit subject and daemon-system ingress has a
+    /// named descriptor-default policy. Keeping that policy here prevents
+    /// LocalRuntime adapters from inventing their own fallback subject rules.
+    pub fn resolved_subject_ura(&self, callee_ura: &str) -> anyhow::Result<String> {
+        self.subject.resolve_for_callee(&self.ability, callee_ura)
+    }
+
+    /// Convert the target's explicit causal binding into Axon's runtime type.
+    #[must_use]
+    pub fn resolved_causal_context(&self) -> CausalContext {
+        self.causal_context.as_axon()
     }
 }
 
@@ -692,5 +729,46 @@ mod tests {
             target.causal_context,
             InvocationCausalContext::explicit(causal_context)
         );
+    }
+
+    #[test]
+    fn daemon_system_subject_resolves_to_callee_for_non_hub_ability() {
+        let target =
+            InvocationTarget::local_daemon_system("observe.health", json!({}), CallMode::Rpc);
+
+        assert_eq!(
+            target
+                .resolved_subject_ura("easynet:///r/acme/device/dev-a")
+                .unwrap(),
+            "easynet:///r/acme/device/dev-a"
+        );
+    }
+
+    #[test]
+    fn daemon_system_subject_resolves_to_ability_ura_for_hub_owner() {
+        let hub_ability = crate::core::ura::hub_ability_ura("acme", "federation.status");
+        let target = InvocationTarget::local_daemon_system(hub_ability, json!({}), CallMode::Rpc);
+
+        assert_eq!(
+            target
+                .resolved_subject_ura(&crate::core::ura::hub_ura("acme"))
+                .unwrap(),
+            crate::core::ura::hub_ability_ura("acme", "federation.status")
+        );
+    }
+
+    #[test]
+    fn explicit_subject_resolution_rejects_non_ura_values() {
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "camera-01",
+        );
+
+        let err = target
+            .resolved_subject_ura("easynet:///r/acme/device/dev-a")
+            .expect_err("subject must be a URA");
+        assert!(err.to_string().contains("InvocationTarget.subject"));
     }
 }

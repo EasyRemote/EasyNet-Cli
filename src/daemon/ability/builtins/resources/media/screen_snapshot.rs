@@ -897,7 +897,7 @@ fn resolve_screen_subject(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -977,15 +977,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            ura,
+        );
         let resp = dispatcher.execute_rpc(target).unwrap();
         for field in [
             "image_bytes_b64",
@@ -1014,15 +1011,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SUBSCRIBE.to_string(),
-            normalized_args: json!({"fps": 5, "resolution": "320x180"}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_SCREEN_SUBSCRIBE,
+            json!({"fps": 5, "resolution": "320x180"}),
+            CallMode::Stream,
+            ura,
+        );
         let frames = dispatcher.execute_stream(target).unwrap().into_snapshot();
         assert!(
             !frames.is_empty(),
@@ -1056,15 +1050,11 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_REQUIRED));
     }
@@ -1089,15 +1079,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(cam_ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            cam_ura,
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH));
     }
@@ -1109,15 +1096,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01NEVER"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01NEVER",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_NOT_FOUND));
     }
@@ -1128,15 +1112,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01SCR"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({"subject": "easynet:///r/x/resource/y"}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01SCR",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_IN_ARGS));
     }

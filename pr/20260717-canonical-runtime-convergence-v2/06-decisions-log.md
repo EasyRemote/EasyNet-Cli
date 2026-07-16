@@ -41,3 +41,14 @@
 - Resource and governance adapters select ability, payload, and subject; the
   routing target value object owns local scope, system causal policy, and empty
   metadata construction.
+- Media subject-boundary fixtures should use routing target constructors so
+  missing-subject, wrong-type, corrupt-table, and subject-in-args tests do not
+  preserve obsolete local target assembly.
+- Camera snapshot, subscribe, and recording fixtures follow the same routing
+  target constructor boundary as mic and screen because all media handlers
+  share the same envelope-subject policy.
+- Subject derivation for daemon-system LocalRuntime calls belongs to
+  `InvocationTarget`, not `local_runtime_invoker`, because target resolution
+  owns the public-ingress versus daemon-system tuple source. The LocalRuntime
+  adapter should build Axon requests from resolved tuple facts, not define a
+  second fallback subject policy.

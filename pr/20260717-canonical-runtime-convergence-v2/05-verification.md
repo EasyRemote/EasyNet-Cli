@@ -174,3 +174,65 @@ Commands run on 2026-07-17:
 
 This evidence verifies only the resource/governance target-boundary slice. It
 does not prove RF-8/RF-7 or SPEC completion.
+
+## Media Subject Target Fixture Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: initially required formatting after the
+  screen missing-subject constructor migration; `cargo fmt --all` was applied.
+- `cargo test -q daemon::ability::builtins::resources::media::mic_subscribe --lib --features axon-pb`:
+  passed, 9 tests.
+- `cargo test -q daemon::ability::builtins::resources::media::screen_snapshot --lib --features axon-pb`:
+  passed, 8 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `rg -n "InvocationTarget \\{|TargetScope|InvocationSubject|InvocationCausalContext" src/daemon/ability/builtins/resources/media/mic_subscribe.rs src/daemon/ability/builtins/resources/media/screen_snapshot.rs`:
+  no matches.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No migrated media file finding was reported.
+
+This evidence verifies only the media subject target-fixture slice. It does
+not prove RF-8/RF-7 or SPEC completion.
+
+## Camera Subject Target Fixture Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -q daemon::ability::builtins::resources::media::camera_snapshot --lib --features axon-pb`:
+  passed, 13 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `rg -n "InvocationTarget \\{|TargetScope|InvocationSubject|InvocationCausalContext" src/daemon/ability/builtins/resources/media/camera_snapshot.rs`:
+  no matches.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No migrated camera media finding was
+  reported.
+
+This evidence verifies only the camera subject target-fixture slice. It does
+not prove RF-8/RF-7 or SPEC completion.
+
+## LocalRuntime Subject Derivation Ownership Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: initially reported one formatting diff after
+  adding `InvocationTarget::resolved_subject_ura`; `cargo fmt --all` was
+  applied and the check then passed.
+- `cargo test -q daemon::invocation::routing::target --lib --features axon-pb`:
+  initially exposed an invalid hand-written hub URA in the new test, then
+  passed, 14 tests, after switching the fixture to the canonical hub Ability
+  URA builder.
+- `cargo test -q daemon::invocation::dispatch::local_runtime_invoker --lib --features axon-pb`:
+  passed, 4 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `rg -n "LocalRuntimeSubjectPolicy|DescriptorDefault|descriptor default subject|AbilitySelector::parse\\(&target\\.ability\\)|target\\.causal_context\\.as_axon\\(\\)" src/daemon/invocation/dispatch/local_runtime_invoker.rs src/daemon/invocation/routing/target.rs`:
+  only reported `AbilitySelector::parse(&target.ability)` in
+  `local_runtime_invoker.rs`, which remains the callee-owner projection, not
+  subject fallback ownership.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `target.rs` or `local_runtime_invoker.rs`
+  finding was reported.
+
+This evidence verifies only the LocalRuntime subject derivation ownership
+slice. It does not prove RF-8/RF-7 or SPEC completion.

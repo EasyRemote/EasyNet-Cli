@@ -498,7 +498,7 @@ fn wav_from_s16le(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -554,15 +554,12 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({"sample_rate": 48000, "channels": 1, "codec": "opus"}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({"sample_rate": 48000, "channels": 1, "codec": "opus"}),
+            CallMode::Stream,
+            ura,
+        );
         let src = dispatcher.execute_stream(target).unwrap();
         let frame = match src {
             StreamSource::Snapshot(mut frames) => {
@@ -628,15 +625,12 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(cam_ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({}),
+            CallMode::Stream,
+            cam_ura,
+        );
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH));
     }
@@ -649,15 +643,12 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01MIC"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({"subject": "easynet:///r/x/resource/y"}),
+            CallMode::Stream,
+            "easynet:///r/acme/resource/01MIC",
+        );
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_IN_ARGS));
     }
@@ -675,15 +666,12 @@ mod tests {
         );
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01MIC"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({}),
+            CallMode::Stream,
+            "easynet:///r/acme/resource/01MIC",
+        );
 
         let err = dispatcher.execute_stream(target).unwrap_err();
         let message = err.to_string();

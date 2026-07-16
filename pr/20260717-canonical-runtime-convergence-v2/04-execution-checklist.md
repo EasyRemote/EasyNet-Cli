@@ -104,6 +104,42 @@
       `InvocationTarget::local_daemon_system`.
 - [x] Verify focused page API and governance health tests plus lib build.
 
+## Media Subject Target Fixture Slice
+
+- [x] Identify mic and screen media tests that still hand-assembled local
+      `InvocationTarget` literals.
+- [x] Migrate explicit media resource subjects to
+      `InvocationTarget::local_daemon_system_with_subject`.
+- [x] Migrate missing-subject screen fixture to
+      `InvocationTarget::local_daemon_system`.
+- [x] Verify focused mic and screen media tests plus lib build.
+- [x] Leave camera media fixtures visible as remaining RF-8/RF-7 inventory.
+
+## Camera Subject Target Fixture Slice
+
+- [x] Identify camera media tests that still hand-assembled local
+      `InvocationTarget` literals.
+- [x] Migrate snapshot, subscribe, record start, and record stop targets with
+      explicit resource subjects to
+      `InvocationTarget::local_daemon_system_with_subject`.
+- [x] Migrate missing-subject camera targets to
+      `InvocationTarget::local_daemon_system`.
+- [x] Verify focused camera media tests plus lib build.
+- [x] Confirm `camera_snapshot.rs` has no remaining direct target literal or
+      target enum construction.
+
+## LocalRuntime Subject Derivation Ownership Slice
+
+- [x] Identify `local_runtime_invoker` as a second descriptor-default subject
+      derivation owner.
+- [x] Move subject URA resolution onto `InvocationTarget`.
+- [x] Preserve explicit subject validation and daemon-system descriptor
+      subject policy as target-domain behavior.
+- [x] Make `local_runtime_invoker` consume resolved subject and causal context
+      instead of defining a parallel subject policy enum.
+- [x] Verify routing target tests, LocalRuntime invoker tests, lib build, and
+      architecture convergence gate.
+
 ## Still Required Before Completion
 
 - [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.

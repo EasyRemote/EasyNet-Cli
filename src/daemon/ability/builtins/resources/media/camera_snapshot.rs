@@ -1260,7 +1260,7 @@ fn parse_positive_u32(ability: &'static str, raw: &str, name: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -1408,15 +1408,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            ura,
+        );
         let resp = dispatcher.execute_rpc(target).unwrap();
 
         // Required receipt fields (matches the docstring contract).
@@ -1459,15 +1456,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_CAMERA_SUBSCRIBE,
+            json!({}),
+            CallMode::Stream,
+            ura,
+        );
         let source = dispatcher.execute_stream(target).unwrap();
         let (snapshot, mut rx) = match source {
             StreamSource::Live(rx) => (Vec::new(), rx),
@@ -1500,29 +1494,23 @@ mod tests {
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let start = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_START.to_string(),
-                normalized_args: json!({"fps": 5, "max_duration_ms": 5000}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura.clone()),
-                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                ABILITY_CAMERA_RECORD_START,
+                json!({"fps": 5, "max_duration_ms": 5000}),
+                CallMode::Rpc,
+                ura.clone(),
+            ))
             .unwrap();
         let session_id = start["recording_session_id"].as_str().unwrap().to_string();
         assert_eq!(start["state"], "recording");
 
         let stop = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
-                normalized_args: json!({"recording_session_id": session_id}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
-                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                ABILITY_CAMERA_RECORD_STOP,
+                json!({"recording_session_id": session_id}),
+                CallMode::Rpc,
+                ura,
+            ))
             .unwrap();
         assert_eq!(stop["state"], "stopped");
         assert_eq!(stop["content_type"], recording_content_type());
@@ -1554,28 +1542,22 @@ mod tests {
         let dispatcher = Arc::new(reg);
         let start_args = json!({"fps": 5, "max_duration_ms": 5000, "max_bytes": 1048576});
         let first = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_START.to_string(),
-                normalized_args: start_args.clone(),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura.clone()),
-                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                ABILITY_CAMERA_RECORD_START,
+                start_args.clone(),
+                CallMode::Rpc,
+                ura.clone(),
+            ))
             .unwrap();
         let session_id = first["recording_session_id"].as_str().unwrap().to_string();
 
         let duplicate_err = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_START.to_string(),
-                normalized_args: start_args,
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura.clone()),
-                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                ABILITY_CAMERA_RECORD_START,
+                start_args,
+                CallMode::Rpc,
+                ura.clone(),
+            ))
             .unwrap_err()
             .to_string();
         assert!(
@@ -1595,15 +1577,12 @@ mod tests {
         }
 
         let stop = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
-                normalized_args: json!({"recording_session_id": session_id}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(ura),
-                causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                ABILITY_CAMERA_RECORD_STOP,
+                json!({"recording_session_id": session_id}),
+                CallMode::Rpc,
+                ura,
+            ))
             .unwrap();
         assert_eq!(stop["state"], "stopped");
         clear_recording_sessions_for_test();
@@ -1615,15 +1594,11 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system(
+            ABILITY_CAMERA_SUBSCRIBE,
+            json!({}),
+            CallMode::Stream,
+        );
         let err = dispatcher.execute_stream(target).unwrap_err().to_string();
 
         assert!(
@@ -1637,8 +1612,7 @@ mod tests {
     }
 
     /// INV-SUBJECT-ENVELOPE positive half: invocation with no
-    /// envelope subject (`subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived()`) MUST fail with
-    /// reason="subject_required". Without this the handler would
+    /// envelope subject MUST fail with reason="subject_required". Without this the handler would
     /// either crash or silently capture from "the first camera",
     /// either of which makes auditing a lie.
     #[test]
@@ -1647,15 +1621,11 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(), // no envelope subject
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_SUBJECT_REQUIRED),
@@ -1676,15 +1646,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01NEVER-EXISTED"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01NEVER-EXISTED",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_RESOURCE_NOT_FOUND),
@@ -1717,15 +1684,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(mic_ura),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            mic_ura,
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH),
@@ -1744,15 +1708,12 @@ mod tests {
         let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit("easynet:///r/acme/resource/01CAM"),
-            causal_context: crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({"subject": "easynet:///r/x/resource/y"}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01CAM",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_SUBJECT_IN_ARGS),

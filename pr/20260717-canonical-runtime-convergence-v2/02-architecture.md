@@ -180,3 +180,50 @@ constructor when forwarding a page API request to a selected ability. The
 governance health test fixture uses the daemon-system constructor for its local
 smoke dispatch. This continues the RF-8/RF-7 migration without claiming that
 all local target construction has moved.
+
+## Current Slice: Media Subject Target Fixtures
+
+Owner: EasyNet-Cli daemon media resource adapters.
+
+Media resource handlers are important subject-boundary tests because they
+reject missing subjects, subject-in-args fallback, wrong resource type, corrupt
+resource tables, and unknown resource URAs. Their tests should therefore
+exercise subject policy through the same routing target constructors as other
+daemon adapters rather than retaining local target literals.
+
+The mic.subscribe and screen.snapshot/screen.subscribe fixtures now construct
+local daemon-system targets through `InvocationTarget` constructors for both
+explicit resource subjects and derived-system missing-subject cases. Camera
+fixtures remain in the direct-literal inventory for a separate slice.
+
+## Current Slice: Camera Subject Target Fixtures
+
+Owner: EasyNet-Cli daemon camera media adapter.
+
+Camera media tests cover the broadest media subject surface: snapshot,
+subscribe, recording start/stop, duplicate recording rejection, missing
+subject, unknown subject, wrong resource type, and subject-in-args rejection.
+Those fixtures must use the same routing target construction boundary as the
+mic and screen tests so media subject policy is exercised consistently.
+
+The camera fixtures now construct explicit resource-subject targets and
+missing-subject daemon-system targets through `InvocationTarget` constructors.
+This closes the media fixture portion of the direct target construction
+inventory while leaving non-media target literals for later RF-8/RF-7 slices.
+
+## Current Slice: LocalRuntime Subject Derivation Ownership
+
+Owner: EasyNet-Cli daemon invocation routing.
+
+The target resolver already distinguishes public ingress from daemon-system
+calls, but `local_runtime_invoker` still carried a second subject derivation
+policy for descriptor defaults. That duplicated the RF-8 decision point: the
+same missing subject could be interpreted by the target domain and again by
+the LocalRuntime adapter.
+
+`InvocationTarget` now owns resolution of its subject binding against the
+selected callee. Explicit subjects are validated as URAs, daemon-system calls
+resolve through the named descriptor-default policy, and hub-owned abilities
+use the Ability URA as subject because Hub identities are not valid Axon
+subjects. The LocalRuntime adapter consumes the resolved subject and causal
+context; it no longer defines a separate fallback subject state machine.
