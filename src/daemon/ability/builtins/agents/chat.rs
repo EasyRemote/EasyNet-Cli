@@ -84,10 +84,11 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::daemon::execution::mission::dispatch::{AgentResponse, DriverOverrides, ToolCall};
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
 /// The wire-level *verb* portion of every chat ability name. The
@@ -498,8 +499,9 @@ pub(crate) fn build_discover_handler_for(
     // immediately — same hot-add story as the chat handler.
     let provider: crate::daemon::ability::builtins::agents::discover::AgentRegistryProvider =
         Arc::new(|| {
-            crate::daemon::persistence::agent_registry::load_agents()
-                .map_err(|error| anyhow::anyhow!("load discover agent registry: {error:#}"))
+            AgentAggregateRepository::load_snapshot()
+                .map(|snapshot| snapshot.registered_agent_registry_projection())
+                .map_err(|error| anyhow::anyhow!("load discover Agent aggregate: {error:#}"))
         });
     Arc::new(move |args: Value| {
         // Defer to the discover module's per-call entry. Public
@@ -522,8 +524,9 @@ pub(crate) fn build_invoke_handler_for(
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) -> crate::daemon::ability::dispatch::LocalRpcHandler {
     Arc::new(move |args: Value| {
-        let registry = crate::daemon::persistence::agent_registry::load_agents()
-            .map_err(|error| anyhow::anyhow!("load invoke agent registry: {error:#}"))?;
+        let registry = AgentAggregateRepository::load_snapshot()
+            .map(|snapshot| snapshot.registered_agent_registry_projection())
+            .map_err(|error| anyhow::anyhow!("load invoke Agent aggregate: {error:#}"))?;
         let provider: Arc<
             dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
         > = Arc::new(move || registry.clone());
@@ -1167,12 +1170,12 @@ fn enumerate_skill_specs(
 fn enumerate_other_agent_specs(
     self_agent_name: &str,
 ) -> Vec<crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec> {
-    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
-        Ok(r) => r,
+    let snapshot = match AgentAggregateRepository::load_snapshot() {
+        Ok(snapshot) => snapshot,
         Err(_) => return Vec::new(),
     };
     let mut out = Vec::new();
-    for (other_name, other_entry) in &registry.agents {
+    for (other_name, other_entry) in snapshot.registered_agents() {
         if other_name == self_agent_name {
             continue;
         }
@@ -2419,14 +2422,14 @@ mod tests {
 
     #[test]
     fn kernel_invoke_routes_chat_through_registered_handler() {
-        use crate::daemon::boot::kernel::api::KernelApi;
         use crate::daemon::boot::kernel::Kernel;
+        use crate::daemon::boot::kernel::api::KernelApi;
         use crate::daemon::invocation::receipts::runtime_record::{
             RuntimeCausalContext, RuntimeInvocation,
         };
         use easynet_axon::invocation::{
-            make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes, AxonError,
-            KeyResolver,
+            AxonError, KeyResolver, make_ability, sign_descriptor_bound_invocation,
+            signing_key_from_bytes,
         };
         use ed25519_dalek::VerifyingKey;
         use std::sync::atomic::{AtomicUsize, Ordering};

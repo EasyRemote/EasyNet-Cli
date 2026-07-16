@@ -19,9 +19,12 @@
 use anyhow::Context;
 use clap::Args;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::ability::builtins::governance::teach::{ACQUIRE, FORGET, TEACH};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, HostedAgentNameLookupError,
+};
 use crate::support::platform::local_invoke::invoke_local_ability_with_hosted_agent_delegation;
 use crate::support::platform::output;
 
@@ -282,17 +285,36 @@ pub fn execute_learn(args: &LearnArgs) -> anyhow::Result<(Value, Value)> {
 }
 
 fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
-    let local = crate::daemon::persistence::local_agents::load()
-        .with_context(|| format!("resolve learner {learner:?} from local-agents.json"))?;
-    let entry =
-        crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(&local, learner)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "learner {learner:?} has no persisted local Agent URA; run agent publish/join \
+    let snapshot = AgentAggregateRepository::try_load_snapshot()
+        .with_context(|| format!("resolve learner {learner:?} from Agent aggregate"))?;
+    let learner_ura = snapshot
+        .hosted_agent_ura_by_name(learner)
+        .map_err(|error| resolve_learner_lookup_error(learner, error))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "learner {learner:?} has no persisted local Agent URA; run agent publish/join \
                  before importing granted descriptors"
-                )
-            })?;
-    Ok(entry.agent_ura.clone())
+            )
+        })?;
+    Ok(learner_ura.to_string())
+}
+
+fn resolve_learner_lookup_error(learner: &str, error: HostedAgentNameLookupError) -> anyhow::Error {
+    match error {
+        HostedAgentNameLookupError::Ambiguous {
+            first_profile,
+            second_profile,
+            ..
+        } => anyhow::anyhow!(
+            "learner {learner:?} is ambiguous across profiles {first_profile:?} and {second_profile:?}"
+        ),
+        HostedAgentNameLookupError::InvalidUra {
+            agent_ura, reason, ..
+        } => anyhow::anyhow!("learner {learner:?} has invalid Agent URA {agent_ura:?}: {reason}"),
+        HostedAgentNameLookupError::NonAgentUra { agent_ura, .. } => {
+            anyhow::anyhow!("learner {learner:?} resolved to non-Agent URA {agent_ura:?}")
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,9 +391,10 @@ mod tests {
 
         assert!(!gate.bypassed);
         assert!(gate.prompt.contains("mentor.quote"));
-        assert!(gate
-            .prompt
-            .contains("easynet:///r/default/agent/user.student"));
+        assert!(
+            gate.prompt
+                .contains("easynet:///r/default/agent/user.student")
+        );
     }
 
     #[test]
@@ -410,9 +433,11 @@ mod tests {
             parse_descriptor_transaction_status("committed_runtime_degraded", "import").unwrap(),
             DescriptorTransactionStatus::CommittedRuntimeDegraded
         );
-        assert!(parse_descriptor_transaction_status("unknown", "import")
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported transaction status"));
+        assert!(
+            parse_descriptor_transaction_status("unknown", "import")
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported transaction status")
+        );
     }
 }

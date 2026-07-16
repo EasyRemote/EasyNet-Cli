@@ -27,7 +27,11 @@ use std::sync::{Mutex, OnceLock};
 
 #[cfg(feature = "axon-pb")]
 use crate::daemon::ability::{
-    HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+    HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY, HostedAgentDelegationRequest,
+};
+#[cfg(feature = "axon-pb")]
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, HostedAgentNameLookupError,
 };
 
 /// Resolve the local daemon Invocation endpoint. Thin re-export of
@@ -693,11 +697,11 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
     use anyhow::Context;
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
     use easynet_axon::pb::axon::v1::{
-        invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
         BinaryChunk, ContentEnvelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
-        StreamDescriptor,
+        StreamDescriptor, invoke_bidi_down::Payload as DownPayload,
+        invoke_bidi_up::Payload as UpPayload,
     };
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
@@ -1733,7 +1737,7 @@ async fn invoke_local_daemon_first_stream_payload(
     request: easynet_axon::pb::axon::v1::InvokeServerStreamRequest,
     function_name: &str,
 ) -> anyhow::Result<LocalDaemonStreamProjection> {
-    use anyhow::{bail, Context};
+    use anyhow::{Context, bail};
 
     let mut stream = client
         .invoke_stream(request)
@@ -1769,7 +1773,7 @@ async fn invoke_local_daemon_first_stream_payload(
 fn invoke_local_daemon_ability_with_invocation_meta_inner(
     request: LocalDaemonInvocationMetaRequest<'_>,
 ) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
-    use anyhow::{anyhow, bail, Context};
+    use anyhow::{Context, anyhow, bail};
     use easynet_axon::pb::axon::v1 as pb;
     use serde_json::Value;
 
@@ -2090,30 +2094,41 @@ fn canonical_hosted_agent_ura_by_name(agent_name: &str) -> anyhow::Result<String
     if agent_name.is_empty() {
         anyhow::bail!("hosted agent callee name must not be empty");
     }
-    let local_agents = crate::daemon::persistence::local_agents::load()
-        .map_err(|err| anyhow::anyhow!("load local hosted agents: {err}"))?;
-    let entry = crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
-        &local_agents,
-        agent_name,
-    )?
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "hosted agent {agent_name:?} is not registered in local-agents.json; run federation join/agent advertise before invoking as that agent"
-        )
-    })?;
-    let parsed = crate::core::ura::parse_ura(&entry.agent_ura).map_err(|err| {
-        anyhow::anyhow!(
-            "hosted agent {agent_name:?} has invalid Agent URA {:?}: {err}",
-            entry.agent_ura
-        )
-    })?;
-    if parsed.kind != crate::core::ura::URAKind::Agent {
-        anyhow::bail!(
-            "hosted agent {agent_name:?} resolved to non-Agent URA {:?}",
-            entry.agent_ura
-        );
+    let snapshot = AgentAggregateRepository::try_load_snapshot()
+        .map_err(|err| anyhow::anyhow!("load Agent aggregate for hosted agent callee: {err:#}"))?;
+    let agent_ura = snapshot
+        .hosted_agent_ura_by_name(agent_name)
+        .map_err(|error| hosted_agent_callee_lookup_error(agent_name, error))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "hosted agent {agent_name:?} is not registered in the Agent aggregate; run federation join/agent advertise before invoking as that agent"
+            )
+        })?;
+    Ok(agent_ura.to_string())
+}
+
+#[cfg(feature = "axon-pb")]
+fn hosted_agent_callee_lookup_error(
+    agent_name: &str,
+    error: HostedAgentNameLookupError,
+) -> anyhow::Error {
+    match error {
+        HostedAgentNameLookupError::Ambiguous {
+            first_profile,
+            second_profile,
+            ..
+        } => anyhow::anyhow!(
+            "hosted agent {agent_name:?} is ambiguous across profiles {first_profile:?} and {second_profile:?}"
+        ),
+        HostedAgentNameLookupError::InvalidUra {
+            agent_ura, reason, ..
+        } => anyhow::anyhow!(
+            "hosted agent {agent_name:?} has invalid Agent URA {agent_ura:?}: {reason}"
+        ),
+        HostedAgentNameLookupError::NonAgentUra { agent_ura, .. } => {
+            anyhow::anyhow!("hosted agent {agent_name:?} resolved to non-Agent URA {agent_ura:?}")
+        }
     }
-    Ok(entry.agent_ura.clone())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2252,9 +2267,9 @@ mod tests {
         ed25519_dalek::SigningKey,
     ) {
         use easynet_axon::invocation::{
-            make_ability, AbilityCallModes, AbilityOptions, AgentIdentity,
-            Ed25519ReceiptSigningAuthority, InvocationState, ReceiptSigningAuthority,
-            StaticReceiptSigningAuthorityProvider, UraProfile,
+            AbilityCallModes, AbilityOptions, AgentIdentity, Ed25519ReceiptSigningAuthority,
+            InvocationState, ReceiptSigningAuthority, StaticReceiptSigningAuthorityProvider,
+            UraProfile, make_ability,
         };
         use easynet_axon::pb::axon::v1::InvokeResponse;
         use ed25519_dalek::SigningKey;
@@ -2484,10 +2499,12 @@ mod tests {
             projection.receipt["anchor"]["receipt_hash"],
             serde_json::json!(expected_hash)
         );
-        assert!(projection.receipt["anchor"]["receipt_ura"]
-            .as_str()
-            .expect("receipt URA")
-            .ends_with(&expected_anchor_suffix));
+        assert!(
+            projection.receipt["anchor"]["receipt_ura"]
+                .as_str()
+                .expect("receipt URA")
+                .ends_with(&expected_anchor_suffix)
+        );
         assert_eq!(
             projection.receipt["cryptographic_verification"],
             "finalization_checkpoints_verified"
@@ -2528,9 +2545,11 @@ mod tests {
         let error = unverified
             .verify(&resolver, "job.run")
             .expect_err("tampered signature must fail closed");
-        assert!(error
-            .to_string()
-            .contains("terminal receipt signature is invalid"));
+        assert!(
+            error
+                .to_string()
+                .contains("terminal receipt signature is invalid")
+        );
     }
 
     #[test]
@@ -2553,9 +2572,11 @@ mod tests {
 
         let error = verified_receipt_refs_from_causal_parents(&[parent])
             .expect_err("unverified anchor must not enter causal context");
-        assert!(error
-            .to_string()
-            .contains("was not cryptographically verified"));
+        assert!(
+            error
+                .to_string()
+                .contains("was not cryptographically verified")
+        );
     }
 
     #[test]

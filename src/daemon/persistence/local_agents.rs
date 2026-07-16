@@ -50,7 +50,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
+use super::config::{WritePermissions, atomic_write_with_permissions, state_dir};
 
 pub(crate) const FILE_NAME: &str = "local-agents.json";
 
@@ -126,31 +126,6 @@ pub fn lookup_hosted_ura(file: &LocalAgentsFile, profile: &str, name: &str) -> O
         .iter()
         .find(|e| e.profile == profile && e.name == name)
         .map(|e| e.agent_ura.clone())
-}
-
-/// Resolve a hosted Agent by its display name across all profiles.
-///
-/// This helper is intentionally stricter than [`lookup_hosted_ura`]: CLI
-/// surfaces such as `ability learn --as <agent>` and runtime transfer handlers
-/// receive a human-facing agent name, not a `(profile, name)` pair. Returning an
-/// error on ambiguity prevents two profiles with the same display name from
-/// silently receiving authority for the wrong hosted URA.
-pub fn lookup_hosted_agent_by_name<'a>(
-    file: &'a LocalAgentsFile,
-    name: &str,
-) -> anyhow::Result<Option<&'a HostedAgentEntry>> {
-    let mut matches = file.hosted_agents.iter().filter(|entry| entry.name == name);
-    let Some(entry) = matches.next() else {
-        return Ok(None);
-    };
-    if let Some(other) = matches.next() {
-        anyhow::bail!(
-            "hosted agent name {name:?} is ambiguous across profiles {:?} and {:?}",
-            entry.profile,
-            other.profile
-        );
-    }
-    Ok(Some(entry))
 }
 
 /// Insert or update a hosted Agent entry. Returns `true` when an

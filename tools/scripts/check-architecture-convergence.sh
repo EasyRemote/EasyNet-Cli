@@ -2710,12 +2710,28 @@ if agent_aggregate.exists():
             "Agent aggregate snapshot must own hosted Agent display-name lookup errors",
         ),
         (
+            "struct HostedAgentIdentityProjection",
+            "Agent aggregate snapshot must own hosted Agent identity projection shape",
+        ),
+        (
             "fn registered_agent_surface_names(&self) -> BTreeSet<String>",
             "Agent aggregate snapshot must expose registered Agent surface names",
         ),
         (
+            "fn registered_agent_registry_projection(&self) -> AgentRegistry",
+            "Agent aggregate snapshot must expose registered registry projection for provider adapters",
+        ),
+        (
             "fn hosted_agent_ura_by_name(",
             "Agent aggregate snapshot must expose hosted Agent lookup by display name",
+        ),
+        (
+            "fn hosted_agent_identity_by_name(",
+            "Agent aggregate snapshot must expose hosted Agent identity lookup by display name",
+        ),
+        (
+            "fn hosted_agent_identity_by_ura(",
+            "Agent aggregate snapshot must expose hosted Agent identity lookup by Agent URA",
         ),
         (
             "agent_registry::load_agents()",
@@ -3119,6 +3135,93 @@ for hosted_name_surface, surface_label in hosted_name_surfaces:
     ):
         if token in production_text:
             add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", hosted_name_surface, 1, detail)
+
+governance_teach = cli_root / "src/daemon/ability/builtins/governance/teach.rs"
+if governance_teach.exists():
+    text = source(governance_teach)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    teach_requirements = (
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            "governance teach hosted identity authorization must load through the Agent aggregate repository",
+        ),
+        (
+            "hosted_agent_identity_by_name(",
+            "governance teach hosted identity authorization must use aggregate display-name identity lookup",
+        ),
+        (
+            "hosted_agent_identity_by_ura(",
+            "governance teach hosted identity authorization must use aggregate Agent URA membership lookup",
+        ),
+        (
+            "HostedAgentNameLookupError",
+            "governance teach hosted identity authorization must preserve hosted Agent lookup error classification",
+        ),
+    )
+    for token, detail in teach_requirements:
+        if token not in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", governance_teach, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            "governance teach hosted identity authorization must not load local-agents.json directly",
+        ),
+        (
+            "lookup_hosted_agent_by_name",
+            "governance teach hosted identity authorization must not bypass aggregate hosted Agent lookup",
+        ),
+        (
+            "LocalAgentsFile",
+            "governance teach hosted identity authorization must not inspect local-agents.json shape",
+        ),
+    ):
+        if token in production_text:
+            add("R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK", governance_teach, 1, detail)
+
+local_agents_identity_file = cli_root / "src/daemon/persistence/local_agents.rs"
+if local_agents_identity_file.exists():
+    text = source(local_agents_identity_file)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    if "fn lookup_hosted_agent_by_name" in production_text:
+        add(
+            "R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK",
+            local_agents_identity_file,
+            line_number(production_text, production_text.find("fn lookup_hosted_agent_by_name")),
+            "hosted Agent display-name lookup must live on AgentAggregateSnapshot, not local-agents file helpers",
+        )
+
+# Rule 39: chat hot-added Agent providers consume Agent aggregate projections.
+# Chat is an invocation-facing surface: hot-added discover/invoke handlers and
+# peer-skill hints must not revive registry-only reads after the Agent aggregate
+# became the read owner for registered + hosted Agent state.
+agent_chat = cli_root / "src/daemon/ability/builtins/agents/chat.rs"
+if agent_chat.exists():
+    text = source(agent_chat)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    chat_requirements = (
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            "Agent chat provider reads must load through the Agent aggregate repository",
+        ),
+        (
+            "registered_agent_registry_projection()",
+            "Agent chat hot providers must clone registry state through an aggregate projection",
+        ),
+        (
+            "snapshot.registered_agents()",
+            "Agent chat peer-skill enumeration must iterate aggregate registered Agents",
+        ),
+    )
+    for token, detail in chat_requirements:
+        if token not in production_text:
+            add("R39_AGENT_CHAT_AGGREGATE_PROVIDER_FORK", agent_chat, 1, detail)
+    if "agent_registry::load_agents" in production_text:
+        add(
+            "R39_AGENT_CHAT_AGGREGATE_PROVIDER_FORK",
+            agent_chat,
+            1,
+            "Agent chat provider path must not load agents.json directly",
+        )
 
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The

@@ -95,12 +95,29 @@ fn handler(client: &InvocationClient, child: ChildInvocation) {
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/chat.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
 fn register(reg: &mut Catalog) {
     reg.register_rpc_with_owner("agents.chat", handler);
 }
 
 fn handler(binding: &ChatImplementationBinding) {
     binding.execute_admitted();
+}
+
+fn build_discover_handler_for() {
+    AgentAggregateRepository::load_snapshot()
+        .map(|snapshot| snapshot.registered_agent_registry_projection());
+}
+
+fn build_invoke_handler_for() {
+    AgentAggregateRepository::load_snapshot()
+        .map(|snapshot| snapshot.registered_agent_registry_projection());
+}
+
+fn enumerate_other_agent_specs() {
+    let snapshot = AgentAggregateRepository::load_snapshot().unwrap();
+    snapshot.registered_agents();
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/lifecycle.rs" <<'EOF'
@@ -216,6 +233,13 @@ enum HostedAgentNameLookupError {
     NonAgentUra,
 }
 
+struct HostedAgentIdentityProjection<'a> {
+    profile: &'a str,
+    name: &'a str,
+    agent_ura: &'a str,
+    signing_authority: &'a str,
+}
+
 struct AgentLocalTargetProjection {
     hosted_agent_targets: BTreeSet<HostedAgentTarget>,
     registered_agent_ids: BTreeSet<String>,
@@ -246,6 +270,14 @@ impl AgentAggregateSnapshot {
         BTreeSet::new()
     }
 
+    fn registered_agent_registry_projection(&self) -> AgentRegistry {
+        self.registry.clone()
+    }
+
+    fn registered_agents(&self) -> impl Iterator<Item = (&str, &AgentEntry)> {
+        self.registry.agents.iter().map(|(name, entry)| (name.as_str(), entry))
+    }
+
     fn host_device_agent_ura(&self) -> &str {
         &self.local_agents.host_device_agent_ura
     }
@@ -264,6 +296,24 @@ impl AgentAggregateSnapshot {
 
     fn hosted_agent_ura_by_name(&self, agent: &str) -> Result<Option<&str>, HostedAgentNameLookupError> {
         Ok(Some("easynet:///r/acme/agent/user.claude"))
+    }
+
+    fn hosted_agent_identity_by_name(&self, agent: &str) -> Result<Option<HostedAgentIdentityProjection<'_>>, HostedAgentNameLookupError> {
+        Ok(Some(HostedAgentIdentityProjection {
+            profile: "llm",
+            name: agent,
+            agent_ura: "easynet:///r/acme/agent/user.claude",
+            signing_authority: "hosted_by:easynet:///r/acme/agent/user.device",
+        }))
+    }
+
+    fn hosted_agent_identity_by_ura(&self, agent_ura: &str) -> Option<HostedAgentIdentityProjection<'_>> {
+        Some(HostedAgentIdentityProjection {
+            profile: "llm",
+            name: "claude",
+            agent_ura,
+            signing_authority: "hosted_by:easynet:///r/acme/agent/user.device",
+        })
     }
 
     fn local_target_projection(&self) -> AgentLocalTargetProjection {
@@ -293,6 +343,21 @@ impl AgentAggregateRepository {
             local_agents: local_agents::load()?,
         })
     }
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/governance/teach.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, HostedAgentNameLookupError,
+};
+
+fn hosted_agent_lookup_error(error: HostedAgentNameLookupError) {}
+
+fn authorize_teach(owner: &str, learner_ura: &str) -> anyhow::Result<()> {
+    let snapshot = AgentAggregateRepository::load_snapshot()?;
+    let owner_identity = snapshot.hosted_agent_identity_by_name(owner)
+        .map_err(hosted_agent_lookup_error)?;
+    let learner_identity = snapshot.hosted_agent_identity_by_ura(learner_ura);
+    Ok(())
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
@@ -2365,9 +2430,48 @@ fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
     Ok(entry.unwrap().agent_ura.clone())
 }
 EOF
+cat >"$CLI/src/daemon/ability/builtins/governance/teach.rs" <<'EOF'
+fn require_owner_authority(owner_agent: &str) -> anyhow::Result<String> {
+    let local = crate::daemon::persistence::local_agents::load()?;
+    let entry =
+        crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(&local, owner_agent)?;
+    Ok(entry.unwrap().agent_ura.clone())
+}
+EOF
+cat >"$CLI/src/daemon/persistence/local_agents.rs" <<'EOF'
+fn lookup_hosted_agent_by_name(file: &LocalAgentsFile, name: &str) -> anyhow::Result<Option<&HostedAgentEntry>> {
+    Ok(None)
+}
+EOF
 expect_fail \
   "mission child target aggregate fork" \
   "R38_MISSION_CHILD_TARGET_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/chat.rs" <<'EOF'
+fn register(reg: &mut Catalog) {
+    reg.register_rpc_with_owner("agents.chat", handler);
+}
+
+fn handler(binding: &ChatImplementationBinding) {
+    binding.execute_admitted();
+}
+
+fn build_discover_handler_for() {
+    crate::daemon::persistence::agent_registry::load_agents().unwrap();
+}
+
+fn build_invoke_handler_for() {
+    crate::daemon::persistence::agent_registry::load_agents().unwrap();
+}
+
+fn enumerate_other_agent_specs() {
+    crate::daemon::persistence::agent_registry::load_agents().unwrap();
+}
+EOF
+expect_fail \
+  "agent chat aggregate provider fork" \
+  "R39_AGENT_CHAT_AGGREGATE_PROVIDER_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'

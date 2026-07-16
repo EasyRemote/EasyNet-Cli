@@ -22,27 +22,31 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::core::ura::AbilitySelector;
+use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
 use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
-use crate::daemon::ability::HostedAgentAuthority;
 use crate::daemon::axon_bridge::hot_agent_registrar::{
-    block_on_hot_registrar, HotAgentRegistrarError, HotAgentRegistrarReadiness,
-    HotAgentRuntimeSyncOutcome,
+    HotAgentRegistrarError, HotAgentRegistrarReadiness, HotAgentRuntimeSyncOutcome,
+    block_on_hot_registrar,
+};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentAggregateSnapshot, HostedAgentIdentityProjection,
+    HostedAgentNameLookupError,
 };
 use crate::daemon::persistence::config::sync_parent_dir;
 use crate::daemon::persistence::teach_grants::{
     AcquireStagedGrant, AcquiringArtifactRecoveryState, AcquiringArtifactTxn,
-    DescriptorImportRecord, TeachGrant, TeachGrantAdmissionSnapshot,
+    DescriptorImportRecord, EXECUTION_MODE_DEFAULT, TeachGrant, TeachGrantAdmissionSnapshot,
     TeachGrantAdmissionSnapshotDraft, TeachGrantAuthoritySnapshot, TeachGrantDraft,
-    TeachGrantStore, EXECUTION_MODE_DEFAULT,
+    TeachGrantStore,
 };
 use crate::support::platform::errors::append_cleanup_error;
 
@@ -341,12 +345,14 @@ fn required_str<'a>(args: &'a Value, field: &str, surface: &str) -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("{surface} requires `{field}`"))
 }
 
-fn hosted_agent_by_name<'a>(
-    local: &'a crate::daemon::persistence::local_agents::LocalAgentsFile,
+fn hosted_agent_identity_by_name<'a>(
+    snapshot: &'a AgentAggregateSnapshot,
     agent_name: &str,
     surface: &str,
-) -> anyhow::Result<&'a crate::daemon::persistence::local_agents::HostedAgentEntry> {
-    crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(local, agent_name)?
+) -> anyhow::Result<HostedAgentIdentityProjection<'a>> {
+    snapshot
+        .hosted_agent_identity_by_name(agent_name)
+        .map_err(|error| hosted_agent_lookup_error(surface, agent_name, error))?
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "{surface} cannot resolve agent {agent_name:?}: no persisted local Agent URA"
@@ -354,21 +360,43 @@ fn hosted_agent_by_name<'a>(
         })
 }
 
-fn hosted_agent_by_ura<'a>(
-    local: &'a crate::daemon::persistence::local_agents::LocalAgentsFile,
+fn hosted_agent_identity_by_ura<'a>(
+    snapshot: &'a AgentAggregateSnapshot,
     agent_ura: &str,
     surface: &str,
-) -> anyhow::Result<&'a crate::daemon::persistence::local_agents::HostedAgentEntry> {
-    local
-        .hosted_agents
-        .iter()
-        .find(|entry| entry.agent_ura == agent_ura)
+) -> anyhow::Result<HostedAgentIdentityProjection<'a>> {
+    snapshot
+        .hosted_agent_identity_by_ura(agent_ura)
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "{surface} cannot teach to {agent_ura:?}: learner must be a local hosted Agent \
                  on this device"
             )
         })
+}
+
+fn hosted_agent_lookup_error(
+    surface: &str,
+    agent_name: &str,
+    error: HostedAgentNameLookupError,
+) -> anyhow::Error {
+    match error {
+        HostedAgentNameLookupError::Ambiguous {
+            first_profile,
+            second_profile,
+            ..
+        } => anyhow::anyhow!(
+            "{surface} cannot resolve agent {agent_name:?}: ambiguous across profiles {first_profile:?} and {second_profile:?}"
+        ),
+        HostedAgentNameLookupError::InvalidUra {
+            agent_ura, reason, ..
+        } => anyhow::anyhow!(
+            "{surface} cannot resolve agent {agent_name:?}: invalid Agent URA {agent_ura:?}: {reason}"
+        ),
+        HostedAgentNameLookupError::NonAgentUra { agent_ura, .. } => anyhow::anyhow!(
+            "{surface} cannot resolve agent {agent_name:?}: non-Agent URA {agent_ura:?}"
+        ),
+    }
 }
 
 /// Validate that the current invocation caller may confer an
@@ -379,20 +407,20 @@ fn hosted_agent_by_ura<'a>(
 /// that Agent's persisted host authority.
 fn require_owner_authority(
     env: &EnvelopeContext,
+    snapshot: &AgentAggregateSnapshot,
     owner_agent: &str,
 ) -> anyhow::Result<OwnerAuthority> {
     let caller = env.caller();
-    let local = crate::daemon::persistence::local_agents::load()?;
-    let owner_entry = hosted_agent_by_name(&local, owner_agent, TEACH)?;
+    let owner_identity = hosted_agent_identity_by_name(snapshot, owner_agent, TEACH)?;
 
     if let Some(authority) = authorized_hosted_agent_delegation(
         env,
-        &owner_entry.agent_ura,
-        &owner_entry.signing_authority,
+        owner_identity.agent_ura,
+        owner_identity.signing_authority,
         TEACH,
     )? {
         return Ok(OwnerAuthority {
-            owner_ura: owner_entry.agent_ura.clone(),
+            owner_ura: owner_identity.agent_ura.to_string(),
             granted_by: authority.host_device_ura().to_string(),
             admission_authority: TeachGrantAuthoritySnapshot::hosted_agent_delegation(
                 authority.agent_ura(),
@@ -402,9 +430,9 @@ fn require_owner_authority(
         });
     }
 
-    if caller == owner_entry.agent_ura {
+    if caller == owner_identity.agent_ura {
         return Ok(OwnerAuthority {
-            owner_ura: owner_entry.agent_ura.clone(),
+            owner_ura: owner_identity.agent_ura.to_string(),
             granted_by: caller.to_string(),
             admission_authority: TeachGrantAuthoritySnapshot::direct_owner(caller),
         });
@@ -414,7 +442,7 @@ fn require_owner_authority(
         "{TEACH} caller {caller:?} cannot teach abilities advertised by \
          {owner_agent:?}; expected advertising agent {} or signed hosted-agent delegation from \
          its host device authority",
-        owner_entry.agent_ura
+        owner_identity.agent_ura
     );
 }
 
@@ -434,7 +462,7 @@ fn authorized_hosted_agent_delegation(
 
 fn require_hosted_agent_authority(
     env: &EnvelopeContext,
-    local: &crate::daemon::persistence::local_agents::LocalAgentsFile,
+    identity: HostedAgentIdentityProjection<'_>,
     agent_name: &str,
     agent_ura: &str,
     surface: &str,
@@ -444,18 +472,17 @@ fn require_hosted_agent_authority(
         return Ok(caller.to_string());
     }
 
-    let entry = hosted_agent_by_name(local, agent_name, surface)?;
-    if entry.agent_ura != agent_ura {
+    if identity.agent_ura != agent_ura {
         anyhow::bail!(
             "{surface} cannot authorize agent {agent_name:?}: persisted URA drifted \
              (expected {}, got {})",
-            entry.agent_ura,
+            identity.agent_ura,
             agent_ura
         );
     }
 
     if let Some(authority) =
-        authorized_hosted_agent_delegation(env, agent_ura, &entry.signing_authority, surface)?
+        authorized_hosted_agent_delegation(env, agent_ura, identity.signing_authority, surface)?
     {
         return Ok(authority.host_device_ura().to_string());
     }
@@ -486,12 +513,12 @@ fn teach_handler_with_clock(
     if parsed.kind != crate::core::ura::URAKind::Agent {
         anyhow::bail!("learner_ura must be an Agent URA; descriptor grants target agents");
     }
-    let local = crate::daemon::persistence::local_agents::load()?;
-    hosted_agent_by_ura(&local, learner_ura, TEACH)?;
+    let agent_snapshot = AgentAggregateRepository::load_snapshot()?;
+    hosted_agent_identity_by_ura(&agent_snapshot, learner_ura, TEACH)?;
 
     let home = resolve_owner_manifest(ability)?;
-    let snapshot = GrantedDescriptorSnapshot::from_home(&home)?;
-    let authority = require_owner_authority(&env, &home.owner_agent)?;
+    let descriptor_snapshot = GrantedDescriptorSnapshot::from_home(&home)?;
+    let authority = require_owner_authority(&env, &agent_snapshot, &home.owner_agent)?;
     let ability_ura = crate::core::ura::owner_ability_ura(&authority.owner_ura, &home.public_name)
         .ok_or_else(|| anyhow::anyhow!("could not mint the granted descriptor URA"))?;
     let granted_at = clock.now_rfc3339();
@@ -504,7 +531,7 @@ fn teach_handler_with_clock(
             granted_ability_ura: &ability_ura,
             owner_ura: &authority.owner_ura,
             learner_ura,
-            manifest_hash: &snapshot.manifest_hash,
+            manifest_hash: &descriptor_snapshot.manifest_hash,
         },
     )?;
     TeachGrantStore::open_default().grant(TeachGrant::from_draft(TeachGrantDraft {
@@ -514,7 +541,7 @@ fn teach_handler_with_clock(
         granted_by_ura: authority.granted_by.clone(),
         owner_agent: home.owner_agent.clone(),
         learner_ura: learner_ura.to_string(),
-        manifest_hash: snapshot.manifest_hash.clone(),
+        manifest_hash: descriptor_snapshot.manifest_hash.clone(),
         execution_mode: EXECUTION_MODE_DEFAULT.to_string(),
         granted_at,
         admission_snapshot,
@@ -527,7 +554,7 @@ fn teach_handler_with_clock(
         "owner_ura": authority.owner_ura,
         "granted_by": authority.granted_by,
         "learner_ura": learner_ura,
-        "manifest_hash": snapshot.manifest_hash,
+        "manifest_hash": descriptor_snapshot.manifest_hash,
         "execution_mode": EXECUTION_MODE_DEFAULT,
         "transfer_kind": TRANSFER_KIND_DISCOVERY_ONLY_MANIFEST,
         "invokable_after_acquire": false,
@@ -1016,18 +1043,18 @@ impl AuthorizedAcquire {
                 request.ability_ura
             );
         }
-        let agents = crate::daemon::persistence::agent_registry::load_agents()?;
-        let learner_entry_for_runtime =
-            agents
-                .agents
-                .get(&request.learner)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "no agent {:?} on this device to learn into",
-                        request.learner
-                    )
-                })?;
+        let agent_snapshot = AgentAggregateRepository::load_snapshot()?;
+        let learner_entry_for_runtime = agent_snapshot
+            .registry
+            .agents
+            .get(&request.learner)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no agent {:?} on this device to learn into",
+                    request.learner
+                )
+            })?;
         let learner_root = learner_entry_for_runtime
             .root_path
             .as_ref()
@@ -1038,21 +1065,26 @@ impl AuthorizedAcquire {
                 )
             })?;
 
-        let local = crate::daemon::persistence::local_agents::load()?;
-        let learner_ura = hosted_agent_by_name(&local, &request.learner, ACQUIRE)?
-            .agent_ura
-            .clone();
-        let mutated_by =
-            require_hosted_agent_authority(&env, &local, &request.learner, &learner_ura, ACQUIRE)?;
+        let learner_identity =
+            hosted_agent_identity_by_name(&agent_snapshot, &request.learner, ACQUIRE)?;
+        let learner_ura = learner_identity.agent_ura.to_string();
+        let mutated_by = require_hosted_agent_authority(
+            &env,
+            learner_identity,
+            &request.learner,
+            &learner_ura,
+            ACQUIRE,
+        )?;
 
         let owner_home = resolve_owner_manifest(&request.registry_name)?;
-        let owner_entry = hosted_agent_by_name(&local, &owner_home.owner_agent, ACQUIRE)?;
-        if owner_entry.agent_ura != request.owner_ura {
+        let owner_identity =
+            hosted_agent_identity_by_name(&agent_snapshot, &owner_home.owner_agent, ACQUIRE)?;
+        if owner_identity.agent_ura != request.owner_ura {
             anyhow::bail!(
                 "{ACQUIRE} rejected {:?}: local ability {:?} belongs to owner {}, not {}",
                 request.ability_ura,
                 request.registry_name,
-                owner_entry.agent_ura,
+                owner_identity.agent_ura,
                 request.owner_ura
             );
         }
@@ -1223,12 +1255,11 @@ struct AuthorizedForget {
 
 impl AuthorizedForget {
     fn from_request(env: EnvelopeContext, request: ForgetRequest) -> anyhow::Result<Self> {
-        let agents = crate::daemon::persistence::agent_registry::load_agents()?;
-        let agent_entry_for_runtime = agents.agents.get(&request.agent).cloned();
-        let local = crate::daemon::persistence::local_agents::load()?;
-        let agent_ura = hosted_agent_by_name(&local, &request.agent, FORGET)?
-            .agent_ura
-            .clone();
+        let agent_snapshot = AgentAggregateRepository::load_snapshot()?;
+        let agent_entry_for_runtime = agent_snapshot.registry.agents.get(&request.agent).cloned();
+        let agent_identity =
+            hosted_agent_identity_by_name(&agent_snapshot, &request.agent, FORGET)?;
+        let agent_ura = agent_identity.agent_ura.to_string();
         let expected_subject = crate::core::ura::owner_ability_ura(&agent_ura, &request.ability)
             .ok_or_else(|| {
                 anyhow::anyhow!("{FORGET} could not mint imported descriptor subject")
@@ -1240,9 +1271,15 @@ impl AuthorizedForget {
                 expected_subject
             );
         }
-        let mutated_by =
-            require_hosted_agent_authority(&env, &local, &request.agent, &agent_ura, FORGET)?;
-        let manifest = agents
+        let mutated_by = require_hosted_agent_authority(
+            &env,
+            agent_identity,
+            &request.agent,
+            &agent_ura,
+            FORGET,
+        )?;
+        let manifest = agent_snapshot
+            .registry
             .agents
             .get(&request.agent)
             .and_then(|e| e.root_path.as_ref())
@@ -2020,12 +2057,16 @@ mod tests {
 
         // …the copy is on disk, and the original is untouched.
         let home = std::env::var("HOME").unwrap();
-        assert!(std::path::Path::new(&home)
-            .join("agents/apprentice/abilities/quote.ability.toml")
-            .exists());
-        assert!(std::path::Path::new(&home)
-            .join("agents/mentor/abilities/quote.ability.toml")
-            .exists());
+        assert!(
+            std::path::Path::new(&home)
+                .join("agents/apprentice/abilities/quote.ability.toml")
+                .exists()
+        );
+        assert!(
+            std::path::Path::new(&home)
+                .join("agents/mentor/abilities/quote.ability.toml")
+                .exists()
+        );
     }
 
     #[test]
@@ -2565,9 +2606,11 @@ mod tests {
             })
             .expect("forget");
         let home = std::env::var("HOME").unwrap();
-        assert!(!std::path::Path::new(&home)
-            .join("agents/apprentice/abilities/quote.ability.toml")
-            .exists());
+        assert!(
+            !std::path::Path::new(&home)
+                .join("agents/apprentice/abilities/quote.ability.toml")
+                .exists()
+        );
         assert!(
             std::path::Path::new(&home)
                 .join("agents/mentor/abilities/quote.ability.toml")

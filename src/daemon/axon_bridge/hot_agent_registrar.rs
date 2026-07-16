@@ -25,8 +25,9 @@ use std::sync::{Arc, OnceLock};
 use easynet_axon::invocation::LocalRuntime;
 
 use crate::daemon::ability::builtins::agents::chat::{
-    build_agent_ability_handler, build_chat_handler_for, build_chat_stream_handler_for,
-    build_discover_handler_for, build_host_stream_handler, build_invoke_handler_for, ContextLoader,
+    ContextLoader, build_agent_ability_handler, build_chat_handler_for,
+    build_chat_stream_handler_for, build_discover_handler_for, build_host_stream_handler,
+    build_invoke_handler_for,
 };
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::agent_registry::AgentEntry;
@@ -59,38 +60,38 @@ struct HotAgentRuntimeSyncContext<'a> {
 impl HostedAgentRuntimeBinding {
     #[cfg(test)]
     fn load(name: &str) -> anyhow::Result<Self> {
-        let local_agents = crate::daemon::persistence::local_agents::load()
-            .map_err(|err| anyhow::anyhow!("load local hosted agents: {err}"))?;
-        let entry = crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(
-            &local_agents,
-            name,
-        )?
-        .ok_or_else(|| {
-            anyhow::anyhow!("hosted agent {name:?} is missing from local-agents.json")
-        })?;
-        let parsed = crate::core::ura::parse_ura(&entry.agent_ura).map_err(|err| {
-            anyhow::anyhow!("invalid hosted agent URA {:?}: {err}", entry.agent_ura)
-        })?;
+        use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+        let snapshot = AgentAggregateRepository::try_load_snapshot()
+            .map_err(|err| anyhow::anyhow!("load Agent aggregate for hosted agent: {err:#}"))?;
+        let agent_ura = snapshot
+            .hosted_agent_ura_by_name(name)
+            .map_err(|err| anyhow::anyhow!("{err}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!("hosted agent {name:?} is missing from Agent aggregate")
+            })?;
+        let parsed = crate::core::ura::parse_ura(agent_ura)
+            .map_err(|err| anyhow::anyhow!("invalid hosted agent URA {:?}: {err}", agent_ura))?;
         if parsed.kind != crate::core::ura::URAKind::Agent {
             anyhow::bail!(
                 "hosted agent {name:?} resolved to non-Agent URA {:?}",
-                entry.agent_ura
+                agent_ura
             );
         }
         let Some((_, agent_id)) = parsed.agent_ids().or_else(|| parsed.device_agent_ids()) else {
             anyhow::bail!(
                 "hosted agent {name:?} URA {:?} does not expose an agent id",
-                entry.agent_ura
+                agent_ura
             );
         };
         if agent_id != name {
             anyhow::bail!(
                 "hosted agent {name:?} resolved to URA {:?} with mismatched agent id {agent_id:?}",
-                entry.agent_ura
+                agent_ura
             );
         }
         Ok(Self {
-            agent_ura: entry.agent_ura.clone(),
+            agent_ura: agent_ura.to_string(),
         })
     }
 
@@ -420,7 +421,7 @@ pub struct HotAgentRevokeRequest {
 /// by the current `session.open` bidi; tests can supply a recorder.
 pub trait HotAgentAdvertiser: Send + Sync {
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
-        -> HotAgentAdvertiseOutcome;
+    -> HotAgentAdvertiseOutcome;
 
     fn publish_owner_projection(
         &self,

@@ -73,6 +73,10 @@ impl AgentAggregateSnapshot {
             .map(|(name, entry)| (name.as_str(), entry))
     }
 
+    pub(crate) fn registered_agent_registry_projection(&self) -> AgentRegistry {
+        self.registry.clone()
+    }
+
     pub(crate) fn registered_agent_surface_names(&self) -> BTreeSet<String> {
         let mut registered = BTreeSet::new();
         for raw_key in self.registry.agents.keys() {
@@ -118,6 +122,15 @@ impl AgentAggregateSnapshot {
         &self,
         name: &str,
     ) -> Result<Option<&str>, HostedAgentNameLookupError> {
+        Ok(self
+            .hosted_agent_identity_by_name(name)?
+            .map(|identity| identity.agent_ura))
+    }
+
+    pub(crate) fn hosted_agent_identity_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<HostedAgentIdentityProjection<'_>>, HostedAgentNameLookupError> {
         let mut matches = self
             .local_agents
             .hosted_agents
@@ -133,20 +146,19 @@ impl AgentAggregateSnapshot {
                 second_profile: other.profile.clone(),
             });
         }
-        let parsed = crate::core::ura::parse_ura(&entry.agent_ura).map_err(|error| {
-            HostedAgentNameLookupError::InvalidUra {
-                name: name.to_string(),
-                agent_ura: entry.agent_ura.clone(),
-                reason: error.to_string(),
-            }
-        })?;
-        if parsed.kind != crate::core::ura::URAKind::Agent {
-            return Err(HostedAgentNameLookupError::NonAgentUra {
-                name: name.to_string(),
-                agent_ura: entry.agent_ura.clone(),
-            });
-        }
-        Ok(Some(entry.agent_ura.as_str()))
+        validate_hosted_agent_name_identity(name, entry)?;
+        Ok(Some(HostedAgentIdentityProjection::from_entry(entry)))
+    }
+
+    pub(crate) fn hosted_agent_identity_by_ura(
+        &self,
+        agent_ura: &str,
+    ) -> Option<HostedAgentIdentityProjection<'_>> {
+        self.local_agents
+            .hosted_agents
+            .iter()
+            .find(|entry| entry.agent_ura == agent_ura)
+            .map(HostedAgentIdentityProjection::from_entry)
     }
 
     pub(crate) fn has_hosted_llm_agent_identity(&self, agent: &str) -> bool {
@@ -197,10 +209,49 @@ impl AgentAggregateSnapshot {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct HostedAgentIdentityProjection<'a> {
+    pub(crate) profile: &'a str,
+    pub(crate) name: &'a str,
+    pub(crate) agent_ura: &'a str,
+    pub(crate) signing_authority: &'a str,
+}
+
+impl<'a> HostedAgentIdentityProjection<'a> {
+    fn from_entry(entry: &'a HostedAgentEntry) -> Self {
+        Self {
+            profile: entry.profile.as_str(),
+            name: entry.name.as_str(),
+            agent_ura: entry.agent_ura.as_str(),
+            signing_authority: entry.signing_authority.as_str(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum HostedLlmAgentIdentity<'a> {
     Missing,
     Present(&'a HostedAgentEntry),
     Ambiguous,
+}
+
+fn validate_hosted_agent_name_identity(
+    name: &str,
+    entry: &HostedAgentEntry,
+) -> Result<(), HostedAgentNameLookupError> {
+    let parsed = crate::core::ura::parse_ura(&entry.agent_ura).map_err(|error| {
+        HostedAgentNameLookupError::InvalidUra {
+            name: name.to_string(),
+            agent_ura: entry.agent_ura.clone(),
+            reason: error.to_string(),
+        }
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Agent {
+        return Err(HostedAgentNameLookupError::NonAgentUra {
+            name: name.to_string(),
+            agent_ura: entry.agent_ura.clone(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -402,6 +453,50 @@ mod tests {
             Some("easynet:///r/acme/agent/u1.claude")
         );
         assert_eq!(snapshot.hosted_agent_ura_by_name("missing").unwrap(), None);
+    }
+
+    #[test]
+    fn hosted_agent_identity_by_name_projects_authority_fields() {
+        let snapshot = snapshot(vec![hosted_agent(
+            "llm",
+            "claude",
+            "easynet:///r/acme/agent/u1.claude",
+        )]);
+
+        let identity = snapshot
+            .hosted_agent_identity_by_name("claude")
+            .unwrap()
+            .expect("hosted identity");
+
+        assert_eq!(identity.profile, "llm");
+        assert_eq!(identity.name, "claude");
+        assert_eq!(identity.agent_ura, "easynet:///r/acme/agent/u1.claude");
+        assert_eq!(
+            identity.signing_authority,
+            "hosted_by:easynet:///r/acme/agent/device"
+        );
+    }
+
+    #[test]
+    fn hosted_agent_identity_by_ura_validates_local_hosted_membership() {
+        let snapshot = snapshot(vec![hosted_agent(
+            "llm",
+            "claude",
+            "easynet:///r/acme/agent/u1.claude",
+        )]);
+
+        assert_eq!(
+            snapshot
+                .hosted_agent_identity_by_ura("easynet:///r/acme/agent/u1.claude")
+                .expect("hosted identity")
+                .name,
+            "claude"
+        );
+        assert!(
+            snapshot
+                .hosted_agent_identity_by_ura("easynet:///r/acme/agent/u1.other")
+                .is_none()
+        );
     }
 
     #[test]
