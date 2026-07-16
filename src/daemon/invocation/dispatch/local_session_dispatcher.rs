@@ -222,6 +222,25 @@ impl SessionSelfTargetSubject {
     }
 }
 
+fn carrier_v1_stream_control_failure(
+    call_id: u64,
+    code: &'static str,
+    message: impl Into<String>,
+) -> easynet_axon::pb::axon::v1::DispatchResult {
+    easynet_axon::pb::axon::v1::DispatchResult {
+        call_id,
+        payload: Vec::new(),
+        terminal: false,
+        failure: Some(easynet_axon::pb::axon::v1::Error {
+            code: code.to_string(),
+            message: message.into(),
+            retryable: false,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
 impl LocalAxonSessionDispatcher {
     fn non_empty_ura(raw: Option<&str>) -> Option<&str> {
         raw.map(str::trim).filter(|value| !value.is_empty())
@@ -373,15 +392,13 @@ impl LocalAxonSessionDispatcher {
     /// step-3c — open a server-stream ability over the carrier-v1
     /// transport and forward its frames as a chain of `DispatchResult`
     /// chunks. The envelope in `wire` has already passed daemon admission; a
-    /// failure to open is reported as a single terminal `DispatchResult`.
+    /// failure to open is reported as a non-terminal carrier control failure.
     async fn handle_carrier_v1_stream_open(
         &self,
         call_id: u64,
         wire: crate::daemon::axon_bridge::dispatch_shim::WireDispatch,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        use easynet_axon::pb::axon::v1::DispatchResult as PbDispatchResult;
-
         let Some(runtime) = self.local_runtime.clone() else {
             return Err(SessionDispatchError::Other(
                 "carrier-v1 stream: Axon LocalRuntime is not wired".to_string(),
@@ -393,19 +410,11 @@ impl LocalAxonSessionDispatcher {
             {
                 Ok(handle) => handle,
                 Err(err) => {
-                    let message = err.to_string();
-                    let reply = PbDispatchResult {
+                    let reply = carrier_v1_stream_control_failure(
                         call_id,
-                        payload: Vec::new(),
-                        terminal: true,
-                        failure: Some(easynet_axon::pb::axon::v1::Error {
-                            code: "STREAM_OPEN_FAILED".to_string(),
-                            message,
-                            retryable: false,
-                            ..Default::default()
-                        }),
-                        ..PbDispatchResult::default()
-                    };
+                        "STREAM_OPEN_FAILED",
+                        err.to_string(),
+                    );
                     outbound
                         .send_payload(UpPayload::DispatchResult(reply))
                         .await
@@ -457,17 +466,13 @@ impl LocalAxonSessionDispatcher {
                 Ok(receipt) => receipt,
                 Err(error) => {
                     let _ = outbound
-                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
-                            call_id,
-                            terminal: true,
-                            failure: Some(easynet_axon::pb::axon::v1::Error {
-                                code: "CANONICAL_ADMISSION_REQUIRED".to_string(),
-                                message: error.to_string(),
-                                retryable: false,
-                                ..Default::default()
-                            }),
-                            ..PbDispatchResult::default()
-                        }))
+                        .send_payload(UpPayload::DispatchResult(
+                            carrier_v1_stream_control_failure(
+                                call_id,
+                                "CANONICAL_ADMISSION_REQUIRED",
+                                error.to_string(),
+                            ),
+                        ))
                         .await;
                     return;
                 }
@@ -476,17 +481,13 @@ impl LocalAxonSessionDispatcher {
                 Ok(receipt) => receipt,
                 Err(error) => {
                     let _ = outbound
-                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
-                            call_id,
-                            terminal: true,
-                            failure: Some(easynet_axon::pb::axon::v1::Error {
-                                code: "CANONICAL_ADMISSION_PROJECTION_FAILED".to_string(),
-                                message: error.to_string(),
-                                retryable: false,
-                                ..Default::default()
-                            }),
-                            ..PbDispatchResult::default()
-                        }))
+                        .send_payload(UpPayload::DispatchResult(
+                            carrier_v1_stream_control_failure(
+                                call_id,
+                                "CANONICAL_ADMISSION_PROJECTION_FAILED",
+                                error.to_string(),
+                            ),
+                        ))
                         .await;
                     return;
                 }
@@ -532,17 +533,13 @@ impl LocalAxonSessionDispatcher {
                                 Ok(finalized) => Some(finalized),
                                 Err(error) => {
                                     let _ = outbound
-                                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
-                                            call_id,
-                                            terminal: true,
-                                            failure: Some(easynet_axon::pb::axon::v1::Error {
-                                                code: "CANONICAL_FINALIZATION_REQUIRED".to_string(),
-                                                message: error.to_string(),
-                                                retryable: false,
-                                                ..Default::default()
-                                            }),
-                                            ..PbDispatchResult::default()
-                                        }))
+                                        .send_payload(UpPayload::DispatchResult(
+                                            carrier_v1_stream_control_failure(
+                                                call_id,
+                                                "CANONICAL_FINALIZATION_REQUIRED",
+                                                error.to_string(),
+                                            ),
+                                        ))
                                         .await;
                                     break;
                                 }
@@ -555,18 +552,13 @@ impl LocalAxonSessionDispatcher {
                                 Ok(receipt) => Some(receipt),
                                 Err(error) => {
                                     let _ = outbound
-                                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
-                                            call_id,
-                                            terminal: true,
-                                            failure: Some(easynet_axon::pb::axon::v1::Error {
-                                                code: "CANONICAL_TERMINAL_PROJECTION_FAILED"
-                                                    .to_string(),
-                                                message: error.to_string(),
-                                                retryable: false,
-                                                ..Default::default()
-                                            }),
-                                            ..PbDispatchResult::default()
-                                        }))
+                                        .send_payload(UpPayload::DispatchResult(
+                                            carrier_v1_stream_control_failure(
+                                                call_id,
+                                                "CANONICAL_TERMINAL_PROJECTION_FAILED",
+                                                error.to_string(),
+                                            ),
+                                        ))
                                         .await;
                                     break;
                                 }
@@ -594,19 +586,15 @@ impl LocalAxonSessionDispatcher {
                             Ok(finalized) => finalized,
                             Err(error) => {
                                 let _ = outbound
-                                    .send_payload(UpPayload::DispatchResult(PbDispatchResult {
-                                        call_id,
-                                        terminal: true,
-                                        failure: Some(easynet_axon::pb::axon::v1::Error {
-                                            code: "CANONICAL_FINALIZATION_REQUIRED".to_string(),
-                                            message: format!(
+                                    .send_payload(UpPayload::DispatchResult(
+                                        carrier_v1_stream_control_failure(
+                                            call_id,
+                                            "CANONICAL_FINALIZATION_REQUIRED",
+                                            format!(
                                                 "frame_error={err}; finalization_error={error}"
                                             ),
-                                            retryable: false,
-                                            ..Default::default()
-                                        }),
-                                        ..PbDispatchResult::default()
-                                    }))
+                                        ),
+                                    ))
                                     .await;
                                 return;
                             }
@@ -616,18 +604,13 @@ impl LocalAxonSessionDispatcher {
                                 Ok(receipt) => receipt,
                                 Err(error) => {
                                     let _ = outbound
-                                        .send_payload(UpPayload::DispatchResult(PbDispatchResult {
-                                            call_id,
-                                            terminal: true,
-                                            failure: Some(easynet_axon::pb::axon::v1::Error {
-                                                code: "CANONICAL_TERMINAL_PROJECTION_FAILED"
-                                                    .to_string(),
-                                                message: error.to_string(),
-                                                retryable: false,
-                                                ..Default::default()
-                                            }),
-                                            ..PbDispatchResult::default()
-                                        }))
+                                        .send_payload(UpPayload::DispatchResult(
+                                            carrier_v1_stream_control_failure(
+                                                call_id,
+                                                "CANONICAL_TERMINAL_PROJECTION_FAILED",
+                                                error.to_string(),
+                                            ),
+                                        ))
                                         .await;
                                     return;
                                 }
@@ -654,18 +637,11 @@ impl LocalAxonSessionDispatcher {
             }
             if !sent_terminal && !cancelled {
                 let message = "stream ended without terminal frame";
-                let reply = PbDispatchResult {
+                let reply = carrier_v1_stream_control_failure(
                     call_id,
-                    payload: Vec::new(),
-                    terminal: true,
-                    failure: Some(easynet_axon::pb::axon::v1::Error {
-                        code: "STREAM_ENDED_WITHOUT_TERMINAL".to_string(),
-                        message: message.to_string(),
-                        retryable: false,
-                        ..Default::default()
-                    }),
-                    ..PbDispatchResult::default()
-                };
+                    "STREAM_ENDED_WITHOUT_TERMINAL",
+                    message,
+                );
                 let _ = outbound
                     .send_payload(UpPayload::DispatchResult(reply))
                     .await;
@@ -1888,6 +1864,28 @@ mod tests {
         assert!(LocalAxonSessionDispatcher::is_json_frame_bidi_with(
             &registry, ability
         ));
+    }
+
+    #[test]
+    fn carrier_v1_stream_control_failure_is_not_lifecycle_terminal() {
+        let result = carrier_v1_stream_control_failure(
+            9,
+            "STREAM_OPEN_FAILED",
+            "target rejected stream open",
+        );
+        assert_eq!(result.call_id, 9);
+        assert!(
+            !result.terminal,
+            "synthetic stream failures must not claim canonical terminality"
+        );
+        assert!(
+            result.terminal_receipt.is_none(),
+            "control failures must not synthesize terminal receipts"
+        );
+        assert_eq!(
+            result.failure.as_ref().map(|failure| failure.code.as_str()),
+            Some("STREAM_OPEN_FAILED")
+        );
     }
 
     // Descriptor proof a test ability must carry so Axon's receipt-proof

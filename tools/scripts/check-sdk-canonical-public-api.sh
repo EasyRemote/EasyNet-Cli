@@ -9,6 +9,7 @@ VALIDATOR="$ROOT/sdk/conformance/sdk_concepts.py"
 PYTHON_BIN="${PYTHON:-python}"
 GO_BIN="${GO:-go}"
 
+export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
 export PYTHONPATH="$ROOT/sdk/python:$ROOT/../EasyNet-Axon/sdk/python${PYTHONPATH:+:$PYTHONPATH}"
 
 check_generated_outputs() {

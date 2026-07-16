@@ -1,10 +1,11 @@
 # Canonical Runtime SDK Interface
 
 This document is the implementation contract for every language binding in
-this repository. It is intentionally product-neutral. EasyNet, EasyRemote and
-future applications consume this SDK; their ability names, request DTOs,
-directory views, lifecycle workflows and UI projections do not become SDK
-types.
+this repository. The canonical runtime model is intentionally product-neutral.
+The EasyNet provider ABI is the lowering layer that binds that model to
+`easynet-daemon`; EasyNet, EasyRemote and future applications consume the SDK
+through explicit providers. Their ability names, request DTOs, directory
+views, lifecycle workflows and UI projections do not become SDK types.
 
 The current architecture is indexed by
 [`docs/ARCHITECTURE_STATE.md`](../docs/ARCHITECTURE_STATE.md). The normative
@@ -16,8 +17,9 @@ requirements are in
 | Owner | Canonical responsibility |
 | --- | --- |
 | Axon | URA grammar and typed builders, descriptor-reference grammar, Invocation canonical bytes, admission, transport call modes, receipt cryptography |
-| daemon | process lifecycle, catalog assembly, governed ability execution, routing, persistence and transport providers |
+| daemon | process lifecycle, catalog assembly, governed ability execution, routing, persistence and EasyNet transport providers |
 | runtime SDK | product-neutral lifecycle, Addressing, identity/signing, PrincipalLifecycle, Directory resolution, complete Invocation, receipt/causal facts, runtime events, administration, health and typed errors |
+| EasyNet provider ABI | daemon discovery/start/attach/status/stop, `easynet_*` C ABI v5 loading, provider route catalogs and projection into canonical runtime objects |
 | products | concrete workflows and arguments, product directory/read-model views, publication UX, Mission/EAL ergonomics, hosted-agent workflows, pages, OpenAI compatibility, host bindings and UI/application state |
 
 The SDK may project an Axon-owned value, but it must not independently parse,
@@ -41,8 +43,8 @@ SdkEnvironment
        -> ReceiptClient
        -> RuntimeEventClient
        -> RuntimeAdminClient
-  -> DaemonControl
-       -> DaemonHandle
+  -> RuntimeHost
+       -> RuntimeHandle
             -> RuntimeClient
             -> HealthClient
             -> Addressing
@@ -70,6 +72,11 @@ RuntimeClient
 an Identity or Directory profile and does not depend on a daemon product
 ability. A constructed handle is valid or construction fails; methods never
 return `nil`/`None` to represent a missing required provider.
+
+`DaemonControl`, `DaemonHandle` and daemon-named factory aliases are EasyNet
+provider/source-compatibility exports. They are not a second canonical object
+graph and must delegate to `RuntimeHost`/`RuntimeHandle` without their own
+transport search, parser, state machine or fallback path.
 
 ## Public runtime concepts
 
@@ -146,7 +153,7 @@ signed:    Signed -> Submitted -> Closed
 handle:    Pending -> Terminal | Cancelled -> Closed
 stream:    Opening -> Open -> Terminal | Cancelled | Failed -> Closed
 bidi:      Opening -> Open -> SendClosed -> Terminal | Cancelled | Failed -> Closed
-daemon:    Discovered -> Starting -> ControlReady -> InvocationReady -> Running
+host:      Discovered -> Starting -> ControlReady -> InvocationReady -> Running
            Running -> Stopping -> Stopped
 ```
 
@@ -166,11 +173,13 @@ state transition.
   language-specific; architecture is not.
 - Direct providers may use generated Axon types internally. Public SDK objects
   never expose them.
-- Native providers use generic C ABI v5 only.
+- Native EasyNet providers use the `easynet_*` C ABI v5 only.
 
-## C ABI v5
+## EasyNet provider C ABI v5
 
-The stable C boundary contains only:
+The stable C boundary is the EasyNet provider ABI for `easynet-daemon`. Its
+generic property is operation-family shape rather than product neutrality: it
+does not allocate one C symbol per product/domain ability. It contains only:
 
 - ABI/version and typed-error discovery;
 - daemon/runtime lifecycle;
@@ -182,8 +191,9 @@ The stable C boundary contains only:
 There are no one-method-per-ability or product-domain C symbols. Identity,
 PrincipalLifecycle, Directory, receipt, events and runtime administration use
 generic handle/Invocation operations at the ABI boundary; language clients may
-provide typed provider-backed projections. Mission, Publication, Surface,
-OpenAI, HostBinding, Wrappers and other product helpers live downstream.
+provide typed provider projections once runner-owned evidence exists. Mission,
+Publication, Surface, OpenAI, HostBinding, Wrappers and other product helpers
+live downstream.
 
 ## Forbidden SDK surfaces
 

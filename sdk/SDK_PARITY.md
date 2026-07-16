@@ -1,9 +1,12 @@
 # SDK Capability Parity
 
-The runtime SDK has one architecture. Go and Python are bindings of that
-architecture, not independent SDK designs. The machine-readable source is
-[`conformance/sdk-parity-matrix.json`](conformance/sdk-parity-matrix.json); this
-file explains how to read it.
+The runtime SDK has one architecture. Rust, C ABI, Go, Python, Node, Java and
+Swift are implementations of the same capability model, not independent SDK
+designs. The machine-readable concept source is
+[`conformance/canonical-public-api.json`](conformance/canonical-public-api.json);
+[`conformance/sdk-parity-matrix.json`](conformance/sdk-parity-matrix.json) is
+the generated seven-language Cartesian product consumed by parity gates. This
+file explains how to read that pair.
 
 ## State model
 
@@ -11,11 +14,11 @@ file explains how to read it.
 | --- | --- |
 | `unsupported` | no public shipped capability |
 | `seam` | public interface and lifecycle exist; no shipped provider claim |
-| `provider-backed` | explicit provider plus executable conformance evidence |
+| `provider-backed` | explicit production provider plus runner-owned executable conformance evidence |
 | `cutover-ready` | first-class consumers use it and obsolete lower/product layers are deleted |
 
-A placeholder type, default implementation, fallback provider or documentation
-claim is not evidence.
+A placeholder type, default implementation, fallback provider, committed report
+status or documentation claim is not evidence.
 
 ## Canonical capabilities
 
@@ -24,7 +27,7 @@ The matrix may contain only product-neutral capabilities from these families:
 | Family | Examples |
 | --- | --- |
 | runtime discovery | ABI/version and capability discovery |
-| lifecycle | environment, native runtime and daemon handle state |
+| lifecycle | environment, native runtime, runtime host and runtime handle state |
 | Addressing | URA, descriptor reference and subject projection delegated to Axon |
 | Invocation | complete draft, prepare/sign/submit, result and handle lifecycle |
 | transport | unary, server stream and bidi |
@@ -69,7 +72,9 @@ parity failure.
 The aggregate gates validate:
 
 - matrix schema and evidence references;
-- Go/Python capability-set equality;
+- complete seven-language matrix closure over the canonical concept schema;
+- Go/Python capability-set equality where both languages expose the mature
+  provider surface;
 - complete Invocation conformance;
 - Addressing accepted/rejected vector parity;
 - lifecycle monotonicity and close ownership;
@@ -94,6 +99,8 @@ proves them.
 
 1. Change the provider/lifecycle implementation.
 2. Add executable conformance evidence in both languages where applicable.
-3. Update the machine row and its `remaining` statement.
-4. Run the parity, package and product-neutrality gates.
+3. Update the canonical public API concept schema and regenerate the parity
+   matrix.
+4. Run the parity, package, runner-owned conformance and product-neutrality
+   gates.
 5. Do not promote a state until the evidence is present in the same change.

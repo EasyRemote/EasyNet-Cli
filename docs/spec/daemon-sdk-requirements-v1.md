@@ -9,17 +9,20 @@ reference. Its contents replace the former product-profile SDK design.
 
 ## 1. Purpose
 
-The SDK defines one canonical runtime model for governed ability invocation.
-It is not an EasyNet product SDK and it is not an EasyRemote product SDK.
-Products consume the runtime model and own their concrete workflows.
+The SDK distribution defines one canonical runtime model for governed ability
+invocation and ships an EasyNet provider ABI that binds that model to
+`easynet-daemon`. The canonical model is provider-neutral; the provider ABI is
+not. Neither layer owns EasyNet or EasyRemote product workflows. Products
+consume the runtime model through an explicit provider and own their concrete
+workflows.
 
 The design goals are:
 
 - one complete Invocation representation across every transport;
 - one Axon-owned addressing and canonicalization authority;
-- one product-neutral object graph in every language;
+- one canonical product-neutral object graph in every language;
 - explicit provider and lifecycle state;
-- generic C ABI stability without domain symbol growth;
+- bounded EasyNet provider ABI stability without domain symbol growth;
 - observable, fail-closed behavior when required state is unavailable.
 
 ## 2. Layer ownership
@@ -38,6 +41,14 @@ Axon owns all facts that independent implementations must agree on:
 The runtime SDK delegates these operations to Axon. It does not maintain a
 second grammar or signer.
 
+The reproducible cross-repository dependency contract is Axon commit
+`896b35c1c403f23754604822a992d2fbbd14520c`. At that revision the Rust SDK is
+`0.129.22` (the version locked by this repository's `Cargo.lock`) and the
+Python SDK is `0.129.23` (the version required by `sdk/python/pyproject.toml`
+and `sdk/python/uv.lock`). CI must check out that exact revision and fail if
+its HEAD or either SDK version differs. A branch name such as `main` is not a
+dependency version.
+
 ### 2.2 Daemon
 
 The daemon owns process lifecycle, provider wiring, catalog assembly,
@@ -45,11 +56,11 @@ AbilityDescriptor/AuthorityBinding/AbilityImplBinding state, governed dispatch,
 routing, persistence and local execution. A language binding may project these
 facts but may not redefine them.
 
-### 2.3 Runtime SDK
+### 2.3 Canonical runtime SDK
 
 The SDK owns language-safe projections and lifecycle around:
 
-- environment and daemon/runtime handles;
+- environment and provider-independent runtime-host/runtime handles;
 - Addressing;
 - runtime identity, public-key projection and sign-only capabilities;
 - managed-signing key lifecycle through the daemon key-service;
@@ -62,7 +73,32 @@ The SDK owns language-safe projections and lifecycle around:
 - receipt facts, causal continuation and runtime event cursors;
 - product-neutral runtime administration.
 
-### 2.4 Products
+The canonical inventory is the `languages`, `members` and
+`capability_inventory` surface in
+`sdk/conformance/canonical-public-api.json`. A symbol exported by a language
+package is not canonical merely because it is public.
+
+### 2.4 EasyNet provider ABI
+
+The EasyNet provider binds the canonical model to `easynet-daemon`. It owns:
+
+- daemon discovery, start, attach, status, stop and endpoint projection;
+- loading and calling the `easynet_*` C ABI v5 symbol set;
+- EasyNet runtime-event and Directory route catalogs;
+- adaptation from provider responses into canonical runtime objects.
+
+Provider-specific routes and daemon terms must stay in explicit provider
+sources or in source-compatibility facades classified by
+`canonical-public-api.json#non_canonical`. They cannot enter provider-neutral
+cores. The neutrality closure is recursive: every Go directory named
+`*core` or `runtimeevents` under `sdk/go` (currently `directorycore`,
+`internal/runtimeevents` and `runtimeevents`) and every Python source under
+`sdk/python/easynet_sdk/core` are canonical runtime roots. The EasyNet
+provider ABI is the separate lowering layer under `sdk/go/provider/easynet`
+and `sdk/python/easynet_sdk/providers/easynet`, plus the generic C ABI v5. It
+may contain daemon route names but may only return canonical runtime types.
+
+### 2.5 Products
 
 Products own all behavior whose meaning exists only for a concrete use case,
 including hosted-agent workflows, product directory/read-model projections,
@@ -75,7 +111,7 @@ Directory, receipt, event or principal lifecycle out of the runtime SDK.
 
 ## 3. Required object model
 
-The normative object graph is:
+The normative canonical object graph is:
 
 ```text
 SdkEnvironment
@@ -90,8 +126,8 @@ SdkEnvironment
        -> ReceiptClient
        -> RuntimeEventClient
        -> RuntimeAdminClient
-  -> DaemonControl
-       -> DaemonHandle
+  -> RuntimeHost
+       -> RuntimeHandle
             -> RuntimeClient
             -> HealthClient
             -> Addressing
@@ -124,8 +160,15 @@ REQ-OBJ-3: Closing an owner closes only resources it explicitly owns. Borrowed
 providers remain usable according to their own lifecycle.
 
 REQ-OBJ-4: No product profile bundle or service locator is part of the public
-graph. Each canonical capability has one explicit provider-backed client; a
-bundle cannot hide provider selection or merge unrelated product lifecycles.
+graph. Each canonical capability has one explicit provider interface; a bundle
+cannot hide provider selection or merge unrelated product lifecycles. An
+interface or facade remains a seam until live step-complete provider proof is
+attached to the concept schema.
+
+REQ-OBJ-5: `DaemonControl`, `DaemonHandle` and related `Daemon*` names are
+EasyNet provider/source-compatibility exports, not a second canonical object
+graph. Each must delegate to the corresponding `RuntimeHost`/`RuntimeHandle`
+implementation and is classified under `non_canonical`.
 
 ## 4. Complete Invocation
 
@@ -258,7 +301,8 @@ fields, never message text.
 
 ## 10. Capability-state matrix
 
-Each Go/Python capability has exactly one state:
+The canonical capability set is language-independent. Every capability has
+exactly one state for each of Rust, C ABI, Go, Python, Node, Java and Swift:
 
 | State | Meaning |
 | --- | --- |
@@ -267,13 +311,24 @@ Each Go/Python capability has exactly one state:
 | provider-backed | an explicit provider is implemented and tested |
 | cutover-ready | first-class consumers use it and lower-layer/product duplication is deleted |
 
-REQ-MATRIX-1: The capability identifiers and semantics are identical for Go and
-Python.
+REQ-MATRIX-1: `canonical-public-api.json` is the single concept schema. Its
+complete Go/Python public export graph assigns every canonical symbol and
+member to exactly one runtime capability or to a justified non-capability
+schema category. A capability without an owned public export is invented and
+invalid. The checked-in matrix is generated as the complete seven-language
+Cartesian product of that derived capability universe. Missing, duplicate or
+undeclared cells are invalid; unsupported is explicit, not skipped.
 
-REQ-MATRIX-2: Each non-unsupported state cites executable evidence.
+REQ-MATRIX-2: Each non-unsupported state cites runner-owned case selectors that
+were collected and executed in the current gate invocation. Committed coverage
+reports are not state evidence.
 
 REQ-MATRIX-3: A type or placeholder method alone cannot justify
-`provider-backed` or `cutover-ready`.
+`provider-backed` or `cutover-ready`. Provider-backed evidence names the
+production provider owner and implementation path, hashes that implementation,
+and maps every normative case step to a runner-owned selector attested by the
+same live invocation. Without that closed proof the state is seam or
+unsupported.
 
 REQ-MATRIX-4: Product workflows are not SDK capabilities. Identity, managed
 signing, principal lifecycle, Directory resolution, receipt/causal facts,
@@ -281,12 +336,31 @@ runtime events and runtime administration are SDK capabilities when their
 semantics are shared across independent consumers. Product-local DTOs and
 workflows may cite these generic capabilities as dependencies.
 
-The machine-readable source is
-`sdk/conformance/sdk-parity-matrix.json`.
+The machine-readable source is `sdk/conformance/canonical-public-api.json`;
+the generated, validated Cartesian product is
+`sdk/conformance/sdk-parity-matrix.json`. Conformance and repository quality
+gates are modeled separately and are not runtime capabilities.
 
-## 11. C ABI v5
+At this update the closed public graph derives 31 runtime capabilities and a
+31 x 7 = 217-cell matrix with no missing or duplicate cell. No cell is labeled
+provider-backed or cutover-ready: the shipped facades remain seams until their
+production provider source and every normative case step are jointly attested.
+The omitted-frame0 bidi requirement is recorded as unproven for all seven
+languages; compile-time arity, fake transports, a positive frame0 test, or a
+Java `NullPointerException` cannot satisfy it.
 
-The C ABI is generic and major-versioned.
+`sdk/conformance/toolchains.json` pins every CI language/build toolchain and
+Python gate tool. CI installs those exact versions and verifies them before
+running conformance. The Axon sibling checkout additionally verifies the exact
+commit and Rust/Python package versions described in section 2.1.
+
+## 11. EasyNet provider C ABI v5
+
+The `easynet_*` C ABI is the major-versioned EasyNet provider ABI for
+`easynet-daemon`. It is not the canonical runtime model. "Generic" at this
+boundary means that Invocation, stream and lifecycle operations are expressed
+through stable operation families rather than one C symbol per product/domain
+ability.
 
 Allowed symbol families:
 
@@ -297,7 +371,8 @@ Allowed symbol families:
 - runtime health/diagnostics and required Addressing projection;
 - opaque handle and owned-buffer release.
 
-REQ-ABI-1: Domain operations do not receive C symbols.
+REQ-ABI-1: Domain operations do not receive C symbols. Daemon lifecycle symbols
+are allowed because this ABI is the EasyNet provider binding.
 
 REQ-ABI-2: Removed v4 domain symbols have no aliases, weak exports, fallback
 lookups or permanent dual track.
@@ -306,6 +381,34 @@ REQ-ABI-3: Go/Python native providers resolve only the v5 export list.
 
 REQ-ABI-4: The header, export list, loader symbol table, release packaging and
 ABI conformance test agree exactly.
+
+REQ-ABI-5: Provider child resources created by the C ABI are bound to one live
+client-session incarnation, not merely to the numeric `EasynetHandle` value.
+The internal lifecycle is `Active -> Closing -> Released`. Submit/open paths
+must perform "session is Active + child resource insertion" as one lifecycle
+transaction; shutdown must mark the session Closing before draining resources
+for that exact binding.
+
+REQ-ABI-6: v5 submitted-invocation handles are one-shot provider resources.
+Unknown, stale, cross-session or post-free submitted handles return
+`ERR_INVALID_HANDLE` for `await`, `cancel`, `events` and `free`. This is the
+v5 public behavior; bindings must not preserve an idempotent-free compatibility
+layer because it allows replay-compatible lifecycle authority.
+
+REQ-ABI-7: Submitted-handle cancellation reports the cancel-request lifecycle,
+not a fabricated target terminal state. The JSON object must include
+`request_accepted`, `deduplicated`, `cancelled`, `state` and `terminal`.
+`CancelRequested` is non-terminal unless a verified target terminal receipt is
+observed later.
+
+REQ-ABI-8: Unary result JSON exposes the verified terminal fact as
+`terminal_receipt`. The retired `receipt` alias is not part of the v5 provider
+ABI because it conflates operational result projection with receipt authority.
+
+REQ-ABI-9: Stream and bidi terminal JSON may treat a frame as canonical
+Invocation terminal only when a terminal receipt passes the inbound checkpoint
+verifier. Transport EOF/status and unverified wire terminal flags are transport
+events, not receipt-backed terminal authority.
 
 ## 12. Language bindings
 
@@ -320,6 +423,12 @@ concepts are unsupported, not placeholder product clients.
 REQ-LANG-4: A language-specific convenience adapter may translate host objects
 to `InvocationDraft`; it cannot own routing, addressing grammar or product
 ability semantics.
+
+REQ-LANG-5: Go/Python `Daemon*` and daemon-named function aliases required by
+REQ-PROD-5 remain source-compatible exports until an explicit major-version
+cutover. They are non-canonical provider ABI names, must be exhaustively listed
+under `canonical-public-api.json#non_canonical`, and must not carry a second
+transport, parser, state machine or fallback path.
 
 ## 13. Product extraction
 
@@ -505,11 +614,12 @@ second daemon/key-service or writing a parallel trust source.
 
 ### 14.4 Delivery status at this specification update
 
-This target is now accepted at the canonical runtime boundary. On 2026-07-11
-the restored baseline was re-audited after the interrupted work: Go SDK tests,
-Python SDK tests, EasyNet backend tests and EasyRemote tests all passed. There
-is therefore no current Go compilation conflict to repair. PrincipalLifecycle
-has a provider-backed Go/Python SDK facade and a daemon durable provider.
+This target is accepted only when the current CI invocation produces the
+required live conformance, SDK, backend and downstream results. Historical or
+committed pass statements are not evidence of current health. PrincipalLifecycle
+has Go/Python SDK facades and a daemon implementation, but remains `seam` in
+the SDK matrix until production-provider identity and every normative step are
+bound to live runner attestations.
 Active-key, grant, recovery, admission-state and enrollment-capability proof
 enforcement have landed in the daemon provider. The product-neutral
 `easynet principal`
@@ -571,21 +681,24 @@ subscription resume in symmetric Go/Python providers; receipt/history now has a
 daemon-backed stable cursor provider and symmetric Go/Python cursor forwarding;
 downstream Backend/EasyRemote Directory and Receipt consumer cutover is now
 covered by `tools/scripts/check-downstream-sdk-consumer-cutover.sh`.
-Runtime events and runtime administration now have symmetric provider-backed
-Go/Python facades; access control now has symmetric provider-backed Go/Python
-SDK facades over daemon
+Runtime events and runtime administration have symmetric Go/Python facades;
+access control has symmetric Go/Python SDK facades over daemon
 `authority.binding.*` abilities, while Backend product role mapping and
-standalone-Hub governance UX packaging remain downstream product work.
+standalone-Hub governance UX packaging remain downstream product work. These
+facades are matrix seams, not provider-backed evidence by themselves.
 Runtime Events now also have an explicit cross-repository adapter gate covering
 the Go/Python SDK event facades, Backend SDK event subscription/open-stream
 adapters and EasyRemote product event consumer behavior. This is adapter
 evidence only by itself. `tools/scripts/runtime-events-live-daemon-e2e.sh`
 now composes it with Go and Python live daemon smokes that read bounded
 `RuntimeEventClient` pages from real `easynet-daemon` handle events over the C
-ABI. Runtime Events are therefore cutover-ready in the SDK capability matrix;
+ABI. Runtime Events remain `seam` in the SDK capability matrix until route
+implementation and every case step share live selector attestations. Consumer
+cutover is established only by its separately executed downstream gate, and
 product event taxonomies remain downstream.
-AbilityDescriptor projection now has symmetric provider-backed Go/Python
-facades over daemon `meta.list_abilities`, so descriptor schema, call mode,
+AbilityDescriptor projection has symmetric Go/Python facades over daemon
+`meta.list_abilities`, but remains a seam until provider proof closes every
+normative step. Descriptor schema, call mode,
 hashes, visibility and hints remain daemon catalog facts rather than
 SDK-inferred product facts.
 Receipt summary causal-anchor projection now has symmetric Go/Python SDK
@@ -613,8 +726,29 @@ The release gate includes:
 8. downstream backend and EasyRemote tests proving product-local ownership;
 9. project-structure and dead-code gates;
 10. zero compiler warnings in the production Rust library;
-11. backend-free PrincipalLifecycle acceptance from section 14.3; and
-12. backend-present mapping to the same principal/key/admission truth.
+11. backend-free PrincipalLifecycle acceptance from section 14.3;
+12. backend-present mapping to the same principal/key/admission truth; and
+13. SDK action-adapter coverage manifests with no committed status, SHA-256
+    pinned evidence sources, and successful runner-owned per-case command
+    executions.
+
+The action-adapter JSON files are coverage manifests only. A committed
+`status=passed`, selector or command is invalid evidence.
+`sdk/conformance/runner/execution-manifest.json` is the runner-owned binding
+from `(language, case_id)` to one exact test selector and its evidence source.
+The runner hashes the case YAML and evidence, proves that the selector is
+declared in the bound source, asks the language test tool to collect it, then
+executes that exact collected test. A required case passes only when collection
+returns exactly that selector and the emitted result contains non-empty
+execution proofs. Each result binds the case SHA-256, evidence SHA-256,
+selector, collected test, command, working directory, exit code and
+command-output SHA-256, then hashes that complete tuple into
+`attestation_sha256`. Empty, uncollected, unrelated or report-supplied
+execution evidence is rejected.
+The parity gate consumes only the seven JSON result files emitted by that same
+runner invocation. It rejects schema-v2 coverage manifests, zero executions,
+`skipped`/undeclared states and any non-unsupported matrix cell without a
+passing selector-bound attestation.
 
 ## 16. Architecture prohibitions
 
@@ -623,7 +757,7 @@ The following fail review and CI:
 - parallel AbilityDescriptor/manifest domain aggregates;
 - more than one daemon transport `CallMode` definition;
 - a runtime adapter that manufactures caller identity;
-- product-specific C ABI exports;
+- product/domain ability-specific C ABI exports;
 - product profile bundles or service locators in the runtime SDK;
 - deleting a generic runtime capability before its canonical provider and
   migrated consumers are proven;
@@ -632,8 +766,9 @@ The following fail review and CI:
 - legacy identity-field spelling instead of URA;
 - load-error-to-empty/default behavior;
 - boot-window no-op success or restart-as-repair;
-- dead compatibility modules, aliases, old schemas or historical source-of-truth
-  documents.
+- unclassified or logic-bearing compatibility modules/aliases, old schemas or
+  historical source-of-truth documents. REQ-LANG-5 aliases are permitted only
+  while they remain exact delegates and explicitly classified non-canonical.
 
 ## 17. Migration plan and remaining work
 
@@ -654,10 +789,11 @@ Migration follows dependency direction. Destructive deletion is last.
 
 The interrupted restoration conflict described in section 14.4 has been
 resolved. Public API inventory, the symmetric capability matrix, generic
-PrincipalLifecycle seams, canonical Invocation lowering, provider-backed
-Directory resolution, the daemon-backed Receipt/causal/history/trace provider,
-provider-backed AbilityDescriptor projection, and provider-backed runtime
-Events/Admin and AccessControl facades have landed. Backend and EasyRemote
+PrincipalLifecycle seams, canonical Invocation lowering, Directory resolution,
+Receipt/causal/history/trace facades, AbilityDescriptor projection, and runtime
+Events/Admin and AccessControl seams have landed. None is labeled
+provider-backed by the SDK matrix without step-complete live provider proof.
+Backend and EasyRemote
 Directory/Receipt/runtime consumer cutover is now guarded by
 `tools/scripts/check-downstream-sdk-consumer-cutover.sh`, and product key
 custody/process/FFI escapes are guarded by

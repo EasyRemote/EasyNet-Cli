@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 VALIDATOR="$REPO_ROOT/sdk/conformance/sdk_matrix.py"
 MATRIX="${1:-$REPO_ROOT/sdk/conformance/sdk-parity-matrix.json}"
 
+export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+
 if [[ "${1:-}" == "--self-test" ]]; then
   mkdir -p "$REPO_ROOT/target"
   tmp="$(mktemp -d "$REPO_ROOT/target/sdk-parity-self-test.XXXXXX")"

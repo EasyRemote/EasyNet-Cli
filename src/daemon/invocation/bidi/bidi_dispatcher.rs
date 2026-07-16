@@ -1538,7 +1538,7 @@ impl BidiDispatcher {
             Err(reason) => {
                 return RequestOutcome::Err {
                     error: SessionRequestError::PermissionDenied { reason },
-                }
+                };
             }
         };
         self.dispatch_session_request_named_for_caller(caller_device_ura, &ability, args)
@@ -1891,9 +1891,9 @@ fn classify_carrier_v1_result(
                 "CARRIER_STREAM_PHASE_INVALID",
             ));
         }
-        if result.failure.is_none() && result.terminal_receipt.is_none() {
+        if result.terminal_receipt.is_none() {
             return Err(protocol_failure(
-                "successful stream terminal omitted its canonical terminal checkpoint",
+                "stream terminal DispatchResult omitted its canonical terminal checkpoint",
                 "CANONICAL_TERMINAL_RECEIPT_REQUIRED",
             ));
         }
@@ -2819,6 +2819,31 @@ mod tests {
         assert_eq!(
             failure.failure.as_ref().map(|value| value.code.as_str()),
             Some("CARRIER_STREAM_PHASE_INVALID")
+        );
+    }
+
+    #[test]
+    fn carrier_v1_stream_terminal_failure_requires_terminal_checkpoint() {
+        let pb = easynet_axon::pb::axon::v1::DispatchResult {
+            call_id: 9,
+            terminal: true,
+            failure: Some(easynet_axon::pb::axon::v1::Error {
+                code: "STREAM_OPEN_FAILED".into(),
+                message: "target rejected stream open".into(),
+                retryable: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (_, failure) = classify_carrier_v1_result(pb)
+            .expect_err("failed stream terminal without receipt must fail closed");
+        assert_eq!(
+            failure.failure.as_ref().map(|value| value.code.as_str()),
+            Some("CANONICAL_TERMINAL_RECEIPT_REQUIRED")
+        );
+        assert!(
+            failure.terminal_receipt.is_none(),
+            "protocol failure must not synthesize a terminal receipt"
         );
     }
 
