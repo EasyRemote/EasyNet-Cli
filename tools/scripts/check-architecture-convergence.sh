@@ -3771,8 +3771,8 @@ if agent_aggregate.exists():
             "Agent aggregate must classify missing and invalid registered workspaces",
         ),
         (
-            "fn registered_agent_workspace(",
-            "Agent aggregate snapshot must own registered workspace lookup",
+            "fn load_registered_agent_workspace(",
+            "Agent aggregate repository must own registered workspace lookup",
         ),
         (
             "fn root_path(&self) -> &Path",

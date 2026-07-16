@@ -541,6 +541,10 @@ impl AgentAggregateRepository {
         })
     }
 
+    pub(crate) fn load_registered_agent_workspace(owner_id: &str, operation: &str) -> anyhow::Result<AgentRegisteredWorkspace> {
+        Ok(AgentRegisteredWorkspace)
+    }
+
     pub(crate) fn try_load_snapshot() -> Result<AgentAggregateSnapshot, AgentAggregateSnapshotLoadError> {
         Ok(AgentAggregateSnapshot {
             registry: agent_registry::load_agents()?,

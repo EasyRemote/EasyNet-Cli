@@ -92,6 +92,7 @@ impl AgentAggregateSnapshot {
         self.registry.clone()
     }
 
+    #[cfg(test)]
     pub(crate) fn registered_agent_workspace(
         &self,
         owner_id: &str,
@@ -101,6 +102,7 @@ impl AgentAggregateSnapshot {
             .map(AgentRegisteredAgent::into_workspace)
     }
 
+    #[cfg(test)]
     pub(crate) fn registered_agent(
         &self,
         owner_id: &str,
@@ -128,6 +130,7 @@ impl AgentAggregateSnapshot {
         &self.local_agents.host_device_agent_ura
     }
 
+    #[cfg(test)]
     pub(crate) fn hosted_identity_status(&self) -> AgentHostedIdentityStatus {
         AgentHostedIdentityStatus::from_local_agents(&self.local_agents)
     }
@@ -345,7 +348,9 @@ impl AgentRegisteredWorkspace {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HostedAgentIdentityProjection<'a> {
+    #[cfg(test)]
     pub(crate) profile: &'a str,
+    #[cfg(test)]
     pub(crate) name: &'a str,
     pub(crate) agent_ura: &'a str,
     pub(crate) signing_authority: &'a str,
@@ -354,7 +359,9 @@ pub(crate) struct HostedAgentIdentityProjection<'a> {
 impl<'a> HostedAgentIdentityProjection<'a> {
     fn from_entry(entry: &'a HostedAgentEntry) -> Self {
         Self {
+            #[cfg(test)]
             profile: entry.profile.as_str(),
+            #[cfg(test)]
             name: entry.name.as_str(),
             agent_ura: entry.agent_ura.as_str(),
             signing_authority: entry.signing_authority.as_str(),

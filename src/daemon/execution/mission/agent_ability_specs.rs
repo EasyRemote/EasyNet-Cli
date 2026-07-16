@@ -82,8 +82,8 @@ use crate::daemon::persistence::agent_registry::AgentEntry;
 
 /// One ability exposed by a locally-installed agent.
 ///
-/// The three fields are the intersection of what every consumer of
-/// this spec needs:
+/// The fields are the intersection of what every consumer of this
+/// discovery/hint spec needs:
 ///
 ///   * `name`      — the tool name as it will appear on the MCP wire
 ///                   and in `a2a.agents_json[*].skills[*].name`. Must
@@ -93,23 +93,16 @@ use crate::daemon::persistence::agent_registry::AgentEntry;
 ///                   by agent-side tool pickers when the agent is
 ///                   choosing which tool to call. Not a protocol
 ///                   field; may be tuned for readability.
-///   * `parameters` — JSON Schema describing the argument shape.
-///                   Must be a JSON object at the top level
-///                   (`{"type": "object", ...}`); that is the only
-///                   shape both OpenAI's tool-use contract and the
-///                   Axon SDK's ToolSpec accept.
 ///
-/// Private fields with public getters: callers construct specs via
-/// `AgentAbilitySpec::new(...)` (which validates the shape) or the
-/// module-level `abilities_for(...)`, never by field-wise struct
-/// literals. This keeps every instance well-formed by construction
-/// and makes "I'll just set description = empty" a compile error at
-/// the site, not a runtime regression downstream.
+/// `AgentAbilitySpec::new(...)` still accepts the manifest input
+/// schema and validates that it is a JSON object, but the schema is
+/// intentionally not retained here. `AbilityManifest` and descriptor
+/// projection own schema transport; this type is only the
+/// discovery/prompt DTO.
 #[derive(Debug, Clone)]
 pub struct AgentAbilitySpec {
     name: String,
     description: String,
-    parameters: Value,
 }
 
 impl AgentAbilitySpec {
@@ -150,7 +143,6 @@ impl AgentAbilitySpec {
         Ok(Self {
             name,
             description: description.into(),
-            parameters,
         })
     }
 
@@ -167,11 +159,6 @@ impl AgentAbilitySpec {
         &self.description
     }
 
-    /// The JSON Schema for this ability's arguments. Always a JSON
-    /// object at the top level (enforced by `AgentAbilitySpec::new`).
-    pub fn parameters(&self) -> &Value {
-        &self.parameters
-    }
 }
 
 /// Build the ability list for one agent entry.
@@ -457,8 +444,8 @@ mod tests {
     #[test]
     fn chat_manifest_schema_is_object_with_required_prompt() {
         let entry = entry_named("claude", AgentType::ClaudeCode);
-        let abilities = abilities_for("claude", &entry);
-        let params = abilities[0].parameters();
+        let manifests = manifests_for("claude", &entry);
+        let params = manifests[0].input_schema();
         // Top-level type is an object — every LLM tool-use contract
         // OpenAI / Anthropic / Axon emits assumes this. Verify it
         // here so a future "let me simplify the schema" patch can't
@@ -490,9 +477,9 @@ mod tests {
     #[test]
     fn chat_manifest_parameters_declare_both_prompt_and_optional_context() {
         let entry = entry_named("codex", AgentType::Codex);
-        let abilities = abilities_for("codex", &entry);
-        let props = abilities[0]
-            .parameters()
+        let manifests = manifests_for("codex", &entry);
+        let props = manifests[0]
+            .input_schema()
             .get("properties")
             .and_then(Value::as_object)
             .expect("properties must be an object");
@@ -604,7 +591,6 @@ mod tests {
         .expect("well-formed spec must be accepted");
         assert_eq!(spec.name(), "claude.chat");
         assert_eq!(spec.description(), "send a prompt");
-        assert!(spec.parameters().is_object());
     }
 
     /// Regression: `AgentAbilitySpec` must be `Clone` so a discovery
