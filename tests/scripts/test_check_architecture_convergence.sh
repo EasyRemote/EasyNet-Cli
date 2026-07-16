@@ -338,6 +338,11 @@ struct AgentHostedPlacement {
 }
 
 struct AgentRegisteredWorkspace;
+enum AgentSkillLayout {
+    ClaudeCode,
+    Codex,
+    External,
+}
 
 enum AgentRegisteredWorkspaceLookupError {
     Missing,
@@ -349,8 +354,8 @@ impl AgentRegisteredWorkspace {
         Path::new("/tmp/agent")
     }
 
-    fn agent_type(&self) -> agent_registry::AgentType {
-        agent_registry::AgentType::ClaudeCode
+    fn skill_layout(&self) -> AgentSkillLayout {
+        AgentSkillLayout::ClaudeCode
     }
 }
 
@@ -445,6 +450,10 @@ impl AgentAggregateSnapshot {
 
     fn registered_agent_registry_projection(&self) -> AgentRegistry {
         self.registry.clone()
+    }
+
+    fn registered_agent_names(&self) -> impl Iterator<Item = &str> {
+        self.registry.agents.keys().map(String::as_str)
     }
 
     fn registered_agent_workspace(&self, owner_id: &str, operation: &str) -> anyhow::Result<AgentRegisteredWorkspace> {
@@ -730,17 +739,16 @@ fn scoped_skill_resource_ura(
 EOF
 	  cat >"$CLI/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
 use crate::daemon::persistence::{
-    agent_aggregate::AgentAggregateRepository,
-    agent_registry as agents,
+    agent_aggregate::{AgentAggregateRepository, AgentSkillLayout},
 };
 
-fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
+fn resolve_owner_root_and_layout(owner_id: &str) -> anyhow::Result<(PathBuf, AgentSkillLayout)> {
     let owner = AgentAggregateRepository::load_registered_agent_workspace(owner_id, "skill.publish")?;
     let root = owner.root_path().to_path_buf();
     if !root.is_dir() {
         anyhow::bail!("owner agent {owner_id:?} has no on-disk workspace at {}", root.display());
     }
-    Ok((root, owner.agent_type()))
+    Ok((root, owner.skill_layout()))
 }
 EOF
 	  cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
@@ -2269,7 +2277,7 @@ The owner agent is identified by an EasyNet agent URI.
 EOF
 expect_fail \
   "RFC-006 identity URI terminology" \
-  "R4_RFC006_IDENTITY_URI_TERMINOLOGY"
+  "R4_CURRENT_DOC_IDENTITY_URI_TERMINOLOGY"
 
 make_good_fixture
 mkdir -p "$CLI/docs/rfc"
@@ -2278,7 +2286,24 @@ TR-INV-12 requires every hub-translated caller to use a principal URI.
 EOF
 expect_fail \
   "RFC-006 companion identity URI terminology" \
-  "R4_RFC006_IDENTITY_URI_TERMINOLOGY"
+  "R4_CURRENT_DOC_IDENTITY_URI_TERMINOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/docs/rfc"
+cat >"$CLI/docs/rfc/AXON-RFC-003-invokebidi-protocol.md" <<'EOF'
+membership_gate checks caller URI directory membership.
+EOF
+expect_fail \
+  "RFC-003 identity URI terminology" \
+  "R4_CURRENT_DOC_IDENTITY_URI_TERMINOLOGY"
+
+make_good_fixture
+cat >"$CLI/docs/PAGES_AND_LLM_API.md" <<'EOF'
+INV-2 Capability-URI Key addresses api keys as resources.
+EOF
+expect_fail \
+  "Pages API identity URI terminology" \
+  "R4_CURRENT_DOC_IDENTITY_URI_TERMINOLOGY"
 
 make_good_fixture
 cat >>"$CLI/sdk/python/easynet_sdk/runtime.py" <<'EOF'

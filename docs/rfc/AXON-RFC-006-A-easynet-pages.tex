@@ -268,7 +268,7 @@ primitive. The mapping is:
 \S3 RC-INV-2 optimistic concurrency & \S\ref{sec:algo-concurrency}: \texttt{ETag} = first 16 bytes of canonical hash. \\
 \S4 Transition Ability         & \S\ref{sec:wire-schemas}: \texttt{transition\_id}s for every page transition. \\
 \S5 Authority + delegation     & Phase 1: owner\_agent signs locally; no delegated execution for pages. \\
-\S5 principal/ caller          & \S\ref{sec:hub}: Hub mints \texttt{human-anon} URIs per request. \\
+\S5 principal/ caller          & \S\ref{sec:hub}: Hub mints \texttt{human-anon} URAs per request. \\
 \S6 View Projection            & \S\ref{sec:algo-views}: human\_view and agent\_view algorithms. \\
 \S7 Receipt Indexing           & \S\ref{sec:storage}: state\_key index in addition to receipt\_id. \\
 \bottomrule
@@ -737,7 +737,7 @@ returns:
 \end{lstlisting}
 
 \texttt{pages.get@v1} produces an \texttt{OperationalReceipt}
-recording the read, the caller URI, and (when from a Hub) the
+recording the read, the caller URA, and (when from a Hub) the
 \texttt{caller\_context} (main \S3.6).
 
 \subsection{pages.list@v1 (query)}
@@ -1034,7 +1034,7 @@ src/bin/easynet-hub.rs               ← NEW (P-A4)
 src/runtime/hub/                     ← NEW (P-A4)
   mod.rs
   router.rs                          path parsing, view selection
-  caller.rs                          principal/human-anon URI
+  caller.rs                          principal/human-anon URA
                                      minting + caller_context
                                      extraction
 
@@ -1090,13 +1090,13 @@ GET  /healthz                          -> 200 "ok"
 The Hub is a daemon client: it has no direct access to the
 state store. Every view fetch is a \texttt{pages.get@v1}
 invocation against the daemon, with the envelope filled per
-main \S5.4 (caller URI \texttt{principal/human-anon/...},
+main \S5.4 (caller URA \texttt{principal/human-anon/...},
 caller\_context filled per main \S3.6).
 
 \textbf{Trust boundary.} The Hub is allowed to mint
 \texttt{principal/human-anon} callers but not arbitrary
-\texttt{agent/} callers. The daemon validates the caller URI on
-admission and rejects \texttt{agent/} URIs that do not match
+\texttt{agent/} callers. The daemon validates the caller URA on
+admission and rejects \texttt{agent/} URAs that do not match
 the Hub's authorisation token (an out-of-band shared secret in
 Phase 1; RFC-008 will replace with proper signing).
 
@@ -1235,7 +1235,7 @@ yield identical output bytes); \texttt{ability\_surface} matches
 \begin{enumerate}[leftmargin=2.2em,itemsep=0.1em]
     \item Parse path $\to$ \texttt{(realm, owner, slug)} $\to$
     \texttt{state\_key}.
-    \item Build envelope: caller URI is
+    \item Build envelope: caller URA is
     \texttt{principal/human-anon/<ip-hash>/<session-id>}
     (\S\ref{sec:hub}); \texttt{caller\_context} populated from
     HTTP headers.
@@ -1501,7 +1501,7 @@ TA-INV-1 (transition\_id required)       & every \texttt{pages.<verb>@v1} string
 VP-INV-1 (ability\_surface from state)   & \texttt{derive\_ability\_surface} match block          & \S\ref{sec:algo-views} \\
 TR-INV-7 (multi-view first-class)        & \texttt{human\_view} + \texttt{agent\_view} both implemented & \S\ref{sec:algo-views} \\
 TR-INV-11 (URA-receipt traceability)     & \texttt{/.receipts} endpoint + idx\_owner index        & \S\ref{sec:storage}, \S\ref{sec:e2e} \\
-TR-INV-12 (principal/human-anon)         & \texttt{build\_envelope} mints the URI                 & \S\ref{sec:hub} \\
+TR-INV-12 (principal/human-anon)         & \texttt{build\_envelope} mints the URA                 & \S\ref{sec:hub} \\
 TR-INV-13 (caller\_context)              & populated by \texttt{build\_envelope}; entered into operational receipts & \S\ref{sec:hub}, \S\ref{sec:e2e} \\
 \bottomrule
 \end{tabularx}

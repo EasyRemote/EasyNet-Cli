@@ -31,11 +31,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
-use crate::daemon::persistence::{
-    agent_aggregate::{AgentAggregateRepository, AgentHostedSkillOwnerProjection},
-    agent_registry as agents,
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentAggregateSnapshot, AgentHostedSkillOwnerProjection,
+    AgentRegisteredWorkspace, AgentSkillLayout,
 };
 
 /// Skill inventory handler.
@@ -67,7 +67,7 @@ pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
     let snapshot = AgentAggregateRepository::load_snapshot()?;
     let hosted_skill_owners = snapshot.hosted_skill_owner_projection();
     let scope = SkillListScope::from_args(&args, &hosted_skill_owners)?;
-    let rows = SkillInventoryBuilder::new(&snapshot.registry, &scope).collect()?;
+    let rows = SkillInventoryBuilder::new(&snapshot, &scope).collect()?;
 
     // Serialise InstallRecord directly — its serde derive emits the
     // wire shape backend already speaks (content_hash via
@@ -103,7 +103,7 @@ pub(crate) fn handle(args: Value) -> anyhow::Result<Value> {
 /// policy out of `list_handler` prevents future patches from reintroducing an
 /// O(agents * global_pool_size) unscoped listing.
 struct SkillInventoryBuilder<'a> {
-    registry: &'a agents::AgentRegistry,
+    snapshot: &'a AgentAggregateSnapshot,
     scope: &'a SkillListScope,
     rows: Vec<crate::daemon::resources::skills::store::InstallRecord>,
     global_pool_cache: GlobalSkillPoolCache,
@@ -111,9 +111,9 @@ struct SkillInventoryBuilder<'a> {
 }
 
 impl<'a> SkillInventoryBuilder<'a> {
-    fn new(registry: &'a agents::AgentRegistry, scope: &'a SkillListScope) -> Self {
+    fn new(snapshot: &'a AgentAggregateSnapshot, scope: &'a SkillListScope) -> Self {
         Self {
-            registry,
+            snapshot,
             scope,
             rows: Vec::new(),
             global_pool_cache: GlobalSkillPoolCache::default(),
@@ -129,12 +129,15 @@ impl<'a> SkillInventoryBuilder<'a> {
             return Ok(self.rows);
         }
 
-        for (name, entry) in &self.registry.agents {
+        for name in self.snapshot.registered_agent_names() {
             if !self.scope.includes_agent(name) {
                 continue;
             }
-            self.collect_managed_installs(name, entry)?;
-            self.collect_global_pools(name, entry.agent_type);
+            let workspace = self
+                .snapshot
+                .registered_agent_workspace(name, "skill.list")?;
+            self.collect_managed_installs(&workspace)?;
+            self.collect_global_pools(name, workspace.skill_layout());
         }
         self.retain_skill_name_filter();
         Ok(self.rows)
@@ -148,11 +151,10 @@ impl<'a> SkillInventoryBuilder<'a> {
 
     fn collect_managed_installs(
         &mut self,
-        name: &str,
-        entry: &agents::AgentEntry,
+        workspace: &AgentRegisteredWorkspace,
     ) -> anyhow::Result<()> {
-        let root = entry.required_root_path(name, "skill.list")?;
-        let skills_dir = managed_skill_dir_for_agent_type(&root, entry.agent_type);
+        let skills_dir =
+            managed_skill_dir_for_layout(workspace.root_path(), workspace.skill_layout());
         if !skills_dir.exists() {
             return Ok(());
         }
@@ -186,9 +188,9 @@ impl<'a> SkillInventoryBuilder<'a> {
         }
     }
 
-    fn collect_global_pools(&mut self, agent_name: &str, agent_type: agents::AgentType) {
+    fn collect_global_pools(&mut self, agent_name: &str, layout: AgentSkillLayout) {
         for (label, pool_dir) in
-            crate::daemon::resources::skills::store::global_skill_pools_for(agent_type)
+            crate::daemon::resources::skills::store::global_skill_pools_for(layout)
         {
             if self.scope.is_agent_scoped() {
                 self.rows.extend(
@@ -301,17 +303,13 @@ impl GlobalSkillPoolCache {
     }
 }
 
-fn managed_skill_dir_for_agent_type(
+fn managed_skill_dir_for_layout(
     root: &std::path::Path,
-    agent_type: crate::daemon::persistence::agent_registry::AgentType,
+    layout: AgentSkillLayout,
 ) -> std::path::PathBuf {
-    match agent_type {
-        crate::daemon::persistence::agent_registry::AgentType::ClaudeCode => {
-            root.join(".claude").join("skills")
-        }
-        crate::daemon::persistence::agent_registry::AgentType::Codex
-        | crate::daemon::persistence::agent_registry::AgentType::CodexAppServer
-        | crate::daemon::persistence::agent_registry::AgentType::External => root.join("skills"),
+    match layout {
+        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
+        AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills"),
     }
 }
 
@@ -521,10 +519,7 @@ mod tests {
     #[test]
     fn managed_skill_dir_for_claude_code_uses_native_project_dir_only() {
         let root = std::path::Path::new("/tmp/agent-root");
-        let dir = managed_skill_dir_for_agent_type(
-            root,
-            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
-        );
+        let dir = managed_skill_dir_for_layout(root, AgentSkillLayout::ClaudeCode);
         assert_eq!(dir, root.join(".claude").join("skills"));
         assert_ne!(
             dir,
@@ -536,11 +531,8 @@ mod tests {
     #[test]
     fn managed_skill_dir_for_codex_profiles_uses_agent_root_skills() {
         let root = std::path::Path::new("/tmp/agent-root");
-        for agent_type in [
-            crate::daemon::persistence::agent_registry::AgentType::Codex,
-            crate::daemon::persistence::agent_registry::AgentType::CodexAppServer,
-        ] {
-            let dir = managed_skill_dir_for_agent_type(root, agent_type);
+        for layout in [AgentSkillLayout::Codex, AgentSkillLayout::External] {
+            let dir = managed_skill_dir_for_layout(root, layout);
             assert_eq!(dir, root.join("skills"));
         }
     }

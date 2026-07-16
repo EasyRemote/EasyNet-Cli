@@ -678,21 +678,28 @@ for path in sorted(semantic_ura_factory_files):
             "semantic URA factory result must not be bound to a URI-named variable",
         )
 
-rfc006_stateful_docs = (
+current_identity_docs = (
     cli_root / "docs/AXON-RFC-006-stateful-easynet.tex",
+    cli_root / "docs/rfc/AXON-RFC-003-invokebidi-protocol.md",
     cli_root / "docs/rfc/AXON-RFC-006-stateful-easynet.tex",
     cli_root / "docs/rfc/AXON-RFC-006-stateful-easynet.md",
+    cli_root / "docs/rfc/AXON-RFC-006-A-easynet-pages.tex",
+    cli_root / "docs/rfc/AXON-RFC-006-A-easynet-pages.zh-CN.tex",
+    cli_root / "docs/PAGES_AND_LLM_API.md",
 )
-for rfc006_stateful in rfc006_stateful_docs:
-    if rfc006_stateful.exists():
-        text = rfc006_stateful.read_text(encoding="utf-8", errors="replace")
-        stale_uri = re.search(r"\buri(?:s)?\b|caller-uri|principal-URI", text, re.I)
+current_identity_uri = re.compile(
+    r"\bURIs?\b|caller-uri|principal-URI|Capability-URI|caller URI|agent URI"
+)
+for identity_doc in current_identity_docs:
+    if identity_doc.exists():
+        text = identity_doc.read_text(encoding="utf-8", errors="replace")
+        stale_uri = current_identity_uri.search(text)
         if stale_uri:
             add(
-                "R4_RFC006_IDENTITY_URI_TERMINOLOGY",
-                rfc006_stateful,
+                "R4_CURRENT_DOC_IDENTITY_URI_TERMINOLOGY",
+                identity_doc,
                 line_number(text, stale_uri.start()),
-                "RFC-006 identity/address terminology must use URA, not URI",
+                "current identity/address docs must use URA, not URI",
             )
 
 
@@ -3767,6 +3774,18 @@ if skill_list_ability.exists():
             "from_local_agents",
             "skill.list production code must not rebuild hosted identity projections locally",
         ),
+        (
+            "agent_registry::AgentType",
+            "skill.list production code must not consume raw registry AgentType",
+        ),
+        (
+            "agents::AgentType",
+            "skill.list production code must not consume raw registry AgentType",
+        ),
+        (
+            "snapshot.registry",
+            "skill.list production code must not iterate raw AgentRegistry rows",
+        ),
     ):
         if token in production_text:
             add("R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK", skill_list_ability, 1, detail)
@@ -3796,8 +3815,12 @@ if agent_aggregate.exists():
             "registered workspace projection must expose the canonical root path",
         ),
         (
-            "fn agent_type(&self) -> agent_registry::AgentType",
-            "registered workspace projection must expose the runtime type selector",
+            "enum AgentSkillLayout",
+            "Agent aggregate must expose a skill-layout projection instead of raw registry row type",
+        ),
+        (
+            "fn skill_layout(&self) -> AgentSkillLayout",
+            "registered workspace projection must expose the skill-layout selector",
         ),
     ):
         if token not in text:
@@ -3815,6 +3838,10 @@ if skill_publish_ability.exists():
             "owner_id, \"skill.publish\"",
             "skill package owner resolution must declare its registered workspace operation",
         ),
+        (
+            "AgentSkillLayout",
+            "skill package owner resolution must consume aggregate skill-layout projection",
+        ),
     ):
         if token not in production_text:
             add("R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK", skill_publish_ability, 1, detail)
@@ -3830,6 +3857,14 @@ if skill_publish_ability.exists():
         (
             "registry.agents",
             "skill package owner resolution must not inspect AgentRegistry rows directly",
+        ),
+        (
+            "agent_registry::AgentType",
+            "skill package owner resolution must not consume raw registry AgentType",
+        ),
+        (
+            "agents::AgentType",
+            "skill package owner resolution must not consume raw registry AgentType",
         ),
     ):
         if token in production_text:
@@ -3851,6 +3886,10 @@ if skill_store.exists():
             "agent, mutation.operation()",
             "shared skill mutations must declare their registered workspace operation",
         ),
+        (
+            "AgentSkillLayout",
+            "shared skill package helpers must consume aggregate skill-layout projection",
+        ),
     ):
         if token not in production_text:
             add("R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK", skill_store, 1, detail)
@@ -3866,6 +3905,14 @@ if skill_store.exists():
         (
             "registry.agents",
             "shared skill mutations must not inspect AgentRegistry rows directly",
+        ),
+        (
+            "agent_registry::AgentType",
+            "shared skill mutations must not consume raw registry AgentType",
+        ),
+        (
+            "agents::AgentType",
+            "shared skill mutations must not consume raw registry AgentType",
         ),
     ):
         if token in production_text:

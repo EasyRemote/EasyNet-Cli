@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
+    AgentSkillLayout,
 };
-use crate::daemon::persistence::agent_registry as agents;
 use crate::daemon::persistence::config;
 
 const GLOBAL_SKILL_OWNER_PREFIX: &str = "global:";
@@ -287,17 +287,17 @@ fn single_top_dir(dir: &Path) -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn global_skill_pools_for(
-    agent_type: agents::AgentType,
+    layout: AgentSkillLayout,
 ) -> Vec<(&'static str, std::path::PathBuf)> {
     let home = config::home_dir();
-    match agent_type {
-        agents::AgentType::ClaudeCode => {
+    match layout {
+        AgentSkillLayout::ClaudeCode => {
             vec![("claude-global", home.join(".claude").join("skills"))]
         }
-        agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
+        AgentSkillLayout::Codex => {
             vec![("codex-global", home.join(".agents").join("skills"))]
         }
-        agents::AgentType::External => Vec::new(),
+        AgentSkillLayout::External => Vec::new(),
     }
 }
 
@@ -359,10 +359,10 @@ impl GlobalSkillPoolRef {
 }
 
 pub(crate) fn global_skill_dir_for(
-    agent_type: agents::AgentType,
+    layout: AgentSkillLayout,
     skill_name: &str,
 ) -> Option<std::path::PathBuf> {
-    for (_label, pool_dir) in global_skill_pools_for(agent_type) {
+    for (_label, pool_dir) in global_skill_pools_for(layout) {
         if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name) {
             return Some(path);
         }
@@ -371,16 +371,15 @@ pub(crate) fn global_skill_dir_for(
 }
 
 fn global_skill_pool_dirs_for_label(pool_label: &str) -> Vec<std::path::PathBuf> {
-    let agent_types = [
-        agents::AgentType::ClaudeCode,
-        agents::AgentType::Codex,
-        agents::AgentType::CodexAppServer,
-        agents::AgentType::External,
+    let layouts = [
+        AgentSkillLayout::ClaudeCode,
+        AgentSkillLayout::Codex,
+        AgentSkillLayout::External,
     ];
     let mut dirs = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for agent_type in agent_types {
-        for (label, pool_dir) in global_skill_pools_for(agent_type) {
+    for layout in layouts {
+        for (label, pool_dir) in global_skill_pools_for(layout) {
             if label != pool_label || !seen.insert(pool_dir.clone()) {
                 continue;
             }
@@ -935,6 +934,7 @@ pub(crate) fn format_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::persistence::agent_registry as agents;
 
     #[test]
     fn resolve_skill_agent_root_projects_registered_workspace() {

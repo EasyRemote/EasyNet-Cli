@@ -59,8 +59,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
-use crate::daemon::persistence::agent_registry as agents;
+use crate::daemon::persistence::agent_aggregate::{AgentAggregateRepository, AgentSkillLayout};
 
 use super::list;
 use crate::daemon::ability::dispatch::OwnerKind;
@@ -129,9 +128,9 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let (owner_id, skill_name, body, run_id) = parse_publish_args(&args)?;
     validate_skill_name(&skill_name)?;
-    let (owner_root, agent_type) = resolve_owner_root_and_type(&owner_id)?;
+    let (owner_root, layout) = resolve_owner_root_and_layout(&owner_id)?;
 
-    let skills_dir = skills_dir_for(&owner_root, agent_type);
+    let skills_dir = skills_dir_for(&owner_root, layout);
     let skill_dir = skills_dir.join(&skill_name);
     if skill_dir.exists() {
         anyhow::bail!(
@@ -230,8 +229,8 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
 fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     let (owner_id, skill_name) = parse_unpublish_args(&args)?;
     validate_skill_name(&skill_name)?;
-    let (owner_root, agent_type) = resolve_owner_root_and_type(&owner_id)?;
-    let skill_dir = skills_dir_for(&owner_root, agent_type).join(&skill_name);
+    let (owner_root, layout) = resolve_owner_root_and_layout(&owner_id)?;
+    let skill_dir = skills_dir_for(&owner_root, layout).join(&skill_name);
 
     if !skill_dir.exists() {
         anyhow::bail!(
@@ -595,14 +594,14 @@ fn parse_skill_file_args(
     Ok((owner, name, path))
 }
 
-/// Resolve the owner agent's root path AND its runtime type. Needed
+/// Resolve the owner agent's root path and skill layout. Needed
 /// by the publish path so we can pick the right SKILL.md install
 /// location: Claude Code looks for project-local skills under
 /// `<cwd>/.claude/skills/<name>/`, not `<cwd>/skills/<name>/`.
 /// Codex has no native skill concept; for codex agents we still
 /// use `<cwd>/skills/` so EasyNet's own listing surfaces the
 /// artifact, but we know the LLM won't auto-load it.
-fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
+fn resolve_owner_root_and_layout(owner_id: &str) -> anyhow::Result<(PathBuf, AgentSkillLayout)> {
     let owner =
         AgentAggregateRepository::load_registered_agent_workspace(owner_id, "skill.publish")?;
     let root = owner.root_path().to_path_buf();
@@ -612,10 +611,10 @@ fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agent
             root.display()
         );
     }
-    Ok((root, owner.agent_type()))
+    Ok((root, owner.skill_layout()))
 }
 
-/// Pick the on-disk skills directory for a given agent type. This
+/// Pick the on-disk skills directory for a given skill layout. This
 /// is the LOAD-BEARING piece of skill discovery: Claude Code's
 /// skill loader scans `<cwd>/.claude/skills/<name>/SKILL.md`. If
 /// EasyNet writes to `<cwd>/skills/<name>/SKILL.md` instead, the
@@ -637,33 +636,29 @@ fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agent
 /// path, knowing the codex CLI won't auto-load them. A future
 /// codex-skill convention (if one ships upstream) would plug in
 /// here without changing call sites.
-fn skills_dir_for(root: &std::path::Path, agent_type: agents::AgentType) -> PathBuf {
-    match agent_type {
-        agents::AgentType::ClaudeCode => root.join(".claude").join("skills"),
-        agents::AgentType::Codex
-        | agents::AgentType::CodexAppServer
-        | agents::AgentType::External => root.join("skills"),
+fn skills_dir_for(root: &std::path::Path, layout: AgentSkillLayout) -> PathBuf {
+    match layout {
+        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
+        AgentSkillLayout::Codex | AgentSkillLayout::External => root.join("skills"),
     }
 }
 
 fn skill_dir_candidates_for(
     root: &Path,
-    agent_type: agents::AgentType,
+    layout: AgentSkillLayout,
     skill_name: &str,
 ) -> Vec<PathBuf> {
-    let mut candidates = match agent_type {
-        agents::AgentType::ClaudeCode => vec![
+    let mut candidates = match layout {
+        AgentSkillLayout::ClaudeCode => vec![
             root.join(".claude").join("skills").join(skill_name),
             root.join("skills").join(skill_name),
         ],
-        agents::AgentType::Codex
-        | agents::AgentType::CodexAppServer
-        | agents::AgentType::External => {
+        AgentSkillLayout::Codex | AgentSkillLayout::External => {
             vec![root.join("skills").join(skill_name)]
         }
     };
     if let Some(global_dir) =
-        crate::daemon::resources::skills::store::global_skill_dir_for(agent_type, skill_name)
+        crate::daemon::resources::skills::store::global_skill_dir_for(layout, skill_name)
     {
         if !candidates.iter().any(|candidate| candidate == &global_dir) {
             candidates.push(global_dir);
@@ -673,8 +668,8 @@ fn skill_dir_candidates_for(
 }
 
 fn resolve_skill_dir(owner_id: &str, skill_name: &str, verb: &str) -> anyhow::Result<PathBuf> {
-    let (owner_root, agent_type) = resolve_owner_root_and_type(owner_id)?;
-    for candidate in skill_dir_candidates_for(&owner_root, agent_type, skill_name) {
+    let (owner_root, layout) = resolve_owner_root_and_layout(owner_id)?;
+    for candidate in skill_dir_candidates_for(&owner_root, layout, skill_name) {
         if candidate.is_dir() {
             return Ok(candidate);
         }
@@ -1065,6 +1060,7 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::core::agent::spec::{AgentSpec, RuntimeKind};
     use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
+    use crate::daemon::persistence::agent_registry as agents;
     use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
 
     fn materialise_agent(tag: &str, _guard: &HomeGuard) -> String {

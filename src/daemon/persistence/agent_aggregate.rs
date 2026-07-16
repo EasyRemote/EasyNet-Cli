@@ -88,11 +88,14 @@ impl AgentAggregateSnapshot {
             .map(|(name, entry)| (name.as_str(), entry))
     }
 
+    pub(crate) fn registered_agent_names(&self) -> impl Iterator<Item = &str> {
+        self.registry.agents.keys().map(String::as_str)
+    }
+
     pub(crate) fn registered_agent_registry_projection(&self) -> AgentRegistry {
         self.registry.clone()
     }
 
-    #[cfg(test)]
     pub(crate) fn registered_agent_workspace(
         &self,
         owner_id: &str,
@@ -102,8 +105,7 @@ impl AgentAggregateSnapshot {
             .map(AgentRegisteredAgent::into_workspace)
     }
 
-    #[cfg(test)]
-    pub(crate) fn registered_agent(
+    fn registered_agent(
         &self,
         owner_id: &str,
         operation: &str,
@@ -318,7 +320,26 @@ impl AgentRegisteredAgent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentRegisteredWorkspace {
     root_path: PathBuf,
-    agent_type: agent_registry::AgentType,
+    skill_layout: AgentSkillLayout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentSkillLayout {
+    ClaudeCode,
+    Codex,
+    External,
+}
+
+impl AgentSkillLayout {
+    fn from_agent_type(agent_type: agent_registry::AgentType) -> Self {
+        match agent_type {
+            agent_registry::AgentType::ClaudeCode => Self::ClaudeCode,
+            agent_registry::AgentType::Codex | agent_registry::AgentType::CodexAppServer => {
+                Self::Codex
+            }
+            agent_registry::AgentType::External => Self::External,
+        }
+    }
 }
 
 impl AgentRegisteredWorkspace {
@@ -333,7 +354,7 @@ impl AgentRegisteredWorkspace {
                 .map_err(
                     |source| AgentRegisteredWorkspaceLookupError::InvalidWorkspace { source },
                 )?,
-            agent_type: entry.agent_type,
+            skill_layout: AgentSkillLayout::from_agent_type(entry.agent_type),
         })
     }
 
@@ -341,8 +362,8 @@ impl AgentRegisteredWorkspace {
         &self.root_path
     }
 
-    pub(crate) fn agent_type(&self) -> agent_registry::AgentType {
-        self.agent_type
+    pub(crate) fn skill_layout(&self) -> AgentSkillLayout {
+        self.skill_layout
     }
 }
 
@@ -873,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_agent_workspace_projects_root_and_type() {
+    fn registered_agent_workspace_projects_root_and_skill_layout() {
         let root = std::env::temp_dir().join("easynet-agent-owner");
         let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
         entry.root_path = Some(root.clone());
@@ -886,7 +907,18 @@ mod tests {
             .expect("registered owner");
 
         assert_eq!(owner.root_path(), root.as_path());
-        assert_eq!(owner.agent_type(), AgentType::ClaudeCode);
+        assert_eq!(owner.skill_layout(), AgentSkillLayout::ClaudeCode);
+
+        let codex_root = std::env::temp_dir().join("easynet-codex-agent-owner");
+        let mut codex_entry = AgentEntry::new(AgentType::CodexAppServer, None);
+        codex_entry.root_path = Some(codex_root);
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert("codex".to_string(), codex_entry);
+        let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
+        let codex = snapshot
+            .registered_agent_workspace("codex", "skill.publish")
+            .expect("codex app server owner");
+        assert_eq!(codex.skill_layout(), AgentSkillLayout::Codex);
     }
 
     #[test]
