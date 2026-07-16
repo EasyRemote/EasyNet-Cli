@@ -22,12 +22,14 @@ run_gate() {
 
 run_sdk_conformance_live_gates() {
   local live_results_dir="$1"
+  local parity_languages="${EASYNET_SDK_PARITY_LANGUAGES:-${SDK_CONFORMANCE_LANGUAGES:-}}"
   local status=0
   run_gate "SDK conformance reports" env \
     SDK_CONFORMANCE_RESULT_DIR="$live_results_dir" \
     bash "$CONFORMANCE_REPORTS_SCRIPT" || status=1
   run_gate "SDK live parity matrix" env \
     EASYNET_SDK_PARITY_RESULTS_DIR="$live_results_dir" \
+    EASYNET_SDK_PARITY_LANGUAGES="$parity_languages" \
     EASYNET_SDK_PARITY_ALLOW_SNAPSHOT_RESULTS=1 \
     bash "$PARITY_MATRIX_SCRIPT" || status=1
   return "$status"
@@ -122,6 +124,9 @@ if [[ -z "${EASYNET_SDK_PARITY_RESULTS_DIR:-}" ]]; then
   exit 1
 fi
 test -f "$EASYNET_SDK_PARITY_RESULTS_DIR/fresh-live-result"
+if [[ -n "${EXPECTED_PARITY_LANGUAGES:-}" ]]; then
+  test "${EASYNET_SDK_PARITY_LANGUAGES:-}" = "$EXPECTED_PARITY_LANGUAGES"
+fi
 if [[ -f "$EASYNET_SDK_PARITY_RESULTS_DIR/rust.json" ]]; then
   echo "stale default live result was used" >&2
   exit 1
@@ -139,6 +144,11 @@ EOF
     echo "self-test expected stale default fixture to remain outside focused run" >&2
     exit 1
   fi
+  CONFORMANCE_REPORTS_SCRIPT="$tmp/stub-conformance-reports.sh" \
+    PARITY_MATRIX_SCRIPT="$tmp/stub-parity-matrix.sh" \
+    SDK_CONFORMANCE_LANGUAGES=go,python \
+    EXPECTED_PARITY_LANGUAGES=go,python \
+    run_sdk_conformance_live_gates "$tmp/cutover-live-results-slice"
 
   easyremote_good="$tmp/EasyRemoteGood"
   backend_bad="$tmp/EasyNetBad"
