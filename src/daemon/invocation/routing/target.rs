@@ -315,6 +315,78 @@ pub struct InvocationTarget {
 }
 
 impl InvocationTarget {
+    /// Construct a local daemon-system dispatch using the named descriptor
+    /// subject and root-causal derivation policy.
+    #[must_use]
+    pub fn local_daemon_system(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> Self {
+        Self::local_with_bindings(
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::daemon_system_derived(),
+            InvocationCausalContext::daemon_system_root(),
+        )
+    }
+
+    /// Construct a local daemon-system dispatch that acts on an explicit
+    /// subject while still using the named root-causal system policy.
+    #[must_use]
+    pub fn local_daemon_system_with_subject(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+    ) -> Self {
+        Self::local_with_bindings(
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::explicit(subject),
+            InvocationCausalContext::daemon_system_root(),
+        )
+    }
+
+    /// Construct a local target from explicit tuple facts already recovered
+    /// by an ingress adapter or caller-owned policy object.
+    #[must_use]
+    pub fn local_explicit_tuple(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+        causal_context: CausalContext,
+    ) -> Self {
+        Self::local_with_bindings(
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::explicit(subject),
+            InvocationCausalContext::explicit(causal_context),
+        )
+    }
+
+    fn local_with_bindings(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: InvocationSubject,
+        causal_context: InvocationCausalContext,
+    ) -> Self {
+        Self {
+            scope: TargetScope::Local,
+            ability: ability.into(),
+            normalized_args,
+            call_mode,
+            subject,
+            causal_context,
+            request_metadata: HashMap::new(),
+        }
+    }
+
     /// Builder: attach a subject to the resolved target. Used by
     /// callers that have envelope context (the IPC translator, or a
     /// future planner).
@@ -563,6 +635,62 @@ mod tests {
         assert_eq!(
             with.subject.as_deref(),
             Some("easynet:///r/acme/resource/01CAM")
+        );
+    }
+
+    #[test]
+    fn local_daemon_system_constructor_names_root_derivation_policy() {
+        let target =
+            InvocationTarget::local_daemon_system("observe.health", json!({}), CallMode::Rpc);
+
+        assert_eq!(target.scope, TargetScope::Local);
+        assert_eq!(target.ability, "observe.health");
+        assert_eq!(target.subject, InvocationSubject::daemon_system_derived());
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::daemon_system_root()
+        );
+        assert!(target.request_metadata.is_empty());
+    }
+
+    #[test]
+    fn local_daemon_system_subject_constructor_keeps_policy_explicit() {
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            "claude.chat",
+            json!({"prompt": "hello"}),
+            CallMode::Rpc,
+            "easynet:///r/acme/agent/claude",
+        );
+
+        assert_eq!(target.scope, TargetScope::Local);
+        assert_eq!(
+            target.subject.as_deref(),
+            Some("easynet:///r/acme/agent/claude")
+        );
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::daemon_system_root()
+        );
+    }
+
+    #[test]
+    fn local_explicit_tuple_constructor_preserves_causal_context() {
+        let causal_context = CausalContext::None;
+        let target = InvocationTarget::local_explicit_tuple(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/camera.1",
+            causal_context.clone(),
+        );
+
+        assert_eq!(
+            target.subject.as_deref(),
+            Some("easynet:///r/acme/resource/camera.1")
+        );
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::explicit(causal_context)
         );
     }
 }

@@ -31,3 +31,13 @@
   because public ingress and daemon-system calls have different authority
   sources. Only the daemon-system variant may select root causal context and
   descriptor-derived subject policy.
+- `InvocationTarget` construction is owned by the target value object for
+  common local dispatch states. Edge adapters should call named constructors
+  instead of repeating local scope, root causal context, and empty metadata
+  literals.
+- Plugin host tests use the same named target constructors as production
+  adapters so test fixtures do not preserve the obsolete local target assembly
+  idiom.
+- Resource and governance adapters select ability, payload, and subject; the
+  routing target value object owns local scope, system causal policy, and empty
+  metadata construction.

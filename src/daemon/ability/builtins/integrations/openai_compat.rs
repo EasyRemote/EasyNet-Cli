@@ -34,7 +34,7 @@ use crate::daemon::ability::names::integrations::{
     OPENAI_CHAT_COMPLETIONS, OPENAI_FILES_DELETE, OPENAI_FILES_RETRIEVE, OPENAI_FILES_UPLOAD,
     OPENAI_LIST_MODELS,
 };
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
 use crate::support::platform::process_singleton::ProcessSingleton;
 
 mod file_projection;
@@ -372,19 +372,12 @@ fn handle_chat_completions_with_handle(
         ability_args["system"] = json!(s);
     }
 
-    let invocation_target = InvocationTarget {
-        scope: TargetScope::Local,
-        ability: target.local_dispatch_key.clone(),
-        normalized_args: ability_args,
-        call_mode: CallMode::Rpc,
-        subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-            target.owner_ura.clone(),
-        ),
-        causal_context:
-            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
-            ),
-        request_metadata: std::collections::HashMap::new(),
-    };
+    let invocation_target = InvocationTarget::local_daemon_system_with_subject(
+        target.local_dispatch_key.clone(),
+        ability_args,
+        CallMode::Rpc,
+        target.owner_ura.clone(),
+    );
     let dispatch_result = registry
         .invoke_rpc_target_json(invocation_target)
         .map_err(|e| {

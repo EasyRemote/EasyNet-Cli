@@ -61,7 +61,7 @@ use serde_json::{json, Value};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
 use crate::daemon::invocation::dispatch::local_runtime_invoker::is_not_found_error;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
 use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 /// Verb portion of the per-agent invoke ability. Combined with the
@@ -191,18 +191,12 @@ pub fn dispatch(
                  this is a daemon boot ordering bug, not a caller-side issue"
             )
         })?;
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: qualified.to_string(),
-            normalized_args: parsed.args.clone(),
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                parsed.owner_ura.clone(),
-            ),
-            causal_context:
-                crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-            request_metadata: std::collections::HashMap::new(),
-        };
+        let target = InvocationTarget::local_daemon_system_with_subject(
+            qualified.to_string(),
+            parsed.args.clone(),
+            CallMode::Rpc,
+            parsed.owner_ura.clone(),
+        );
         registry.invoke_rpc_target_json(target).map_err(|err| {
             let msg = format!("{err}");
             if is_not_found_error(&msg) {

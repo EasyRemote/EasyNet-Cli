@@ -502,7 +502,7 @@ mod tests {
     use super::*;
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
     use crate::daemon::plugins::package::PluginPackage;
     use crate::daemon::plugins::{
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
@@ -547,18 +547,12 @@ mod tests {
             .contains("plugin:"));
         assert_eq!(record.authority().scope().owner_projection(), "device");
         let result = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_echo".to_string(),
-                normalized_args: json!({"message": "hello"}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                    "easynet:///r/acme/resource/test".to_string(),
-                ),
-                causal_context:
-                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                "test.declarative_echo",
+                json!({"message": "hello"}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect("declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hello"}));
     }
@@ -586,18 +580,12 @@ mod tests {
         );
         assert_eq!(record.descriptor().input_schema()["type"], "object");
         let result = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_echo".to_string(),
-                normalized_args: json!({"message": "hot"}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                    "easynet:///r/acme/resource/test".to_string(),
-                ),
-                causal_context:
-                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                "test.declarative_echo",
+                json!({"message": "hot"}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect("hot declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hot"}));
 
@@ -607,18 +595,12 @@ mod tests {
         assert!(!catalog.has_dynamic("test.declarative_echo"));
         assert!(!catalog.has_rpc("test.declarative_echo"));
         catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_echo".to_string(),
-                normalized_args: json!({"message": "after"}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                    "easynet:///r/acme/resource/test".to_string(),
-                ),
-                causal_context:
-                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                "test.declarative_echo",
+                json!({"message": "after"}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect_err("hot-unregistered plugin ability must not remain invokable");
     }
 
@@ -655,16 +637,11 @@ mod tests {
             "rejected plugin must not leave a dynamic handler behind"
         );
         let out = catalog
-            .invoke_rpc_target_json(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "fs.read".to_string(),
-                normalized_args: json!({}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
-                causal_context:
-                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .invoke_rpc_target_json(InvocationTarget::local_daemon_system(
+                "fs.read",
+                json!({}),
+                CallMode::Rpc,
+            ))
             .expect("static system handler remains invokable after rejected reload");
         assert_eq!(out, json!({"from": "static-system"}));
     }
@@ -688,18 +665,12 @@ mod tests {
             .expect("EAL plugin control-plane record");
         assert_eq!(*record.implementation().source(), AbilityImplSource::Eal);
         let err = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_eal".to_string(),
-                normalized_args: json!({}),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                    "easynet:///r/acme/resource/test".to_string(),
-                ),
-                causal_context:
-                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                "test.declarative_eal",
+                json!({}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect_err("missing EAL template argument should surface through handler");
         let msg = format!("{err}");
         assert!(msg.contains("eal executor"), "wrong error: {msg}");
@@ -730,18 +701,12 @@ mod tests {
         );
         assert_eq!(record.descriptor().input_schema()["type"], "object");
         let err = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_mcp".to_string(),
-                normalized_args: json!([1, 2]),
-                call_mode: CallMode::Rpc,
-                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                    "easynet:///r/acme/resource/test".to_string(),
-                ),
-                causal_context:
-                    crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
-                request_metadata: std::collections::HashMap::new(),
-            })
+            .execute_rpc(InvocationTarget::local_daemon_system_with_subject(
+                "test.declarative_mcp",
+                json!([1, 2]),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect_err("non-object MCP args should be rejected by mcp executor");
         let msg = format!("{err}");
         assert!(

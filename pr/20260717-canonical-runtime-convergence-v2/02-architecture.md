@@ -128,3 +128,55 @@ The resolver validates public-ingress subjects as URAs and refuses to interpret
 an invalid or absent public subject as daemon-system derivation. This narrows
 RF-8 at the resolver boundary; direct `InvocationTarget` construction sites
 remain to migrate before the fork is closed.
+
+## Current Slice: Invocation Target Construction Boundary
+
+Owner: EasyNet-Cli daemon invocation routing.
+
+`InvocationTarget` is the daemon-local target value that all local ability
+adapters eventually submit to the shared registry and Axon `LocalRuntime`.
+Direct struct literals duplicated the same policy tuple at many adapters:
+local scope, daemon-system subject derivation, root causal context, and empty
+transport metadata. That made it too easy for public ingress and system calls
+to look structurally identical.
+
+The target type now owns named constructors for the common states:
+
+- `local_daemon_system` for descriptor-derived daemon-system calls;
+- `local_daemon_system_with_subject` for daemon-system calls with an explicit
+  acted-on subject; and
+- `local_explicit_tuple` for callers that already hold explicit subject and
+  causal-context facts.
+
+The first production migration covers agent discover/invoke and edge
+integration adapters for MCP, A2A, and OpenAI compatibility. Remaining direct
+`InvocationTarget` literals are still inventory for RF-8/RF-7 migration.
+
+## Current Slice: Plugin Host Target Test Boundary
+
+Owner: EasyNet-Cli daemon plugin host.
+
+Plugin host tests exercise declarative plugin execution through the same local
+registry target shape that production plugin dispatch uses. Those tests should
+not preserve hand-assembled target literals because they become copyable
+examples of the obsolete assembly style.
+
+The plugin host tests now construct daemon-system and explicit-subject local
+targets through `InvocationTarget` constructors. This keeps plugin execution
+fixtures aligned with the canonical routing target boundary while preserving
+the tested plugin load, hot-register, hot-unregister, and rejection behavior.
+
+## Current Slice: Resource and Governance Target Boundary
+
+Owner: EasyNet-Cli daemon resource and governance adapters.
+
+Ability-backed page APIs and governance health dispatch both route through the
+daemon local registry. They should not hand-assemble local routing targets
+because the adapter's responsibility is selecting the product ability and
+subject, not restating routing target state.
+
+The pages ability adapter now uses the explicit-subject daemon-system target
+constructor when forwarding a page API request to a selected ability. The
+governance health test fixture uses the daemon-system constructor for its local
+smoke dispatch. This continues the RF-8/RF-7 migration without claiming that
+all local target construction has moved.

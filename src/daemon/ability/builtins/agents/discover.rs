@@ -70,7 +70,7 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
 use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
 /// Verb portion of the per-agent discover ability. Combined with the
@@ -628,20 +628,13 @@ impl DiscoverProviderTarget {
     }
 
     fn into_invocation_target(self, args: Value) -> InvocationTarget {
-        InvocationTarget {
-            scope: TargetScope::Local,
-            ability: self.ability_ura,
-            normalized_args: args,
-            call_mode: CallMode::Rpc,
-            subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-                self.subject_ura,
-            ),
-            causal_context:
-                crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
-                    easynet_axon::invocation::CausalContext::None,
-                ),
-            request_metadata: std::collections::HashMap::new(),
-        }
+        InvocationTarget::local_explicit_tuple(
+            self.ability_ura,
+            args,
+            CallMode::Rpc,
+            self.subject_ura,
+            easynet_axon::invocation::CausalContext::None,
+        )
     }
 }
 

@@ -118,3 +118,59 @@ Commands run on 2026-07-17:
 
 This evidence verifies only the resolver ingress tuple-source slice. It does
 not prove RF-8 or SPEC completion.
+
+## Invocation Target Construction Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: passed after formatting the new constructor
+  tests.
+- `cargo test -q daemon::invocation::routing::target --lib --features axon-pb`:
+  passed, 11 tests.
+- `cargo test -q daemon::ability::builtins::agents::discover --lib --features axon-pb`:
+  passed, 31 tests.
+- `cargo test -q daemon::ability::builtins::agents::invoke --lib --features axon-pb`:
+  passed, 30 tests.
+- `cargo test -q daemon::ability::builtins::integrations --lib --features axon-pb`:
+  passed, 101 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No migrated file or `target.rs` constructor
+  finding was reported.
+
+This evidence verifies only the invocation target construction-boundary slice.
+It does not prove RF-8/RF-7 or SPEC completion.
+
+## Plugin Host Target Test Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo test -q daemon::plugins::host_api --lib --features axon-pb`: passed,
+  7 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `rg -n "InvocationTarget \\{" src/daemon/plugins/host_api.rs`: no matches.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No `host_api.rs` finding was reported.
+
+This evidence verifies only the plugin host target test-boundary slice. It
+does not prove RF-8/RF-7 or SPEC completion.
+
+## Resource and Governance Target Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --all -- --check`: initially required formatting after the
+  governance health constructor migration; `cargo fmt --all` was applied.
+- `cargo test -q daemon::ability::builtins::resources::pages::api --lib --features axon-pb`:
+  passed, 2 tests.
+- `cargo test -q daemon::ability::builtins::governance::health --lib --features axon-pb`:
+  passed, 3 tests.
+- `cargo check --lib --features axon-pb`: passed.
+- `rg -n "InvocationTarget \\{|TargetScope|InvocationSubject|InvocationCausalContext" src/daemon/ability/builtins/resources/pages/api.rs src/daemon/ability/builtins/governance/health.rs`:
+  no matches.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No migrated file finding was reported.
+
+This evidence verifies only the resource/governance target-boundary slice. It
+does not prove RF-8/RF-7 or SPEC completion.

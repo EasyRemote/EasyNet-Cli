@@ -74,6 +74,36 @@
 - [x] Add positive and negative resolver tests for public ingress tuple
       propagation.
 
+## Invocation Target Construction Boundary Slice
+
+- [x] Add named `InvocationTarget` constructors for local daemon-system and
+      explicit-tuple dispatch states.
+- [x] Add constructor tests that pin subject and causal-context projection.
+- [x] Migrate clean production adapter call sites in agent discover/invoke and
+      MCP/A2A/OpenAI compatibility integrations.
+- [x] Leave remaining direct target literals visible as RF-8/RF-7 migration
+      inventory instead of claiming closure.
+
+## Plugin Host Target Test Boundary Slice
+
+- [x] Identify plugin host tests that still hand-assembled local
+      `InvocationTarget` literals.
+- [x] Replace declarative plugin test targets with named routing target
+      constructors.
+- [x] Verify plugin host tests and lib build.
+- [x] Confirm `host_api.rs` has no remaining direct `InvocationTarget`
+      literal.
+
+## Resource and Governance Target Boundary Slice
+
+- [x] Identify clean resource/governance target literals outside the current
+      dirty worktree.
+- [x] Migrate page API ability forwarding to
+      `InvocationTarget::local_daemon_system_with_subject`.
+- [x] Migrate governance health local smoke target to
+      `InvocationTarget::local_daemon_system`.
+- [x] Verify focused page API and governance health tests plus lib build.
+
 ## Still Required Before Completion
 
 - [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.

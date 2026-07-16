@@ -18,6 +18,7 @@
   `src/daemon/invocation/routing/target.rs` now separates resolver plans into
   daemon-system and public-ingress tuple sources, but direct
   `InvocationTarget` construction sites still need migration before RF-8 can
-  close.
+  close. The first construction-boundary migration moved agent discover/invoke
+  and MCP/A2A/OpenAI edge adapters onto named `InvocationTarget` constructors.
 - `src/support/platform/local_daemon_grpc.rs` remains an adapter boundary to
   retire from direct envelope construction in favour of an Axon-owned builder.

@@ -59,7 +59,7 @@ use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget};
 
 pub const ABILITY_LIST_TOOLS: &str =
     crate::daemon::ability::names::integrations::MCP_BRIDGE_LIST_TOOLS;
@@ -189,19 +189,12 @@ fn call_tool_handler(
         )));
     }
 
-    let invocation_target = InvocationTarget {
-        scope: TargetScope::Local,
-        ability: ability_name.clone(),
-        normalized_args: arguments,
-        call_mode: CallMode::Rpc,
-        subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
-            target.default_subject_ura().to_string(),
-        ),
-        causal_context:
-            crate::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(
-            ),
-        request_metadata: std::collections::HashMap::new(),
-    };
+    let invocation_target = InvocationTarget::local_daemon_system_with_subject(
+        ability_name.clone(),
+        arguments,
+        CallMode::Rpc,
+        target.default_subject_ura().to_string(),
+    );
 
     match registry.invoke_rpc_target_json(invocation_target) {
         Ok(value) => Ok(success_response(value)),
