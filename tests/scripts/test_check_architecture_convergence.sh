@@ -65,6 +65,7 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/resources/files_store" \
     "$CLI/src/daemon/ability/builtins/resources/skills" \
     "$CLI/src/daemon/ability/catalog/profiles" \
+    "$CLI/src/daemon/axon_bridge" \
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/identity" \
     "$CLI/src/daemon/invocation/admission" \
@@ -1190,6 +1191,42 @@ fn require_actor_ura(actor_ura: Option<&str>) -> anyhow::Result<&str> {
     Ok(actor_ura)
 }
 EOF
+  cat >"$CLI/sdk/go/access_control.go" <<'EOF'
+func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlRevokeRequest, map[string]any, error) {
+    ownerURA := strings.TrimSpace(request.OwnerURA)
+    if ownerURA == "" {
+        return AccessControlRevokeRequest{}, nil, invalidAccessControl("owner_ura is required", nil)
+    }
+    grantID := strings.TrimSpace(request.GrantID)
+    if grantID == "" {
+        return AccessControlRevokeRequest{}, nil, invalidAccessControl("grant_id is required", nil)
+    }
+    actorURA := strings.TrimSpace(request.ActorURA)
+    if actorURA == "" {
+        return AccessControlRevokeRequest{}, nil, invalidAccessControl("actor_ura is required", nil)
+    }
+    if _, err := ParseURAParts(actorURA); err != nil {
+        return AccessControlRevokeRequest{}, nil, invalidAccessControl("actor_ura must be canonical", err)
+    }
+    request.OwnerURA = ownerURA
+    request.ActorURA = actorURA
+    args := map[string]any{"owner_ura": ownerURA, "grant_id": grantID, "actor_ura": actorURA}
+    return request, args, nil
+}
+EOF
+  cat >"$CLI/sdk/python/easynet_sdk/access_control.py" <<'EOF'
+def _revoke_args(request: AccessControlRevokeRequest) -> tuple[AccessControlRevokeRequest, dict[str, object]]:
+    owner_ura = _required_text(request.owner_ura, "owner_ura")
+    grant_id = _required_text(request.grant_id, "grant_id")
+    actor_ura = _required_text(request.actor_ura, "actor_ura")
+    parse_ura(actor_ura)
+    args: dict[str, object] = {
+        "owner_ura": owner_ura,
+        "grant_id": grant_id,
+        "actor_ura": actor_ura,
+    }
+    return request, args
+EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/voice_contract.rs" <<'EOF'
 use std::sync::Arc;
 
@@ -2171,6 +2208,21 @@ fn local_daemon_loopback_invocation_from_subject_policy() -> LocalDaemonLoopback
     LocalDaemonLoopbackInvocation::from_target()
 }
 EOF
+  cat >"$CLI/src/daemon/axon_bridge/hot_agent_registrar.rs" <<'EOF'
+struct HostedAgentRuntimeBinding {
+    agent_ura: String,
+}
+
+impl HotAgentRegistrar {
+    fn register_agent_replacing(&self, name: &str) -> anyhow::Result<()> {
+        let enrollment = catalog.enroll_persisted_hot_agent_authority(name)?;
+        let binding = HostedAgentRuntimeBinding {
+            agent_ura: enrollment.authority_root().to_string(),
+        };
+        register(binding)
+    }
+}
+EOF
 }
 
 bash -n "$CHECK"
@@ -2928,6 +2980,30 @@ expect_fail \
   "R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK"
 
 make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/hot_agent_registrar.rs" <<'EOF'
+struct HostedAgentRuntimeBinding {
+    agent_ura: String,
+}
+
+impl HotAgentRegistrar {
+    fn register_agent_replacing(&self, name: &str) -> anyhow::Result<()> {
+        let local = crate::daemon::persistence::local_agents::load()?;
+        let agent_ura = crate::daemon::persistence::local_agents::lookup_hosted_ura(
+            &local,
+            "llm",
+            name,
+        )
+        .ok_or_else(|| anyhow::anyhow!("missing"))?;
+        let binding = HostedAgentRuntimeBinding { agent_ura };
+        register(binding)
+    }
+}
+EOF
+expect_fail \
+  "hot agent runtime binding aggregate fork" \
+  "R34B_HOT_AGENT_RUNTIME_BINDING_AGGREGATE_FORK"
+
+make_good_fixture
 cat >"$CLI/src/daemon/invocation/admission/target_gate.rs" <<'EOF'
 struct LocalAgentTargetIndex {
     hosted_agent_targets: HashSet<AgentTargetIdentity>,
@@ -3519,6 +3595,38 @@ EOF
 expect_fail \
   "access-control actor URA fork" \
   "R18_ACCESS_CONTROL_ACTOR_URA_FORK"
+
+make_good_fixture
+cat >"$CLI/sdk/go/access_control.go" <<'EOF'
+func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlRevokeRequest, map[string]any, error) {
+    ownerURA := strings.TrimSpace(request.OwnerURA)
+    grantID := strings.TrimSpace(request.GrantID)
+    args := map[string]any{"owner_ura": ownerURA, "grant_id": grantID}
+    if actor := strings.TrimSpace(request.ActorURA); actor != "" {
+        args["actor_ura"] = actor
+    }
+    return request, args, nil
+}
+EOF
+expect_fail \
+  "Go SDK access-control revoke actor URA fork" \
+  "R18B_SDK_ACCESS_CONTROL_REVOKE_ACTOR_URA_FORK"
+
+make_good_fixture
+cat >"$CLI/sdk/python/easynet_sdk/access_control.py" <<'EOF'
+def _revoke_args(request: AccessControlRevokeRequest) -> tuple[AccessControlRevokeRequest, dict[str, object]]:
+    owner_ura = _required_text(request.owner_ura, "owner_ura")
+    grant_id = _required_text(request.grant_id, "grant_id")
+    args: dict[str, object] = {
+        "owner_ura": owner_ura,
+        "grant_id": grant_id,
+    }
+    _optional(args, "actor_ura", request.actor_ura)
+    return request, args
+EOF
+expect_fail \
+  "Python SDK access-control revoke actor URA fork" \
+  "R18B_SDK_ACCESS_CONTROL_REVOKE_ACTOR_URA_FORK"
 
 make_good_fixture
 cat >"$CLI/src/cli/commands/groups/principal.rs" <<'EOF'

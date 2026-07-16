@@ -17,6 +17,7 @@ from easynet_sdk.access_control import (
     AccessControlPermissionRequestListRequest,
     AccessControlPermissionRequestResolveRequest,
     AccessControlPrincipalKind,
+    AccessControlRevokeRequest,
     RuntimeAccessControlProvider,
 )
 from easynet_sdk.errors import ErrorCode, SDKError, is_code
@@ -78,6 +79,20 @@ class _MemoryAbility:
                     "principal_kind": "user",
                     "principal_ura": "easynet:///r/example/user/bob",
                     "action": "invoke",
+                }
+            }
+        if ability_name == "authority.binding.revoke":
+            return {
+                "grant": {
+                    "grant_id": self.arguments["grant_id"],
+                    "owner_ura": self.arguments["owner_ura"],
+                    "principal_kind": "user",
+                    "principal_ura": "easynet:///r/example/user/bob",
+                    "actions": ["invoke"],
+                    "state": "revoked",
+                    "created_by": self.arguments["actor_ura"],
+                    "revoked_by": self.arguments["actor_ura"],
+                    "revocation_reason": self.arguments.get("reason", ""),
                 }
             }
         if ability_name == "policy.request.create":
@@ -227,6 +242,47 @@ class AccessControlTests(unittest.TestCase):
         )
 
         self.assertEqual(result.policy_decision.decision, "allow")
+
+    def test_runtime_provider_revoke_requires_canonical_actor_ura(self) -> None:
+        ability = _MemoryAbility()
+        provider = RuntimeAccessControlProvider(ability)
+
+        grant = provider.revoke(
+            AccessControlRevokeRequest(
+                call=_call(),
+                owner_ura="easynet:///r/example/user/alice",
+                grant_id="grant-1",
+                actor_ura="easynet:///r/example/user/alice",
+                reason="operator request",
+            )
+        )
+
+        self.assertEqual(ability.ability, "authority.binding.revoke")
+        self.assertEqual(ability.arguments["actor_ura"], "easynet:///r/example/user/alice")
+        self.assertNotIn("owner_user_id", ability.arguments)
+        self.assertEqual(grant.state, AccessControlGrantState.REVOKED)
+        self.assertEqual(grant.revoked_by, "easynet:///r/example/user/alice")
+
+        with self.assertRaises(SDKError) as missing_actor:
+            provider.revoke(
+                AccessControlRevokeRequest(
+                    call=_call(),
+                    owner_ura="easynet:///r/example/user/alice",
+                    grant_id="grant-1",
+                )
+            )
+        self.assertTrue(is_code(missing_actor.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as scalar_actor:
+            provider.revoke(
+                AccessControlRevokeRequest(
+                    call=_call(),
+                    owner_ura="easynet:///r/example/user/alice",
+                    grant_id="grant-1",
+                    actor_ura="alice",
+                )
+            )
+        self.assertTrue(is_code(scalar_actor.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_provider_rejects_non_user_owner_ura(self) -> None:
         provider = RuntimeAccessControlProvider(_MemoryAbility())

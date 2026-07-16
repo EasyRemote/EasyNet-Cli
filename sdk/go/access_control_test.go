@@ -75,6 +75,18 @@ func (m *memoryAccessControlAbility) Invoke(_ context.Context, call RuntimeCallC
 			"principal_ura":  "easynet:///r/example/user/bob",
 			"action":         "invoke",
 		}}, nil
+	case accessControlAbilityRevoke:
+		return map[string]any{"grant": map[string]any{
+			"grant_id":          m.args["grant_id"],
+			"owner_ura":         m.args["owner_ura"],
+			"principal_kind":    "user",
+			"principal_ura":     "easynet:///r/example/user/bob",
+			"actions":           []any{"invoke"},
+			"state":             "revoked",
+			"created_by":        m.args["actor_ura"],
+			"revoked_by":        m.args["actor_ura"],
+			"revocation_reason": m.args["reason"],
+		}}, nil
 	case accessControlAbilityPolicyRequestCreate:
 		request := m.args["request"].(map[string]any)
 		return map[string]any{"request": request}, nil
@@ -222,6 +234,56 @@ func TestRuntimeAccessControlProviderListsAndChecksCanonicalPolicies(t *testing.
 	}
 	if check.PolicyDecision.Decision != "allow" {
 		t.Fatalf("unexpected decision: %#v", check)
+	}
+}
+
+func TestRuntimeAccessControlProviderRevokeRequiresCanonicalActorURA(t *testing.T) {
+	transport := &memoryAccessControlAbility{}
+	provider, err := NewRuntimeAccessControlProvider(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeAccessControlProvider: %v", err)
+	}
+
+	grant, err := provider.Revoke(context.Background(), AccessControlRevokeRequest{
+		Call:     accessControlCallFixture(),
+		OwnerURA: "easynet:///r/example/user/alice",
+		GrantID:  "grant-1",
+		ActorURA: "easynet:///r/example/user/alice",
+		Reason:   "operator request",
+	})
+	if err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if transport.ability != accessControlAbilityRevoke {
+		t.Fatalf("ability = %s", transport.ability)
+	}
+	if transport.args["actor_ura"] != "easynet:///r/example/user/alice" {
+		t.Fatalf("validated actor_ura missing from revoke wire: %#v", transport.args)
+	}
+	if _, ok := transport.args["owner_user_id"]; ok {
+		t.Fatalf("scalar owner leaked into revoke wire: %#v", transport.args)
+	}
+	if grant.State != AccessControlGrantRevoked || grant.RevokedBy != "easynet:///r/example/user/alice" {
+		t.Fatalf("revocation projection lost canonical actor: %#v", grant)
+	}
+
+	_, err = provider.Revoke(context.Background(), AccessControlRevokeRequest{
+		Call:     accessControlCallFixture(),
+		OwnerURA: "easynet:///r/example/user/alice",
+		GrantID:  "grant-1",
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing actor_ura error = %v", err)
+	}
+
+	_, err = provider.Revoke(context.Background(), AccessControlRevokeRequest{
+		Call:     accessControlCallFixture(),
+		OwnerURA: "easynet:///r/example/user/alice",
+		GrantID:  "grant-1",
+		ActorURA: "alice",
+	})
+	if !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("scalar actor_ura error = %v", err)
 	}
 }
 

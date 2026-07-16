@@ -610,11 +610,16 @@ func accessControlRevokeArgs(request AccessControlRevokeRequest) (AccessControlR
 	if grantID == "" {
 		return AccessControlRevokeRequest{}, nil, invalidAccessControl("grant_id is required", nil)
 	}
-	request.OwnerURA = ownerURA
-	args := map[string]any{"owner_ura": ownerURA, "grant_id": grantID}
-	if actor := strings.TrimSpace(request.ActorURA); actor != "" {
-		args["actor_ura"] = actor
+	actorURA := strings.TrimSpace(request.ActorURA)
+	if actorURA == "" {
+		return AccessControlRevokeRequest{}, nil, invalidAccessControl("actor_ura is required", nil)
 	}
+	if _, err := ParseURAParts(actorURA); err != nil {
+		return AccessControlRevokeRequest{}, nil, invalidAccessControl("actor_ura must be canonical", err)
+	}
+	request.OwnerURA = ownerURA
+	request.ActorURA = actorURA
+	args := map[string]any{"owner_ura": ownerURA, "grant_id": grantID, "actor_ura": actorURA}
 	if reason := strings.TrimSpace(request.Reason); reason != "" {
 		args["reason"] = reason
 	}

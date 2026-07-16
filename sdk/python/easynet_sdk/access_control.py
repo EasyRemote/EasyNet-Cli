@@ -565,11 +565,13 @@ def _revoke_args(
     owner_ura = _required_text(request.owner_ura, "owner_ura")
     _user_id_from_user_ura(owner_ura, "owner_ura")
     grant_id = _required_text(request.grant_id, "grant_id")
+    actor_ura = _required_text(request.actor_ura, "actor_ura")
+    parse_ura(actor_ura)
     args: dict[str, object] = {
         "owner_ura": owner_ura,
         "grant_id": grant_id,
+        "actor_ura": actor_ura,
     }
-    _optional(args, "actor_ura", request.actor_ura)
     _optional(args, "reason", request.reason)
     return request, args
 

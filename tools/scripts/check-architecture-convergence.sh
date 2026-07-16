@@ -1747,6 +1747,75 @@ if access_control.exists():
             "audited actor_ura must not fall back to scalar owner_user_id",
         )
 
+# Rule 18b: SDK provider facades must mirror the daemon audited mutation
+# boundary. Revoke is a mutation; actor_ura is not optional transport metadata.
+# It must be required and parsed before provider wire dispatch in each SDK.
+sdk_access_control_checks = (
+    (
+        cli_root / "sdk/go/access_control.go",
+        "go",
+        "func\\s+accessControlRevokeArgs\\s*\\(\\s*request\\s+AccessControlRevokeRequest\\s*\\)",
+        (
+            ("actorURA := strings.TrimSpace(request.ActorURA)", "Go revoke must normalize actor_ura before dispatch"),
+            ("actorURA == \"\"", "Go revoke must reject missing actor_ura before dispatch"),
+            ("ParseURAParts(actorURA)", "Go revoke must parse actor_ura as a canonical URA"),
+            ("actor_ura must be canonical", "Go revoke must expose a canonical actor_ura error"),
+            ("\"actor_ura\": actorURA", "Go revoke wire args must carry the validated actor_ura"),
+        ),
+        (
+            r"_optional\s*\([^)]*actor_ura",
+            r"if\s+actor\s*:=\s*strings\.TrimSpace\(request\.ActorURA\)\s*;\s*actor\s*!=",
+        ),
+    ),
+    (
+        cli_root / "sdk/python/easynet_sdk/access_control.py",
+        "python",
+        "_revoke_args",
+        (
+            ("actor_ura = _required_text(request.actor_ura, \"actor_ura\")", "Python revoke must require actor_ura before dispatch"),
+            ("parse_ura(actor_ura)", "Python revoke must parse actor_ura as a canonical URA"),
+            ("\"actor_ura\": actor_ura", "Python revoke wire args must carry the validated actor_ura"),
+        ),
+        (
+            r"_optional\s*\(\s*args\s*,\s*[\"']actor_ura[\"']",
+        ),
+    ),
+)
+for path, language, function, requirements, forbidden_patterns in sdk_access_control_checks:
+    if not path.exists():
+        continue
+    text = source(path)
+    if language == "go":
+        body = brace_function_body(text, function)
+    else:
+        body = python_function_body(text, function)
+    if body is None:
+        add(
+            "R18B_SDK_ACCESS_CONTROL_REVOKE_ACTOR_URA_FORK",
+            path,
+            1,
+            f"{language} SDK access-control provider must own revoke request lowering",
+        )
+        continue
+    start, body_text = body
+    for token, detail in requirements:
+        if token not in body_text:
+            add(
+                "R18B_SDK_ACCESS_CONTROL_REVOKE_ACTOR_URA_FORK",
+                path,
+                line_number(text, start),
+                detail,
+            )
+    for pattern in forbidden_patterns:
+        match = re.search(pattern, body_text)
+        if match:
+            add(
+                "R18B_SDK_ACCESS_CONTROL_REVOKE_ACTOR_URA_FORK",
+                path,
+                line_number(text, start + match.start()),
+                "SDK access-control revoke must not serialize actor_ura as an optional field",
+            )
+
 
 # Rule 33: PrincipalLifecycle CLI may preserve source-compatible subject-self
 # behavior, but actor source must be an explicit command-state boundary before
@@ -3042,6 +3111,67 @@ if ability_dispatch.exists():
         ):
             if token in body:
                 add("R34_HOT_AUTHORITY_AGGREGATE_SNAPSHOT_FORK", ability_dispatch, 1, detail)
+
+# Rule 34b: hot Agent runtime row materialization must consume the authority
+# root allocated by the catalogue enrollment transaction. The registrar owns
+# runtime transactions; it must not re-open local-agents.json display-name
+# lookup as a second durable identity source.
+hot_agent_registrar = cli_root / "src/daemon/axon_bridge/hot_agent_registrar.rs"
+if hot_agent_registrar.exists():
+    text = source(hot_agent_registrar)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    register_body = rust_method_body(production_text, "register_agent_replacing")
+    if "struct HostedAgentRuntimeBinding" in production_text and register_body is None:
+        add(
+            "R34B_HOT_AGENT_RUNTIME_BINDING_AGGREGATE_FORK",
+            hot_agent_registrar,
+            1,
+            "HotAgentRegistrar must retain an explicit authority-enrolled runtime binding path",
+        )
+    if register_body is not None:
+        offset, body = register_body
+        for token, detail in (
+            (
+                ".enroll_persisted_hot_agent_authority(name)",
+                "hot Agent runtime binding must start from the catalogue authority enrollment",
+            ),
+            (
+                "agent_ura: enrollment.authority_root().to_string()",
+                "hot Agent runtime binding must use the enrolled authority root",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R34B_HOT_AGENT_RUNTIME_BINDING_AGGREGATE_FORK",
+                    hot_agent_registrar,
+                    line_number(production_text, offset),
+                    detail,
+                )
+        for token, detail in (
+            (
+                "local_agents::load",
+                "hot Agent runtime binding must not load local-agents.json directly",
+            ),
+            (
+                "lookup_hosted_ura",
+                "hot Agent runtime binding must not bypass catalogue authority enrollment",
+            ),
+            (
+                "lookup_hosted_agent_by_name",
+                "hot Agent runtime binding must not bypass catalogue authority enrollment",
+            ),
+            (
+                "AgentAggregateRepository::try_load_snapshot()",
+                "hot Agent runtime binding must not perform a separate aggregate lookup after authority enrollment",
+            ),
+        ):
+            if token in body:
+                add(
+                    "R34B_HOT_AGENT_RUNTIME_BINDING_AGGREGATE_FORK",
+                    hot_agent_registrar,
+                    line_number(production_text, offset),
+                    detail,
+                )
 
 # Rule 35: admission Agent self-target locality consumes the Agent aggregate
 # snapshot. TargetGate gates unary, stream, and bidi dispatch. If it
