@@ -11,6 +11,9 @@
    runtime adapter owns exact stream route dispatch.
 5. The convergence gate must reject reintroducing `dispatch_subscribe_directory_*`
    direct calls from `Invocation::invoke_stream`.
-6. Existing unrelated dirty changes in federation read models and unary route
+6. Runtime-registered exact stream providers must not keep the daemon service
+   alive. The service owns a lifecycle token; product pumps hold only weak
+   references and close when that token drops.
+7. Existing unrelated dirty changes in federation read models and unary route
    registration visibility are not part of this slice unless required by the
    runtime stream refactor.

@@ -401,6 +401,10 @@ pub struct DaemonInvocationService {
     /// unary registration so a failed stream cutover cannot be mistaken for a
     /// partially valid all-route runtime surface.
     daemon_stream_route_registration: Arc<tokio::sync::OnceCell<Result<String, String>>>,
+    /// Strong owner for live exact stream route pumps. Runtime-registered
+    /// providers keep only a weak reference, so dropping the service tears
+    /// down product stream bridges without weakening Axon's admission owner.
+    daemon_stream_route_lifecycle: Arc<()>,
 }
 
 impl std::fmt::Debug for DaemonInvocationService {
@@ -508,6 +512,7 @@ impl DaemonInvocationService {
             },
             daemon_unary_route_registration: Arc::new(tokio::sync::OnceCell::new()),
             daemon_stream_route_registration: Arc::new(tokio::sync::OnceCell::new()),
+            daemon_stream_route_lifecycle: Arc::new(()),
         }
     }
 
@@ -629,6 +634,7 @@ impl DaemonInvocationService {
             self.sessions.clone(),
             self.runtime.clone(),
             self.target_gate(),
+            Arc::downgrade(&self.daemon_stream_route_lifecycle),
         )
     }
 

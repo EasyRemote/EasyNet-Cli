@@ -920,6 +920,7 @@ daemon_service = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_se
 unary_dispatcher = cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs"
 stream_dispatcher = cli_root / "src/daemon/invocation/streams/stream_dispatcher.rs"
 daemon_route_runtime = cli_root / "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
+boot_invocation_routes = cli_root / "src/daemon/boot/invocation/mod.rs"
 if daemon_service.exists():
     service_text = source(daemon_service)
     service_requirements = (
@@ -1063,6 +1064,41 @@ elif daemon_service.exists() or unary_dispatcher.exists():
         1,
         "exact daemon routes require a dedicated LocalRuntime adapter owner",
     )
+
+if boot_invocation_routes.exists():
+    boot_text = source(boot_invocation_routes)
+    boot_requirements = (
+        (
+            "register_daemon_unary_routes(daemon_route_owner)",
+            "boot must register exact unary routes before exposing listeners",
+        ),
+        (
+            "register_daemon_stream_routes(daemon_route_owner)",
+            "boot must register exact stream routes before exposing listeners",
+        ),
+    )
+    for token, detail in boot_requirements:
+        if token not in boot_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", boot_invocation_routes, 1, detail)
+    listener_offsets = [
+        offset
+        for token in ("spawn_uds_listener(", "spawn_tcp_tls_listener(")
+        if (offset := boot_text.find(token)) >= 0
+    ]
+    stream_registration_offset = boot_text.find(
+        "register_daemon_stream_routes(daemon_route_owner)"
+    )
+    if (
+        listener_offsets
+        and stream_registration_offset >= 0
+        and stream_registration_offset > min(listener_offsets)
+    ):
+        add(
+            "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+            boot_invocation_routes,
+            line_number(boot_text, stream_registration_offset),
+            "exact stream routes must be registered before invocation listeners are spawned",
+        )
 
 # Rule 23: CLI command modules may not own target-owned remote system ability
 # routing. They map user input into payloads; the CLI daemon-client facade owns

@@ -51,9 +51,50 @@ async fn invoke_stream_dispatches_subscribe_directory_initial_frame_then_pump() 
         Some("easynet:///r/test-realm/device/n1"),
     );
 
-    drop(stream);
     drop(svc);
     drop(presence);
+
+    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("pump closes within 2 s after route lifecycle drops");
+    let terminal = close
+        .expect("route lifecycle close yields terminal chunk")
+        .expect("terminal chunk is Ok");
+    assert!(terminal.terminal);
+    assert!(terminal.terminal_receipt.is_some());
+    let end = stream.next().await;
+    assert!(end.is_none());
+}
+
+#[tokio::test]
+async fn invoke_stream_subscribe_directory_closes_when_route_lifecycle_drops() {
+    use futures::StreamExt;
+
+    let presence = Arc::new(PresenceRegistry::new());
+    let svc = make_service_with_presence(Arc::clone(&presence));
+    let resp = svc
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
+            envelope: Some(test_envelope()),
+            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
+            ..InvokeServerStreamRequest::default()
+        }))
+        .await
+        .expect("subscribe_directory stream starts");
+    let mut stream = resp.into_inner();
+    let _first = stream.next().await.expect("snapshot").expect("Ok");
+
+    drop(svc);
+    drop(presence);
+
+    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("route lifecycle closes v1 stream within 2 s");
+    let terminal = close
+        .expect("route lifecycle close yields terminal chunk")
+        .expect("terminal chunk is Ok");
+    assert!(terminal.terminal);
+    assert!(terminal.terminal_receipt.is_some());
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]
@@ -137,9 +178,18 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
         other => panic!("expected AgentRevoked; got {other:?}"),
     }
 
-    drop(stream);
     drop(svc);
     drop(presence);
+
+    let close = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .expect("pump closes within 2 s after route lifecycle drops");
+    let terminal = close
+        .expect("route lifecycle close yields terminal chunk")
+        .expect("terminal chunk is Ok");
+    assert!(terminal.terminal);
+    assert!(terminal.terminal_receipt.is_some());
+    assert!(stream.next().await.is_none());
 }
 
 #[tokio::test]

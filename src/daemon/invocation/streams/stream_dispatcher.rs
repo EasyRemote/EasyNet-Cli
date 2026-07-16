@@ -67,6 +67,7 @@ pub(crate) struct StreamDispatcher {
     sessions: SessionPlane,
     runtime: RuntimePlane,
     gate: TargetGate,
+    daemon_route_lifecycle: Weak<()>,
 }
 
 impl StreamDispatcher {
@@ -76,6 +77,7 @@ impl StreamDispatcher {
         sessions: SessionPlane,
         runtime: RuntimePlane,
         gate: TargetGate,
+        daemon_route_lifecycle: Weak<()>,
     ) -> Self {
         Self {
             admission,
@@ -83,6 +85,7 @@ impl StreamDispatcher {
             sessions,
             runtime,
             gate,
+            daemon_route_lifecycle,
         }
     }
 
@@ -90,6 +93,7 @@ impl StreamDispatcher {
         DaemonStreamRouteProvider::new(
             Arc::downgrade(&self.directory.presence),
             self.directory.subscribe_v2_heartbeat_interval_ms,
+            self.daemon_route_lifecycle.clone(),
         )
     }
 
@@ -665,16 +669,19 @@ impl StreamDispatcher {
 pub(crate) struct DaemonStreamRouteProvider {
     presence: Weak<PresenceRegistry>,
     subscribe_v2_heartbeat_interval_ms: u64,
+    daemon_route_lifecycle: Weak<()>,
 }
 
 impl DaemonStreamRouteProvider {
     pub(crate) fn new(
         presence: Weak<PresenceRegistry>,
         subscribe_v2_heartbeat_interval_ms: u64,
+        daemon_route_lifecycle: Weak<()>,
     ) -> Self {
         Self {
             presence,
             subscribe_v2_heartbeat_interval_ms,
+            daemon_route_lifecycle,
         }
     }
 
@@ -705,6 +712,7 @@ impl DaemonStreamRouteProvider {
         .map_err(|err| anyhow::anyhow!("federation.subscribe_directory initial snapshot: {err}"))?;
         let mut events = presence.subscribe_events();
         let presence_weak = Arc::downgrade(&presence);
+        let lifecycle_weak = self.daemon_route_lifecycle.clone();
         drop(presence);
         let (tx, rx) = tokio::sync::broadcast::channel(256);
         tokio::spawn(async move {
@@ -743,7 +751,9 @@ impl DaemonStreamRouteProvider {
                         }
                     }
                     _ = shutdown_tick.tick() => {
-                        if presence_weak.upgrade().is_none() {
+                        if lifecycle_weak.upgrade().is_none()
+                            || presence_weak.upgrade().is_none()
+                        {
                             break;
                         }
                     }
@@ -768,6 +778,7 @@ impl DaemonStreamRouteProvider {
         })?;
         let mut events = presence.subscribe_events();
         let presence_weak = Arc::downgrade(&presence);
+        let lifecycle_weak = self.daemon_route_lifecycle.clone();
         drop(presence);
         let heartbeat_interval_ms = self.subscribe_v2_heartbeat_interval_ms;
         let (tx, rx) = tokio::sync::broadcast::channel(256);
@@ -824,7 +835,9 @@ impl DaemonStreamRouteProvider {
                         }
                     }
                     _ = shutdown_tick.tick() => {
-                        if presence_weak.upgrade().is_none() {
+                        if lifecycle_weak.upgrade().is_none()
+                            || presence_weak.upgrade().is_none()
+                        {
                             break;
                         }
                     }

@@ -461,6 +461,9 @@ fn start_daemon_invocation_transport(config: DaemonConfig) -> anyhow::Result<()>
     if capabilities.owns_upstream_session() {
         register_purge_recovery_on_outbox_ready(outbox, registrar);
     }
+    let daemon_route_owner = daemon_ura.as_deref().unwrap();
+    service.register_daemon_unary_routes(daemon_route_owner)?;
+    service.register_daemon_stream_routes(daemon_route_owner)?;
     spawn_tcp_tls_listener(
         &config,
         listen_tcp,
@@ -1194,6 +1197,19 @@ impl UnaryDispatcher {
 EOF
 expect_fail \
   "daemon exact route runtime owner fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+python3 - "$CLI/src/daemon/boot/invocation/mod.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace("    service.register_daemon_stream_routes(daemon_route_owner)?;\n", "")
+path.write_text(text)
+PY
+expect_fail \
+  "daemon exact stream boot registration owner fork" \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
 
 make_good_fixture

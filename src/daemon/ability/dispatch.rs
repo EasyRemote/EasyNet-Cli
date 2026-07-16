@@ -2601,31 +2601,17 @@ impl ExecutionIndex {
             .collect()
     }
 
-    fn has_rpc(&self, ability: &str) -> bool {
-        let handlers = self.handlers_for_ability(ability);
-        handlers.rpc.is_some() || handlers.rpc_with_env.is_some()
-    }
-
-    fn has_stream(&self, ability: &str) -> bool {
-        let handlers = self.handlers_for_ability(ability);
-        handlers.stream.is_some() || handlers.stream_with_env.is_some()
-    }
-
-    fn has_bidi(&self, ability: &str) -> bool {
-        let handlers = self.handlers_for_ability(ability);
-        handlers.bidi.is_some() || handlers.bidi_with_env.is_some()
+    fn has_mode(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
+        let modes = self.handlers_for_ability(ability).modes();
+        match call_mode {
+            DescriptorCallMode::Rpc => modes.rpc,
+            DescriptorCallMode::Stream => modes.stream,
+            DescriptorCallMode::Bidi => modes.bidi,
+        }
     }
 
     fn has_any_handler(&self, ability: &str) -> bool {
         !self.handlers_for_ability(ability).is_empty()
-    }
-
-    fn extend_rpc_names(&self, names: &mut BTreeSet<String>) {
-        for (key, entry) in &self.entries {
-            if entry.handlers.rpc.is_some() || entry.handlers.rpc_with_env.is_some() {
-                names.insert(key.ability().to_string());
-            }
-        }
     }
 
     fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
@@ -4145,20 +4131,6 @@ impl AxonAbilityCatalog {
         )
     }
 
-    fn runtime_ability_key_for_mode(
-        &self,
-        ability: &str,
-        call_mode: DescriptorCallMode,
-    ) -> anyhow::Result<Option<String>> {
-        let Some(record) = self.control_plane_record_for_mode(ability, call_mode)? else {
-            return Ok(None);
-        };
-        Ok(Some(local_runtime_ability_key_for_authority(
-            record.authority().scope().authority_root(),
-            ability,
-        )?))
-    }
-
     fn bind_invocation_target_to_control_plane(
         &self,
         mut target: InvocationTarget,
@@ -5403,49 +5375,52 @@ impl AxonAbilityCatalog {
         self.resolve_rpc(ability)
     }
 
-    /// True iff an RPC-mode handler is registered for `ability`,
-    /// including the envelope-aware variant. Consults the dynamic
-    /// execution index so hot-loaded MCP tools count as registered.
-    pub fn has_rpc(&self, ability: &str) -> bool {
-        if let Some(runtime) = self.runtime() {
-            if self
-                .runtime_ability_key_for_mode(ability, DescriptorCallMode::Rpc)
-                .ok()
-                .flatten()
-                .and_then(|runtime_key| {
-                    block_on_runtime_sync(runtime.ability_options(&runtime_key))
-                })
-                .map(|options| options.modes.rpc)
-                .unwrap_or(false)
-            {
-                return true;
-            }
+    fn routeable_mode_registered(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
+        let has_control_plane_record = self
+            .control_plane_record_for_mode(ability, call_mode)
+            .ok()
+            .flatten()
+            .is_some();
+        if !has_control_plane_record {
+            return false;
         }
         self.execution_index
             .read()
             .expect("execution_index RwLock poisoned")
-            .has_rpc(ability)
+            .has_mode(ability, call_mode)
     }
 
-    /// List all registered RPC ability names. Dynamic names must
-    /// already be materialised in the runtime or execution index; the
-    /// catalogue no longer synthesises fallback handlers on lookup miss.
+    /// True iff an RPC-mode handler and matching control-plane record are
+    /// registered for `ability`, including the envelope-aware variant.
+    /// `LocalRuntime` installation is verified by explicit runtime
+    /// option/proof checks, never as catalogue presence fallback.
+    pub fn has_rpc(&self, ability: &str) -> bool {
+        self.routeable_mode_registered(ability, DescriptorCallMode::Rpc)
+    }
+
+    /// List all committed RPC ability names from the control-plane registry.
+    /// Handler maps and `LocalRuntime` ability options are execution details,
+    /// not publication sources.
     pub fn list_rpc_names(&self) -> Vec<String> {
         let mut names = BTreeSet::new();
-        self.execution_index
+        for record in self
+            .control_plane
             .read()
-            .expect("execution_index RwLock poisoned")
-            .extend_rpc_names(&mut names);
+            .expect("control_plane RwLock poisoned")
+            .records()
+        {
+            if record.descriptor().call_mode() == DescriptorCallMode::Rpc {
+                names.insert(record.ability().to_string());
+            }
+        }
         names.into_iter().collect()
     }
 
     /// True iff any local handler is registered for `ability` in the
     /// catalogue's execution index.
     ///
-    /// Unlike [`Self::has_rpc`], [`Self::has_stream`], and [`Self::has_bidi`],
-    /// this is a pure catalogue check and never probes `LocalRuntime`.
-    /// Use it for metadata/collision decisions where the caller only needs
-    /// to know whether the public name is already occupied.
+    /// Use it for metadata/collision decisions where the caller only needs to
+    /// know whether the public name is already occupied.
     pub fn has_registered_handler(&self, ability: &str) -> bool {
         self.execution_index
             .read()
@@ -5519,28 +5494,12 @@ impl AxonAbilityCatalog {
         self.resolve_stream(ability)
     }
 
-    /// True iff a server-stream handler is registered for `ability`,
-    /// including the envelope-aware variant. Consults the dynamic
-    /// execution index.
+    /// True iff a server-stream handler and matching control-plane record are
+    /// registered for `ability`, including the envelope-aware variant.
+    /// `LocalRuntime` installation is verified by explicit runtime
+    /// option/proof checks, never as catalogue presence fallback.
     pub fn has_stream(&self, ability: &str) -> bool {
-        if let Some(runtime) = self.runtime() {
-            if self
-                .runtime_ability_key_for_mode(ability, DescriptorCallMode::Stream)
-                .ok()
-                .flatten()
-                .and_then(|runtime_key| {
-                    block_on_runtime_sync(runtime.ability_options(&runtime_key))
-                })
-                .map(|options| options.modes.stream)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-        self.execution_index
-            .read()
-            .expect("execution_index RwLock poisoned")
-            .has_stream(ability)
+        self.routeable_mode_registered(ability, DescriptorCallMode::Stream)
     }
 
     /// Returns Some when a bidi handler is registered for `ability`.
@@ -5548,28 +5507,12 @@ impl AxonAbilityCatalog {
         self.resolve_bidi(ability)
     }
 
-    /// True iff a bidirectional-stream handler is registered for
-    /// `ability`, including the envelope-aware variant. Consults
-    /// the unified execution index.
+    /// True iff a bidirectional-stream handler and matching control-plane
+    /// record are registered for `ability`, including the envelope-aware
+    /// variant. `LocalRuntime` installation is verified by explicit runtime
+    /// option/proof checks, never as catalogue presence fallback.
     pub fn has_bidi(&self, ability: &str) -> bool {
-        if let Some(runtime) = self.runtime() {
-            if self
-                .runtime_ability_key_for_mode(ability, DescriptorCallMode::Bidi)
-                .ok()
-                .flatten()
-                .and_then(|runtime_key| {
-                    block_on_runtime_sync(runtime.ability_options(&runtime_key))
-                })
-                .map(|options| options.modes.bidi)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-        self.execution_index
-            .read()
-            .expect("execution_index RwLock poisoned")
-            .has_bidi(ability)
+        self.routeable_mode_registered(ability, DescriptorCallMode::Bidi)
     }
     /// Test-only convenience wrapper that still executes through
     /// `LocalRuntime`, matching the daemon path.
@@ -5984,6 +5927,22 @@ mod tests {
         )
         .and_then(|manifest| manifest.with_admission_action("invoke"))
         .expect("test ability manifest is well-formed")
+    }
+
+    fn runtime_key_for_registered_mode(
+        catalog: &AxonAbilityCatalog,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> String {
+        catalog
+            .control_plane_record_for_mode(ability, call_mode)
+            .expect("control-plane lookup is unambiguous")
+            .expect("control-plane record");
+        catalog
+            .handler_control_plane_key(ability)
+            .expect("handler authority key")
+            .runtime_key()
+            .expect("runtime key")
     }
 
     fn hot_register_test_rpc(
@@ -7009,13 +6968,141 @@ mod tests {
         // record is gone.
         reg.clear_owner_for_test("fs.read");
         assert!(
-            reg.has_rpc("fs.read"),
-            "handler map still holds the closure"
+            reg.has_registered_handler("fs.read"),
+            "execution index still holds the closure"
+        );
+        assert!(
+            !reg.has_rpc("fs.read"),
+            "routeability must require a committed RPC control-plane record"
         );
         assert!(
             !reg.list_abilities().contains(&"fs.read".to_string()),
             "list_abilities must read control-plane, not the handler map union"
         );
+    }
+
+    #[test]
+    fn routeability_helpers_require_control_plane_records_for_all_modes() {
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "doomed.rpc", OwnerKind::Device, ok_handler());
+        register_test_stream(
+            &mut reg,
+            "doomed.stream",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(StreamSource::Snapshot(Vec::new()))),
+        );
+        register_test_bidi(
+            &mut reg,
+            "doomed.bidi",
+            OwnerKind::Device,
+            trivial_bidi_handler(),
+        );
+        assert!(reg.has_rpc("doomed.rpc"));
+        assert!(reg.has_stream("doomed.stream"));
+        assert!(reg.has_bidi("doomed.bidi"));
+
+        for ability in ["doomed.rpc", "doomed.stream", "doomed.bidi"] {
+            reg.clear_owner_for_test(ability);
+            assert!(
+                reg.has_registered_handler(ability),
+                "execution index remains installed for {ability}"
+            );
+        }
+
+        assert!(!reg.has_rpc("doomed.rpc"));
+        assert!(!reg.has_stream("doomed.stream"));
+        assert!(!reg.has_bidi("doomed.bidi"));
+    }
+
+    #[test]
+    fn routeability_helpers_do_not_fallback_to_local_runtime_options() {
+        let mut reg = combined_catalog();
+        register_test_rpc(&mut reg, "runtime.rpc", OwnerKind::Device, ok_handler());
+        register_test_stream(
+            &mut reg,
+            "runtime.stream",
+            OwnerKind::Device,
+            Arc::new(|_| Ok(StreamSource::Snapshot(Vec::new()))),
+        );
+        register_test_bidi(
+            &mut reg,
+            "runtime.bidi",
+            OwnerKind::Device,
+            trivial_bidi_handler(),
+        );
+        let runtime = reg.runtime().expect("registry owns LocalRuntime");
+        let rpc_key = runtime_key_for_registered_mode(&reg, "runtime.rpc", DescriptorCallMode::Rpc);
+        let stream_key =
+            runtime_key_for_registered_mode(&reg, "runtime.stream", DescriptorCallMode::Stream);
+        let bidi_key =
+            runtime_key_for_registered_mode(&reg, "runtime.bidi", DescriptorCallMode::Bidi);
+
+        for (ability, call_mode) in [
+            ("runtime.rpc", DescriptorCallMode::Rpc),
+            ("runtime.stream", DescriptorCallMode::Stream),
+            ("runtime.bidi", DescriptorCallMode::Bidi),
+        ] {
+            reg.control_plane_record_for_mode(ability, call_mode)
+                .expect("control-plane lookup is unambiguous")
+                .expect("control-plane record");
+            let key = reg
+                .handler_control_plane_key(ability)
+                .expect("handler authority key");
+            assert!(
+                reg.execution_index
+                    .write()
+                    .expect("execution_index RwLock poisoned")
+                    .drain_static(&key),
+                "static execution row removed for {ability}"
+            );
+        }
+
+        assert!(block_on_runtime_sync(runtime.ability_options(&rpc_key)).is_some());
+        assert!(block_on_runtime_sync(runtime.ability_options(&stream_key)).is_some());
+        assert!(block_on_runtime_sync(runtime.ability_options(&bidi_key)).is_some());
+        assert!(!reg.has_rpc("runtime.rpc"));
+        assert!(!reg.has_stream("runtime.stream"));
+        assert!(!reg.has_bidi("runtime.bidi"));
+    }
+
+    #[test]
+    fn list_rpc_names_requires_rpc_control_plane_record() {
+        let mut reg = combined_catalog();
+        register_test_rpc(
+            &mut reg,
+            "agent.chat",
+            OwnerKind::Agent("agent".to_string()),
+            ok_handler(),
+        );
+        register_test_stream(
+            &mut reg,
+            "agent.chat",
+            OwnerKind::Agent("agent".to_string()),
+            Arc::new(|_| Ok(StreamSource::Snapshot(Vec::new()))),
+        );
+        assert!(reg.list_rpc_names().contains(&"agent.chat".to_string()));
+
+        let rpc_key = reg
+            .control_plane_record_for_mode("agent.chat", DescriptorCallMode::Rpc)
+            .expect("RPC control-plane lookup is unambiguous")
+            .expect("RPC control-plane record")
+            .key()
+            .clone();
+        assert!(reg.remove_control_plane_record_for_authority_mode(
+            rpc_key.authority_root(),
+            rpc_key.ability(),
+            rpc_key.call_mode(),
+        ));
+
+        assert!(
+            !reg.list_rpc_names().contains(&"agent.chat".to_string()),
+            "RPC names must come from committed RPC control-plane rows"
+        );
+        assert!(
+            reg.list_abilities().contains(&"agent.chat".to_string()),
+            "stream control-plane row still publishes the ability name"
+        );
+        assert!(reg.has_stream("agent.chat"));
     }
 
     #[test]
