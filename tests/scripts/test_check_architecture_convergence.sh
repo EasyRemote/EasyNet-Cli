@@ -64,11 +64,13 @@ make_good_fixture() {
     "$CLI/src/daemon/ability/builtins/resources/files_store" \
     "$CLI/src/daemon/ability/catalog/profiles" \
     "$CLI/src/daemon/boot/invocation" \
+    "$CLI/src/daemon/identity" \
     "$CLI/src/daemon/invocation/admission" \
     "$CLI/src/daemon/invocation/dispatch" \
     "$CLI/src/daemon/invocation/routing" \
     "$CLI/src/daemon/invocation/streams" \
     "$CLI/src/daemon/persistence" \
+    "$CLI/src/daemon/resources/context" \
     "$CLI/ability-descriptors/system/agents" \
     "$CLI/docs/spec" \
     "$CLI/sdk/go" \
@@ -126,6 +128,38 @@ impl LocalAgentAbilityOwners {
     fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
         self.snapshot.hosted_llm_agent_ura(agent_name).map(str::to_string)
     }
+}
+EOF
+  cat >"$CLI/src/daemon/ability/catalog/profiles/mod.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn load_host_descriptors() -> Vec<AbilityDescriptor> {
+    let snapshot = AgentAggregateRepository::load_hosted_identity_snapshot().unwrap();
+    let projection = snapshot.host_descriptor_identity_projection();
+    let device = projection.host_device_agent_ura();
+    let consent = projection.consent_agent_ura();
+    let mcp = projection.mcp_agent_ura();
+    let llm = projection.llm_agent_uras();
+    all_descriptors_for_host(device.unwrap(), consent, mcp, llm)
+}
+EOF
+  cat >"$CLI/src/daemon/identity/local_invocation.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+fn persisted_local_device_ura() -> Option<String> {
+    let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
+    hosted_identity.host_device_agent_ura().map(str::to_string)
+}
+EOF
+  cat >"$CLI/src/daemon/resources/context/clipboard_tracker.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+pub fn spawn() {
+    let device_ura = AgentAggregateRepository::load_hosted_identity_status()
+        .ok()
+        .and_then(|status| status.host_device_agent_ura().map(str::to_string))
+        .unwrap_or_default();
+    run_loop(&device_ura);
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/chat.rs" <<'EOF'
@@ -300,11 +334,51 @@ struct AgentHostedIdentityStatus {
     hosted_agent_count: usize,
 }
 
+struct AgentHostDescriptorIdentityProjection {
+    host_device_agent_ura: Option<String>,
+    consent_agent_ura: Option<String>,
+    mcp_agent_ura: Option<String>,
+    llm_agent_uras: Vec<(String, String)>,
+}
+
+impl AgentHostDescriptorIdentityProjection {
+    fn host_device_agent_ura(&self) -> Option<&str> {
+        self.host_device_agent_ura.as_deref()
+    }
+
+    fn consent_agent_ura(&self) -> Option<&str> {
+        self.consent_agent_ura.as_deref()
+    }
+
+    fn mcp_agent_ura(&self) -> Option<&str> {
+        self.mcp_agent_ura.as_deref()
+    }
+
+    fn llm_agent_uras(&self) -> &[(String, String)] {
+        &self.llm_agent_uras
+    }
+}
+
 struct AgentHostedIdentitySnapshot;
 
 impl AgentHostedIdentitySnapshot {
+    fn host_descriptor_identity_projection(&self) -> AgentHostDescriptorIdentityProjection {
+        AgentHostDescriptorIdentityProjection {
+            host_device_agent_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
+            consent_agent_ura: Some("easynet:///r/acme/agent/user.consent".to_string()),
+            mcp_agent_ura: Some("easynet:///r/acme/agent/user.mcp".to_string()),
+            llm_agent_uras: vec![
+                ("claude".to_string(), "easynet:///r/acme/agent/user.claude".to_string()),
+            ],
+        }
+    }
+
     fn hosted_llm_agent_ura(&self, agent: &str) -> Option<&str> {
         Some("easynet:///r/acme/agent/user.claude")
+    }
+
+    fn hosted_agent_authority_roots(&self) -> Vec<String> {
+        vec!["easynet:///r/acme/agent/user.claude".to_string()]
     }
 }
 
@@ -412,6 +486,14 @@ impl AgentAggregateRepository {
     fn load_hosted_identity_projection() -> Result<LocalAgentsFile, AgentAggregateSnapshotLoadError> {
         local_agents::load()
     }
+}
+EOF
+  cat >"$CLI/src/daemon/persistence/mod.rs" <<'EOF'
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
+
+pub fn hosted_agent_authority_roots() -> anyhow::Result<Vec<String>> {
+    Ok(AgentAggregateRepository::load_hosted_identity_snapshot()?
+        .hosted_agent_authority_roots())
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/governance/teach.rs" <<'EOF'
@@ -2638,6 +2720,62 @@ EOF
 expect_fail \
   "hosted owner lookup aggregate fork" \
   "R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/profiles/mod.rs" <<'EOF'
+fn load_host_descriptors() -> Vec<AbilityDescriptor> {
+    let local = crate::daemon::persistence::local_agents::load().unwrap();
+    let host_ura = local.host_device_agent_ura.clone();
+    let consent_ura =
+        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default");
+    let mcp_ura =
+        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default");
+    let llm_uras: Vec<(String, String)> = local
+        .hosted_agents
+        .iter()
+        .filter(|entry| entry.profile == "llm")
+        .map(|entry| (entry.name.clone(), entry.agent_ura.clone()))
+        .collect();
+    all_descriptors_for_host(&host_ura, consent_ura.as_deref(), mcp_ura.as_deref(), &llm_uras)
+}
+EOF
+expect_fail \
+  "host descriptor identity aggregate fork" \
+  "R43_HOST_DESCRIPTOR_IDENTITY_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/identity/local_invocation.rs" <<'EOF'
+fn persisted_local_device_ura() -> Option<String> {
+    let local = crate::daemon::persistence::local_agents::load().ok()?;
+    Some(local.host_device_agent_ura.trim().to_string())
+}
+EOF
+cat >"$CLI/src/daemon/resources/context/clipboard_tracker.rs" <<'EOF'
+pub fn spawn() {
+    let device_ura = crate::daemon::persistence::local_agents::load()
+        .map(|file| file.host_device_agent_ura)
+        .unwrap_or_default();
+    run_loop(&device_ura);
+}
+EOF
+expect_fail \
+  "local device URA aggregate fork" \
+  "R44_LOCAL_DEVICE_URA_AGENT_AGGREGATE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/persistence/mod.rs" <<'EOF'
+pub fn hosted_agent_authority_roots() -> anyhow::Result<Vec<String>> {
+    let local = crate::daemon::persistence::local_agents::load()?;
+    Ok(local
+        .hosted_agents
+        .into_iter()
+        .map(|entry| entry.agent_ura)
+        .collect())
+}
+EOF
+expect_fail \
+  "hosted authority roots aggregate fork" \
+  "R45_HOSTED_AUTHORITY_ROOTS_AGENT_AGGREGATE_FORK"
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'

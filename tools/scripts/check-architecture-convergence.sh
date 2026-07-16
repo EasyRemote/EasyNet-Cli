@@ -3378,6 +3378,201 @@ for hosted_owner_surface, surface_label in hosted_owner_lookup_surfaces:
         if token in production_text:
             add("R42_HOSTED_OWNER_LOOKUP_AGENT_AGGREGATE_FORK", hosted_owner_surface, 1, detail)
 
+# Rule 43: host descriptor catalog identity consumes the Agent aggregate
+# hosted-identity projection. The descriptor catalog may validate descriptor
+# owners, but it must not own the local-agents.json file layout while deriving
+# device, consent, MCP, or LLM profile owners.
+host_descriptor_catalog = cli_root / "src/daemon/ability/catalog/profiles/mod.rs"
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    aggregate_requirements = (
+        (
+            "struct AgentHostDescriptorIdentityProjection",
+            "Agent aggregate must own the host descriptor identity projection shape",
+        ),
+        (
+            "fn host_descriptor_identity_projection(",
+            "hosted identity snapshot must expose descriptor identity projection",
+        ),
+        (
+            "fn consent_agent_ura(&self) -> Option<&str>",
+            "Agent aggregate projection must own consent profile owner lookup",
+        ),
+        (
+            "fn mcp_agent_ura(&self) -> Option<&str>",
+            "Agent aggregate projection must own MCP profile owner lookup",
+        ),
+        (
+            "fn llm_agent_uras(&self) -> &[(String, String)]",
+            "Agent aggregate projection must own hosted LLM owner enumeration",
+        ),
+    )
+    for token, detail in aggregate_requirements:
+        if token not in text:
+            add("R43_HOST_DESCRIPTOR_IDENTITY_AGGREGATE_FORK", agent_aggregate, 1, detail)
+if host_descriptor_catalog.exists():
+    text = source(host_descriptor_catalog)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    catalog_requirements = (
+        (
+            "AgentAggregateRepository::load_hosted_identity_snapshot()",
+            "host descriptor catalog must load hosted identity state through the Agent aggregate repository",
+        ),
+        (
+            "host_descriptor_identity_projection()",
+            "host descriptor catalog must consume the aggregate descriptor identity projection",
+        ),
+    )
+    for token, detail in catalog_requirements:
+        if token not in production_text:
+            add("R43_HOST_DESCRIPTOR_IDENTITY_AGGREGATE_FORK", host_descriptor_catalog, 1, detail)
+    projection_method_requirements = (
+        (
+            r"projection\s*\.\s*host_device_agent_ura\s*\(",
+            "host descriptor catalog must read host device owner through the aggregate projection",
+        ),
+        (
+            r"projection\s*\.\s*consent_agent_ura\s*\(",
+            "host descriptor catalog must read consent owner through the aggregate projection",
+        ),
+        (
+            r"projection\s*\.\s*mcp_agent_ura\s*\(",
+            "host descriptor catalog must read MCP owner through the aggregate projection",
+        ),
+        (
+            r"projection\s*\.\s*llm_agent_uras\s*\(",
+            "host descriptor catalog must enumerate LLM owners through the aggregate projection",
+        ),
+    )
+    for pattern, detail in projection_method_requirements:
+        if not re.search(pattern, production_text):
+            add("R43_HOST_DESCRIPTOR_IDENTITY_AGGREGATE_FORK", host_descriptor_catalog, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            "host descriptor catalog must not load local-agents.json directly",
+        ),
+        (
+            "lookup_hosted_ura",
+            "host descriptor catalog must not bypass aggregate profile owner lookup",
+        ),
+        (
+            "LocalAgentsFile",
+            "host descriptor catalog must not inspect hosted identity file shape",
+        ),
+        (
+            "local.hosted_agents",
+            "host descriptor catalog must not inspect hosted identity rows directly",
+        ),
+        (
+            "local.host_device_agent_ura",
+            "host descriptor catalog must not inspect host-device storage directly",
+        ),
+    ):
+        if token in production_text:
+            add("R43_HOST_DESCRIPTOR_IDENTITY_AGGREGATE_FORK", host_descriptor_catalog, 1, detail)
+
+# Rule 44: host device URA read surfaces consume the Agent aggregate
+# hosted-identity status. These callers only need the persisted host device URA;
+# they must not open local-agents.json or inspect its storage field directly.
+local_device_ura_surfaces = (
+    (
+        cli_root / "src/daemon/identity/local_invocation.rs",
+        "daemon local invocation identity",
+    ),
+    (
+        cli_root / "src/daemon/resources/context/clipboard_tracker.rs",
+        "clipboard context tracker",
+    ),
+)
+for local_device_surface, surface_label in local_device_ura_surfaces:
+    if not local_device_surface.exists():
+        continue
+    text = source(local_device_surface)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "AgentAggregateRepository::load_hosted_identity_status()",
+            f"{surface_label} must load host device URA through the hosted identity aggregate status",
+        ),
+        (
+            "host_device_agent_ura()",
+            f"{surface_label} must consume the aggregate host device URA projection",
+        ),
+    ):
+        if token not in production_text:
+            add("R44_LOCAL_DEVICE_URA_AGENT_AGGREGATE_FORK", local_device_surface, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            f"{surface_label} must not load local-agents.json directly for host device URA lookup",
+        ),
+        (
+            "LocalAgentsFile",
+            f"{surface_label} must not inspect hosted identity file shape",
+        ),
+        (
+            "local.host_device_agent_ura",
+            f"{surface_label} must not inspect host-device storage directly",
+        ),
+        (
+            "file.host_device_agent_ura",
+            f"{surface_label} must not inspect host-device storage directly",
+        ),
+    ):
+        if token in production_text:
+            add("R44_LOCAL_DEVICE_URA_AGENT_AGGREGATE_FORK", local_device_surface, 1, detail)
+
+# Rule 45: hosted authority-root enumeration consumes the Agent aggregate
+# hosted-identity projection. Ability authority contexts need hosted Agent URAs,
+# but the public persistence facade must not reopen local-agents.json or own
+# its row layout.
+persistence_facade = cli_root / "src/daemon/persistence/mod.rs"
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    if "fn hosted_agent_authority_roots(&self) -> Vec<String>" not in text:
+        add(
+            "R45_HOSTED_AUTHORITY_ROOTS_AGENT_AGGREGATE_FORK",
+            agent_aggregate,
+            1,
+            "Agent hosted identity snapshot must expose hosted authority roots",
+        )
+if persistence_facade.exists():
+    text = source(persistence_facade)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "pub fn hosted_agent_authority_roots() -> anyhow::Result<Vec<String>>",
+            "public hosted authority roots facade must remain available",
+        ),
+        (
+            "AgentAggregateRepository::load_hosted_identity_snapshot()",
+            "hosted authority roots facade must load through the Agent aggregate hosted identity snapshot",
+        ),
+        (
+            ".hosted_agent_authority_roots()",
+            "hosted authority roots facade must consume the aggregate projection method",
+        ),
+    ):
+        if token not in production_text:
+            add("R45_HOSTED_AUTHORITY_ROOTS_AGENT_AGGREGATE_FORK", persistence_facade, 1, detail)
+    for token, detail in (
+        (
+            "local_agents::load",
+            "hosted authority roots facade must not load local-agents.json directly",
+        ),
+        (
+            "LocalAgentsFile",
+            "hosted authority roots facade must not inspect hosted identity file shape",
+        ),
+        (
+            ".hosted_agents",
+            "hosted authority roots facade must not inspect hosted identity rows directly",
+        ),
+    ):
+        if token in production_text:
+            add("R45_HOSTED_AUTHORITY_ROOTS_AGENT_AGGREGATE_FORK", persistence_facade, 1, detail)
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the

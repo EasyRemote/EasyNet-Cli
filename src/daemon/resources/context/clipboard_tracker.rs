@@ -63,12 +63,14 @@ enum Captured {
 /// Spawn the tracker thread. Called once from daemon boot; never
 /// fails — a spawn error is logged and the daemon continues without
 /// clipboard capture. The capturing device's URA is resolved here
-/// (not passed in) because `persistence::local_agents` is crate-
-/// private and the daemon bin only links the public surface.
+/// (not passed in) because hosted identity projection belongs to the
+/// daemon persistence aggregate, not the daemon binary surface.
 pub fn spawn() {
-    let device_ura = crate::daemon::persistence::local_agents::load()
-        .map(|f| f.host_device_agent_ura)
-        .unwrap_or_default();
+    let device_ura =
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_status()
+            .ok()
+            .and_then(|status| status.host_device_agent_ura().map(str::to_string))
+            .unwrap_or_default();
     if let Err(e) = std::thread::Builder::new()
         .name("clipboard-tracker".into())
         .spawn(move || run_loop(&device_ura))

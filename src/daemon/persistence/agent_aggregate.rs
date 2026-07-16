@@ -230,6 +230,12 @@ impl AgentHostedIdentitySnapshot {
         Self { local_agents }
     }
 
+    pub(crate) fn host_descriptor_identity_projection(
+        &self,
+    ) -> AgentHostDescriptorIdentityProjection {
+        AgentHostDescriptorIdentityProjection::from_local_agents(&self.local_agents)
+    }
+
     pub(crate) fn hosted_identity_status(&self) -> AgentHostedIdentityStatus {
         AgentHostedIdentityStatus::from_local_agents(&self.local_agents)
     }
@@ -239,6 +245,57 @@ impl AgentHostedIdentitySnapshot {
             HostedLlmAgentIdentity::Present(identity) => Some(identity.agent_ura.as_str()),
             HostedLlmAgentIdentity::Missing | HostedLlmAgentIdentity::Ambiguous => None,
         }
+    }
+
+    pub(crate) fn hosted_agent_authority_roots(&self) -> Vec<String> {
+        self.local_agents
+            .hosted_agents
+            .iter()
+            .map(|entry| entry.agent_ura.clone())
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentHostDescriptorIdentityProjection {
+    host_device_agent_ura: Option<String>,
+    consent_agent_ura: Option<String>,
+    mcp_agent_ura: Option<String>,
+    llm_agent_uras: Vec<(String, String)>,
+}
+
+impl AgentHostDescriptorIdentityProjection {
+    fn from_local_agents(local_agents: &LocalAgentsFile) -> Self {
+        Self {
+            host_device_agent_ura: trimmed_nonempty(&local_agents.host_device_agent_ura)
+                .map(str::to_string),
+            consent_agent_ura: hosted_profile_agent_ura(local_agents, "consent", "default")
+                .map(str::to_string),
+            mcp_agent_ura: hosted_profile_agent_ura(local_agents, "mcp", "default")
+                .map(str::to_string),
+            llm_agent_uras: local_agents
+                .hosted_agents
+                .iter()
+                .filter(|entry| entry.profile == "llm")
+                .map(|entry| (entry.name.clone(), entry.agent_ura.clone()))
+                .collect(),
+        }
+    }
+
+    pub(crate) fn host_device_agent_ura(&self) -> Option<&str> {
+        self.host_device_agent_ura.as_deref()
+    }
+
+    pub(crate) fn consent_agent_ura(&self) -> Option<&str> {
+        self.consent_agent_ura.as_deref()
+    }
+
+    pub(crate) fn mcp_agent_ura(&self) -> Option<&str> {
+        self.mcp_agent_ura.as_deref()
+    }
+
+    pub(crate) fn llm_agent_uras(&self) -> &[(String, String)] {
+        &self.llm_agent_uras
     }
 }
 
@@ -293,6 +350,27 @@ fn hosted_llm_agent_identity<'a>(
         return HostedLlmAgentIdentity::Ambiguous;
     }
     HostedLlmAgentIdentity::Present(identity)
+}
+
+fn hosted_profile_agent_ura<'a>(
+    local_agents: &'a LocalAgentsFile,
+    profile: &str,
+    name: &str,
+) -> Option<&'a str> {
+    let mut matches = local_agents
+        .hosted_agents
+        .iter()
+        .filter(|entry| entry.profile == profile && entry.name == name);
+    let identity = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(identity.agent_ura.as_str())
+}
+
+fn trimmed_nonempty(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 fn validate_hosted_agent_name_identity(
@@ -649,6 +727,83 @@ mod tests {
         });
 
         assert_eq!(snapshot.hosted_llm_agent_ura("same"), None);
+    }
+
+    #[test]
+    fn hosted_agent_authority_roots_preserve_hosted_identity_order() {
+        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            hosted_agents: vec![
+                hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
+                hosted_agent("mcp", "default", "easynet:///r/acme/agent/u1.mcp"),
+            ],
+        });
+
+        assert_eq!(
+            snapshot.hosted_agent_authority_roots(),
+            vec![
+                "easynet:///r/acme/agent/u1.claude".to_string(),
+                "easynet:///r/acme/agent/u1.mcp".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn hosted_identity_snapshot_projects_host_descriptor_owners() {
+        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
+            host_device_agent_ura: "  easynet:///r/acme/device/dev-1  ".to_string(),
+            hosted_agents: vec![
+                hosted_agent("consent", "default", "easynet:///r/acme/agent/u1.consent"),
+                hosted_agent("mcp", "default", "easynet:///r/acme/agent/u1.mcp"),
+                hosted_agent("llm", "claude", "easynet:///r/acme/agent/u1.claude"),
+                hosted_agent("llm", "codex", "easynet:///r/acme/agent/u1.codex"),
+            ],
+        });
+
+        let projection = snapshot.host_descriptor_identity_projection();
+
+        assert_eq!(
+            projection.host_device_agent_ura(),
+            Some("easynet:///r/acme/device/dev-1")
+        );
+        assert_eq!(
+            projection.consent_agent_ura(),
+            Some("easynet:///r/acme/agent/u1.consent")
+        );
+        assert_eq!(
+            projection.mcp_agent_ura(),
+            Some("easynet:///r/acme/agent/u1.mcp")
+        );
+        assert_eq!(
+            projection.llm_agent_uras(),
+            &[
+                (
+                    "claude".to_string(),
+                    "easynet:///r/acme/agent/u1.claude".to_string()
+                ),
+                (
+                    "codex".to_string(),
+                    "easynet:///r/acme/agent/u1.codex".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn host_descriptor_profile_owner_requires_unambiguous_default_identity() {
+        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
+            host_device_agent_ura: "easynet:///r/acme/device/dev-1".to_string(),
+            hosted_agents: vec![
+                hosted_agent("consent", "default", "easynet:///r/acme/agent/u1.consent"),
+                hosted_agent("consent", "default", "easynet:///r/acme/agent/u1.consent2"),
+                hosted_agent("mcp", "other", "easynet:///r/acme/agent/u1.mcp"),
+            ],
+        });
+
+        let projection = snapshot.host_descriptor_identity_projection();
+
+        assert_eq!(projection.consent_agent_ura(), None);
+        assert_eq!(projection.mcp_agent_ura(), None);
     }
 
     #[test]

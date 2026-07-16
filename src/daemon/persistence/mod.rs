@@ -78,11 +78,8 @@ pub mod voice_calls;
 /// builds its authority context; callers do not receive the broader
 /// local-agents persistence shape.
 pub fn hosted_agent_authority_roots() -> anyhow::Result<Vec<String>> {
-    local_agents::load().map(|local| {
-        local
-            .hosted_agents
-            .into_iter()
-            .map(|entry| entry.agent_ura)
-            .collect()
-    })
+    Ok(
+        agent_aggregate::AgentAggregateRepository::load_hosted_identity_snapshot()?
+            .hosted_agent_authority_roots(),
+    )
 }

@@ -71,33 +71,31 @@ fn system_descriptors_for_owner(
 pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     use crate::daemon::ability::descriptors::AbilityDescriptor;
 
-    let Ok(local) = crate::daemon::persistence::local_agents::load() else {
+    let Ok(snapshot) =
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_snapshot()
+    else {
         return Vec::new();
     };
-    let host_ura = local.host_device_agent_ura.clone();
-    if AbilityDescriptor::validate_owner_ura(&host_ura).is_err() {
+    let projection = snapshot.host_descriptor_identity_projection();
+    let Some(host_ura) = projection.host_device_agent_ura() else {
+        return Vec::new();
+    };
+    if AbilityDescriptor::validate_owner_ura(host_ura).is_err() {
         return Vec::new();
     }
-    let consent_ura =
-        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default")
-            .filter(|owner| AbilityDescriptor::validate_owner_ura(owner).is_ok());
-    let mcp_ura =
-        crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "mcp", "default")
-            .filter(|owner| AbilityDescriptor::validate_owner_ura(owner).is_ok());
-    let llm_uras: Vec<(String, String)> = local
-        .hosted_agents
+    let consent_ura = projection
+        .consent_agent_ura()
+        .filter(|owner| AbilityDescriptor::validate_owner_ura(owner).is_ok());
+    let mcp_ura = projection
+        .mcp_agent_ura()
+        .filter(|owner| AbilityDescriptor::validate_owner_ura(owner).is_ok());
+    let llm_uras: Vec<(String, String)> = projection
+        .llm_agent_uras()
         .iter()
-        .filter(|e| {
-            e.profile == "llm" && AbilityDescriptor::validate_owner_ura(&e.agent_ura).is_ok()
-        })
-        .map(|e| (e.name.clone(), e.agent_ura.clone()))
+        .filter(|(_, agent_ura)| AbilityDescriptor::validate_owner_ura(agent_ura).is_ok())
+        .cloned()
         .collect();
-    all_descriptors_for_host(
-        &host_ura,
-        consent_ura.as_deref(),
-        mcp_ura.as_deref(),
-        &llm_uras,
-    )
+    all_descriptors_for_host(host_ura, consent_ura, mcp_ura, &llm_uras)
 }
 
 /// Aggregate every profile's descriptors into one list, anchored to
