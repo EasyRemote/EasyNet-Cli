@@ -121,3 +121,44 @@
 - Manifest inventory is necessary but not sufficient for Python proof-boundary
   convergence. The V2 gate must also scan Axon source for public plain helper
   definitions and re-exports.
+- Java receipt constructors rejecting omitted proof facts is not enough if
+  `LocalRuntime` still supplies `ReceiptProofFacts.empty()`. RF-6 must be
+  enforced at the production binding boundary where receipts are actually
+  emitted.
+- Signed Java LocalRuntime receipt facts are descriptor-bound admission facts:
+  subject, descriptor version, authority proof, input hash, parent receipts,
+  and runtime env are derived from the admitted envelope rather than attached
+  during serialization.
+- Plain Java `invokeAsync` is a system-local runtime path, not an external
+  descriptor-bound caller. Its receipts use a separate
+  `system-local.invoke.v1` proof identity so internal SystemAgent calls remain
+  auditable without creating a compatibility fallback or mislabeling their
+  authority source.
+- Receipt output hash belongs to the emitted event, not the admission binding.
+  `AxiomBinding.withPayloadDigest` therefore replaces immutable proof facts
+  with an event-specific output hash when `InvocationCore` emits each receipt.
+- The V2 RF-6 gate must scan production runtime code, not only receipt
+  constructors and bundle parsing. A constructor can be strict while a runtime
+  caller still passes empty facts.
+- Python LocalRuntime follows the same RF-6 ownership as Java: receipt proof
+  facts are binding-domain facts created before invocation launch, while
+  per-event output hash is refreshed at receipt emission.
+- Python `invoke_async` is an internal SystemAgent path. It needs complete
+  proof facts, but those facts must use a system-local proof identity rather
+  than pretending the call was an externally signed descriptor-bound request.
+- Python source scans must include `local_runtime.py`; checking only
+  `axiom.py` and `audit.py` can miss a runtime that passes strict constructors
+  while still emitting receipts with an empty default proof object.
+- Go LocalRuntime follows the same RF-6 ownership as Java and Python: receipt
+  proof facts are constructed at the admitted binding boundary, while
+  per-event output hashes are refreshed when `InvocationCore` emits receipts.
+- Go `InvokeAsync` is a system-local runtime path. It gets complete proof
+  facts under `system-local.invoke.v1` rather than reusing empty facts or
+  pretending to be an externally signed descriptor-bound call.
+- Go and Rust must share the same descriptor-bound ability identity. The Go
+  parser now requires `ability_ura@version#descriptor_hash!admission_action`
+  so a Go-signed bundle can be verified by the Rust verifier without a plain
+  proof fallback.
+- The V2 RF-6 gate must reject `EmptyReceiptProofFacts()` in Go production
+  LocalRuntime code; test fixtures can remain explicit until the broader
+  constructor/test cleanup slice closes RF-6 globally.

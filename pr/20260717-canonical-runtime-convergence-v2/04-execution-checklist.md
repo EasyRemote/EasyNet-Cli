@@ -283,6 +283,66 @@
 - [x] Verify Python public-surface smoke, repo-managed pytest for admission and
       axiom vectors, Axon Rust format/check, and V2 gate/self-test.
 
+## RF-6 Java LocalRuntime Receipt Proof Facts Slice
+
+- [x] Identify that Java receipt constructors reject omitted proof facts but
+      production `LocalRuntime` still emitted bindings with
+      `ReceiptProofFacts.empty()`.
+- [x] Add immutable per-event proof-fact output-hash replacement on
+      `InvocationReceipt.AxiomBinding`.
+- [x] Move Java LocalRuntime signed descriptor-bound receipt facts to a local
+      proof normalizer at the admission binding boundary.
+- [x] Give system-local `invokeAsync` receipts a separate
+      `system-local.invoke.v1` proof identity rather than reusing empty facts.
+- [x] Add Java behavior tests proving signed and system-local terminal receipts
+      carry non-empty schema/impl hashes, authority proof, runtime env, input
+      hash, and output hash.
+- [x] Extend the EasyNet-Cli V2 gate and self-test to reject
+      `ReceiptProofFacts.empty()` in Java `LocalRuntime`.
+- [x] Verify targeted Java invocation tests plus V2 gate/self-test.
+
+## RF-6 Python LocalRuntime Receipt Proof Facts Slice
+
+- [x] Identify that Python `LocalRuntime` still emitted signed and
+      system-local bindings with default `ReceiptProofFacts()`.
+- [x] Add `ReceiptProofFacts.with_output_hash` so event receipts can refresh
+      proof output facts without mutating the admission binding.
+- [x] Refresh `_InvocationCore.emit` per-event proof facts alongside
+      per-event payload digest.
+- [x] Move Python signed descriptor-bound receipt facts to
+      `_LocalReceiptProofFacts` at the admission binding boundary.
+- [x] Give Python system-local `invoke_async` receipts the same separate
+      `system-local.invoke.v1` proof identity used for Java.
+- [x] Add Python runtime tests proving signed and system-local terminal
+      receipts carry non-empty schema/impl hashes, authority proof, runtime
+      env, input hash, and output hash.
+- [x] Extend the EasyNet-Cli V2 gate and self-test to reject
+      `proof_facts=ReceiptProofFacts()` in Python `LocalRuntime`.
+- [x] Verify Python admission tests plus V2 gate/self-test.
+
+## RF-6 Go LocalRuntime Receipt Proof Facts Slice
+
+- [x] Identify that Go `LocalRuntime` still emitted signed and system-local
+      bindings with `EmptyReceiptProofFacts()`.
+- [x] Add `ReceiptProofFacts.WithOutputHash` so event receipts can refresh
+      proof output facts without mutating the admission binding.
+- [x] Refresh `InvocationCore.emit` per-event proof facts alongside per-event
+      payload digest.
+- [x] Move Go signed descriptor-bound receipt facts to the LocalRuntime
+      binding boundary.
+- [x] Converge Go `AbilityDescriptorRef` parsing on the Rust canonical
+      `ability_ura@version#descriptor_hash!admission_action` shape.
+- [x] Migrate Go cross-language bundle fixtures to descriptor-bound signing
+      and digest/action-bound ability refs.
+- [x] Give Go system-local `InvokeAsync` receipts the same separate
+      `system-local.invoke.v1` proof identity used for Java and Python.
+- [x] Add Go runtime tests proving signed and system-local terminal receipts
+      carry non-empty schema/impl hashes, authority proof, runtime env, input
+      hash, and output hash.
+- [x] Extend the EasyNet-Cli V2 gate and self-test to reject
+      `EmptyReceiptProofFacts()` in Go `LocalRuntime`.
+- [x] Verify Go invocation tests plus V2 gate/self-test.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
@@ -290,7 +350,8 @@
       descriptor-bound-only public proof.
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
 - [ ] RF-4 shared lifecycle matrix and transition vectors.
-- [ ] RF-6 receipt proof-fact constructor closure.
+- [ ] RF-6 Node runtime proof-fact production path, remaining examples and
+      tests, and descriptor proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.
 - [ ] RF-2 Mission/EAL extraction from Axon canonical runtime.
 - [ ] RF-9 URA terminology and generated-schema ownership closure.

@@ -23135,7 +23135,7 @@
     }
   ],
   "dependency_revisions": {
-    "easynet_axon": "6afa52adf5f834395634f1428cd1dd174bcd8da9"
+    "easynet_axon": "f167a15444d8f5f744f9d87c25208e5ff4209c1d"
   },
   "provider_implementations": [
     {
@@ -23154,7 +23154,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
+      "axon_revision": "f167a15444d8f5f744f9d87c25208e5ff4209c1d",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     },
@@ -23174,16 +23174,16 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
+      "axon_revision": "f167a15444d8f5f744f9d87c25208e5ff4209c1d",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     }
   ],
   "inventory_source_revisions": {
-    "rust": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
+    "rust": "f167a15444d8f5f744f9d87c25208e5ff4209c1d",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "6afa52adf5f834395634f1428cd1dd174bcd8da9",
+    "python": "f167a15444d8f5f744f9d87c25208e5ff4209c1d",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

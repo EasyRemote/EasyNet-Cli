@@ -413,3 +413,98 @@ The V2 convergence script now performs a direct Axon source scan for public
 Rust and Python plain proof/admission helpers. This closes the gap where the
 manifest proved the EasyNet-Cli facade surface was clean but could not detect
 an Axon Python submodule exposing the obsolete proof boundary.
+
+## Current Slice: RF-6 Java LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Java LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+Java receipt constructors already reject omitted authority and proof facts, but
+the production `LocalRuntime` binding path still created receipts with
+`ReceiptProofFacts.empty()`. That preserved the exact RF-6 defect after the
+constructor cleanup: the runtime could produce canonical receipts whose proof
+facts did not identify the descriptor version, subject, authority proof,
+runtime environment, input hash, output hash, or causal parents.
+
+The Java LocalRuntime now constructs receipt proof facts at the admission
+binding boundary. Signed descriptor-bound calls derive proof facts from the
+descriptor-bound envelope and caller authority. Plain `invokeAsync` calls use a
+separate system-local proof identity, `system-local.invoke.v1`, so internal
+SystemAgent receipts remain auditable without pretending to be external
+descriptor-bound calls.
+
+`InvocationReceipt.AxiomBinding.withPayloadDigest` now carries per-event proof
+facts forward by replacing the immutable proof-fact output hash with the event
+payload hash. This keeps output facts attached to the receipt event that is
+actually emitted instead of leaving the binding with an admission-time empty
+output fact.
+
+This slice removes the Java LocalRuntime empty proof-fact production path and
+adds an EasyNet-Cli V2 source gate for that exact regression. It does not close
+RF-6 globally: Java still needs full descriptor proof-binding metadata parity
+with Rust, and the remaining language examples/tests/constructors must be
+audited before receipt proof-fact convergence is complete.
+
+## Current Slice: RF-6 Python LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Python LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+The Python LocalRuntime had the same RF-6 production defect as Java: signed
+descriptor-bound invocations and system-local `invoke_async` both created
+`AxiomBinding` values with default `ReceiptProofFacts()`. Because
+`_InvocationCore.emit` refreshed only `payload_digest`, every emitted receipt
+could still carry an admission-time empty proof-fact block even when the
+receipt payload digest changed per event.
+
+The Python LocalRuntime now constructs receipt proof facts at the binding
+boundary through `_LocalReceiptProofFacts`. Signed invocations derive facts
+from the descriptor-bound envelope, caller authority, subject, causal parent
+receipts, and runtime admission hook. System-local calls use the separate
+`system-local.invoke.v1` proof identity so infrastructure-originated local
+calls are auditable without being mislabelled as external descriptor-bound
+signed calls.
+
+`ReceiptProofFacts.with_output_hash` and `_InvocationCore.emit` now keep each
+receipt's proof output hash aligned with the event payload hash. This mirrors
+the Java correction and prevents terminal receipts from combining a refreshed
+payload digest with stale empty proof output facts.
+
+This slice removes the Python LocalRuntime empty proof-fact production path and
+adds a V2 source gate for that regression. RF-6 remains open for Go, Node,
+remaining examples/tests, and full descriptor proof-binding parity.
+
+## Current Slice: RF-6 Go LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Go LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+The Go LocalRuntime carried the same production RF-6 defect: descriptor-bound
+signed invocations and system-local `InvokeAsync` calls built `AxiomBinding`
+values with `EmptyReceiptProofFacts()`. The receipt constructor was already
+able to carry complete facts, but the runtime binding boundary still admitted
+empty descriptor, subject, authority, runtime, input, output, and parent
+receipt facts.
+
+The Go LocalRuntime now constructs receipt proof facts where the runtime
+creates the admitted `AxiomBinding`. Signed invocations derive proof facts
+from the descriptor-bound envelope and caller authority. System-local
+`InvokeAsync` uses the separate `system-local.invoke.v1` proof identity, so
+internal runtime-originated calls remain auditable without being represented
+as externally signed descriptor-bound requests.
+
+Full Go invocation-package verification exposed a second Go/Rust fork: Go
+accepted `ability_ura@version` descriptor refs while the Rust verifier requires
+`ability_ura@version#descriptor_hash!admission_action`. The Go invocation
+parser now uses the Rust canonical descriptor-ref shape, canonicalizes the
+descriptor hash casing, validates the admission action, and signs
+cross-language bundle fixtures with descriptor-bound bytes.
+
+`ReceiptProofFacts.WithOutputHash` and `InvocationCore.emit` now refresh the
+proof output hash with each emitted event payload digest. This matches the
+Java and Python RF-6 shape: admission owns descriptor/input/authority facts,
+while event emission owns output facts.
+
+This slice removes the Go LocalRuntime empty proof-fact production path and
+adds a V2 gate/self-test for that exact regression. RF-6 remains open for
+Node, remaining examples/tests, and full descriptor proof-binding parity.

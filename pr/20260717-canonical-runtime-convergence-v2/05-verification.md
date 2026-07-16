@@ -478,3 +478,127 @@ This evidence verifies that Axon Python no longer exposes plain proof helpers
 as normal submodule APIs and that the V2 gate now checks the source-level
 boundary directly. It does not complete the remaining RF-3 vector/example audit
 for all languages.
+
+## RF-6 Java LocalRuntime Receipt Proof Facts Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "ReceiptProofFacts\\.empty\\(\\)|descriptorBoundBinding|LocalReceiptProofFacts|withOutputHash" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java/src/main/java/run/easynet/axon/invocation/InvocationReceipt.java /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java`:
+  reported `descriptorBoundBinding`, `LocalReceiptProofFacts`, and
+  `withOutputHash`; no `ReceiptProofFacts.empty()` match was reported in
+  Java `LocalRuntime`.
+- `mvn -q -Dtest=run.easynet.axon.invocation.InvokeSignedTest,run.easynet.axon.invocation.AdmissionTest test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed. The new assertions verify non-empty signed and system-local receipt
+  proof facts and terminal output-hash projection.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- A broad manual `javac` compile attempt without Maven classpath failed because
+  it pulled `PersistentLog.java`, which imports Gson. Maven is the correct Java
+  SDK dependency context and passed the targeted tests above.
+- After the Axon RF-6 Java commit, `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and updated `sdk/conformance/canonical-public-api.json` to Axon
+  revision `057966488f62bae0b81b6f67cce4ada70a40cf1e`.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  existing lint errors in files outside this RF-6 Java/gate slice:
+  `publish.rs`, `runtime.rs`, `lifecycle.rs`, `access_control.rs`,
+  `catalog_metadata.rs`, `health.rs`, `route_resolver.rs`,
+  `agent_lifecycle.rs`, and `config.rs`.
+
+This evidence verifies the Java LocalRuntime empty proof-fact production-path
+removal and the EasyNet-Cli V2 regression gate for that path. It does not
+complete RF-6 for all SDK languages or prove descriptor proof-binding parity
+with Rust.
+
+## RF-6 Python LocalRuntime Receipt Proof Facts Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "proof_facts\\s*=\\s*ReceiptProofFacts\\(\\)|ReceiptProofFacts\\(\\)" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python/easynet_axon/invocation/local_runtime.py /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python/easynet_axon/invocation/handle.py /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python/easynet_axon/invocation/axiom.py`:
+  no matches after moving Python LocalRuntime binding construction to
+  `_LocalReceiptProofFacts`.
+- `uv run --project /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python pytest -q tests/test_admission.py`:
+  passed, 13 tests. The new assertions verify non-empty signed and
+  system-local receipt proof facts and terminal output-hash projection.
+- `PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python /Users/macbook.silan.tech/.local/bin/python3.12 - <<'PY' ...`:
+  passed; a LocalRuntime invocation emitted 7 receipts, `verify_receipt_chain`
+  accepted the chain, and the terminal receipt proof-fact output hash was
+  non-zero.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- After the Axon RF-6 Python commit, `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and updated `sdk/conformance/canonical-public-api.json` to Axon
+  revision `ba08ffcdbaa5ef56ed58003a4d8542163ac4464f`.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 existing lint errors in files outside this RF-6 Python/gate slice:
+  `publish.rs`, `runtime.rs`, `lifecycle.rs`, `access_control.rs`,
+  `catalog_metadata.rs`, `health.rs`, `route_resolver.rs`,
+  `agent_lifecycle.rs`, and `config.rs`.
+- `uv run --project /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python pytest -q tests/test_admission.py tests/industrial/test_audit_receipt_chain_verify.py tests/industrial/test_audit_tamper_detection.py tests/industrial/test_invocation_terminal_monotonicity.py tests/industrial/test_supervisor_cleanup_before_receipt.py`:
+  failed 3 of 17 tests because those industrial tests call current-missing
+  `LocalRuntime.core()` / `LocalRuntime.cancel()` APIs. This is not used as
+  RF-6 evidence; the failure remains separate lifecycle/test API debt.
+
+This evidence verifies the Python LocalRuntime empty proof-fact
+production-path removal and the EasyNet-Cli V2 regression gate for that path.
+It does not complete RF-6 for Go, Node, remaining examples/tests, or
+descriptor proof-binding parity with Rust.
+
+## RF-6 Go LocalRuntime Receipt Proof Facts Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "EmptyReceiptProofFacts\\(\\)|descriptorBoundBinding|localReceiptProofFacts|WithOutputHash" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go/easynet/invocation/local_runtime.go /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go/easynet/invocation/handle.go /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go/easynet/invocation/axiom.go`:
+  reported `descriptorBoundBinding`, `localReceiptProofFacts*`, and
+  `WithOutputHash`; no `EmptyReceiptProofFacts()` match was reported in Go
+  `local_runtime.go`.
+- `go test ./easynet/invocation -run 'TestInvokeSigned|TestAdmission' -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed. The new assertions verify non-empty signed and system-local receipt
+  proof facts and terminal output-hash projection.
+- `go test ./easynet/invocation -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed. This includes the Go-produced bundle accepted by the Rust verifier
+  after migrating the fixture to descriptor-bound signing and
+  digest/action-bound AbilityDescriptorRef values.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes a Go `LocalRuntime` fixture that calls
+  `EmptyReceiptProofFacts()` and proves the gate rejects it.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `go test ./tests/industrial -run 'Test_audit_receipt_chain_verify|Test_audit_tamper_detection|Test_invocation_terminal_monotonicity|Test_supervisor_cleanup_before_receipt' -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  failed to compile because the industrial package still references
+  current-missing `LocalRuntime.CoreOf`, `LocalRuntime.Cancel`, and
+  `LocalRuntime.SendMessage` public APIs. This is not used as RF-6 proof-fact
+  evidence; it remains RF-4/lifecycle API debt.
+- After the Axon RF-6 Go commit, `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed and updated `sdk/conformance/canonical-public-api.json` to Axon
+  revision `f167a15444d8f5f744f9d87c25208e5ff4209c1d`.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 existing lint errors in files outside this RF-6 Go/gate slice:
+  `publish.rs`, `runtime.rs`, `lifecycle.rs`, `access_control.rs`,
+  `catalog_metadata.rs`, `health.rs`, `route_resolver.rs`,
+  `agent_lifecycle.rs`, and `config.rs`.
+
+This evidence verifies the Go LocalRuntime empty proof-fact production-path
+removal, the Go descriptor-ref parser convergence required by Rust verifier
+interoperability, and the EasyNet-Cli V2 regression gate for that path. It
+does not complete RF-6 for Node, remaining examples/tests, or full descriptor
+proof-binding parity with Rust.

@@ -414,17 +414,28 @@ check_receipt_proof_fact_contract() {
 
   local java_axiom="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
   local java_bundle="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
+  local java_local_runtime="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
   local python_axiom="$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
+  local python_local_runtime="$AXON_ROOT/sdk/python/easynet_axon/invocation/local_runtime.py"
   local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
   local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
   local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
+  local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
 
   if rg -n 'AuthorityBinding\.self\(callerBinding\.ura\)|ReceiptProofFacts\.empty\(\)\);' "$java_axiom" "$java_bundle"; then
     fail "Java receipt construction/parsing still synthesizes authority or proof facts"
   fi
 
+  if rg -n 'ReceiptProofFacts\.empty\(\)' "$java_local_runtime"; then
+    fail "Java LocalRuntime still emits receipts with empty proof facts"
+  fi
+
   if rg -n 'field\(default_factory=ReceiptProofFacts\)|AuthorityBinding\.self_\(r\.caller_binding\.ura\)|proof_facts if .*else .*ReceiptProofFacts\(\)' "$python_axiom" "$AXON_ROOT/sdk/python/easynet_axon/invocation/audit.py"; then
     fail "Python receipt construction still defaults authority or proof facts"
+  fi
+
+  if rg -n 'proof_facts\s*=\s*ReceiptProofFacts\(\)' "$python_local_runtime"; then
+    fail "Python LocalRuntime still emits receipts with empty proof facts"
   fi
 
   if rg -n 'proofFacts \?\? EMPTY_RECEIPT_PROOF_FACTS|authorityBinding \?\? AuthorityBinding\.self_|readonly proofFacts\?:|proofFacts\?: ReceiptProofFacts|authorityBinding\?: AuthorityBinding' "$node_invocation" \
@@ -439,6 +450,10 @@ check_receipt_proof_fact_contract() {
   if rg -n 'normaliseAuthority\(r\.AuthorityBinding|ProofFacts:\s*ReceiptProofFacts\{|return ReceiptProofFacts\{' "$go_invocation" \
     --glob '!axiom.go'; then
     fail "Go receipt construction still omits constructor-backed proof facts"
+  fi
+
+  if rg -n 'EmptyReceiptProofFacts\(\)' "$go_local_runtime"; then
+    fail "Go LocalRuntime still emits receipts with empty proof facts"
   fi
 }
 
@@ -536,16 +551,37 @@ PY
   printf '## Product-Owned Surfaces\n' > "$tmp/axon/sdk/SDK_PARITY.md"
   touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
   touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
+  touch "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
   touch "$tmp/axon/sdk/python/easynet_axon/invocation/axiom.py"
   touch "$tmp/axon/sdk/python/easynet_axon/invocation/audit.py"
+  touch "$tmp/axon/sdk/python/easynet_axon/invocation/local_runtime.py"
   touch "$tmp/axon/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
   touch "$tmp/axon/sdk/go/easynet/invocation/axiom.go"
+  touch "$tmp/axon/sdk/go/easynet/invocation/local_runtime.go"
   printf 'export interface ReceiptBody { readonly proofFacts?: ReceiptProofFacts; }\n' \
     > "$tmp/axon/sdk/node/src/invocation/axiom.d.ts"
   if ! rg -n 'proofFacts\?: ReceiptProofFacts' "$tmp/axon/sdk/node/src/invocation" >/dev/null; then
     fail "self-test expected receipt proof-fact default gate to fail"
   fi
   printf '' > "$tmp/axon/sdk/node/src/invocation/axiom.d.ts"
+  cp -R "$tmp/axon" "$tmp/axon-receipt-runtime"
+  printf 'class LocalRuntime { void emit() { Axiom.ReceiptProofFacts.empty(); } }\n' \
+    > "$tmp/axon-receipt-runtime/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
+  if ( AXON_ROOT="$tmp/axon-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java LocalRuntime empty proof facts gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-python-receipt-runtime"
+  printf 'binding = AxiomBinding(proof_facts=ReceiptProofFacts())\n' \
+    > "$tmp/axon-python-receipt-runtime/sdk/python/easynet_axon/invocation/local_runtime.py"
+  if ( AXON_ROOT="$tmp/axon-python-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Python LocalRuntime empty proof facts gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-go-receipt-runtime"
+  printf 'binding := AxiomBinding{ProofFacts: EmptyReceiptProofFacts()}\n' \
+    > "$tmp/axon-go-receipt-runtime/sdk/go/easynet/invocation/local_runtime.go"
+  if ( AXON_ROOT="$tmp/axon-go-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Go LocalRuntime empty proof facts gate to fail"
+  fi
   mkdir -p "$tmp/axon/scripts/proto"
   printf '%s\n' \
     '#!/usr/bin/env bash' \
