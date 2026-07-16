@@ -870,15 +870,17 @@ fn build_registry_with_services_result_inner(
     // ability and would fall back to fabricating answers.
     mission_ability::register(&mut reg);
     // The device-owned aggregate `agent.discover` owns the top-level view and
-    // reloads `agents.json` per call, so it never chooses a random first
-    // agent as a synthetic self. Per-agent `<agent>.discover` /
+    // reloads the Agent aggregate per call, so it never chooses a random first
+    // agent as a synthetic self or splits registry reads from hosted identity
+    // reads. Per-agent `<agent>.discover` /
     // `<agent>.invoke` are hosted-agent lifecycle rows; they are replayed
     // through HotAgentRegistrar after `Arc::new(reg)` below.
     discover_ability::register_device_aggregate_with_resolver(
         &mut reg,
         || {
-            crate::daemon::persistence::agent_registry::load_agents()
-                .map_err(|error| anyhow::anyhow!("load discover agent registry: {error:#}"))
+            crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+                .map(|snapshot| snapshot.registered_agent_registry_projection())
+                .map_err(|error| anyhow::anyhow!("load discover Agent aggregate: {error:#}"))
         },
         Arc::clone(&local_registry_handle),
         Arc::clone(&discover_federation_resolver),
@@ -920,13 +922,15 @@ fn build_registry_with_services_result_inner(
     );
     // a2a.bridge.list_skills — same edge-adapter pattern as the MCP
     // bridge above, but for the A2A agent-card surface. The provider
-    // reloads durable state per call and propagates corruption/read failures;
-    // it never substitutes the boot snapshot as a plausible stale catalog.
+    // reloads the Agent aggregate per call and propagates corruption/read
+    // failures; it never substitutes the boot snapshot as a plausible stale
+    // catalog or reopens agents.json as a registry-only read.
     a2a_bridge_ability::register(
         &mut reg,
         || {
-            crate::daemon::persistence::agent_registry::load_agents()
-                .map_err(|error| anyhow::anyhow!("load A2A agent registry: {error:#}"))
+            crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+                .map(|snapshot| snapshot.registered_agent_registry_projection())
+                .map_err(|error| anyhow::anyhow!("load A2A Agent aggregate: {error:#}"))
         },
         Arc::clone(&local_registry_handle),
     );

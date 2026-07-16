@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentRegisteredWorkspaceLookupError,
+};
 use crate::daemon::persistence::agent_registry as agents;
 use crate::daemon::persistence::config;
 
@@ -131,11 +134,7 @@ pub(crate) fn install_skill(
         ..parsed
     };
 
-    let registry = agents::load_agents()?;
-    let entry = registry.agents.get(agent).ok_or_else(|| {
-        anyhow::anyhow!("agent '{}' not registered; run 'easynet agent list'", agent)
-    })?;
-    let agent_root = entry.required_root_path(agent, "skill.install")?;
+    let agent_root = resolve_skill_agent_root(agent, SkillMutation::Install)?;
     if !agent_root.exists() {
         anyhow::bail!(
             "agent '{}' has no on-disk root at {}",
@@ -621,12 +620,7 @@ pub(crate) fn upgrade_skill(
     agent: &str,
     target_ref: Option<&str>,
 ) -> anyhow::Result<InstallRecord> {
-    let registry = agents::load_agents()?;
-    let entry = registry
-        .agents
-        .get(agent)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
-    let agent_root = entry.required_root_path(agent, "skill.upgrade")?;
+    let agent_root = resolve_skill_agent_root(agent, SkillMutation::Upgrade)?;
     let skill_dir = agent_root.join("skills").join(name);
     let record_path = skill_dir.join(".easynet").join("install.json");
     let existing = read_install_record(&record_path)?;
@@ -702,12 +696,7 @@ pub(crate) fn upgrade_skill(
 ///     idempotent at the ability layer if desired; we surface the
 ///     distinction here)
 pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
-    let registry = agents::load_agents()?;
-    let entry = registry
-        .agents
-        .get(agent)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
-    let agent_root = entry.required_root_path(agent, "skill.remove")?;
+    let agent_root = resolve_skill_agent_root(agent, SkillMutation::Remove)?;
     let skill_dir = agent_root.join("skills").join(name);
     if !skill_dir.exists() {
         anyhow::bail!("skill '{}' is not installed on agent '{}'", name, agent);
@@ -717,6 +706,43 @@ pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────
+
+#[derive(Clone, Copy)]
+enum SkillMutation {
+    Install,
+    Upgrade,
+    Remove,
+}
+
+impl SkillMutation {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Install => "skill.install",
+            Self::Upgrade => "skill.upgrade",
+            Self::Remove => "skill.remove",
+        }
+    }
+
+    fn missing_owner_error(self, agent: &str) -> anyhow::Error {
+        match self {
+            Self::Install => {
+                anyhow::anyhow!("agent '{}' not registered; run 'easynet agent list'", agent)
+            }
+            Self::Upgrade | Self::Remove => anyhow::anyhow!("agent '{}' not registered", agent),
+        }
+    }
+}
+
+fn resolve_skill_agent_root(agent: &str, mutation: SkillMutation) -> anyhow::Result<PathBuf> {
+    let snapshot = AgentAggregateRepository::load_snapshot()?;
+    match snapshot.registered_agent_workspace(agent, mutation.operation()) {
+        Ok(workspace) => Ok(workspace.root_path().to_path_buf()),
+        Err(AgentRegisteredWorkspaceLookupError::Missing { .. }) => {
+            Err(mutation.missing_owner_error(agent))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
 
 fn parse_source_url(url: &str) -> anyhow::Result<SkillSource> {
     let (kind, rest) = url
@@ -910,6 +936,39 @@ pub(crate) fn format_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_skill_agent_root_projects_registered_workspace() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let root = config::home_dir().join("agents").join("alice");
+        let mut entry = agents::AgentEntry::new(agents::AgentType::ClaudeCode, None);
+        entry.root_path = Some(root.clone());
+        let mut registry = agents::AgentRegistry::default();
+        registry.agents.insert("alice".to_string(), entry);
+        agents::save_agents(&registry).expect("save registry");
+
+        assert_eq!(
+            resolve_skill_agent_root("alice", SkillMutation::Install).expect("resolve workspace"),
+            root
+        );
+    }
+
+    #[test]
+    fn resolve_skill_agent_root_preserves_command_specific_missing_owner_errors() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        for (mutation, expected) in [
+            (
+                SkillMutation::Install,
+                "agent 'missing' not registered; run 'easynet agent list'",
+            ),
+            (SkillMutation::Upgrade, "agent 'missing' not registered"),
+            (SkillMutation::Remove, "agent 'missing' not registered"),
+        ] {
+            let err =
+                resolve_skill_agent_root("missing", mutation).expect_err("missing owner must fail");
+            assert!(err.to_string().contains(expected), "wrong error: {err}");
+        }
+    }
 
     #[test]
     fn global_skill_pool_ref_parses_known_owner_and_rejects_bad_labels() {

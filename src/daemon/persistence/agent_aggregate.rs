@@ -14,6 +14,7 @@
 //! abilities and beside lifecycle mutation persistence.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 use crate::core::agent::id::{AgentId, DEFAULT_TENANT};
 
@@ -75,6 +76,22 @@ impl AgentAggregateSnapshot {
 
     pub(crate) fn registered_agent_registry_projection(&self) -> AgentRegistry {
         self.registry.clone()
+    }
+
+    pub(crate) fn registered_skill_owner(
+        &self,
+        owner_id: &str,
+    ) -> anyhow::Result<AgentRegisteredSkillOwner> {
+        let entry = self.registry.agents.get(owner_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "owner_agent_id {owner_id:?} is not registered (registered agents: {:?})",
+                self.registry.agents.keys().collect::<Vec<_>>()
+            )
+        })?;
+        Ok(AgentRegisteredSkillOwner {
+            root_path: entry.required_root_path(owner_id, "skill.publish")?,
+            agent_type: entry.agent_type,
+        })
     }
 
     pub(crate) fn registered_agent_surface_names(&self) -> BTreeSet<String> {
@@ -202,6 +219,22 @@ impl AgentAggregateSnapshot {
                 })
                 .collect(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentRegisteredSkillOwner {
+    root_path: PathBuf,
+    agent_type: agent_registry::AgentType,
+}
+
+impl AgentRegisteredSkillOwner {
+    pub(crate) fn root_path(&self) -> &Path {
+        &self.root_path
+    }
+
+    pub(crate) fn agent_type(&self) -> agent_registry::AgentType {
+        self.agent_type
     }
 }
 
@@ -699,6 +732,46 @@ mod tests {
         assert!(names.contains("default/claude"));
         assert!(names.contains("codex"));
         assert!(names.contains("research/codex"));
+    }
+
+    #[test]
+    fn registered_skill_owner_projects_root_and_type() {
+        let root = std::env::temp_dir().join("easynet-agent-owner");
+        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        entry.root_path = Some(root.clone());
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert("claude".to_string(), entry);
+        let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
+
+        let owner = snapshot
+            .registered_skill_owner("claude")
+            .expect("registered owner");
+
+        assert_eq!(owner.root_path(), root.as_path());
+        assert_eq!(owner.agent_type(), AgentType::ClaudeCode);
+    }
+
+    #[test]
+    fn registered_skill_owner_reports_missing_and_corrupt_rows() {
+        let mut registry = AgentRegistry::default();
+        registry
+            .agents
+            .insert("codex".to_string(), AgentEntry::new(AgentType::Codex, None));
+        let snapshot = AgentAggregateSnapshot::new(registry, LocalAgentsFile::default());
+
+        let missing = snapshot
+            .registered_skill_owner("claude")
+            .expect_err("missing owner");
+        assert!(
+            missing
+                .to_string()
+                .contains("registered agents: [\"codex\"]")
+        );
+
+        let corrupt = snapshot
+            .registered_skill_owner("codex")
+            .expect_err("missing root path");
+        assert!(corrupt.to_string().contains("skill.publish"));
     }
 
     #[test]

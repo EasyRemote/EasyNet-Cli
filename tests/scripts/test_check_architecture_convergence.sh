@@ -73,6 +73,7 @@ make_good_fixture() {
     "$CLI/src/daemon/invocation/streams" \
     "$CLI/src/daemon/persistence" \
     "$CLI/src/daemon/resources/context" \
+    "$CLI/src/daemon/resources/skills" \
     "$CLI/ability-descriptors/system/agents" \
     "$CLI/docs/spec" \
     "$CLI/sdk/go" \
@@ -331,6 +332,23 @@ struct AgentHostedPlacement {
     host_node_id: Option<String>,
 }
 
+struct AgentRegisteredWorkspace;
+
+enum AgentRegisteredWorkspaceLookupError {
+    Missing,
+    InvalidWorkspace,
+}
+
+impl AgentRegisteredWorkspace {
+    fn root_path(&self) -> &Path {
+        Path::new("/tmp/agent")
+    }
+
+    fn agent_type(&self) -> agent_registry::AgentType {
+        agent_registry::AgentType::ClaudeCode
+    }
+}
+
 	struct AgentHostedIdentityStatus {
 	    host_device_agent_ura: Option<String>,
 	    hosted_agent_count: usize,
@@ -422,6 +440,10 @@ impl AgentAggregateSnapshot {
 
     fn registered_agent_registry_projection(&self) -> AgentRegistry {
         self.registry.clone()
+    }
+
+    fn registered_agent_workspace(&self, owner_id: &str, operation: &str) -> anyhow::Result<AgentRegisteredWorkspace> {
+        Ok(AgentRegisteredWorkspace)
     }
 
     fn registered_agents(&self) -> impl Iterator<Item = (&str, &AgentEntry)> {
@@ -690,6 +712,21 @@ fn scoped_skill_resource_ura(
 ) -> Option<String> {
     let agent_ura = explicit_agent_ura.or_else(|| hosted_skill_owners.hosted_ura_for(agent_name))?;
     crate::daemon::federation::read_model::owner_projection::skill_resource_ura(agent_ura, skill_name)
+}
+EOF
+	  cat >"$CLI/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
+use crate::daemon::persistence::{
+    agent_aggregate::AgentAggregateRepository,
+    agent_registry as agents,
+};
+
+fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
+    let owner = AgentAggregateRepository::load_snapshot()?.registered_agent_workspace(owner_id, "skill.publish")?;
+    let root = owner.root_path().to_path_buf();
+    if !root.is_dir() {
+        anyhow::bail!("owner agent {owner_id:?} has no on-disk workspace at {}", root.display());
+    }
+    Ok((root, owner.agent_type()))
 }
 EOF
 	  cat >"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
@@ -1155,12 +1192,29 @@ fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool
             voice_call_ability::register(&mut reg, provider.clone());
         }
     }
-    agent_list_ability::register(&mut reg, || {
-        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
-    });
-    let evidence = VoiceAssemblyEvidence {
-        repository_assembled: voice_provider_assembly.is_some(),
-        executable_delivery_evidence: false,
+	    agent_list_ability::register(&mut reg, || {
+	        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+	    });
+	    discover_ability::register_device_aggregate_with_resolver(
+	        &mut reg,
+	        || {
+	            crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+	                .map(|snapshot| snapshot.registered_agent_registry_projection())
+	        },
+	        Arc::clone(&local_registry_handle),
+	        Arc::clone(&discover_federation_resolver),
+	    );
+	    a2a_bridge_ability::register(
+	        &mut reg,
+	        || {
+	            crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+	                .map(|snapshot| snapshot.registered_agent_registry_projection())
+	        },
+	        Arc::clone(&local_registry_handle),
+	    );
+	    let evidence = VoiceAssemblyEvidence {
+	        repository_assembled: voice_provider_assembly.is_some(),
+	        executable_delivery_evidence: false,
     };
 }
 
@@ -3441,6 +3495,61 @@ EOF
 expect_fail \
   "skill list aggregate identity fork" \
   "R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
+fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
+    let registry = agents::load_agents()?;
+    let entry = registry.agents.get(owner_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "owner_agent_id {owner_id:?} is not registered (registered agents: {:?})",
+            registry.agents.keys().collect::<Vec<_>>()
+        )
+    })?;
+    Ok((entry.required_root_path(owner_id, "skill.publish")?, entry.agent_type))
+}
+EOF
+expect_fail \
+  "skill publish aggregate owner fork" \
+  "R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/resources/skills/store.rs" <<'EOF'
+fn install_skill(agent: &str) -> anyhow::Result<()> {
+    let registry = agents::load_agents()?;
+    let _entry = registry.agents.get(agent).ok_or_else(|| anyhow::anyhow!("missing"))?;
+    Ok(())
+}
+EOF
+expect_fail \
+  "shared skill store aggregate owner fork" \
+  "R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
+fn build_registry_with_services_result_inner() {
+    discover_ability::register_device_aggregate_with_resolver(
+        &mut reg,
+        || {
+            crate::daemon::persistence::agent_registry::load_agents()
+                .map_err(|error| anyhow::anyhow!("load discover agent registry: {error:#}"))
+        },
+        Arc::clone(&local_registry_handle),
+        Arc::clone(&discover_federation_resolver),
+    );
+    a2a_bridge_ability::register(
+        &mut reg,
+        || {
+            crate::daemon::persistence::agent_registry::load_agents()
+                .map_err(|error| anyhow::anyhow!("load A2A agent registry: {error:#}"))
+        },
+        Arc::clone(&local_registry_handle),
+    );
+}
+EOF
+expect_fail \
+  "boot discovery aggregate provider fork" \
+  "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

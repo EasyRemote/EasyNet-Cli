@@ -3754,6 +3754,169 @@ if skill_list_ability.exists():
         if token in production_text:
             add("R48_SKILL_LIST_AGENT_AGGREGATE_IDENTITY_FORK", skill_list_ability, 1, detail)
 
+# Rule 49: skill package owner resolution consumes the Agent aggregate
+# registered-workspace projection. Package surfaces own package path layout,
+# but they must not reopen agents.json or inspect AgentRegistry rows.
+skill_publish_ability = cli_root / "src/daemon/ability/builtins/resources/skills/publish.rs"
+skill_store = cli_root / "src/daemon/resources/skills/store.rs"
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    for token, detail in (
+        (
+            "struct AgentRegisteredWorkspace",
+            "Agent aggregate must expose a registered workspace projection type",
+        ),
+        (
+            "enum AgentRegisteredWorkspaceLookupError",
+            "Agent aggregate must classify missing and invalid registered workspaces",
+        ),
+        (
+            "fn registered_agent_workspace(",
+            "Agent aggregate snapshot must own registered workspace lookup",
+        ),
+        (
+            "fn root_path(&self) -> &Path",
+            "registered workspace projection must expose the canonical root path",
+        ),
+        (
+            "fn agent_type(&self) -> agent_registry::AgentType",
+            "registered workspace projection must expose the runtime type selector",
+        ),
+    ):
+        if token not in text:
+            add("R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK", agent_aggregate, 1, detail)
+
+if skill_publish_ability.exists():
+    text = source(skill_publish_ability)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            "skill package owner resolution must load through the Agent aggregate snapshot",
+        ),
+        (
+            ".registered_agent_workspace(owner_id, \"skill.publish\")",
+            "skill package owner resolution must consume the aggregate registered-workspace projection",
+        ),
+    ):
+        if token not in production_text:
+            add("R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK", skill_publish_ability, 1, detail)
+    for token, detail in (
+        (
+            "agents::load_agents",
+            "skill package owner resolution must not load agents.json directly",
+        ),
+        (
+            "agent_registry::load_agents",
+            "skill package owner resolution must not bypass the Agent aggregate repository",
+        ),
+        (
+            "registry.agents",
+            "skill package owner resolution must not inspect AgentRegistry rows directly",
+        ),
+    ):
+        if token in production_text:
+            add("R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK", skill_publish_ability, 1, detail)
+
+if skill_store.exists():
+    text = source(skill_store)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "fn resolve_skill_agent_root(",
+            "shared skill mutations must centralize registered workspace resolution",
+        ),
+        (
+            "AgentAggregateRepository::load_snapshot()",
+            "shared skill mutations must load through the Agent aggregate snapshot",
+        ),
+        (
+            ".registered_agent_workspace(agent, mutation.operation())",
+            "shared skill mutations must consume the aggregate registered-workspace projection",
+        ),
+    ):
+        if token not in production_text:
+            add("R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK", skill_store, 1, detail)
+    for token, detail in (
+        (
+            "agents::load_agents",
+            "shared skill mutations must not load agents.json directly",
+        ),
+        (
+            "agent_registry::load_agents",
+            "shared skill mutations must not bypass the Agent aggregate repository",
+        ),
+        (
+            "registry.agents",
+            "shared skill mutations must not inspect AgentRegistry rows directly",
+        ),
+    ):
+        if token in production_text:
+            add("R49_SKILL_PUBLISH_AGENT_AGGREGATE_OWNER_FORK", skill_store, 1, detail)
+
+# Rule 50: boot-time discovery/A2A providers consume the Agent aggregate
+# registry projection. Discovery handlers still accept a registry-shaped
+# adapter, but production boot must not inject a raw agents.json loader.
+catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
+if catalog_build.exists():
+    text = source(catalog_build)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    provider_blocks = (
+        (
+            "discover_ability::register_device_aggregate_with_resolver(",
+            "agent.discover boot provider",
+        ),
+        (
+            "a2a_bridge_ability::register(",
+            "A2A bridge boot provider",
+        ),
+    )
+    for token, label in provider_blocks:
+        start = production_text.find(token)
+        if start < 0:
+            add(
+                "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK",
+                catalog_build,
+                1,
+                f"{label} registration block is missing",
+            )
+            continue
+        block = production_text[start : start + 650]
+        for required, detail in (
+            (
+                "AgentAggregateRepository::load_snapshot()",
+                f"{label} must load through the Agent aggregate snapshot",
+            ),
+            (
+                ".registered_agent_registry_projection()",
+                f"{label} must project registry rows from the Agent aggregate",
+            ),
+        ):
+            if required not in block:
+                add(
+                    "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK",
+                    catalog_build,
+                    line_number(production_text, start),
+                    detail,
+                )
+        for forbidden, detail in (
+            (
+                "agent_registry::load_agents",
+                f"{label} must not inject a raw agents.json provider",
+            ),
+            (
+                "agents::load_agents",
+                f"{label} must not inject a raw agents.json provider",
+            ),
+        ):
+            if forbidden in block:
+                add(
+                    "R50_BOOT_DISCOVERY_AGENT_AGGREGATE_PROVIDER_FORK",
+                    catalog_build,
+                    line_number(production_text, start),
+                    detail,
+                )
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the
