@@ -111,9 +111,8 @@ pub fn register_with_ledger(
 
 fn grant_handler(args: Value) -> anyhow::Result<Value> {
     let request: GrantRequest = serde_json::from_value(args)?;
-    let mut grant = request.grant;
-    normalize_grant_mutation_boundary(
-        &mut grant,
+    let grant = grant_from_wire_mutation_boundary(
+        request.grant,
         request.owner_ura.as_deref(),
         request.principal_ura.as_deref(),
     )?;
@@ -215,9 +214,8 @@ fn check_handler(args: Value) -> anyhow::Result<Value> {
 
 fn request_create_handler(args: Value) -> anyhow::Result<Value> {
     let request: PermissionRequestEnvelope = serde_json::from_value(args)?;
-    let mut permission_request = request.request;
-    normalize_permission_request_mutation_boundary(
-        &mut permission_request,
+    let permission_request = permission_request_from_wire_mutation_boundary(
+        request.request,
         request.owner_ura.as_deref(),
         request.principal_ura.as_deref(),
     )?;
@@ -229,9 +227,8 @@ fn request_create_handler(args: Value) -> anyhow::Result<Value> {
 
 fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
     let request: PermissionRequestResolutionEnvelope = serde_json::from_value(args)?;
-    let mut permission_request = request.request;
-    normalize_permission_request_mutation_boundary(
-        &mut permission_request,
+    let permission_request = permission_request_from_wire_mutation_boundary(
+        request.request,
         request.owner_ura.as_deref(),
         request.principal_ura.as_deref(),
     )?;
@@ -239,9 +236,8 @@ fn request_resolve_handler(args: Value) -> anyhow::Result<Value> {
     let mut store = AccessControlStore::open_or_create(permission_request.owner_user_id.clone())?;
     if permission_request.status == PermissionRequestStatus::Approved {
         if let Some(grant) = request.created_grant {
-            let mut grant = grant;
-            normalize_grant_mutation_boundary(
-                &mut grant,
+            let grant = grant_from_wire_mutation_boundary(
+                grant,
                 request.owner_ura.as_deref(),
                 request.principal_ura.as_deref(),
             )?;
@@ -356,36 +352,34 @@ fn creation_time_matches(
     true
 }
 
-fn normalize_grant_mutation_boundary(
-    grant: &mut crate::daemon::invocation::admission::grant_matcher::PermissionGrant,
+fn grant_from_wire_mutation_boundary(
+    grant: WirePermissionGrant,
     owner_ura: Option<&str>,
     principal_ura: Option<&str>,
-) -> anyhow::Result<()> {
-    grant.owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
-    if let Some(principal_id) = principal_id_from_mutation_boundary(
+) -> anyhow::Result<crate::daemon::invocation::admission::grant_matcher::PermissionGrant> {
+    let owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
+    let principal_id = principal_id_from_mutation_boundary(
         Some(grant.principal_kind),
         principal_ura,
         grant.token_id.as_deref(),
-    )? {
-        grant.principal_id = principal_id;
-    }
-    Ok(())
+    )?
+    .ok_or_else(|| anyhow::anyhow!("principal_ura or token_id is required for policy mutation"))?;
+    Ok(grant.into_permission_grant(owner_user_id, principal_id))
 }
 
-fn normalize_permission_request_mutation_boundary(
-    request: &mut crate::daemon::invocation::admission::decision::PermissionRequest,
+fn permission_request_from_wire_mutation_boundary(
+    request: WirePermissionRequest,
     owner_ura: Option<&str>,
     principal_ura: Option<&str>,
-) -> anyhow::Result<()> {
-    request.owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
-    if let Some(principal_id) = principal_id_from_mutation_boundary(
+) -> anyhow::Result<crate::daemon::invocation::admission::decision::PermissionRequest> {
+    let owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
+    let principal_id = principal_id_from_mutation_boundary(
         Some(request.principal_kind),
         principal_ura,
         request.token_id.as_deref(),
-    )? {
-        request.principal_id = principal_id;
-    }
-    Ok(())
+    )?
+    .ok_or_else(|| anyhow::anyhow!("principal_ura or token_id is required for policy mutation"))?;
+    Ok(request.into_permission_request(owner_user_id, principal_id))
 }
 
 fn owner_user_id_from_boundary(owner_ura: Option<&str>) -> anyhow::Result<String> {
@@ -671,13 +665,86 @@ fn trace_stage_for(state: &str) -> TraceStage {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GrantRequest {
-    grant: crate::daemon::invocation::admission::grant_matcher::PermissionGrant,
+    grant: WirePermissionGrant,
     #[serde(default)]
     owner_ura: Option<String>,
     #[serde(default)]
     principal_ura: Option<String>,
     #[serde(default)]
     actor_ura: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WirePermissionGrant {
+    grant_id: String,
+    principal_kind: crate::daemon::invocation::admission::decision::PrincipalKind,
+    #[serde(default)]
+    token_id: Option<String>,
+    #[serde(default)]
+    token_class: Option<crate::daemon::invocation::admission::decision::TokenClass>,
+    #[serde(default)]
+    callee_ura: Option<String>,
+    #[serde(default)]
+    subject_ura_pattern: Option<String>,
+    #[serde(default)]
+    ability_ura_pattern: Option<String>,
+    actions: Vec<crate::daemon::invocation::admission::decision::AccessAction>,
+    #[serde(default)]
+    constraints: Option<crate::daemon::invocation::admission::grant_matcher::PermissionConstraints>,
+    effect: crate::daemon::invocation::admission::grant_matcher::PermissionEffect,
+    lifetime: crate::daemon::invocation::admission::grant_matcher::PermissionGrantLifetime,
+    state: crate::daemon::invocation::admission::grant_matcher::PermissionGrantState,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    review_required_after: Option<String>,
+    #[serde(default)]
+    last_reviewed_at: Option<String>,
+    #[serde(default)]
+    last_used_at: Option<String>,
+    created_by: String,
+    created_at: String,
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    revoked_at: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+impl WirePermissionGrant {
+    fn into_permission_grant(
+        self,
+        owner_user_id: String,
+        principal_id: String,
+    ) -> crate::daemon::invocation::admission::grant_matcher::PermissionGrant {
+        crate::daemon::invocation::admission::grant_matcher::PermissionGrant {
+            grant_id: self.grant_id,
+            owner_user_id,
+            principal_kind: self.principal_kind,
+            principal_id,
+            token_id: self.token_id,
+            token_class: self.token_class,
+            callee_ura: self.callee_ura,
+            subject_ura_pattern: self.subject_ura_pattern,
+            ability_ura_pattern: self.ability_ura_pattern,
+            actions: self.actions,
+            constraints: self.constraints,
+            effect: self.effect,
+            lifetime: self.lifetime,
+            state: self.state,
+            expires_at: self.expires_at,
+            review_required_after: self.review_required_after,
+            last_reviewed_at: self.last_reviewed_at,
+            last_used_at: self.last_used_at,
+            created_by: self.created_by,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            revoked_at: self.revoked_at,
+            reason: self.reason,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -753,7 +820,7 @@ struct CheckRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PermissionRequestEnvelope {
-    request: crate::daemon::invocation::admission::decision::PermissionRequest,
+    request: WirePermissionRequest,
     #[serde(default)]
     owner_ura: Option<String>,
     #[serde(default)]
@@ -765,17 +832,87 @@ struct PermissionRequestEnvelope {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PermissionRequestResolutionEnvelope {
-    request: crate::daemon::invocation::admission::decision::PermissionRequest,
+    request: WirePermissionRequest,
     #[serde(default)]
     owner_ura: Option<String>,
     #[serde(default)]
     principal_ura: Option<String>,
     #[serde(default)]
-    created_grant: Option<crate::daemon::invocation::admission::grant_matcher::PermissionGrant>,
+    created_grant: Option<WirePermissionGrant>,
     #[serde(default)]
     authority_proof: Option<crate::daemon::invocation::admission::authority_proof::AuthorityProof>,
     #[serde(default)]
     actor_ura: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WirePermissionRequest {
+    request_id: String,
+    caller_ura: String,
+    principal_kind: crate::daemon::invocation::admission::decision::PrincipalKind,
+    #[serde(default)]
+    token_id: Option<String>,
+    #[serde(default)]
+    token_class: Option<crate::daemon::invocation::admission::decision::TokenClass>,
+    callee_ura: String,
+    subject_ura: String,
+    ability_ura: String,
+    action: crate::daemon::invocation::admission::decision::AccessAction,
+    #[serde(default)]
+    nonce: Option<String>,
+    #[serde(default)]
+    canonical_hash: Option<String>,
+    requested_lifetimes: Vec<crate::daemon::invocation::admission::decision::PermissionLifetime>,
+    status: crate::daemon::invocation::admission::decision::PermissionRequestStatus,
+    created_at: String,
+    expires_at: String,
+    #[serde(default)]
+    resolver_ura: Option<String>,
+    #[serde(default)]
+    resolved_lifetime: Option<crate::daemon::invocation::admission::decision::PermissionLifetime>,
+    #[serde(default)]
+    created_grant_id: Option<String>,
+    #[serde(default)]
+    authority_proof_id: Option<String>,
+    #[serde(default)]
+    resolved_at: Option<String>,
+    #[serde(default)]
+    decision_reason: Option<String>,
+}
+
+impl WirePermissionRequest {
+    fn into_permission_request(
+        self,
+        owner_user_id: String,
+        principal_id: String,
+    ) -> crate::daemon::invocation::admission::decision::PermissionRequest {
+        crate::daemon::invocation::admission::decision::PermissionRequest {
+            request_id: self.request_id,
+            owner_user_id,
+            caller_ura: self.caller_ura,
+            principal_kind: self.principal_kind,
+            principal_id,
+            token_id: self.token_id,
+            token_class: self.token_class,
+            callee_ura: self.callee_ura,
+            subject_ura: self.subject_ura,
+            ability_ura: self.ability_ura,
+            action: self.action,
+            nonce: self.nonce,
+            canonical_hash: self.canonical_hash,
+            requested_lifetimes: self.requested_lifetimes,
+            status: self.status,
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+            resolver_ura: self.resolver_ura,
+            resolved_lifetime: self.resolved_lifetime,
+            created_grant_id: self.created_grant_id,
+            authority_proof_id: self.authority_proof_id,
+            resolved_at: self.resolved_at,
+            decision_reason: self.decision_reason,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1403,14 +1540,14 @@ mod tests {
     }
 
     #[test]
-    fn authority_binding_overwrites_nested_scalar_identity_from_boundary_uras() {
+    fn authority_binding_rejects_nested_scalar_identity_fields() {
         let _home = HomeGuard::new();
-        let output = grant_handler(json!({
+        let grant_error = grant_handler(json!({
             "owner_ura": "easynet:///r/example/user/alice",
             "principal_ura": "easynet:///r/example/user/alice",
             "actor_ura": "easynet:///r/example/user/alice",
             "grant": {
-                "grant_id": "grant-derived",
+                "grant_id": "grant-scalar",
                 "owner_user_id": "bob",
                 "principal_kind": "user",
                 "principal_id": "bob",
@@ -1422,9 +1559,39 @@ mod tests {
                 "created_at": "2026-07-09T00:00:00Z"
             }
         }))
-        .expect("nested scalar identity is not boundary truth");
-        assert_eq!(output["grant"]["owner_user_id"], "alice");
-        assert_eq!(output["grant"]["principal_id"], "alice");
+        .expect_err("nested scalar identity fields must not be accepted");
+        assert!(
+            grant_error.to_string().contains("owner_user_id")
+                || grant_error.to_string().contains("principal_id"),
+            "{grant_error}"
+        );
+
+        let request_error = request_create_handler(json!({
+            "owner_ura": "easynet:///r/example/user/alice",
+            "principal_ura": "easynet:///r/example/user/alice",
+            "actor_ura": "easynet:///r/example/user/alice",
+            "request": {
+                "request_id": "req-scalar",
+                "owner_user_id": "bob",
+                "caller_ura": "easynet:///r/example/hub",
+                "principal_kind": "user",
+                "principal_id": "bob",
+                "callee_ura": "easynet:///r/example/device/dev-a",
+                "subject_ura": "easynet:///r/example/user/alice",
+                "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
+                "action": "invoke",
+                "requested_lifetimes": ["session"],
+                "status": "pending",
+                "created_at": "2026-07-09T00:00:00Z",
+                "expires_at": "2026-07-09T01:00:00Z"
+            }
+        }))
+        .expect_err("nested request scalar identity fields must not be accepted");
+        assert!(
+            request_error.to_string().contains("owner_user_id")
+                || request_error.to_string().contains("principal_id"),
+            "{request_error}"
+        );
     }
 
     #[test]

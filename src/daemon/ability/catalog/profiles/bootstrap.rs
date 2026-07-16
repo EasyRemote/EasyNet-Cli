@@ -97,7 +97,10 @@ pub fn build_plan_from_registry(
     user_id: &str,
     username: &str,
 ) -> anyhow::Result<BootstrapPlan> {
-    let registry = crate::daemon::persistence::agent_registry::load_agents()
+    let registry = crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(
+            crate::daemon::persistence::agent_aggregate::AgentRegistryProjectionLoadError::into_source_or_self,
+        )
         .map_err(|err| anyhow::anyhow!("load agent registry: {err}"))?;
     let llm_sub_agents: Vec<LlmSubAgent> = registry
         .agents

@@ -426,7 +426,7 @@ struct CuratorTurnRequest<'a> {
 /// returns an empty list, and validation downstream emits a clear
 /// "no catalog available" rather than refusing to publish.
 pub(crate) fn collect_owner_catalog(owner: &str) -> Vec<CatalogEntry> {
-    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
+    let registry = match crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_registered_agent_registry_projection() {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };

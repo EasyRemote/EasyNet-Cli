@@ -38,8 +38,8 @@ use crate::daemon::axon_bridge::hot_agent_registrar::{
     block_on_hot_registrar,
 };
 use crate::daemon::persistence::agent_aggregate::{
-    AgentAggregateRepository, AgentAggregateSnapshot, HostedAgentIdentityProjection,
-    HostedAgentNameLookupError,
+    AgentAggregateRepository, AgentAggregateSnapshot, AgentRegistryProjectionLoadError,
+    HostedAgentIdentityProjection, HostedAgentNameLookupError,
 };
 use crate::daemon::persistence::config::sync_parent_dir;
 use crate::daemon::persistence::teach_grants::{
@@ -313,7 +313,8 @@ fn resolve_owner_manifest(registry_name: &str) -> anyhow::Result<AbilityHome> {
     let owner_local = crate::core::ura::OwnerLocalAbilityName::parse(registry_name)?;
     let agent = owner_local.owner();
     let public_name = owner_local.public_name();
-    let agents = crate::daemon::persistence::agent_registry::load_agents()?;
+    let agents = AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(AgentRegistryProjectionLoadError::into_source_or_self)?;
     let Some(entry) = agents.agents.get(agent) else {
         anyhow::bail!("no agent {agent:?} on this device (see `easynet agent list`)");
     };
@@ -792,7 +793,8 @@ pub fn recover_forget_transactions(
     hot_registrar: Option<&SharedHotRegistrarCell>,
 ) -> anyhow::Result<usize> {
     let store = TeachGrantStore::open_default();
-    let agents = crate::daemon::persistence::agent_registry::load_agents()?;
+    let agents = AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(AgentRegistryProjectionLoadError::into_source_or_self)?;
     let mut recovered = 0usize;
     for record in store.snapshot_forgetting_records()? {
         let pending = match store.resume_forget_pending(&record) {

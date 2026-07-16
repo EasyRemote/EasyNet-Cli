@@ -4035,6 +4035,132 @@ if agent_authoring.exists():
         if token in production_text:
             add("R53_AGENT_ABILITY_AUTHORING_REGISTRY_ONLY_WORKSPACE_FORK", agent_authoring, 1, detail)
 
+# Rule 54: registry-only consumers must acquire full Agent registry state from
+# the Agent aggregate repository. These consumers intentionally do not join
+# registered metadata with hosted identity state, so `load_snapshot` would add
+# an incorrect local-agents.json dependency.
+registry_bootstrap = cli_root / "src/daemon/ability/catalog/profiles/bootstrap.rs"
+think_ability = cli_root / "src/daemon/ability/builtins/automation/think.rs"
+registry_projection_call = "AgentAggregateRepository::load_registered_agent_registry_projection()"
+if agent_aggregate.exists():
+    text = source(agent_aggregate)
+    if "enum AgentRegistryProjectionLoadError" not in text:
+        add(
+            "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK",
+            agent_aggregate,
+            1,
+            "Agent aggregate must classify registry-only projection failures",
+        )
+    projection_body = brace_function_body(
+        text,
+        r"fn\s+load_registered_agent_registry_projection\s*\(",
+    )
+    if projection_body is None:
+        add(
+            "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK",
+            agent_aggregate,
+            1,
+            "Agent aggregate must own the full registry-only projection loader",
+        )
+    else:
+        offset, body = projection_body
+        if "agent_registry::load_agents()" not in body:
+            add(
+                "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK",
+                agent_aggregate,
+                line_number(text, offset),
+                "registry-only projection loader must delegate to registry persistence",
+            )
+        if "load_snapshot" in body or "local_agents" in body:
+            add(
+                "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK",
+                agent_aggregate,
+                line_number(text, offset),
+                "registry-only projection loader must not depend on hosted identity state",
+            )
+
+for registry_consumer, label, minimum_calls in (
+    (registry_bootstrap, "bootstrap plan", 1),
+    (think_ability, "curator catalog", 1),
+    (catalog_build, "daemon catalog boot and purge replay", 2),
+):
+    if not registry_consumer.exists():
+        continue
+    text = source(registry_consumer)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    required_calls = minimum_calls
+    if registry_consumer == catalog_build and "fn build_registry_for_daemon_result" not in production_text:
+        required_calls = 0
+    call_count = production_text.count(registry_projection_call)
+    if call_count < required_calls:
+        add(
+            "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK",
+            registry_consumer,
+            1,
+            f"{label} must load the full registry through the Agent aggregate projection ({required_calls} call(s) required)",
+        )
+    if "agent_registry::load_agents" in production_text or "agents::load_agents" in production_text:
+        add(
+            "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK",
+            registry_consumer,
+            1,
+            f"{label} must not bypass the Agent registry projection owner",
+        )
+
+# Rule 55: meta.teach's manifest lookup and forget-recovery state machine read
+# only the durable Agent registry. Their hosted identity checks remain paired
+# snapshot reads elsewhere; these registry-only paths must not reopen
+# agents.json or turn a malformed identity file into a recovery blocker.
+teach_registry_owners = (
+    (
+        "resolve_owner_manifest",
+        "owner manifest resolution",
+    ),
+    (
+        "recover_forget_transactions",
+        "forget transaction recovery",
+    ),
+)
+if governance_teach.exists():
+    text = source(governance_teach)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    if any(f"fn {function_name}" in production_text for function_name, _ in teach_registry_owners):
+        for function_name, label in teach_registry_owners:
+            body = brace_function_body(production_text, rf"fn\s+{function_name}\s*\(")
+            if body is None:
+                add(
+                    "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK",
+                    governance_teach,
+                    1,
+                    f"{label} must remain a named registry-only read owner",
+                )
+                continue
+            offset, function_body = body
+            for token, detail in (
+                (
+                    "AgentAggregateRepository::load_registered_agent_registry_projection()",
+                    f"{label} must load through the Agent registry projection owner",
+                ),
+                (
+                    "AgentRegistryProjectionLoadError::into_source_or_self",
+                    f"{label} must preserve raw registry persistence errors",
+                ),
+            ):
+                if token not in function_body:
+                    add(
+                        "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK",
+                        governance_teach,
+                        line_number(production_text, offset),
+                        detail,
+                    )
+            if "agent_registry::load_agents" in function_body or "agents::load_agents" in function_body:
+                add(
+                    "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK",
+                    governance_teach,
+                    line_number(production_text, offset),
+                    f"{label} must not bypass the Agent registry projection owner",
+                )
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the

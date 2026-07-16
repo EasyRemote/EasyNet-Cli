@@ -56,7 +56,10 @@ use crate::daemon::execution::permission::PermissionService;
 use crate::daemon::execution::pty::PtyService;
 use crate::daemon::execution::schedule::ScheduleService;
 use crate::daemon::execution::session::SessionService;
-use crate::daemon::persistence::agent_registry::AgentRegistry;
+use crate::daemon::persistence::{
+    agent_aggregate::{AgentAggregateRepository, AgentRegistryProjectionLoadError},
+    agent_registry::AgentRegistry,
+};
 use anyhow::Context as _;
 use std::sync::Arc;
 
@@ -1085,8 +1088,10 @@ fn build_registry_with_services_result_inner(
                 .context("recover pending Agent purge before hosted-Agent boot replay")?;
             let recovered_agents;
             let replay_agents = if recovered_purge {
-                recovered_agents = crate::daemon::persistence::agent_registry::load_agents()
-                    .context("reload Agent registry after purge boot recovery")?;
+                recovered_agents =
+                    AgentAggregateRepository::load_registered_agent_registry_projection()
+                        .map_err(AgentRegistryProjectionLoadError::into_source_or_self)
+                        .context("reload Agent registry after purge boot recovery")?;
                 &recovered_agents
             } else {
                 agents
@@ -1263,7 +1268,8 @@ pub fn build_registry_for_daemon_result(
         // corrupt or inaccessible durable daemon state and must abort boot;
         // replacing it with an empty registry would silently withdraw hosted
         // abilities from the control plane.
-        crate::daemon::persistence::agent_registry::load_agents()
+        AgentAggregateRepository::load_registered_agent_registry_projection()
+            .map_err(AgentRegistryProjectionLoadError::into_source_or_self)
             .map_err(|error| anyhow::anyhow!("load daemon agent registry: {error:#}"))?
     } else {
         AgentRegistry::default()

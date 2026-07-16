@@ -288,6 +288,10 @@ enum AgentAggregateSnapshotLoadError {
     IdentityUnreadable { source: anyhow::Error },
 }
 
+enum AgentRegistryProjectionLoadError {
+    RegistryUnreadable { source: anyhow::Error },
+}
+
 pub(crate) struct AgentAggregateSnapshot {
     pub(crate) registry: AgentRegistry,
     pub(crate) local_agents: local_agents::LocalAgentsFile,
@@ -517,6 +521,11 @@ impl AgentAggregateSnapshot {
 pub(crate) struct AgentAggregateRepository;
 
 impl AgentAggregateRepository {
+    fn load_registered_agent_registry_projection() -> Result<AgentRegistry, AgentRegistryProjectionLoadError> {
+        agent_registry::load_agents()
+            .map_err(|source| AgentRegistryProjectionLoadError::RegistryUnreadable { source })
+    }
+
     pub(crate) fn load_snapshot() -> anyhow::Result<AgentAggregateSnapshot> {
         Self::try_load_snapshot().map_err(Into::into)
     }
@@ -2004,6 +2013,19 @@ EOF
   cat >"$AXON/sdk/rust/src/transport.rs" <<'EOF'
 pub struct TransportEndpoint {
     pub endpoint: tonic::transport::Uri,
+}
+EOF
+
+  cat >"$CLI/src/daemon/ability/catalog/profiles/bootstrap.rs" <<'EOF'
+fn build_plan_from_registry() -> anyhow::Result<()> {
+    AgentAggregateRepository::load_registered_agent_registry_projection()?;
+    Ok(())
+}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/automation/think.rs" <<'EOF'
+fn collect_owner_catalog() -> anyhow::Result<()> {
+    AgentAggregateRepository::load_registered_agent_registry_projection()?;
+    Ok(())
 }
 EOF
 }
@@ -3614,6 +3636,56 @@ EOF
 expect_fail \
   "agent ability authoring registry-only workspace fork" \
   "R53_AGENT_ABILITY_AUTHORING_REGISTRY_ONLY_WORKSPACE_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/profiles/bootstrap.rs" <<'EOF'
+fn build_plan_from_registry() -> anyhow::Result<()> {
+    crate::daemon::persistence::agent_registry::load_agents()?;
+    Ok(())
+}
+EOF
+expect_fail \
+  "bootstrap registry projection read owner fork" \
+  "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/automation/think.rs" <<'EOF'
+fn collect_owner_catalog() -> anyhow::Result<()> {
+    crate::daemon::persistence::agent_registry::load_agents()?;
+    Ok(())
+}
+EOF
+expect_fail \
+  "curator registry projection read owner fork" \
+  "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
+fn build_registry_for_daemon_result() -> anyhow::Result<()> {
+    crate::daemon::persistence::agent_registry::load_agents()?;
+    crate::daemon::persistence::agent_registry::load_agents()?;
+    Ok(())
+}
+EOF
+expect_fail \
+  "daemon catalog registry projection read owner fork" \
+  "R54_AGENT_REGISTRY_PROJECTION_READ_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/governance/teach.rs" <<'EOF'
+fn resolve_owner_manifest() -> anyhow::Result<()> {
+    crate::daemon::persistence::agent_registry::load_agents()?;
+    Ok(())
+}
+
+fn recover_forget_transactions() -> anyhow::Result<()> {
+    crate::daemon::persistence::agent_registry::load_agents()?;
+    Ok(())
+}
+EOF
+expect_fail \
+  "teach registry projection read owner fork" \
+  "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"
