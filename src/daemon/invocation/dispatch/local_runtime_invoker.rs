@@ -370,10 +370,18 @@ mod tests {
     }
 
     fn target(ability: String, subject: Option<String>) -> InvocationTarget {
+        target_with_args(ability, subject, json!({}))
+    }
+
+    fn target_with_args(
+        ability: String,
+        subject: Option<String>,
+        normalized_args: Value,
+    ) -> InvocationTarget {
         InvocationTarget {
             scope: TargetScope::Local,
             ability,
-            normalized_args: json!({}),
+            normalized_args,
             call_mode: CallMode::Rpc,
             subject,
             causal_context: None,
@@ -385,7 +393,7 @@ mod tests {
         callee_ura: &str,
         ability: &str,
     ) -> Arc<LocalRuntime> {
-        let runtime = LocalRuntime::new();
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(None, None);
         let runtime_ability =
             ability_ura_for_wire(callee_ura, ability).expect("runtime ability URA");
         runtime
@@ -476,5 +484,18 @@ mod tests {
                     .unwrap()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn local_rpc_projects_finalized_output() {
+        let ability = "device.inspect".to_string();
+        let runtime = runtime_with_descriptor_bound_ability(&local_device_ura(), &ability).await;
+        let args = json!({"ok": true, "source": "finalized"});
+
+        let output = invoke_local_rpc(runtime, target_with_args(ability, None, args.clone()))
+            .await
+            .expect("local RPC output");
+
+        assert_eq!(output, args);
     }
 }

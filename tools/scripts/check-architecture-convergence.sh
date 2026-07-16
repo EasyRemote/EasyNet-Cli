@@ -4258,6 +4258,44 @@ if loop_instance.exists():
             "loop terminal consumer must handle timeout distinctly from failure",
         )
 
+# Rule 59: Go and Python RuntimeAbility facades share one descriptor binding
+# owner. Addressing may project URAs and subjects, but only RuntimeClient may
+# select a registered descriptor version, hash, action, and call mode.
+go_runtime_ability = cli_root / "sdk/go/runtime_ability.go"
+python_runtime_ability = cli_root / "sdk/python/easynet_sdk/runtime_ability.py"
+if go_runtime_ability.exists():
+    text = source(go_runtime_ability)
+    if "c.runtime.ResolveDescriptorRef(" not in text:
+        add(
+            "R59_SDK_RUNTIME_DESCRIPTOR_OWNER_FORK",
+            go_runtime_ability,
+            1,
+            "Go runtime ability lowering must resolve descriptors through RuntimeClient",
+        )
+if python_runtime_ability.exists():
+    text = source(python_runtime_ability)
+    if "self._runtime.resolve_descriptor_ref(" not in text:
+        add(
+            "R59_SDK_RUNTIME_DESCRIPTOR_OWNER_FORK",
+            python_runtime_ability,
+            1,
+            "Python runtime ability lowering must resolve descriptors through RuntimeClient",
+        )
+    if "owner_ability_descriptor_ref(" in text:
+        add(
+            "R59_SDK_RUNTIME_DESCRIPTOR_OWNER_FORK",
+            python_runtime_ability,
+            1,
+            "Python runtime ability lowering must not mint descriptor refs through Addressing",
+        )
+    if 'call_mode="stream"' not in text:
+        add(
+            "R59_SDK_RUNTIME_DESCRIPTOR_OWNER_FORK",
+            python_runtime_ability,
+            1,
+            "Python stream lowering must resolve a stream-mode descriptor",
+        )
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the

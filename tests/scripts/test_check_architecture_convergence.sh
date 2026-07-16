@@ -3743,6 +3743,25 @@ expect_fail \
   "R58_TERMINAL_TIMEOUT_PROJECTION_FORK"
 
 make_good_fixture
+mkdir -p "$CLI/sdk/go" "$CLI/sdk/python/easynet_sdk"
+cat >"$CLI/sdk/go/runtime_ability.go" <<'EOF'
+func build(addressing Addressing) string {
+    return addressing.OwnerAbilityDescriptorRef()
+}
+EOF
+cat >"$CLI/sdk/python/easynet_sdk/runtime_ability.py" <<'EOF'
+class RuntimeAbilityClient:
+    def build(self):
+        return self._addressing.owner_ability_descriptor_ref()
+
+    def open_stream(self):
+        return self.build()
+EOF
+expect_fail \
+  "SDK runtime descriptor owner fork" \
+  "R59_SDK_RUNTIME_DESCRIPTOR_OWNER_FORK"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

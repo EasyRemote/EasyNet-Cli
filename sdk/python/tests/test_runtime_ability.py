@@ -14,7 +14,22 @@ from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 class RuntimeTransportFake:
     def __init__(self) -> None:
         self.seen: dict[str, object] = {}
+        self.descriptor_requests: list[dict[str, object]] = []
         self.output_json: dict[str, object] = {"answer_kind": "positive"}
+
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json)
+        self.descriptor_requests.append(request)
+        action = "stream" if request["call_mode"] == "stream" else "read"
+        return json.dumps(
+            {
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    f"!{action}"
+                )
+            }
+        ).encode()
 
     def invoke(self, draft_json: bytes) -> bytes:
         self.seen = json.loads(draft_json)
@@ -55,11 +70,21 @@ def _call() -> RuntimeCallContext:
 
 
 def test_runtime_ability_builds_complete_canonical_draft() -> None:
-    client, _ = _client()
+    client, transport = _client()
     draft = client.build(_call(), "namespace.resolve", {"name": "alice"})
     assert draft.descriptor_ref == (
-        "easynet:///r/example/ability/hub.namespace.resolve@1.0.0"
+        "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
     )
+    assert transport.descriptor_requests == [
+        {
+            "ability": "namespace.resolve",
+            "call_mode": "rpc",
+            "callee_ura": _call().callee_ura,
+            "caller_ura": _call().caller_ura,
+            "subject_ura": _call().subject_ura,
+        }
+    ]
     assert draft.subject_ura != _call().subject_ura
     assert draft.metadata == {"request_id": "call-1"}
 
@@ -70,8 +95,29 @@ def test_runtime_ability_invokes_object_result() -> None:
         "answer_kind": "positive"
     }
     assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/hub.namespace.resolve@1.0.0"
+        "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
     )
+
+
+def test_runtime_ability_stream_resolves_stream_descriptor() -> None:
+    client, transport = _client()
+    draft = client._build(_call(), "namespace.resolve", {}, call_mode="stream")
+    assert draft.descriptor_ref.endswith("!stream")
+    assert transport.descriptor_requests[-1]["call_mode"] == "stream"
+
+
+def test_runtime_ability_requires_runtime_descriptor_resolver() -> None:
+    class InvocationOnlyTransport:
+        def invoke(self, draft_json: bytes) -> bytes:
+            raise AssertionError(f"unexpected invocation: {draft_json!r}")
+
+    client = RuntimeAbilityClient(
+        RuntimeClient(InvocationOnlyTransport()),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+    with pytest.raises(SDKError, match="descriptor resolution"):
+        client.build(_call(), "namespace.resolve", {})
 
 
 def test_runtime_ability_rejects_incomplete_context() -> None:

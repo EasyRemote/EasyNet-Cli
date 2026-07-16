@@ -21,6 +21,17 @@ class RuntimeTransportFake:
         self.seen: dict[str, object] = {}
         self.output_json: dict[str, object] = {"abilities": []}
 
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json)
+        return json.dumps(
+            {
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/hub."
+                    f"{request['ability']}@1.0.0"
+                )
+            }
+        ).encode()
+
     def invoke(self, draft_json: bytes) -> bytes:
         self.seen = json.loads(draft_json)
         return json.dumps(

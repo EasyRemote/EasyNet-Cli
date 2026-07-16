@@ -43,11 +43,24 @@ class RuntimeAbilityClient:
     def build(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> InvocationDraft:
+        return self._build(call, ability_name, arguments, call_mode="rpc")
+
+    def _build(
+        self,
+        call: RuntimeCallContext,
+        ability_name: str,
+        arguments: object,
+        *,
+        call_mode: str,
+    ) -> InvocationDraft:
         _validate_call(call)
         ability_name = _required_text(ability_name, "ability name")
-        version = call.descriptor_version.strip() or "1.0.0"
-        descriptor_ref = self._addressing.owner_ability_descriptor_ref(
-            call.callee_ura.strip(), ability_name, version
+        descriptor_ref = self._runtime.resolve_descriptor_ref(
+            callee_ura=call.callee_ura.strip(),
+            ability=ability_name,
+            call_mode=call_mode,
+            caller_ura=call.caller_ura.strip(),
+            subject_ura=call.subject_ura.strip(),
         )
         subject = self._addressing.parse_ura(call.subject_ura.strip())
         if subject.kind in {"user", "hub"}:
@@ -85,7 +98,9 @@ class RuntimeAbilityClient:
     def open_stream(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> StreamHandle:
-        return self._runtime.invoke_stream(self.build(call, ability_name, arguments))
+        return self._runtime.invoke_stream(
+            self._build(call, ability_name, arguments, call_mode="stream")
+        )
 
 
 def _validate_call(call: RuntimeCallContext) -> None:
