@@ -3688,6 +3688,19 @@ expect_fail \
   "R55_TEACH_REGISTRY_PROJECTION_OWNER_FORK"
 
 make_good_fixture
+mkdir -p "$CLI/src/daemon/boot/kernel"
+cat >"$CLI/src/daemon/boot/kernel/mod.rs" <<'EOF'
+fn dispatch(handle: Handle) -> TerminalState {
+    let state = handle.wait().await;
+    let terminal = events.iter().rev().find(|e| e.state.is_terminal());
+    KernelDispatchTerminal::Failed(format!("{state:?}"))
+}
+EOF
+expect_fail \
+  "kernel canonical terminal projection fork" \
+  "R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK"
+
+make_good_fixture
 expect_pass "fixture restored after all negative cases"
 
 printf 'test_check_architecture_convergence.sh: all cases passed\n'

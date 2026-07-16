@@ -72,52 +72,71 @@ pub struct Kernel {
 }
 
 #[derive(Debug, Clone)]
-enum KernelDispatchTerminal {
-    Succeeded(serde_json::Value),
-    Failed(String),
-}
-
-#[derive(Debug, Clone)]
 struct KernelDispatchOutcome {
-    terminal: KernelDispatchTerminal,
+    terminal: TerminalState,
+    response: Option<serde_json::Value>,
     events: Vec<ReceiptEvent>,
+    terminal_receipt_hash: Option<String>,
+    callee_signature: Option<Vec<u8>>,
 }
 
 impl KernelDispatchOutcome {
-    fn succeeded(value: serde_json::Value, events: Vec<ReceiptEvent>) -> Self {
-        Self {
-            terminal: KernelDispatchTerminal::Succeeded(value),
-            events,
-        }
-    }
-
     fn failed(reason: impl Into<String>, events: Vec<ReceiptEvent>) -> Self {
         Self {
-            terminal: KernelDispatchTerminal::Failed(reason.into()),
+            terminal: TerminalState::Failed {
+                reason: reason.into(),
+            },
+            response: None,
             events,
+            terminal_receipt_hash: None,
+            callee_signature: None,
         }
     }
 
-    fn terminal_state(&self) -> TerminalState {
-        match &self.terminal {
-            KernelDispatchTerminal::Succeeded(_) => TerminalState::from_axon_terminal(
-                easynet_axon::invocation::InvocationState::Completed,
-                None,
-            )
-            .expect("Completed is an Axon terminal state"),
-            KernelDispatchTerminal::Failed(reason) => TerminalState::from_axon_terminal(
-                easynet_axon::invocation::InvocationState::Failed,
-                Some(reason.clone()),
-            )
-            .expect("Failed is an Axon terminal state"),
-        }
+    fn finalized(
+        finalized: easynet_axon::invocation::FinalizedInvocation,
+        events: Vec<ReceiptEvent>,
+    ) -> anyhow::Result<Self> {
+        let reason = finalized
+            .failure
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| {
+                (!finalized.terminal_receipt.reason().is_empty())
+                    .then(|| finalized.terminal_receipt.reason().to_string())
+            });
+        let terminal = TerminalState::from_axon_terminal(finalized.terminal_state, reason)?;
+        let response = if matches!(terminal, TerminalState::Succeeded) {
+            Some(if finalized.output().is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_slice(finalized.output()).unwrap_or_else(|_| {
+                    use base64::Engine as _;
+                    json!({
+                        "payload_content_type": finalized.terminal_receipt.payload_content_type(),
+                        "payload_base64": base64::engine::general_purpose::STANDARD.encode(finalized.output()),
+                    })
+                })
+            })
+        } else {
+            None
+        };
+        Ok(Self {
+            terminal,
+            response,
+            events,
+            terminal_receipt_hash: Some(hex::encode(finalized.terminal_receipt.self_hash())),
+            callee_signature: finalized
+                .terminal_receipt
+                .axiom_binding()
+                .callee_signature
+                .as_ref()
+                .map(|signature| signature.signature.clone()),
+        })
     }
 
     fn terminal_event_value(&self) -> serde_json::Value {
-        match &self.terminal {
-            KernelDispatchTerminal::Succeeded(value) => json!({"ok": value}),
-            KernelDispatchTerminal::Failed(reason) => json!({"err": reason}),
-        }
+        json!({ "terminal": self.terminal })
     }
 }
 
@@ -333,7 +352,6 @@ impl Kernel {
                 Vec::new(),
             );
         }
-        let ability_name = invocation.ability.to_string();
         let trace_id = session_id.as_ref().to_string();
         let runtime = Arc::clone(runtime);
         // The descriptor-bound envelope must carry the version the runtime
@@ -380,39 +398,13 @@ impl Kernel {
                 .await
                 .map(|(handle, _signed)| handle)
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
-            let state = handle.wait().await;
+            let finalized = handle
+                .finalized()
+                .await
+                .map_err(|err| anyhow::anyhow!("Axon finalization: {err}"))?;
             let events = handle.events_snapshot().await;
-            let terminal = events.iter().rev().find(|e| e.state.is_terminal()).cloned();
             let receipt_events = receipt_events_from_axon(&events)?;
-            match (state, terminal) {
-                (easynet_axon::invocation::InvocationState::Completed, Some(ev)) => {
-                    let value = if ev.payload.is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        match serde_json::from_slice(&ev.payload) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                return Ok(KernelDispatchOutcome::failed(
-                                    format!("decode {ability_name} result: {err}"),
-                                    receipt_events,
-                                ));
-                            }
-                        }
-                    };
-                    Ok(KernelDispatchOutcome::succeeded(value, receipt_events))
-                }
-                (_, Some(ev)) => Ok(KernelDispatchOutcome::failed(
-                    terminal_reason(&ev, state),
-                    receipt_events,
-                )),
-                (other, None) => Ok(KernelDispatchOutcome::failed(
-                    format!(
-                        "Axon invocation ended in {} without a terminal event",
-                        other.as_str()
-                    ),
-                    receipt_events,
-                )),
-            }
+            KernelDispatchOutcome::finalized(finalized, receipt_events)
         });
 
         let outcome = match result {
@@ -420,8 +412,8 @@ impl Kernel {
             Err(error) => KernelDispatchOutcome::failed(format!("{error}"), Vec::new()),
         };
 
-        match &outcome.terminal {
-            KernelDispatchTerminal::Succeeded(value) => {
+        match (&outcome.terminal, &outcome.response) {
+            (TerminalState::Succeeded, Some(value)) => {
                 let _ = self.session.emit_event(
                     session_id,
                     json!({
@@ -431,13 +423,13 @@ impl Kernel {
                     }),
                 );
             }
-            KernelDispatchTerminal::Failed(reason) => {
+            (terminal, _) => {
                 let _ = self.session.emit_event(
                     session_id,
                     json!({
                         "kind": "ability_error",
                         "ability": invocation.ability,
-                        "error": reason,
+                        "error": terminal,
                     }),
                 );
             }
@@ -455,17 +447,6 @@ where
         f(),
         crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
     )
-}
-
-fn terminal_reason(
-    event: &easynet_axon::invocation::InvocationEvent,
-    state: easynet_axon::invocation::InvocationState,
-) -> String {
-    if event.reason.is_empty() {
-        format!("Axon invocation ended as {}", state.as_str())
-    } else {
-        event.reason.clone()
-    }
 }
 
 fn receipt_events_from_axon(
@@ -660,7 +641,7 @@ impl KernelApi for Kernel {
         };
 
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let terminal = outcome.terminal_state();
+        let terminal = outcome.terminal.clone();
         let _ = self.session.emit_event(
             &session_id,
             json!({
@@ -675,7 +656,8 @@ impl KernelApi for Kernel {
             terminal,
             events: outcome.events,
             prior: PriorChain::None,
-            callee_signature: None,
+            terminal_receipt_hash: outcome.terminal_receipt_hash,
+            callee_signature: outcome.callee_signature,
         })
     }
 

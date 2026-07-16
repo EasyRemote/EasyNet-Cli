@@ -59,6 +59,11 @@ def canonical_quarantine_reason(item: str) -> str | None:
     }:
         return "Device revoke is EasyNet provider administration over federation.revoke, not product-neutral runtime administration."
     if root in {
+        "ErrRuntimeIdentityNotFound",
+        "ErrRuntimeIdentityUnavailable",
+    }:
+        return "Runtime identity error aliases are source-compatible names for daemon key-service errors, not independent canonical capability evidence."
+    if root in {
         "DirectRuntimeConnector",
         "DirectRuntimeConnectorOptions",
         "DirectRuntimeOptions",

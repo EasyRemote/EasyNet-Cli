@@ -4161,6 +4161,28 @@ if governance_teach.exists():
                     f"{label} must not bypass the Agent registry projection owner",
                 )
 
+# Rule 56: KernelApi is a daemon entry boundary, not a second invocation
+# lifecycle owner. Runtime-admitted calls must consume Axon's finalized proof
+# projection instead of deriving terminal state from an event snapshot.
+kernel_module = cli_root / "src/daemon/boot/kernel/mod.rs"
+if kernel_module.exists():
+    text = source(kernel_module)
+    production_text = text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (".finalized()", "kernel runtime dispatch must consume Axon finalized invocation proof"),
+        ("terminal_receipt_hash: Some", "kernel receipt projection must cite the canonical terminal receipt hash"),
+        ("callee_signature: finalized", "kernel receipt projection must carry the canonical callee signature"),
+    ):
+        if token not in production_text:
+            add("R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK", kernel_module, 1, detail)
+    for token, detail in (
+        ("KernelDispatchTerminal", "kernel must not maintain a parallel terminal state enum"),
+        ("handle.wait().await", "kernel must not infer terminal state by waiting outside Axon finalization"),
+        ("events.iter().rev().find(|e| e.state.is_terminal())", "kernel must not derive terminality from an event snapshot"),
+    ):
+        if token in production_text:
+            add("R56_KERNEL_CANONICAL_TERMINAL_PROJECTION_FORK", kernel_module, 1, detail)
+
 # Rule 23: MCP stdio frame ownership must enforce declared bounds before
 # retaining arbitrarily long lines or allocating Content-Length bodies. The
 # daemon MCP stdio owner may drain oversized input, but it must not revive the

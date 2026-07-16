@@ -466,16 +466,19 @@ pub struct ReceiptEvent {
     pub payload: Option<Value>,
 }
 
-/// AXIOM §6.1 I3 Receipt — the durable record that a runtime invocation
-/// terminated. In v1 the callee_signature field is always `None`
-/// (I3 integrity holds via the in-process events hash; non-
-/// repudiation C2 lands with v2 signed invocation).
+/// Daemon presentation projection of a terminal invocation outcome.
+///
+/// This is not a second signed receipt. When Axon admitted the invocation,
+/// `terminal_receipt_hash` and `callee_signature` identify the already-verified
+/// canonical terminal receipt. Pre-admission rejections have neither proof.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
     pub invocation_id: String,
     pub terminal: TerminalState,
     pub events: Vec<ReceiptEvent>,
     pub prior: PriorChain,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_receipt_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callee_signature: Option<Vec<u8>>,
 }

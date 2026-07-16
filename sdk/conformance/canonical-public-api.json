@@ -600,8 +600,6 @@
       "ErrProtocol",
       "ErrProtocolMismatch",
       "ErrRouteUnavailable",
-      "ErrRuntimeIdentityNotFound",
-      "ErrRuntimeIdentityUnavailable",
       "ErrSignatureDenied",
       "ErrTimeout",
       "ErrTransport",
@@ -6117,6 +6115,8 @@
         "ErrDaemonKeyServiceNotFound",
         "ErrDaemonKeyServiceUnavailable",
         "ErrDaemonOffline",
+        "ErrRuntimeIdentityNotFound",
+        "ErrRuntimeIdentityUnavailable",
         "FederationRevokePayload",
         "FileControlDiscoveryReader",
         "ModeDevice",
@@ -7273,6 +7273,22 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Daemon-bound provider or lifecycle surface; canonical SDK runtime concepts must not encode product daemon ownership."
+        },
+        "ErrRuntimeIdentityNotFound": {
+          "canonical_replacement": [
+            "capability_inventory.runtime_identity"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Runtime identity error aliases are source-compatible names for daemon key-service errors, not independent canonical capability evidence."
+        },
+        "ErrRuntimeIdentityUnavailable": {
+          "canonical_replacement": [
+            "capability_inventory.runtime_identity"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Runtime identity error aliases are source-compatible names for daemon key-service errors, not independent canonical capability evidence."
         },
         "FederationRevokePayload": {
           "canonical_replacement": [
@@ -14573,8 +14589,6 @@
         "symbols": [
           "EnsureRuntimeSigningIdentity",
           "EnsureRuntimeSigningIdentityRequest",
-          "ErrRuntimeIdentityNotFound",
-          "ErrRuntimeIdentityUnavailable",
           "LoadRuntimeSigningIdentity",
           "NewRuntimeIdentityProjectionFromJSON",
           "ReadRuntimeIdentityProjection",
