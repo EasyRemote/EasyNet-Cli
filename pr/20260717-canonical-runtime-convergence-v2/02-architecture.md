@@ -307,3 +307,45 @@ The fixture now calls `InvocationTarget::local_daemon_system` when it dispatches
 ordinary agent command abilities. The special envelope-aware branch still uses
 its explicit `EnvelopeContext` helper because that path tests envelope handler
 behavior, not routing target construction.
+
+## Current Slice: Protobuf Transport Target Projection Boundary
+
+Owner: EasyNet-Cli daemon Invocation protobuf wire facade.
+
+Bidi `EnvelopeOpen.target` is a protobuf transport selector, not the canonical
+Invocation tuple owner. The signed envelope still owns caller, callee, subject,
+nonce, causal context, and descriptor-bound proof material. However, SDK bidi
+frame construction, `session.open`, the local daemon gRPC bidi adapter, and
+crate-internal service test helpers were each hand-building the same
+`InvocationTarget { ability_name, ..Default::default() }` projection. That
+kept transport frame assembly duplicated at the exact boundary where the daemon
+should have one wire-shape construction point.
+
+`invocation_wire::wire_invocation_target` now owns that protobuf selector
+projection and rejects empty selectors before frame construction. Production
+callers pass either the descriptor ref or route-local ability name required by
+their ingress contract, but they no longer construct the proto target literal
+themselves. External integration tests may still hand-build raw protobuf input
+when they intentionally model an outside client; that is fixture input, not an
+internal construction path.
+
+## Current Slice: RF-5 Public Surface Signer Fallback Quarantine
+
+Owner: EasyNet-Cli SDK conformance model and public-surface policy.
+
+The canonical SDK capability matrix must not count process-local signer
+fallback helpers as evidence for a generic runtime capability. The Rust Axon
+inventory still exposes `generate_subject_auth` through the imported public
+surface model, which previously let that host-generated auth path appear in the
+canonical capability graph beside explicit signer-handle and daemon KeyService
+flows.
+
+The public-surface policy now classifies default/generated subject auth,
+process-local signer, and private-key authenticator symbols as non-canonical
+RF-5 defects. The generated manifest moves `generate_subject_auth` and
+`runtime_admin.generate_subject_auth` from Rust canonical capability evidence
+to legacy quarantine with the explicit replacement direction: canonical SDK
+signing uses an explicit signer handle or daemon KeyService authority. This
+does not delete the upstream Axon implementation yet; it prevents the
+conformance model from treating that fallback as a valid canonical runtime
+capability while RF-5 implementation cutover remains open.

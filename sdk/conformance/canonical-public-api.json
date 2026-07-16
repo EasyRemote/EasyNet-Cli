@@ -345,7 +345,6 @@
       "federation_resolve_payload",
       "fresh_nonce",
       "generate_private_agent_auth",
-      "generate_subject_auth",
       "handle",
       "invocation",
       "invocation_tools",
@@ -1672,7 +1671,6 @@
       "runtime_admin.GeneratedSubjectAuth",
       "runtime_admin.MAX_BOOTSTRAP_KEYS_PER_NODE",
       "runtime_admin.generate_private_agent_auth",
-      "runtime_admin.generate_subject_auth",
       "runtime_admin.private_agent_subject_id",
       "server.ServerConfig",
       "server.ServerHandle",
@@ -5997,6 +5995,7 @@
         "canonical_invocation_bytes",
         "easynet_axon",
         "generate_private_hub_auth",
+        "generate_subject_auth",
         "private_hub_subject_id",
         "run_admission",
         "verify_signature"
@@ -6186,6 +6185,7 @@
         "easynet_axon.ura",
         "federation_directory.DeviceJoinCredentialEnvelope",
         "runtime_admin.generate_private_hub_auth",
+        "runtime_admin.generate_subject_auth",
         "runtime_admin.private_hub_subject_id"
       ],
       "c_abi": [],
@@ -6405,6 +6405,14 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
+        },
+        "generate_subject_auth": {
+          "canonical_replacement": [
+            "capability_inventory.authority_metadata"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
         },
         "private_hub_subject_id": {
           "canonical_replacement": [
@@ -7826,6 +7834,14 @@
           "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
           "removal_phase": "quarantined",
           "reason": "Non-URA device/hub naming exposes product lifecycle or directory semantics inside the canonical SDK model."
+        },
+        "runtime_admin.generate_subject_auth": {
+          "canonical_replacement": [
+            "capability_inventory.authority_metadata"
+          ],
+          "consumer_cutover_ref": "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces",
+          "removal_phase": "quarantined",
+          "reason": "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
         },
         "runtime_admin.private_hub_subject_id": {
           "canonical_replacement": [
@@ -10535,7 +10551,6 @@
           "canonical_authority_proof_bytes",
           "canonical_host_attestation_bytes",
           "generate_private_agent_auth",
-          "generate_subject_auth",
           "normalize_authority_proof_hash",
           "sign_host_attestation",
           "validate_hosted_attestation_authority",
@@ -10564,7 +10579,6 @@
           "federation_directory.SigningAuthority",
           "runtime_admin.GeneratedSubjectAuth",
           "runtime_admin.generate_private_agent_auth",
-          "runtime_admin.generate_subject_auth",
           "signing.InvocationSigningAuthority",
           "signing.InvocationSigningAuthorityProvider",
           "signing.ReceiptSigningAuthority",

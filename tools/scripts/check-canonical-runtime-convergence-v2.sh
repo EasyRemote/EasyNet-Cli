@@ -51,12 +51,25 @@ plain_helpers = {
     "admission.run_admission",
     "admission.verify_signature",
 }
+fallback_signer_helpers = {
+    "default_auth_for_subject",
+    "generate_subject_auth",
+    "DefaultAuthForSubject",
+    "GenerateSubjectAuth",
+    "ProcessLocalSigner",
+    "PrivateKeyAuthenticator",
+}
 for section in ("languages", "members"):
     graph = manifest.get(section, {})
     for language, values in graph.items():
         leaked = sorted(plain_helpers & set(values))
         if leaked:
             raise SystemExit(f"canonical_plain_helper_leak:{language}:{section}:{','.join(leaked)}")
+        fallback_leaked = sorted(fallback_signer_helpers & set(values))
+        if fallback_leaked:
+            raise SystemExit(
+                f"fallback_signer_helper_leak:{language}:{section}:{','.join(fallback_leaked)}"
+            )
 
 quarantine = manifest.get("non_canonical", {})
 metadata = manifest.get("legacy_quarantine", {})
@@ -67,12 +80,20 @@ for helper in plain_helpers:
     reason = metadata.get(section, {}).get("rust", {}).get(helper, {}).get("reason", "")
     if "descriptor-bound proof" not in reason:
         raise SystemExit(f"plain_helper_reason_not_bound:{section}:{helper}")
+for section in ("languages", "members"):
+    graph = quarantine.get(section, {})
+    for language, values in graph.items():
+        for helper in sorted(fallback_signer_helpers & set(values)):
+            reason = metadata.get(section, {}).get(language, {}).get(helper, {}).get("reason", "")
+            if "Process-local signer fallback" not in reason:
+                raise SystemExit(f"fallback_signer_reason_not_bound:{section}:{language}:{helper}")
 PY
 }
 
 check_active_source_contract() {
   if rg -n 'default_auth_for_subject' "$ROOT/src" "$ROOT/sdk" "$ROOT/include" \
     --glob '!sdk/node/node_modules/**' \
+    --glob '!sdk/conformance/**' \
     --glob '!target/**' \
     --glob '!sdk/go/internal/axonpb/**' \
     --glob '!sdk/python/easynet_sdk/_axon_pb/**'; then
@@ -415,6 +436,29 @@ if plain & set(manifest["languages"]["rust"]):
 PY
   then
     fail "self-test expected canonical helper leak to fail"
+  fi
+  cp "$MANIFEST" "$tmp/fallback-manifest.json"
+  "$PYTHON_BIN" - "$tmp/fallback-manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["languages"]["go"].append("GenerateSubjectAuth")
+data["languages"]["go"].sort()
+path.write_text(json.dumps(data))
+PY
+  if "$PYTHON_BIN" - "$tmp/fallback-manifest.json" "$tmp/matrix.json" <<'PY' >/dev/null 2>&1
+import json
+import sys
+from pathlib import Path
+manifest = json.loads(Path(sys.argv[1]).read_text())
+fallback = {"GenerateSubjectAuth"}
+if fallback & set(manifest["languages"]["go"]):
+    raise SystemExit("fallback_signer_helper_leak")
+PY
+  then
+    fail "self-test expected fallback signer leak to fail"
   fi
   mkdir -p "$tmp/axon/sdk/node/src/invocation"
   mkdir -p "$tmp/axon/sdk/java/src/main/java/run/easynet/axon/invocation"

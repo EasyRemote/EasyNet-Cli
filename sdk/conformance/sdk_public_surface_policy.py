@@ -6,6 +6,32 @@ DOWNSTREAM_ITEMS = {"FederationRevokePayload"}
 PRODUCT_NEUTRAL_CUTOVER_REF = "docs/spec/daemon-sdk-requirements-v1.md#product-provider-surfaces"
 
 
+def is_fallback_signer_item(item: str) -> bool:
+    lowered = item.lower()
+    tokens = semantic_tokens(item)
+    compact = re.sub(r"[^a-z0-9]", "", lowered)
+    explicit_names = {
+        "defaultauthforsubject",
+        "generatesubjectauth",
+        "generatedefaultauth",
+        "defaultauthenticator",
+        "processlocalsigner",
+        "localgeneratedsigner",
+        "generatedsigner",
+        "privatekeyauth",
+        "privatekeyauthenticator",
+    }
+    return (
+        compact in explicit_names
+        or lowered.endswith(".default_auth_for_subject")
+        or lowered.endswith(".generate_subject_auth")
+        or {"default", "auth", "subject"}.issubset(tokens)
+        or {"generate", "subject", "auth"}.issubset(tokens)
+        or {"process", "local", "signer"}.issubset(tokens)
+        or {"private", "key", "auth"}.issubset(tokens)
+    )
+
+
 def public_root(item: str) -> str:
     return item.split("#", 1)[0].split(".", 1)[0]
 
@@ -39,6 +65,8 @@ def canonical_quarantine_reason(item: str) -> str | None:
     root = public_root(item)
     tokens = semantic_tokens(item)
     lowered = item.lower()
+    if is_fallback_signer_item(item):
+        return "Process-local signer fallback is prohibited; canonical SDK signing uses an explicit signer handle or daemon KeyService authority."
     if root in {
         "canonical_invocation_bytes",
         "verify_signature",

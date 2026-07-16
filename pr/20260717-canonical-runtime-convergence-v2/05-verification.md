@@ -336,3 +336,71 @@ Commands run on 2026-07-17:
 
 This evidence verifies only the CLI agent command target-fixture slice. It
 does not prove RF-8/RF-7 or SPEC completion.
+
+## Protobuf Transport Target Projection Boundary Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "target: Some\\(InvocationTarget \\{" src/daemon/invocation src/support/platform`:
+  no matches.
+- `rg -n "InvocationTarget" src/daemon/invocation/dispatch/request.rs src/daemon/invocation/bidi/session_initiator/envelope.rs src/support/platform/local_daemon_grpc.rs src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs src/daemon/invocation/dispatch/invocation_wire.rs`:
+  only reported the new `wire_invocation_target` helper and the unrelated
+  `LocalDaemonCanonicalInvocationTarget` domain struct.
+- `cargo fmt --all -- --check`: initially reported one rustfmt line-wrap diff
+  in `request.rs`; the line wrap was manually updated and the check then
+  passed.
+- `cargo test -q daemon::invocation::dispatch::invocation_wire::tests::wire_invocation_target_trims_and_rejects_empty_selector --lib --features axon-pb`:
+  passed, 1 test.
+- `cargo test -q extract_envelope_open_returns_inner_for_envelope_open_frame --lib --features axon-pb`:
+  passed, 1 test.
+- `cargo test -q remote_bidi_open_frame_is_canonical_and_fail_closed --lib --features axon-pb`:
+  passed, 1 test.
+- `cargo test -q daemon::invocation::dispatch::daemon_invocation_service_tests::bidi_open_forwards_to_local_dispatcher --lib --features axon-pb`:
+  completed with 0 matched tests; this command is not counted as coverage.
+- `cargo check --lib --features axon-pb`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on 15
+  remaining pre-existing errors. No migrated transport target file finding was
+  reported.
+
+This evidence verifies only the protobuf transport target projection slice. It
+does not prove RF-8/RF-7, receipt cutover, SDK convergence, or SPEC completion.
+
+## RF-5 Public Surface Signer Fallback Quarantine Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n 'generate_subject_auth|GenerateSubjectAuth|default_auth_for_subject' sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`:
+  initially showed `generate_subject_auth` and
+  `runtime_admin.generate_subject_auth` in Rust canonical public API and SDK
+  parity evidence.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  regenerated public API artifacts using the baseline Python AST parser.
+- Manifest inspection after regeneration:
+  `generate_subject_auth` and `runtime_admin.generate_subject_auth` are absent
+  from Rust canonical symbols/members and present in Rust `non_canonical` with
+  reason `Process-local signer fallback is prohibited; canonical SDK signing
+  uses an explicit signer handle or daemon KeyService authority.`
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 python3 sdk/conformance/sdk_concepts.py --self-test --tmp target/sdk-concepts-rf5-self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-sdk-canonical-public-api.sh --self-test`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-sdk-canonical-public-api.sh`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`:
+  passed.
+- `cargo test -q --test script_checks canonical_runtime_convergence_v2_script_contract_holds`:
+  passed, 1 test.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `cargo clippy --lib --features axon-pb -- -D warnings`: failed on the same
+  15 pre-existing lint errors; no migrated conformance/policy file finding was
+  reported.
+
+This evidence verifies only the RF-5 public-surface conformance quarantine. It
+does not delete the upstream signer fallback implementation or prove full RF-5
+completion.

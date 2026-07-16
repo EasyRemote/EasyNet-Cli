@@ -30,7 +30,9 @@ use crate::daemon::ability::{
     HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 #[cfg(feature = "axon-pb")]
-use crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation;
+use crate::daemon::invocation::dispatch::invocation_wire::{
+    wire_invocation_target, LocalDaemonLoopbackInvocation,
+};
 #[cfg(feature = "axon-pb")]
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, HostedAgentNameLookupError,
@@ -591,8 +593,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use easynet_axon::pb::axon::v1::{
         invoke_bidi_down::Payload as DownPayload, invoke_bidi_up::Payload as UpPayload,
-        BinaryChunk, ContentEnvelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
-        StreamDescriptor,
+        BinaryChunk, ContentEnvelope, EnvelopeOpen, InvokeBidiUp, StreamDescriptor,
     };
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
@@ -618,10 +619,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
     let function_name = invocation.function_name().to_string();
     let envelope_open = EnvelopeOpen {
         envelope: Some(invocation.envelope()?),
-        target: Some(InvocationTarget {
-            ability_name: function_name.clone(),
-            ..InvocationTarget::default()
-        }),
+        target: Some(wire_invocation_target(function_name.clone())?),
         initial_args: invocation.arguments().to_vec(),
         args_content_type: "application/json".to_string(),
         streams: vec![StreamDescriptor {

@@ -38,7 +38,9 @@ use crate::daemon::invocation::bidi::bidi_dispatcher::{
 use crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN;
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::dispatch::federation_wrappers;
-use crate::daemon::invocation::dispatch::invocation_wire::FEDERATION_RESULT_CONTENT_TYPE;
+use crate::daemon::invocation::dispatch::invocation_wire::{
+    wire_invocation_target, FEDERATION_RESULT_CONTENT_TYPE,
+};
 use crate::daemon::invocation::ProtoEnvelope;
 use crate::daemon::persistence::access_control::AccessControlStore;
 use easynet_axon::invocation::{AbilityFrame, BidiInputFrame, CallMode};
@@ -917,7 +919,7 @@ fn parse_response_body<T: serde::de::DeserializeOwned>(resp: Response<InvokeResp
 // Canonical session dispatch helpers.
 
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
-use easynet_axon::pb::axon::v1::{BidiControl, EnvelopeOpen, InvocationTarget, InvokeBidiUp};
+use easynet_axon::pb::axon::v1::{BidiControl, EnvelopeOpen, InvokeBidiUp};
 fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
     let signing_key = test_device_signing_key();
     EnvelopeOpen {
@@ -929,10 +931,7 @@ fn make_envelope_open(ability: &str, initial_args: Vec<u8>) -> EnvelopeOpen {
             &initial_args,
             &signing_key,
         )),
-        target: Some(InvocationTarget {
-            ability_name: ability.to_string(),
-            ..InvocationTarget::default()
-        }),
+        target: Some(wire_invocation_target(ability).expect("test wire target")),
         streams: vec![StreamDescriptor {
             stream_id: 1,
             content_type: "application/json".to_string(),
@@ -956,10 +955,7 @@ fn make_descriptor_ref_envelope_open(descriptor_ref: &str, initial_args: Vec<u8>
             &initial_args,
             &signing_key,
         )),
-        target: Some(InvocationTarget {
-            ability_name: descriptor_ref.to_string(),
-            ..InvocationTarget::default()
-        }),
+        target: Some(wire_invocation_target(descriptor_ref).expect("test descriptor target")),
         initial_args,
         args_content_type: "application/json".to_string(),
         ..EnvelopeOpen::default()
@@ -978,10 +974,7 @@ fn make_envelope_open_with_callee(callee_ura: &str) -> EnvelopeOpen {
             &[],
             &signing_key,
         )),
-        target: Some(InvocationTarget {
-            ability_name: ability.to_string(),
-            ..InvocationTarget::default()
-        }),
+        target: Some(wire_invocation_target(ability).expect("test wire target")),
         ..EnvelopeOpen::default()
     }
 }

@@ -72,3 +72,20 @@
   also use routing target constructors. Envelope-aware handler tests may keep
   explicit `EnvelopeContext` fixtures because they validate handler context,
   not target construction.
+- Protobuf `EnvelopeOpen.target` construction belongs in the invocation wire
+  facade. It is a transport selector projection, not the canonical invocation
+  tuple, so concentrating it in `wire_invocation_target` removes duplicated
+  proto assembly without changing the signed envelope's ownership of caller,
+  callee, subject, nonce, causal context, and descriptor-bound proof material.
+- External integration tests may still build raw protobuf fixtures when they
+  model an outside client. That does not justify keeping internal daemon or SDK
+  transport adapters hand-building the same target selector literal.
+- The SDK capability matrix must not count process-local generated subject auth
+  as canonical runtime evidence. Such helpers are RF-5 defects until migrated
+  to explicit signer-handle or daemon KeyService authority, so the conformance
+  model must quarantine them instead of classifying them under normal
+  capability ownership.
+- Public-surface quarantine is not implementation cutover. It prevents false
+  readiness claims and new canonical capability evidence for fallback signers;
+  the upstream fallback implementation still needs removal in the RF-5 root
+  fork.

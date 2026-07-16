@@ -47,7 +47,8 @@ use tonic::{Response, Status};
 use easynet_axon::invocation::DescriptorBoundEnvelope;
 use easynet_axon::pb::axon::v1::{
     causal_context, AgentIdentity, CallerSignature, CausalContext, Empty, EntityRef, EntityRefKind,
-    Envelope, InvokeRequest, InvokeResponse, InvokeServerStreamRequest, SubjectIdentity,
+    Envelope, InvocationTarget, InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
+    SubjectIdentity,
 };
 
 use crate::daemon::axon_bridge::wire_descriptor::{
@@ -428,6 +429,27 @@ fn checked_function_name(function_name: &str) -> anyhow::Result<String> {
         anyhow::bail!("function_name must not be empty");
     }
     Ok(function_name.to_string())
+}
+
+/// Build the protobuf target selector used by bidi `EnvelopeOpen`.
+///
+/// This is transport projection only. It preserves the wire field name
+/// (`ability_name`) because generated proto structs own that ABI, while callers
+/// may pass either a route-local ability name or a descriptor ref depending on
+/// the ingress contract. Canonical caller/callee/subject ownership remains in
+/// the signed envelope, not in this selector.
+pub(crate) fn wire_invocation_target(
+    target_ref: impl Into<String>,
+) -> anyhow::Result<InvocationTarget> {
+    let target_ref = target_ref.into();
+    let target_ref = target_ref.trim();
+    if target_ref.is_empty() {
+        anyhow::bail!("invocation target must not be empty");
+    }
+    Ok(InvocationTarget {
+        ability_name: target_ref.to_string(),
+        ..InvocationTarget::default()
+    })
 }
 
 fn checked_ura(ura: String, field: &str) -> anyhow::Result<String> {
@@ -839,6 +861,15 @@ mod tests {
     fn invalid_ura_is_rejected_before_wire_send() {
         let err = ProtoEnvelope::loopback("agent://self").unwrap_err();
         assert!(format!("{err}").contains("valid URA"));
+    }
+
+    #[test]
+    fn wire_invocation_target_trims_and_rejects_empty_selector() {
+        let target = wire_invocation_target(" demo.echo ").unwrap();
+        assert_eq!(target.ability_name, "demo.echo");
+
+        let err = wire_invocation_target("  ").unwrap_err();
+        assert!(format!("{err}").contains("invocation target must not be empty"));
     }
 
     #[test]

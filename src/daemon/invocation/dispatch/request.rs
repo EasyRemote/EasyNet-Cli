@@ -182,16 +182,17 @@ impl DaemonInvocation {
         self,
         streams: Vec<easynet_axon::pb::axon::v1::StreamDescriptor>,
     ) -> Result<easynet_axon::pb::axon::v1::InvokeBidiUp> {
-        use easynet_axon::pb::axon::v1::{
-            invoke_bidi_up, EnvelopeOpen, InvocationTarget, InvokeBidiUp,
-        };
+        use easynet_axon::pb::axon::v1::{invoke_bidi_up, EnvelopeOpen, InvokeBidiUp};
         if streams.is_empty() {
             return Err(DaemonError::InvalidInvocation(
                 "bidi streams must not be empty".to_string(),
             ));
         }
         validate_bidi_streams(&streams)?;
-        let ability_name = self.descriptor_ref.clone();
+        let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+            self.descriptor_ref.clone(),
+        )
+        .map_err(|err| DaemonError::InvalidInvocation(err.to_string()))?;
         let envelope = self.envelope();
         let content_envelope = self.content_envelope();
         let metadata = self.wire_metadata()?;
@@ -205,10 +206,7 @@ impl DaemonInvocation {
             mac,
             payload: Some(invoke_bidi_up::Payload::EnvelopeOpen(EnvelopeOpen {
                 envelope: Some(envelope),
-                target: Some(InvocationTarget {
-                    ability_name,
-                    ..InvocationTarget::default()
-                }),
+                target: Some(target),
                 initial_args: self.args,
                 args_content_type: self.content_type.clone(),
                 streams,

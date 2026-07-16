@@ -200,6 +200,40 @@
 - [x] Verify focused CLI agent command tests, lib build, architecture
       convergence gate, and absence of target literal remnants in the file.
 
+## Protobuf Transport Target Projection Boundary Slice
+
+- [x] Identify remaining crate-internal `EnvelopeOpen.target` protobuf target
+      literals in SDK bidi frame construction, `session.open`, local daemon
+      gRPC bidi invocation, and service test helpers.
+- [x] Add `invocation_wire::wire_invocation_target` as the single daemon-owned
+      protobuf target selector projector.
+- [x] Reject empty target selectors before constructing bidi frame-0 wire
+      messages.
+- [x] Migrate production and crate-internal test helpers to the named wire
+      projector.
+- [x] Leave external integration raw protobuf fixtures as external-client
+      input, not as internal construction paths.
+- [x] Verify focused target projector and bidi helper tests, lib build,
+      architecture convergence gate, and absence of crate-internal
+      `target: Some(InvocationTarget { ... })` literals.
+
+## RF-5 Public Surface Signer Fallback Quarantine Slice
+
+- [x] Identify `generate_subject_auth` and
+      `runtime_admin.generate_subject_auth` as Rust public-surface evidence
+      still counted in the canonical SDK capability graph.
+- [x] Extend public-surface policy to classify generated/default subject auth,
+      process-local signer, and private-key authenticator symbols as RF-5
+      non-canonical signer fallback defects.
+- [x] Extend the V2 manifest gate to reject fallback signer helpers in
+      canonical language/member graphs.
+- [x] Regenerate the canonical public API manifest and SDK parity matrix with
+      `generate_subject_auth` moved to legacy quarantine.
+- [x] Verify the V2 convergence script, canonical public API script, focused
+      Cargo script-check wrapper, formatting, and lib build.
+- [x] Record that upstream implementation removal remains open; this slice
+      fixes conformance ownership, not the full RF-5 cutover.
+
 ## Still Required Before Completion
 
 - [ ] RF-5/RF-3 signer custody and descriptor-bound proof cutover.

@@ -20540,10 +20540,6 @@
           "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
         },
         {
-          "item": "generate_subject_auth",
-          "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-        },
-        {
           "item": "normalize_authority_proof_hash",
           "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
         },
@@ -20646,10 +20642,6 @@
         {
           "item": "runtime_admin.generate_private_agent_auth",
           "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-        },
-        {
-          "item": "runtime_admin.generate_subject_auth",
-          "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
         },
         {
           "item": "signing.InvocationSigningAuthority",
@@ -20763,10 +20755,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -20869,10 +20857,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -20986,10 +20970,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -21092,10 +21072,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21209,10 +21185,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -21315,10 +21287,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21432,10 +21400,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -21538,10 +21502,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21655,10 +21615,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -21761,10 +21717,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -21878,10 +21830,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -21984,10 +21932,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -22101,10 +22045,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -22207,10 +22147,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -22324,10 +22260,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -22430,10 +22362,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",
@@ -22547,10 +22475,6 @@
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
             },
             {
-              "item": "generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
-            },
-            {
               "item": "normalize_authority_proof_hash",
               "sha256": "445733108ef46c89f1b984b93b5d60885ebe4b2230a4c5305df0965d801e9939"
             },
@@ -22653,10 +22577,6 @@
             {
               "item": "runtime_admin.generate_private_agent_auth",
               "sha256": "ca3d7fc38cc41654d99af8af22565a0a87d76e2dc48ed28b2f8f51c0b2646261"
-            },
-            {
-              "item": "runtime_admin.generate_subject_auth",
-              "sha256": "872813d39277fb4875b1476ee86ba2679cc6d4d90d5d07a11a2c6be76bcd46f8"
             },
             {
               "item": "signing.InvocationSigningAuthority",

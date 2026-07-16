@@ -1,7 +1,6 @@
 use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
 use easynet_axon::pb::axon::v1::{
-    AgentIdentity, Envelope, EnvelopeOpen, InvocationTarget, InvokeBidiUp, StreamDescriptor,
-    SubjectIdentity,
+    AgentIdentity, Envelope, EnvelopeOpen, InvokeBidiUp, StreamDescriptor, SubjectIdentity,
 };
 use rand::RngCore as _;
 
@@ -85,15 +84,16 @@ pub async fn build_session_envelope_open(
             .to_string(),
         descriptor_ref,
     );
+    let target = crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+        ABILITY_SESSION_OPEN,
+    )
+    .map_err(|err| SelfIdentityError::Unexpected(format!("session.open target: {err}")))?;
     Ok(InvokeBidiUp {
         sequence: 0,
         mac,
         payload: Some(UpPayload::EnvelopeOpen(EnvelopeOpen {
             envelope: Some(envelope),
-            target: Some(InvocationTarget {
-                ability_name: ABILITY_SESSION_OPEN.to_string(),
-                ..InvocationTarget::default()
-            }),
+            target: Some(target),
             initial_args,
             streams: vec![StreamDescriptor {
                 stream_id: SESSION_STREAM_ID,
