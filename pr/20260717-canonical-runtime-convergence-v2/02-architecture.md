@@ -1071,3 +1071,58 @@ receipt authority fallback patterns across Swift invocation source, examples,
 and tests. This closes the Swift empty receipt proof helper path. RF-6 remains
 open for final cross-language constructor hardening and any remaining
 language/package surfaces not yet proven by the shared capability matrix.
+
+## Current Slice: RF-6 Node Empty Receipt Proof Helper Removal
+
+Owner: EasyNet-Axon Node SDK invocation model, Node receipt/verifier fixtures,
+and EasyNet-Cli V2 convergence gate.
+
+After Node LocalRuntime moved to explicit descriptor-bound and system-local
+receipt proof facts, the Node SDK still exported
+`EMPTY_RECEIPT_PROOF_FACTS` from the invocation package and root package. That
+kept a public no-proof receipt construction value available to downstream
+callers and preserved the obsolete RF-6 model in generated declaration/build
+artifacts. A tracked but excluded TypeScript authority-anchor test also kept
+the old empty-proof receipt pins beside the newer shared
+`axon-receipt-anchor-v2` anchor suite.
+
+The Node public empty helper is removed from source exports. The cross-language
+verifier fixture now constructs a normalized authority proof explicitly and
+projects scalar/list causal parents into receipt proof facts. The excluded
+legacy TypeScript authority-anchor test is deleted because
+`tests/receipt-authority-anchor.test.mjs` is the active shared anchor suite and
+already uses complete receipt proof facts.
+
+The V2 RF-6 gate now rejects `EMPTY_RECEIPT_PROOF_FACTS` anywhere under Node
+SDK source or tests, not only in LocalRuntime. This closes the Node empty
+receipt proof helper path. RF-6 remains open for final cross-language
+constructor hardening, remaining package/example audit, and descriptor
+proof-binding parity closure.
+
+## Current Slice: RF-6 Python Receipt Proof Constructor Hardening
+
+Owner: EasyNet-Axon Python SDK invocation model, Python receipt
+tests/examples, and EasyNet-Cli V2 convergence gate.
+
+Python LocalRuntime had already moved receipt emission to explicit
+descriptor-bound and system-local proof facts, but the `ReceiptProofFacts`
+dataclass itself still carried defaults for every field. That meant
+`ReceiptProofFacts()` remained a valid construction path in Python tests and
+callers, preserving the same omitted-proof model RF-6 is removing from the
+other SDK languages.
+
+The Python invocation model now requires every receipt proof-fact field at
+construction time: subject ref, descriptor version, schema hash,
+implementation hash, runtime environment, authority proof, input hash, output
+hash, and parent receipts. Python audit, fluent, projection, cross-language,
+and example fixtures were migrated to pass explicit facts. The shared
+authority-anchor suite keeps the existing cross-language
+`axon-receipt-anchor-v2` fixture values as explicit fields rather than
+silently constructing them through dataclass defaults.
+
+The V2 RF-6 gate now runs an AST scan over Python SDK source, tests, and
+examples to reject empty `ReceiptProofFacts()` calls, including multiline
+forms that a grep-only gate could miss. This closes the Python omitted
+constructor path. RF-6 remains open for final cross-language constructor
+hardening, remaining package/example audit, and descriptor proof-binding
+parity closure.

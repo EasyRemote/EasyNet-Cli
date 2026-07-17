@@ -657,12 +657,19 @@ check_receipt_proof_fact_contract() {
   local java_local_runtime="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
   local python_axiom="$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
   local python_local_runtime="$AXON_ROOT/sdk/python/easynet_axon/invocation/local_runtime.py"
+  local python_receipt_paths=()
   local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
   local node_local_runtime="$AXON_ROOT/sdk/node/src/invocation/local-runtime.ts"
+  local node_receipt_paths=()
   local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
   local swift_receipt_paths=()
   local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
   local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
+  [[ -d "$AXON_ROOT/sdk/python/easynet_axon" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/easynet_axon")
+  [[ -d "$AXON_ROOT/sdk/python/tests" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/tests")
+  [[ -d "$AXON_ROOT/sdk/python/examples" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/examples")
+  [[ -d "$AXON_ROOT/sdk/node/src" ]] && node_receipt_paths+=("$AXON_ROOT/sdk/node/src")
+  [[ -d "$AXON_ROOT/sdk/node/tests" ]] && node_receipt_paths+=("$AXON_ROOT/sdk/node/tests")
   [[ -d "$swift_invocation" ]] && swift_receipt_paths+=("$swift_invocation")
   [[ -d "$AXON_ROOT/sdk/swift/Examples" ]] && swift_receipt_paths+=("$AXON_ROOT/sdk/swift/Examples")
   [[ -d "$AXON_ROOT/sdk/swift/Tests" ]] && swift_receipt_paths+=("$AXON_ROOT/sdk/swift/Tests")
@@ -679,8 +686,41 @@ check_receipt_proof_fact_contract() {
     fail "Python receipt construction still defaults authority or proof facts"
   fi
 
-  if rg -n 'proof_facts\s*=\s*ReceiptProofFacts\(\)' "$python_local_runtime"; then
-    fail "Python LocalRuntime still emits receipts with empty proof facts"
+  if ((${#python_receipt_paths[@]} > 0)) \
+    && ! "$PYTHON_BIN" - "${python_receipt_paths[@]}" <<'PY'
+import ast
+import sys
+from pathlib import Path
+
+violations = []
+for root in map(Path, sys.argv[1:]):
+    paths = [root] if root.is_file() else sorted(root.rglob("*.py"))
+    for path in paths:
+        if "__pycache__" in path.parts:
+            continue
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError as exc:
+            violations.append(f"{path}:{exc.lineno}:syntax_error:{exc.msg}")
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = None
+            if isinstance(func, ast.Name):
+                name = func.id
+            elif isinstance(func, ast.Attribute):
+                name = func.attr
+            if name == "ReceiptProofFacts" and not node.args and not node.keywords:
+                violations.append(f"{path}:{node.lineno}:empty ReceiptProofFacts()")
+
+if violations:
+    print("\n".join(violations))
+    raise SystemExit(1)
+PY
+  then
+    fail "Python SDK/tests/examples still construct empty receipt proof facts"
   fi
 
   if rg -n 'proofFacts \?\? EMPTY_RECEIPT_PROOF_FACTS|authorityBinding \?\? AuthorityBinding\.self_|readonly proofFacts\?:|proofFacts\?: ReceiptProofFacts|authorityBinding\?: AuthorityBinding' "$node_invocation" \
@@ -690,6 +730,12 @@ check_receipt_proof_fact_contract() {
 
   if rg -n 'EMPTY_RECEIPT_PROOF_FACTS' "$node_local_runtime"; then
     fail "Node LocalRuntime still emits receipts with empty proof facts"
+  fi
+
+  if ((${#node_receipt_paths[@]} > 0)) \
+    && rg -n 'EMPTY_RECEIPT_PROOF_FACTS' "${node_receipt_paths[@]}" \
+      --glob '!**/node_modules/**'; then
+    fail "Node invocation package still exposes or uses empty receipt proof facts"
   fi
 
   if ((${#swift_receipt_paths[@]} > 0)) \
@@ -837,11 +883,24 @@ PY
   if ( AXON_ROOT="$tmp/axon-python-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Python LocalRuntime empty proof facts gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-python-receipt-test-helper"
+  mkdir -p "$tmp/axon-python-receipt-test-helper/sdk/python/tests"
+  printf 'facts = ReceiptProofFacts()\n' \
+    > "$tmp/axon-python-receipt-test-helper/sdk/python/tests/test_empty_receipt_facts.py"
+  if ( AXON_ROOT="$tmp/axon-python-receipt-test-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Python SDK/test empty proof facts gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-node-receipt-runtime"
   printf 'const binding = { proofFacts: EMPTY_RECEIPT_PROOF_FACTS };\n' \
     > "$tmp/axon-node-receipt-runtime/sdk/node/src/invocation/local-runtime.ts"
   if ( AXON_ROOT="$tmp/axon-node-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Node LocalRuntime empty proof facts gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-node-receipt-helper"
+  printf 'export const EMPTY_RECEIPT_PROOF_FACTS = Object.freeze({});\n' \
+    > "$tmp/axon-node-receipt-helper/sdk/node/src/invocation/axiom.ts"
+  if ( AXON_ROOT="$tmp/axon-node-receipt-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Node empty proof facts helper gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-receipt-runtime"
   printf 'binding := AxiomBinding{ProofFacts: EmptyReceiptProofFacts()}\n' \

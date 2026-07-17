@@ -752,6 +752,46 @@
 - [x] Verify Swift focused tests and V2 gate/self-test before committing this
       slice.
 
+## RF-6 Node Empty Receipt Proof Helper Removal Slice
+
+- [x] Identify Node `EMPTY_RECEIPT_PROOF_FACTS` as an obsolete public SDK
+      helper after LocalRuntime receipt emission moved to explicit proof facts.
+- [x] Delete the Node empty receipt proof-facts helper from the invocation
+      source and root package exports.
+- [x] Migrate the Node cross-language verifier fixture to construct explicit
+      normalized authority proof and causal parent receipt facts.
+- [x] Delete the excluded TypeScript authority-anchor test that preserved old
+      empty-proof receipt anchors beside the active shared anchor suite.
+- [x] Rebuild/check the Node SDK so generated JS/declaration artifacts no
+      longer expose the empty helper.
+- [x] Extend the V2 gate and self-test to reject `EMPTY_RECEIPT_PROOF_FACTS`
+      anywhere under Node SDK source or tests.
+- [x] Regenerate the canonical public API manifest after the Node public API
+      hash changed.
+- [x] Verify Node receipt-anchor tests, cross-language verifier tests, full
+      Node SDK verification, and V2 gate/self-test before committing this
+      slice.
+
+## RF-6 Python Receipt Proof Constructor Hardening Slice
+
+- [x] Identify Python `ReceiptProofFacts` dataclass defaults as an omitted
+      proof-facts constructor path after LocalRuntime receipt emission moved
+      to explicit facts.
+- [x] Remove default values from Python `ReceiptProofFacts` fields so callers
+      must provide subject, descriptor, runtime, authority, input/output, and
+      causal parent facts explicitly.
+- [x] Migrate Python audit, fluent authority, cross-language verifier,
+      projection, authority-anchor, and example receipt fixtures away from
+      empty `ReceiptProofFacts()` construction.
+- [x] Preserve existing shared authority-anchor values as explicit fixture
+      facts rather than changing cross-language anchors in a Python-only
+      slice.
+- [x] Extend the V2 gate and self-test with a Python AST scan that rejects
+      empty `ReceiptProofFacts()` calls across SDK source, tests, and
+      examples.
+- [x] Verify focused Python receipt tests, V2 gate/self-test, and public API
+      manifest refresh before committing this slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
@@ -760,8 +800,8 @@
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
 - [ ] RF-4 shared lifecycle matrix, transition vectors, and cross-language
       provider status cutover.
-- [ ] RF-6 final cross-language constructor hardening, remaining language
-      package/example audit, and descriptor proof-binding parity closure.
+- [ ] RF-6 final cross-language constructor hardening, remaining package/example
+      audit, and descriptor proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.
 - [ ] RF-2 Mission/EAL extraction from Axon canonical runtime.
 - [ ] RF-9 URA terminology and generated-schema ownership closure.

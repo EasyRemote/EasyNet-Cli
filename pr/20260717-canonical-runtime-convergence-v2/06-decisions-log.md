@@ -427,3 +427,37 @@
   `ReceiptProofFacts.empty`, `proofFacts: .empty`, empty
   `try ReceiptProofFacts()` construction, and authority fallback shapes because
   public API inventory cannot detect these semantic receipt-model regressions.
+- Node `EMPTY_RECEIPT_PROOF_FACTS` is a public no-proof receipt construction
+  value, not a harmless fixture. Keeping it after Node LocalRuntime moved to
+  explicit proof facts would preserve RF-6 as an SDK integration pattern.
+- Node generated JS/declaration artifacts derive from source, so the source
+  export must be deleted and regenerated rather than hidden by editing build
+  output.
+- The Node cross-language verifier fixture must build normalized authority
+  proof facts directly. Borrowing `authorityProof` from an empty helper keeps
+  the old proof model alive even when the surrounding proof-fact fields are
+  non-empty.
+- The excluded Node TypeScript authority-anchor test is obsolete because the
+  active `tests/receipt-authority-anchor.test.mjs` suite already pins the
+  shared `axon-receipt-anchor-v2` anchors. Keeping the excluded test would
+  preserve contradictory receipt evidence.
+- The V2 RF-6 gate now rejects `EMPTY_RECEIPT_PROOF_FACTS` anywhere under Node
+  SDK source or tests because public API manifest checks cannot see generated
+  build artifacts or excluded fixture files reliably.
+- Python `ReceiptProofFacts` default field values are an omitted proof-facts
+  constructor path. Removing only runtime calls is insufficient while
+  `ReceiptProofFacts()` remains valid for tests, examples, or downstream
+  callers.
+- Python tests and examples must construct receipt proof facts at the receipt
+  signing boundary. Fixture helpers may centralize the construction, but they
+  must still pass explicit subject, descriptor, runtime, authority, hash, and
+  parent-receipt fields.
+- Existing cross-language authority anchors are shared fixture evidence, not a
+  Python-only decision point. The Python anchor test therefore keeps the
+  current `axon-receipt-anchor-v2` values as explicit proof facts instead of
+  changing anchor constants before the Rust/Go/Node/Java/Swift anchor model is
+  migrated together.
+- The V2 RF-6 gate now uses a Python AST scan for empty
+  `ReceiptProofFacts()` calls across Python SDK source, tests, and examples
+  because grep patterns can miss multiline empty calls or non-runtime fixture
+  regressions.
