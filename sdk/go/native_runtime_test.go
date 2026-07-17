@@ -101,6 +101,45 @@ func TestNativeRuntimeHandleAlwaysProvidesCanonicalAddressing(t *testing.T) {
 	}
 }
 
+func TestNativeRuntimeHandleProvidesRuntimeAbilityFacade(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		InvokeFunc:               func(context.Context, []byte) ([]byte, error) { return nil, nil },
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	handle, err := newNativeRuntimeHandle(runtime, nativeRuntimeTestHealth(t), nil)
+	if err != nil {
+		t.Fatalf("newNativeRuntimeHandle: %v", err)
+	}
+
+	ability, err := handle.AbilityClient()
+	if err != nil {
+		t.Fatalf("AbilityClient: %v", err)
+	}
+	draft, err := ability.Build(context.Background(), RuntimeCallContext{
+		CallerURA:     "easynet:///r/example/agent/alice.client",
+		CalleeURA:     "easynet:///r/example/device/dev-a",
+		SubjectURA:    "easynet:///r/example/device/dev-a",
+		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
+		CausalContext: map[string]any{"form": "none"},
+	}, "observe.health", map[string]any{"ready": true})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if draft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
+		t.Fatalf("descriptor_ref = %q", draft.DescriptorRef())
+	}
+
+	if err := handle.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := handle.AbilityClient(); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("AbilityClient after close error = %v, want %s", err, ErrInvalidArgument)
+	}
+}
+
 func TestNativeRuntimeHandleRequiresHealthFacade(t *testing.T) {
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
 		InvokeFunc: func(context.Context, []byte) ([]byte, error) {

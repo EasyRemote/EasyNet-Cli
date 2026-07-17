@@ -1,0 +1,18 @@
+id: runtime/ability_start_provider
+profile: runtime_core
+required_for:
+  - go
+  - python
+lifecycle_actions:
+  - start
+description: Native Runtime startup exposes a generic ability facade from the same provider-owned Runtime and Addressing graph without creating a product-specific ability lifecycle.
+steps:
+  - action: start_native_runtime_provider
+  - action: borrow_runtime_ability_facade
+  - action: lower_ability_call_after_start
+  - action: reject_ability_facade_after_provider_close
+expect:
+  result: ability_facade_started_from_native_runtime
+  provider_graph_shared: true
+  product_lifecycle_added: false
+  close_releases_borrowed_facade: true

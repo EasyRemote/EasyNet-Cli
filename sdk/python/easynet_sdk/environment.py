@@ -20,6 +20,7 @@ from .errors import ErrorCode, RetryHint, SDKError
 from .health import HealthClient
 from .axon_addressing import AddressingClient
 from .runtime import RuntimeClient
+from .runtime_ability import RuntimeAbilityClient
 from .runtime_environment import (
     RuntimeIdentityProjection,
     read_runtime_identity_projection,
@@ -89,6 +90,12 @@ class NativeRuntimeHandle:
 
         self._require_open()
         return self._addressing
+
+    def ability_client(self) -> RuntimeAbilityClient:
+        """Return a borrowed generic runtime ability facade."""
+
+        self._require_open()
+        return RuntimeAbilityClient(self._runtime, self._addressing)
 
     def close(self) -> None:
         """Close all provider-owned facades exactly once."""

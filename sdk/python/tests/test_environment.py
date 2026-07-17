@@ -9,14 +9,18 @@ from easynet_sdk import (
     HealthClient,
     NativeRuntimeHandle,
     RuntimeClient,
+    RuntimeAbilityClient,
     SDKError,
     SdkEnvironment,
     default_environment,
     is_code,
 )
 from easynet_sdk._cabi import CLILibrary
+from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
+from easynet_sdk.runtime_ability import RuntimeCallContext
 
 from test_cabi import FakeRawCABI
+from test_runtime_ability import RuntimeTransportFake
 
 
 def _load_patch(raw: FakeRawCABI):
@@ -64,6 +68,42 @@ class SdkEnvironmentTests(unittest.TestCase):
             env.close()
 
         self.assertEqual(raw.shutdown_handles, [42])
+
+    def test_native_runtime_handle_provides_runtime_ability_facade(self) -> None:
+        transport = RuntimeTransportFake()
+        runtime = RuntimeClient(transport)  # type: ignore[arg-type]
+        health = HealthClient(lambda: b'{"runtime_ready":true,"diagnostics":[]}')
+        addressing = AddressingClient(AxonAddressingTransport())
+        provider = NativeRuntimeHandle(runtime, health, addressing)
+
+        ability = provider.ability_client()
+        self.assertIsInstance(ability, RuntimeAbilityClient)
+        draft = ability.build(
+            RuntimeCallContext(
+                caller_ura="easynet:///r/example/agent/alice.client",
+                callee_ura="easynet:///r/example/hub",
+                subject_ura="easynet:///r/example/user/alice",
+                nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+                causal_context={"form": "none"},
+            ),
+            "namespace.resolve",
+            {"name": "alice"},
+        )
+        self.assertEqual(
+            draft.descriptor_ref,
+            "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+        )
+        self.assertEqual(
+            transport.descriptor_requests[-1]["call_mode"],
+            "rpc",
+        )
+
+        provider.close()
+        self.assertTrue(transport.closed)
+        with self.assertRaises(SDKError) as raised:
+            provider.ability_client()
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_connect_local_returns_generic_runtime_client(self) -> None:
         raw = FakeRawCABI()

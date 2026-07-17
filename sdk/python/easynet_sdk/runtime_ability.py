@@ -8,9 +8,16 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 from .axon_addressing import AddressingClient
+from .bidi import BidiSession, BidiStreamDescriptor
 from .errors import ErrorCode, RetryHint, SDKError
 from .invocation import InvocationBuilder, InvocationDraft
-from .runtime import InvocationResult, RuntimeClient
+from .runtime import (
+    InvocationCancel,
+    InvocationHandle,
+    InvocationResult,
+    RuntimeClient,
+)
+from .signing import SignedInvocation
 from .stream import StreamHandle
 
 __all__ = ["RuntimeAbilityClient", "RuntimeCallContext"]
@@ -101,6 +108,35 @@ class RuntimeAbilityClient:
         return self._runtime.invoke_stream(
             self._build(call, ability_name, arguments, call_mode="stream")
         )
+
+    def open_bidi(
+        self,
+        call: RuntimeCallContext,
+        ability_name: str,
+        arguments: object,
+        streams: tuple[BidiStreamDescriptor, ...],
+    ) -> BidiSession:
+        return self._runtime.open_bidi(
+            self._build(call, ability_name, arguments, call_mode="bidi"),
+            streams,
+        )
+
+    def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
+        return self._runtime.submit_signed(signed)
+
+    def await_result(self, handle: InvocationHandle) -> InvocationResult:
+        return self._runtime.await_result(handle)
+
+    def cancel(
+        self, handle: InvocationHandle, reason: str = ""
+    ) -> InvocationCancel:
+        return self._runtime.cancel(handle, reason)
+
+    def events(self, handle: InvocationHandle) -> InvocationHandle:
+        return self._runtime.events(handle)
+
+    def close_handle(self, handle: InvocationHandle) -> None:
+        self._runtime.close_handle(handle)
 
 
 def _validate_call(call: RuntimeCallContext) -> None:

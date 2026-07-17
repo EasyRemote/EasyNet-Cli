@@ -419,6 +419,14 @@
     },
     {
       "language": "go",
+      "case_id": "runtime/ability_start_provider",
+      "selector": "TestNativeRuntimeHandleProvidesRuntimeAbilityFacade",
+      "evidence": [
+        "sdk/go/native_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
       "case_id": "runtime/administration_seam",
       "selector": "TestRuntimeAdminReadinessComposesLifecycleAndHealth",
       "evidence": [
@@ -1055,6 +1063,14 @@
       "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts",
       "evidence": [
         "sdk/python/tests/test_ability_invocation.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_start_provider",
+      "selector": "test_native_runtime_handle_provides_runtime_ability_facade",
+      "evidence": [
+        "sdk/python/tests/test_environment.py"
       ]
     },
     {

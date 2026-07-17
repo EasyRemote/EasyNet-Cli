@@ -217,3 +217,27 @@ ability facade does not introduce a separate timeout field; it delegates to the
 provider deadline owner and proves retry after timeout cleanup. The cells
 remain `provider-backed`, not `cutover-ready`, because `restart_recover` and
 `start` remain open.
+
+## Ability Start Vector Iteration Evidence
+
+- `cd sdk/go && go test -run 'TestNativeRuntimeHandleProvidesRuntimeAbilityFacade' -count=1 .`
+- `env PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python/tests PYTHONDONTWRITEBYTECODE=1 /opt/anaconda3/bin/python -m pytest -q -p no:cacheprovider sdk/python/tests/test_environment.py::SdkEnvironmentTests::test_native_runtime_handle_provides_runtime_ability_facade`
+- `env PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python/tests PYTHONDONTWRITEBYTECODE=1 /opt/anaconda3/bin/python -m pytest -q -p no:cacheprovider sdk/python/tests/test_runtime_ability.py`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-ability-start-self-test`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_matrix.py --self-test --tmp /tmp/easynet-sdk-matrix-ability-start-self-test`
+- `bash tools/scripts/check-sdk-canonical-public-api.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo fmt --all -- --check`
+- `cargo check --lib --features axon-pb`
+- `bash tools/scripts/check-architecture-convergence.sh`
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+
+Result: focused tests, schema validation, matrix validation, canonical public
+API validation, V2 gates, Rust formatting/checking, and architecture gates
+passed. Go and Python `ability_invocation_facade` now carry `start` lifecycle
+evidence by borrowing the generic ability facade from the Native Runtime
+provider graph. The cells remain `provider-backed`, not `cutover-ready`,
+because `restart_recover` remains open.

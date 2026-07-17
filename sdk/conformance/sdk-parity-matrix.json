@@ -5348,6 +5348,258 @@
               "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
             }
           ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "start_native_runtime_provider",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityFn",
+              "sha256": "75e8eb0d8fef576f0e4f6ea131f6d987618a8ce696bc1b2032ac4c444a37f2ba"
+            },
+            {
+              "item": "AbilityFrame",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityOptions",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityRawCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "AbilityRegistration",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilitySignedCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "ChildInvocationRequest",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
+              "item": "PublishCapabilityRequest",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            },
+            {
+              "item": "axiom.AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "call_mode.AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "local_runtime.make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "borrow_runtime_ability_facade",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityFn",
+              "sha256": "75e8eb0d8fef576f0e4f6ea131f6d987618a8ce696bc1b2032ac4c444a37f2ba"
+            },
+            {
+              "item": "AbilityFrame",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityOptions",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityRawCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "AbilityRegistration",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilitySignedCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "ChildInvocationRequest",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
+              "item": "PublishCapabilityRequest",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            },
+            {
+              "item": "axiom.AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "call_mode.AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "local_runtime.make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "lower_ability_call_after_start",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityFn",
+              "sha256": "75e8eb0d8fef576f0e4f6ea131f6d987618a8ce696bc1b2032ac4c444a37f2ba"
+            },
+            {
+              "item": "AbilityFrame",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityOptions",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityRawCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "AbilityRegistration",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilitySignedCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "ChildInvocationRequest",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
+              "item": "PublishCapabilityRequest",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            },
+            {
+              "item": "axiom.AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "call_mode.AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "local_runtime.make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "reject_ability_facade_after_provider_close",
+          "execution_case_bound": false,
+          "items": [
+            {
+              "item": "AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityFn",
+              "sha256": "75e8eb0d8fef576f0e4f6ea131f6d987618a8ce696bc1b2032ac4c444a37f2ba"
+            },
+            {
+              "item": "AbilityFrame",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityOptions",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilityRawCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "AbilityRegistration",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AbilitySignedCallOptions",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "ChildInvocationRequest",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
+              "item": "PublishCapabilityRequest",
+              "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
+            },
+            {
+              "item": "make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            },
+            {
+              "item": "axiom.AbilityCallMode",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "call_mode.AbilityCallModes",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "local_runtime.make_ability",
+              "sha256": "8540d9fdb2ea8660b49d1a8d1dbda14699d214d292556399895fe84902bb8117"
+            }
+          ]
         }
       ],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/ability_invocation_facade",
@@ -5387,7 +5639,8 @@
         "runtime/ability_child_dispatch",
         "runtime/ability_deadline_owner",
         "runtime/ability_lowering",
-        "runtime/ability_provider_lifecycle"
+        "runtime/ability_provider_lifecycle",
+        "runtime/ability_start_provider"
       ],
       "lifecycle_vector_actions": [
         "bidi_open",
@@ -5395,12 +5648,12 @@
         "child_dispatch",
         "deadline",
         "dispatch",
+        "start",
         "stream_open",
         "terminal_receipt"
       ],
       "missing_lifecycle_vector_actions": [
-        "restart_recover",
-        "start"
+        "restart_recover"
       ],
       "lifecycle_vector_evidence": [
         {
@@ -5430,6 +5683,10 @@
         {
           "case_id": "runtime/ability_provider_lifecycle",
           "action": "terminal_receipt"
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "start"
         }
       ],
       "unproven_requirement_ids": [],
@@ -6363,6 +6620,226 @@
               "sha256": "f16ebae1e07677af1ee8aa447a17c213c47ad62d0dec12ec067411f213985f0b"
             }
           ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "start_native_runtime_provider",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityChildContext",
+              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
+            },
+            {
+              "item": "AbilityChildContext.Build",
+              "sha256": "bf7a86d3460ece5b504beac68cc2ae0f4ed5d3ade3b5264e8c1ab5c543a7adf9"
+            },
+            {
+              "item": "AbilityChildContext.Invoke",
+              "sha256": "51c229a4198cfae5e7544dc2cc00e720c621351f40527cb05b1fb8f4be31d865"
+            },
+            {
+              "item": "AbilityChildContext.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "AbilityChildContext.OpenStream",
+              "sha256": "d91466201d8f7c127eb4a9cb3d050a80d9f1956fb7560d65e9d07c0bf231826a"
+            },
+            {
+              "item": "RuntimeAbilityClient.Await",
+              "sha256": "15a54ffd27e72dee4a23ad170090317836ea8172f099734b5910a1bb39008bfc"
+            },
+            {
+              "item": "RuntimeAbilityClient.Cancel",
+              "sha256": "8732a70ab4a5bde7459e9f24e2a7e63a0a58be0493367336a63ebbc10d525fea"
+            },
+            {
+              "item": "RuntimeAbilityClient.ChildContext",
+              "sha256": "694c607e30f3716d21bb95210beacc0a71dec1773ce622e0a09977d9cba6ba82"
+            },
+            {
+              "item": "RuntimeAbilityClient.CloseHandle",
+              "sha256": "bfa1be280f50ccf0c4a13a11643eee13d22728f7bf174686c7744aada4cde0b7"
+            },
+            {
+              "item": "RuntimeAbilityClient.Events",
+              "sha256": "f26dc3987adf9b0f5ac6a0965a38524544e7c4cd958ea748ab96d6aa6e3e92d8"
+            },
+            {
+              "item": "RuntimeAbilityClient.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "RuntimeAbilityClient.SubmitSigned",
+              "sha256": "f16ebae1e07677af1ee8aa447a17c213c47ad62d0dec12ec067411f213985f0b"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "borrow_runtime_ability_facade",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityChildContext",
+              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
+            },
+            {
+              "item": "AbilityChildContext.Build",
+              "sha256": "bf7a86d3460ece5b504beac68cc2ae0f4ed5d3ade3b5264e8c1ab5c543a7adf9"
+            },
+            {
+              "item": "AbilityChildContext.Invoke",
+              "sha256": "51c229a4198cfae5e7544dc2cc00e720c621351f40527cb05b1fb8f4be31d865"
+            },
+            {
+              "item": "AbilityChildContext.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "AbilityChildContext.OpenStream",
+              "sha256": "d91466201d8f7c127eb4a9cb3d050a80d9f1956fb7560d65e9d07c0bf231826a"
+            },
+            {
+              "item": "RuntimeAbilityClient.Await",
+              "sha256": "15a54ffd27e72dee4a23ad170090317836ea8172f099734b5910a1bb39008bfc"
+            },
+            {
+              "item": "RuntimeAbilityClient.Cancel",
+              "sha256": "8732a70ab4a5bde7459e9f24e2a7e63a0a58be0493367336a63ebbc10d525fea"
+            },
+            {
+              "item": "RuntimeAbilityClient.ChildContext",
+              "sha256": "694c607e30f3716d21bb95210beacc0a71dec1773ce622e0a09977d9cba6ba82"
+            },
+            {
+              "item": "RuntimeAbilityClient.CloseHandle",
+              "sha256": "bfa1be280f50ccf0c4a13a11643eee13d22728f7bf174686c7744aada4cde0b7"
+            },
+            {
+              "item": "RuntimeAbilityClient.Events",
+              "sha256": "f26dc3987adf9b0f5ac6a0965a38524544e7c4cd958ea748ab96d6aa6e3e92d8"
+            },
+            {
+              "item": "RuntimeAbilityClient.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "RuntimeAbilityClient.SubmitSigned",
+              "sha256": "f16ebae1e07677af1ee8aa447a17c213c47ad62d0dec12ec067411f213985f0b"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "lower_ability_call_after_start",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityChildContext",
+              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
+            },
+            {
+              "item": "AbilityChildContext.Build",
+              "sha256": "bf7a86d3460ece5b504beac68cc2ae0f4ed5d3ade3b5264e8c1ab5c543a7adf9"
+            },
+            {
+              "item": "AbilityChildContext.Invoke",
+              "sha256": "51c229a4198cfae5e7544dc2cc00e720c621351f40527cb05b1fb8f4be31d865"
+            },
+            {
+              "item": "AbilityChildContext.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "AbilityChildContext.OpenStream",
+              "sha256": "d91466201d8f7c127eb4a9cb3d050a80d9f1956fb7560d65e9d07c0bf231826a"
+            },
+            {
+              "item": "RuntimeAbilityClient.Await",
+              "sha256": "15a54ffd27e72dee4a23ad170090317836ea8172f099734b5910a1bb39008bfc"
+            },
+            {
+              "item": "RuntimeAbilityClient.Cancel",
+              "sha256": "8732a70ab4a5bde7459e9f24e2a7e63a0a58be0493367336a63ebbc10d525fea"
+            },
+            {
+              "item": "RuntimeAbilityClient.ChildContext",
+              "sha256": "694c607e30f3716d21bb95210beacc0a71dec1773ce622e0a09977d9cba6ba82"
+            },
+            {
+              "item": "RuntimeAbilityClient.CloseHandle",
+              "sha256": "bfa1be280f50ccf0c4a13a11643eee13d22728f7bf174686c7744aada4cde0b7"
+            },
+            {
+              "item": "RuntimeAbilityClient.Events",
+              "sha256": "f26dc3987adf9b0f5ac6a0965a38524544e7c4cd958ea748ab96d6aa6e3e92d8"
+            },
+            {
+              "item": "RuntimeAbilityClient.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "RuntimeAbilityClient.SubmitSigned",
+              "sha256": "f16ebae1e07677af1ee8aa447a17c213c47ad62d0dec12ec067411f213985f0b"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "reject_ability_facade_after_provider_close",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityChildContext",
+              "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
+            },
+            {
+              "item": "AbilityChildContext.Build",
+              "sha256": "bf7a86d3460ece5b504beac68cc2ae0f4ed5d3ade3b5264e8c1ab5c543a7adf9"
+            },
+            {
+              "item": "AbilityChildContext.Invoke",
+              "sha256": "51c229a4198cfae5e7544dc2cc00e720c621351f40527cb05b1fb8f4be31d865"
+            },
+            {
+              "item": "AbilityChildContext.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "AbilityChildContext.OpenStream",
+              "sha256": "d91466201d8f7c127eb4a9cb3d050a80d9f1956fb7560d65e9d07c0bf231826a"
+            },
+            {
+              "item": "RuntimeAbilityClient.Await",
+              "sha256": "15a54ffd27e72dee4a23ad170090317836ea8172f099734b5910a1bb39008bfc"
+            },
+            {
+              "item": "RuntimeAbilityClient.Cancel",
+              "sha256": "8732a70ab4a5bde7459e9f24e2a7e63a0a58be0493367336a63ebbc10d525fea"
+            },
+            {
+              "item": "RuntimeAbilityClient.ChildContext",
+              "sha256": "694c607e30f3716d21bb95210beacc0a71dec1773ce622e0a09977d9cba6ba82"
+            },
+            {
+              "item": "RuntimeAbilityClient.CloseHandle",
+              "sha256": "bfa1be280f50ccf0c4a13a11643eee13d22728f7bf174686c7744aada4cde0b7"
+            },
+            {
+              "item": "RuntimeAbilityClient.Events",
+              "sha256": "f26dc3987adf9b0f5ac6a0965a38524544e7c4cd958ea748ab96d6aa6e3e92d8"
+            },
+            {
+              "item": "RuntimeAbilityClient.OpenBidi",
+              "sha256": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a"
+            },
+            {
+              "item": "RuntimeAbilityClient.SubmitSigned",
+              "sha256": "f16ebae1e07677af1ee8aa447a17c213c47ad62d0dec12ec067411f213985f0b"
+            }
+          ]
         }
       ],
       "public_api_ref": "sdk/conformance/canonical-public-api.json#capability_inventory/ability_invocation_facade",
@@ -6377,7 +6854,8 @@
         "runtime/ability_child_dispatch",
         "runtime/ability_deadline_owner",
         "runtime/ability_lowering",
-        "runtime/ability_provider_lifecycle"
+        "runtime/ability_provider_lifecycle",
+        "runtime/ability_start_provider"
       ],
       "lifecycle_vector_actions": [
         "bidi_open",
@@ -6385,12 +6863,12 @@
         "child_dispatch",
         "deadline",
         "dispatch",
+        "start",
         "stream_open",
         "terminal_receipt"
       ],
       "missing_lifecycle_vector_actions": [
-        "restart_recover",
-        "start"
+        "restart_recover"
       ],
       "lifecycle_vector_evidence": [
         {
@@ -6420,6 +6898,10 @@
         {
           "case_id": "runtime/ability_provider_lifecycle",
           "action": "terminal_receipt"
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "start"
         }
       ],
       "unproven_requirement_ids": [],
@@ -6755,6 +7237,30 @@
         {
           "item": "ResolvedAbilityTarget.subject_ura",
           "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+        },
+        {
+          "item": "RuntimeAbilityClient.await_result",
+          "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+        },
+        {
+          "item": "RuntimeAbilityClient.cancel",
+          "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+        },
+        {
+          "item": "RuntimeAbilityClient.close_handle",
+          "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+        },
+        {
+          "item": "RuntimeAbilityClient.events",
+          "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+        },
+        {
+          "item": "RuntimeAbilityClient.open_bidi",
+          "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+        },
+        {
+          "item": "RuntimeAbilityClient.submit_signed",
+          "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
         }
       ],
       "step_shape_evidence": [
@@ -7094,6 +7600,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -7433,6 +7963,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -7772,6 +8326,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -8111,6 +8689,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -8450,6 +9052,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -8789,6 +9415,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -9128,6 +9778,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -9467,6 +10141,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -9806,6 +10504,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -10145,6 +10867,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -10484,6 +11230,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -10823,6 +11593,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -11162,6 +11956,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -11501,6 +12319,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -11840,6 +12682,30 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         },
@@ -12179,6 +13045,1482 @@
             {
               "item": "ResolvedAbilityTarget.subject_ura",
               "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "start_native_runtime_provider",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityCallRequest",
+              "sha256": "efb13db11adaf74e8388744a7973ed20a5fb1ab9faae2f7c67bc592096ac2d36"
+            },
+            {
+              "item": "AbilityChildContext",
+              "sha256": "6ba80816bb95dcc4d11704278d15ffa9ea58ed0d3b69b633221a9b14f7f4a78f"
+            },
+            {
+              "item": "AbilityInvocationClient",
+              "sha256": "07c8a11d74581c93fb69594f88737df11e1a884fe9680d7a73b628461d71c0c4"
+            },
+            {
+              "item": "AbilityTargetRequest",
+              "sha256": "a2b76327ccfcbf16d3c3d543cbb286d3c5a76f48c62c1724129e8d8009efbd3b"
+            },
+            {
+              "item": "InvocationObjectAdapter",
+              "sha256": "09a276d46029cd2616e42ac7d09357dacc79e3b2722357d6052fd1fa8648b8f7"
+            },
+            {
+              "item": "InvocationWireProjector",
+              "sha256": "99d69f5cd6b8259217faeb115d98b0db6aecc8d4a0b2e52869e9aa442abeed0e"
+            },
+            {
+              "item": "ResolvedAbilityTarget",
+              "sha256": "4328c9bed2ad41cd2db8781bbeb37703524f4266aee2b67b87d0af661809a0de"
+            },
+            {
+              "item": "AbilityCallRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityCallRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityCallRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityCallRequest.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "AbilityCallRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityCallRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityCallRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityCallRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityCallRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityCallRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityCallRequest.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "AbilityChildContext.build_invocation",
+              "sha256": "c78685c7170d7cdbc95481136e4eb8dac6756f174b77c1f043f93a40a9c9bdac"
+            },
+            {
+              "item": "AbilityChildContext.build_target_invocation",
+              "sha256": "41f02d613ba2d382c6708c09d9444c12463ad1360359d6b54f6a96961158046d"
+            },
+            {
+              "item": "AbilityChildContext.call_request",
+              "sha256": "6ca0933b3345ce697e339da7dc47681ac95269a154ffbee54669d258adb33f71"
+            },
+            {
+              "item": "AbilityChildContext.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityChildContext.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityChildContext.invoke",
+              "sha256": "74e92578f3f5b3f9a14c9238436c49f70c3e66bd88f5fd0ff8866e6b641075b1"
+            },
+            {
+              "item": "AbilityChildContext.invoke_target",
+              "sha256": "394e23695875f3682bb8d9a85e03deea2e5bff56196f01985e60ea019b4ba2ae"
+            },
+            {
+              "item": "AbilityChildContext.invoker",
+              "sha256": "beb9c4a4a9dd2456b4fdfda7a14c1d86f2d0a29460a1c60d02d732f939b2b14d"
+            },
+            {
+              "item": "AbilityChildContext.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityChildContext.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityChildContext.stream",
+              "sha256": "f7e8bc12a6dcb22f9f1150f73cb4c03bcc31c36074a1ada9f859f5dfb39c4eb6"
+            },
+            {
+              "item": "AbilityChildContext.stream_target",
+              "sha256": "604c7e6e5edd10745ce0b91daee954c0847e768d15c83aa0b060adb5adb6d063"
+            },
+            {
+              "item": "AbilityChildContext.target_request",
+              "sha256": "a988bcdc30f13de949d0cc61b5c4a3a9c295bcd5c216304af7ab8abaed103807"
+            },
+            {
+              "item": "AbilityInvocationClient.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "AbilityInvocationClient.await_result",
+              "sha256": "27e9ec3199c3e2167c7c8f20c51b2e2bdcb53807edad89a9a64ba0c902dea270"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi",
+              "sha256": "eb74ad4be8f94e901d0c449c7a0622785f7d339605d9b3ff4fc6056c0d3b02f5"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi_target",
+              "sha256": "2511116c78f6e21a8f771425a29b4a1d9f2ddde302255a1be6f34bef5772587d"
+            },
+            {
+              "item": "AbilityInvocationClient.build_invocation",
+              "sha256": "6f7bb44cfbb4bff9d7eff459a8f6c012623ce4bce404767a285db2a3da79327a"
+            },
+            {
+              "item": "AbilityInvocationClient.build_target_invocation",
+              "sha256": "93d1a9d53e9393c6d4dc3e640c574d84164abb9d55a1988b0accb02365e01acb"
+            },
+            {
+              "item": "AbilityInvocationClient.cancel",
+              "sha256": "6b4b0d1b3966f14aed71cca740e21c1074b8c24831244d5efda2e6829af376c3"
+            },
+            {
+              "item": "AbilityInvocationClient.child_context",
+              "sha256": "19e78a2473c0d999f9c075a9adc567dcebb318d2d2c140bf9a70100e219ef742"
+            },
+            {
+              "item": "AbilityInvocationClient.close",
+              "sha256": "bc8e55f10615a44e60d337d354c0611b071eba880c61f269a942b4ebccb4d92c"
+            },
+            {
+              "item": "AbilityInvocationClient.close_handle",
+              "sha256": "a39f1d165e3e61b038aa2d0bbc4afd5dc0641f47a518308aa698bde7a2fde13e"
+            },
+            {
+              "item": "AbilityInvocationClient.events",
+              "sha256": "5b295529691d5850d823954e653cd66a13632386071c70b92a8d990be02f8734"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke",
+              "sha256": "cf721ccfa3b08e561242ae321a1d87dca85809c57388720ef36c8fcb3ecdcbf6"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke_target",
+              "sha256": "b04aa1b4fb80b801421478dab4ddb50ce10ae613586c8f861b63a3288253d5cf"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare",
+              "sha256": "3e46b9ac89066bf12893fcbc2eb175f8ad65b87c82ca05bb2861e6c1476817c6"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign",
+              "sha256": "b937b16eb9eb45b9ff8bc4a7d60deeff20e31c30a228e94d1d40c81adb0f39f1"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign_target",
+              "sha256": "f7ca288ef5d3041975fadc530558d486ec4585c383d1c97c5d95a8a054e8a6fc"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_target",
+              "sha256": "ff36cecf385914ea17d0650b7102aab97409958131f03b82f0c87b757ba80e27"
+            },
+            {
+              "item": "AbilityInvocationClient.resolve_target",
+              "sha256": "18c8652c569b04de111157533c7d877bb603a907960076819d8d04d511a16823"
+            },
+            {
+              "item": "AbilityInvocationClient.runtime",
+              "sha256": "5aea6d1e49f3fb7ca916590a65adf5bd2172ae212288d180c3d42a97e7dad34a"
+            },
+            {
+              "item": "AbilityInvocationClient.stream",
+              "sha256": "d938da5348784c2c806af497201409febfe643b0a58a9731bd48046f4c45d536"
+            },
+            {
+              "item": "AbilityInvocationClient.stream_target",
+              "sha256": "05f481fa280d8cc0a5d6d0725957b3df38e732fe6cea0f7ae9de38394e6f15cc"
+            },
+            {
+              "item": "AbilityInvocationClient.submit_signed",
+              "sha256": "60792265f177ffad31b725c1da539da7994abf77203f1a72ca2eaff40b9a8c06"
+            },
+            {
+              "item": "AbilityTargetRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityTargetRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityTargetRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityTargetRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityTargetRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityTargetRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityTargetRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityTargetRequest.subject_ura",
+              "sha256": "bcee53edef9c54e36d9e7ffbb7d4e37dc10edf6d3ac9ed07c84930ac8eb6efe3"
+            },
+            {
+              "item": "InvocationObjectAdapter.bidi",
+              "sha256": "15e23b7bea60620e065cfba25ee25a06cc7c74bfcd1a8a88a74bb4bf50f2d858"
+            },
+            {
+              "item": "InvocationObjectAdapter.build_invocation",
+              "sha256": "65bd1ad67e115a0b4190c601ccd07cc1f2bdfac4d1e5fbed049a110df04b10d3"
+            },
+            {
+              "item": "InvocationObjectAdapter.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoke",
+              "sha256": "1460be63f599d8befdb235e75d0969670816ae420e8208dec9af4e07aa2c03c0"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoker",
+              "sha256": "1831aff566b0f1949c5c2c6171bfd3905788b2b42167d68a78e923af002b41c7"
+            },
+            {
+              "item": "InvocationObjectAdapter.stream",
+              "sha256": "c263b1b1e2b5244b9863272f730d603c8403cf7be4365bdd4412b3a57b5750ee"
+            },
+            {
+              "item": "InvocationObjectAdapter.to_wire_dict",
+              "sha256": "015beee47d4efb5581bd73906ba9e9972c97716e52892f9e7ee6ed4cbd57e605"
+            },
+            {
+              "item": "InvocationWireProjector.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "InvocationWireProjector.build_invocation",
+              "sha256": "ec08a22df7896be8df91d50c18c694a9993928bd73ad3112c23ab700d89f581e"
+            },
+            {
+              "item": "InvocationWireProjector.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationWireProjector.to_wire_dict",
+              "sha256": "e18daee75d1d4065ec684b433c8722f73537a6edab01594dd7726759daa40d45"
+            },
+            {
+              "item": "ResolvedAbilityTarget.ability_ura",
+              "sha256": "6358ed03a84231a90141a84abb93e82a17f149460155c5119890682e31a49271"
+            },
+            {
+              "item": "ResolvedAbilityTarget.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_ref",
+              "sha256": "631915bdabe3eebf2a2e82cd2e74116fa41d98ba46b5d8faeaa1307a232ce9a0"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_version",
+              "sha256": "2e0d8f97dd311c04fb9586c03fff7ad87fae1e125dd6b91bece9d0e637e5644d"
+            },
+            {
+              "item": "ResolvedAbilityTarget.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "borrow_runtime_ability_facade",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityCallRequest",
+              "sha256": "efb13db11adaf74e8388744a7973ed20a5fb1ab9faae2f7c67bc592096ac2d36"
+            },
+            {
+              "item": "AbilityChildContext",
+              "sha256": "6ba80816bb95dcc4d11704278d15ffa9ea58ed0d3b69b633221a9b14f7f4a78f"
+            },
+            {
+              "item": "AbilityInvocationClient",
+              "sha256": "07c8a11d74581c93fb69594f88737df11e1a884fe9680d7a73b628461d71c0c4"
+            },
+            {
+              "item": "AbilityTargetRequest",
+              "sha256": "a2b76327ccfcbf16d3c3d543cbb286d3c5a76f48c62c1724129e8d8009efbd3b"
+            },
+            {
+              "item": "InvocationObjectAdapter",
+              "sha256": "09a276d46029cd2616e42ac7d09357dacc79e3b2722357d6052fd1fa8648b8f7"
+            },
+            {
+              "item": "InvocationWireProjector",
+              "sha256": "99d69f5cd6b8259217faeb115d98b0db6aecc8d4a0b2e52869e9aa442abeed0e"
+            },
+            {
+              "item": "ResolvedAbilityTarget",
+              "sha256": "4328c9bed2ad41cd2db8781bbeb37703524f4266aee2b67b87d0af661809a0de"
+            },
+            {
+              "item": "AbilityCallRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityCallRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityCallRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityCallRequest.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "AbilityCallRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityCallRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityCallRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityCallRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityCallRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityCallRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityCallRequest.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "AbilityChildContext.build_invocation",
+              "sha256": "c78685c7170d7cdbc95481136e4eb8dac6756f174b77c1f043f93a40a9c9bdac"
+            },
+            {
+              "item": "AbilityChildContext.build_target_invocation",
+              "sha256": "41f02d613ba2d382c6708c09d9444c12463ad1360359d6b54f6a96961158046d"
+            },
+            {
+              "item": "AbilityChildContext.call_request",
+              "sha256": "6ca0933b3345ce697e339da7dc47681ac95269a154ffbee54669d258adb33f71"
+            },
+            {
+              "item": "AbilityChildContext.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityChildContext.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityChildContext.invoke",
+              "sha256": "74e92578f3f5b3f9a14c9238436c49f70c3e66bd88f5fd0ff8866e6b641075b1"
+            },
+            {
+              "item": "AbilityChildContext.invoke_target",
+              "sha256": "394e23695875f3682bb8d9a85e03deea2e5bff56196f01985e60ea019b4ba2ae"
+            },
+            {
+              "item": "AbilityChildContext.invoker",
+              "sha256": "beb9c4a4a9dd2456b4fdfda7a14c1d86f2d0a29460a1c60d02d732f939b2b14d"
+            },
+            {
+              "item": "AbilityChildContext.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityChildContext.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityChildContext.stream",
+              "sha256": "f7e8bc12a6dcb22f9f1150f73cb4c03bcc31c36074a1ada9f859f5dfb39c4eb6"
+            },
+            {
+              "item": "AbilityChildContext.stream_target",
+              "sha256": "604c7e6e5edd10745ce0b91daee954c0847e768d15c83aa0b060adb5adb6d063"
+            },
+            {
+              "item": "AbilityChildContext.target_request",
+              "sha256": "a988bcdc30f13de949d0cc61b5c4a3a9c295bcd5c216304af7ab8abaed103807"
+            },
+            {
+              "item": "AbilityInvocationClient.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "AbilityInvocationClient.await_result",
+              "sha256": "27e9ec3199c3e2167c7c8f20c51b2e2bdcb53807edad89a9a64ba0c902dea270"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi",
+              "sha256": "eb74ad4be8f94e901d0c449c7a0622785f7d339605d9b3ff4fc6056c0d3b02f5"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi_target",
+              "sha256": "2511116c78f6e21a8f771425a29b4a1d9f2ddde302255a1be6f34bef5772587d"
+            },
+            {
+              "item": "AbilityInvocationClient.build_invocation",
+              "sha256": "6f7bb44cfbb4bff9d7eff459a8f6c012623ce4bce404767a285db2a3da79327a"
+            },
+            {
+              "item": "AbilityInvocationClient.build_target_invocation",
+              "sha256": "93d1a9d53e9393c6d4dc3e640c574d84164abb9d55a1988b0accb02365e01acb"
+            },
+            {
+              "item": "AbilityInvocationClient.cancel",
+              "sha256": "6b4b0d1b3966f14aed71cca740e21c1074b8c24831244d5efda2e6829af376c3"
+            },
+            {
+              "item": "AbilityInvocationClient.child_context",
+              "sha256": "19e78a2473c0d999f9c075a9adc567dcebb318d2d2c140bf9a70100e219ef742"
+            },
+            {
+              "item": "AbilityInvocationClient.close",
+              "sha256": "bc8e55f10615a44e60d337d354c0611b071eba880c61f269a942b4ebccb4d92c"
+            },
+            {
+              "item": "AbilityInvocationClient.close_handle",
+              "sha256": "a39f1d165e3e61b038aa2d0bbc4afd5dc0641f47a518308aa698bde7a2fde13e"
+            },
+            {
+              "item": "AbilityInvocationClient.events",
+              "sha256": "5b295529691d5850d823954e653cd66a13632386071c70b92a8d990be02f8734"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke",
+              "sha256": "cf721ccfa3b08e561242ae321a1d87dca85809c57388720ef36c8fcb3ecdcbf6"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke_target",
+              "sha256": "b04aa1b4fb80b801421478dab4ddb50ce10ae613586c8f861b63a3288253d5cf"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare",
+              "sha256": "3e46b9ac89066bf12893fcbc2eb175f8ad65b87c82ca05bb2861e6c1476817c6"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign",
+              "sha256": "b937b16eb9eb45b9ff8bc4a7d60deeff20e31c30a228e94d1d40c81adb0f39f1"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign_target",
+              "sha256": "f7ca288ef5d3041975fadc530558d486ec4585c383d1c97c5d95a8a054e8a6fc"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_target",
+              "sha256": "ff36cecf385914ea17d0650b7102aab97409958131f03b82f0c87b757ba80e27"
+            },
+            {
+              "item": "AbilityInvocationClient.resolve_target",
+              "sha256": "18c8652c569b04de111157533c7d877bb603a907960076819d8d04d511a16823"
+            },
+            {
+              "item": "AbilityInvocationClient.runtime",
+              "sha256": "5aea6d1e49f3fb7ca916590a65adf5bd2172ae212288d180c3d42a97e7dad34a"
+            },
+            {
+              "item": "AbilityInvocationClient.stream",
+              "sha256": "d938da5348784c2c806af497201409febfe643b0a58a9731bd48046f4c45d536"
+            },
+            {
+              "item": "AbilityInvocationClient.stream_target",
+              "sha256": "05f481fa280d8cc0a5d6d0725957b3df38e732fe6cea0f7ae9de38394e6f15cc"
+            },
+            {
+              "item": "AbilityInvocationClient.submit_signed",
+              "sha256": "60792265f177ffad31b725c1da539da7994abf77203f1a72ca2eaff40b9a8c06"
+            },
+            {
+              "item": "AbilityTargetRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityTargetRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityTargetRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityTargetRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityTargetRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityTargetRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityTargetRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityTargetRequest.subject_ura",
+              "sha256": "bcee53edef9c54e36d9e7ffbb7d4e37dc10edf6d3ac9ed07c84930ac8eb6efe3"
+            },
+            {
+              "item": "InvocationObjectAdapter.bidi",
+              "sha256": "15e23b7bea60620e065cfba25ee25a06cc7c74bfcd1a8a88a74bb4bf50f2d858"
+            },
+            {
+              "item": "InvocationObjectAdapter.build_invocation",
+              "sha256": "65bd1ad67e115a0b4190c601ccd07cc1f2bdfac4d1e5fbed049a110df04b10d3"
+            },
+            {
+              "item": "InvocationObjectAdapter.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoke",
+              "sha256": "1460be63f599d8befdb235e75d0969670816ae420e8208dec9af4e07aa2c03c0"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoker",
+              "sha256": "1831aff566b0f1949c5c2c6171bfd3905788b2b42167d68a78e923af002b41c7"
+            },
+            {
+              "item": "InvocationObjectAdapter.stream",
+              "sha256": "c263b1b1e2b5244b9863272f730d603c8403cf7be4365bdd4412b3a57b5750ee"
+            },
+            {
+              "item": "InvocationObjectAdapter.to_wire_dict",
+              "sha256": "015beee47d4efb5581bd73906ba9e9972c97716e52892f9e7ee6ed4cbd57e605"
+            },
+            {
+              "item": "InvocationWireProjector.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "InvocationWireProjector.build_invocation",
+              "sha256": "ec08a22df7896be8df91d50c18c694a9993928bd73ad3112c23ab700d89f581e"
+            },
+            {
+              "item": "InvocationWireProjector.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationWireProjector.to_wire_dict",
+              "sha256": "e18daee75d1d4065ec684b433c8722f73537a6edab01594dd7726759daa40d45"
+            },
+            {
+              "item": "ResolvedAbilityTarget.ability_ura",
+              "sha256": "6358ed03a84231a90141a84abb93e82a17f149460155c5119890682e31a49271"
+            },
+            {
+              "item": "ResolvedAbilityTarget.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_ref",
+              "sha256": "631915bdabe3eebf2a2e82cd2e74116fa41d98ba46b5d8faeaa1307a232ce9a0"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_version",
+              "sha256": "2e0d8f97dd311c04fb9586c03fff7ad87fae1e125dd6b91bece9d0e637e5644d"
+            },
+            {
+              "item": "ResolvedAbilityTarget.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "lower_ability_call_after_start",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityCallRequest",
+              "sha256": "efb13db11adaf74e8388744a7973ed20a5fb1ab9faae2f7c67bc592096ac2d36"
+            },
+            {
+              "item": "AbilityChildContext",
+              "sha256": "6ba80816bb95dcc4d11704278d15ffa9ea58ed0d3b69b633221a9b14f7f4a78f"
+            },
+            {
+              "item": "AbilityInvocationClient",
+              "sha256": "07c8a11d74581c93fb69594f88737df11e1a884fe9680d7a73b628461d71c0c4"
+            },
+            {
+              "item": "AbilityTargetRequest",
+              "sha256": "a2b76327ccfcbf16d3c3d543cbb286d3c5a76f48c62c1724129e8d8009efbd3b"
+            },
+            {
+              "item": "InvocationObjectAdapter",
+              "sha256": "09a276d46029cd2616e42ac7d09357dacc79e3b2722357d6052fd1fa8648b8f7"
+            },
+            {
+              "item": "InvocationWireProjector",
+              "sha256": "99d69f5cd6b8259217faeb115d98b0db6aecc8d4a0b2e52869e9aa442abeed0e"
+            },
+            {
+              "item": "ResolvedAbilityTarget",
+              "sha256": "4328c9bed2ad41cd2db8781bbeb37703524f4266aee2b67b87d0af661809a0de"
+            },
+            {
+              "item": "AbilityCallRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityCallRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityCallRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityCallRequest.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "AbilityCallRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityCallRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityCallRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityCallRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityCallRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityCallRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityCallRequest.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "AbilityChildContext.build_invocation",
+              "sha256": "c78685c7170d7cdbc95481136e4eb8dac6756f174b77c1f043f93a40a9c9bdac"
+            },
+            {
+              "item": "AbilityChildContext.build_target_invocation",
+              "sha256": "41f02d613ba2d382c6708c09d9444c12463ad1360359d6b54f6a96961158046d"
+            },
+            {
+              "item": "AbilityChildContext.call_request",
+              "sha256": "6ca0933b3345ce697e339da7dc47681ac95269a154ffbee54669d258adb33f71"
+            },
+            {
+              "item": "AbilityChildContext.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityChildContext.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityChildContext.invoke",
+              "sha256": "74e92578f3f5b3f9a14c9238436c49f70c3e66bd88f5fd0ff8866e6b641075b1"
+            },
+            {
+              "item": "AbilityChildContext.invoke_target",
+              "sha256": "394e23695875f3682bb8d9a85e03deea2e5bff56196f01985e60ea019b4ba2ae"
+            },
+            {
+              "item": "AbilityChildContext.invoker",
+              "sha256": "beb9c4a4a9dd2456b4fdfda7a14c1d86f2d0a29460a1c60d02d732f939b2b14d"
+            },
+            {
+              "item": "AbilityChildContext.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityChildContext.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityChildContext.stream",
+              "sha256": "f7e8bc12a6dcb22f9f1150f73cb4c03bcc31c36074a1ada9f859f5dfb39c4eb6"
+            },
+            {
+              "item": "AbilityChildContext.stream_target",
+              "sha256": "604c7e6e5edd10745ce0b91daee954c0847e768d15c83aa0b060adb5adb6d063"
+            },
+            {
+              "item": "AbilityChildContext.target_request",
+              "sha256": "a988bcdc30f13de949d0cc61b5c4a3a9c295bcd5c216304af7ab8abaed103807"
+            },
+            {
+              "item": "AbilityInvocationClient.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "AbilityInvocationClient.await_result",
+              "sha256": "27e9ec3199c3e2167c7c8f20c51b2e2bdcb53807edad89a9a64ba0c902dea270"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi",
+              "sha256": "eb74ad4be8f94e901d0c449c7a0622785f7d339605d9b3ff4fc6056c0d3b02f5"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi_target",
+              "sha256": "2511116c78f6e21a8f771425a29b4a1d9f2ddde302255a1be6f34bef5772587d"
+            },
+            {
+              "item": "AbilityInvocationClient.build_invocation",
+              "sha256": "6f7bb44cfbb4bff9d7eff459a8f6c012623ce4bce404767a285db2a3da79327a"
+            },
+            {
+              "item": "AbilityInvocationClient.build_target_invocation",
+              "sha256": "93d1a9d53e9393c6d4dc3e640c574d84164abb9d55a1988b0accb02365e01acb"
+            },
+            {
+              "item": "AbilityInvocationClient.cancel",
+              "sha256": "6b4b0d1b3966f14aed71cca740e21c1074b8c24831244d5efda2e6829af376c3"
+            },
+            {
+              "item": "AbilityInvocationClient.child_context",
+              "sha256": "19e78a2473c0d999f9c075a9adc567dcebb318d2d2c140bf9a70100e219ef742"
+            },
+            {
+              "item": "AbilityInvocationClient.close",
+              "sha256": "bc8e55f10615a44e60d337d354c0611b071eba880c61f269a942b4ebccb4d92c"
+            },
+            {
+              "item": "AbilityInvocationClient.close_handle",
+              "sha256": "a39f1d165e3e61b038aa2d0bbc4afd5dc0641f47a518308aa698bde7a2fde13e"
+            },
+            {
+              "item": "AbilityInvocationClient.events",
+              "sha256": "5b295529691d5850d823954e653cd66a13632386071c70b92a8d990be02f8734"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke",
+              "sha256": "cf721ccfa3b08e561242ae321a1d87dca85809c57388720ef36c8fcb3ecdcbf6"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke_target",
+              "sha256": "b04aa1b4fb80b801421478dab4ddb50ce10ae613586c8f861b63a3288253d5cf"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare",
+              "sha256": "3e46b9ac89066bf12893fcbc2eb175f8ad65b87c82ca05bb2861e6c1476817c6"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign",
+              "sha256": "b937b16eb9eb45b9ff8bc4a7d60deeff20e31c30a228e94d1d40c81adb0f39f1"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign_target",
+              "sha256": "f7ca288ef5d3041975fadc530558d486ec4585c383d1c97c5d95a8a054e8a6fc"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_target",
+              "sha256": "ff36cecf385914ea17d0650b7102aab97409958131f03b82f0c87b757ba80e27"
+            },
+            {
+              "item": "AbilityInvocationClient.resolve_target",
+              "sha256": "18c8652c569b04de111157533c7d877bb603a907960076819d8d04d511a16823"
+            },
+            {
+              "item": "AbilityInvocationClient.runtime",
+              "sha256": "5aea6d1e49f3fb7ca916590a65adf5bd2172ae212288d180c3d42a97e7dad34a"
+            },
+            {
+              "item": "AbilityInvocationClient.stream",
+              "sha256": "d938da5348784c2c806af497201409febfe643b0a58a9731bd48046f4c45d536"
+            },
+            {
+              "item": "AbilityInvocationClient.stream_target",
+              "sha256": "05f481fa280d8cc0a5d6d0725957b3df38e732fe6cea0f7ae9de38394e6f15cc"
+            },
+            {
+              "item": "AbilityInvocationClient.submit_signed",
+              "sha256": "60792265f177ffad31b725c1da539da7994abf77203f1a72ca2eaff40b9a8c06"
+            },
+            {
+              "item": "AbilityTargetRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityTargetRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityTargetRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityTargetRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityTargetRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityTargetRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityTargetRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityTargetRequest.subject_ura",
+              "sha256": "bcee53edef9c54e36d9e7ffbb7d4e37dc10edf6d3ac9ed07c84930ac8eb6efe3"
+            },
+            {
+              "item": "InvocationObjectAdapter.bidi",
+              "sha256": "15e23b7bea60620e065cfba25ee25a06cc7c74bfcd1a8a88a74bb4bf50f2d858"
+            },
+            {
+              "item": "InvocationObjectAdapter.build_invocation",
+              "sha256": "65bd1ad67e115a0b4190c601ccd07cc1f2bdfac4d1e5fbed049a110df04b10d3"
+            },
+            {
+              "item": "InvocationObjectAdapter.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoke",
+              "sha256": "1460be63f599d8befdb235e75d0969670816ae420e8208dec9af4e07aa2c03c0"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoker",
+              "sha256": "1831aff566b0f1949c5c2c6171bfd3905788b2b42167d68a78e923af002b41c7"
+            },
+            {
+              "item": "InvocationObjectAdapter.stream",
+              "sha256": "c263b1b1e2b5244b9863272f730d603c8403cf7be4365bdd4412b3a57b5750ee"
+            },
+            {
+              "item": "InvocationObjectAdapter.to_wire_dict",
+              "sha256": "015beee47d4efb5581bd73906ba9e9972c97716e52892f9e7ee6ed4cbd57e605"
+            },
+            {
+              "item": "InvocationWireProjector.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "InvocationWireProjector.build_invocation",
+              "sha256": "ec08a22df7896be8df91d50c18c694a9993928bd73ad3112c23ab700d89f581e"
+            },
+            {
+              "item": "InvocationWireProjector.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationWireProjector.to_wire_dict",
+              "sha256": "e18daee75d1d4065ec684b433c8722f73537a6edab01594dd7726759daa40d45"
+            },
+            {
+              "item": "ResolvedAbilityTarget.ability_ura",
+              "sha256": "6358ed03a84231a90141a84abb93e82a17f149460155c5119890682e31a49271"
+            },
+            {
+              "item": "ResolvedAbilityTarget.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_ref",
+              "sha256": "631915bdabe3eebf2a2e82cd2e74116fa41d98ba46b5d8faeaa1307a232ce9a0"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_version",
+              "sha256": "2e0d8f97dd311c04fb9586c03fff7ad87fae1e125dd6b91bece9d0e637e5644d"
+            },
+            {
+              "item": "ResolvedAbilityTarget.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
+            }
+          ]
+        },
+        {
+          "case_id": "runtime/ability_start_provider",
+          "action": "reject_ability_facade_after_provider_close",
+          "execution_case_bound": true,
+          "items": [
+            {
+              "item": "AbilityCallRequest",
+              "sha256": "efb13db11adaf74e8388744a7973ed20a5fb1ab9faae2f7c67bc592096ac2d36"
+            },
+            {
+              "item": "AbilityChildContext",
+              "sha256": "6ba80816bb95dcc4d11704278d15ffa9ea58ed0d3b69b633221a9b14f7f4a78f"
+            },
+            {
+              "item": "AbilityInvocationClient",
+              "sha256": "07c8a11d74581c93fb69594f88737df11e1a884fe9680d7a73b628461d71c0c4"
+            },
+            {
+              "item": "AbilityTargetRequest",
+              "sha256": "a2b76327ccfcbf16d3c3d543cbb286d3c5a76f48c62c1724129e8d8009efbd3b"
+            },
+            {
+              "item": "InvocationObjectAdapter",
+              "sha256": "09a276d46029cd2616e42ac7d09357dacc79e3b2722357d6052fd1fa8648b8f7"
+            },
+            {
+              "item": "InvocationWireProjector",
+              "sha256": "99d69f5cd6b8259217faeb115d98b0db6aecc8d4a0b2e52869e9aa442abeed0e"
+            },
+            {
+              "item": "ResolvedAbilityTarget",
+              "sha256": "4328c9bed2ad41cd2db8781bbeb37703524f4266aee2b67b87d0af661809a0de"
+            },
+            {
+              "item": "AbilityCallRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityCallRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityCallRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityCallRequest.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "AbilityCallRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityCallRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityCallRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityCallRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityCallRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityCallRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityCallRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityCallRequest.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "AbilityChildContext.build_invocation",
+              "sha256": "c78685c7170d7cdbc95481136e4eb8dac6756f174b77c1f043f93a40a9c9bdac"
+            },
+            {
+              "item": "AbilityChildContext.build_target_invocation",
+              "sha256": "41f02d613ba2d382c6708c09d9444c12463ad1360359d6b54f6a96961158046d"
+            },
+            {
+              "item": "AbilityChildContext.call_request",
+              "sha256": "6ca0933b3345ce697e339da7dc47681ac95269a154ffbee54669d258adb33f71"
+            },
+            {
+              "item": "AbilityChildContext.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityChildContext.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityChildContext.invoke",
+              "sha256": "74e92578f3f5b3f9a14c9238436c49f70c3e66bd88f5fd0ff8866e6b641075b1"
+            },
+            {
+              "item": "AbilityChildContext.invoke_target",
+              "sha256": "394e23695875f3682bb8d9a85e03deea2e5bff56196f01985e60ea019b4ba2ae"
+            },
+            {
+              "item": "AbilityChildContext.invoker",
+              "sha256": "beb9c4a4a9dd2456b4fdfda7a14c1d86f2d0a29460a1c60d02d732f939b2b14d"
+            },
+            {
+              "item": "AbilityChildContext.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityChildContext.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityChildContext.stream",
+              "sha256": "f7e8bc12a6dcb22f9f1150f73cb4c03bcc31c36074a1ada9f859f5dfb39c4eb6"
+            },
+            {
+              "item": "AbilityChildContext.stream_target",
+              "sha256": "604c7e6e5edd10745ce0b91daee954c0847e768d15c83aa0b060adb5adb6d063"
+            },
+            {
+              "item": "AbilityChildContext.target_request",
+              "sha256": "a988bcdc30f13de949d0cc61b5c4a3a9c295bcd5c216304af7ab8abaed103807"
+            },
+            {
+              "item": "AbilityInvocationClient.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "AbilityInvocationClient.await_result",
+              "sha256": "27e9ec3199c3e2167c7c8f20c51b2e2bdcb53807edad89a9a64ba0c902dea270"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi",
+              "sha256": "eb74ad4be8f94e901d0c449c7a0622785f7d339605d9b3ff4fc6056c0d3b02f5"
+            },
+            {
+              "item": "AbilityInvocationClient.bidi_target",
+              "sha256": "2511116c78f6e21a8f771425a29b4a1d9f2ddde302255a1be6f34bef5772587d"
+            },
+            {
+              "item": "AbilityInvocationClient.build_invocation",
+              "sha256": "6f7bb44cfbb4bff9d7eff459a8f6c012623ce4bce404767a285db2a3da79327a"
+            },
+            {
+              "item": "AbilityInvocationClient.build_target_invocation",
+              "sha256": "93d1a9d53e9393c6d4dc3e640c574d84164abb9d55a1988b0accb02365e01acb"
+            },
+            {
+              "item": "AbilityInvocationClient.cancel",
+              "sha256": "6b4b0d1b3966f14aed71cca740e21c1074b8c24831244d5efda2e6829af376c3"
+            },
+            {
+              "item": "AbilityInvocationClient.child_context",
+              "sha256": "19e78a2473c0d999f9c075a9adc567dcebb318d2d2c140bf9a70100e219ef742"
+            },
+            {
+              "item": "AbilityInvocationClient.close",
+              "sha256": "bc8e55f10615a44e60d337d354c0611b071eba880c61f269a942b4ebccb4d92c"
+            },
+            {
+              "item": "AbilityInvocationClient.close_handle",
+              "sha256": "a39f1d165e3e61b038aa2d0bbc4afd5dc0641f47a518308aa698bde7a2fde13e"
+            },
+            {
+              "item": "AbilityInvocationClient.events",
+              "sha256": "5b295529691d5850d823954e653cd66a13632386071c70b92a8d990be02f8734"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke",
+              "sha256": "cf721ccfa3b08e561242ae321a1d87dca85809c57388720ef36c8fcb3ecdcbf6"
+            },
+            {
+              "item": "AbilityInvocationClient.invoke_target",
+              "sha256": "b04aa1b4fb80b801421478dab4ddb50ce10ae613586c8f861b63a3288253d5cf"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare",
+              "sha256": "3e46b9ac89066bf12893fcbc2eb175f8ad65b87c82ca05bb2861e6c1476817c6"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign",
+              "sha256": "b937b16eb9eb45b9ff8bc4a7d60deeff20e31c30a228e94d1d40c81adb0f39f1"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_and_sign_target",
+              "sha256": "f7ca288ef5d3041975fadc530558d486ec4585c383d1c97c5d95a8a054e8a6fc"
+            },
+            {
+              "item": "AbilityInvocationClient.prepare_target",
+              "sha256": "ff36cecf385914ea17d0650b7102aab97409958131f03b82f0c87b757ba80e27"
+            },
+            {
+              "item": "AbilityInvocationClient.resolve_target",
+              "sha256": "18c8652c569b04de111157533c7d877bb603a907960076819d8d04d511a16823"
+            },
+            {
+              "item": "AbilityInvocationClient.runtime",
+              "sha256": "5aea6d1e49f3fb7ca916590a65adf5bd2172ae212288d180c3d42a97e7dad34a"
+            },
+            {
+              "item": "AbilityInvocationClient.stream",
+              "sha256": "d938da5348784c2c806af497201409febfe643b0a58a9731bd48046f4c45d536"
+            },
+            {
+              "item": "AbilityInvocationClient.stream_target",
+              "sha256": "05f481fa280d8cc0a5d6d0725957b3df38e732fe6cea0f7ae9de38394e6f15cc"
+            },
+            {
+              "item": "AbilityInvocationClient.submit_signed",
+              "sha256": "60792265f177ffad31b725c1da539da7994abf77203f1a72ca2eaff40b9a8c06"
+            },
+            {
+              "item": "AbilityTargetRequest.ability_ura",
+              "sha256": "96cd566edb4b7ac5e999ef360f49f14b9bee61f2108634f296b4c14efa75c4ff"
+            },
+            {
+              "item": "AbilityTargetRequest.args",
+              "sha256": "eac5f6795586561b7147b42f6a7e7aad46942bb7233613964c5486350959a75e"
+            },
+            {
+              "item": "AbilityTargetRequest.arguments_base64",
+              "sha256": "52256403a395d5305dcbbe5a883830376033b097357b28bdc0c4c438385d4c42"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_signature",
+              "sha256": "16b4e9afed5bec3cc9d17ff347bb292849d510fcd265dce4bccf804c3d687782"
+            },
+            {
+              "item": "AbilityTargetRequest.caller_ura",
+              "sha256": "e4c47631298657954a133070672569adca35a06d0c4fe78ca13ef17a19801aca"
+            },
+            {
+              "item": "AbilityTargetRequest.causal_context",
+              "sha256": "b0a19c8ad8c2fcfb061bcc55a105111a8e1b721138607faa3fe9b52e4ded5bf5"
+            },
+            {
+              "item": "AbilityTargetRequest.content_type",
+              "sha256": "333430f9e36edb7c4b692eb6a0ce46c6df4889d637cc35dae4b1527c5350d401"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_ref",
+              "sha256": "bc72ffe82c43cac8f2a4e209b9859d0892a00ffee3ee92b2af7d2756141dc54f"
+            },
+            {
+              "item": "AbilityTargetRequest.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "AbilityTargetRequest.metadata",
+              "sha256": "4be2fa60438cdd669beeb9e6a2eb8957749de6b28701bd93f845a52395ca9e0c"
+            },
+            {
+              "item": "AbilityTargetRequest.nonce_base64",
+              "sha256": "19cbee18197e3fa6450bcbdf552a853df092af4205b350fd916c7888e99bc313"
+            },
+            {
+              "item": "AbilityTargetRequest.subject_ura",
+              "sha256": "bcee53edef9c54e36d9e7ffbb7d4e37dc10edf6d3ac9ed07c84930ac8eb6efe3"
+            },
+            {
+              "item": "InvocationObjectAdapter.bidi",
+              "sha256": "15e23b7bea60620e065cfba25ee25a06cc7c74bfcd1a8a88a74bb4bf50f2d858"
+            },
+            {
+              "item": "InvocationObjectAdapter.build_invocation",
+              "sha256": "65bd1ad67e115a0b4190c601ccd07cc1f2bdfac4d1e5fbed049a110df04b10d3"
+            },
+            {
+              "item": "InvocationObjectAdapter.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoke",
+              "sha256": "1460be63f599d8befdb235e75d0969670816ae420e8208dec9af4e07aa2c03c0"
+            },
+            {
+              "item": "InvocationObjectAdapter.invoker",
+              "sha256": "1831aff566b0f1949c5c2c6171bfd3905788b2b42167d68a78e923af002b41c7"
+            },
+            {
+              "item": "InvocationObjectAdapter.stream",
+              "sha256": "c263b1b1e2b5244b9863272f730d603c8403cf7be4365bdd4412b3a57b5750ee"
+            },
+            {
+              "item": "InvocationObjectAdapter.to_wire_dict",
+              "sha256": "015beee47d4efb5581bd73906ba9e9972c97716e52892f9e7ee6ed4cbd57e605"
+            },
+            {
+              "item": "InvocationWireProjector.addressing",
+              "sha256": "b9fe9ff463db6f515720e58e3a2fbbd469cbef74e45cb0d985aa7fb5915f260c"
+            },
+            {
+              "item": "InvocationWireProjector.build_invocation",
+              "sha256": "ec08a22df7896be8df91d50c18c694a9993928bd73ad3112c23ab700d89f581e"
+            },
+            {
+              "item": "InvocationWireProjector.descriptor_version",
+              "sha256": "c9762d88365f073c090f0d3f67512c31afa1043585eb00e1d65c4b163fbc7d36"
+            },
+            {
+              "item": "InvocationWireProjector.to_wire_dict",
+              "sha256": "e18daee75d1d4065ec684b433c8722f73537a6edab01594dd7726759daa40d45"
+            },
+            {
+              "item": "ResolvedAbilityTarget.ability_ura",
+              "sha256": "6358ed03a84231a90141a84abb93e82a17f149460155c5119890682e31a49271"
+            },
+            {
+              "item": "ResolvedAbilityTarget.callee_ura",
+              "sha256": "78f7879e362a88bd71232b6c58bd8156b5ac23563669537121417b40d8916ed9"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_ref",
+              "sha256": "631915bdabe3eebf2a2e82cd2e74116fa41d98ba46b5d8faeaa1307a232ce9a0"
+            },
+            {
+              "item": "ResolvedAbilityTarget.descriptor_version",
+              "sha256": "2e0d8f97dd311c04fb9586c03fff7ad87fae1e125dd6b91bece9d0e637e5644d"
+            },
+            {
+              "item": "ResolvedAbilityTarget.subject_ura",
+              "sha256": "c58da0c1697531dd319ab830e5f28e08958e997b5a5a185d5395f204e44b383b"
+            },
+            {
+              "item": "RuntimeAbilityClient.await_result",
+              "sha256": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45"
+            },
+            {
+              "item": "RuntimeAbilityClient.cancel",
+              "sha256": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d"
+            },
+            {
+              "item": "RuntimeAbilityClient.close_handle",
+              "sha256": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020"
+            },
+            {
+              "item": "RuntimeAbilityClient.events",
+              "sha256": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e"
+            },
+            {
+              "item": "RuntimeAbilityClient.open_bidi",
+              "sha256": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd"
+            },
+            {
+              "item": "RuntimeAbilityClient.submit_signed",
+              "sha256": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf"
             }
           ]
         }
@@ -123297,6 +125639,10 @@
           "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
         },
         {
+          "item": "NativeRuntimeHandle.AbilityClient",
+          "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
+        },
+        {
           "item": "NativeRuntimeHandle.Addressing",
           "sha256": "2d1cb08e2d3da60c042d82c8801e107fb54bb3a01bb98fa47a9616dcc4c0c54c"
         },
@@ -123378,6 +125724,10 @@
             {
               "item": "RuntimeEndpointPathOptions",
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
+            },
+            {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
             {
               "item": "NativeRuntimeHandle.Addressing",
@@ -123463,6 +125813,10 @@
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
             },
             {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
+            },
+            {
               "item": "NativeRuntimeHandle.Addressing",
               "sha256": "2d1cb08e2d3da60c042d82c8801e107fb54bb3a01bb98fa47a9616dcc4c0c54c"
             },
@@ -123544,6 +125898,10 @@
             {
               "item": "RuntimeEndpointPathOptions",
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
+            },
+            {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
             {
               "item": "NativeRuntimeHandle.Addressing",
@@ -123629,6 +125987,10 @@
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
             },
             {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
+            },
+            {
               "item": "NativeRuntimeHandle.Addressing",
               "sha256": "2d1cb08e2d3da60c042d82c8801e107fb54bb3a01bb98fa47a9616dcc4c0c54c"
             },
@@ -123710,6 +126072,10 @@
             {
               "item": "RuntimeEndpointPathOptions",
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
+            },
+            {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
             {
               "item": "NativeRuntimeHandle.Addressing",
@@ -123795,6 +126161,10 @@
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
             },
             {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
+            },
+            {
               "item": "NativeRuntimeHandle.Addressing",
               "sha256": "2d1cb08e2d3da60c042d82c8801e107fb54bb3a01bb98fa47a9616dcc4c0c54c"
             },
@@ -123878,6 +126248,10 @@
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
             },
             {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
+            },
+            {
               "item": "NativeRuntimeHandle.Addressing",
               "sha256": "2d1cb08e2d3da60c042d82c8801e107fb54bb3a01bb98fa47a9616dcc4c0c54c"
             },
@@ -123959,6 +126333,10 @@
             {
               "item": "RuntimeEndpointPathOptions",
               "sha256": "f99351f0a92d54e92878fba6da6cc3f3cdefa3521be1b9fe80b5c9b1470e2e3a"
+            },
+            {
+              "item": "NativeRuntimeHandle.AbilityClient",
+              "sha256": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2"
             },
             {
               "item": "NativeRuntimeHandle.Addressing",
@@ -124058,7 +126436,11 @@
       "shape_evidence": [
         {
           "item": "NativeRuntimeHandle",
-          "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+          "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+        },
+        {
+          "item": "NativeRuntimeHandle.ability_client",
+          "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
         },
         {
           "item": "NativeRuntimeHandle.addressing",
@@ -124085,7 +126467,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -124112,7 +126498,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -124139,7 +126529,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -124166,7 +126560,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -124193,7 +126591,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -124220,7 +126622,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -124247,7 +126653,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -124274,7 +126684,11 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf"
+              "sha256": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb"
+            },
+            {
+              "item": "NativeRuntimeHandle.ability_client",
+              "sha256": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -248840,7 +251254,7 @@
         },
         {
           "item": "RuntimeAbilityClient",
-          "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+          "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
         },
         {
           "item": "RuntimeCallContext",
@@ -249263,7 +251677,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -249686,7 +252100,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -250109,7 +252523,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -250532,7 +252946,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -250955,7 +253369,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -251378,7 +253792,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -251801,7 +254215,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -252224,7 +254638,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -252647,7 +255061,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -253070,7 +255484,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -253493,7 +255907,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -253916,7 +256330,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",
@@ -254339,7 +256753,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6"
+              "sha256": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da"
             },
             {
               "item": "RuntimeCallContext",

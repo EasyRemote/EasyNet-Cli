@@ -57,7 +57,11 @@
       provider-backed `deadline` vector that proves Runtime Core provider
       timeout ownership and retry after cleanup without adding a separate
       ability timeout model.
-- [ ] Re-run SDK parity gates against current worktree.
+- [x] Bind Go and Python generic ability invocation facades to a
+      provider-backed `start` vector by borrowing the ability facade from the
+      Native Runtime provider graph instead of introducing a product-specific
+      ability lifecycle root.
+- [x] Re-run SDK parity gates against current worktree.
 
 ## RF-6
 

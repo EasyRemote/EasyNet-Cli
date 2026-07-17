@@ -114,6 +114,21 @@ func (h *NativeRuntimeHandle) Addressing() (Addressing, error) {
 	return h.addressing, nil
 }
 
+// AbilityClient returns a generic runtime ability facade backed by this native
+// Runtime provider. The handle keeps ownership of the Runtime and Addressing
+// facades; callers close the NativeRuntimeHandle, not this borrowed facade.
+func (h *NativeRuntimeHandle) AbilityClient() (*RuntimeAbilityClient, error) {
+	runtime, err := h.Client()
+	if err != nil {
+		return nil, err
+	}
+	addressing, err := h.Addressing()
+	if err != nil {
+		return nil, err
+	}
+	return NewRuntimeAbilityClient(runtime, addressing)
+}
+
 // Close releases the RuntimeClient and native provider resources exactly once.
 func (h *NativeRuntimeHandle) Close(ctx context.Context) error {
 	if h == nil {

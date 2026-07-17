@@ -57,6 +57,12 @@
   same session. This closes the `dispatch` action for Go and Python stream/bidi
   cells without claiming child dispatch, restart recovery, runtime start, or
   cutover readiness.
+- Treat ability facade start as a borrowed view over the Native Runtime
+  provider graph. The handle owns Runtime, Addressing, and Health; the ability
+  facade is created only after that provider graph exists and fails closed
+  after provider close. This closes the `start` action for Go and Python
+  `ability_invocation_facade` without adding a product-specific ability
+  lifecycle root or claiming restart recovery.
 - Treat ability child dispatch as a provider-backed generic runtime facade
   vector only when the selector proves all three facts: the parent terminal
   receipt is required, the child draft uses Axon scalar causal context derived

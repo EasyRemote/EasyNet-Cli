@@ -2436,6 +2436,7 @@
       "ManagedSigningPeerRegistration.PeerURA",
       "ManagedSigningPeerRegistration.PublicKey",
       "ManagedSigningPeerRegistration.ViaHubURA",
+      "NativeRuntimeHandle.AbilityClient",
       "NativeRuntimeHandle.Addressing",
       "NativeRuntimeHandle.Client",
       "NativeRuntimeHandle.Close",
@@ -4086,6 +4087,7 @@
       "ManagedSigningStatus.ACTIVE",
       "ManagedSigningStatus.RETIRED",
       "ManagedSigningStatus.REVOKED",
+      "NativeRuntimeHandle.ability_client",
       "NativeRuntimeHandle.addressing",
       "NativeRuntimeHandle.client",
       "NativeRuntimeHandle.close",
@@ -4247,9 +4249,15 @@
       "RotatePrincipalKeyRequest.command",
       "RotatePrincipalKeyRequest.principal_ura",
       "RotatePrincipalKeyRequest.replacement",
+      "RuntimeAbilityClient.await_result",
       "RuntimeAbilityClient.build",
+      "RuntimeAbilityClient.cancel",
+      "RuntimeAbilityClient.close_handle",
+      "RuntimeAbilityClient.events",
       "RuntimeAbilityClient.invoke",
+      "RuntimeAbilityClient.open_bidi",
       "RuntimeAbilityClient.open_stream",
+      "RuntimeAbilityClient.submit_signed",
       "RuntimeAbilityDescriptorProvider.get",
       "RuntimeAbilityDescriptorProvider.list",
       "RuntimeAccessControlProvider.check",
@@ -9178,7 +9186,8 @@
         "runtime/ability_child_dispatch",
         "runtime/ability_deadline_owner",
         "runtime/ability_lowering",
-        "runtime/ability_provider_lifecycle"
+        "runtime/ability_provider_lifecycle",
+        "runtime/ability_start_provider"
       ]
     },
     "access_control": {
@@ -9833,7 +9842,13 @@
           "ResolvedAbilityTarget.callee_ura",
           "ResolvedAbilityTarget.descriptor_ref",
           "ResolvedAbilityTarget.descriptor_version",
-          "ResolvedAbilityTarget.subject_ura"
+          "ResolvedAbilityTarget.subject_ura",
+          "RuntimeAbilityClient.await_result",
+          "RuntimeAbilityClient.cancel",
+          "RuntimeAbilityClient.close_handle",
+          "RuntimeAbilityClient.events",
+          "RuntimeAbilityClient.open_bidi",
+          "RuntimeAbilityClient.submit_signed"
         ]
       },
       "node": {
@@ -12535,6 +12550,7 @@
           "RuntimeEndpointPathOptions"
         ],
         "members": [
+          "NativeRuntimeHandle.AbilityClient",
           "NativeRuntimeHandle.Addressing",
           "NativeRuntimeHandle.Client",
           "NativeRuntimeHandle.Close",
@@ -12557,6 +12573,7 @@
           "NativeRuntimeHandle"
         ],
         "members": [
+          "NativeRuntimeHandle.ability_client",
           "NativeRuntimeHandle.addressing",
           "NativeRuntimeHandle.client",
           "NativeRuntimeHandle.close",
@@ -17443,6 +17460,26 @@
             "case_id": "runtime/ability_provider_lifecycle",
             "action": "open_stream_invocation_through_runtime",
             "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "borrow_runtime_ability_facade",
+            "selector": "TestNativeRuntimeHandleProvidesRuntimeAbilityFacade"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "lower_ability_call_after_start",
+            "selector": "TestNativeRuntimeHandleProvidesRuntimeAbilityFacade"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "reject_ability_facade_after_provider_close",
+            "selector": "TestNativeRuntimeHandleProvidesRuntimeAbilityFacade"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "start_native_runtime_provider",
+            "selector": "TestNativeRuntimeHandleProvidesRuntimeAbilityFacade"
           }
         ]
       },
@@ -17535,6 +17572,26 @@
             "case_id": "runtime/ability_provider_lifecycle",
             "action": "open_stream_invocation_through_runtime",
             "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "borrow_runtime_ability_facade",
+            "selector": "test_native_runtime_handle_provides_runtime_ability_facade"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "lower_ability_call_after_start",
+            "selector": "test_native_runtime_handle_provides_runtime_ability_facade"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "reject_ability_facade_after_provider_close",
+            "selector": "test_native_runtime_handle_provides_runtime_ability_facade"
+          },
+          {
+            "case_id": "runtime/ability_start_provider",
+            "action": "start_native_runtime_provider",
+            "selector": "test_native_runtime_handle_provides_runtime_ability_facade"
           }
         ]
       }
@@ -19342,6 +19399,7 @@
       "ModeDevice": "753b1dbda03e7d78eec0d237c4bb8266c1b04ef58f65003e944324b11488ebdb",
       "ModeHub": "c60d21b3f16421ecc9e6f710f256f507a7677bb9e426484fa77b0b47f83fa19d",
       "NativeRuntimeHandle": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
+      "NativeRuntimeHandle.AbilityClient": "3dfefd9e06df210a96e3839a7845f39bba402d7d431484cc0fca163bcd2459b2",
       "NativeRuntimeHandle.Addressing": "2d1cb08e2d3da60c042d82c8801e107fb54bb3a01bb98fa47a9616dcc4c0c54c",
       "NativeRuntimeHandle.Client": "0e7b9fb0f4fa531c0e7de61de1bc04fcc194be908d8639d9858e71a23b23c23e",
       "NativeRuntimeHandle.Close": "0d464a887ccc7c5ec145a263e02280f50af96ec1b1fd7e770a900867d4a8ba14",
@@ -21537,7 +21595,8 @@
       "ManagedSigningStatus.ACTIVE": "b070243dc73fb92b0eff79c97738d3ab06dc582aece8c40af886a9b91eeb3b4a",
       "ManagedSigningStatus.RETIRED": "b3ee688f4f12f27474d956b1f660edd2b95ab055b74713fe0158082b16de9d5f",
       "ManagedSigningStatus.REVOKED": "435dad215b76f8c281a786b9a5b2fe1d98f00d53fdc02dd2d4bfee40dbb7d0de",
-      "NativeRuntimeHandle": "548aa765163348bfd738903519d543251256bfb3ab0ba048d9852a0ac4883eaf",
+      "NativeRuntimeHandle": "5932b9c1c7ab1c891bb0f83b6c7d80760e3ac8ee66e76e6649c8d97f26fa6fbb",
+      "NativeRuntimeHandle.ability_client": "3a7f0f8f237a0ef9db1288f4b3662394a9f58cdd2deb943b68a26293f1757ff4",
       "NativeRuntimeHandle.addressing": "33f888d2dc4e5a25c612dafebd8b05ff187997485ffe2b48891592de80e955c2",
       "NativeRuntimeHandle.client": "5c6d568fa1731540a2425a533fed37153270f1388f03c6be484abf7e5d379549",
       "NativeRuntimeHandle.close": "11691e41911d035be1f7fe694b8856ba441fc4d4e57a8847a0807cd2fccc9f5f",
@@ -21732,10 +21791,16 @@
       "RotatePrincipalKeyRequest.command": "92d0fb95ac99f0a9d346caba84f2388d0100a11a202422237ea4d9088cf6b597",
       "RotatePrincipalKeyRequest.principal_ura": "226de28f41b41a6dfb42152d7bc1e734b95702289f7d3dc18021dec63961c9c6",
       "RotatePrincipalKeyRequest.replacement": "22570d7af1ec5172e5bb2ddbb6502b54d23c83f3d8b6c2d125cd99e6b333d3df",
-      "RuntimeAbilityClient": "43febd145cdb0ba5158c606cc90a12dcc6ea0143028362568e37c3f53ad365c6",
+      "RuntimeAbilityClient": "b908b8f148cb3db2d86bf2139c846aaa1bc47b9f79753e5323b18c95af8966da",
+      "RuntimeAbilityClient.await_result": "fbd6ece71c92fe25e19046ac68efbe0890668e2fa9ae9353000f336b49775a45",
       "RuntimeAbilityClient.build": "28435bece2bc9471f2354c9572f44366c68fac5b097ce6df78e81aa117ddd499",
+      "RuntimeAbilityClient.cancel": "0411b26729d2260b4ceccf902f79ce6e93382a2c98e0cfda2579a4a2b642a00d",
+      "RuntimeAbilityClient.close_handle": "09f4ab3511840cdb83e38de81f8b4c10d5496ff65de2ba7159e0c63d74962020",
+      "RuntimeAbilityClient.events": "c893a7ad38b39c29d92af051fc0428ce11dee3789d384002419d34b8a082cc7e",
       "RuntimeAbilityClient.invoke": "6071dc3b8b7d72d3b9c233977b466793a96fc5b64a86b967a0eff9dab92c97d1",
+      "RuntimeAbilityClient.open_bidi": "7b92a27e1b5b615aaace3db89501638908c25422ef7972462d424595444658fd",
       "RuntimeAbilityClient.open_stream": "2d53069edf249e04dffbd625bd7cb5bd6a2d96d1d41c0fc8ce1853fa9bc203ab",
+      "RuntimeAbilityClient.submit_signed": "7bc3d5c6f57181b43579512f323e3e62b22c68ed753c594f238828c5a8a224cf",
       "RuntimeAbilityDescriptorProvider": "d941651014fbb525b1a0245b765d35d6c993856ebd2ed484c1b3d0c491920415",
       "RuntimeAbilityDescriptorProvider.get": "6fb5e0504c109bb281d5516f96143684086e6e1e0a35b7b168ccf1eb8ed85144",
       "RuntimeAbilityDescriptorProvider.list": "75cfae096b3e2f62d8b9570a613429b84e8aa1a3ac2e85587c469c6d8f442d42",
