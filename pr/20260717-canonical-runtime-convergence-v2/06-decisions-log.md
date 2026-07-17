@@ -706,3 +706,41 @@
 - Allocation baseline coverage remains open until an allocator-counting harness
   exists. Timing-only Criterion rows must not be used as evidence for
   allocation regressions.
+- Allocation baselines should be measured by an allocator-counting harness, not
+  by encoding counts as fake time in Criterion. Timing and allocation are
+  distinct acceptance surfaces.
+- Benchmark runtime setup is shared through a bench-local support module so
+  latency and allocation rows cannot quietly diverge through different receipt
+  authority or descriptor-bound fixture construction.
+- A registered direct runtime provider plus closed live case bindings is
+  stronger than API-shape parity and must be reflected as `ProviderBacked` in
+  the canonical matrix. Leaving those cells as `Seam` hides real provider
+  state and lets RF-4 drift without an explicit proof boundary.
+- Provider step evidence is action-closed, not selector-unique. A single live
+  conformance test may exercise all actions in a case; the matrix must bind
+  every action to that selector instead of inventing fake per-action selectors.
+- Go/Python `native_runtime`, `unary_invoke`, and `stream` can be marked
+  `ProviderBacked` because their registered direct runtime providers have
+  implementation digests and all required case selectors are live. They are
+  not `CutoverReady` because full transition-vector and recovery cutover is
+  still open.
+- `bidi` must remain `Seam` while `bidi/frame0_required` is unproven. Positive
+  bidi close/backpressure evidence is not enough to claim provider-backed
+  lifecycle parity for the full bidi contract.
+- Lifecycle parity needs a canonical state-machine contract, not only an
+  action-name list. The conformance source manifest now owns the transition
+  contract, and the generated matrix carries the same contract so facades do
+  not invent language-specific lifecycle semantics.
+- The lifecycle transition contract names allowed source states and exactly one
+  next or terminal state per action. Deadline ownership, child-deadline
+  propagation, cancellation acknowledgement, idempotent replay, bounded
+  queue/concurrency behavior, cleanup responsibility, and receipt/event
+  observability are first-class fields rather than prose-only claims.
+- Start and restart recovery are runtime-host lifecycle actions, while
+  dispatch, stream, bidi, child dispatch, cancel, deadline, and terminal
+  receipt are invocation/session lifecycle actions. Keeping both in one
+  contract is intentional because RF-4 requires one shared runtime model across
+  facades.
+- Adding the transition contract does not make any language `CutoverReady`.
+  Cutover still requires executable transition/recovery vectors and public
+  error-contract proof against the same provider/runtime version.

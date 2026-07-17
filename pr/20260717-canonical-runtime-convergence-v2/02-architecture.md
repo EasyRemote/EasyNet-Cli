@@ -1678,3 +1678,28 @@ retain unary, bounded-concurrency, stream, bidi, and cancellation cleanup
 scenarios. This is a coverage-hardening slice, not full RF-4 or acceptance
 gate 9 closure: allocation baselines and complete cross-language lifecycle
 cutover remain open.
+
+## Current Slice: RF-4 LocalRuntime Allocation Baseline Harness
+
+Owner: EasyNet-Axon Rust `LocalRuntime` benchmark harness and the
+EasyNet-Cli V2 convergence gate.
+
+The previous benchmark slice made stream, bidi, and cancellation cleanup
+latency executable, but the V2 acceptance gate also requires allocation
+baselines. Treating allocation count as a Criterion timing unit would blur
+measurement semantics, and duplicating runtime setup between latency and
+allocation benches would create a second fixture model.
+
+The Axon Rust benchmarks now use `local_runtime_support.rs` as a shared
+bench-only fixture module for descriptor-bound envelope construction, explicit
+receipt authority setup, and reusable `LocalRuntime` scenario builders. The
+new `local_runtime_allocations` bench installs a counting allocator, resets
+the counters after scenario setup, runs provider-backed unary, stream, bidi,
+cooperative cancel, and bounded-concurrency operations, and prints allocation
+count plus allocated bytes. The allocation baseline rows are recorded in
+`sdk/rust/benches/BASELINE.md`.
+
+The V2 gate now verifies both the timing harness and allocation harness, plus
+their baseline rows. This closes the Rust `LocalRuntime` benchmark coverage
+gap for acceptance gate 9, but it does not complete RF-4 globally because full
+cross-language lifecycle transition-vector cutover remains open.

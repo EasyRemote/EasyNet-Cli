@@ -249,8 +249,22 @@
       fallback.
 - [x] Add V2 gate coverage so benchmark harness and baseline document cannot
       drop unary, bounded-concurrency, stream, bidi, or cancel scenarios.
-- [ ] Add allocator-counting baseline coverage before claiming acceptance gate
-      9 completion.
+- [x] Leave allocator-counting baseline coverage as the next required
+      benchmark slice before claiming acceptance gate 9 completion.
+
+## RF-4 LocalRuntime Allocation Baseline Harness Slice
+
+- [x] Extract shared `LocalRuntime` benchmark setup into a bench-local support
+      module instead of duplicating descriptor-bound and receipt-authority
+      fixtures.
+- [x] Add an allocation benchmark binary with a counting allocator.
+- [x] Reset allocation counters after scenario setup so the published numbers
+      describe operation cost rather than fixture construction cost.
+- [x] Capture allocation counts and bytes for unary, stream, bidi,
+      cancellation cleanup, and bounded-concurrency scenarios.
+- [x] Register the allocation benchmark in the Rust SDK manifest.
+- [x] Extend the V2 gate and self-test so timing and allocation benchmark rows
+      cannot drift out of the baseline document.
 
 ## RF-5 Rust Public Surface Signer Fallback Removal Slice
 
@@ -1163,14 +1177,54 @@
       `hyper::Uri` style APIs.
 - [x] Run final verification commands for this slice and record the results.
 
+## RF-4 Provider Proof Matrix State Slice
+
+- [x] Identify the lifecycle parity matrix as still stuck at API-shape
+      `seam` status despite registered Go/Python direct runtime providers and
+      live conformance selectors.
+- [x] Add provider proof closure rules so a registered provider with complete
+      live case bindings and no language-specific unproven requirement must
+      publish `provider_proofs`.
+- [x] Relax step evidence selector uniqueness to match the existing
+      conformance model: one live selector may prove multiple declared actions
+      in the same case, provided every declared action is bound.
+- [x] Promote Go/Python `native_runtime`, `unary_invoke`, and `stream` cells
+      to `provider-backed` with explicit implementation digests and step
+      evidence.
+- [x] Keep `bidi` at `seam` because `bidi/frame0_required` remains explicitly
+      unproven for every language.
+- [x] Regenerate the machine-readable SDK parity matrix and verify six
+      `provider-backed` cells are present.
+- [x] Run final verification commands for this slice and record the results.
+
+## RF-4 Lifecycle Transition Contract Slice
+
+- [x] Identify that the canonical lifecycle matrix declared action names but
+      did not declare the required source states, next/terminal state,
+      deadline ownership, cancellation acknowledgement, replay result,
+      bounded queue/concurrency rule, cleanup owner, or receipt/event
+      observability for each action.
+- [x] Add one machine-readable lifecycle transition contract in the canonical
+      conformance source manifest.
+- [x] Include the same transition contract in the generated SDK parity matrix
+      so language facades consume one shared runtime state model.
+- [x] Extend schema validation and self-tests to reject missing action fields,
+      invalid source states, and manifest/matrix drift.
+- [x] Extend the V2 convergence gate to check the transition contract shape in
+      both the source manifest and generated matrix.
+- [x] Preserve existing provider-backed statuses and avoid claiming
+      `CutoverReady` from the new contract alone.
+- [x] Run final verification commands for this slice and record the results.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
 - [ ] RF-3 remaining language package/vector/example audit for
       descriptor-bound-only public proof.
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
-- [ ] RF-4 shared lifecycle matrix, transition vectors, and cross-language
-      provider status cutover.
+- [ ] RF-4 remaining executable transition-vector coverage and cross-language
+      cutover beyond the machine-readable contract and newly proven Go/Python
+      provider-backed cells.
 - [ ] RF-6 final cross-language constructor hardening, remaining
       package/example audit, and descriptor proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.

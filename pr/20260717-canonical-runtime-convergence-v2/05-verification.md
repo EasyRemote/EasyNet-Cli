@@ -2653,3 +2653,113 @@ cancellation cleanup on the Rust `LocalRuntime` harness, plus V2 gate coverage
 that protects those scenarios. It does not complete RF-4 or acceptance gate 9
 because allocator-counting baselines and full cross-language lifecycle cutover
 remain open.
+
+## RF-4 LocalRuntime Allocation Baseline Harness Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --manifest-path sdk/rust/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: applied
+  benchmark formatting after extracting the support module and adding the
+  allocation harness.
+- `cargo bench --manifest-path sdk/rust/Cargo.toml --bench local_runtime --no-run`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo bench --manifest-path sdk/rust/Cargo.toml --bench local_runtime_allocations`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed and
+  printed:
+
+```text
+scenario,allocations,bytes
+allocation/unary_invoke,766,110512
+allocation/stream_two_frames,1081,152017
+allocation/bidi_echo_round_trip,1220,173101
+allocation/cancel_cleanup,1024,127424
+allocation/bounded_concurrency_n16,12202,1993212
+```
+
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test && bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --manifest-path sdk/rust/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo check --manifest-path sdk/rust/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check -- sdk/rust/Cargo.toml sdk/rust/benches/local_runtime.rs sdk/rust/benches/local_runtime_support.rs sdk/rust/benches/local_runtime_allocations.rs sdk/rust/benches/README.md sdk/rust/benches/BASELINE.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+
+This evidence verifies Rust `LocalRuntime` allocation baseline coverage for
+unary, stream, bidi, cancellation cleanup, and bounded-concurrency scenarios,
+and V2 gate coverage that protects those rows. It does not complete RF-4 or
+the full V2 SPEC because cross-language lifecycle transition-vector cutover
+and the remaining acceptance gates still require separate proof.
+
+## RF-4 Provider Proof Matrix State Slice
+
+Commands run on 2026-07-17:
+
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_matrix.py --self-test --tmp /tmp/easynet-sdk-matrix-self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test && bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `python3 - <<'PY' ...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed and
+  reported `Counter({'seam': 129, 'unsupported': 82, 'provider-backed': 6})`.
+  The provider-backed cells are Go/Python `native_runtime`, `unary_invoke`,
+  and `stream`.
+- `git diff --check -- sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json sdk/conformance/sdk_concepts.py pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies RF-4 matrix provider-proof state for the existing
+Go/Python direct runtime providers. It does not complete RF-4 or the full V2
+SPEC because bidi frame-0 rejection, complete transition-vector execution, and
+cross-language cutover remain open.
+
+## RF-4 Lifecycle Transition Contract Slice
+
+Commands run on 2026-07-17:
+
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_matrix.py --self-test --tmp /tmp/easynet-sdk-matrix-self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test && bash tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `python3 - <<'PY' ...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed and
+  reported `contract_actions 9`, terminal actions `cancel`, `deadline`, and
+  `terminal_receipt`, and next-state actions `bidi_open`, `child_dispatch`,
+  `dispatch`, `restart_recover`, `start`, and `stream_open`.
+- `git diff --check -- sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json sdk/conformance/sdk_concepts.py sdk/conformance/sdk_matrix.py tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies that RF-4 now has one machine-readable lifecycle
+transition contract in the source manifest and generated matrix. It does not
+complete RF-4 or the full V2 SPEC because executable transition/recovery
+vectors and full cross-language cutover remain open.

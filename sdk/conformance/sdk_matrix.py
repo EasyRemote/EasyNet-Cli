@@ -17,6 +17,7 @@ from sdk_concepts import (
     STATUS_CANONICAL_NAMES,
     STATUSES,
     LIFECYCLE_ACTIONS,
+    LIFECYCLE_TRANSITION_CONTRACT,
     case_contracts,
     self_test as concepts_self_test,
     validate_schema,
@@ -182,6 +183,7 @@ def generate() -> dict[str, Any]:
         "status_order": STATUSES,
         "status_canonical_names": STATUS_CANONICAL_NAMES,
         "lifecycle_actions": sorted(LIFECYCLE_ACTIONS),
+        "lifecycle_transition_contract": LIFECYCLE_TRANSITION_CONTRACT,
         "capability_ids": capability_ids,
         "cells": cells,
     }

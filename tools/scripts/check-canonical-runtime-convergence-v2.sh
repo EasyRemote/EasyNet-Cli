@@ -42,6 +42,40 @@ for name, document in (("manifest", manifest), ("matrix", matrix)):
         raise SystemExit(f"{name}:status_canonical_names")
     if document.get("lifecycle_actions") != expected_actions:
         raise SystemExit(f"{name}:lifecycle_actions")
+    contract = document.get("lifecycle_transition_contract")
+    if not isinstance(contract, dict) or sorted(contract) != expected_actions:
+        raise SystemExit(f"{name}:lifecycle_transition_contract")
+    for action, entry in contract.items():
+        required = {
+            "allowed_source_states",
+            "transition",
+            "deadline_owner",
+            "child_deadline_propagation",
+            "cancellation_authority",
+            "cancellation_ack",
+            "idempotent_replay_result",
+            "queue_concurrency_limits",
+            "cleanup_responsibility",
+            "receipt_event_observability",
+        }
+        if not isinstance(entry, dict) or set(entry) != required:
+            raise SystemExit(f"{name}:lifecycle_transition_contract:{action}")
+        if not isinstance(entry["allowed_source_states"], list) or not entry["allowed_source_states"]:
+            raise SystemExit(f"{name}:lifecycle_transition_sources:{action}")
+        transition = entry["transition"]
+        if (
+            not isinstance(transition, dict)
+            or set(transition) != {"kind", "state"}
+            or transition["kind"] not in {"next", "terminal"}
+            or not isinstance(transition["state"], str)
+            or not transition["state"]
+        ):
+            raise SystemExit(f"{name}:lifecycle_transition_target:{action}")
+        for field in required - {"allowed_source_states", "transition"}:
+            if not isinstance(entry[field], str) or not entry[field].strip():
+                raise SystemExit(f"{name}:lifecycle_transition_metadata:{action}:{field}")
+if manifest.get("lifecycle_transition_contract") != matrix.get("lifecycle_transition_contract"):
+    raise SystemExit("matrix:lifecycle_transition_contract_drift")
 
 plain_helpers = {
     "canonical_invocation_bytes",
@@ -731,9 +765,10 @@ check_axon_benchmark_baseline_coverage_contract() {
   fi
 
   local local_runtime_bench="$AXON_ROOT/sdk/rust/benches/local_runtime.rs"
+  local allocation_bench="$AXON_ROOT/sdk/rust/benches/local_runtime_allocations.rs"
   local baseline_doc="$AXON_ROOT/sdk/rust/benches/BASELINE.md"
   local readme_doc="$AXON_ROOT/sdk/rust/benches/README.md"
-  for path in "$local_runtime_bench" "$baseline_doc" "$readme_doc"; do
+  for path in "$local_runtime_bench" "$allocation_bench" "$baseline_doc" "$readme_doc"; do
     [[ -f "$path" ]] || fail "Axon benchmark baseline coverage file is missing: ${path#$AXON_ROOT/}"
   done
 
@@ -753,8 +788,23 @@ check_axon_benchmark_baseline_coverage_contract() {
     fi
   done
 
-  if ! grep -q "Allocation baselines are not yet captured" "$readme_doc"; then
-    fail "Axon benchmark README must explicitly keep allocation baseline coverage open"
+  for scenario in \
+    "allocation/unary_invoke" \
+    "allocation/stream_two_frames" \
+    "allocation/bidi_echo_round_trip" \
+    "allocation/cancel_cleanup" \
+    "allocation/bounded_concurrency_n16"
+  do
+    if ! grep -q "$scenario" "$allocation_bench"; then
+      fail "Axon local_runtime allocation benchmark is missing V2 scenario: $scenario"
+    fi
+    if ! grep -q "$scenario" "$baseline_doc"; then
+      fail "Axon local_runtime baseline document is missing V2 allocation scenario: $scenario"
+    fi
+  done
+
+  if ! grep -q "local_runtime_allocations.rs" "$readme_doc"; then
+    fail "Axon benchmark README must name the allocation baseline harness"
   fi
 }
 
@@ -959,6 +1009,32 @@ if [[ "${1:-}" == "--self-test" ]]; then
   trap 'rm -rf "$tmp"' EXIT
   cp "$MANIFEST" "$tmp/manifest.json"
   cp "$MATRIX" "$tmp/matrix.json"
+  cp "$MATRIX" "$tmp/lifecycle-matrix-missing.json"
+  "$PYTHON_BIN" - "$tmp/lifecycle-matrix-missing.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+del data["lifecycle_transition_contract"]["cancel"]["cleanup_responsibility"]
+path.write_text(json.dumps(data))
+PY
+  if ( MATRIX="$tmp/lifecycle-matrix-missing.json"; check_manifest_contract ) >/dev/null 2>&1; then
+    fail "self-test expected lifecycle transition contract field gate to fail"
+  fi
+  cp "$MATRIX" "$tmp/lifecycle-matrix-drift.json"
+  "$PYTHON_BIN" - "$tmp/lifecycle-matrix-drift.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+data["lifecycle_transition_contract"]["dispatch"]["transition"]["state"] = "running"
+path.write_text(json.dumps(data))
+PY
+  if ( MATRIX="$tmp/lifecycle-matrix-drift.json"; check_manifest_contract ) >/dev/null 2>&1; then
+    fail "self-test expected lifecycle transition contract drift gate to fail"
+  fi
   "$PYTHON_BIN" - "$tmp/manifest.json" <<'PY'
 import json
 import sys
@@ -1368,6 +1444,15 @@ fn bench() {
     let _ = "cancel/cooperative_cleanup";
 }
 RS
+    cat > "$root/sdk/rust/benches/local_runtime_allocations.rs" <<'RS'
+fn bench() {
+    let _ = "allocation/unary_invoke";
+    let _ = "allocation/stream_two_frames";
+    let _ = "allocation/bidi_echo_round_trip";
+    let _ = "allocation/cancel_cleanup";
+    let _ = "allocation/bounded_concurrency_n16";
+}
+RS
     cat > "$root/sdk/rust/benches/BASELINE.md" <<'MD'
 # Baseline benchmark numbers
 
@@ -1378,11 +1463,19 @@ RS
 | `invoke_stream/two_frames` | 3 us |
 | `invoke_bidi/echo_round_trip` | 4 us |
 | `cancel/cooperative_cleanup` | 5 us |
+
+| Scenario | Allocations | Bytes |
+|---|---:|---:|
+| `allocation/unary_invoke` | 1 | 1 |
+| `allocation/stream_two_frames` | 2 | 2 |
+| `allocation/bidi_echo_round_trip` | 3 | 3 |
+| `allocation/cancel_cleanup` | 4 | 4 |
+| `allocation/bounded_concurrency_n16` | 5 | 5 |
 MD
     cat > "$root/sdk/rust/benches/README.md" <<'MD'
 # Benchmarks
 
-Allocation baselines are not yet captured by Criterion's default timing harness.
+`local_runtime_allocations.rs` owns allocation baselines.
 MD
   }
 
@@ -1391,7 +1484,7 @@ MD
     fail "self-test expected benchmark baseline coverage fixture to pass"
   fi
   cp -R "$tmp/axon-benchmark-good" "$tmp/axon-benchmark-bad"
-  perl -0pi -e 's/\| `invoke_bidi\/echo_round_trip` \| 4 us \|\n//' \
+  perl -0pi -e 's/\| `allocation\/bidi_echo_round_trip` \| 3 \| 3 \|\n//' \
     "$tmp/axon-benchmark-bad/sdk/rust/benches/BASELINE.md"
   if ( AXON_ROOT="$tmp/axon-benchmark-bad"; check_axon_benchmark_baseline_coverage_contract ) >/dev/null 2>&1; then
     fail "self-test expected benchmark baseline coverage gate to fail"

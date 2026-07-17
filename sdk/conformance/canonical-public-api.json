@@ -16314,7 +16314,266 @@
       }
     }
   },
-  "provider_proofs": {},
+  "provider_proofs": {
+    "native_runtime": {
+      "go": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/direct_runtime.go",
+          "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "runtime/control_only",
+            "action": "attach_runtime_host",
+            "selector": "TestRuntimeHealthExposesControlOnlyState"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "reject_control_socket_product_call",
+            "selector": "TestRuntimeHealthExposesControlOnlyState"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/direct_runtime.py",
+          "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "runtime/control_only",
+            "action": "attach_runtime_host",
+            "selector": "test_reads_discovery_and_negotiates_v1"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "reject_control_socket_product_call",
+            "selector": "test_reads_discovery_and_negotiates_v1"
+          }
+        ]
+      }
+    },
+    "stream": {
+      "go": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/direct_runtime.go",
+          "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_stream_callback_queue",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_stream_backpressure_terminal",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_bidi_callback_queue",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_bidi_backpressure_terminal",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "open_stream",
+            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "project_stream_terminal_event",
+            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "close_stream",
+            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/direct_runtime.py",
+          "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_stream_callback_queue",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_stream_backpressure_terminal",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_bidi_callback_queue",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_bidi_backpressure_terminal",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "open_stream",
+            "selector": "test_stream_orders_events_and_closes_after_terminal"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "project_stream_terminal_event",
+            "selector": "test_stream_orders_events_and_closes_after_terminal"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "close_stream",
+            "selector": "test_stream_orders_events_and_closes_after_terminal"
+          }
+        ]
+      }
+    },
+    "unary_invoke": {
+      "go": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/direct_runtime.go",
+          "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "invocation/complete_tuple",
+            "action": "build_invocation",
+            "selector": "TestInvocationBuilderBuildsCompleteTuple"
+          },
+          {
+            "case_id": "invocation/complete_tuple",
+            "action": "remove_field",
+            "selector": "TestInvocationBuilderBuildsCompleteTuple"
+          },
+          {
+            "case_id": "invocation/complete_tuple",
+            "action": "prepare",
+            "selector": "TestInvocationBuilderBuildsCompleteTuple"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "prepare_complete_tuple",
+            "selector": "TestStreamHandleRejectsDuplicateTerminal"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "sign_prepared",
+            "selector": "TestStreamHandleRejectsDuplicateTerminal"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "submit_signed_handle",
+            "selector": "TestStreamHandleRejectsDuplicateTerminal"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "await_handle_terminal",
+            "selector": "TestStreamHandleRejectsDuplicateTerminal"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "cancel_handle",
+            "selector": "TestStreamHandleRejectsDuplicateTerminal"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "read_handle_events",
+            "selector": "TestStreamHandleRejectsDuplicateTerminal"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/direct_runtime.py",
+          "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "invocation/complete_tuple",
+            "action": "build_invocation",
+            "selector": "test_builder_builds_complete_tuple"
+          },
+          {
+            "case_id": "invocation/complete_tuple",
+            "action": "remove_field",
+            "selector": "test_builder_builds_complete_tuple"
+          },
+          {
+            "case_id": "invocation/complete_tuple",
+            "action": "prepare",
+            "selector": "test_builder_builds_complete_tuple"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "prepare_complete_tuple",
+            "selector": "test_result_rejects_inconsistent_failure"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "sign_prepared",
+            "selector": "test_result_rejects_inconsistent_failure"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "submit_signed_handle",
+            "selector": "test_result_rejects_inconsistent_failure"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "await_handle_terminal",
+            "selector": "test_result_rejects_inconsistent_failure"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "cancel_handle",
+            "selector": "test_result_rejects_inconsistent_failure"
+          },
+          {
+            "case_id": "invocation/terminal_monotonicity",
+            "action": "read_handle_events",
+            "selector": "test_result_rejects_inconsistent_failure"
+          }
+        ]
+      }
+    }
+  },
   "inventory_parsers": {
     "rust": "rustdoc-json",
     "c_abi": "clang-ast",
@@ -24503,5 +24762,179 @@
     "start",
     "stream_open",
     "terminal_receipt"
-  ]
+  ],
+  "lifecycle_transition_contract": {
+    "bidi_open": {
+      "allowed_source_states": [
+        "dispatched",
+        "running"
+      ],
+      "transition": {
+        "kind": "next",
+        "state": "bidi_open"
+      },
+      "deadline_owner": "invocation_deadline_owner",
+      "child_deadline_propagation": "bidi_children_inherit_remaining_parent_deadline",
+      "cancellation_authority": "caller_or_parent",
+      "cancellation_ack": "close_send_is_half_close_cancel_requires_explicit_cancel",
+      "idempotent_replay_result": "duplicate_bidi_open_returns_existing_session_or_invalid_handle",
+      "queue_concurrency_limits": "bounded_bidi_frame_queue_and_session_permit",
+      "cleanup_responsibility": "release_bidi_session_permit_after_terminal_frame_or_close",
+      "receipt_event_observability": "bidi_frame0_admission_and_terminal_frame_visible"
+    },
+    "cancel": {
+      "allowed_source_states": [
+        "admitted",
+        "bidi_open",
+        "child_dispatched",
+        "dispatched",
+        "running",
+        "stream_open"
+      ],
+      "transition": {
+        "kind": "terminal",
+        "state": "cancelled"
+      },
+      "deadline_owner": "cancel_request_uses_runtime_control_deadline",
+      "child_deadline_propagation": "parent_cancel_propagates_to_live_children",
+      "cancellation_authority": "caller_parent_or_runtime_supervisor",
+      "cancellation_ack": "cancel_ack_is_request_lifecycle_not_synthetic_terminal",
+      "idempotent_replay_result": "duplicate_cancel_returns_existing_terminal_or_pending_intent",
+      "queue_concurrency_limits": "single_cancel_winner_with_bounded_child_fanout",
+      "cleanup_responsibility": "cleanup_processes_streams_and_permits_before_terminal_receipt",
+      "receipt_event_observability": "cancel_event_and_cancelled_terminal_receipt_visible"
+    },
+    "child_dispatch": {
+      "allowed_source_states": [
+        "bidi_open",
+        "running",
+        "stream_open"
+      ],
+      "transition": {
+        "kind": "next",
+        "state": "child_dispatched"
+      },
+      "deadline_owner": "parent_invocation_deadline_owner",
+      "child_deadline_propagation": "child_deadline_cannot_exceed_parent_remaining_deadline",
+      "cancellation_authority": "parent_invocation_control",
+      "cancellation_ack": "parent_terminal_cancels_live_child_dispatch",
+      "idempotent_replay_result": "child_dispatch_nonce_replay_returns_original_child_receipt",
+      "queue_concurrency_limits": "bounded_child_dispatch_fanout",
+      "cleanup_responsibility": "child_permits_released_before_parent_terminal_receipt",
+      "receipt_event_observability": "parent_receipt_records_child_receipt_link"
+    },
+    "deadline": {
+      "allowed_source_states": [
+        "admitted",
+        "bidi_open",
+        "child_dispatched",
+        "dispatched",
+        "running",
+        "stream_open"
+      ],
+      "transition": {
+        "kind": "terminal",
+        "state": "timed_out"
+      },
+      "deadline_owner": "invocation_deadline_owner",
+      "child_deadline_propagation": "deadline_terminal_propagates_to_live_children",
+      "cancellation_authority": "runtime_deadline_timer",
+      "cancellation_ack": "deadline_terminal_is_not_user_cancel_ack",
+      "idempotent_replay_result": "late_deadline_observation_returns_existing_timed_out_receipt",
+      "queue_concurrency_limits": "deadline_timers_are_bounded_by_live_invocation_count",
+      "cleanup_responsibility": "deadline_cleanup_completes_before_timed_out_receipt",
+      "receipt_event_observability": "deadline_exceeded_event_and_timed_out_receipt_visible"
+    },
+    "dispatch": {
+      "allowed_source_states": [
+        "admitted"
+      ],
+      "transition": {
+        "kind": "next",
+        "state": "dispatched"
+      },
+      "deadline_owner": "invocation_deadline_owner",
+      "child_deadline_propagation": "not_applicable_until_child_dispatch",
+      "cancellation_authority": "caller_or_parent",
+      "cancellation_ack": "cancel_after_dispatch_records_control_intent",
+      "idempotent_replay_result": "duplicate_dispatch_rejected_by_nonce_replay",
+      "queue_concurrency_limits": "bounded_runtime_dispatch_queue",
+      "cleanup_responsibility": "dispatch_permit_released_at_terminal_receipt",
+      "receipt_event_observability": "admission_and_dispatch_events_visible"
+    },
+    "restart_recover": {
+      "allowed_source_states": [
+        "recovering",
+        "runtime_started"
+      ],
+      "transition": {
+        "kind": "next",
+        "state": "runtime_started"
+      },
+      "deadline_owner": "runtime_supervisor_recovery_deadline",
+      "child_deadline_propagation": "recovered_children_keep_original_deadline_bounds",
+      "cancellation_authority": "runtime_supervisor",
+      "cancellation_ack": "orphan_reap_records_cleanup_without_fabricating_success",
+      "idempotent_replay_result": "repeated_recovery_returns_same_replayed_terminal_facts",
+      "queue_concurrency_limits": "recovery_scan_is_bounded_by_persisted_live_invocations",
+      "cleanup_responsibility": "orphan_processes_and_permits_reaped_before_ready",
+      "receipt_event_observability": "recovery_events_and_replayed_terminal_receipts_visible"
+    },
+    "start": {
+      "allowed_source_states": [
+        "runtime_unstarted"
+      ],
+      "transition": {
+        "kind": "next",
+        "state": "runtime_started"
+      },
+      "deadline_owner": "runtime_supervisor_start_deadline",
+      "child_deadline_propagation": "not_applicable_before_invocation",
+      "cancellation_authority": "runtime_supervisor",
+      "cancellation_ack": "start_cancel_reports_unavailable_without_invocation_receipt",
+      "idempotent_replay_result": "repeat_start_returns_existing_runtime_handle",
+      "queue_concurrency_limits": "runtime_start_serialized_per_process_root",
+      "cleanup_responsibility": "failed_start_releases_process_root_and_sockets",
+      "receipt_event_observability": "runtime_health_event_no_invocation_receipt"
+    },
+    "stream_open": {
+      "allowed_source_states": [
+        "dispatched",
+        "running"
+      ],
+      "transition": {
+        "kind": "next",
+        "state": "stream_open"
+      },
+      "deadline_owner": "invocation_deadline_owner",
+      "child_deadline_propagation": "stream_children_inherit_remaining_parent_deadline",
+      "cancellation_authority": "caller_or_parent",
+      "cancellation_ack": "stream_cancel_is_request_then_terminal_event",
+      "idempotent_replay_result": "duplicate_stream_open_returns_existing_stream_or_invalid_handle",
+      "queue_concurrency_limits": "bounded_stream_callback_queue_and_stream_permit",
+      "cleanup_responsibility": "release_stream_permit_after_terminal_event_or_close",
+      "receipt_event_observability": "stream_open_data_and_terminal_events_visible"
+    },
+    "terminal_receipt": {
+      "allowed_source_states": [
+        "bidi_open",
+        "child_dispatched",
+        "dispatched",
+        "running",
+        "stream_open"
+      ],
+      "transition": {
+        "kind": "terminal",
+        "state": "terminal"
+      },
+      "deadline_owner": "terminal_receipt_preserves_original_deadline_owner",
+      "child_deadline_propagation": "terminal_parent_closes_or_cancels_live_children",
+      "cancellation_authority": "not_applicable_after_terminal_receipt",
+      "cancellation_ack": "post_terminal_cancel_is_idempotent_observation",
+      "idempotent_replay_result": "terminal_receipt_replay_returns_same_receipt",
+      "queue_concurrency_limits": "terminal_receipt_closes_live_queue_slots",
+      "cleanup_responsibility": "all_runtime_resources_released_before_terminal_receipt",
+      "receipt_event_observability": "exactly_one_terminal_receipt_with_proof_facts"
+    }
+  }
 }

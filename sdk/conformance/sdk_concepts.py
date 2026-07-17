@@ -38,6 +38,165 @@ LIFECYCLE_ACTIONS = {
     "terminal_receipt",
     "restart_recover",
 }
+LIFECYCLE_TRANSITION_FIELDS = {
+    "allowed_source_states",
+    "transition",
+    "deadline_owner",
+    "child_deadline_propagation",
+    "cancellation_authority",
+    "cancellation_ack",
+    "idempotent_replay_result",
+    "queue_concurrency_limits",
+    "cleanup_responsibility",
+    "receipt_event_observability",
+}
+LIFECYCLE_STATES = {
+    "admitted",
+    "bidi_open",
+    "cancelled",
+    "child_dispatched",
+    "completed",
+    "dispatched",
+    "failed",
+    "recovering",
+    "running",
+    "runtime_started",
+    "runtime_unstarted",
+    "stream_open",
+    "terminal",
+    "timed_out",
+}
+LIFECYCLE_TRANSITION_KINDS = {"next", "terminal"}
+LIFECYCLE_TRANSITION_CONTRACT = {
+    "bidi_open": {
+        "allowed_source_states": ["dispatched", "running"],
+        "transition": {"kind": "next", "state": "bidi_open"},
+        "deadline_owner": "invocation_deadline_owner",
+        "child_deadline_propagation": "bidi_children_inherit_remaining_parent_deadline",
+        "cancellation_authority": "caller_or_parent",
+        "cancellation_ack": "close_send_is_half_close_cancel_requires_explicit_cancel",
+        "idempotent_replay_result": "duplicate_bidi_open_returns_existing_session_or_invalid_handle",
+        "queue_concurrency_limits": "bounded_bidi_frame_queue_and_session_permit",
+        "cleanup_responsibility": "release_bidi_session_permit_after_terminal_frame_or_close",
+        "receipt_event_observability": "bidi_frame0_admission_and_terminal_frame_visible",
+    },
+    "cancel": {
+        "allowed_source_states": [
+            "admitted",
+            "bidi_open",
+            "child_dispatched",
+            "dispatched",
+            "running",
+            "stream_open",
+        ],
+        "transition": {"kind": "terminal", "state": "cancelled"},
+        "deadline_owner": "cancel_request_uses_runtime_control_deadline",
+        "child_deadline_propagation": "parent_cancel_propagates_to_live_children",
+        "cancellation_authority": "caller_parent_or_runtime_supervisor",
+        "cancellation_ack": "cancel_ack_is_request_lifecycle_not_synthetic_terminal",
+        "idempotent_replay_result": "duplicate_cancel_returns_existing_terminal_or_pending_intent",
+        "queue_concurrency_limits": "single_cancel_winner_with_bounded_child_fanout",
+        "cleanup_responsibility": "cleanup_processes_streams_and_permits_before_terminal_receipt",
+        "receipt_event_observability": "cancel_event_and_cancelled_terminal_receipt_visible",
+    },
+    "child_dispatch": {
+        "allowed_source_states": ["bidi_open", "running", "stream_open"],
+        "transition": {"kind": "next", "state": "child_dispatched"},
+        "deadline_owner": "parent_invocation_deadline_owner",
+        "child_deadline_propagation": "child_deadline_cannot_exceed_parent_remaining_deadline",
+        "cancellation_authority": "parent_invocation_control",
+        "cancellation_ack": "parent_terminal_cancels_live_child_dispatch",
+        "idempotent_replay_result": "child_dispatch_nonce_replay_returns_original_child_receipt",
+        "queue_concurrency_limits": "bounded_child_dispatch_fanout",
+        "cleanup_responsibility": "child_permits_released_before_parent_terminal_receipt",
+        "receipt_event_observability": "parent_receipt_records_child_receipt_link",
+    },
+    "deadline": {
+        "allowed_source_states": [
+            "admitted",
+            "bidi_open",
+            "child_dispatched",
+            "dispatched",
+            "running",
+            "stream_open",
+        ],
+        "transition": {"kind": "terminal", "state": "timed_out"},
+        "deadline_owner": "invocation_deadline_owner",
+        "child_deadline_propagation": "deadline_terminal_propagates_to_live_children",
+        "cancellation_authority": "runtime_deadline_timer",
+        "cancellation_ack": "deadline_terminal_is_not_user_cancel_ack",
+        "idempotent_replay_result": "late_deadline_observation_returns_existing_timed_out_receipt",
+        "queue_concurrency_limits": "deadline_timers_are_bounded_by_live_invocation_count",
+        "cleanup_responsibility": "deadline_cleanup_completes_before_timed_out_receipt",
+        "receipt_event_observability": "deadline_exceeded_event_and_timed_out_receipt_visible",
+    },
+    "dispatch": {
+        "allowed_source_states": ["admitted"],
+        "transition": {"kind": "next", "state": "dispatched"},
+        "deadline_owner": "invocation_deadline_owner",
+        "child_deadline_propagation": "not_applicable_until_child_dispatch",
+        "cancellation_authority": "caller_or_parent",
+        "cancellation_ack": "cancel_after_dispatch_records_control_intent",
+        "idempotent_replay_result": "duplicate_dispatch_rejected_by_nonce_replay",
+        "queue_concurrency_limits": "bounded_runtime_dispatch_queue",
+        "cleanup_responsibility": "dispatch_permit_released_at_terminal_receipt",
+        "receipt_event_observability": "admission_and_dispatch_events_visible",
+    },
+    "restart_recover": {
+        "allowed_source_states": ["recovering", "runtime_started"],
+        "transition": {"kind": "next", "state": "runtime_started"},
+        "deadline_owner": "runtime_supervisor_recovery_deadline",
+        "child_deadline_propagation": "recovered_children_keep_original_deadline_bounds",
+        "cancellation_authority": "runtime_supervisor",
+        "cancellation_ack": "orphan_reap_records_cleanup_without_fabricating_success",
+        "idempotent_replay_result": "repeated_recovery_returns_same_replayed_terminal_facts",
+        "queue_concurrency_limits": "recovery_scan_is_bounded_by_persisted_live_invocations",
+        "cleanup_responsibility": "orphan_processes_and_permits_reaped_before_ready",
+        "receipt_event_observability": "recovery_events_and_replayed_terminal_receipts_visible",
+    },
+    "start": {
+        "allowed_source_states": ["runtime_unstarted"],
+        "transition": {"kind": "next", "state": "runtime_started"},
+        "deadline_owner": "runtime_supervisor_start_deadline",
+        "child_deadline_propagation": "not_applicable_before_invocation",
+        "cancellation_authority": "runtime_supervisor",
+        "cancellation_ack": "start_cancel_reports_unavailable_without_invocation_receipt",
+        "idempotent_replay_result": "repeat_start_returns_existing_runtime_handle",
+        "queue_concurrency_limits": "runtime_start_serialized_per_process_root",
+        "cleanup_responsibility": "failed_start_releases_process_root_and_sockets",
+        "receipt_event_observability": "runtime_health_event_no_invocation_receipt",
+    },
+    "stream_open": {
+        "allowed_source_states": ["dispatched", "running"],
+        "transition": {"kind": "next", "state": "stream_open"},
+        "deadline_owner": "invocation_deadline_owner",
+        "child_deadline_propagation": "stream_children_inherit_remaining_parent_deadline",
+        "cancellation_authority": "caller_or_parent",
+        "cancellation_ack": "stream_cancel_is_request_then_terminal_event",
+        "idempotent_replay_result": "duplicate_stream_open_returns_existing_stream_or_invalid_handle",
+        "queue_concurrency_limits": "bounded_stream_callback_queue_and_stream_permit",
+        "cleanup_responsibility": "release_stream_permit_after_terminal_event_or_close",
+        "receipt_event_observability": "stream_open_data_and_terminal_events_visible",
+    },
+    "terminal_receipt": {
+        "allowed_source_states": [
+            "bidi_open",
+            "child_dispatched",
+            "dispatched",
+            "running",
+            "stream_open",
+        ],
+        "transition": {"kind": "terminal", "state": "terminal"},
+        "deadline_owner": "terminal_receipt_preserves_original_deadline_owner",
+        "child_deadline_propagation": "terminal_parent_closes_or_cancels_live_children",
+        "cancellation_authority": "not_applicable_after_terminal_receipt",
+        "cancellation_ack": "post_terminal_cancel_is_idempotent_observation",
+        "idempotent_replay_result": "terminal_receipt_replay_returns_same_receipt",
+        "queue_concurrency_limits": "terminal_receipt_closes_live_queue_slots",
+        "cleanup_responsibility": "all_runtime_resources_released_before_terminal_receipt",
+        "receipt_event_observability": "exactly_one_terminal_receipt_with_proof_facts",
+    },
+}
 PACKAGE_CATEGORIES = {
     "canonical_axon_sdk",
     "easynet_provider",
@@ -142,6 +301,35 @@ def validate_product_neutral_inventory(concepts: dict[str, Any]) -> None:
                         )
 
 
+def validate_lifecycle_transition_contract(concepts: dict[str, Any]) -> None:
+    contract = concepts.get("lifecycle_transition_contract")
+    if contract != LIFECYCLE_TRANSITION_CONTRACT:
+        fail("lifecycle_transition_contract")
+    if set(contract) != LIFECYCLE_ACTIONS:
+        fail("lifecycle_transition_contract_actions")
+    for action, entry in contract.items():
+        if set(entry) != LIFECYCLE_TRANSITION_FIELDS:
+            fail(f"lifecycle_transition_fields:{action}")
+        sources = entry["allowed_source_states"]
+        if (
+            not isinstance(sources, list)
+            or sources != sorted(set(sources))
+            or not set(sources).issubset(LIFECYCLE_STATES)
+        ):
+            fail(f"lifecycle_transition_sources:{action}")
+        transition = entry["transition"]
+        if (
+            not isinstance(transition, dict)
+            or set(transition) != {"kind", "state"}
+            or transition["kind"] not in LIFECYCLE_TRANSITION_KINDS
+            or transition["state"] not in LIFECYCLE_STATES
+        ):
+            fail(f"lifecycle_transition_target:{action}")
+        for field in LIFECYCLE_TRANSITION_FIELDS - {"allowed_source_states", "transition"}:
+            if not isinstance(entry[field], str) or not entry[field].strip():
+                fail(f"lifecycle_transition_metadata:{action}:{field}")
+
+
 def validate_schema(
     concepts: dict[str, Any], *, check_paths: bool = True
 ) -> dict[str, Any]:
@@ -156,6 +344,7 @@ def validate_schema(
     lifecycle_actions = concepts.get("lifecycle_actions")
     if lifecycle_actions != sorted(LIFECYCLE_ACTIONS):
         fail("lifecycle_actions")
+    validate_lifecycle_transition_contract(concepts)
     source_revisions = concepts.get("inventory_source_revisions")
     if not isinstance(source_revisions, dict) or set(source_revisions) != set(PUBLIC_LANGUAGES):
         fail("inventory_source_revisions")
@@ -471,6 +660,23 @@ def validate_provider_proofs(
     capabilities = concepts["capabilities"]
     bindings = execution_bindings()
     registered = concepts["provider_implementations"]
+    required_proofs: dict[str, set[str]] = defaultdict(set)
+    for implementation in registered:
+        language = implementation["language"]
+        for capability_id in implementation["capability_ids"]:
+            capability = capabilities[capability_id]
+            if any(
+                language in requirement["languages"]
+                for requirement in capability.get("unproven_requirements", [])
+            ):
+                continue
+            case_ids = [
+                case_id
+                for case_id in capability["case_ids"]
+                if language in contracts[case_id]["languages"]
+            ]
+            if case_ids and all((language, case_id) in bindings for case_id in case_ids):
+                required_proofs[capability_id].add(language)
     for capability_id, languages in proofs.items():
         if capability_id not in capabilities or not isinstance(languages, dict):
             fail(f"unknown_provider_capability:{capability_id}")
@@ -532,7 +738,6 @@ def validate_provider_proofs(
             if not isinstance(mappings, list):
                 fail(f"provider_step_evidence_required:{capability_id}:{language}")
             actual_steps: set[tuple[str, str]] = set()
-            selectors: set[str] = set()
             for mapping in mappings:
                 if not isinstance(mapping, dict):
                     fail(f"invalid_provider_step:{capability_id}:{language}")
@@ -544,11 +749,14 @@ def validate_provider_proofs(
                 if binding is None or binding.get("selector") != mapping.get("selector"):
                     fail(f"provider_step_selector_unbound:{capability_id}:{language}:{key}")
                 selector = mapping.get("selector")
-                if selector in selectors:
-                    fail(f"provider_step_selector_reused:{capability_id}:{language}:{selector}")
-                selectors.add(selector)
+                if not isinstance(selector, str) or not selector:
+                    fail(f"provider_step_selector_required:{capability_id}:{language}:{key}")
             if actual_steps != expected_steps:
                 fail(f"provider_steps_not_closed:{capability_id}:{language}")
+    for capability_id, languages in required_proofs.items():
+        for language in sorted(languages, key=PUBLIC_LANGUAGES.index):
+            if language not in proofs.get(capability_id, {}):
+                fail(f"provider_proof_required:{capability_id}:{language}")
 
 
 def canonical_package_paths(concepts: dict[str, Any]) -> list[str]:
@@ -750,6 +958,16 @@ def self_test(tmp: Path) -> None:
     bad_lifecycle_actions["lifecycle_actions"].remove("restart_recover")
     expect(bad_lifecycle_actions, "lifecycle_actions")
 
+    bad_lifecycle_contract = copy.deepcopy(concepts)
+    del bad_lifecycle_contract["lifecycle_transition_contract"]["cancel"]["cleanup_responsibility"]
+    expect(bad_lifecycle_contract, "lifecycle_transition_contract")
+
+    bad_lifecycle_source = copy.deepcopy(concepts)
+    bad_lifecycle_source["lifecycle_transition_contract"]["dispatch"][
+        "allowed_source_states"
+    ] = ["invented"]
+    expect(bad_lifecycle_source, "lifecycle_transition_contract")
+
     unapproved_quarantine = copy.deepcopy(concepts)
     unapproved_value = next(
         value
@@ -827,6 +1045,14 @@ def self_test(tmp: Path) -> None:
     expect(
         incomplete_steps,
         f"provider_steps_not_closed:{provider_capability_id}:go",
+        check_paths=True,
+    )
+
+    missing_required_proof = copy.deepcopy(concepts)
+    del missing_required_proof["provider_proofs"][provider_capability_id]["go"]
+    expect(
+        missing_required_proof,
+        f"provider_proof_required:{provider_capability_id}:go",
         check_paths=True,
     )
 
