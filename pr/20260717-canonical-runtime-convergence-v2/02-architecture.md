@@ -1126,3 +1126,82 @@ forms that a grep-only gate could miss. This closes the Python omitted
 constructor path. RF-6 remains open for final cross-language constructor
 hardening, remaining package/example audit, and descriptor proof-binding
 parity closure.
+
+## Current Slice: RF-6 Rust Receipt Proof Default Constructor Removal
+
+Owner: EasyNet-Axon Rust SDK invocation model, InvocationCore construction,
+Rust LocalRuntime descriptor-bound admission, and EasyNet-Cli V2 convergence
+gate.
+
+Rust still exposed the strongest omitted-proof path after the previous RF-6
+slices: `ReceiptProofFacts` derived `Default`, `InvocationCore::new_with_policy`
+fed that default into every source-compatible core constructor, and the
+LocalRuntime receipt normalizer used `unwrap_or_default()` before patching
+fields from the admitted descriptor-bound envelope. That preserved an empty
+receipt proof object as the root lifecycle state even when the final receipt
+looked complete.
+
+The Rust invocation model now requires explicit `ReceiptProofFacts`
+construction. `ReceiptProofFacts::new(...)` is the named constructor for the
+complete receipt proof-fact tuple, and `Default` is no longer implemented for
+the type. `InvocationCore::new_with_policy` preserves its public behavior by
+deriving complete local proof facts from the provided `AxiomBinding` before
+building the core; it no longer inserts empty facts. Descriptor-bound
+LocalRuntime normalization now has two explicit states: caller-supplied facts
+must already be complete and matching, while omitted runtime-owned facts are
+constructed directly from the admitted envelope plus registered descriptor
+proof binding.
+
+The V2 RF-6 gate now rejects Rust `ReceiptProofFacts::default()`,
+`proof_facts: Default::default()`, and a `Default` derive on
+`ReceiptProofFacts`. This closes the Rust default receipt proof constructor
+path. RF-6 remains open for the remaining authority-proof default audit,
+package/example audit, and descriptor proof-binding parity closure.
+
+## Current Slice: RF-6 Python Authority Proof Constructor Hardening
+
+Owner: EasyNet-Axon Python SDK invocation model, Python receipt
+tests/examples, and EasyNet-Cli V2 convergence gate.
+
+After Python receipt proof facts became mandatory, the nested
+`InvocationAuthorityProof` dataclass still carried defaults for every field.
+That preserved an omitted-authority constructor path:
+`InvocationAuthorityProof()` or a partial proof object could still be
+embedded inside an otherwise explicit receipt proof-facts object.
+
+The Python invocation model now requires every authority-proof field at
+construction time: proof type, authority binding, proof payload, proof hash,
+issuer, signature, and admission hook. Runtime, bundle, test, and example
+callers now spell out empty payload and absent signature explicitly. The
+shared authority-anchor fixture keeps the current cross-language empty
+authority proof as an explicit object rather than relying on dataclass
+defaults.
+
+The V2 RF-6 gate now rejects Python authority-proof dataclass field defaults
+and incomplete `InvocationAuthorityProof(...)` calls across SDK source, tests,
+and examples. This closes the Python omitted authority-proof constructor path.
+RF-6 remains open for Node/Java/Swift empty authority helpers, Go/Rust
+authority-proof zero-struct audits, and descriptor proof-binding parity
+closure.
+
+## Current Slice: RF-6 Node Empty Authority Proof Helper Removal
+
+Owner: EasyNet-Axon Node SDK invocation model, Node receipt-anchor fixture,
+and EasyNet-Cli V2 convergence gate.
+
+After Node receipt proof facts and LocalRuntime facts moved to explicit
+construction, the Node SDK still exported `EMPTY_AUTHORITY_PROOF` from the
+invocation package and root package. That kept a reusable no-authority proof
+value in the public SDK surface and let callers build a complete-looking
+receipt proof-facts object while omitting the authority proof itself.
+
+The Node public empty authority helper is removed from TypeScript source and
+the generated JavaScript/declaration artifacts. The shared receipt-authority
+anchor test keeps the current cross-language empty authority proof as a
+file-local explicit fixture, so anchor parity remains visible without
+publishing the empty proof model as SDK API.
+
+The V2 RF-6 gate now rejects `EMPTY_AUTHORITY_PROOF` anywhere under Node SDK
+source or tests. This closes the Node empty authority-proof helper path. RF-6
+remains open for Java/Swift empty authority helpers, Go/Rust authority-proof
+zero-struct audits, and descriptor proof-binding parity closure.

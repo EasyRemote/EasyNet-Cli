@@ -461,3 +461,43 @@
   `ReceiptProofFacts()` calls across Python SDK source, tests, and examples
   because grep patterns can miss multiline empty calls or non-runtime fixture
   regressions.
+- Rust `ReceiptProofFacts: Default` is an RF-6 constructor defect. It makes an
+  empty receipt proof object a first-class lifecycle state, even if later
+  normalizers patch the fields before emission.
+- `InvocationCore::new_with_policy` keeps source-compatible behavior by
+  deriving complete local proof facts from `AxiomBinding`; it no longer uses
+  an empty receipt-facts object as the default construction path.
+- Descriptor-bound LocalRuntime normalization is now an explicit two-state
+  model. Runtime-owned omitted facts are derived directly from the admitted
+  envelope and registered descriptor proof binding; caller-supplied facts are
+  treated as a complete object and rejected if descriptor version or subject
+  ref is missing.
+- Rust test fixtures that need zero hash predicate coverage should set zero
+  hash fields on an otherwise explicit receipt proof-facts object. They must
+  not use `Default` as a shortcut for an invalid receipt proof model.
+- The V2 RF-6 gate now rejects Rust `ReceiptProofFacts::default()`,
+  `proof_facts: Default::default()`, and `Default` derive on
+  `ReceiptProofFacts` because public API manifests cannot reliably detect
+  derive-based constructor semantics or test/example defaults.
+- Python `InvocationAuthorityProof` defaults are a nested RF-6 defect. A
+  receipt proof-facts object is not complete if its authority proof was
+  created by omitted default fields.
+- Python authority-proof call sites now pass empty payload and absent
+  signature explicitly. This keeps the receipt authority model readable at
+  the signing boundary instead of hiding optionality in dataclass defaults.
+- The shared authority-anchor fixture may still encode an empty authority
+  proof while the cross-language anchor model is open, but it must do so as
+  an explicit fixture value and not through `InvocationAuthorityProof`
+  constructor defaults.
+- The V2 RF-6 gate now requires Python `InvocationAuthorityProof(...)` calls
+  in SDK source, tests, and examples to use the full named field set. That
+  catches partial omitted-authority proofs, not only zero-argument calls.
+- Node `EMPTY_AUTHORITY_PROOF` is a public omitted-authority construction
+  value, not a harmless fixture. Keeping it would preserve RF-6 as an SDK
+  integration pattern even after receipt proof facts became explicit.
+- The Node receipt-authority anchor suite may retain the shared empty
+  authority proof while the cross-language anchor model is open, but that
+  value belongs as a file-local fixture rather than an exported SDK helper.
+- The V2 RF-6 gate now rejects `EMPTY_AUTHORITY_PROOF` anywhere under Node SDK
+  source or tests because generated JS/declaration artifacts and excluded
+  fixtures can otherwise keep the wrong authority model alive.

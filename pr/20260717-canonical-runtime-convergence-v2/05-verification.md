@@ -1686,3 +1686,161 @@ new V2 regression coverage for Python empty `ReceiptProofFacts()` calls. It
 does not complete RF-6 globally because remaining language constructor
 hardening, package/example audit, and descriptor proof-binding parity still
 require separate closure.
+
+## RF-6 Rust Receipt Proof Default Constructor Removal Slice
+
+Commands run on 2026-07-17:
+
+- `cargo fmt --manifest-path sdk/rust/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed
+  after `cargo fmt --manifest-path sdk/rust/Cargo.toml` was applied to the
+  Rust SDK edits.
+- `cargo check --manifest-path sdk/rust/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo test --manifest-path sdk/rust/Cargo.toml receipt_proof_normalization`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed,
+  6 tests. This includes rejection of caller-supplied proof facts missing
+  descriptor version or subject ref.
+- `cargo test --manifest-path sdk/rust/Cargo.toml invocation::axiom::tests::receipt_proof_facts`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed,
+  2 tests.
+- `cargo test --manifest-path sdk/rust/Cargo.toml invocation::audit::tests::proof_fact_bound_predicates_treat_zero_hash_as_unbound`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed,
+  1 test.
+- `cargo test --manifest-path sdk/rust/Cargo.toml --features proto --test ledger_sink_and_external_signed public_invocation_core_cannot_emit_terminal_receipt`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed,
+  1 test. This preserves the public `InvocationCore::new()` fail-closed
+  receipt-authority behavior after it stopped using default proof facts.
+- `rg -n "ReceiptProofFacts::default\\(|proof_facts:\\s*Default::default\\(|#\\[derive\\([^\\]]*Default[^\\]]*\\)\\]\\s*pub struct ReceiptProofFacts" sdk/rust/src/invocation sdk/rust/tests -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no
+  receipt-proof default matches. The broader command output only contained
+  unrelated `unwrap_or_default()` uses in other domains.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed after
+  the Rust `ReceiptProofFacts` public constructor surface changed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects Rust `ReceiptProofFacts::default()`,
+  `proof_facts: Default::default()`, and `Default` derive fixtures and proves
+  the RF-6 gate rejects them.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Rust receipt proof default constructor removal,
+stricter descriptor-bound proof-fact normalization, and the new V2 regression
+coverage for Rust default proof-facts construction. It does not complete RF-6
+globally because authority-proof default semantics, package/example audit, and
+descriptor proof-binding parity still require separate closure.
+
+## RF-6 Python Authority Proof Constructor Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `uv run pytest tests/test_audit.py tests/test_authority_idiomatic.py tests/test_cross_language_verify.py tests/test_invocation_receipt_projection.py tests/test_authority_tail_parity.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python`:
+  passed, 39 tests. Python receipt audit, fluent authority, cross-language
+  verifier, projection, and shared authority-anchor fixtures all construct
+  authority proof facts explicitly.
+- `/Users/macbook.silan.tech/.local/bin/python3.12 -m compileall -q sdk/python/easynet_axon sdk/python/tests/test_audit.py sdk/python/tests/test_authority_idiomatic.py sdk/python/tests/test_cross_language_verify.py sdk/python/tests/test_invocation_receipt_projection.py sdk/python/tests/test_authority_tail_parity.py sdk/python/examples/authority_receipt.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `PYTHONPATH=sdk/python /Users/macbook.silan.tech/.local/bin/python3.12 -`
+  with a direct `InvocationAuthorityProof()` construction probe from
+  `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed by
+  raising `TypeError` and printing `authority-empty-rejected`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed after
+  the manifest source revision was refreshed to the Axon authority-proof
+  hardening commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects Python authority-proof dataclass defaults and a
+  partial `InvocationAuthorityProof(...)` call and proves the RF-6 gate
+  rejects both.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Python authority-proof constructor hardening and
+the new V2 regression coverage for Python omitted authority proof fields. It
+does not complete RF-6 globally because Node/Java/Swift empty authority
+helpers, Go/Rust authority-proof zero-struct audits, and descriptor
+proof-binding parity still require separate closure.
+
+## RF-6 Node Empty Authority Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `npm run build`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed after deleting the Node empty authority-proof export.
+- `rg -n "EMPTY_AUTHORITY_PROOF" sdk/node -S --glob '!**/node_modules/**'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no
+  matches after renaming the local receipt-authority anchor fixture.
+- `node --test tests/receipt-authority-anchor.test.mjs tests/cross-language-verify.test.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 11 tests. The active Node receipt-anchor suite still matches the
+  shared pins, and the Node bundle remains accepted by Rust `easynet-verify`.
+- `npm run verify`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed. This includes TypeScript checking, generated type verification,
+  generated artifact verification, axiom vectors, and protocol-pack vectors.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed after
+  the manifest source revision was refreshed to the Axon Node empty authority
+  proof removal commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now reintroduces a Node `EMPTY_AUTHORITY_PROOF` helper and proves
+  the RF-6 gate rejects it.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Node empty authority-proof helper removal and the
+new V2 regression coverage for that helper. It does not complete RF-6
+globally because Java/Swift empty authority helpers, Go/Rust authority-proof
+zero-struct audits, and descriptor proof-binding parity still require
+separate closure.

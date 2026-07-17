@@ -792,6 +792,65 @@
 - [x] Verify focused Python receipt tests, V2 gate/self-test, and public API
       manifest refresh before committing this slice.
 
+## RF-6 Rust Receipt Proof Default Constructor Removal Slice
+
+- [x] Identify Rust `ReceiptProofFacts: Default`,
+      `ReceiptProofFacts::default()`, and `proof_facts: Default::default()`
+      as omitted receipt proof-facts construction paths.
+- [x] Remove the `Default` implementation from Rust `ReceiptProofFacts`.
+- [x] Add an explicit `ReceiptProofFacts::new(...)` constructor for the full
+      subject, descriptor, runtime, authority, input/output, and causal-parent
+      fact tuple.
+- [x] Migrate `InvocationCore::new_with_policy` away from empty facts by
+      deriving complete local proof facts from the provided `AxiomBinding`.
+- [x] Refactor LocalRuntime receipt proof normalization so runtime-owned
+      omitted facts are constructed directly from the admitted envelope and
+      registered descriptor proof binding, while supplied facts must already
+      be complete and matching.
+- [x] Migrate Rust tests away from default receipt proof facts and add
+      negative tests for supplied facts missing descriptor version or subject
+      ref.
+- [x] Extend the V2 gate and self-test to reject Rust receipt proof-facts
+      default calls and `Default` derive reintroduction.
+- [x] Verify focused Rust tests, Rust SDK check, V2 gate/self-test, and public
+      API manifest refresh before committing this slice.
+
+## RF-6 Python Authority Proof Constructor Hardening Slice
+
+- [x] Identify Python `InvocationAuthorityProof` dataclass defaults as an
+      omitted authority-proof constructor path nested inside receipt proof
+      facts.
+- [x] Remove default values from Python `InvocationAuthorityProof` fields so
+      callers must provide proof type, binding, payload, hash, issuer,
+      signature, and admission hook explicitly.
+- [x] Migrate Python audit, fluent authority, cross-language verifier,
+      projection, authority-anchor, and example receipt fixtures to explicit
+      authority-proof construction.
+- [x] Preserve existing shared authority-anchor values as explicit empty
+      authority-proof fixture facts rather than changing cross-language
+      anchors in a Python-only slice.
+- [x] Extend the V2 gate and self-test with a Python AST scan that rejects
+      authority-proof dataclass defaults and incomplete
+      `InvocationAuthorityProof(...)` calls.
+- [x] Verify focused Python receipt tests, V2 gate/self-test, and public API
+      manifest refresh before committing this slice.
+
+## RF-6 Node Empty Authority Proof Helper Removal Slice
+
+- [x] Identify Node `EMPTY_AUTHORITY_PROOF` as an obsolete public SDK helper
+      after receipt proof facts moved to explicit construction.
+- [x] Delete the Node empty authority-proof helper from invocation source and
+      root package exports.
+- [x] Migrate the Node receipt-authority anchor suite to a file-local explicit
+      authority-proof fixture instead of importing a public empty helper.
+- [x] Rebuild/check the Node SDK so generated JS/declaration artifacts no
+      longer expose the empty helper.
+- [x] Extend the V2 gate and self-test to reject `EMPTY_AUTHORITY_PROOF`
+      anywhere under Node SDK source or tests.
+- [x] Verify Node receipt-anchor tests, cross-language verifier tests, full
+      Node SDK verification, and V2 gate/self-test before committing this
+      slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

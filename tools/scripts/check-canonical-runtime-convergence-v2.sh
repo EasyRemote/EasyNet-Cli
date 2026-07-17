@@ -665,6 +665,8 @@ check_receipt_proof_fact_contract() {
   local swift_receipt_paths=()
   local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
   local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
+  local rust_invocation="$AXON_ROOT/sdk/rust/src/invocation"
+  local rust_axiom="$AXON_ROOT/sdk/rust/src/invocation/axiom.rs"
   [[ -d "$AXON_ROOT/sdk/python/easynet_axon" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/easynet_axon")
   [[ -d "$AXON_ROOT/sdk/python/tests" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/tests")
   [[ -d "$AXON_ROOT/sdk/python/examples" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/examples")
@@ -692,6 +694,16 @@ import ast
 import sys
 from pathlib import Path
 
+authority_fields = {
+    "proof_type",
+    "binding",
+    "proof_payload",
+    "proof_hash",
+    "issuer",
+    "signature",
+    "admission_hook",
+}
+
 violations = []
 for root in map(Path, sys.argv[1:]):
     paths = [root] if root.is_file() else sorted(root.rglob("*.py"))
@@ -704,6 +716,13 @@ for root in map(Path, sys.argv[1:]):
             violations.append(f"{path}:{exc.lineno}:syntax_error:{exc.msg}")
             continue
         for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "InvocationAuthorityProof":
+                for item in node.body:
+                    if isinstance(item, ast.AnnAssign) and item.value is not None:
+                        field = item.target.id if isinstance(item.target, ast.Name) else "<unknown>"
+                        violations.append(
+                            f"{path}:{item.lineno}:InvocationAuthorityProof field default:{field}"
+                        )
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
@@ -714,13 +733,20 @@ for root in map(Path, sys.argv[1:]):
                 name = func.attr
             if name == "ReceiptProofFacts" and not node.args and not node.keywords:
                 violations.append(f"{path}:{node.lineno}:empty ReceiptProofFacts()")
+            if name == "InvocationAuthorityProof":
+                keyword_names = {kw.arg for kw in node.keywords if kw.arg is not None}
+                if node.args or keyword_names != authority_fields:
+                    missing = ",".join(sorted(authority_fields - keyword_names))
+                    violations.append(
+                        f"{path}:{node.lineno}:incomplete InvocationAuthorityProof({missing})"
+                    )
 
 if violations:
     print("\n".join(violations))
     raise SystemExit(1)
 PY
   then
-    fail "Python SDK/tests/examples still construct empty receipt proof facts"
+    fail "Python SDK/tests/examples still default receipt or authority proof facts"
   fi
 
   if rg -n 'proofFacts \?\? EMPTY_RECEIPT_PROOF_FACTS|authorityBinding \?\? AuthorityBinding\.self_|readonly proofFacts\?:|proofFacts\?: ReceiptProofFacts|authorityBinding\?: AuthorityBinding' "$node_invocation" \
@@ -736,6 +762,12 @@ PY
     && rg -n 'EMPTY_RECEIPT_PROOF_FACTS' "${node_receipt_paths[@]}" \
       --glob '!**/node_modules/**'; then
     fail "Node invocation package still exposes or uses empty receipt proof facts"
+  fi
+
+  if ((${#node_receipt_paths[@]} > 0)) \
+    && rg -n 'EMPTY_AUTHORITY_PROOF' "${node_receipt_paths[@]}" \
+      --glob '!**/node_modules/**'; then
+    fail "Node invocation package still exposes or uses empty authority proof facts"
   fi
 
   if ((${#swift_receipt_paths[@]} > 0)) \
@@ -755,6 +787,26 @@ PY
 
   if rg -n 'EmptyReceiptProofFacts\(\)' "$go_invocation"; then
     fail "Go invocation package still exposes or uses empty receipt proof facts"
+  fi
+
+  if [[ -d "$rust_invocation" ]] \
+    && rg -n 'ReceiptProofFacts::default\(\)|proof_facts:\s*Default::default\(\)' "$rust_invocation"; then
+    fail "Rust invocation package still constructs default receipt proof facts"
+  fi
+
+  if [[ -f "$rust_axiom" ]] \
+    && ! "$PYTHON_BIN" - "$rust_axiom" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+if re.search(r"#\[derive\([^\]]*\bDefault\b[^\]]*\)\]\s*pub struct ReceiptProofFacts\b", text, re.S):
+    print(f"{sys.argv[1]}: ReceiptProofFacts derives Default")
+    raise SystemExit(1)
+PY
+  then
+    fail "Rust ReceiptProofFacts still exposes a default constructor"
   fi
 }
 
@@ -848,6 +900,7 @@ PY
     > "$tmp/axon/sdk/rust/Cargo.toml"
   printf 'pub mod invocation;\n' > "$tmp/axon/sdk/rust/src/lib.rs"
   touch "$tmp/axon/sdk/rust/src/invocation/mod.rs"
+  touch "$tmp/axon/sdk/rust/src/invocation/axiom.rs"
   touch "$tmp/axon/sdk/rust/src/invocation/local_runtime/mod.rs"
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/build.rs"
   printf 'const CANONICAL_AXON_PROTO_FILES: &[&str] = &[];\n' > "$tmp/axon/core/runtime-rs/client-sdk/build.rs"
@@ -890,6 +943,19 @@ PY
   if ( AXON_ROOT="$tmp/axon-python-receipt-test-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Python SDK/test empty proof facts gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-python-authority-default-class"
+  printf 'class InvocationAuthorityProof:\n    proof_type: str = ""\n    proof_hash: bytes = b"0" * 32\n' \
+    > "$tmp/axon-python-authority-default-class/sdk/python/easynet_axon/invocation/axiom.py"
+  if ( AXON_ROOT="$tmp/axon-python-authority-default-class"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Python authority proof dataclass default gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-python-authority-partial-call"
+  mkdir -p "$tmp/axon-python-authority-partial-call/sdk/python/tests"
+  printf 'proof = InvocationAuthorityProof(proof_hash=b"0" * 32)\n' \
+    > "$tmp/axon-python-authority-partial-call/sdk/python/tests/test_partial_authority_proof.py"
+  if ( AXON_ROOT="$tmp/axon-python-authority-partial-call"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Python partial authority proof call gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-node-receipt-runtime"
   printf 'const binding = { proofFacts: EMPTY_RECEIPT_PROOF_FACTS };\n' \
     > "$tmp/axon-node-receipt-runtime/sdk/node/src/invocation/local-runtime.ts"
@@ -901,6 +967,12 @@ PY
     > "$tmp/axon-node-receipt-helper/sdk/node/src/invocation/axiom.ts"
   if ( AXON_ROOT="$tmp/axon-node-receipt-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Node empty proof facts helper gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-node-authority-helper"
+  printf 'export const EMPTY_AUTHORITY_PROOF = Object.freeze({});\n' \
+    > "$tmp/axon-node-authority-helper/sdk/node/src/invocation/axiom.ts"
+  if ( AXON_ROOT="$tmp/axon-node-authority-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Node empty authority proof helper gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-receipt-runtime"
   printf 'binding := AxiomBinding{ProofFacts: EmptyReceiptProofFacts()}\n' \
@@ -925,6 +997,18 @@ PY
     > "$tmp/axon-swift-receipt-default-init/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-receipt-default-init"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Swift empty proof facts constructor gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-rust-receipt-default-call"
+  printf 'fn f() { let facts = ReceiptProofFacts::default(); let body = ReceiptBody { proof_facts: Default::default() }; }\n' \
+    > "$tmp/axon-rust-receipt-default-call/sdk/rust/src/invocation/handle.rs"
+  if ( AXON_ROOT="$tmp/axon-rust-receipt-default-call"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Rust default receipt proof facts call gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-rust-receipt-default-derive"
+  printf '#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct ReceiptProofFacts {}\n' \
+    > "$tmp/axon-rust-receipt-default-derive/sdk/rust/src/invocation/axiom.rs"
+  if ( AXON_ROOT="$tmp/axon-rust-receipt-default-derive"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Rust ReceiptProofFacts Default derive gate to fail"
   fi
   mkdir -p "$tmp/axon/scripts/proto"
   printf '%s\n' \
