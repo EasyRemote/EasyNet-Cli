@@ -1006,6 +1006,43 @@
       lifecycle failures around `core`, `children_of`, `send_message`, and
       `cancel`; those remain RF-4 lifecycle facade debt.
 
+## RF-3 Swift Legacy Plain Proof Implementation Removal Slice
+
+- [x] Identify Swift `legacyPlainInvocationBytes`,
+      `signLegacyPlainInvocation`,
+      `verifyLegacyPlainInvocationSignature`,
+      `verifyLegacyPlainSignature`, and `runLegacyPlainAdmission` as a
+      production legacy plain proof/admission implementation path.
+- [x] Delete the Swift production legacy plain encoder, signer, verifier,
+      admission verifier, and admission runner instead of preserving internal
+      compatibility fixtures.
+- [x] Migrate Swift admission tests to `runDescriptorBoundAdmission` and
+      descriptor-bound signatures.
+- [x] Migrate Swift axiom-vector tests to descriptor-bound canonical bytes,
+      signing, and verification.
+- [x] Extend the V2 gate/self-test to reject Swift legacy plain
+      proof/admission helper names in production invocation source.
+- [x] Verify focused Swift invocation tests, V2 gate/self-test, CLI
+      conformance tests, and diff hygiene before committing this slice.
+
+## RF-3 Go Legacy Plain Proof Test Fixture Removal Slice
+
+- [x] Identify Go `legacy_plain_fixtures_test.go` as a test-scoped but
+      executable legacy plain proof/admission fixture in the invocation
+      package.
+- [x] Delete the Go legacy plain test encoder, signer, and verifier instead
+      of keeping historical fixture compatibility.
+- [x] Migrate Go axiom unit tests to descriptor-bound canonical bytes,
+      signing, and verification.
+- [x] Migrate Go axiom-vector tests to descriptor-bound canonical bytes,
+      signing, and verification.
+- [x] Replace old arbitrary plain fixture data with valid descriptor refs and
+      subject URAs where descriptor-bound validation is now exercised.
+- [x] Extend the V2 gate/self-test to reject Go legacy plain proof/admission
+      helper names across invocation test files as well as production source.
+- [x] Verify focused Go invocation tests, V2 gate/self-test, CLI conformance
+      tests, and diff hygiene before committing this slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

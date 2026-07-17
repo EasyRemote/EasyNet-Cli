@@ -1419,3 +1419,52 @@ across Python SDK source, tests, and examples. This closes the Python
 production legacy plain proof implementation path. RF-3 remains open for the
 remaining package, script, historical-vector, and example audits across all
 SDKs before descriptor-bound-only proof can be declared complete.
+
+## Current Slice: RF-3 Swift Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Swift invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Swift SDK still kept `legacyPlainInvocationBytes`, legacy plain signing,
+legacy plain signature verification, and a legacy plain admission runner in
+production invocation source. Those functions were internal rather than public,
+but they were still a second proof/admission model in the canonical SDK domain
+and the Swift admission/vector tests used them as normal fixtures.
+
+Swift invocation now has one caller-signature proof path:
+`DescriptorBoundEnvelope` canonical bytes. Admission tests enter
+`runDescriptorBoundAdmission`, and vector tests sign, verify, and compare
+descriptor-bound canonical bytes using the descriptor refs already carried by
+the shared conformance vectors. The legacy plain encoder, signer, verifier,
+signature wrapper, and admission runner were deleted instead of retained as
+test-only or internal compatibility helpers.
+
+The V2 RF-3 gate now rejects Swift production legacy plain proof/admission
+helper names in addition to public plain helper names. This closes the Swift
+production legacy plain proof implementation path. RF-3 remains open for the
+remaining package, script, historical-vector, and example audits across SDKs
+before descriptor-bound-only proof can be declared complete.
+
+## Current Slice: RF-3 Go Legacy Plain Proof Test Fixture Removal
+
+Owner: EasyNet-Axon Go invocation proof/admission test model and EasyNet-Cli
+V2 convergence gate.
+
+The Go SDK production invocation package had already moved runtime signing and
+admission onto descriptor-bound canonical bytes, but Go tests still carried a
+`legacy_plain_fixtures_test.go` encoder/signer/verifier and used it in axiom
+and vector tests. That fixture preserved a second proof model as executable
+SDK package code, even though it was test-scoped.
+
+Go invocation tests now use the same proof boundary as production:
+`DescriptorBoundEnvelope` canonical bytes. The axiom tests use valid
+descriptor refs and subject URAs, and the vector tests sign, verify, and
+compare descriptor-bound canonical bytes using the descriptor refs already in
+the shared conformance vectors. The legacy plain Go fixture file was deleted
+instead of retained for historical vector compatibility.
+
+The V2 RF-3 gate now rejects Go legacy plain proof/admission helper names
+across the invocation package, including test files. This closes the Go
+invocation test-fixture legacy plain proof path. RF-3 remains open for
+remaining Node scripts/tests and any broader package, historical-vector, and
+example audits before descriptor-bound-only proof can be declared complete.

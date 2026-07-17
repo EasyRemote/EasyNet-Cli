@@ -2263,3 +2263,94 @@ This evidence verifies only Python production legacy plain proof/admission
 implementation removal and the new V2 regression coverage for those helper
 names. It does not complete RF-3 globally because remaining package, script,
 historical-vector, and example audits still require separate closure.
+
+## RF-3 Swift Legacy Plain Proof Implementation Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission|verifyPhaseLegacyPlain|legacy_plain_invocation_bytes_empty|canonical_invocation_bytes_empty" sdk/swift/Sources sdk/swift/Tests -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after deleting the Swift production legacy plain proof/admission path and
+  migrating Swift invocation tests.
+- `swift test --package-path sdk/swift --filter AdmissionTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed,
+  24 tests.
+- `swift test --package-path sdk/swift --filter AxiomVectorsTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed,
+  2 tests.
+- `swift test --package-path sdk/swift`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: failed with
+  146 passed and 1 failed. The remaining failure is
+  `IndustrialTests.MessageInboxIdempotentTests.test_dup_id_delivers_once`,
+  which observed `0` deliveries instead of `1`; this is existing RF-4
+  lifecycle/message-inbox debt, not an RF-3 proof-boundary failure.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects Swift `legacyPlainInvocationBytes` and proves the
+  RF-3 gate rejects production legacy plain helpers.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Swift production legacy plain proof/admission
+implementation removal and the new V2 regression coverage for those helper
+names. It does not complete RF-3 globally because remaining package, script,
+historical-vector, and example audits still require separate closure.
+
+## RF-3 Go Legacy Plain Proof Test Fixture Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission|legacy_plain_invocation_bytes_empty" sdk/go/easynet/invocation -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after deleting `legacy_plain_fixtures_test.go` and migrating Go invocation
+  tests to descriptor-bound proof helpers.
+- `go test ./easynet/invocation -run 'TestCanonicalInvocationIsDeterministic|TestNonceIsPartOfSignedBytes|TestSubjectIsPartOfSignedBytes|TestProfileIsPartOfSignedBytes|TestSignVerifyRoundtrip|TestTamperedNonceFailsVerification|TestUnsupportedAlgorithmRejected|TestAxiomVectorsAllPass'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./easynet/invocation`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects Go `legacyPlainInvocationBytes` in a `_test.go`
+  fixture and proves the RF-3 gate rejects test-scoped legacy plain helpers.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Go legacy plain proof test-fixture removal and
+the new V2 regression coverage for test-scoped Go helper names. It does not
+complete RF-3 globally because remaining Node scripts/tests and broader
+package, historical-vector, and example audits still require separate closure.

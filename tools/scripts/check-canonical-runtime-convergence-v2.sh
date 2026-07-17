@@ -345,6 +345,10 @@ check_axon_plain_proof_public_boundary_contract() {
       --glob '!**/*_test.go'; then
     fail "Axon Go production invocation source preserves legacy plain proof/admission helper names"
   fi
+  if [[ -d "$go_invocation" ]] \
+    && rg -n '\b(legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission)\b|legacy_plain_invocation_bytes_empty' "$go_invocation"; then
+    fail "Axon Go invocation package preserves legacy plain proof/admission helper names"
+  fi
 
   local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
   local node_plain_paths=()
@@ -381,6 +385,10 @@ check_axon_plain_proof_public_boundary_contract() {
   if ((${#swift_plain_paths[@]} > 0)) \
     && rg -n 'public func (canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b|\b(canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' "${swift_plain_paths[@]}"; then
     fail "Axon Swift exposes plain proof/admission helpers"
+  fi
+  if [[ -d "$swift_invocation" ]] \
+    && rg -n '\b(legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission|verifyPhaseLegacyPlain)\b|legacy_plain_invocation_bytes_empty|canonical_invocation_bytes_empty' "$swift_invocation"; then
+    fail "Axon Swift production invocation source preserves legacy plain proof/admission helpers"
   fi
 }
 
@@ -1170,6 +1178,13 @@ PY
   if ( AXON_ROOT="$tmp/axon-go-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Go legacy plain proof boundary gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-go-legacy-plain-test-fixture"
+  mkdir -p "$tmp/axon-go-legacy-plain-test-fixture/sdk/go/easynet/invocation"
+  printf 'package invocation\nfunc legacyPlainInvocationBytes() []byte { return nil }\n' \
+    > "$tmp/axon-go-legacy-plain-test-fixture/sdk/go/easynet/invocation/legacy_plain_fixtures_test.go"
+  if ( AXON_ROOT="$tmp/axon-go-legacy-plain-test-fixture"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Go legacy plain proof test fixture gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-node-plain-proof"
   mkdir -p "$tmp/axon-node-plain-proof/sdk/node/src/invocation"
   printf 'export function canonicalInvocationBytes(env) { return Buffer.alloc(0); }\n' \
@@ -1204,6 +1219,13 @@ PY
     > "$tmp/axon-swift-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Swift plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-swift-legacy-plain-proof"
+  mkdir -p "$tmp/axon-swift-legacy-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation"
+  printf 'import Foundation\nfunc legacyPlainInvocationBytes(_ env: Any) -> Data { Data() }\n' \
+    > "$tmp/axon-swift-legacy-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+  if ( AXON_ROOT="$tmp/axon-swift-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Swift legacy plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-rust-local-fast"
   printf 'local-fast-probes = []\n' >> "$tmp/axon-rust-local-fast/sdk/rust/Cargo.toml"

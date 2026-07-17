@@ -610,3 +610,27 @@
 - The V2 RF-3 gate now rejects Python legacy plain helper names across source,
   tests, and examples because a private helper imported by tests is enough to
   keep the retired proof model live.
+- Internal Swift functions are still canonical-domain architecture when they
+  live under `EasyNetAxon/Invocation`. Keeping `legacyPlainInvocationBytes`,
+  legacy plain signing, legacy plain verifier, and `runLegacyPlainAdmission`
+  would preserve a second proof/admission model even without public exports.
+- Swift admission tests should exercise `runDescriptorBoundAdmission` because
+  it is the runtime state-machine boundary. A legacy plain admission runner in
+  tests would be a compatibility path and would weaken RF-3 convergence.
+- Swift axiom-vector tests should consume descriptor-bound canonical bytes for
+  tuple-binding properties. The shared vectors already use descriptor-ref
+  ability strings, so a plain encoder is not required to keep those vector
+  invariants meaningful.
+- The V2 RF-3 gate now rejects Swift production legacy plain helper names in
+  addition to public plain helper names because source-level absence is the
+  clean target for proof/admission convergence.
+- Go test files inside `easynet/invocation` are still part of the SDK proof
+  architecture. A test-scoped `legacy_plain_fixtures_test.go` encoder and
+  signer can be copied into production later and therefore preserves the
+  retired proof model.
+- Go axiom tests should use valid descriptor refs and subject URAs once they
+  exercise descriptor-bound bytes. Invalid arbitrary strings only made sense
+  when the tests bypassed descriptor-bound validation.
+- The V2 RF-3 gate now rejects Go legacy plain helper names across the whole
+  invocation package, including tests, because old vector fixture
+  compatibility is not a clean-target proof model.
