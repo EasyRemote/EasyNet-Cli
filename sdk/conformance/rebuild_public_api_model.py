@@ -383,9 +383,12 @@ def main() -> int:
         "stream",
         "bidi",
     ]
+    ability_provider_capabilities = ["ability_invocation_facade"]
     provider_specs = [
         ("go", "direct_runtime_provider", "sdk/go/", "sdk/go/direct_runtime.go", "RuntimeConnector", "sdk/go/connection.go", runtime_provider_capabilities),
         ("python", "direct_runtime_provider", "sdk/python/easynet_sdk/", "sdk/python/easynet_sdk/direct_runtime.py", "RuntimeConnector", "sdk/python/easynet_sdk/connection.py", runtime_provider_capabilities),
+        ("go", "runtime_ability_facade", "sdk/go/", "sdk/go/runtime_ability.go", "RuntimeAbilityClient", "sdk/go/runtime_ability.go", ability_provider_capabilities),
+        ("python", "ability_invocation_facade", "sdk/python/easynet_sdk/", "sdk/python/easynet_sdk/ability_invocation.py", "AbilityInvocationClient", "sdk/python/easynet_sdk/ability_invocation.py", ability_provider_capabilities),
     ]
     model["provider_implementations"] = []
     for language, identity, owner_path, path, interface, interface_path, capabilities in provider_specs:

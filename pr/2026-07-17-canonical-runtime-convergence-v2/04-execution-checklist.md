@@ -45,6 +45,18 @@
       runtime provider selectors that prove runtime provider entry, observable
       non-terminal provider output, and terminal receipt projection after
       dispatch.
+- [x] Bind Go and Python generic ability invocation facades to a
+      provider-backed `child_dispatch` vector that derives child causality from
+      a parent terminal receipt, dispatches through Runtime Core, and observes
+      the parent receipt link in the child terminal receipt.
+- [x] Bind Go and Python generic ability invocation facades to provider-backed
+      `dispatch`, `stream_open`, `bidi_open`, `cancel`, and
+      `terminal_receipt` vectors through Runtime Core selectors, while keeping
+      `deadline`, `restart_recover`, and `start` open.
+- [x] Bind Go and Python generic ability invocation facades to a
+      provider-backed `deadline` vector that proves Runtime Core provider
+      timeout ownership and retry after cleanup without adding a separate
+      ability timeout model.
 - [ ] Re-run SDK parity gates against current worktree.
 
 ## RF-6

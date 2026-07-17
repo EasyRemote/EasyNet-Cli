@@ -155,8 +155,8 @@ not treated as a passed gate for this iteration.
 Result: focused tests and model validation passed. Go and Python `stream` and
 `bidi` now carry `deadline` lifecycle evidence through direct runtime provider
 selectors. The cells remain `provider-backed`, not `cutover-ready`, because
-`child_dispatch`, `dispatch`, `restart_recover`, and `start` are still open for
-those capabilities.
+`child_dispatch`, `restart_recover`, and `start` are still open for those
+capabilities after the later dispatch-vector iteration.
 
 ## Stream/Bidi Dispatch Vector Iteration Evidence
 
@@ -170,3 +170,50 @@ Result: focused tests and matrix validation passed. Go and Python `stream` and
 selectors. The cells remain `provider-backed`, not `cutover-ready`, because
 `child_dispatch`, `restart_recover`, and `start` are still open for those
 capabilities.
+
+## Ability Child Dispatch Vector Iteration Evidence
+
+- `cd sdk/go && go test -run 'TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality' -count=1 .`
+- `env PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python/tests PYTHONDONTWRITEBYTECODE=1 /opt/anaconda3/bin/python -m pytest -q -p no:cacheprovider sdk/python/tests/test_ability_invocation.py::AbilityInvocationClientTests::test_child_context_anchors_child_invocation_to_parent_receipt`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_matrix.py --self-test --tmp /tmp/easynet-sdk-matrix-ability-child-dispatch-self-test`
+
+Result: focused tests, schema validation, and matrix validation passed. Go and
+Python `ability_invocation_facade` now carry `child_dispatch` lifecycle evidence
+through provider-backed runtime selectors. The child vector requires a parent
+terminal receipt, derives scalar Axon causal context, dispatches the child
+through Runtime Core, and observes the parent receipt link in the child
+terminal receipt. The cells remain `provider-backed`, not `cutover-ready`.
+
+Additional result: the canonical public API model now records the adjacent
+EasyNet-Axon revision as
+`a80b21bd8f7fbbdb5bc7c864f6bf692da616189c`, aligning the model with the current
+checkout used by the rebuild script instead of the prior
+`def78f91805209cff0a906298c740c080b36aa58` baseline.
+
+## Ability Provider Lifecycle Vector Iteration Evidence
+
+- `cd sdk/go && go test -run 'TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces|TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality|TestRuntimeAbilityClientInvokesObjectResult' -count=1 .`
+- `env PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python/tests PYTHONDONTWRITEBYTECODE=1 /opt/anaconda3/bin/python -m pytest -q -p no:cacheprovider sdk/python/tests/test_ability_invocation.py::AbilityInvocationClientTests::test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts sdk/python/tests/test_ability_invocation.py::AbilityInvocationClientTests::test_child_context_anchors_child_invocation_to_parent_receipt`
+- `python sdk/conformance/rebuild_public_api_model.py --write`
+
+Result: focused tests passed and the canonical public API/matrix model was
+regenerated. Go and Python `ability_invocation_facade` now carry
+`dispatch`, `stream_open`, `bidi_open`, `cancel`, and `terminal_receipt`
+lifecycle evidence through provider-backed Runtime Core selectors. The cells
+remain `provider-backed`, not `cutover-ready`, because `deadline`,
+`restart_recover`, and `start` remain open.
+
+## Ability Deadline Vector Iteration Evidence
+
+- `cd sdk/go && go test -tags easynet_direct_runtime -run 'TestRuntimeAbilityClientDeadlineIsProviderOwned' -count=1 .`
+- `env PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python:/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/python/tests PYTHONDONTWRITEBYTECODE=1 /opt/anaconda3/bin/python -m pytest -q -p no:cacheprovider sdk/python/tests/test_direct_runtime.py::DirectRuntimeTests::test_runtime_ability_deadline_is_provider_owned`
+- `python sdk/conformance/rebuild_public_api_model.py --write`
+
+Result: focused direct-runtime tests passed and the canonical public API/matrix
+model was regenerated. Go and Python `ability_invocation_facade` now carry
+`deadline` lifecycle evidence through Runtime Core provider selectors. The
+ability facade does not introduce a separate timeout field; it delegates to the
+provider deadline owner and proves retry after timeout cleanup. The cells
+remain `provider-backed`, not `cutover-ready`, because `restart_recover` and
+`start` remain open.

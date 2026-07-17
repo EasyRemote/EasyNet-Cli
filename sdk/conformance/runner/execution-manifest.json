@@ -387,8 +387,32 @@
     },
     {
       "language": "go",
+      "case_id": "runtime/ability_child_dispatch",
+      "selector": "TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality",
+      "evidence": [
+        "sdk/go/runtime_ability_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_deadline_owner",
+      "selector": "TestRuntimeAbilityClientDeadlineIsProviderOwned",
+      "evidence": [
+        "sdk/go/runtime_ability_direct_test.go"
+      ]
+    },
+    {
+      "language": "go",
       "case_id": "runtime/ability_lowering",
       "selector": "TestRuntimeAbilityClientBuildsCompleteCanonicalDraft",
+      "evidence": [
+        "sdk/go/runtime_ability_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_provider_lifecycle",
+      "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces",
       "evidence": [
         "sdk/go/runtime_ability_test.go"
       ]
@@ -1003,10 +1027,34 @@
     },
     {
       "language": "python",
+      "case_id": "runtime/ability_child_dispatch",
+      "selector": "test_child_context_anchors_child_invocation_to_parent_receipt",
+      "evidence": [
+        "sdk/python/tests/test_ability_invocation.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_deadline_owner",
+      "selector": "test_runtime_ability_deadline_is_provider_owned",
+      "evidence": [
+        "sdk/python/tests/test_direct_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
       "case_id": "runtime/ability_lowering",
       "selector": "test_runtime_ability_builds_complete_canonical_draft",
       "evidence": [
         "sdk/python/tests/test_runtime_ability.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_provider_lifecycle",
+      "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts",
+      "evidence": [
+        "sdk/python/tests/test_ability_invocation.py"
       ]
     },
     {

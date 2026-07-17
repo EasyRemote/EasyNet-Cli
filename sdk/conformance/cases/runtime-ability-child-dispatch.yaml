@@ -1,0 +1,20 @@
+id: runtime/ability_child_dispatch
+profile: runtime_core
+required_for:
+  - go
+  - python
+lifecycle_actions:
+  - child_dispatch
+description: Runtime ability facades derive child Invocation causality from a parent terminal receipt and dispatch the child through Runtime Core.
+steps:
+  - action: derive_child_causal_context_from_parent_receipt
+    schema: invocation-result.schema.json
+  - action: dispatch_child_invocation_through_runtime
+    fixture: invocation.complete.v4.json
+  - action: observe_child_parent_receipt_link
+    schema: invocation-result.schema.json
+expect:
+  result: ability_child_dispatch_observed
+  parent_receipt_required: true
+  child_uses_scalar_causal_context: true
+  runtime_provider_receives_child_draft: true

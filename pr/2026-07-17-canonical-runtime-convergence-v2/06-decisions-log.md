@@ -57,3 +57,17 @@
   same session. This closes the `dispatch` action for Go and Python stream/bidi
   cells without claiming child dispatch, restart recovery, runtime start, or
   cutover readiness.
+- Treat ability child dispatch as a provider-backed generic runtime facade
+  vector only when the selector proves all three facts: the parent terminal
+  receipt is required, the child draft uses Axon scalar causal context derived
+  from that receipt, and the child terminal receipt records the parent receipt
+  link. Presence of a `causal_context` field alone is not lifecycle proof.
+- Treat ability provider lifecycle methods as generic facade delegation, not a
+  second lifecycle owner. Go and Python close ability-facade `dispatch`,
+  `stream_open`, `bidi_open`, `cancel`, and `terminal_receipt` only when the
+  selector proves descriptor-bound lowering followed by Runtime Core provider
+  entry or handle control.
+- Treat ability deadline parity as composition over the Runtime Core provider
+  deadline owner. The ability facade must not grow an independent timeout field
+  or language-specific deadline state machine; it closes `deadline` only when
+  the selector proves provider timeout projection and retry after cleanup.

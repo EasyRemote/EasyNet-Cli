@@ -1,0 +1,31 @@
+id: runtime/ability_provider_lifecycle
+profile: runtime_core
+required_for:
+  - go
+  - python
+lifecycle_actions:
+  - bidi_open
+  - cancel
+  - dispatch
+  - stream_open
+  - terminal_receipt
+description: Runtime ability facades lower generic ability calls once and delegate provider lifecycle operations to Runtime Core.
+steps:
+  - action: dispatch_unary_invocation_through_runtime
+    fixture: invocation.complete.v4.json
+  - action: open_stream_invocation_through_runtime
+    schema: invocation-result.schema.json
+  - action: open_bidi_invocation_through_runtime
+    schema: invocation-result.schema.json
+  - action: cancel_runtime_invocation_handle
+    schema: invocation-result.schema.json
+  - action: observe_terminal_receipt_from_runtime_result
+    schema: invocation-result.schema.json
+expect:
+  result: ability_provider_lifecycle_observed
+  descriptor_bound_lowering: true
+  runtime_provider_receives_unary_draft: true
+  runtime_provider_receives_stream_draft: true
+  runtime_provider_receives_bidi_draft: true
+  runtime_provider_owns_cancellation: true
+  terminal_receipt_projected: true

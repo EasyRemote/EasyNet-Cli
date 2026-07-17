@@ -393,6 +393,7 @@
     ],
     "c_abi": [],
     "go": [
+      "AbilityChildContext",
       "AbilityDescriptorClient",
       "AbilityDescriptorGetRequest",
       "AbilityDescriptorHints",
@@ -1695,6 +1696,10 @@
     ],
     "c_abi": [],
     "go": [
+      "AbilityChildContext.Build",
+      "AbilityChildContext.Invoke",
+      "AbilityChildContext.OpenBidi",
+      "AbilityChildContext.OpenStream",
       "AbilityDescriptorClient.Get",
       "AbilityDescriptorClient.List",
       "AbilityDescriptorGetRequest.AbilityURA",
@@ -2608,9 +2613,16 @@
       "RotatePrincipalKeyRequest.Command",
       "RotatePrincipalKeyRequest.PrincipalURA",
       "RotatePrincipalKeyRequest.Replacement",
+      "RuntimeAbilityClient.Await",
       "RuntimeAbilityClient.Build",
+      "RuntimeAbilityClient.Cancel",
+      "RuntimeAbilityClient.ChildContext",
+      "RuntimeAbilityClient.CloseHandle",
+      "RuntimeAbilityClient.Events",
       "RuntimeAbilityClient.Invoke",
+      "RuntimeAbilityClient.OpenBidi",
       "RuntimeAbilityClient.OpenStream",
+      "RuntimeAbilityClient.SubmitSigned",
       "RuntimeAbilityDescriptorProvider.Get",
       "RuntimeAbilityDescriptorProvider.List",
       "RuntimeAccessControlProvider.Check",
@@ -9163,7 +9175,10 @@
     "ability_invocation_facade": {
       "profile": "runtime_core",
       "case_ids": [
-        "runtime/ability_lowering"
+        "runtime/ability_child_dispatch",
+        "runtime/ability_deadline_owner",
+        "runtime/ability_lowering",
+        "runtime/ability_provider_lifecycle"
       ]
     },
     "access_control": {
@@ -9715,8 +9730,22 @@
         "members": []
       },
       "go": {
-        "symbols": [],
-        "members": []
+        "symbols": [
+          "AbilityChildContext"
+        ],
+        "members": [
+          "AbilityChildContext.Build",
+          "AbilityChildContext.Invoke",
+          "AbilityChildContext.OpenBidi",
+          "AbilityChildContext.OpenStream",
+          "RuntimeAbilityClient.Await",
+          "RuntimeAbilityClient.Cancel",
+          "RuntimeAbilityClient.ChildContext",
+          "RuntimeAbilityClient.CloseHandle",
+          "RuntimeAbilityClient.Events",
+          "RuntimeAbilityClient.OpenBidi",
+          "RuntimeAbilityClient.SubmitSigned"
+        ]
       },
       "python": {
         "symbols": [
@@ -16330,7 +16359,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16382,7 +16411,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16436,7 +16465,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16478,7 +16507,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16522,7 +16551,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16574,7 +16603,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16628,7 +16657,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16680,7 +16709,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16734,7 +16763,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16831,7 +16860,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -16930,7 +16959,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -17007,7 +17036,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -17086,7 +17115,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -17208,7 +17237,7 @@
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
           "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
-          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
         },
         "step_evidence": [
           {
@@ -17320,6 +17349,192 @@
             "case_id": "stream/backpressure_bound",
             "action": "project_stream_backpressure_terminal",
             "selector": "test_stream_and_bidi_backpressure_bounds"
+          }
+        ]
+      }
+    },
+    "ability_invocation_facade": {
+      "go": {
+        "implementation": {
+          "identity": "runtime_ability_facade",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/runtime_ability.go",
+          "sha256": "3c93af0951de962e7850f6f41224fef01b1a640efab55a52971318a650a7aad4",
+          "interface": "RuntimeAbilityClient",
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
+        },
+        "step_evidence": [
+          {
+            "case_id": "runtime/ability_child_dispatch",
+            "action": "derive_child_causal_context_from_parent_receipt",
+            "selector": "TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality"
+          },
+          {
+            "case_id": "runtime/ability_child_dispatch",
+            "action": "dispatch_child_invocation_through_runtime",
+            "selector": "TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality"
+          },
+          {
+            "case_id": "runtime/ability_child_dispatch",
+            "action": "observe_child_parent_receipt_link",
+            "selector": "TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality"
+          },
+          {
+            "case_id": "runtime/ability_deadline_owner",
+            "action": "dispatch_ability_with_provider_deadline",
+            "selector": "TestRuntimeAbilityClientDeadlineIsProviderOwned"
+          },
+          {
+            "case_id": "runtime/ability_deadline_owner",
+            "action": "observe_ability_typed_timeout",
+            "selector": "TestRuntimeAbilityClientDeadlineIsProviderOwned"
+          },
+          {
+            "case_id": "runtime/ability_deadline_owner",
+            "action": "retry_ability_after_deadline_cleanup",
+            "selector": "TestRuntimeAbilityClientDeadlineIsProviderOwned"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "delegate_descriptor_and_subject_projection",
+            "selector": "TestRuntimeAbilityClientBuildsCompleteCanonicalDraft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "preserve_metadata_without_profile_injection",
+            "selector": "TestRuntimeAbilityClientBuildsCompleteCanonicalDraft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "preserve_typed_runtime_failure",
+            "selector": "TestRuntimeAbilityClientBuildsCompleteCanonicalDraft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "require_explicit_caller",
+            "selector": "TestRuntimeAbilityClientBuildsCompleteCanonicalDraft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "require_explicit_nonce_and_causal_context",
+            "selector": "TestRuntimeAbilityClientBuildsCompleteCanonicalDraft"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "cancel_runtime_invocation_handle",
+            "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "dispatch_unary_invocation_through_runtime",
+            "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "observe_terminal_receipt_from_runtime_result",
+            "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "open_bidi_invocation_through_runtime",
+            "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "open_stream_invocation_through_runtime",
+            "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "ability_invocation_facade",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/ability_invocation.py",
+          "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
+          "interface": "AbilityInvocationClient",
+          "revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
+        },
+        "step_evidence": [
+          {
+            "case_id": "runtime/ability_child_dispatch",
+            "action": "derive_child_causal_context_from_parent_receipt",
+            "selector": "test_child_context_anchors_child_invocation_to_parent_receipt"
+          },
+          {
+            "case_id": "runtime/ability_child_dispatch",
+            "action": "dispatch_child_invocation_through_runtime",
+            "selector": "test_child_context_anchors_child_invocation_to_parent_receipt"
+          },
+          {
+            "case_id": "runtime/ability_child_dispatch",
+            "action": "observe_child_parent_receipt_link",
+            "selector": "test_child_context_anchors_child_invocation_to_parent_receipt"
+          },
+          {
+            "case_id": "runtime/ability_deadline_owner",
+            "action": "dispatch_ability_with_provider_deadline",
+            "selector": "test_runtime_ability_deadline_is_provider_owned"
+          },
+          {
+            "case_id": "runtime/ability_deadline_owner",
+            "action": "observe_ability_typed_timeout",
+            "selector": "test_runtime_ability_deadline_is_provider_owned"
+          },
+          {
+            "case_id": "runtime/ability_deadline_owner",
+            "action": "retry_ability_after_deadline_cleanup",
+            "selector": "test_runtime_ability_deadline_is_provider_owned"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "delegate_descriptor_and_subject_projection",
+            "selector": "test_runtime_ability_builds_complete_canonical_draft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "preserve_metadata_without_profile_injection",
+            "selector": "test_runtime_ability_builds_complete_canonical_draft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "preserve_typed_runtime_failure",
+            "selector": "test_runtime_ability_builds_complete_canonical_draft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "require_explicit_caller",
+            "selector": "test_runtime_ability_builds_complete_canonical_draft"
+          },
+          {
+            "case_id": "runtime/ability_lowering",
+            "action": "require_explicit_nonce_and_causal_context",
+            "selector": "test_runtime_ability_builds_complete_canonical_draft"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "cancel_runtime_invocation_handle",
+            "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "dispatch_unary_invocation_through_runtime",
+            "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "observe_terminal_receipt_from_runtime_result",
+            "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "open_bidi_invocation_through_runtime",
+            "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts"
+          },
+          {
+            "case_id": "runtime/ability_provider_lifecycle",
+            "action": "open_stream_invocation_through_runtime",
+            "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts"
           }
         ]
       }
@@ -17989,6 +18204,11 @@
       "easynet_string_free": "04fc5eb79513f4ebea1bef700938d84722ba20a39ec2e123baeb7f0cb401d5c5"
     },
     "go": {
+      "AbilityChildContext": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
+      "AbilityChildContext.Build": "bf7a86d3460ece5b504beac68cc2ae0f4ed5d3ade3b5264e8c1ab5c543a7adf9",
+      "AbilityChildContext.Invoke": "51c229a4198cfae5e7544dc2cc00e720c621351f40527cb05b1fb8f4be31d865",
+      "AbilityChildContext.OpenBidi": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a",
+      "AbilityChildContext.OpenStream": "d91466201d8f7c127eb4a9cb3d050a80d9f1956fb7560d65e9d07c0bf231826a",
       "AbilityDescriptorClient": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "AbilityDescriptorClient.Get": "244a0afc95e954600a1ce21a2b5c4fcd94b1933c32f7b58445b02e1b9161489e",
       "AbilityDescriptorClient.List": "8713a5848678d303b86cad8a538c0fc586215de6538c81a2fbf23db5bb75e577",
@@ -19458,9 +19678,16 @@
       "RotatePrincipalKeyRequest.PrincipalURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RotatePrincipalKeyRequest.Replacement": "1c432d69b2bfa8eb7fa2324441f872fc76d8dcfc425a02d8e2600b3cf4a6fce6",
       "RuntimeAbilityClient": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
+      "RuntimeAbilityClient.Await": "15a54ffd27e72dee4a23ad170090317836ea8172f099734b5910a1bb39008bfc",
       "RuntimeAbilityClient.Build": "bf7a86d3460ece5b504beac68cc2ae0f4ed5d3ade3b5264e8c1ab5c543a7adf9",
+      "RuntimeAbilityClient.Cancel": "8732a70ab4a5bde7459e9f24e2a7e63a0a58be0493367336a63ebbc10d525fea",
+      "RuntimeAbilityClient.ChildContext": "694c607e30f3716d21bb95210beacc0a71dec1773ce622e0a09977d9cba6ba82",
+      "RuntimeAbilityClient.CloseHandle": "bfa1be280f50ccf0c4a13a11643eee13d22728f7bf174686c7744aada4cde0b7",
+      "RuntimeAbilityClient.Events": "f26dc3987adf9b0f5ac6a0965a38524544e7c4cd958ea748ab96d6aa6e3e92d8",
       "RuntimeAbilityClient.Invoke": "51c229a4198cfae5e7544dc2cc00e720c621351f40527cb05b1fb8f4be31d865",
+      "RuntimeAbilityClient.OpenBidi": "d49550cba6217d408be85c501e7cc7ddf7588d042b0c7af685936b2237f9003a",
       "RuntimeAbilityClient.OpenStream": "d91466201d8f7c127eb4a9cb3d050a80d9f1956fb7560d65e9d07c0bf231826a",
+      "RuntimeAbilityClient.SubmitSigned": "f16ebae1e07677af1ee8aa447a17c213c47ad62d0dec12ec067411f213985f0b",
       "RuntimeAbilityDescriptorProvider": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "RuntimeAbilityDescriptorProvider.Get": "244a0afc95e954600a1ce21a2b5c4fcd94b1933c32f7b58445b02e1b9161489e",
       "RuntimeAbilityDescriptorProvider.List": "8713a5848678d303b86cad8a538c0fc586215de6538c81a2fbf23db5bb75e577",
@@ -24145,7 +24372,7 @@
     }
   ],
   "dependency_revisions": {
-    "easynet_axon": "def78f91805209cff0a906298c740c080b36aa58"
+    "easynet_axon": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c"
   },
   "provider_implementations": [
     {
@@ -24167,7 +24394,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "def78f91805209cff0a906298c740c080b36aa58",
+      "axon_revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     },
@@ -24190,16 +24417,50 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "def78f91805209cff0a906298c740c080b36aa58",
+      "axon_revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c",
+      "proof_state": "behavior_attestation_incomplete",
+      "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
+    },
+    {
+      "language": "go",
+      "identity": "runtime_ability_facade",
+      "production_owner": "EasyNet daemon provider",
+      "owner_path": "sdk/go/",
+      "path": "sdk/go/runtime_ability.go",
+      "sha256": "3c93af0951de962e7850f6f41224fef01b1a640efab55a52971318a650a7aad4",
+      "interface": "RuntimeAbilityClient",
+      "interface_path": "sdk/go/runtime_ability.go",
+      "interface_sha256": "3c93af0951de962e7850f6f41224fef01b1a640efab55a52971318a650a7aad4",
+      "capability_ids": [
+        "ability_invocation_facade"
+      ],
+      "axon_revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c",
+      "proof_state": "behavior_attestation_incomplete",
+      "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
+    },
+    {
+      "language": "python",
+      "identity": "ability_invocation_facade",
+      "production_owner": "EasyNet daemon provider",
+      "owner_path": "sdk/python/easynet_sdk/",
+      "path": "sdk/python/easynet_sdk/ability_invocation.py",
+      "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
+      "interface": "AbilityInvocationClient",
+      "interface_path": "sdk/python/easynet_sdk/ability_invocation.py",
+      "interface_sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
+      "capability_ids": [
+        "ability_invocation_facade"
+      ],
+      "axon_revision": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c",
       "proof_state": "behavior_attestation_incomplete",
       "debt": "A01/A13 physical package migration remains open; provider identity is explicit and cannot certify canonical neutrality."
     }
   ],
   "inventory_source_revisions": {
-    "rust": "def78f91805209cff0a906298c740c080b36aa58",
+    "rust": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "def78f91805209cff0a906298c740c080b36aa58",
+    "python": "a80b21bd8f7fbbdb5bc7c864f6bf692da616189c",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

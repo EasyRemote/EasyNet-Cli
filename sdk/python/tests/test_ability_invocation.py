@@ -134,7 +134,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             [{"descriptor_ref": (DESCRIPTOR_REF)}],
         )
 
-    def test_invoke_stream_and_bidi_dispatch_built_draft(self) -> None:
+    def test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts(self) -> None:
         identity = _identity_transport()
         runtime_transport = MemoryRuntimeTransport()
         client = AbilityInvocationClient(
@@ -153,9 +153,31 @@ class AbilityInvocationClientTests(unittest.TestCase):
         bidi.close_send()
         bidi.cancel("done")
         bidi.close()
+        signer = Signer.from_signature(
+            signer_handle(),
+            InvocationSignature(
+                algorithm="ed25519",
+                signature_base64="c2lnbmF0dXJl",
+            ),
+        )
+        signed, _ = client.prepare_and_sign(
+            _request(ability_ura=ABILITY_URA),
+            signer,
+            PrepareOptions(expires_in_ms=60000),
+        )
+        handle = client.submit_signed(signed)
+        awaited = client.await_result(handle)
+        cancelled = client.cancel(handle, "client stop")
+        client.close_handle(handle)
 
         self.assertTrue(result.ok)
+        self.assertIsNotNone(result.terminal_receipt_summary)
+        assert result.terminal_receipt_summary is not None
+        self.assertEqual(result.terminal_receipt_summary.receipt_id, "receipt-1")
         self.assertTrue(event.terminal)
+        self.assertTrue(awaited.ok)
+        self.assertTrue(cancelled.deduplicated)
+        self.assertEqual(runtime_transport.seen_cancel_reason, "client stop")
         assert runtime_transport.seen_draft is not None
         self.assertEqual(
             runtime_transport.seen_draft["descriptor_ref"],
@@ -404,7 +426,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
 
     def test_child_context_anchors_child_invocation_to_parent_receipt(self) -> None:
         identity = _identity_transport()
-        runtime = MemoryRuntimeTransport()
+        runtime = ChildDispatchRuntimeTransport()
         client = AbilityInvocationClient(
             runtime=RuntimeClient(runtime),
             addressing=AddressingClient(identity),
@@ -434,6 +456,16 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         self.assertTrue(result.ok)
+        self.assertIsNotNone(result.terminal_receipt_summary)
+        assert result.terminal_receipt_summary is not None
+        self.assertEqual(
+            result.terminal_receipt_summary.parent_receipts[0].receipt_ura,
+            "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
+        )
+        self.assertEqual(
+            result.terminal_receipt_summary.parent_receipts[0].receipt_hash_hex,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )
         self.assertEqual(
             request.causal_context,
             {
@@ -501,6 +533,43 @@ class ChildReceiptTransport:
             b'"receipt_hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
             b'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
         )
+
+
+class ChildDispatchRuntimeTransport(MemoryRuntimeTransport):
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.seen_draft = json.loads(draft_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen_draft,
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_base64": "eyJjaGlsZCI6dHJ1ZX0=",
+                "output_json": {"child": True},
+                "elapsed_ms": 8,
+                "terminal_receipt": {
+                    "receipt_ura": "easynet:///r/example/resource/agent.child.sdk/invocation/child-1/receipt",
+                    "invocation_id": "child-1",
+                    "receipt_type": "terminal",
+                    "state": "completed",
+                    "index": 1,
+                    "timestamp_unix_ms": 1783100000456,
+                    "prev_receipt_hash_hex": "bb" * 32,
+                    "self_hash_hex": "cc" * 32,
+                    "causal_binding": self.seen_draft["causal_context"],
+                    "parent_receipts": [
+                        {
+                            "receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/parent-1/receipt",
+                            "receipt_hash_hex": "aa" * 32,
+                        }
+                    ],
+                    "cleanup_complete": True,
+                },
+                "error": None,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
 
 
 def _identity_transport() -> MemoryAddressingTransport:

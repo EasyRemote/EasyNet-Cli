@@ -11,12 +11,16 @@ from typing import Any, cast
 import grpc
 
 from easynet_sdk import (
+    AbilityCallRequest,
+    AbilityInvocationClient,
+    AddressingClient,
     AddressingProjection,
     ConnectOptions,
     DaemonInvocationTransport,
     ErrorCode,
     InvocationHandle,
     InvocationSignature,
+    RuntimeClient,
     SDKError,
     is_code,
 )
@@ -32,6 +36,7 @@ from easynet_sdk.direct_runtime import (
     DirectRuntimeTransport,
 )
 from test_runtime import complete_draft
+from addressing_fake import MemoryAddressingTransport
 
 invoke_pb2: Any = _invoke_pb2
 invoke_pb2_grpc: Any = _invoke_pb2_grpc
@@ -52,6 +57,7 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
         self.requests: list[Any] = []
         self.stream_requests: list[Any] = []
         self.bidi_up_frames: list[Any] = []
+        self.invoke_delay_seconds = 0.0
         self.stream_delay_seconds = 0.0
         self.bidi_delay_seconds = 0.0
         self.stream_chunks: list[Any] = [
@@ -89,6 +95,8 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
 
     def Invoke(self, request, context):
         self.requests.append(request)
+        if self.invoke_delay_seconds:
+            time.sleep(self.invoke_delay_seconds)
         return invoke_pb2.InvokeResponse(
             state=types_pb2.INVOCATION_STATE_COMPLETED,
             selected_node_id="node-direct",
@@ -413,6 +421,39 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(request.envelope.causal_context.WhichOneof("form"), "none")
         self.assertEqual(identity.descriptor_refs, [DESCRIPTOR_REF])
         self.assertEqual(identity.ability_uras, [ABILITY_URA])
+
+    def test_runtime_ability_deadline_is_provider_owned(self) -> None:
+        servicer = RecordingInvocationServicer()
+        servicer.invoke_delay_seconds = 0.2
+        with _fake_daemon(servicer) as endpoint:
+            direct = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=0.05,
+                identity=_identity(),
+            )
+            client = AbilityInvocationClient(
+                runtime=RuntimeClient(_DirectAbilityRuntimeTransport(direct)),
+                addressing=AddressingClient(_ability_addressing_transport()),
+            )
+            try:
+                with self.assertRaises(SDKError) as raised:
+                    client.invoke(_ability_request())
+
+                servicer.invoke_delay_seconds = 0.0
+                retry = client.invoke(_ability_request())
+            finally:
+                client.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.TIMEOUT))
+        self.assertEqual(raised.exception.stage, "direct_runtime")
+        self.assertEqual(
+            raised.exception.details["grpc_status"],
+            str(grpc.StatusCode.DEADLINE_EXCEEDED),
+        )
+        self.assertGreaterEqual(len(servicer.requests), 2)
+        self.assertTrue(retry.ok)
+        self.assertIsNotNone(retry.terminal_receipt_summary)
 
     def test_direct_transport_projects_user_subject_before_daemon_invoke(self) -> None:
         servicer = RecordingInvocationServicer()
@@ -1166,6 +1207,65 @@ class _RecordingIdentity:
 
 def _identity(*, owner_ura: str = CALLEE_URA) -> _RecordingIdentity:
     return _RecordingIdentity(owner_ura=owner_ura)
+
+
+class _DirectAbilityRuntimeTransport:
+    def __init__(self, delegate: DirectRuntimeTransport) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json.decode("utf-8"))
+        if request != {
+            "ability": ABILITY_PUBLIC_NAME,
+            "callee_ura": CALLEE_URA,
+            "call_mode": "rpc",
+            "caller_ura": "easynet:///r/example/agent/alice.sdk",
+            "subject_ura": CALLEE_URA,
+        }:
+            raise AssertionError(f"unexpected ability descriptor request: {request}")
+        return json.dumps(
+            {"descriptor_ref": DESCRIPTOR_REF},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+
+
+def _ability_addressing_transport() -> MemoryAddressingTransport:
+    transport = MemoryAddressingTransport()
+    transport.identity_json = (
+        b'{"kind":"ability","valid":true,'
+        b'"ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+        b'"profile":"easynet-strict-v2",'
+        b'"components":{"owner_ura":"easynet:///r/example/device/dev-a",'
+        b'"owner_kind":"device","public_name":"observe.health",'
+        b'"local_registry_ability":"observe.health",'
+        b'"namespace":"observe","local_name":"health"},'
+        b'"metadata":{"grammar_owner":"axon"}}'
+    )
+    transport.descriptor_json = (
+        b'{"kind":"descriptor_ref","valid":true,'
+        b'"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",'
+        b'"ability_ura":"easynet:///r/example/ability/device.dev-a.observe.health",'
+        b'"descriptor_version":"1.0.0","profile":"easynet-strict-v2",'
+        b'"components":{"owner_ura":"easynet:///r/example/device/dev-a"},'
+        b'"metadata":{"grammar_owner":"axon"}}'
+    )
+    return transport
+
+
+def _ability_request() -> AbilityCallRequest:
+    return AbilityCallRequest(
+        caller_ura="easynet:///r/example/agent/alice.sdk",
+        callee_ura=CALLEE_URA,
+        subject_ura=CALLEE_URA,
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        ability_ura=ABILITY_URA,
+        args={"city": "Singapore"},
+    )
 
 
 def _user_subject_draft_json() -> bytes:
