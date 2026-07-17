@@ -24,9 +24,7 @@
 use tonic::Status;
 
 use crate::daemon::ability::catalog::publication::LocalAbilityPublicationSnapshot;
-use crate::daemon::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity,
-};
+use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
 use crate::daemon::invocation::admission::admission_facade::AdmissionFacade;
 use crate::daemon::invocation::admission::child_invocation_builder::{
     ChildInvocationAuthority, ChildInvocationBuildFailure, ChildInvocationBuildInput,
@@ -544,18 +542,14 @@ fn signed_child_canonical_hash(
     signed_descriptor_ref: &str,
     args: &[u8],
 ) -> Result<String, Status> {
-    let descriptor_bound = descriptor_bound_from_wire_parts(
-        envelope.clone(),
-        signed_descriptor_ref.to_string(),
-        args,
-        WireCallerIdentity::FromEnvelope,
-    )
-    .map_err(|err| {
-        Status::invalid_argument(format!(
-            "{}: rebuild descriptor-bound child invocation bytes: {err}",
-            SignatureDecisionReason::CanonicalHashMismatch.as_str()
-        ))
-    })?;
+    let descriptor_bound =
+        descriptor_bound_from_wire_parts(envelope.clone(), signed_descriptor_ref.to_string(), args)
+            .map_err(|err| {
+                Status::invalid_argument(format!(
+                    "{}: rebuild descriptor-bound child invocation bytes: {err}",
+                    SignatureDecisionReason::CanonicalHashMismatch.as_str()
+                ))
+            })?;
     Ok(format!(
         "sha256:{}",
         hex::encode(easynet_axon::invocation::sha256(

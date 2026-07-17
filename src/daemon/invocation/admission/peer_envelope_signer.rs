@@ -25,9 +25,7 @@ use tonic::Status;
 
 use easynet_axon::pb::axon::v1::{AgentIdentity, Envelope, InvokeRequest, SubjectIdentity};
 
-use crate::daemon::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity,
-};
+use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::register_device_pubkey::parse_realm_from_ura;
 use crate::daemon::invocation::dispatch::invocation_wire::{
@@ -257,17 +255,13 @@ pub(crate) async fn sign_peer_request_envelope(
             ))
         })?;
 
-    let descriptor_bound = descriptor_bound_from_wire_parts(
-        envelope.clone(),
-        descriptor_ref.clone(),
-        arguments,
-        WireCallerIdentity::FromEnvelope,
-    )
-    .map_err(|err| {
-        Status::internal(format!(
-            "cross-hub canonical_invoke signing: build descriptor-bound envelope: {err}"
-        ))
-    })?;
+    let descriptor_bound =
+        descriptor_bound_from_wire_parts(envelope.clone(), descriptor_ref.clone(), arguments)
+            .map_err(|err| {
+                Status::internal(format!(
+                    "cross-hub canonical_invoke signing: build descriptor-bound envelope: {err}"
+                ))
+            })?;
 
     let hub_signer = hub_signer.ok_or_else(|| {
         Status::failed_precondition(
@@ -495,13 +489,9 @@ mod tests {
             .expect("canonical signer attaches caller signature");
         let signature = ed25519_dalek::Signature::from_slice(&signature.signature)
             .expect("ed25519 signature bytes");
-        let descriptor_bound = descriptor_bound_from_wire_parts(
-            env.clone(),
-            descriptor_ref,
-            br#"{"q":"chat"}"#,
-            WireCallerIdentity::FromEnvelope,
-        )
-        .expect("descriptor-bound envelope");
+        let descriptor_bound =
+            descriptor_bound_from_wire_parts(env.clone(), descriptor_ref, br#"{"q":"chat"}"#)
+                .expect("descriptor-bound envelope");
         signer
             .signing_public_key()
             .expect("test signer public key")

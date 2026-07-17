@@ -33,6 +33,7 @@ use crate::core::domain::{
 };
 use crate::daemon::axon_bridge::local_runtime_request::{
     LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
+    SystemInvocationIssuer,
 };
 use crate::daemon::boot::kernel::api::KernelApi;
 use crate::daemon::execution::{
@@ -379,20 +380,25 @@ impl Kernel {
                 .map_err(|err| anyhow::anyhow!("{err}"))?;
             let (envelope, payload) =
                 dispatch_invocation.axon_descriptor_bound_envelope(&descriptor_binding)?;
-            let ingress = match caller_signature {
-                Some(signature) => LocalRuntimeIngress::ExternalSigned {
+            let options = LocalRuntimeRequestOptions::default().with_trace_id(trace_id);
+            let request = match caller_signature {
+                Some(signature) => LocalRuntimeRequestFactory::request_for(
+                    AxonInvocationCallMode::Rpc,
+                    LocalRuntimeIngress::ExternalSigned {
+                        envelope,
+                        signature,
+                        payload,
+                    },
+                    options,
+                ),
+                None => SystemInvocationIssuer::request_for_complete_envelope(
+                    AxonInvocationCallMode::Rpc,
                     envelope,
-                    signature,
                     payload,
-                },
-                None => LocalRuntimeIngress::LocalSystem { envelope, payload },
+                    options,
+                ),
             };
-            let request = LocalRuntimeRequestFactory::request_for(
-                AxonInvocationCallMode::Rpc,
-                ingress,
-                LocalRuntimeRequestOptions::default().with_trace_id(trace_id),
-            )
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
+            let request = request.map_err(|err| anyhow::anyhow!("{err}"))?;
             let handle = runtime
                 .invoke_descriptor_bound_request_async(request)
                 .await

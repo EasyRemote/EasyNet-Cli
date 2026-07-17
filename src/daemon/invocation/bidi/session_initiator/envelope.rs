@@ -67,7 +67,6 @@ pub async fn build_session_envelope_open(
             envelope.clone(),
             descriptor_ref.clone(),
             &initial_args,
-            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
         .expect("session.open descriptor-bound envelope is complete");
     let caller_signature =

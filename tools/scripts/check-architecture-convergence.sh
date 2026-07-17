@@ -1603,6 +1603,202 @@ if invocation_wire.exists():
         if token not in wire_text:
             add("R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK", invocation_wire, 1, detail)
 
+# Rule 16c: daemon-local system invocation construction has one named issuer.
+# Transport shims may resolve descriptor refs and select call mode, but they
+# must not mint the `_system.local` envelope fields or root causal policy in
+# each RPC/stream/bidi helper.
+dispatch_shim = cli_root / "src/daemon/axon_bridge/dispatch_shim.rs"
+local_runtime_request = cli_root / "src/daemon/axon_bridge/local_runtime_request.rs"
+wire_descriptor = cli_root / "src/daemon/axon_bridge/wire_descriptor.rs"
+kernel_runtime = cli_root / "src/daemon/boot/kernel/mod.rs"
+if local_runtime_request.exists():
+    request_text = source(local_runtime_request)
+    for token, detail in (
+        (
+            "pub(crate) struct SystemInvocationIssuer",
+            "daemon-local system invocation requires a named issuer",
+        ),
+        (
+            "request_for_descriptor_ref",
+            "SystemInvocationIssuer must expose one descriptor-ref request constructor",
+        ),
+        (
+            "request_for_complete_envelope",
+            "SystemInvocationIssuer must accept only already-complete descriptor-bound envelopes",
+        ),
+        (
+            "LocalRuntimeRequestFactory::request_for_local_system",
+            "SystemInvocationIssuer must be the sole caller of the private system-signing factory",
+        ),
+        (
+            "sign_system_canonical(&envelope.canonical_bytes())",
+            "system signing must remain in the LocalRuntime request factory",
+        ),
+    ):
+        if token not in request_text:
+            add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", local_runtime_request, 1, detail)
+    if "pub(crate) fn request_for_local_system" in request_text:
+        add(
+            "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
+            local_runtime_request,
+            line_number(
+                request_text, request_text.find("pub(crate) fn request_for_local_system")
+            ),
+            "the system-signing factory must remain private to SystemInvocationIssuer",
+        )
+
+if wire_descriptor.exists():
+    wire_descriptor_text = source(wire_descriptor)
+    for token, detail in (
+        (
+            "wire envelope missing caller",
+            "wire reassembly must require an explicit caller",
+        ),
+        (
+            "wire envelope missing subject",
+            "wire reassembly must require an explicit subject",
+        ),
+        (
+            "wire::try_invocation_nonce(envelope.invocation_nonce)?",
+            "wire reassembly must require a valid explicit nonce",
+        ),
+    ):
+        if token not in wire_descriptor_text:
+            add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", wire_descriptor, 1, detail)
+    for token, detail in (
+        (
+            "WireCallerIdentity",
+            "wire reassembly must not select a caller-synthesis policy",
+        ),
+        (
+            "system_agent_identity",
+            "wire reassembly must not mint the local system caller",
+        ),
+        (
+            "fresh_nonce",
+            "wire reassembly must not replace a missing or invalid nonce",
+        ),
+        (
+            "SubjectIdentity::from_callee",
+            "wire reassembly must not replace a missing subject with the callee",
+        ),
+    ):
+        offset = wire_descriptor_text.find(token)
+        if offset >= 0:
+            add(
+                "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
+                wire_descriptor,
+                line_number(wire_descriptor_text, offset),
+                detail,
+            )
+if dispatch_shim.exists():
+    shim_text = source(dispatch_shim)
+    production_text = shim_text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "pub(crate) fn local_system_from_wire_parts",
+            "trusted-local system dispatch construction must not be public SDK surface",
+        ),
+        (
+            "then_some(LocalSystemAuthority)",
+            "trusted-local classification must mint an unforgeable local-system authority seal",
+        ),
+        (
+            "local_system_authority.ok_or_else",
+            "local-system request conversion must require the trusted-local authority seal",
+        ),
+        (
+            "SystemInvocationIssuer::request_for_descriptor_ref",
+            "daemon local RPC/stream/bidi helpers must delegate to SystemInvocationIssuer",
+        ),
+        (
+            "SystemInvocationIssuer::request_for_complete_envelope",
+            "trusted local wire dispatch must delegate complete-envelope signing to SystemInvocationIssuer",
+        ),
+        (
+            "DescriptorBoundEnvelopeParts",
+            "dispatch shim production code must not construct local system envelope parts",
+        ),
+        (
+            "system_agent_identity()",
+            "dispatch shim production code must not mint the local system caller directly",
+        ),
+    ):
+        if token in (
+            "pub(crate) fn local_system_from_wire_parts",
+            "then_some(LocalSystemAuthority)",
+            "local_system_authority.ok_or_else",
+            "SystemInvocationIssuer::request_for_descriptor_ref",
+            "SystemInvocationIssuer::request_for_complete_envelope",
+        ):
+            if token not in production_text:
+                add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", dispatch_shim, 1, detail)
+            continue
+        offset = production_text.find(token)
+        if offset >= 0:
+            add(
+                "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
+                dispatch_shim,
+                line_number(production_text, offset),
+                detail,
+            )
+
+if kernel_runtime.exists():
+    kernel_text = source(kernel_runtime)
+    if "SystemInvocationIssuer::request_for_complete_envelope" not in kernel_text:
+        add(
+            "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
+            kernel_runtime,
+            1,
+            "kernel local-system dispatch must enter through SystemInvocationIssuer",
+        )
+
+for path in production_files(cli_root / "src", {".rs"}):
+    text = source(path)
+    offset = text.find("LocalRuntimeIngress::LocalSystem")
+    if offset >= 0:
+        add(
+            "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
+            path,
+            line_number(text, offset),
+            "no caller may access a local-system request-factory ingress directly",
+        )
+
+local_runtime_invoker = cli_root / "src/daemon/invocation/dispatch/local_runtime_invoker.rs"
+if local_runtime_invoker.exists():
+    invoker_text = source(local_runtime_invoker)
+    production_text = invoker_text.split("#[cfg(test)]", 1)[0]
+    for token, detail in (
+        (
+            "SystemInvocationIssuer::request_for_descriptor_ref",
+            "daemon LocalRuntime invoker must delegate local system tuple construction to SystemInvocationIssuer",
+        ),
+        (
+            "DescriptorBoundEnvelopeParts",
+            "daemon LocalRuntime invoker production code must not construct local system envelope parts",
+        ),
+        (
+            "system_agent_identity()",
+            "daemon LocalRuntime invoker production code must not mint the local system caller directly",
+        ),
+        (
+            "fresh_nonce()",
+            "daemon LocalRuntime invoker production code must not mint local system invocation nonces directly",
+        ),
+    ):
+        if token == "SystemInvocationIssuer::request_for_descriptor_ref":
+            if token not in production_text:
+                add("R16C_SYSTEM_INVOCATION_ISSUER_FORK", local_runtime_invoker, 1, detail)
+            continue
+        offset = production_text.find(token)
+        if offset >= 0:
+            add(
+                "R16C_SYSTEM_INVOCATION_ISSUER_FORK",
+                local_runtime_invoker,
+                line_number(production_text, offset),
+                detail,
+            )
+
 # Rule 23: CLI command modules may not own target-owned remote system ability
 # routing. They map user input into payloads; the CLI daemon-client facade owns
 # remote device/hub selector projection and caller identity selection. The

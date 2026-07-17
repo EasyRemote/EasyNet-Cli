@@ -105,7 +105,7 @@ use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 use crate::daemon::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity, WireDescriptorBoundEnvelope,
+    descriptor_bound_from_wire_parts, WireDescriptorBoundEnvelope,
 };
 use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::peers::SharedFederatedPeers;
@@ -792,14 +792,10 @@ impl AdmissionFacade {
             .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
         ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)
             .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        let descriptor_bound = descriptor_bound_from_wire_parts(
-            envelope.clone(),
-            signed_descriptor_ref,
-            args,
-            WireCallerIdentity::FromEnvelope,
-        )
-        .map_err(axon_error_to_status)
-        .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
+        let descriptor_bound =
+            descriptor_bound_from_wire_parts(envelope.clone(), signed_descriptor_ref, args)
+                .map_err(axon_error_to_status)
+                .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
 
         let descriptor = self.bound_admission_descriptor(
             ability,
@@ -840,14 +836,10 @@ impl AdmissionFacade {
             .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
         ensure_signed_descriptor_ref_matches_route(envelope, ability, &signed_descriptor_ref)
             .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
-        let descriptor_bound = descriptor_bound_from_wire_parts(
-            envelope.clone(),
-            signed_descriptor_ref,
-            args,
-            WireCallerIdentity::FromEnvelope,
-        )
-        .map_err(axon_error_to_status)
-        .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
+        let descriptor_bound =
+            descriptor_bound_from_wire_parts(envelope.clone(), signed_descriptor_ref, args)
+                .map_err(axon_error_to_status)
+                .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
         let descriptor = self.bound_admission_descriptor(
             ability,
             crate::daemon::ability::CallMode::Rpc,
@@ -1084,7 +1076,6 @@ impl AdmissionFacade {
             envelope.clone(),
             descriptor.descriptor_ref.clone(),
             args,
-            WireCallerIdentity::FromEnvelope,
         )
         .map_err(axon_error_to_status)
         .map_err(|status| self.signature_denied_status(envelope, ability, status))?;
@@ -2822,13 +2813,9 @@ mod tests {
                 .into_inner();
         envelope.invocation_nonce = nonce.to_vec();
         let descriptor_ref = descriptor_ref_for_mode(callee_ura, ability, call_mode);
-        let descriptor_bound = descriptor_bound_from_wire_parts(
-            envelope.clone(),
-            descriptor_ref.clone(),
-            args,
-            WireCallerIdentity::FromEnvelope,
-        )
-        .expect("descriptor-bound signed test envelope");
+        let descriptor_bound =
+            descriptor_bound_from_wire_parts(envelope.clone(), descriptor_ref.clone(), args)
+                .expect("descriptor-bound signed test envelope");
         let sig = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());
         envelope.caller_signature = Some(PbCallerSignature {
             algorithm: "ed25519".to_string(),
@@ -3270,7 +3257,6 @@ mod tests {
             req.envelope.clone().expect("envelope"),
             descriptor_ref,
             &req.arguments,
-            WireCallerIdentity::FromEnvelope,
         )
         .expect("descriptor-bound request");
         let canonical_hash = format!(

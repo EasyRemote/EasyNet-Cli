@@ -2445,7 +2445,6 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
             envelope,
             descriptor_ref,
             &request.arguments,
-            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
         .expect("descriptor-bound forwarded carrier");
     let signature = ed25519_dalek::Signature::from_slice(&signature).expect("ed25519 signature");

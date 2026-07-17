@@ -848,7 +848,6 @@ fn signed_test_envelope_with_descriptor_ref(
             envelope.clone(),
             descriptor_ref,
             arguments,
-            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
         .expect("descriptor-bound signed test envelope");
     let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());

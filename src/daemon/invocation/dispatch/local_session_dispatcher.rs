@@ -2223,7 +2223,6 @@ mod tests {
                 envelope.clone(),
                 signed_descriptor_ref.clone(),
                 &args,
-                crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
             )
             .expect("descriptor-bound carrier-v1 envelope");
         let signature = signing_key.sign(&descriptor_bound.envelope.canonical_bytes());

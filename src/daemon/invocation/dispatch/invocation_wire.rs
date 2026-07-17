@@ -51,9 +51,7 @@ use easynet_axon::pb::axon::v1::{
     SubjectIdentity,
 };
 
-use crate::daemon::axon_bridge::wire_descriptor::{
-    descriptor_bound_from_wire_parts, WireCallerIdentity,
-};
+use crate::daemon::axon_bridge::wire_descriptor::descriptor_bound_from_wire_parts;
 
 pub const DEFAULT_URA_PROFILE: &str = "easynet-strict-v2";
 
@@ -412,14 +410,9 @@ impl ProtoEnvelope {
         if ability.trim().is_empty() {
             anyhow::bail!("ability must not be empty");
         }
-        descriptor_bound_from_wire_parts(
-            self.inner.clone(),
-            ability.to_string(),
-            arguments,
-            WireCallerIdentity::FromEnvelope,
-        )
-        .map(|wire| wire.envelope)
-        .map_err(|err| anyhow::anyhow!("{err}"))
+        descriptor_bound_from_wire_parts(self.inner.clone(), ability.to_string(), arguments)
+            .map(|wire| wire.envelope)
+            .map_err(|err| anyhow::anyhow!("{err}"))
     }
 }
 

@@ -1669,6 +1669,81 @@ impl BidiDispatcher {
     }
 }
 EOF
+  mkdir -p "$CLI/src/daemon/axon_bridge"
+  cat >"$CLI/src/daemon/axon_bridge/local_runtime_request.rs" <<'EOF'
+pub(crate) enum LocalRuntimeIngress {
+    ExternalSigned,
+}
+
+pub(crate) struct LocalRuntimeRequestFactory;
+
+impl LocalRuntimeRequestFactory {
+    fn request_for_local_system() {
+        sign_system_canonical(&envelope.canonical_bytes());
+    }
+}
+
+pub(crate) struct SystemInvocationIssuer;
+
+impl SystemInvocationIssuer {
+    pub(crate) fn request_for_descriptor_ref() {
+        LocalRuntimeRequestFactory::request_for_local_system();
+    }
+
+    pub(crate) fn request_for_complete_envelope() {
+        LocalRuntimeRequestFactory::request_for_local_system();
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/axon_bridge/wire_descriptor.rs" <<'EOF'
+fn descriptor_bound_from_wire_parts(envelope: Envelope) -> Result<(), AxonError> {
+    let caller = envelope
+        .caller
+        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing caller"))?;
+    let subject = envelope
+        .subject
+        .ok_or_else(|| AxonError::invalid_argument("wire envelope missing subject"))?;
+    let nonce = wire::try_invocation_nonce(envelope.invocation_nonce)?;
+    Ok(())
+}
+EOF
+  cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+struct LocalSystemAuthority;
+
+struct WireDispatch {
+    local_system_authority: Option<LocalSystemAuthority>,
+}
+
+pub(crate) fn local_system_from_wire_parts() {
+    let local_system_authority = true.then_some(LocalSystemAuthority);
+    SystemInvocationIssuer::request_for_complete_envelope();
+}
+
+fn request_for_wire_dispatch(local_system_authority: Option<LocalSystemAuthority>) {
+    local_system_authority.ok_or_else(|| "trusted-local authority required");
+}
+
+fn open_stream_local_with_subject() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+
+fn open_bidi_local_with_subject() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+
+fn dispatch_rpc_local_with_subject() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/local_runtime_invoker.rs" <<'EOF'
+async fn local_system_request() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+
+pub async fn rpc_value_from_handle(handle: InvocationHandle) {
+    handle.finalized().await;
+}
+EOF
   cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
 pub const ABILITY_INVOCATION_CANCEL: &str = "invocation.cancel";
 
@@ -2879,6 +2954,93 @@ EOF
 expect_fail \
   "local loopback support envelope owner fork" \
   "R16B_LOCAL_LOOPBACK_INVOCATION_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+fn dispatch_rpc_local_with_subject() {
+    let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
+        caller: system_agent_identity(),
+        causal_context: CausalContext::None,
+    });
+}
+EOF
+expect_fail \
+  "system invocation issuer owner fork" \
+  "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/dispatch_shim.rs" <<'EOF'
+pub fn local_system_from_wire_parts() {
+    SystemInvocationIssuer::request_for_complete_envelope();
+}
+
+fn open_stream_local_with_subject() {
+    SystemInvocationIssuer::request_for_descriptor_ref();
+}
+EOF
+expect_fail \
+  "public unsealed local-system wire ingress fork" \
+  "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/wire_descriptor.rs" <<'EOF'
+enum WireCallerIdentity {
+    FromEnvelope,
+    LocalSystem,
+}
+
+fn descriptor_bound_from_wire_parts(envelope: Envelope) {
+    let caller = system_agent_identity();
+    let subject = SubjectIdentity::from_callee(&callee);
+    let nonce = fresh_nonce();
+}
+EOF
+expect_fail \
+  "wire local-system tuple fallback fork" \
+  "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/local_runtime_request.rs" <<'EOF'
+pub(crate) enum LocalRuntimeIngress {
+    LocalSystem { envelope: DescriptorBoundEnvelope, payload: Vec<u8> },
+}
+
+pub(crate) struct LocalRuntimeRequestFactory;
+
+impl LocalRuntimeRequestFactory {
+    pub(crate) fn request_for_local_system() {
+        sign_system_canonical(&envelope.canonical_bytes());
+    }
+}
+
+pub(crate) struct SystemInvocationIssuer;
+
+impl SystemInvocationIssuer {
+    pub(crate) fn request_for_descriptor_ref() {}
+    pub(crate) fn request_for_complete_envelope() {}
+}
+EOF
+expect_fail \
+  "direct local-system request factory ingress fork" \
+  "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/local_runtime_invoker.rs" <<'EOF'
+async fn local_system_request() {
+    let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
+        caller: system_agent_identity(),
+        invocation_nonce: fresh_nonce(),
+        causal_context: CausalContext::None,
+    });
+}
+
+pub async fn rpc_value_from_handle(handle: InvocationHandle) {
+    handle.finalized().await;
+}
+EOF
+expect_fail \
+  "local runtime invoker system issuer fork" \
+  "R16C_SYSTEM_INVOCATION_ISSUER_FORK"
 
 make_good_fixture
 cat >"$CLI/src/cli/commands/remote_exec.rs" <<'EOF'
@@ -4117,6 +4279,7 @@ make_good_fixture
 mkdir -p "$CLI/src/daemon/boot/kernel"
 cat >"$CLI/src/daemon/boot/kernel/mod.rs" <<'EOF'
 fn dispatch(handle: Handle) -> TerminalState {
+    SystemInvocationIssuer::request_for_complete_envelope();
     let state = handle.wait().await;
     let terminal = events.iter().rev().find(|e| e.state.is_terminal());
     KernelDispatchTerminal::Failed(format!("{state:?}"))

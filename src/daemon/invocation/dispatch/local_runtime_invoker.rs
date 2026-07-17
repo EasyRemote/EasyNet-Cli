@@ -11,10 +11,9 @@
 use std::sync::Arc;
 
 use easynet_axon::invocation::{
-    fresh_nonce, AbilityFrame, AgentIdentity, BidiInputSender, BidiOutputReceiver,
-    CallMode as AxonInvocationCallMode, CausalContext, DescriptorBoundEnvelope,
-    DescriptorBoundEnvelopeParts, DescriptorBoundInvocationRequest, InvocationHandle,
-    InvocationState, LocalRuntime, StreamingInvocationHandle, SubjectIdentity, UraProfile,
+    AbilityFrame, BidiInputSender, BidiOutputReceiver, CallMode as AxonInvocationCallMode,
+    CausalContext, DescriptorBoundInvocationRequest, InvocationHandle, InvocationState,
+    LocalRuntime, StreamingInvocationHandle,
 };
 use serde_json::Value;
 
@@ -22,11 +21,9 @@ use crate::daemon::axon_bridge::descriptor_ref::{
     ability_descriptor_ref_for_wire, ability_ura_for_wire, registered_descriptor_binding,
 };
 use crate::daemon::axon_bridge::local_runtime_request::{
-    LocalRuntimeIngress, LocalRuntimeRequestFactory, LocalRuntimeRequestOptions,
+    LocalRuntimeRequestOptions, SystemInvocationIssuer,
 };
-use crate::daemon::identity::local_invocation::{
-    agent_identity, local_device_ura, system_agent_identity,
-};
+use crate::daemon::identity::local_invocation::local_device_ura;
 use crate::daemon::invocation::routing::target::{InvocationTarget, TargetScope};
 
 /// Bidirectional LocalRuntime stream halves exposed to daemon dispatchers.
@@ -38,14 +35,6 @@ use crate::daemon::invocation::routing::target::{InvocationTarget, TargetScope};
 pub struct RuntimeBidiSource {
     pub to_client: BidiInputSender,
     pub from_client: BidiOutputReceiver,
-}
-
-fn local_identity(ura: &str) -> AgentIdentity {
-    agent_identity(ura)
-}
-
-fn local_subject(ura: String) -> SubjectIdentity {
-    SubjectIdentity::new(ura, UraProfile::EasynetStrictV2)
 }
 
 fn local_invocation_callee_ura(target: &InvocationTarget) -> String {
@@ -71,45 +60,6 @@ impl LocalRuntimeInvocationPolicy {
             causal_context: target.resolved_causal_context(),
         })
     }
-
-    fn into_envelope_parts(
-        self,
-        callee_ura: String,
-        ability: String,
-        payload: &[u8],
-    ) -> DescriptorBoundEnvelopeParts<'_> {
-        DescriptorBoundEnvelopeParts {
-            caller: system_agent_identity(),
-            callee: local_identity(&callee_ura),
-            ability,
-            subject: local_subject(self.subject_ura),
-            invocation_nonce: fresh_nonce(),
-            causal_context: self.causal_context,
-            args_bytes: payload,
-        }
-    }
-}
-
-async fn local_descriptor_bound_envelope(
-    runtime: &Arc<LocalRuntime>,
-    mode: AxonInvocationCallMode,
-    target: &InvocationTarget,
-    payload: &[u8],
-) -> Result<DescriptorBoundEnvelope, String> {
-    let callee_ura = local_invocation_callee_ura(target);
-    let invocation_policy = LocalRuntimeInvocationPolicy::from_target(target, &callee_ura)?;
-    let runtime_ability =
-        ability_ura_for_wire(&callee_ura, &target.ability).map_err(|err| format!("{err}"))?;
-    let descriptor_binding = registered_descriptor_binding(runtime, &runtime_ability, mode)
-        .await
-        .map_err(|err| err.message().to_string())?;
-    let ability =
-        ability_descriptor_ref_for_wire(&callee_ura, &target.ability, &descriptor_binding)
-            .map_err(|err| format!("{err}"))?;
-    DescriptorBoundEnvelope::from_parts(
-        invocation_policy.into_envelope_parts(callee_ura, ability, payload),
-    )
-    .map_err(|err| format!("{err}"))
 }
 
 async fn local_system_request(
@@ -118,7 +68,16 @@ async fn local_system_request(
     target: &InvocationTarget,
     payload: Vec<u8>,
 ) -> Result<DescriptorBoundInvocationRequest, String> {
-    let envelope = local_descriptor_bound_envelope(runtime, mode, target, &payload).await?;
+    let callee_ura = local_invocation_callee_ura(target);
+    let invocation_policy = LocalRuntimeInvocationPolicy::from_target(target, &callee_ura)?;
+    let runtime_ability =
+        ability_ura_for_wire(&callee_ura, &target.ability).map_err(|err| format!("{err}"))?;
+    let descriptor_binding = registered_descriptor_binding(runtime, &runtime_ability, mode)
+        .await
+        .map_err(|err| err.message().to_string())?;
+    let ability_descriptor_ref =
+        ability_descriptor_ref_for_wire(&callee_ura, &target.ability, &descriptor_binding)
+            .map_err(|err| format!("{err}"))?;
     #[cfg(feature = "axon-pb")]
     let options = LocalRuntimeRequestOptions::default()
         .with_request_metadata(target.request_metadata.clone());
@@ -128,9 +87,13 @@ async fn local_system_request(
         LocalRuntimeRequestOptions::default()
     };
 
-    LocalRuntimeRequestFactory::request_for(
+    SystemInvocationIssuer::request_for_descriptor_ref(
         mode,
-        LocalRuntimeIngress::LocalSystem { envelope, payload },
+        &callee_ura,
+        ability_descriptor_ref,
+        invocation_policy.subject_ura.as_str(),
+        payload,
+        invocation_policy.causal_context,
         options,
     )
     .map_err(|err| format!("{err}"))
@@ -378,19 +341,19 @@ mod tests {
         let owner = crate::core::ura::device_ura("acme", "dev-a");
         let ability = crate::core::ura::owner_ability_ura(&owner, "fs.read").unwrap();
         let runtime = runtime_with_descriptor_bound_ability(&owner, &ability).await;
-        let envelope = local_descriptor_bound_envelope(
+        let request = local_system_request(
             &runtime,
             AxonInvocationCallMode::Rpc,
             &target(ability.clone(), None),
-            b"{}",
+            b"{}".to_vec(),
         )
         .await
-        .expect("descriptor-bound envelope");
+        .expect("descriptor-bound request");
 
-        assert_eq!(envelope.envelope().callee.ura, owner);
-        assert_eq!(envelope.envelope().subject.ura, owner);
+        assert_eq!(request.envelope().envelope().callee.ura, owner);
+        assert_eq!(request.envelope().envelope().subject.ura, owner);
         assert_eq!(
-            envelope.envelope().ability,
+            request.envelope().envelope().ability,
             expected_descriptor_ref(&ability)
         );
     }
@@ -400,19 +363,19 @@ mod tests {
         let subject =
             crate::core::ura::resource_dot_ura("acme", "device.dev-a.files", "tmp/report.txt");
         let runtime = runtime_with_descriptor_bound_ability(&local_device_ura(), "fs.read").await;
-        let envelope = local_descriptor_bound_envelope(
+        let request = local_system_request(
             &runtime,
             AxonInvocationCallMode::Rpc,
             &target("fs.read".to_string(), Some(subject.clone())),
-            b"{}",
+            b"{}".to_vec(),
         )
         .await
-        .expect("descriptor-bound envelope");
+        .expect("descriptor-bound request");
 
-        assert_eq!(envelope.envelope().callee.ura, local_device_ura());
-        assert_eq!(envelope.envelope().subject.ura, subject);
+        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura());
+        assert_eq!(request.envelope().envelope().subject.ura, subject);
         assert_eq!(
-            envelope.envelope().ability,
+            request.envelope().envelope().ability,
             expected_descriptor_ref(
                 &crate::core::ura::owner_ability_ura(&local_device_ura(), "fs.read").unwrap()
             )
@@ -424,19 +387,19 @@ mod tests {
         let subject = crate::core::ura::device_ura("acme", "dev-b");
         let runtime =
             runtime_with_descriptor_bound_ability(&local_device_ura(), "device.inspect").await;
-        let envelope = local_descriptor_bound_envelope(
+        let request = local_system_request(
             &runtime,
             AxonInvocationCallMode::Rpc,
             &target("device.inspect".to_string(), Some(subject.clone())),
-            b"{}",
+            b"{}".to_vec(),
         )
         .await
-        .expect("descriptor-bound envelope");
+        .expect("descriptor-bound request");
 
-        assert_eq!(envelope.envelope().callee.ura, local_device_ura());
-        assert_eq!(envelope.envelope().subject.ura, subject);
+        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura());
+        assert_eq!(request.envelope().envelope().subject.ura, subject);
         assert_eq!(
-            envelope.envelope().ability,
+            request.envelope().envelope().ability,
             expected_descriptor_ref(
                 &crate::core::ura::owner_ability_ura(&local_device_ura(), "device.inspect")
                     .unwrap()

@@ -701,7 +701,6 @@ async fn sign_descriptor_bound_prelude_request(
             envelope.clone(),
             descriptor_ref.clone(),
             &request.arguments,
-            crate::daemon::axon_bridge::wire_descriptor::WireCallerIdentity::FromEnvelope,
         )
         .map_err(|err| {
             Status::internal(format!(
