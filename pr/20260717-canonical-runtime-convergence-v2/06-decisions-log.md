@@ -664,3 +664,27 @@
 - Endpoint adapter tests should use endpoint naming when the tested value is a
   transport scheme. That keeps the URA rule focused on routable identity
   architecture while avoiding retired address-token vocabulary in test names.
+- Axon `document/` files should be treated as active vocabulary unless a
+  future classification explicitly marks them historical. A manually curated
+  active-document list is too weak for RF-9 because new documents can drift
+  outside the list.
+- When `axon://` appears in active text, describe it as an endpoint if that is
+  the tested or packaged object. `easynet:///` identity examples remain URAs.
+- Brand and strategy documents can still affect architecture by shaping
+  vocabulary. They should not preserve retired address terms merely because
+  they are not implementation files.
+- Dendrite bridge contract docs under `core/runtime-rs` are active caller
+  contracts even though they are outside Axon's top-level `document/` tree.
+  RF-9 gates must cover them explicitly when they define SDK-facing shapes.
+- Legacy FFI compatibility should be described as an edge adapter pending
+  descriptor-bound migration, not as a permanent canonical proof path.
+- Test names are vocabulary too. A test that checks a URA field should say
+  URA; a test that checks a transport scheme should say endpoint.
+- RF-9 active source gates should scan repository roots, not only paths where
+  a previous audit found issues. Otherwise new source files can preserve
+  retired terminology outside the gate.
+- Build outputs, virtual environments, package metadata, and caches are not
+  canonical source. The gate should exclude them rather than force generated
+  third-party files to follow EasyNet terminology.
+- `http::uri::PathAndQuery` and similar imports are transport-library API
+  names. They are allowed because they do not describe routable Axon identity.

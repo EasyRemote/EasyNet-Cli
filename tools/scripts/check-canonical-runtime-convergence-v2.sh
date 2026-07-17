@@ -518,12 +518,16 @@ check_axon_normative_ura_document_contract() {
   fi
 
   local docs=()
+  if [[ -d "$AXON_ROOT/document" ]]; then
+    while IFS= read -r -d '' path; do
+      docs+=("$path")
+    done < <(
+      find "$AXON_ROOT/document" \
+        \( -path '*/target/*' -o -path '*/node_modules/*' \) -prune \
+        -o -type f \( -name '*.md' -o -name '*.tex' \) -print0
+    )
+  fi
   for path in \
-    "$AXON_ROOT/document/concepts/AXIOM.tex" \
-    "$AXON_ROOT/document/concepts/ONTOLOGY_AGENT_ABILITY.md" \
-    "$AXON_ROOT/document/rfcs/001-envelope-axiom-alignment.md" \
-    "$AXON_ROOT/document/rfcs/001-pr2-acceptance-checklist.md" \
-    "$AXON_ROOT/document/rfcs/002-keyring-and-keyresolver.md" \
     "$AXON_ROOT/sdk/SDK_INTERFACE_SPEC.md" \
     "$AXON_ROOT/sdk/FEDERATION_INVOKE_SCHEMAS.md" \
     "$AXON_ROOT/sdk/conformance/cases/axiom/README.md" \
@@ -590,6 +594,29 @@ check_axon_sdk_product_neutral_ura_error_contract() {
   fi
 }
 
+check_axon_active_ura_source_test_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for active URA source/test contract: $AXON_ROOT"
+  fi
+
+  local paths=()
+  for path in \
+    "$AXON_ROOT/core" \
+    "$AXON_ROOT/sdk" \
+    "$AXON_ROOT/scripts" \
+    "$AXON_ROOT/packaging" \
+    "$AXON_ROOT/core/runtime-rs/dendrite-bridge/docs/AUTHENTICATED_INVOCATION.md" \
+    "$AXON_ROOT/sdk/go/easynet/signed_invoke_request_test.go" \
+    "$AXON_ROOT/sdk/go/easynet/ability_lifecycle_server_test.go"
+  do
+    [[ -e "$path" ]] && paths+=("$path")
+  done
+  if ((${#paths[@]} == 0)); then
+    return
+  fi
+  check_active_ura_transport_classification_contract "${paths[@]}"
+}
+
 check_active_ura_transport_classification_contract() {
   "$PYTHON_BIN" - "$@" <<'PY'
 import re
@@ -606,6 +633,7 @@ retired = re.compile(
 )
 transport = re.compile(
     r"\b(?:hyper::Uri|http::Uri|tonic::transport::Uri|url::Url)\b"
+    r"|\b(?:hyper|http)::uri::[A-Za-z0-9_]+\b"
     r"|use\s+(?:hyper|tonic::transport)::\{[^}]*\bUri\b[^}]*\}"
     r"|\bconnect_with_connector\b"
     r"|\btower::service_fn\(move \|_:\s*Uri\|"
@@ -622,7 +650,13 @@ semantic = re.compile(
 ura = re.compile(r"ura", re.IGNORECASE)
 skip_parts = {
     ".git",
+    ".pytest_cache",
+    ".venv",
+    ".venv-test",
     "target",
+    "build",
+    "dist",
+    "site-packages",
     "node_modules",
     "__pycache__",
 }
@@ -638,6 +672,8 @@ def iter_files(root: Path):
             continue
         parts = set(path.parts)
         if parts & skip_parts:
+            continue
+        if path.name.endswith(".egg-info") or any(part.endswith(".egg-info") for part in path.parts):
             continue
         if "/tests/scripts/" in path.as_posix():
             continue
@@ -1368,6 +1404,18 @@ PY
   if ( AXON_ROOT="$tmp/axon-sdk-product-ura"; check_axon_sdk_product_neutral_ura_error_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon SDK product-specific URA error gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-active-ura-source"
+  mkdir -p "$tmp/axon-active-ura-source/core/runtime-rs/dendrite-bridge/docs" \
+    "$tmp/axon-active-ura-source/sdk/go/easynet"
+  printf 'type SigningConfig struct { CallerURI string }\nInvokeAbility(handle, tenantID, resourceURI, payloadJSON, metadata, timeoutMs)\n' \
+    > "$tmp/axon-active-ura-source/core/runtime-rs/dendrite-bridge/docs/AUTHENTICATED_INVOCATION.md"
+  printf 'package easynet\nfunc TestSignedInvokeRequest_RejectsEmptyCalleeURI() {}\n' \
+    > "$tmp/axon-active-ura-source/sdk/go/easynet/signed_invoke_request_test.go"
+  printf 'package easynet\nfunc TestNormalizeHubEndpointConvertsAxonURI() {}\n' \
+    > "$tmp/axon-active-ura-source/sdk/go/easynet/ability_lifecycle_server_test.go"
+  if ( AXON_ROOT="$tmp/axon-active-ura-source"; check_axon_active_ura_source_test_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon active source/test URI terminology gate to fail"
+  fi
   AXON_ROOT="$tmp/axon"
   check_manifest_contract
   check_active_source_contract
@@ -1380,6 +1428,7 @@ PY
   check_axon_normative_ura_document_contract
   check_axon_proto_ura_vocabulary_contract
   check_axon_sdk_product_neutral_ura_error_contract
+  check_axon_active_ura_source_test_contract
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
   check_schema_source_derivation_contract
   check_axon_product_protocol_boundary_contract
@@ -1403,6 +1452,7 @@ check_axon_protocol_pack_ura_vector_contract
 check_axon_normative_ura_document_contract
 check_axon_proto_ura_vocabulary_contract
 check_axon_sdk_product_neutral_ura_error_contract
+check_axon_active_ura_source_test_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
 check_axon_product_protocol_boundary_contract

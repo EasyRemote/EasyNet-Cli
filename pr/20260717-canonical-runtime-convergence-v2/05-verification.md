@@ -2476,3 +2476,108 @@ Commands run on 2026-07-17:
 This evidence verifies only active ontology/conformance URA terminology
 convergence and the new V2 regression coverage for that active-document set.
 It does not complete RF-9 or the full canonical runtime convergence SPEC.
+
+## RF-9 Axon Document-Wide URA Vocabulary Gate Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "\bURI\b|\bURIs\b|\bUri\b|\buri\b|_uri\b|AgentUri" document sdk/SDK_INTERFACE_SPEC.md sdk/FEDERATION_INVOKE_SCHEMAS.md sdk/conformance/cases/axiom/README.md sdk/conformance/cases/axiom/axiom-identity-composite-required.json -g '*.md' -g '*.tex' -g '*.json' -g '!target' -g '!node_modules'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after replacing the remaining brand and ecosystem-plan retired terminology.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies Axon document-wide URA terminology convergence and the
+new V2 regression coverage for the `document/` tree. It does not complete
+RF-9 because generated-schema ownership and any non-document source/test
+terminology gaps still require separate closure.
+
+## RF-9 Dendrite Active Source/Test URA Vocabulary Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "\bURI\b|\bURIs\b|\bUri\b|\buri\b|_uri\b|[A-Za-z0-9]+Uri\b|[A-Za-z0-9]+URI\b" core/runtime-rs/dendrite-bridge/docs/AUTHENTICATED_INVOCATION.md sdk/go/easynet/signed_invoke_request_test.go sdk/go/easynet/ability_lifecycle_server_test.go -g '!target'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after the Dendrite contract and Go test naming updates.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects `CallerURI`, `resourceURI`, and URI-suffixed Go test
+  names to prove the active source/test gate rejects this RF-9 regression.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `go test ./easynet -run 'TestSignedInvokeRequest_RejectsEmptyCalleeURA|TestNormalizeHubEndpointConvertsAxonEndpoint'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies Dendrite active contract and Go SDK test URA
+terminology convergence plus V2 regression coverage for those paths. It does
+not complete RF-9 because broader non-document source/test audits and
+generated-schema ownership remain separate closure work.
+
+## RF-9 Axon Active Source-Wide URA Vocabulary Gate Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "\bURI\b|\bURIs\b|\bUri\b|\buri\b|_uri\b|[A-Za-z0-9]+Uri\b|[A-Za-z0-9]+URI\b" core sdk scripts packaging -g '!target' -g '!node_modules' -g '!*.pb.go' -g '!*.lock' -g '!*.png' -g '!*.jpg' -g '!dist/**' -g '!build/**' -g '!*.egg-info/**' -g '!.venv/**' -g '!.venv-test/**' -g '!.pytest_cache/**'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: only
+  transport-library uses remain:
+  `core/runtime-rs/dendrite-bridge/src/common.rs:40` and
+  `core/runtime-rs/dendrite-bridge/src/raw_transport.rs:32`, both importing
+  `http::uri::PathAndQuery`.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `cargo test -q -p axon-runtime join_accepts`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/core/runtime-rs`:
+  passed, 2 passed.
+- `cargo test -q --manifest-path sdk/rust/Cargo.toml bootstrap_appends_distinct_keys_for_same_node_ura_within_bound`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 1
+  passed.
+- `rg -n "membership_uri|canonical_device_uri|same_node_uri|URI|Uri" core/runtime-rs/src/services/invocation/hub_profile/tests/join.rs sdk/rust/src/invocation/runtime_admin.rs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies active Axon source-wide URA terminology convergence and
+V2 regression coverage across active source roots. It does not complete RF-9
+because generated-schema ownership remains a separate closure requirement.

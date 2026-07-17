@@ -1544,3 +1544,77 @@ addressability, and conformance-vector URI wording to prove the gate rejects
 the regression. This slice closes one active ontology/conformance vocabulary
 defect. RF-9 remains open for broader historical document classification and
 schema-source ownership closure.
+
+## Current Slice: RF-9 Axon Document-Wide URA Vocabulary Gate
+
+Owner: EasyNet-Axon active document corpus and the EasyNet-Cli V2 convergence
+gate.
+
+After the ontology/conformance slice, a repository-wide document scan still
+found retired URI terminology in brand and ecosystem planning documents:
+ability-addressing claims, release-plan conformance-vector descriptions, and
+object-centric examples such as `ability_uri`. These documents are not
+protocol implementations, but they remain checked-in architecture and strategy
+material. Leaving them outside the active terminology gate would preserve a
+parallel vocabulary path that future SDK or protocol work could copy.
+
+The active documents now use URA terminology for ability addressing,
+conformance vectors, ability identity, and invocation examples. `axon://` is
+described as an endpoint where it appears beside `easynet:///` URAs, keeping
+transport endpoint language separate from routable identity terminology.
+
+The V2 RF-9 gate now scans every Markdown and TeX file under Axon's
+`document/` tree, plus the active SDK/conformance interface files already
+covered by prior slices. This removes the manually curated active-document
+allowlist for Axon documents and makes new retired address vocabulary fail by
+default. RF-9 remains open for generated-schema ownership and any remaining
+non-document source/test terminology gaps.
+
+## Current Slice: RF-9 Dendrite Active Source/Test URA Vocabulary
+
+Owner: EasyNet-Axon Dendrite bridge active contract documentation and Go SDK
+tests, plus the EasyNet-Cli V2 convergence gate.
+
+The document-wide RF-9 gate intentionally covers Axon `document/`, but the
+Dendrite authenticated invocation contract lives under
+`core/runtime-rs/dendrite-bridge/docs`. That active contract still used
+`resourceURI` and `CallerURI` in the representative Go surface and stated the
+legacy path was permanent. Go tests also retained function names such as
+`RejectsEmptyCalleeURI` and `ConvertsAxonURI`. These were not transport API
+uses; they were active caller vocabulary and test contract names.
+
+The Dendrite contract now uses `resourceURA` and `CallerURA` in the
+representative Go surface and describes the legacy FFI path as a legacy edge
+adapter until callers move to descriptor-bound signed invocation entry points,
+not as a canonical runtime proof path. Go tests use URA or endpoint language
+according to the semantic object under test.
+
+The V2 RF-9 gate now covers this Dendrite document and the Go SDK test files
+with the same active URA classifier used elsewhere. Its self-test injects
+`CallerURI`, `resourceURI`, and URI-suffixed Go test names to prove the gate
+rejects this regression. This slice closes one active source/test terminology
+defect; RF-9 remains open for broader non-document source/test audits and
+generated-schema ownership.
+
+## Current Slice: RF-9 Axon Active Source-Wide URA Vocabulary Gate
+
+Owner: EasyNet-Axon active source/test vocabulary and the EasyNet-Cli V2
+convergence gate.
+
+After the Dendrite/Go slice, a broad active source scan across Axon `core`,
+`sdk`, `scripts`, and `packaging` found three remaining semantic test names:
+two hub-profile join tests used `membership_uri` / `canonical_device_uri`, and
+a Rust SDK runtime-admin test used `same_node_uri`. These tests exercised URA
+fields, not transport URI APIs, so the names preserved retired architecture
+vocabulary.
+
+The test names now use `membership_ura`, `canonical_device_ura`, and
+`same_node_ura`. The V2 active source/test classifier now scans the Axon
+active roots by default instead of only the earlier Dendrite/Go file list.
+It excludes build outputs, virtual environments, package metadata, and caches,
+and it explicitly permits transport-library APIs such as
+`http::uri::PathAndQuery`.
+
+This slice closes the current semantic source/test RF-9 findings from the
+broad scan. RF-9 remains open for generated-schema ownership and any future
+source roots not covered by the active-root gate.

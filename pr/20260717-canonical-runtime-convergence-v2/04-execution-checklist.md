@@ -1088,6 +1088,46 @@
       ontology and axiom conformance files.
 - [x] Run final verification commands for this slice and record the results.
 
+## RF-9 Axon Document-Wide URA Vocabulary Gate Slice
+
+- [x] Scan the full Axon `document/` tree for retired URI vocabulary after the
+      active ontology/conformance slice.
+- [x] Replace remaining brand and ecosystem-plan URI terminology with URA or
+      endpoint terminology according to semantic ownership.
+- [x] Expand the V2 RF-9 active document gate from a curated Axon document
+      list to every Markdown/TeX file under `document/`.
+- [x] Keep SDK/conformance interface files in the active document gate because
+      they sit outside `document/` but still define active caller vocabulary.
+- [x] Run final verification commands for this slice and record the results.
+
+## RF-9 Dendrite Active Source/Test URA Vocabulary Slice
+
+- [x] Identify Dendrite authenticated invocation docs and Go SDK tests as
+      active source/test vocabulary outside the Axon `document/` tree.
+- [x] Replace `resourceURI` and `CallerURI` in the Dendrite representative Go
+      surface with `resourceURA` and `CallerURA`.
+- [x] Reword the legacy FFI path as a legacy edge adapter pending
+      descriptor-bound signed invocation migration, not as a canonical runtime
+      proof path.
+- [x] Rename Go test functions from URI vocabulary to URA or endpoint
+      terminology according to the object under test.
+- [x] Extend the V2 RF-9 gate/self-test to reject URI vocabulary in these
+      active Dendrite and Go SDK source/test paths.
+- [x] Run final verification commands for this slice and record the results.
+
+## RF-9 Axon Active Source-Wide URA Vocabulary Gate Slice
+
+- [x] Run a broad Axon active source/test scan across `core`, `sdk`,
+      `scripts`, and `packaging`.
+- [x] Rename remaining semantic Rust test names from URI to URA terminology.
+- [x] Broaden the V2 RF-9 active source/test gate from the Dendrite/Go file
+      list to Axon's active source roots.
+- [x] Exclude generated/build/environment artifacts from the active source
+      classifier instead of treating them as canonical source.
+- [x] Preserve explicit transport-library exceptions for `http::uri` /
+      `hyper::Uri` style APIs.
+- [x] Run final verification commands for this slice and record the results.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
