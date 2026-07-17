@@ -1618,3 +1618,63 @@ and it explicitly permits transport-library APIs such as
 This slice closes the current semantic source/test RF-9 findings from the
 broad scan. RF-9 remains open for generated-schema ownership and any future
 source roots not covered by the active-root gate.
+
+## Current Slice: RF-9 Proto Schema Source Derivation Self-Test Hardening
+
+Owner: EasyNet-Axon canonical `core/proto/axon/v1` source, generated proto
+mirrors, Dendrite protocol catalog parity, and the EasyNet-Cli V2 convergence
+gate.
+
+The production schema-source contract already delegates to Axon's real
+`scripts/proto/sync_axon_v1.sh --check`, which makes `core/proto/axon/v1` the
+single canonical proto source and treats the runtime client-sdk and Rust SDK
+proto trees as derived mirrors. It also verifies that the Dendrite protocol
+catalog matches canonical proto services/RPCs and that prost/prost-types/tonic
+codegen versions stay aligned between the two Rust consumers.
+
+The V2 self-test previously used a fake syncer that failed only when a marker
+file existed. That proved failure propagation, but not the schema ownership
+invariants required by RF-9. The self-test now builds a minimal Axon fixture
+with the real syncer copied from the live Axon checkout, the full canonical
+proto filename set, derived mirror trees, a Dendrite catalog, and codegen
+version pins/locks. It proves the good fixture passes, then mutates separate
+fixtures to verify that mirror drift, product proto declarations, catalog RPC
+drift, and codegen version drift all fail through the same production
+`check_schema_source_derivation_contract` path.
+
+This hardens RF-9 regression coverage without introducing a second schema
+model in EasyNet-Cli. The CLI gate remains an ownership verifier; Axon remains
+the owner of proto canonicalization, mirror derivation, catalog parity, and
+codegen version alignment. RF-9 remains open until all remaining schema-source
+and generated-artifact ownership requirements in the SPEC are audited against
+the current checkout.
+
+## Current Slice: RF-4 Acceptance Benchmark Coverage Harness
+
+Owner: EasyNet-Axon Rust `LocalRuntime` benchmark harness and the
+EasyNet-Cli V2 convergence gate.
+
+The V2 acceptance gates require fixed-baseline benchmark evidence for
+unary/stream/bidi latency, cancellation cleanup, bounded concurrency, and
+allocation behavior. Existing Axon Rust benches already covered unary
+`LocalRuntime::invoke_async`, signed parallel invocation, registry read
+contention, invocation-core contention, message inbox contention, and
+admission replay/pipeline behavior. They did not include executable
+`LocalRuntime` scenarios for server-stream open/drain, bidi open/input/output
+round-trip, or cooperative cancellation cleanup.
+
+The Axon `local_runtime` benchmark now includes three additional user-visible
+runtime scenarios: `invoke_stream/two_frames`, `invoke_bidi/echo_round_trip`,
+and `cancel/cooperative_cleanup`. Each scenario uses public `LocalRuntime`
+entry points and an explicit benchmark `ReceiptSigningAuthorityProvider`, so
+the benchmark measures the provider-backed receipt path instead of relying on
+the fail-closed zero-argument runtime constructor or a hidden process-local
+fallback. The benchmark documentation records quick-mode medians from the
+current checkout and explicitly keeps allocation baseline coverage open until
+an allocator-counting harness exists.
+
+The V2 gate now verifies that the Axon benchmark harness and baseline document
+retain unary, bounded-concurrency, stream, bidi, and cancellation cleanup
+scenarios. This is a coverage-hardening slice, not full RF-4 or acceptance
+gate 9 closure: allocation baselines and complete cross-language lifecycle
+cutover remain open.

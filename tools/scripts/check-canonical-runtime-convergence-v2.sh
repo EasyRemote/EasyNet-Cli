@@ -725,6 +725,39 @@ check_schema_source_derivation_contract() {
   fi
 }
 
+check_axon_benchmark_baseline_coverage_contract() {
+  if [[ ! -d "$AXON_ROOT" ]]; then
+    fail "EasyNet-Axon root not found for benchmark baseline coverage contract: $AXON_ROOT"
+  fi
+
+  local local_runtime_bench="$AXON_ROOT/sdk/rust/benches/local_runtime.rs"
+  local baseline_doc="$AXON_ROOT/sdk/rust/benches/BASELINE.md"
+  local readme_doc="$AXON_ROOT/sdk/rust/benches/README.md"
+  for path in "$local_runtime_bench" "$baseline_doc" "$readme_doc"; do
+    [[ -f "$path" ]] || fail "Axon benchmark baseline coverage file is missing: ${path#$AXON_ROOT/}"
+  done
+
+  local scenario
+  for scenario in \
+    "invoke_async/noop/single" \
+    "invoke_async/noop/parallel" \
+    "invoke_stream/two_frames" \
+    "invoke_bidi/echo_round_trip" \
+    "cancel/cooperative_cleanup"
+  do
+    if ! grep -q "$scenario" "$local_runtime_bench"; then
+      fail "Axon local_runtime benchmark harness is missing V2 scenario: $scenario"
+    fi
+    if ! grep -q "$scenario" "$baseline_doc"; then
+      fail "Axon local_runtime baseline document is missing V2 scenario: $scenario"
+    fi
+  done
+
+  if ! grep -q "Allocation baselines are not yet captured" "$readme_doc"; then
+    fail "Axon benchmark README must explicitly keep allocation baseline coverage open"
+  fi
+}
+
 check_receipt_proof_fact_contract() {
   if [[ ! -d "$AXON_ROOT" ]]; then
     fail "EasyNet-Axon root not found for receipt proof-fact contract: $AXON_ROOT"
@@ -1163,22 +1196,205 @@ PY
   if ( AXON_ROOT="$tmp/axon-runtime-client-receipt-default"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Rust runtime client receipt proof default gate to fail"
   fi
-  mkdir -p "$tmp/axon/scripts/proto"
-  printf '%s\n' \
-    '#!/usr/bin/env bash' \
-    'set -euo pipefail' \
-    'if [[ "${1:-}" != "--check" ]]; then' \
-    '  exit 2' \
-    'fi' \
-    'if [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/SCHEMA_DERIVATION_BROKEN" ]]; then' \
-    '  exit 1' \
-    'fi' \
-    > "$tmp/axon/scripts/proto/sync_axon_v1.sh"
-  mkdir -p "$tmp/axon-bad/scripts/proto"
-  cp "$tmp/axon/scripts/proto/sync_axon_v1.sh" "$tmp/axon-bad/scripts/proto/sync_axon_v1.sh"
-  touch "$tmp/axon-bad/SCHEMA_DERIVATION_BROKEN"
-  if ( AXON_ROOT="$tmp/axon-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
-    fail "self-test expected schema-source derivation gate to fail"
+  make_schema_fixture() {
+    local root="$1"
+    local syncer="$AXON_ROOT/scripts/proto/sync_axon_v1.sh"
+    if [[ ! -f "$syncer" ]]; then
+      fail "self-test requires real Axon proto syncer: ${syncer#$AXON_ROOT/}"
+    fi
+
+    mkdir -p "$root/scripts/proto" \
+      "$root/core/proto/axon/v1" \
+      "$root/core/runtime-rs/client-sdk/proto/axon/v1" \
+      "$root/sdk/rust/proto/axon/v1" \
+      "$root/core/runtime-rs/client-sdk" \
+      "$root/core/runtime-rs/dendrite-bridge" \
+      "$root/sdk/rust"
+    cp "$syncer" "$root/scripts/proto/sync_axon_v1.sh"
+
+    local files=(
+      admin.proto
+      capability.proto
+      control.proto
+      federation.proto
+      identity.proto
+      invoke.proto
+      namespace.proto
+      observe.proto
+      policy.proto
+      state_sync.proto
+      stream.proto
+      transfer.proto
+      types.proto
+    )
+    local proto
+    for proto in "${files[@]}"; do
+      printf 'syntax = "proto3";\npackage axon.v1;\n' \
+        > "$root/core/proto/axon/v1/$proto"
+    done
+
+    cat > "$root/core/proto/axon/v1/invoke.proto" <<'PROTO'
+syntax = "proto3";
+package axon.v1;
+
+message InvocationRequest {}
+message InvocationResponse {}
+message StreamRequest {}
+message StreamResponse {}
+message BidiRequest {}
+message BidiResponse {}
+
+service Invocation {
+  rpc Invoke(InvocationRequest) returns (InvocationResponse);
+  rpc InvokeStream(StreamRequest) returns (stream StreamResponse);
+  rpc InvokeBidi(stream BidiRequest) returns (stream BidiResponse);
+}
+PROTO
+    cat > "$root/core/proto/axon/v1/namespace.proto" <<'PROTO'
+syntax = "proto3";
+package axon.v1;
+
+message ResolveRequest {}
+message ResolveResponse {}
+
+service Namespace {
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+}
+PROTO
+    cat > "$root/core/proto/axon/v1/transfer.proto" <<'PROTO'
+syntax = "proto3";
+package axon.v1;
+
+message DeletePayloadRequest {}
+message DeletePayloadResponse {}
+message DownloadPayloadRequest {}
+message DownloadPayloadResponse {}
+message GetPayloadMetaRequest {}
+message GetPayloadMetaResponse {}
+message UploadPayloadRequest {}
+message UploadPayloadResponse {}
+
+service PayloadTransfer {
+  rpc DeletePayload(DeletePayloadRequest) returns (DeletePayloadResponse);
+  rpc DownloadPayload(DownloadPayloadRequest) returns (DownloadPayloadResponse);
+  rpc GetPayloadMeta(GetPayloadMetaRequest) returns (GetPayloadMetaResponse);
+  rpc UploadPayload(UploadPayloadRequest) returns (UploadPayloadResponse);
+}
+PROTO
+
+    bash "$root/scripts/proto/sync_axon_v1.sh" --write >/dev/null
+
+    cat > "$root/core/runtime-rs/dendrite-bridge/protocol_catalog.json" <<'JSON'
+[
+  {"service":"Invocation","rpc":"Invoke"},
+  {"service":"Invocation","rpc":"InvokeBidi"},
+  {"service":"Invocation","rpc":"InvokeStream"},
+  {"service":"Namespace","rpc":"Resolve"},
+  {"service":"PayloadTransfer","rpc":"DeletePayload"},
+  {"service":"PayloadTransfer","rpc":"DownloadPayload"},
+  {"service":"PayloadTransfer","rpc":"GetPayloadMeta"},
+  {"service":"PayloadTransfer","rpc":"UploadPayload"}
+]
+JSON
+    for manifest in "$root/core/runtime-rs/client-sdk/Cargo.toml" "$root/sdk/rust/Cargo.toml"; do
+      cat > "$manifest" <<'TOML'
+[package]
+name = "axon-schema-fixture"
+version = "0.0.0"
+
+[dependencies]
+prost = "0.13"
+prost-types = "0.13"
+tonic = "0.12"
+TOML
+    done
+    for lockfile in "$root/core/runtime-rs/client-sdk/Cargo.lock" "$root/sdk/rust/Cargo.lock"; do
+      cat > "$lockfile" <<'LOCK'
+[[package]]
+name = "prost"
+version = "0.13.0"
+
+[[package]]
+name = "prost-types"
+version = "0.13.0"
+
+[[package]]
+name = "tonic"
+version = "0.12.0"
+LOCK
+    done
+  }
+
+  make_schema_fixture "$tmp/axon-schema-good"
+  if ! ( AXON_ROOT="$tmp/axon-schema-good"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected schema-source derivation fixture to pass"
+  fi
+  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-mirror-bad"
+  printf '\n// mirror drift\n' \
+    >> "$tmp/axon-schema-mirror-bad/sdk/rust/proto/axon/v1/invoke.proto"
+  if ( AXON_ROOT="$tmp/axon-schema-mirror-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected schema-source mirror drift gate to fail"
+  fi
+  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-product-bad"
+  printf '\nmessage VoiceSession {}\n' \
+    >> "$tmp/axon-schema-product-bad/core/proto/axon/v1/admin.proto"
+  if ( AXON_ROOT="$tmp/axon-schema-product-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected schema-source product proto gate to fail"
+  fi
+  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-catalog-bad"
+  cat > "$tmp/axon-schema-catalog-bad/core/runtime-rs/dendrite-bridge/protocol_catalog.json" <<'JSON'
+[
+  {"service":"Invocation","rpc":"Invoke"}
+]
+JSON
+  if ( AXON_ROOT="$tmp/axon-schema-catalog-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected schema-source Dendrite catalog parity gate to fail"
+  fi
+  cp -R "$tmp/axon-schema-good" "$tmp/axon-schema-codegen-bad"
+  perl -0pi -e 's/prost = "0\.13"/prost = "0.12"/' \
+    "$tmp/axon-schema-codegen-bad/sdk/rust/Cargo.toml"
+  if ( AXON_ROOT="$tmp/axon-schema-codegen-bad"; check_schema_source_derivation_contract ) >/dev/null 2>&1; then
+    fail "self-test expected schema-source codegen version parity gate to fail"
+  fi
+  make_benchmark_fixture() {
+    local root="$1"
+    mkdir -p "$root/sdk/rust/benches"
+    cat > "$root/sdk/rust/benches/local_runtime.rs" <<'RS'
+fn bench() {
+    let _ = "invoke_async/noop/single";
+    let _ = "invoke_async/noop/parallel";
+    let _ = "invoke_stream/two_frames";
+    let _ = "invoke_bidi/echo_round_trip";
+    let _ = "cancel/cooperative_cleanup";
+}
+RS
+    cat > "$root/sdk/rust/benches/BASELINE.md" <<'MD'
+# Baseline benchmark numbers
+
+| Scenario | Median |
+|---|---|
+| `invoke_async/noop/single` | 1 us |
+| `invoke_async/noop/parallel` | 2 us |
+| `invoke_stream/two_frames` | 3 us |
+| `invoke_bidi/echo_round_trip` | 4 us |
+| `cancel/cooperative_cleanup` | 5 us |
+MD
+    cat > "$root/sdk/rust/benches/README.md" <<'MD'
+# Benchmarks
+
+Allocation baselines are not yet captured by Criterion's default timing harness.
+MD
+  }
+
+  make_benchmark_fixture "$tmp/axon-benchmark-good"
+  if ! ( AXON_ROOT="$tmp/axon-benchmark-good"; check_axon_benchmark_baseline_coverage_contract ) >/dev/null 2>&1; then
+    fail "self-test expected benchmark baseline coverage fixture to pass"
+  fi
+  cp -R "$tmp/axon-benchmark-good" "$tmp/axon-benchmark-bad"
+  perl -0pi -e 's/\| `invoke_bidi\/echo_round_trip` \| 4 us \|\n//' \
+    "$tmp/axon-benchmark-bad/sdk/rust/benches/BASELINE.md"
+  if ( AXON_ROOT="$tmp/axon-benchmark-bad"; check_axon_benchmark_baseline_coverage_contract ) >/dev/null 2>&1; then
+    fail "self-test expected benchmark baseline coverage gate to fail"
   fi
   mkdir -p "$tmp/axon-product/sdk/rust/src"
   cp -R "$tmp/axon/core" "$tmp/axon-product/core"
@@ -1430,7 +1646,8 @@ PY
   check_axon_sdk_product_neutral_ura_error_contract
   check_axon_active_ura_source_test_contract
   check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
-  check_schema_source_derivation_contract
+  ( AXON_ROOT="$tmp/axon-schema-good"; check_schema_source_derivation_contract )
+  ( AXON_ROOT="$tmp/axon-benchmark-good"; check_axon_benchmark_baseline_coverage_contract )
   check_axon_product_protocol_boundary_contract
   check_axon_plain_proof_public_boundary_contract
   check_axon_rust_local_fast_signer_boundary_contract
@@ -1455,6 +1672,7 @@ check_axon_sdk_product_neutral_ura_error_contract
 check_axon_active_ura_source_test_contract
 check_active_ura_transport_classification_contract "$ROOT/src" "$ROOT/tests" "$ROOT/include"
 check_schema_source_derivation_contract
+check_axon_benchmark_baseline_coverage_contract
 check_axon_product_protocol_boundary_contract
 check_axon_plain_proof_public_boundary_contract
 check_axon_rust_local_fast_signer_boundary_contract

@@ -688,3 +688,21 @@
   third-party files to follow EasyNet terminology.
 - `http::uri::PathAndQuery` and similar imports are transport-library API
   names. They are allowed because they do not describe routable Axon identity.
+- Schema-source self-tests must exercise Axon's real proto syncer instead of a
+  fake pass/fail shim. RF-9 is about ownership of canonical source,
+  derivation, catalog parity, and codegen compatibility, so the regression
+  test must mutate those concrete surfaces.
+- EasyNet-Cli may verify schema-source convergence, but it must not grow a
+  second schema derivation model. The syncer, canonical filename set, product
+  proto boundary, Dendrite catalog parity, and codegen version rules remain
+  Axon-owned.
+- Benchmark coverage for V2 acceptance must use executable runtime scenarios,
+  not prose-only claims. Stream, bidi, and cancellation cleanup baselines belong
+  in the Axon `LocalRuntime` harness because Axon owns the generic runtime
+  state machine.
+- Benchmarks that need terminal receipts must install an explicit receipt
+  signing provider. The fail-closed `LocalRuntime::new()` constructor is a seam
+  and should not be silently promoted into provider-backed benchmark evidence.
+- Allocation baseline coverage remains open until an allocator-counting harness
+  exists. Timing-only Criterion rows must not be used as evidence for
+  allocation regressions.

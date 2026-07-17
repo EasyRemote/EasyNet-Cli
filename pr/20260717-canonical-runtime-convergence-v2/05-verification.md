@@ -2581,3 +2581,75 @@ Commands run on 2026-07-17:
 This evidence verifies active Axon source-wide URA terminology convergence and
 V2 regression coverage across active source roots. It does not complete RF-9
 because generated-schema ownership remains a separate closure requirement.
+
+## RF-9 Proto Schema Source Derivation Self-Test Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now uses the real Axon proto syncer in a minimal fixture and proves
+  failure for mirror drift, product proto declarations, Dendrite catalog RPC
+  drift, and codegen version drift.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies that RF-9 schema-source derivation coverage now tests
+the real Axon syncer and its concrete ownership invariants. It does not
+complete RF-9 or the full V2 SPEC; remaining SPEC roots still require separate
+implementation and audit.
+
+## RF-4 Acceptance Benchmark Coverage Harness Slice
+
+Commands run on 2026-07-17:
+
+- `cargo bench --manifest-path sdk/rust/Cargo.toml --bench local_runtime --no-run`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo bench --manifest-path sdk/rust/Cargo.toml --bench local_runtime -- --quick 'invoke_stream/two_frames|invoke_bidi/echo_round_trip|cancel/cooperative_cleanup'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+  Observed medians: `invoke_stream/two_frames` 395.34 us,
+  `invoke_bidi/echo_round_trip` 450.48 us,
+  `cancel/cooperative_cleanup` 289.58 us.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --manifest-path sdk/rust/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: initially
+  failed on import formatting in `sdk/rust/benches/local_runtime.rs`; after
+  `cargo fmt --manifest-path sdk/rust/Cargo.toml`, passed.
+- `cargo check --manifest-path sdk/rust/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check -- sdk/rust/benches/local_runtime.rs sdk/rust/benches/README.md sdk/rust/benches/BASELINE.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies executable benchmark coverage for stream, bidi, and
+cancellation cleanup on the Rust `LocalRuntime` harness, plus V2 gate coverage
+that protects those scenarios. It does not complete RF-4 or acceptance gate 9
+because allocator-counting baselines and full cross-language lifecycle cutover
+remain open.

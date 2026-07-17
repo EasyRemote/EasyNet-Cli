@@ -217,6 +217,41 @@
       architecture convergence gate, and absence of crate-internal
       `target: Some(InvocationTarget { ... })` literals.
 
+## RF-9 Proto Schema Source Derivation Self-Test Hardening Slice
+
+- [x] Identify the weak schema-source self-test as a fake syncer that only
+      proved failure propagation.
+- [x] Replace the fake syncer with a real minimal Axon proto fixture using the
+      live `scripts/proto/sync_axon_v1.sh`.
+- [x] Prove the good fixture passes through
+      `check_schema_source_derivation_contract`.
+- [x] Add failure fixtures for derived mirror drift, product proto
+      declarations, Dendrite catalog RPC drift, and codegen version drift.
+- [x] Keep EasyNet-Cli as the verifier and Axon as the owner of proto source,
+      mirror derivation, catalog parity, and codegen version alignment.
+- [x] Verify the V2 self-test, live V2 gate, architecture convergence gate,
+      formatting, lib check, and scoped diff cleanliness.
+
+## RF-4 Acceptance Benchmark Coverage Harness Slice
+
+- [x] Identify that Axon Rust benchmark coverage had unary and bounded
+      concurrency evidence but lacked executable stream, bidi, and cooperative
+      cancellation cleanup scenarios.
+- [x] Add `invoke_stream/two_frames` to measure server-stream open, progress
+      frame projection, terminal drain, and receipt closure.
+- [x] Add `invoke_bidi/echo_round_trip` to measure bidi open, inbound frame
+      delivery, outbound projection, close-input, and terminal drain.
+- [x] Add `cancel/cooperative_cleanup` to measure runtime cancel, cooperative
+      handler observation, cleanup acknowledgement, and terminal receipt
+      closure.
+- [x] Use an explicit benchmark `ReceiptSigningAuthorityProvider` instead of
+      the fail-closed default runtime constructor or hidden process-local
+      fallback.
+- [x] Add V2 gate coverage so benchmark harness and baseline document cannot
+      drop unary, bounded-concurrency, stream, bidi, or cancel scenarios.
+- [ ] Add allocator-counting baseline coverage before claiming acceptance gate
+      9 completion.
+
 ## RF-5 Rust Public Surface Signer Fallback Removal Slice
 
 - [x] Identify `generate_subject_auth` and
