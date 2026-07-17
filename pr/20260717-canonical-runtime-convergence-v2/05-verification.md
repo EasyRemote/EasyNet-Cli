@@ -1415,3 +1415,168 @@ This evidence verifies only the Python fluent receipt proof-facts boundary
 slice. It does not complete RF-6 globally because other language examples,
 remaining empty-proof fixtures, and public empty-proof helper exports still
 need separate migration or removal.
+
+## RF-6 Java Empty Receipt Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "ReceiptProofFacts\\.empty\\(|static ReceiptProofFacts empty|new byte\\[32\\], new byte\\[32\\], \"\"" sdk/java/src/main/java sdk/java/src/test/java -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after removing the Java empty proof-facts helper and
+  migrating remaining example/test call sites.
+- `mvn -Dtest=ReceiptVerbsTest test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed, 11 tests.
+- `mvn -q exec:java -Dexec.mainClass=run.easynet.axon.examples.ReceiptClosureExample`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed and completed the receipt -> verify -> trace -> prove-authority flow
+  with explicit descriptor/runtime proof facts.
+- `mvn test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed, 164 tests.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed before committing the Java slice.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `a4efe9cc29f60da3daa640dc05a6551b92a3942d`. The SDK parity matrix
+  had no content change for this Java helper removal.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` and
+  `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed in both repositories.
+- `rg -n "ReceiptProofFacts\\.empty|static ReceiptProofFacts empty|ReceiptProofFacts empty" /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java/src /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli/sdk/conformance -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed with no matches.
+
+This evidence verifies only the Java empty receipt proof helper removal and
+the migration of Java receipt example/test call sites to explicit proof facts.
+It does not complete RF-6 globally because constructor hardening, remaining
+fixtures, and descriptor proof-binding parity still require final
+cross-language closure.
+
+## RF-6 Go Empty Receipt Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "EmptyReceiptProofFacts\\(|ReceiptProofFacts\\(\\)|EMPTY_RECEIPT_PROOF_FACTS|ReceiptProofFacts\\.empty" sdk/go/easynet/invocation -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed with no matches after removing the Go empty proof-facts helper and
+  migrating Go receipt tests.
+- `go test ./easynet/invocation -run 'TestVerb|TestAuthorityAnchor|TestReceiptSignVerifyRoundtrip' -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./easynet/invocation -count=1`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `go test ./...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed, including `easynet`, `easynet/invocation`, and
+  `tests/industrial`.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed. The self-test now includes a Go production helper fixture that
+  reintroduces `EmptyReceiptProofFacts()`.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed before committing the Go slice.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed and refreshed `sdk/conformance/canonical-public-api.json` to Axon
+  revision `e2f41f12f1f325215364966c102cae24f87bb2a6`. The SDK parity matrix
+  had no content change for this Go helper removal.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`:
+  passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli` and
+  `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`:
+  passed in both repositories.
+
+This evidence verifies only the Go empty receipt proof helper removal and the
+new regression gate for that helper. It does not complete RF-6 globally
+because Swift empty proof helpers and final constructor/example parity remained
+open before the next slice.
+
+## RF-6 Swift Empty Receipt Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n 'public static let empty\s*=\s*ReceiptProofFacts|ReceiptProofFacts\.empty|proofFacts:\s*\.empty|proofFacts:\s*ReceiptProofFacts\s*=\s*\.empty|try\s+ReceiptProofFacts\(\s*\)|\?\? \.selfAuthority|authorityBinding: AuthorityBinding\? = nil' sdk/swift -S --glob '!**/.build/**'`:
+  passed with no matches after removing Swift empty receipt proof helpers,
+  empty constructor defaults, and fixture-level authority fallback.
+- `swift test --filter InvokeSignedTests`: passed, 13 tests. The signed
+  invocation LocalRuntime path now carries descriptor-bound proof facts and
+  plain async LocalRuntime receipts carry system-local proof facts.
+- `swift test --filter AuthorityMethodsTests`: passed, 8 tests. Receipt verb
+  fixtures now pass explicit authority bindings and explicit proof facts.
+- `swift test --filter BundleUsageTests`: passed, 4 tests. Bundle JSON
+  fixtures now construct complete proof facts, and non-32-byte hash validation
+  still rejects invalid facts.
+- `swift test --filter CrossLanguageVerifyTests`: passed, 3 tests. Swift
+  bundle receipts with explicit proof facts are accepted by the Rust verifier
+  and rejected after receipt/usage tampering.
+- `swift test`: failed after executing 147 tests with 2 unrelated industrial
+  message-inbox failures:
+  `MessageInboxFifoTests.test_fifo_order_preserved` observed `[1, 0, 2, ...]`
+  instead of FIFO order, and
+  `MessageInboxIdempotentTests.test_dup_id_delivers_once` observed `0`
+  instead of `1`. Receipt, authority, bundle, cross-language, and signed
+  invocation suites passed before these failures.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`:
+  passed after the Swift public `ReceiptProofFacts` constructor surface
+  changed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`:
+  passed. The self-test now includes Swift fixtures for
+  `ReceiptProofFacts.empty`, `proofFacts: .empty`, and empty
+  `try ReceiptProofFacts()` construction.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`:
+  passed against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --lib --features axon-pb`: passed.
+- `git diff --check` in EasyNet-Axon: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`:
+  passed.
+
+This evidence verifies only the Swift empty receipt proof helper removal,
+Swift LocalRuntime proof-fact ownership, and V2 regression coverage for this
+slice. It does not complete RF-6 globally because final cross-language
+constructor hardening and descriptor proof-binding parity still need a separate
+closure pass.

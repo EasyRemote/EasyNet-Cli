@@ -379,3 +379,51 @@
 - Python `prove_authority()` must read the explicit authority binding already
   stored on `AxiomBinding`; constructing a dummy `ReceiptBody` preserved an
   obsolete receipt path and failed once receipt proof facts became mandatory.
+- Java `ReceiptProofFacts.empty()` is an obsolete public receipt-construction
+  helper. Keeping it after LocalRuntime and fluent receipt paths moved to
+  explicit proof facts would preserve the wrong proof model as a reusable SDK
+  API.
+- Java examples and tests must construct descriptor/runtime proof facts where
+  they construct signed receipt bodies. An example that calls an empty helper
+  is effective SDK guidance, not harmless test convenience.
+- Causal parent receipts are proof facts, not display-only trace metadata. The
+  Java receipt-closure and verb fixtures now carry scalar/list causal parents
+  into `ReceiptProofFacts.parentReceipts` instead of signing receipts with an
+  empty proof tail.
+- Go `EmptyReceiptProofFacts()` is the same RF-6 defect as Java's removed
+  empty helper. Even if production LocalRuntime no longer calls it, keeping it
+  public in the invocation package preserves a reusable no-proof receipt
+  construction path.
+- Go receipt tests should own explicit fixture proof facts rather than call a
+  production empty helper. The fixture binds subject, descriptor, runtime,
+  authority, input/output hashes, and causal parents so tests exercise the
+  canonical receipt model.
+- Go authority anchors are cross-language conformance tests. They must use the
+  shared `axon-receipt-anchor-v2` strict proof-facts fixture rather than the
+  local receipt-verbs fixture, so Go remains aligned with Rust, Java, Python,
+  Node, and Swift anchor pins.
+- The V2 RF-6 gate now rejects `EmptyReceiptProofFacts()` anywhere under the
+  Go invocation package because a helper in tests, examples, or production
+  source would teach the obsolete empty-proof model.
+- Swift `ReceiptProofFacts.empty` is the same RF-6 defect as the removed Java
+  and Go empty helpers. Removing only production calls would leave an SDK API
+  that still teaches no-proof receipt construction, so the helper and unchecked
+  receipt-facts initializer are deleted.
+- Swift `ReceiptProofFacts` construction must require all receipt proof
+  fields explicitly. Defaulted hashes, runtime env, authority proof, and
+  parent receipts are a fallback path, not a canonical runtime abstraction.
+- Swift LocalRuntime owns local receipt proof-fact construction at the binding
+  boundary. Descriptor-bound and system-local receipts use separate runtime
+  env/admission-hook values, while both carry subject ref, descriptor identity,
+  authority proof, input hash, and causal parent receipts through one shared
+  builder.
+- Swift receipt output hashes are per-emitted-receipt facts. Updating only the
+  `payloadDigest` on `AxiomBinding` would leave stale proof facts, so
+  `withPayloadDigest` also refreshes `ReceiptProofFacts.outputHash`.
+- Swift examples and tests are part of the effective SDK contract. They must
+  construct explicit proof facts at the receipt signing boundary instead of
+  using empty helpers or fixture-level self-authority fallback.
+- The V2 RF-6 gate now scans Swift invocation source, examples, and tests for
+  `ReceiptProofFacts.empty`, `proofFacts: .empty`, empty
+  `try ReceiptProofFacts()` construction, and authority fallback shapes because
+  public API inventory cannot detect these semantic receipt-model regressions.

@@ -1013,3 +1013,61 @@ Swift constant. This slice advances RF-1 product-neutral SDK surface and RF-9
 URA-only source vocabulary. It does not complete either fork because package
 renaming, broader docs/examples, historical classification, and remaining
 product-owned SDK capabilities still require separate closure work.
+
+## Current Slice: RF-6 Go Empty Receipt Proof Helper Removal
+
+Owner: EasyNet-Axon Go SDK receipt model and EasyNet-Cli V2 conformance gate.
+
+The Go SDK had already moved LocalRuntime receipt emission to descriptor-bound
+proof facts, but the production invocation package still exported
+`EmptyReceiptProofFacts()`. Go receipt verb, authority-anchor, and signature
+roundtrip tests used that helper, so the SDK continued to publish and teach an
+empty-proof receipt construction path even though canonical receipt
+construction requires complete proof facts.
+
+The helper is deleted from production Go source. Go tests now construct
+explicit receipt proof facts through test-owned fixture builders. The
+authority-anchor test uses the same language-neutral
+`axon-receipt-anchor-v2` proof-facts pins as Rust, Java, Python, Node, and
+Swift; ordinary Go receipt tests use a local test fixture that binds subject,
+descriptor version, schema hash, implementation hash, runtime environment,
+authority proof, input hash, output hash, and causal parent receipts.
+
+The V2 gate now rejects `EmptyReceiptProofFacts()` anywhere in the Go
+invocation package, not only in `LocalRuntime`. This closes one more RF-6
+fallback surface. RF-6 remains open for the remaining language helpers,
+constructors, examples, and final descriptor proof-binding parity audit.
+
+## Current Slice: RF-6 Swift Empty Receipt Proof Helper Removal
+
+Owner: EasyNet-Axon Swift SDK invocation model, Swift LocalRuntime, Swift
+receipt examples/tests, and EasyNet-Cli V2 convergence gate.
+
+Swift retained the same RF-6 defect previously removed from Java and Go:
+`ReceiptProofFacts.empty` and defaulted `ReceiptProofFacts(...)` parameters
+allowed any receipt producer, example, or test to construct a valid-looking
+signed receipt with no descriptor/runtime/authority/input/output facts. The
+production `LocalRuntime` and signed invocation path also needed a single
+local proof-facts owner so output-hash refresh stayed aligned with the emitted
+receipt payload digest.
+
+The Swift invocation model now requires explicit `ReceiptProofFacts`
+constructor arguments. The public empty helper and unchecked receipt-facts
+initializer are removed. Swift LocalRuntime constructs descriptor-bound and
+system-local proof facts at the binding boundary through
+`LocalReceiptProofFacts`, and `AxiomBinding.withPayloadDigest` refreshes the
+proof-fact output hash with each emitted receipt digest.
+
+Swift examples and tests now construct receipt proof facts at the receipt
+signing boundary. Fixture builders bind subject ref, descriptor version,
+schema hash, implementation hash, runtime env, normalized authority proof,
+input/output hash, and causal parent receipts where applicable. Authority
+method tests no longer infer self authority when a fixture omits authority;
+callers pass the intended authority binding explicitly.
+
+The V2 RF-6 gate now rejects Swift `ReceiptProofFacts.empty`,
+`proofFacts: .empty`, empty `try ReceiptProofFacts()` construction, and
+receipt authority fallback patterns across Swift invocation source, examples,
+and tests. This closes the Swift empty receipt proof helper path. RF-6 remains
+open for final cross-language constructor hardening and any remaining
+language/package surfaces not yet proven by the shared capability matrix.

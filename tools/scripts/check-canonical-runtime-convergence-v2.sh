@@ -660,8 +660,12 @@ check_receipt_proof_fact_contract() {
   local node_invocation="$AXON_ROOT/sdk/node/src/invocation"
   local node_local_runtime="$AXON_ROOT/sdk/node/src/invocation/local-runtime.ts"
   local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
+  local swift_receipt_paths=()
   local go_invocation="$AXON_ROOT/sdk/go/easynet/invocation"
   local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
+  [[ -d "$swift_invocation" ]] && swift_receipt_paths+=("$swift_invocation")
+  [[ -d "$AXON_ROOT/sdk/swift/Examples" ]] && swift_receipt_paths+=("$AXON_ROOT/sdk/swift/Examples")
+  [[ -d "$AXON_ROOT/sdk/swift/Tests" ]] && swift_receipt_paths+=("$AXON_ROOT/sdk/swift/Tests")
 
   if rg -n 'AuthorityBinding\.self\(callerBinding\.ura\)|ReceiptProofFacts\.empty\(\)\);' "$java_axiom" "$java_bundle"; then
     fail "Java receipt construction/parsing still synthesizes authority or proof facts"
@@ -688,7 +692,9 @@ check_receipt_proof_fact_contract() {
     fail "Node LocalRuntime still emits receipts with empty proof facts"
   fi
 
-  if rg -n 'authorityBinding: AuthorityBinding\? = nil|proofFacts: ReceiptProofFacts = \.empty|\?\? \.selfAuthority' "$swift_invocation"; then
+  if ((${#swift_receipt_paths[@]} > 0)) \
+    && rg -n 'authorityBinding: AuthorityBinding\? = nil|proofFacts: ReceiptProofFacts = \.empty|\?\? \.selfAuthority|public static let empty\s*=\s*ReceiptProofFacts|ReceiptProofFacts\.empty|proofFacts:\s*\.empty|try\s+ReceiptProofFacts\(\s*\)' "${swift_receipt_paths[@]}" \
+      --glob '!**/.build/**'; then
     fail "Swift receipt construction still defaults authority or proof facts"
   fi
 
@@ -699,6 +705,10 @@ check_receipt_proof_fact_contract() {
 
   if rg -n 'EmptyReceiptProofFacts\(\)' "$go_local_runtime"; then
     fail "Go LocalRuntime still emits receipts with empty proof facts"
+  fi
+
+  if rg -n 'EmptyReceiptProofFacts\(\)' "$go_invocation"; then
+    fail "Go invocation package still exposes or uses empty receipt proof facts"
   fi
 }
 
@@ -838,6 +848,24 @@ PY
     > "$tmp/axon-go-receipt-runtime/sdk/go/easynet/invocation/local_runtime.go"
   if ( AXON_ROOT="$tmp/axon-go-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Go LocalRuntime empty proof facts gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-go-receipt-helper"
+  printf 'func EmptyReceiptProofFacts() ReceiptProofFacts { return ReceiptProofFacts{} }\n' \
+    > "$tmp/axon-go-receipt-helper/sdk/go/easynet/invocation/axiom.go"
+  if ( AXON_ROOT="$tmp/axon-go-receipt-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Go empty proof facts helper gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-swift-receipt-empty"
+  printf 'public struct ReceiptProofFacts { public static let empty = ReceiptProofFacts() }\nlet binding = AxiomBinding(proofFacts: .empty)\n' \
+    > "$tmp/axon-swift-receipt-empty/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+  if ( AXON_ROOT="$tmp/axon-swift-receipt-empty"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Swift empty proof facts helper gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-swift-receipt-default-init"
+  printf 'let facts = try ReceiptProofFacts()\n' \
+    > "$tmp/axon-swift-receipt-default-init/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+  if ( AXON_ROOT="$tmp/axon-swift-receipt-default-init"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Swift empty proof facts constructor gate to fail"
   fi
   mkdir -p "$tmp/axon/scripts/proto"
   printf '%s\n' \

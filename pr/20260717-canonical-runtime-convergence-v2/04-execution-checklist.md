@@ -693,6 +693,65 @@
 - [x] Verify Python authority, audit, admission, cross-language, and example
       paths.
 
+## RF-6 Java Empty Receipt Proof Helper Removal Slice
+
+- [x] Identify Java `Axiom.ReceiptProofFacts.empty()` as an obsolete public
+      helper that preserved empty proof facts after Java receipt constructors
+      and LocalRuntime production paths had moved to explicit facts.
+- [x] Delete the public empty proof-facts helper instead of retaining a
+      compatibility wrapper.
+- [x] Migrate the Java receipt-closure example to build explicit
+      descriptor/runtime proof facts at the receipt signing boundary.
+- [x] Migrate Java receipt verb tests to pass explicit proof facts for signed,
+      hosted, and causal-parent receipt forms.
+- [x] Bind scalar/list causal parents into the explicit Java proof facts so
+      example/test receipts no longer drop causal evidence at the proof-fact
+      boundary.
+- [x] Regenerate the canonical public API manifest and SDK parity matrix after
+      the Java public API hash changed.
+- [x] Verify the Java receipt verb suite, Java full SDK test suite, example
+      receipt authority flow, and V2/architecture gates.
+
+## RF-6 Go Empty Receipt Proof Helper Removal Slice
+
+- [x] Identify Go `EmptyReceiptProofFacts()` as an obsolete production SDK
+      helper after LocalRuntime receipt emission moved to explicit proof facts.
+- [x] Delete the helper instead of retaining an empty-proof compatibility
+      constructor.
+- [x] Add a Go test-owned receipt proof-facts fixture helper for ordinary
+      receipt verb and signature tests.
+- [x] Migrate Go receipt verb and signature roundtrip tests away from empty
+      proof facts.
+- [x] Migrate Go authority-anchor tests to the shared
+      `axon-receipt-anchor-v2` strict proof-facts pins used by the other
+      language anchor suites.
+- [x] Extend the V2 gate and self-test to reject `EmptyReceiptProofFacts()`
+      anywhere in the Go invocation package.
+- [x] Verify Go invocation tests, full Go SDK tests, V2 gate/self-test, and
+      public API manifest refresh before committing this slice.
+
+## RF-6 Swift Empty Receipt Proof Helper Removal Slice
+
+- [x] Identify Swift `ReceiptProofFacts.empty` and defaulted
+      `ReceiptProofFacts(...)` parameters as obsolete receipt-construction
+      surfaces after LocalRuntime receipt emission moved to explicit facts.
+- [x] Delete the Swift empty receipt proof-facts helper and unchecked
+      receipt-facts initializer instead of preserving a compatibility path.
+- [x] Require explicit arguments for Swift `ReceiptProofFacts` construction.
+- [x] Add Swift `LocalReceiptProofFacts` ownership for descriptor-bound and
+      system-local LocalRuntime receipt facts.
+- [x] Refresh Swift proof-fact output hashes through
+      `AxiomBinding.withPayloadDigest` when receipts are emitted.
+- [x] Migrate Swift receipt-authority example, authority-method tests,
+      bundle tests, cross-language verifier tests, and signed invocation tests
+      away from empty proof facts.
+- [x] Remove fixture-level authority fallback in Swift authority-method tests;
+      callers pass the intended authority binding explicitly.
+- [x] Extend the V2 gate and self-test to reject Swift empty receipt proof
+      helpers, empty constructor calls, and receipt authority fallback shapes.
+- [x] Verify Swift focused tests and V2 gate/self-test before committing this
+      slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
@@ -701,8 +760,8 @@
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
 - [ ] RF-4 shared lifecycle matrix, transition vectors, and cross-language
       provider status cutover.
-- [ ] RF-6 remaining examples and tests, receipt constructor hardening in every
-      language, and descriptor proof-binding parity closure.
+- [ ] RF-6 final cross-language constructor hardening, remaining language
+      package/example audit, and descriptor proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.
 - [ ] RF-2 Mission/EAL extraction from Axon canonical runtime.
 - [ ] RF-9 URA terminology and generated-schema ownership closure.
