@@ -23,6 +23,10 @@
       CutoverReady.
 - [x] Gate lifecycle vectors for start, dispatch, stream, bidi, child dispatch,
       cancel, deadline, terminal receipt, and restart recovery.
+- [x] Bind a provider-backed unary `deadline` vector for Go and Python to
+      concrete selectors and matrix evidence.
+- [x] Bind a provider-backed native runtime `start` vector for Go and Python to
+      concrete environment/process-root selectors and matrix evidence.
 - [ ] Re-run SDK parity gates against current worktree.
 
 ## RF-6

@@ -9241,6 +9241,7 @@
     "native_runtime": {
       "profile": "runtime_core",
       "case_ids": [
+        "environment/process_root",
         "runtime/control_only"
       ]
     },
@@ -9371,7 +9372,8 @@
       "profile": "runtime_core",
       "case_ids": [
         "invocation/complete_tuple",
-        "invocation/terminal_monotonicity"
+        "invocation/terminal_monotonicity",
+        "runtime/deadline_owner"
       ]
     }
   },
@@ -16327,6 +16329,36 @@
         },
         "step_evidence": [
           {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
             "case_id": "runtime/control_only",
             "action": "attach_runtime_host",
             "selector": "TestRuntimeHealthExposesControlOnlyState"
@@ -16348,6 +16380,36 @@
           "revision": "def78f91805209cff0a906298c740c080b36aa58"
         },
         "step_evidence": [
+          {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
           {
             "case_id": "runtime/control_only",
             "action": "attach_runtime_host",
@@ -16512,6 +16574,26 @@
             "case_id": "invocation/terminal_monotonicity",
             "action": "read_handle_events",
             "selector": "TestStreamHandleRejectsDuplicateTerminal"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "dispatch_with_deadline",
+            "selector": "TestDirectRuntimeInvokeDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "observe_typed_timeout",
+            "selector": "TestDirectRuntimeInvokeDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "release_timed_out_transport",
+            "selector": "TestDirectRuntimeInvokeDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "retry_after_deadline_cleanup",
+            "selector": "TestDirectRuntimeInvokeDeadlineIsTypedTimeout"
           }
         ]
       },
@@ -16569,6 +16651,26 @@
             "case_id": "invocation/terminal_monotonicity",
             "action": "read_handle_events",
             "selector": "test_result_rejects_inconsistent_failure"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "dispatch_with_deadline",
+            "selector": "test_unary_pool_retires_timed_out_owned_transport"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "observe_typed_timeout",
+            "selector": "test_unary_pool_retires_timed_out_owned_transport"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "release_timed_out_transport",
+            "selector": "test_unary_pool_retires_timed_out_owned_transport"
+          },
+          {
+            "case_id": "runtime/deadline_owner",
+            "action": "retry_after_deadline_cleanup",
+            "selector": "test_unary_pool_retires_timed_out_owned_transport"
           }
         ]
       }

@@ -379,6 +379,14 @@
     },
     {
       "language": "go",
+      "case_id": "runtime/deadline_owner",
+      "selector": "TestDirectRuntimeInvokeDeadlineIsTypedTimeout",
+      "evidence": [
+        "sdk/go/direct_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
       "case_id": "runtime/events_seam",
       "selector": "TestRuntimeEventClientReadsBoundedTypedPage",
       "evidence": [
@@ -927,6 +935,14 @@
       "selector": "test_reads_discovery_and_negotiates_v1",
       "evidence": [
         "sdk/python/tests/test_control_ipc.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/deadline_owner",
+      "selector": "test_unary_pool_retires_timed_out_owned_transport",
+      "evidence": [
+        "sdk/python/tests/test_transport.py"
       ]
     },
     {

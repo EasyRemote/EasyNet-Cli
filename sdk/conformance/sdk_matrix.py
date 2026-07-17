@@ -115,6 +115,22 @@ def generate() -> dict[str, Any]:
         ids = capability["case_ids"]
         for language in LANGUAGES:
             evidence = [case_id for case_id in ids if language in known_cases[case_id]]
+            lifecycle_vector_evidence = [
+                {
+                    "case_id": case_id,
+                    "action": lifecycle_action,
+                }
+                for case_id in evidence
+                for lifecycle_action in contracts[case_id]["lifecycle_actions"]
+            ]
+            lifecycle_vector_actions = sorted({
+                item["action"] for item in lifecycle_vector_evidence
+            })
+            missing_lifecycle_vector_actions = [
+                action
+                for action in sorted(LIFECYCLE_ACTIONS)
+                if action not in lifecycle_vector_actions
+            ]
             unproven = [
                 requirement["requirement_id"]
                 for requirement in capability.get("unproven_requirements", [])
@@ -132,11 +148,20 @@ def generate() -> dict[str, Any]:
                 )
                 if not has_public_surface or evidence != ids or unproven:
                     fail(f"provider_status_not_closed:{capability_id}:{language}")
+                if (
+                    status == "cutover-ready"
+                    and profile == "runtime_core"
+                    and missing_lifecycle_vector_actions
+                ):
+                    fail(f"cutover_lifecycle_vectors_not_closed:{capability_id}:{language}")
             elif has_public_surface or evidence:
                 status = "seam"
             else:
                 status = "unsupported"
                 evidence = []
+                lifecycle_vector_evidence = []
+                lifecycle_vector_actions = []
+                missing_lifecycle_vector_actions = sorted(LIFECYCLE_ACTIONS)
             cells.append(
                 {
                     "capability_id": capability_id,
@@ -144,6 +169,9 @@ def generate() -> dict[str, Any]:
                     "profile": profile,
                     "status": status,
                     "evidence_case_ids": evidence,
+                    "lifecycle_vector_actions": lifecycle_vector_actions,
+                    "missing_lifecycle_vector_actions": missing_lifecycle_vector_actions,
+                    "lifecycle_vector_evidence": lifecycle_vector_evidence,
                     "unproven_requirement_ids": unproven,
                     "shape_evidence": [
                         {

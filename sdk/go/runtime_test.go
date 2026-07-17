@@ -15,7 +15,7 @@ func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -27,6 +27,8 @@ func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
 	}
 	return draft
 }
+
+const runtimeTestDescriptorRef = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 
 func signedForRuntimeTest(t *testing.T) SignedInvocation {
 	t.Helper()
@@ -273,7 +275,7 @@ func TestRuntimeClientPrepareBuilderConsumesOnlyAfterSuccess(t *testing.T) {
 	builder := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -305,7 +307,7 @@ func TestRuntimeClientPrepareBuilderKeepsBuilderOnFailure(t *testing.T) {
 	builder := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -360,7 +362,7 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	tuple := prepared["tuple"].(map[string]any)
 	if tuple["caller_ura"] != "easynet:///r/example/agent/alice.sdk" ||
 		tuple["callee_ura"] != "easynet:///r/example/device/dev-a" ||
-		tuple["descriptor_ref"] != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+		tuple["descriptor_ref"] != runtimeTestDescriptorRef {
 		t.Fatalf("prepared tuple not preserved: %#v", seenSigned)
 	}
 }

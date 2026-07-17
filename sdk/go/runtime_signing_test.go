@@ -24,7 +24,7 @@ func TestRuntimeSigningTransportSignsUnsignedInvokeDraft(t *testing.T) {
 				"tuple": {
 					"caller_ura": "easynet:///r/example/agent/alice.sdk",
 					"callee_ura": "easynet:///r/example/device/dev-a",
-					"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+					"descriptor_ref": "` + runtimeTestDescriptorRef + `",
 					"subject_ura": "easynet:///r/example/device/dev-a",
 					"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 					"causal_context": {"form": "none"},
@@ -59,7 +59,7 @@ func TestRuntimeSigningTransportSignsUnsignedInvokeDraft(t *testing.T) {
 	if signature["algorithm"] != "ed25519" || signature["signature_base64"] != "c2lnbmF0dXJl" {
 		t.Fatalf("unexpected signature: %#v", signature)
 	}
-	if provider.material.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0" {
+	if provider.material.DescriptorRef() != runtimeTestDescriptorRef {
 		t.Fatalf("provider material descriptor = %q", provider.material.DescriptorRef())
 	}
 	if provider.material.CanonicalBytesBase64() == "" {
@@ -76,7 +76,7 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 	presigned, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -99,7 +99,7 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 				"tuple": {
 					"caller_ura": "easynet:///r/example/agent/alice.sdk",
 					"callee_ura": "easynet:///r/example/device/dev-a",
-					"descriptor_ref": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+					"descriptor_ref": "` + runtimeTestDescriptorRef + `",
 					"subject_ura": "easynet:///r/example/device/dev-a",
 					"nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 					"causal_context": {"form": "none"},
@@ -141,7 +141,7 @@ func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testin
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/user/bob").
 		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0").
+		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/user/bob").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).

@@ -76,6 +76,36 @@ for name, document in (("manifest", manifest), ("matrix", matrix)):
                 raise SystemExit(f"{name}:lifecycle_transition_metadata:{action}:{field}")
 if manifest.get("lifecycle_transition_contract") != matrix.get("lifecycle_transition_contract"):
     raise SystemExit("matrix:lifecycle_transition_contract_drift")
+expected_action_set = set(expected_actions)
+for cell in matrix.get("cells", []):
+    capability_id = cell.get("capability_id")
+    language = cell.get("language")
+    actions = cell.get("lifecycle_vector_actions")
+    missing = cell.get("missing_lifecycle_vector_actions")
+    evidence = cell.get("lifecycle_vector_evidence")
+    if not isinstance(actions, list) or actions != sorted(set(actions)):
+        raise SystemExit(f"matrix:lifecycle_vector_actions:{capability_id}:{language}")
+    if not isinstance(missing, list) or missing != sorted(set(missing)):
+        raise SystemExit(f"matrix:missing_lifecycle_vector_actions:{capability_id}:{language}")
+    if set(actions) | set(missing) != expected_action_set or set(actions) & set(missing):
+        raise SystemExit(f"matrix:lifecycle_vector_partition:{capability_id}:{language}")
+    if not isinstance(evidence, list):
+        raise SystemExit(f"matrix:lifecycle_vector_evidence:{capability_id}:{language}")
+    for item in evidence:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"case_id", "action"}
+            or item["action"] not in actions
+            or not isinstance(item["case_id"], str)
+            or not item["case_id"]
+        ):
+            raise SystemExit(f"matrix:lifecycle_vector_evidence:{capability_id}:{language}")
+    if (
+        cell.get("status") == "cutover-ready"
+        and cell.get("profile") == "runtime_core"
+        and missing
+    ):
+        raise SystemExit(f"matrix:cutover_lifecycle_vectors_not_closed:{capability_id}:{language}")
 
 plain_helpers = {
     "canonical_invocation_bytes",
@@ -1034,6 +1064,35 @@ path.write_text(json.dumps(data))
 PY
   if ( MATRIX="$tmp/lifecycle-matrix-drift.json"; check_manifest_contract ) >/dev/null 2>&1; then
     fail "self-test expected lifecycle transition contract drift gate to fail"
+  fi
+  cp "$MATRIX" "$tmp/lifecycle-vector-missing.json"
+  "$PYTHON_BIN" - "$tmp/lifecycle-vector-missing.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+del data["cells"][0]["lifecycle_vector_actions"]
+path.write_text(json.dumps(data))
+PY
+  if ( MATRIX="$tmp/lifecycle-vector-missing.json"; check_manifest_contract ) >/dev/null 2>&1; then
+    fail "self-test expected lifecycle vector field gate to fail"
+  fi
+  cp "$MATRIX" "$tmp/lifecycle-cutover-incomplete.json"
+  "$PYTHON_BIN" - "$tmp/lifecycle-cutover-incomplete.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+for cell in data["cells"]:
+    if cell["profile"] == "runtime_core" and cell["missing_lifecycle_vector_actions"]:
+        cell["status"] = "cutover-ready"
+        break
+path.write_text(json.dumps(data))
+PY
+  if ( MATRIX="$tmp/lifecycle-cutover-incomplete.json"; check_manifest_contract ) >/dev/null 2>&1; then
+    fail "self-test expected lifecycle cutover vector closure gate to fail"
   fi
   "$PYTHON_BIN" - "$tmp/manifest.json" <<'PY'
 import json

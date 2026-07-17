@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"easynet.run/cli/sdk/go/internal/axonpb"
 	"google.golang.org/grpc"
@@ -24,10 +25,23 @@ type directRuntimeFakeDaemon struct {
 	seenInvoke *axonpb.InvokeRequest
 	seenStream *axonpb.InvokeServerStreamRequest
 	seenBidi   []*axonpb.InvokeBidiUp
+
+	invokeDelay   time.Duration
+	invokeStarted chan struct{}
 }
 
-func (d *directRuntimeFakeDaemon) Invoke(_ context.Context, req *axonpb.InvokeRequest) (*axonpb.InvokeResponse, error) {
+func (d *directRuntimeFakeDaemon) Invoke(ctx context.Context, req *axonpb.InvokeRequest) (*axonpb.InvokeResponse, error) {
 	d.seenInvoke = req
+	if d.invokeStarted != nil {
+		close(d.invokeStarted)
+	}
+	if d.invokeDelay > 0 {
+		select {
+		case <-time.After(d.invokeDelay):
+		case <-ctx.Done():
+			return nil, status.Error(codes.DeadlineExceeded, "deadline elapsed")
+		}
+	}
 	return &axonpb.InvokeResponse{
 		State:             axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
 		SelectedNodeId:    "node-a",
@@ -45,6 +59,51 @@ func (d *directRuntimeFakeDaemon) Invoke(_ context.Context, req *axonpb.InvokeRe
 			CleanupComplete: true,
 		},
 	}, nil
+}
+
+func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+		DialTimeoutMS:   3000,
+		InvokeTimeoutMS: 50,
+	})
+	defer cleanup()
+	daemon.invokeDelay = time.Second
+	daemon.invokeStarted = make(chan struct{})
+
+	client, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Invoke(context.Background(), directRuntimeDraft(t))
+		done <- err
+	}()
+
+	select {
+	case <-daemon.invokeStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("deadline test did not dispatch the runtime invocation")
+	}
+
+	err = <-done
+	if !IsCode(err, ErrTimeout) {
+		t.Fatalf("Invoke deadline = %v, want %s", err, ErrTimeout)
+	}
+	sdkErr := new(SDKError)
+	if !errors.As(err, &sdkErr) {
+		t.Fatalf("deadline error is not SDKError: %T", err)
+	}
+	if sdkErr.Stage != "direct_runtime" || sdkErr.Retry != RetrySafe || !sdkErr.Retryable {
+		t.Fatalf("deadline classification = stage %q retry %s retryable %v", sdkErr.Stage, sdkErr.Retry, sdkErr.Retryable)
+	}
+	if sdkErr.Details["grpc_status"] != codes.DeadlineExceeded.String() {
+		t.Fatalf("grpc status = %#v", sdkErr.Details)
+	}
+	if daemon.seenInvoke == nil {
+		t.Fatalf("deadline test did not dispatch the runtime invocation")
+	}
 }
 
 func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamRequest, stream grpc.ServerStreamingServer[axonpb.InvokeStreamChunk]) error {

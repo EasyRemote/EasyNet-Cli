@@ -18,3 +18,16 @@
   generated `language.json` results from the conformance runner.
 - Treat Go result fixtures emitting `receipt` as retired alias regressions
   unless the fixture is explicitly testing rejection.
+- Treat Go SDK plain canonical invocation encoding as obsolete after Axon
+  removed the plain encoder. The public Go facade keeps the existing function
+  name but now delegates only to descriptor-bound canonical encoding.
+- Treat RF-4 deadline parity as a vector-backed matrix property: Go and Python
+  `unary_invoke` gain `deadline` evidence only through concrete provider
+  selectors, not through timeout option shape alone.
+- Keep V2 completion open. The deadline vector reduces the RF-4 matrix gap but
+  does not close `child_dispatch`, `restart_recover`, or cross-language
+  cutover readiness.
+- Treat `environment/process_root` as native runtime `start` evidence only when
+  Go and Python provider proofs bind concrete SDK-environment selectors. This
+  reduces the RF-4 start gap without claiming dispatch, stream, bidi, recovery,
+  or cutover readiness.

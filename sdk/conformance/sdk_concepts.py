@@ -224,12 +224,14 @@ def package_identity(path: str) -> str:
     return Path(path).name
 
 
-def case_contracts() -> dict[str, dict[str, Any]]:
+def case_contracts(cases_root: Path | None = None) -> dict[str, dict[str, Any]]:
     contracts: dict[str, dict[str, Any]] = {}
-    for path in sorted((ROOT / "sdk/conformance/cases").glob("*.yaml")):
+    root = cases_root or ROOT / "sdk/conformance/cases"
+    for path in sorted(root.glob("*.yaml")):
         case_id = ""
         languages: list[str] = []
         actions: list[str] = []
+        lifecycle_actions: list[str] = []
         section = ""
         for raw in path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
@@ -237,20 +239,29 @@ def case_contracts() -> dict[str, dict[str, Any]]:
                 case_id = raw.split(":", 1)[1].strip()
             elif raw == "required_for:":
                 section = "required_for"
+            elif raw == "lifecycle_actions:":
+                section = "lifecycle_actions"
             elif raw == "steps:":
                 section = "steps"
             elif raw and not raw.startswith(" "):
                 section = ""
             elif section == "required_for" and line.startswith("- "):
                 languages.append(line[2:].strip())
+            elif section == "lifecycle_actions" and line.startswith("- "):
+                lifecycle_actions.append(line[2:].strip())
             elif section == "steps" and line.startswith("- action:"):
                 actions.append(line.split(":", 1)[1].strip())
         if not case_id or case_id in contracts or not actions:
             fail(f"invalid_case_contract:{path}")
+        if lifecycle_actions != sorted(set(lifecycle_actions)):
+            fail(f"invalid_lifecycle_case_actions:{path}")
+        if set(lifecycle_actions) - LIFECYCLE_ACTIONS:
+            fail(f"unknown_lifecycle_case_actions:{path}")
         contracts[case_id] = {
             "path": path,
             "languages": languages,
             "actions": actions,
+            "lifecycle_actions": lifecycle_actions,
         }
     return contracts
 
@@ -734,6 +745,19 @@ def validate_provider_proofs(
                 if language in contracts[case_id]["languages"]
                 for action in contracts[case_id]["actions"]
             }
+            expected_lifecycle_actions = {
+                action
+                for case_id in capabilities[capability_id]["case_ids"]
+                if language in contracts[case_id]["languages"]
+                for action in contracts[case_id]["lifecycle_actions"]
+            }
+            if (
+                proof.get("cutover_ready") is True
+                and capabilities[capability_id]["profile"] == "runtime_core"
+                and expected_lifecycle_actions != LIFECYCLE_ACTIONS
+            ):
+                missing = ",".join(sorted(LIFECYCLE_ACTIONS - expected_lifecycle_actions))
+                fail(f"cutover_lifecycle_vectors_not_closed:{capability_id}:{language}:{missing}")
             mappings = proof.get("step_evidence")
             if not isinstance(mappings, list):
                 fail(f"provider_step_evidence_required:{capability_id}:{language}")
@@ -968,6 +992,21 @@ def self_test(tmp: Path) -> None:
     ] = ["invented"]
     expect(bad_lifecycle_source, "lifecycle_transition_contract")
 
+    bad_case_action = tmp / "bad-lifecycle-case-action"
+    bad_case_action.mkdir(parents=True, exist_ok=True)
+    original_case = ROOT / "sdk/conformance/cases/environment-process-root.yaml"
+    case_text = original_case.read_text(encoding="utf-8").replace(
+        "  - start\n", "  - invented_lifecycle_action\n", 1
+    )
+    (bad_case_action / original_case.name).write_text(case_text, encoding="utf-8")
+    try:
+        case_contracts(bad_case_action)
+    except ValueError as error:
+        if "unknown_lifecycle_case_actions" not in str(error):
+            raise
+    else:
+        fail("self_test_expected:unknown_lifecycle_case_actions")
+
     unapproved_quarantine = copy.deepcopy(concepts)
     unapproved_value = next(
         value
@@ -1053,6 +1092,16 @@ def self_test(tmp: Path) -> None:
     expect(
         missing_required_proof,
         f"provider_proof_required:{provider_capability_id}:go",
+        check_paths=True,
+    )
+
+    premature_cutover = copy.deepcopy(concepts)
+    premature_cutover["provider_proofs"][provider_capability_id]["go"][
+        "cutover_ready"
+    ] = True
+    expect(
+        premature_cutover,
+        f"cutover_lifecycle_vectors_not_closed:{provider_capability_id}:go",
         check_paths=True,
     )
 

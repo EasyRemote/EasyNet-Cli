@@ -2763,3 +2763,37 @@ This evidence verifies that RF-4 now has one machine-readable lifecycle
 transition contract in the source manifest and generated matrix. It does not
 complete RF-4 or the full V2 SPEC because executable transition/recovery
 vectors and full cross-language cutover remain open.
+
+## RF-4 Lifecycle Vector Coverage Binding Slice
+
+Commands run on 2026-07-17:
+
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_matrix.py --self-test --tmp /tmp/easynet-sdk-matrix-self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test && bash tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `python3 - <<'PY' ...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed and
+  reported `Counter({'seam': 129, 'unsupported': 82, 'provider-backed': 6})`.
+  Covered lifecycle actions are currently `bidi_open`, `cancel`, `dispatch`,
+  `start`, `stream_open`, and `terminal_receipt` depending on language and
+  capability. `child_dispatch`, `deadline`, and `restart_recover` remain
+  visible missing vectors.
+- `git diff --check -- sdk/conformance/cases/environment-process-root.yaml sdk/conformance/cases/invocation-terminal-monotonicity.yaml sdk/conformance/cases/stream-order-terminal.yaml sdk/conformance/cases/stream-backpressure-bound.yaml sdk/conformance/cases/bidi-close-send-not-cancel.yaml sdk/conformance/sdk-parity-matrix.json sdk/conformance/sdk_concepts.py sdk/conformance/sdk_matrix.py tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies that RF-4 executable lifecycle-vector coverage is now
+machine-readable in cases and matrix cells, and that incomplete runtime-core
+vector coverage blocks `CutoverReady`. It does not complete RF-4 or the full
+V2 SPEC because child dispatch, deadline, restart recovery, and full
+cross-language cutover still require executable vectors.

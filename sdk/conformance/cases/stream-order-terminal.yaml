@@ -8,6 +8,9 @@ required_for:
   - node
   - java
   - swift
+lifecycle_actions:
+  - stream_open
+  - terminal_receipt
 description: Runtime Core stream adapters preserve ordered data frames and project exactly one schema-shaped terminal event.
 steps:
   - action: open_stream

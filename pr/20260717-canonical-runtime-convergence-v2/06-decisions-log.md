@@ -744,3 +744,15 @@
 - Adding the transition contract does not make any language `CutoverReady`.
   Cutover still requires executable transition/recovery vectors and public
   error-contract proof against the same provider/runtime version.
+- Lifecycle vector evidence must be declared by conformance cases, not inferred
+  from arbitrary step names. Case steps describe test mechanics; lifecycle
+  actions describe the canonical runtime state machine being proved.
+- Existing cases only prove a subset of RF-4. The matrix now exposes that
+  subset directly: start for Go/Python environment roots, dispatch/cancel/
+  terminal receipt for submitted invocation handles, stream and bidi open plus
+  terminal observability for stream/bidi cases. Child dispatch, deadline, and
+  restart recovery remain explicit missing vectors.
+- `CutoverReady` is therefore blocked at both provider-proof validation and
+  matrix validation while any runtime-core lifecycle vector action is missing.
+  This prevents API-shape parity or partial provider-backed behavior from
+  being promoted into cutover status.

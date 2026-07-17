@@ -1216,15 +1216,33 @@
       `CutoverReady` from the new contract alone.
 - [x] Run final verification commands for this slice and record the results.
 
+## RF-4 Lifecycle Vector Coverage Binding Slice
+
+- [x] Identify that executable conformance cases were not machine-readably
+      bound to the canonical lifecycle transition actions.
+- [x] Add `lifecycle_actions` metadata to existing cases only where the
+      current executable tests already cover the action.
+- [x] Preserve child dispatch, deadline, and restart recovery as visible
+      missing vectors instead of inferring coverage from unrelated tests.
+- [x] Generate per-cell `lifecycle_vector_actions`,
+      `missing_lifecycle_vector_actions`, and `lifecycle_vector_evidence` in
+      the SDK parity matrix.
+- [x] Reject unknown lifecycle case annotations in schema self-tests.
+- [x] Reject `CutoverReady` for runtime-core provider proofs and matrix cells
+      while lifecycle vector actions remain missing.
+- [x] Extend the V2 gate and self-test to protect lifecycle vector field
+      presence, action partitioning, and cutover closure.
+- [x] Run final verification commands for this slice and record the results.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
 - [ ] RF-3 remaining language package/vector/example audit for
       descriptor-bound-only public proof.
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
-- [ ] RF-4 remaining executable transition-vector coverage and cross-language
-      cutover beyond the machine-readable contract and newly proven Go/Python
-      provider-backed cells.
+- [ ] RF-4 remaining executable child dispatch, deadline, restart recovery,
+      and full cross-language cutover beyond the machine-readable contract,
+      vector binding, and newly proven Go/Python provider-backed cells.
 - [ ] RF-6 final cross-language constructor hardening, remaining
       package/example audit, and descriptor proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.

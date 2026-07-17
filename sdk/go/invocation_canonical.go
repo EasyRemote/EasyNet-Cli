@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	axoninv "easynet.run/axon/sdk/go/easynet/invocation"
 )
@@ -14,10 +13,10 @@ import (
 // admission path for signed Invocation material.
 const UraProfileEasynetStrictV2 = "easynet-strict-v2"
 
-// CanonicalInvocationBytes returns the AXIOM caller-signature byte sequence
-// for an SDK Invocation envelope. The byte layout is owned by Axon; this
-// facade owns only SDK DTO validation and projection into Axon's canonical
-// encoder.
+// CanonicalInvocationBytes returns the descriptor-bound AXIOM
+// caller-signature byte sequence for an SDK Invocation envelope. The byte
+// layout is owned by Axon; this facade owns only SDK DTO validation and
+// projection into Axon's canonical descriptor-bound encoder.
 func CanonicalInvocationBytes(envelope Envelope, ability string, args []byte) ([]byte, error) {
 	if envelope.Caller.URA == "" {
 		return nil, errors.New("canonical: empty Caller.URA")
@@ -51,14 +50,11 @@ func CanonicalInvocationBytes(envelope Envelope, ability string, args []byte) ([
 		InvocationNonce: nonce,
 		CausalContext:   causalContext,
 	}
-	if strings.Contains(ability, "@") {
-		bound, err := axoninv.NewDescriptorBoundEnvelope(env)
-		if err != nil {
-			return nil, fmt.Errorf("descriptor-bound canonical: %w", err)
-		}
-		return axoninv.CanonicalDescriptorBoundInvocationBytes(bound)
+	bound, err := axoninv.NewDescriptorBoundEnvelope(env)
+	if err != nil {
+		return nil, fmt.Errorf("descriptor-bound canonical: %w", err)
 	}
-	return axoninv.CanonicalInvocationBytes(env), nil
+	return axoninv.CanonicalDescriptorBoundInvocationBytes(bound)
 }
 
 func canonicalCausalContext(cc CausalContext) (axoninv.CausalContext, error) {
