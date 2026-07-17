@@ -527,6 +527,30 @@ func TestDirectRuntimeBidiCancelProjectsNonTerminalRequest(t *testing.T) {
 	}
 }
 
+func TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry(t *testing.T) {
+	cancelCalled := false
+	cancel := func() { cancelCalled = true }
+	if _, err := newDirectRuntimeBidiTransport(nil, cancel, "unix:///direct-test", nil); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("missing frame0 error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !cancelCalled {
+		t.Fatalf("missing frame0 did not cancel pending bidi context")
+	}
+
+	cancelCalled = false
+	if _, err := newDirectRuntimeBidiTransport(
+		nil,
+		cancel,
+		"unix:///direct-test",
+		&axonpb.InvokeBidiUp{Sequence: 1, Payload: &axonpb.InvokeBidiUp_Control{Control: &axonpb.BidiControl{Control: &axonpb.BidiControl_Eof{Eof: true}}}},
+	); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("non-frame0 error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if !cancelCalled {
+		t.Fatalf("non-frame0 did not cancel pending bidi context")
+	}
+}
+
 func TestDirectRuntimeTransportDelegatesHandleOperations(t *testing.T) {
 	handle := &directRuntimeFakeHandleTransport{}
 	transport, _, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{

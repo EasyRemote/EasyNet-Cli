@@ -195,10 +195,26 @@
     },
     {
       "language": "go",
+      "case_id": "bidi/cancel_request",
+      "selector": "TestConformanceBidiCancelRequestIsNonTerminal",
+      "evidence": [
+        "sdk/go/conformance_test.go"
+      ]
+    },
+    {
+      "language": "go",
       "case_id": "bidi/close_send_not_cancel",
       "selector": "TestBidiCloseSendDiffersFromCancel",
       "evidence": [
         "sdk/go/bidi_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "bidi/frame0_required",
+      "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry",
+      "evidence": [
+        "sdk/go/direct_runtime_test.go"
       ]
     },
     {
@@ -429,6 +445,14 @@
       "language": "go",
       "case_id": "stream/backpressure_bound",
       "selector": "TestConformanceStreamAndBidiBackpressureBounds",
+      "evidence": [
+        "sdk/go/conformance_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/cancel_request",
+      "selector": "TestConformanceStreamCancelRequestIsNonTerminal",
       "evidence": [
         "sdk/go/conformance_test.go"
       ]
@@ -755,10 +779,26 @@
     },
     {
       "language": "python",
+      "case_id": "bidi/cancel_request",
+      "selector": "test_bidi_cancel_request_is_non_terminal",
+      "evidence": [
+        "sdk/python/tests/test_conformance_gates.py"
+      ]
+    },
+    {
+      "language": "python",
       "case_id": "bidi/close_send_not_cancel",
       "selector": "test_close_send_differs_from_cancel",
       "evidence": [
         "sdk/python/tests/test_bidi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "bidi/frame0_required",
+      "selector": "test_direct_bidi_rejects_missing_frame0_before_session_entry",
+      "evidence": [
+        "sdk/python/tests/test_direct_runtime.py"
       ]
     },
     {
@@ -989,6 +1029,14 @@
       "language": "python",
       "case_id": "stream/backpressure_bound",
       "selector": "test_stream_and_bidi_backpressure_bounds",
+      "evidence": [
+        "sdk/python/tests/test_conformance_gates.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/cancel_request",
+      "selector": "test_stream_cancel_request_is_non_terminal",
       "evidence": [
         "sdk/python/tests/test_conformance_gates.py"
       ]

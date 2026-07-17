@@ -27,6 +27,12 @@
       concrete selectors and matrix evidence.
 - [x] Bind a provider-backed native runtime `start` vector for Go and Python to
       concrete environment/process-root selectors and matrix evidence.
+- [x] Require direct runtime bidi frame0 validation before session entry for
+      Go and Python, then bind the bidi provider proof to shared matrix
+      evidence.
+- [x] Bind stream and bidi `cancel` vectors for Go and Python to shared
+      conformance selectors that prove non-terminal cancel acknowledgement and
+      rejection of synthetic terminal cancel acks.
 - [ ] Re-run SDK parity gates against current worktree.
 
 ## RF-6

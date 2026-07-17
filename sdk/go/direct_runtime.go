@@ -686,6 +686,14 @@ func newDirectRuntimeBidiTransport(
 	endpoint string,
 	openFrame *axonpb.InvokeBidiUp,
 ) (*directRuntimeBidiTransport, error) {
+	if err := validateDirectBidiOpenFrame(openFrame); err != nil {
+		cancel()
+		return nil, err
+	}
+	if stream == nil {
+		cancel()
+		return nil, invalidRuntimeClient("bidi stream is not initialized")
+	}
 	transport := &directRuntimeBidiTransport{
 		stream:    stream,
 		cancel:    cancel,
@@ -697,6 +705,19 @@ func newDirectRuntimeBidiTransport(
 		return nil, directRuntimeGRPCError(err, endpoint)
 	}
 	return transport, nil
+}
+
+func validateDirectBidiOpenFrame(openFrame *axonpb.InvokeBidiUp) error {
+	if openFrame == nil {
+		return invalidRuntimePayload("bidi frame0 EnvelopeOpen is required", nil)
+	}
+	if openFrame.GetSequence() != 0 {
+		return invalidRuntimePayload("bidi frame0 sequence must be 0", nil)
+	}
+	if openFrame.GetEnvelopeOpen() == nil {
+		return invalidRuntimePayload("bidi frame0 must carry EnvelopeOpen", nil)
+	}
+	return nil
 }
 
 func (t *directRuntimeBidiTransport) Send(ctx context.Context, frameJSON []byte) ([]byte, error) {

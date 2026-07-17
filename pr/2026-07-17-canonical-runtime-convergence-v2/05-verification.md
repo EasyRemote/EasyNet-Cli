@@ -34,6 +34,44 @@
 
 Result: passed.
 
+## Bidi Frame0 Provider-Backed Iteration Evidence
+
+- `cd sdk/go && go test -tags easynet_direct_runtime -run 'TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry|TestDirectRuntimeTransportBidiOverUnixSocket|TestDirectRuntimeBidiCancelProjectsNonTerminalRequest' .`
+- `cd sdk/python && PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python:.:tests .venv/bin/python -m unittest test_direct_runtime.DirectRuntimeTests.test_direct_bidi_rejects_missing_frame0_before_session_entry test_direct_runtime.DirectRuntimeTests.test_direct_runtime_bidi_provider_json_uses_terminal_receipt test_direct_runtime.DirectRuntimeTests.test_direct_runtime_bidi_cancel_projects_non_terminal_request`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-self-test`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_matrix.py --self-test --tmp /tmp/easynet-sdk-matrix-self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo fmt --all -- --check`
+- `cargo check --lib --features axon-pb`
+- `bash tools/scripts/check-architecture-convergence.sh`
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+- `git diff --check -- sdk/go/direct_runtime.go sdk/go/direct_runtime_test.go sdk/python/easynet_sdk/direct_runtime.py sdk/python/tests/test_direct_runtime.py sdk/conformance/cases/bidi-frame0-required.yaml sdk/conformance/runner/execution-manifest.json sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json pr/2026-07-17-canonical-runtime-convergence-v2/04-execution-checklist.md pr/2026-07-17-canonical-runtime-convergence-v2/05-verification.md pr/2026-07-17-canonical-runtime-convergence-v2/06-decisions-log.md`
+
+Result: passed. The first Python focused command used an invalid unittest class
+selector for `test_conformance_gates.py`; the pytest-style function was then
+run with pytest and passed.
+
+## Stream/Bidi Cancel Vector Iteration Evidence
+
+- `cd sdk/go && go test -run 'TestConformanceStreamCancelRequestIsNonTerminal|TestConformanceBidiCancelRequestIsNonTerminal' .`
+- `cd sdk/python && PYTHONPATH=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/python:.:tests .venv/bin/python -m pytest -q tests/test_conformance_gates.py::test_stream_cancel_request_is_non_terminal tests/test_conformance_gates.py::test_bidi_cancel_request_is_non_terminal`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --self-test --tmp /tmp/easynet-sdk-concepts-self-test`
+- `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_matrix.py --self-test --tmp /tmp/easynet-sdk-matrix-self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo fmt --all -- --check`
+- `cargo check --lib --features axon-pb`
+- `bash tools/scripts/check-architecture-convergence.sh`
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+- `git diff --check -- sdk/conformance/cases/bidi-cancel-request.yaml sdk/conformance/cases/stream-cancel-request.yaml sdk/go/conformance_test.go sdk/python/tests/test_conformance_gates.py sdk/conformance/runner/execution-manifest.json sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json pr/2026-07-17-canonical-runtime-convergence-v2/04-execution-checklist.md pr/2026-07-17-canonical-runtime-convergence-v2/05-verification.md pr/2026-07-17-canonical-runtime-convergence-v2/06-decisions-log.md`
+
+Result: passed.
+
 ## Deadline Vector Iteration Evidence
 
 - `PYTHONPATH=sdk/conformance python3 sdk/conformance/sdk_concepts.py --validate-schema`

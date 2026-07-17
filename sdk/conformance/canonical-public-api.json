@@ -9182,17 +9182,17 @@
     "bidi": {
       "profile": "runtime_core",
       "case_ids": [
+        "bidi/cancel_request",
         "bidi/close_send_not_cancel",
+        "bidi/frame0_required",
         "stream/backpressure_bound"
       ],
       "unproven_requirements": [
         {
-          "requirement_id": "bidi/frame0_required",
+          "requirement_id": "bidi/frame0_required_other_languages",
           "languages": [
             "rust",
             "c_abi",
-            "go",
-            "python",
             "node",
             "java",
             "swift"
@@ -9201,7 +9201,7 @@
             "open_bidi_without_frame0",
             "reject_before_runtime_session_entry"
           ],
-          "reason": "No shipped language boundary currently demonstrates protocol-level rejection of an omitted frame0 before runtime session entry; compile-time arity, fake transports, positive frame0 tests, and Java NullPointerException are not evidence."
+          "reason": "Rust, C ABI, Node, Java, and Swift still lack executable proof that omitted frame0 is rejected before runtime session entry."
         }
       ]
     },
@@ -9350,6 +9350,7 @@
       "profile": "runtime_core",
       "case_ids": [
         "stream/backpressure_bound",
+        "stream/cancel_request",
         "stream/order_terminal"
       ]
     },
@@ -16323,7 +16324,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
+          "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
           "revision": "def78f91805209cff0a906298c740c080b36aa58"
         },
@@ -16375,7 +16376,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
+          "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
           "revision": "def78f91805209cff0a906298c740c080b36aa58"
         },
@@ -16429,14 +16430,24 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
+          "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
           "revision": "def78f91805209cff0a906298c740c080b36aa58"
         },
         "step_evidence": [
           {
             "case_id": "stream/backpressure_bound",
+            "action": "overflow_bidi_callback_queue",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
             "action": "overflow_stream_callback_queue",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_bidi_backpressure_terminal",
             "selector": "TestConformanceStreamAndBidiBackpressureBounds"
           },
           {
@@ -16445,14 +16456,24 @@
             "selector": "TestConformanceStreamAndBidiBackpressureBounds"
           },
           {
-            "case_id": "stream/backpressure_bound",
-            "action": "overflow_bidi_callback_queue",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "case_id": "stream/cancel_request",
+            "action": "open_stream",
+            "selector": "TestConformanceStreamCancelRequestIsNonTerminal"
           },
           {
-            "case_id": "stream/backpressure_bound",
-            "action": "project_bidi_backpressure_terminal",
-            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+            "case_id": "stream/cancel_request",
+            "action": "reject_synthetic_terminal_cancel_ack",
+            "selector": "TestConformanceStreamCancelRequestIsNonTerminal"
+          },
+          {
+            "case_id": "stream/cancel_request",
+            "action": "request_stream_cancel",
+            "selector": "TestConformanceStreamCancelRequestIsNonTerminal"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "close_stream",
+            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
           },
           {
             "case_id": "stream/order_terminal",
@@ -16462,11 +16483,6 @@
           {
             "case_id": "stream/order_terminal",
             "action": "project_stream_terminal_event",
-            "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
-          },
-          {
-            "case_id": "stream/order_terminal",
-            "action": "close_stream",
             "selector": "TestStreamHandleOrdersEventsAndClosesAfterTerminal"
           }
         ]
@@ -16476,14 +16492,24 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
+          "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
           "revision": "def78f91805209cff0a906298c740c080b36aa58"
         },
         "step_evidence": [
           {
             "case_id": "stream/backpressure_bound",
+            "action": "overflow_bidi_callback_queue",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
             "action": "overflow_stream_callback_queue",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_bidi_backpressure_terminal",
             "selector": "test_stream_and_bidi_backpressure_bounds"
           },
           {
@@ -16492,14 +16518,24 @@
             "selector": "test_stream_and_bidi_backpressure_bounds"
           },
           {
-            "case_id": "stream/backpressure_bound",
-            "action": "overflow_bidi_callback_queue",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "case_id": "stream/cancel_request",
+            "action": "open_stream",
+            "selector": "test_stream_cancel_request_is_non_terminal"
           },
           {
-            "case_id": "stream/backpressure_bound",
-            "action": "project_bidi_backpressure_terminal",
-            "selector": "test_stream_and_bidi_backpressure_bounds"
+            "case_id": "stream/cancel_request",
+            "action": "reject_synthetic_terminal_cancel_ack",
+            "selector": "test_stream_cancel_request_is_non_terminal"
+          },
+          {
+            "case_id": "stream/cancel_request",
+            "action": "request_stream_cancel",
+            "selector": "test_stream_cancel_request_is_non_terminal"
+          },
+          {
+            "case_id": "stream/order_terminal",
+            "action": "close_stream",
+            "selector": "test_stream_orders_events_and_closes_after_terminal"
           },
           {
             "case_id": "stream/order_terminal",
@@ -16509,11 +16545,6 @@
           {
             "case_id": "stream/order_terminal",
             "action": "project_stream_terminal_event",
-            "selector": "test_stream_orders_events_and_closes_after_terminal"
-          },
-          {
-            "case_id": "stream/order_terminal",
-            "action": "close_stream",
             "selector": "test_stream_orders_events_and_closes_after_terminal"
           }
         ]
@@ -16525,7 +16556,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
+          "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
           "interface": "RuntimeConnector",
           "revision": "def78f91805209cff0a906298c740c080b36aa58"
         },
@@ -16602,7 +16633,7 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
+          "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
           "interface": "RuntimeConnector",
           "revision": "def78f91805209cff0a906298c740c080b36aa58"
         },
@@ -16671,6 +16702,182 @@
             "case_id": "runtime/deadline_owner",
             "action": "retry_after_deadline_cleanup",
             "selector": "test_unary_pool_retires_timed_out_owned_transport"
+          }
+        ]
+      }
+    },
+    "bidi": {
+      "go": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/direct_runtime.go",
+          "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "open_bidi",
+            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+          },
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "reject_synthetic_terminal_cancel_ack",
+            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+          },
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "release_bidi_after_cancel_request",
+            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+          },
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "request_bidi_cancel",
+            "selector": "TestConformanceBidiCancelRequestIsNonTerminal"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "close_bidi",
+            "selector": "TestBidiCloseSendDiffersFromCancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "close_bidi_send",
+            "selector": "TestBidiCloseSendDiffersFromCancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "open_bidi",
+            "selector": "TestBidiCloseSendDiffersFromCancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "project_bidi_terminal_frame",
+            "selector": "TestBidiCloseSendDiffersFromCancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "send_bidi_after_close_send",
+            "selector": "TestBidiCloseSendDiffersFromCancel"
+          },
+          {
+            "case_id": "bidi/frame0_required",
+            "action": "open_bidi_without_frame0",
+            "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry"
+          },
+          {
+            "case_id": "bidi/frame0_required",
+            "action": "reject_before_runtime_session_entry",
+            "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_bidi_callback_queue",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_stream_callback_queue",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_bidi_backpressure_terminal",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_stream_backpressure_terminal",
+            "selector": "TestConformanceStreamAndBidiBackpressureBounds"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/direct_runtime.py",
+          "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "open_bidi",
+            "selector": "test_bidi_cancel_request_is_non_terminal"
+          },
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "reject_synthetic_terminal_cancel_ack",
+            "selector": "test_bidi_cancel_request_is_non_terminal"
+          },
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "release_bidi_after_cancel_request",
+            "selector": "test_bidi_cancel_request_is_non_terminal"
+          },
+          {
+            "case_id": "bidi/cancel_request",
+            "action": "request_bidi_cancel",
+            "selector": "test_bidi_cancel_request_is_non_terminal"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "close_bidi",
+            "selector": "test_close_send_differs_from_cancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "close_bidi_send",
+            "selector": "test_close_send_differs_from_cancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "open_bidi",
+            "selector": "test_close_send_differs_from_cancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "project_bidi_terminal_frame",
+            "selector": "test_close_send_differs_from_cancel"
+          },
+          {
+            "case_id": "bidi/close_send_not_cancel",
+            "action": "send_bidi_after_close_send",
+            "selector": "test_close_send_differs_from_cancel"
+          },
+          {
+            "case_id": "bidi/frame0_required",
+            "action": "open_bidi_without_frame0",
+            "selector": "test_direct_bidi_rejects_missing_frame0_before_session_entry"
+          },
+          {
+            "case_id": "bidi/frame0_required",
+            "action": "reject_before_runtime_session_entry",
+            "selector": "test_direct_bidi_rejects_missing_frame0_before_session_entry"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_bidi_callback_queue",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "overflow_stream_callback_queue",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_bidi_backpressure_terminal",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
+          },
+          {
+            "case_id": "stream/backpressure_bound",
+            "action": "project_stream_backpressure_terminal",
+            "selector": "test_stream_and_bidi_backpressure_bounds"
           }
         ]
       }
@@ -23505,7 +23712,7 @@
       "production_owner": "EasyNet daemon provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "15a393dbc005434dbb708101fcc74480cbe72b2b7c9858d922ea820dc00a3e6d",
+      "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "8a81c30b8f3d50915a70ff45ee9d81ee363ac4a4c0a34fec50040c56c6f15e8a",
@@ -23525,7 +23732,7 @@
       "production_owner": "EasyNet daemon provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "0162f7554fd0fa79df41fd984e45ef349064542b87ac68c9aed6e3f7e6248f89",
+      "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
       "interface_sha256": "a398d78c51607f79260e73d3c7bb73f37243a67bbb18dd6b15d68cb3d5bb5f5a",

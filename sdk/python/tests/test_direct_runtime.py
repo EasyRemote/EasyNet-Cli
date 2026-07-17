@@ -26,6 +26,7 @@ from easynet_sdk._axon_pb.axon.v1 import (
 )
 from easynet_sdk.control_ipc import ControlDiscovery, IpcVersionRange
 from easynet_sdk.direct_runtime import (
+    DirectRuntimeBidiTransport,
     DirectRuntimeConnector,
     DirectRuntimeTransport,
 )
@@ -858,6 +859,32 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(cancel["state"], "CancelRequested")
         self.assertFalse(cancel["terminal"])
         self.assertEqual(cancel["reason"], "client stop")
+
+    def test_direct_bidi_rejects_missing_frame0_before_session_entry(self) -> None:
+        class Stub:
+            called = False
+
+            def InvokeBidi(self, request_iterator: Any, *, timeout: float) -> Any:
+                self.called = True
+                return iter(())
+
+        stub = Stub()
+        session = DirectRuntimeBidiTransport(endpoint="unix:///direct-test")
+        with self.assertRaises(SDKError) as raised:
+            session.start(stub, None, timeout_seconds=1)
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertFalse(stub.called)
+
+        bad_open = invoke_pb2.InvokeBidiUp(
+            sequence=1,
+            control=invoke_pb2.BidiControl(eof=True),
+        )
+        with self.assertRaises(SDKError) as raised:
+            session.start(stub, bad_open, timeout_seconds=1)
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertFalse(stub.called)
 
     def test_direct_transport_rejects_non_contiguous_bidi_up_sequence(self) -> None:
         servicer = RecordingInvocationServicer()

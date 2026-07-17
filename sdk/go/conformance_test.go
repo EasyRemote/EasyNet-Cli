@@ -70,6 +70,65 @@ func TestConformanceStreamAndBidiBackpressureBounds(t *testing.T) {
 	}
 }
 
+func TestConformanceStreamCancelRequestIsNonTerminal(t *testing.T) {
+	stream, err := NewStreamHandleFromJSON(&memoryStreamTransport{}, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON: %v", err)
+	}
+	cancel, err := stream.Cancel(context.Background(), "client stop")
+	if err != nil {
+		t.Fatalf("stream cancel: %v", err)
+	}
+	if cancel.Terminal() || cancel.Cancelled() || cancel.State() != StreamCancelRequested || stream.State() != StreamCancelRequested {
+		t.Fatalf("stream cancel must be a non-terminal request: outcome=%#v state=%s", cancel, stream.State())
+	}
+
+	terminalReply := &memoryStreamTransport{
+		cancelReply: `{"stream_id":"stream-1","cancelled":true,"state":"Cancelled","terminal":true}`,
+	}
+	stream, err = NewStreamHandleFromJSON(terminalReply, []byte(`{"stream_id":"stream-1","state":"Open","max_buffered_events":4}`))
+	if err != nil {
+		t.Fatalf("NewStreamHandleFromJSON terminal reply: %v", err)
+	}
+	if _, err := stream.Cancel(context.Background(), "client stop"); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("terminal stream cancel ack error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if stream.State() != StreamFailed {
+		t.Fatalf("terminal cancel ack must fail the stream facade, got %s", stream.State())
+	}
+}
+
+func TestConformanceBidiCancelRequestIsNonTerminal(t *testing.T) {
+	session := newTestBidiSession(t, &memoryBidiTransport{})
+	outcome, err := session.Cancel(context.Background(), "client stop")
+	if err != nil {
+		t.Fatalf("bidi cancel: %v", err)
+	}
+	if outcome.Terminal() || outcome.State() != BidiCancelRequested || session.State() != BidiCancelRequested {
+		t.Fatalf("bidi cancel must be a non-terminal request: outcome=%#v state=%s", outcome, session.State())
+	}
+	if _, err := session.CloseSend(context.Background()); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("close-send after bidi cancel error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("close after bidi cancel request: %v", err)
+	}
+	if session.State() != BidiClosed {
+		t.Fatalf("bidi close after cancel request state = %s, want %s", session.State(), BidiClosed)
+	}
+
+	terminalReply := &memoryBidiTransport{
+		cancelReply: `{"session_id":"bidi-1","state":"Cancelled","terminal":true,"reason":"client stop"}`,
+	}
+	session = newTestBidiSession(t, terminalReply)
+	if _, err := session.Cancel(context.Background(), "client stop"); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("terminal bidi cancel ack error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if session.State() != BidiFailed {
+		t.Fatalf("terminal cancel ack must fail the bidi facade, got %s", session.State())
+	}
+}
+
 func TestRuntimeSDKContainsNoProductProfiles(t *testing.T) {
 	// Profile facades are generic Runtime Core bindings and remain public for
 	// source compatibility. Product-specific policy belongs downstream.

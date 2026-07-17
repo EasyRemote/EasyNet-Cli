@@ -610,6 +610,7 @@ class DirectRuntimeBidiTransport:
     def start(self, stub: Any, open_frame: Any, *, timeout_seconds: float) -> None:
         with self._lock:
             self._require_open()
+            _validate_bidi_open_frame(open_frame)
             self._call = stub.InvokeBidi(
                 self._request_iterator(open_frame),
                 timeout=timeout_seconds,
@@ -836,6 +837,28 @@ def _draft_to_bidi_open_frame(
             content_envelope=fields["content_envelope"],
         ),
     )
+
+
+def _validate_bidi_open_frame(open_frame: Any) -> None:
+    if open_frame is None:
+        raise _direct_error(
+            "bidi frame0 EnvelopeOpen is required",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
+    if int(getattr(open_frame, "sequence", -1)) != 0:
+        raise _direct_error(
+            "bidi frame0 sequence must be 0",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
+    has_field = getattr(open_frame, "HasField", None)
+    if not callable(has_field) or not has_field("envelope_open"):
+        raise _direct_error(
+            "bidi frame0 must carry EnvelopeOpen",
+            code=ErrorCode.INVALID_ARGUMENT,
+            retry=RetryHint.NEVER,
+        )
 
 
 def _direct_executable_draft(

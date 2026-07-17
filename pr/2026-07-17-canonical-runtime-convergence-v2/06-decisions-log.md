@@ -31,3 +31,11 @@
   Go and Python provider proofs bind concrete SDK-environment selectors. This
   reduces the RF-4 start gap without claiming dispatch, stream, bidi, recovery,
   or cutover readiness.
+- Treat bidi frame0 as a direct runtime session-entry invariant, not an API
+  shape assumption. Go and Python only become `provider-backed` for `bidi`
+  after the provider rejects missing or non-EnvelopeOpen frame0 before opening
+  a runtime session; other languages keep the explicit unproven requirement.
+- Treat stream and bidi cancel as request lifecycle evidence, not synthetic
+  terminal completion. Go and Python receive `cancel` vector evidence only
+  through selectors that prove the cancel acknowledgement is non-terminal and
+  that terminal cancel acks are rejected by the facade.
