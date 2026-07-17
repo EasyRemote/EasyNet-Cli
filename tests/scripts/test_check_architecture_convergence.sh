@@ -1639,6 +1639,35 @@ impl DaemonInvocationService {
         }
     }
 }
+
+pub(crate) enum DaemonBidiRoute {
+    SessionOpen,
+}
+
+impl DaemonBidiRoute {
+    pub(crate) fn from_function(function: &str) -> Option<Self> {
+        Some(Self::SessionOpen)
+    }
+}
+
+pub(crate) const DAEMON_INVOCATION_BIDI_ROUTES: &[DaemonBidiRoute] = &[DaemonBidiRoute::SessionOpen];
+EOF
+  mkdir -p "$CLI/src/daemon/invocation/bidi"
+  cat >"$CLI/src/daemon/invocation/bidi/bidi_dispatcher.rs" <<'EOF'
+use crate::daemon::invocation::dispatch::daemon_invocation_service::{
+    DaemonBidiRoute, DAEMON_INVOCATION_BIDI_ROUTES,
+};
+
+pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[DaemonBidiRoute] = DAEMON_INVOCATION_BIDI_ROUTES;
+
+impl BidiDispatcher {
+    async fn dispatch(&self, ability_name: &str) {
+        match DaemonBidiRoute::from_function(ability_name) {
+            Some(DaemonBidiRoute::SessionOpen) => self.dispatch_self_session_accept().await,
+            None => self.dispatch_local_bidi_selected_route().await,
+        }
+    }
+}
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/cancellation.rs" <<'EOF'
 pub const ABILITY_INVOCATION_CANCEL: &str = "invocation.cancel";
@@ -2812,6 +2841,21 @@ path.write_text(text)
 PY
 expect_fail \
   "daemon exact stream boot registration owner fork" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/bidi/bidi_dispatcher.rs" <<'EOF'
+impl BidiDispatcher {
+    async fn dispatch(&self, ability_name: &str) {
+        match ability_name {
+            "session.open" => self.dispatch_self_session_accept().await,
+            _ => self.dispatch_local_bidi_selected_route().await,
+        }
+    }
+}
+EOF
+expect_fail \
+  "daemon exact bidi route inventory fork" \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
 
 make_good_fixture

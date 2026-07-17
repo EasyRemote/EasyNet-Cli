@@ -1,0 +1,23 @@
+id: runtime/restart_recovery
+profile: runtime_core
+required_for:
+  - go
+  - python
+lifecycle_actions:
+  - restart_recover
+description: Runtime Core restart recovery is a bounded provider-owned transition that replays terminal facts and completes orphan cleanup before reporting runtime_started.
+steps:
+  - action: submit_bounded_recovery_request
+    schema: runtime-recovery-request.schema.json
+  - action: delegate_recovery_to_runtime_provider
+    fixture: runtime.recovery.provider.json
+  - action: reject_unbounded_recovery_report
+  - action: observe_replayed_terminal_facts
+  - action: verify_cleanup_before_runtime_started
+expect:
+  result: runtime_started
+  bounded_scan: true
+  cleanup_complete: true
+  terminal_success_fabricated: false
+  replayed_terminal_receipts_visible: true
+  orphan_reap_events_visible: true

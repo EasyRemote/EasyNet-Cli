@@ -339,6 +339,14 @@
     },
     {
       "language": "go",
+      "case_id": "invocation/receipt_proof_required",
+      "selector": "TestRuntimeReceiptProofFactsRequired",
+      "evidence": [
+        "sdk/go/runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
       "case_id": "invocation/terminal_monotonicity",
       "selector": "TestStreamHandleRejectsDuplicateTerminal",
       "evidence": [
@@ -419,6 +427,14 @@
     },
     {
       "language": "go",
+      "case_id": "runtime/ability_restart_recover",
+      "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces",
+      "evidence": [
+        "sdk/go/runtime_ability_test.go"
+      ]
+    },
+    {
+      "language": "go",
       "case_id": "runtime/ability_start_provider",
       "selector": "TestNativeRuntimeHandleProvidesRuntimeAbilityFacade",
       "evidence": [
@@ -455,6 +471,14 @@
       "selector": "TestRuntimeEventClientReadsBoundedTypedPage",
       "evidence": [
         "sdk/go/runtime_events_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/restart_recovery",
+      "selector": "TestRuntimeClientRestartRecoveryProviderContract",
+      "evidence": [
+        "sdk/go/runtime_test.go"
       ]
     },
     {
@@ -987,6 +1011,14 @@
     },
     {
       "language": "python",
+      "case_id": "invocation/receipt_proof_required",
+      "selector": "test_runtime_receipt_proof_facts_required",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
       "case_id": "invocation/terminal_monotonicity",
       "selector": "test_result_rejects_inconsistent_failure",
       "evidence": [
@@ -1067,6 +1099,14 @@
     },
     {
       "language": "python",
+      "case_id": "runtime/ability_restart_recover",
+      "selector": "test_runtime_ability_delegates_restart_recovery",
+      "evidence": [
+        "sdk/python/tests/test_runtime_ability.py"
+      ]
+    },
+    {
+      "language": "python",
       "case_id": "runtime/ability_start_provider",
       "selector": "test_native_runtime_handle_provides_runtime_ability_facade",
       "evidence": [
@@ -1103,6 +1143,14 @@
       "selector": "test_runtime_event_client_reads_bounded_typed_page",
       "evidence": [
         "sdk/python/tests/test_runtime_events.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/restart_recovery",
+      "selector": "test_recover_delegates_to_provider",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
       ]
     },
     {

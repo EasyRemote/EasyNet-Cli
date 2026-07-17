@@ -228,6 +228,14 @@ func (c *RuntimeAbilityClient) SubmitSigned(ctx context.Context, signed SignedIn
 	return c.runtime.SubmitSigned(ctx, signed)
 }
 
+// Recover delegates restart recovery to Runtime Core.
+func (c *RuntimeAbilityClient) Recover(ctx context.Context, request RuntimeRecoveryRequest) (RuntimeRecoveryReport, error) {
+	if err := c.requireReady(ctx); err != nil {
+		return RuntimeRecoveryReport{}, err
+	}
+	return c.runtime.Recover(ctx, request)
+}
+
 // Await waits for an ability Invocation handle through Runtime Core.
 func (c *RuntimeAbilityClient) Await(ctx context.Context, handle InvocationHandle) (InvocationResult, error) {
 	if err := c.requireReady(ctx); err != nil {

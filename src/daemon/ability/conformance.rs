@@ -676,7 +676,7 @@ impl RuntimeAdminConformance {
         Self::new(
             crate::daemon::invocation::bidi::bidi_dispatcher::RUNTIME_ADMIN_BIDI_ROUTES
                 .iter()
-                .copied()
+                .map(|route| route.name())
                 .chain(std::iter::once(ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY)),
         )
     }
@@ -955,6 +955,16 @@ mod tests {
                 crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonStreamRoute::from_function(route.name()),
                 Some(*route)
             );
+        }
+
+        for route in
+            crate::daemon::invocation::dispatch::daemon_invocation_service::DAEMON_INVOCATION_BIDI_ROUTES
+        {
+            assert_eq!(
+                crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonBidiRoute::from_function(route.name()),
+                Some(*route)
+            );
+            assert_eq!(route.call_mode(), CallMode::Bidi);
         }
     }
 

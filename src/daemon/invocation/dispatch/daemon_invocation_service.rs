@@ -129,6 +129,7 @@ use crate::daemon::invocation::admission::target_gate::TargetGate;
 use crate::daemon::invocation::bidi::bidi_dispatcher::{
     validate_and_extract_bidi_frame0, BidiDispatcher, BidiDispatcherDeps,
 };
+use crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN;
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, FederationDial, IdentityPlane, RegisterPubkeyContext, RuntimePlane,
     SessionPlane,
@@ -316,6 +317,45 @@ impl DaemonStreamRoute {
 }
 
 pub(crate) const DAEMON_INVOCATION_STREAM_ROUTES: &[DaemonStreamRoute] = DaemonStreamRoute::ALL;
+
+/// Production bidirectional daemon Invocation routes served by exact frame-0
+/// `EnvelopeOpen.target.ability_name` matches in [`Invocation::invoke_bidi`].
+///
+/// This is the bidi peer of [`DaemonUnaryRoute`] and [`DaemonStreamRoute`].
+/// `session.open` still owns a product carrier lifecycle, but it must stay in
+/// the same typed route inventory as the other daemon ability routes so route
+/// ownership, baseline conformance, and future LocalRuntime cutover cannot
+/// drift through hand-written string lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaemonBidiRoute {
+    SessionOpen,
+}
+
+impl DaemonBidiRoute {
+    pub(crate) const ALL: &'static [Self] = &[Self::SessionOpen];
+
+    #[must_use]
+    pub(crate) fn from_function(function: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|route| route.name() == function)
+    }
+
+    #[must_use]
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::SessionOpen => ABILITY_SESSION_OPEN,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn call_mode(self) -> CallMode {
+        CallMode::Bidi
+    }
+}
+
+pub(crate) const DAEMON_INVOCATION_BIDI_ROUTES: &[DaemonBidiRoute] = DaemonBidiRoute::ALL;
 
 pub(crate) fn dispatch_function_name_for_route_table(
     function_name: &str,

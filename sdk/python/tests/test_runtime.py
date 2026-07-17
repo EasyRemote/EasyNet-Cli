@@ -12,6 +12,8 @@ from easynet_sdk import (
     PrepareOptions,
     PreparedInvocation,
     RuntimeClient,
+    RuntimeRecoveryReport,
+    RuntimeRecoveryRequest,
     RuntimeReceipt,
     SDKError,
     Signer,
@@ -28,6 +30,7 @@ class MemoryRuntimeTransport:
         self.seen_signed: dict[str, object] | None = None
         self.seen_streams: list[dict[str, object]] | None = None
         self.seen_descriptor_request: dict[str, object] | None = None
+        self.seen_recovery_request: dict[str, object] | None = None
         self.prepare_error: BaseException | None = None
         self.seen_await_id = 0
         self.seen_free_id = 0
@@ -101,6 +104,33 @@ class MemoryRuntimeTransport:
     def submit_signed(self, signed_json: bytes) -> bytes:
         self.seen_signed = json.loads(signed_json.decode("utf-8"))
         return self.handle_json
+
+    def recover(self, request_json: bytes) -> bytes:
+        self.seen_recovery_request = json.loads(request_json.decode("utf-8"))
+        return json.dumps(
+            {
+                "bounded_scan": True,
+                "cleanup_complete": True,
+                "events": [
+                    {
+                        "invocation_id": "inv-orphan",
+                        "kind": "orphan_reaped",
+                        "reason": "host restart",
+                        "receipt_ura": "easynet:///r/example/resource/agent.alice/invocation/inv-orphan/receipt",
+                        "sequence": 1,
+                        "state": "cancelled",
+                        "terminal": True,
+                    }
+                ],
+                "reaped_orphans": 1,
+                "recovered_invocations": 2,
+                "recovery_id": "recovery-1",
+                "replayed_terminal_receipts": 1,
+                "state": "runtime_started",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
 
     def await_handle(self, control) -> bytes:
         self.seen_await_id = control._adapter_handle_id()
@@ -321,7 +351,7 @@ class RuntimeTests(unittest.TestCase):
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
-    def test_runtime_receipt_required_summary_validates_hashes(self) -> None:
+    def test_runtime_receipt_proof_facts_required(self) -> None:
         receipt = RuntimeReceipt.from_required_mapping(
             {
                 "index": 1,
@@ -331,6 +361,49 @@ class RuntimeTests(unittest.TestCase):
                 "timestamp_unix_ms": 1_700_000_000_000,
                 "prev_receipt_hash_hex": "00" * 32,
                 "self_hash_hex": "aa" * 32,
+                "caller_binding": {"ura": "easynet:///r/local/agent/caller"},
+                "callee_binding": {"ura": "easynet:///r/local/agent/callee"},
+                "subject_binding": {"ura": "easynet:///r/local/resource/subject"},
+                "invocation_nonce_base64": "bm9uY2U=",
+                "causal_binding_kind": "scalar",
+                "causal_binding": {
+                    "form": "scalar",
+                    "receipt": {
+                        "receipt_hash_hex": "77" * 32,
+                        "receipt_ura": "easynet:///r/local/resource/subject/invocation/root/receipt",
+                    },
+                },
+                "callee_signature": {
+                    "algorithm": "ed25519",
+                    "signature_base64": "Y2FsbGVlLXNpZw==",
+                },
+                "signer_binding": {"ura": "easynet:///r/local/agent/signer"},
+                "authority_binding_kind": "delegation",
+                "authority_binding": {
+                    "kind": "delegation",
+                    "issuer_ura": "easynet:///r/local/agent/issuer",
+                    "subject_ura": "easynet:///r/local/resource/subject",
+                    "caller_ura": "easynet:///r/local/agent/caller",
+                },
+                "ability_binding": "easynet:///r/local/ability/example.run",
+                "descriptor_version": "1.0.0",
+                "schema_hash_hex": "11" * 32,
+                "impl_hash_hex": "22" * 32,
+                "runtime_env": "native",
+                "authority_proof": {
+                    "proof_type": "admission",
+                    "binding_kind": "delegation",
+                    "proof_payload_base64": "cHJvb2Y=",
+                    "proof_hash_hex": "33" * 32,
+                    "issuer": {"ura": "easynet:///r/local/agent/issuer"},
+                    "signature": {
+                        "algorithm": "ed25519",
+                        "signature_base64": "cHJvb2ZzaWc=",
+                    },
+                },
+                "input_hash_hex": "44" * 32,
+                "output_hash_hex": "55" * 32,
+                "parent_receipts": [],
             }
         )
 
@@ -338,6 +411,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(receipt.state, "2")
         self.assertEqual(receipt.prev_receipt_hash(), bytes(32))
         self.assertEqual(receipt.self_receipt_hash(), b"\xaa" * 32)
+
+        with self.assertRaises(SDKError) as caught:
+            RuntimeReceipt.from_required_mapping(
+                {
+                    "index": 1,
+                    "invocation_id": "inv-1",
+                    "receipt_type": "completed",
+                    "state": "completed",
+                    "timestamp_unix_ms": 1_700_000_000_000,
+                    "prev_receipt_hash_hex": "00" * 32,
+                    "self_hash_hex": "aa" * 32,
+                }
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
 
     def test_runtime_receipt_projects_complete_typed_facts(self) -> None:
         receipt = RuntimeReceipt.from_mapping(
@@ -795,6 +883,70 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len(events.events), 2)
         self.assertEqual(events.events[1].reason, "client stop")
         self.assertEqual(transport.seen_free_id, 7)
+
+    def test_recover_delegates_to_provider(self) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        report = client.recover(
+            RuntimeRecoveryRequest(
+                recovery_id="recovery-1",
+                deadline_unix_ms=1783100009999,
+                max_invocations=32,
+            )
+        )
+
+        self.assertEqual(
+            transport.seen_recovery_request,
+            {
+                "deadline_unix_ms": 1783100009999,
+                "max_invocations": 32,
+                "recovery_id": "recovery-1",
+            },
+        )
+        self.assertEqual(report.state, "runtime_started")
+        self.assertTrue(report.bounded_scan)
+        self.assertTrue(report.cleanup_complete)
+        self.assertEqual(report.recovered_invocations, 2)
+        self.assertEqual(report.reaped_orphans, 1)
+        self.assertEqual(report.replayed_terminal_receipts, 1)
+        self.assertEqual(report.events[0].kind, "orphan_reaped")
+        self.assertTrue(report.events[0].terminal)
+        self.assertTrue(report.events[0].receipt_ura.startswith("easynet:///"))
+
+        with self.assertRaises(SDKError) as state_caught:
+            RuntimeRecoveryReport.from_json(
+                b'{"recovery_id":"recovery-1","state":"recovering",'
+                b'"bounded_scan":true,"cleanup_complete":true,"events":[]}'
+            )
+        self.assertTrue(is_code(state_caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as bounded_caught:
+            RuntimeRecoveryReport.from_json(
+                b'{"recovery_id":"recovery-1","state":"runtime_started",'
+                b'"bounded_scan":false,"cleanup_complete":true,"events":[]}'
+            )
+        self.assertTrue(is_code(bounded_caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        with self.assertRaises(SDKError) as cleanup_caught:
+            RuntimeRecoveryReport.from_json(
+                b'{"recovery_id":"recovery-1","state":"runtime_started",'
+                b'"bounded_scan":true,"cleanup_complete":false,"events":[]}'
+            )
+        self.assertTrue(is_code(cleanup_caught.exception, ErrorCode.INVALID_ARGUMENT))
+
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+        with self.assertRaises(SDKError) as request_caught:
+            client.recover(
+                RuntimeRecoveryRequest(
+                    recovery_id="",
+                    deadline_unix_ms=1783100009999,
+                    max_invocations=32,
+                )
+            )
+        self.assertTrue(is_code(request_caught.exception, ErrorCode.INVALID_ARGUMENT))
+        self.assertIsNone(transport.seen_recovery_request)
 
     def test_prepare_wraps_transport_failure(self) -> None:
         transport = MemoryRuntimeTransport()

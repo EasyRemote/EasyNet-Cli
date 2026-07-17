@@ -289,6 +289,10 @@ from .runtime import (
     InvocationResult,
     PrepareOptions,
     RuntimeClient,
+    RuntimeRecoveryEvent,
+    RuntimeRecoveryReport,
+    RuntimeRecoveryRequest,
+    RuntimeRecoveryTransport,
     RuntimeReceipt,
     RuntimeReceiptAgentBinding,
     RuntimeReceiptAuthorityProof,
@@ -610,6 +614,10 @@ __all__ = [
     "RuntimeLifecycleTransport",
     "RuntimePrincipalProvider",
     "RuntimeReadiness",
+    "RuntimeRecoveryEvent",
+    "RuntimeRecoveryReport",
+    "RuntimeRecoveryRequest",
+    "RuntimeRecoveryTransport",
     "RuntimeReceipt",
     "RuntimeReceiptAgentBinding",
     "RuntimeReceiptAuthorityProof",
@@ -695,7 +703,7 @@ __all__ = [
     "start_daemon",
     "start_runtime_host",
     "user_ura",
-    "validate_authority_metadata"
+    "validate_authority_metadata",
 ]
 
 _ROOT_MODULE_EXPORTS = (

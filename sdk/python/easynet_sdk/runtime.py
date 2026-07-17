@@ -49,6 +49,13 @@ class RuntimeTransport(Protocol):
 
 
 @runtime_checkable
+class RuntimeRecoveryTransport(Protocol):
+    """Optional provider seam for bounded restart recovery."""
+
+    def recover(self, request_json: bytes) -> bytes: ...
+
+
+@runtime_checkable
 class DescriptorResolverTransport(Protocol):
     """Optional provider seam for runtime-bound descriptor resolution."""
 
@@ -81,6 +88,100 @@ class PrepareOptions:
         return json.dumps(
             self.to_json_dict(), separators=(",", ":"), sort_keys=True
         ).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class RuntimeRecoveryRequest:
+    """Bounded Runtime restart-recovery request."""
+
+    recovery_id: str
+    deadline_unix_ms: int
+    max_invocations: int
+
+    def to_json_dict(self) -> dict[str, object]:
+        _required_text(self.recovery_id, "recovery_id")
+        if self.deadline_unix_ms <= 0:
+            raise _invalid_runtime("deadline_unix_ms is required")
+        if self.max_invocations <= 0:
+            raise _invalid_runtime("max_invocations is required")
+        return {
+            "deadline_unix_ms": self.deadline_unix_ms,
+            "max_invocations": self.max_invocations,
+            "recovery_id": self.recovery_id.strip(),
+        }
+
+    def to_json_bytes(self) -> bytes:
+        return json.dumps(
+            self.to_json_dict(), separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+
+
+@dataclass(frozen=True)
+class RuntimeRecoveryEvent:
+    """Runtime restart-recovery event projection."""
+
+    sequence: int
+    kind: str
+    terminal: bool
+    invocation_id: str = ""
+    state: str = ""
+    receipt_ura: str = ""
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimeRecoveryReport:
+    """Provider proof that restart recovery reached runtime_started."""
+
+    recovery_id: str
+    state: str
+    recovered_invocations: int
+    reaped_orphans: int
+    replayed_terminal_receipts: int
+    bounded_scan: bool
+    cleanup_complete: bool
+    events: tuple[RuntimeRecoveryEvent, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def from_json(cls, raw: bytes | str) -> "RuntimeRecoveryReport":
+        try:
+            text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            decoded = json.loads(text)
+        except Exception as exc:
+            raise _invalid_runtime(
+                f"decode runtime recovery report JSON: {exc}", exc
+            ) from exc
+        if not isinstance(decoded, dict):
+            raise _invalid_runtime("runtime recovery report JSON must be an object")
+        state = _required_string(decoded, "state")
+        if state != "runtime_started":
+            raise _invalid_runtime("runtime recovery state must be runtime_started")
+        bounded_scan = _required_bool(decoded, "bounded_scan")
+        if not bounded_scan:
+            raise _invalid_runtime("bounded_scan must be true")
+        cleanup_complete = _required_bool(decoded, "cleanup_complete")
+        if not cleanup_complete:
+            raise _invalid_runtime("cleanup_complete must be true")
+        raw_events = decoded.get("events", [])
+        if not isinstance(raw_events, list):
+            raise _invalid_runtime("events must be an array")
+        return cls(
+            recovery_id=_required_string(decoded, "recovery_id"),
+            state=state,
+            recovered_invocations=_optional_non_negative_int(
+                decoded.get("recovered_invocations"), "recovered_invocations"
+            ),
+            reaped_orphans=_optional_non_negative_int(
+                decoded.get("reaped_orphans"), "reaped_orphans"
+            ),
+            replayed_terminal_receipts=_optional_non_negative_int(
+                decoded.get("replayed_terminal_receipts"),
+                "replayed_terminal_receipts",
+            ),
+            bounded_scan=bounded_scan,
+            cleanup_complete=cleanup_complete,
+            events=tuple(_runtime_recovery_event(item) for item in raw_events),
+        )
 
 
 @dataclass(frozen=True)
@@ -175,7 +276,9 @@ class InvocationHandle:
 
     def control_capability(self) -> InvocationControlCapability:
         if not self.control._is_runtime_bound():
-            raise _invalid_runtime("runtime-bound invocation control capability is required")
+            raise _invalid_runtime(
+                "runtime-bound invocation control capability is required"
+            )
         return self.control
 
 
@@ -189,9 +292,7 @@ def _invocation_handle_from_json(
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         decoded = json.loads(text)
     except Exception as exc:
-        raise _invalid_runtime(
-            f"decode invocation handle JSON: {exc}", exc
-        ) from exc
+        raise _invalid_runtime(f"decode invocation handle JSON: {exc}", exc) from exc
     if not isinstance(decoded, dict):
         raise _invalid_runtime("invocation handle JSON must be an object")
 
@@ -459,6 +560,7 @@ class RuntimeReceipt:
             raise _invalid_runtime("runtime receipt summary is missing receipt_type")
         receipt.prev_receipt_hash()
         receipt.self_receipt_hash()
+        receipt.validate_proof_facts()
         return receipt
 
     def has_causal_anchor(self) -> bool:
@@ -477,6 +579,54 @@ class RuntimeReceipt:
         """Return the validated self receipt hash bytes."""
 
         return _runtime_receipt_hash(self.self_hash_hex, "self_hash_hex")
+
+    def validate_proof_facts(self) -> None:
+        """Reject receipt projections that omit canonical proof facts."""
+
+        _required_receipt_agent_binding(self.caller_binding, "caller_binding")
+        _required_receipt_agent_binding(self.callee_binding, "callee_binding")
+        _required_receipt_subject_binding(self.subject_binding, "subject_binding")
+        _required_receipt_text(self.invocation_nonce_base64, "invocation_nonce_base64")
+        _required_receipt_text(self.causal_binding_kind, "causal_binding_kind")
+        if self.causal_binding is None:
+            raise _invalid_runtime("runtime receipt summary is missing causal_binding")
+        _required_receipt_signature(self.callee_signature, "callee_signature")
+        _required_receipt_agent_binding(self.signer_binding, "signer_binding")
+        _required_receipt_text(self.authority_binding_kind, "authority_binding_kind")
+        if self.authority_binding is None:
+            raise _invalid_runtime(
+                "runtime receipt summary is missing authority_binding"
+            )
+        _required_receipt_text(self.ability_binding, "ability_binding")
+        _required_receipt_text(self.descriptor_version, "descriptor_version")
+        _runtime_receipt_hash(self.schema_hash_hex, "schema_hash_hex")
+        _runtime_receipt_hash(self.impl_hash_hex, "impl_hash_hex")
+        _required_receipt_text(self.runtime_env, "runtime_env")
+        if self.authority_proof is None:
+            raise _invalid_runtime("runtime receipt summary is missing authority_proof")
+        _required_receipt_text(
+            self.authority_proof.proof_type, "authority_proof.proof_type"
+        )
+        _required_receipt_text(
+            self.authority_proof.binding_kind, "authority_proof.binding_kind"
+        )
+        _required_receipt_text(
+            self.authority_proof.proof_payload_base64,
+            "authority_proof.proof_payload_base64",
+        )
+        _runtime_receipt_hash(
+            self.authority_proof.proof_hash_hex, "authority_proof.proof_hash_hex"
+        )
+        _required_receipt_agent_binding(
+            self.authority_proof.issuer, "authority_proof.issuer"
+        )
+        _required_receipt_signature(
+            self.authority_proof.signature, "authority_proof.signature"
+        )
+        _runtime_receipt_hash(self.input_hash_hex, "input_hash_hex")
+        _runtime_receipt_hash(self.output_hash_hex, "output_hash_hex")
+        if "parent_receipts" not in self.raw:
+            raise _invalid_runtime("runtime receipt summary is missing parent_receipts")
 
     def to_json_dict(self) -> dict[str, object]:
         return dict(self.raw)
@@ -598,15 +748,15 @@ def _invocation_cancel_from_json(
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         decoded = json.loads(text)
     except Exception as exc:
-        raise _invalid_runtime(
-            f"decode invocation cancel JSON: {exc}", exc
-        ) from exc
+        raise _invalid_runtime(f"decode invocation cancel JSON: {exc}", exc) from exc
     if not isinstance(decoded, dict):
         raise _invalid_runtime("invocation cancel JSON must be an object")
     handle_id = _required_positive_int(decoded, "handle_id")
     if expected_control is not None:
         if expected_control._adapter_handle_id() != handle_id:
-            raise _invalid_runtime("handle_id does not match invocation control capability")
+            raise _invalid_runtime(
+                "handle_id does not match invocation control capability"
+            )
         control = expected_control
     else:
         control = InvocationControlCapability._from_snapshot_handle_id(handle_id)
@@ -671,7 +821,9 @@ class RuntimeClient:
         except SDKError:
             raise
         except Exception as exc:
-            raise _transport_error("resolve descriptor_ref transport failed", exc) from exc
+            raise _transport_error(
+                "resolve descriptor_ref transport failed", exc
+            ) from exc
         if not isinstance(decoded, Mapping):
             raise _invalid_runtime("descriptor_ref resolution must return an object")
         return _required_string(decoded, "descriptor_ref")
@@ -810,6 +962,20 @@ class RuntimeClient:
             raise _transport_error("submit signed transport failed", exc) from exc
         return InvocationHandle._from_runtime_json(raw)._bind_runtime(self)
 
+    def recover(self, request: RuntimeRecoveryRequest) -> RuntimeRecoveryReport:
+        transport = self._require_open()
+        if not isinstance(transport, RuntimeRecoveryTransport):
+            raise _invalid_runtime_client(
+                "runtime transport does not expose restart recovery"
+            )
+        try:
+            raw = transport.recover(request.to_json_bytes())
+        except SDKError:
+            raise
+        except Exception as exc:
+            raise _transport_error("runtime recovery transport failed", exc) from exc
+        return RuntimeRecoveryReport.from_json(raw)
+
     def await_result(self, handle: InvocationHandle) -> InvocationResult:
         transport = self._require_open()
         _require_handle(handle)
@@ -843,7 +1009,9 @@ class RuntimeClient:
             raise
         except Exception as exc:
             raise _transport_error("handle events transport failed", exc) from exc
-        return InvocationHandle._from_json_with_control(raw, control)._bind_runtime(self)
+        return InvocationHandle._from_json_with_control(raw, control)._bind_runtime(
+            self
+        )
 
     def close_handle(self, handle: InvocationHandle) -> None:
         transport = self._require_open()
@@ -889,6 +1057,21 @@ def _handle_event(value: object) -> InvocationHandleEvent:
     )
 
 
+def _runtime_recovery_event(value: object) -> RuntimeRecoveryEvent:
+    if not isinstance(value, dict):
+        raise _invalid_runtime("recovery event must be an object")
+    return RuntimeRecoveryEvent(
+        sequence=_required_positive_int(value, "sequence"),
+        kind=_required_string(value, "kind"),
+        terminal=_required_bool(value, "terminal"),
+        invocation_id=_optional_string(value.get("invocation_id"), "invocation_id")
+        or "",
+        state=_optional_string(value.get("state"), "state") or "",
+        receipt_ura=_optional_string(value.get("receipt_ura"), "receipt_ura") or "",
+        reason=_optional_string(value.get("reason"), "reason") or "",
+    )
+
+
 def _failure(value: object) -> Optional[InvocationFailure]:
     if value is None:
         return None
@@ -931,6 +1114,12 @@ def _required_string(decoded: Mapping[str, object], field_name: str) -> str:
     if not isinstance(value, str) or value.strip() == "":
         raise _invalid_runtime(f"{field_name} is required")
     return value
+
+
+def _required_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or value.strip() == "":
+        raise _invalid_runtime(f"{field_name} is required")
+    return value.strip()
 
 
 def _required_bool(decoded: Mapping[str, object], field_name: str) -> bool:
@@ -987,6 +1176,12 @@ def _runtime_receipt_hash(value: object, field_name: str) -> bytes:
     return decoded
 
 
+def _required_receipt_text(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise _invalid_runtime(f"runtime receipt summary is missing {field_name}")
+    return value.strip()
+
+
 def _optional_mapping(value: object, field_name: str) -> Optional[Mapping[str, object]]:
     if value is None:
         return None
@@ -1027,6 +1222,20 @@ def _receipt_subject_binding(
     )
 
 
+def _required_receipt_agent_binding(
+    value: Optional[RuntimeReceiptAgentBinding], field_name: str
+) -> None:
+    if value is None or not value.ura.strip():
+        raise _invalid_runtime(f"runtime receipt summary is missing {field_name}.ura")
+
+
+def _required_receipt_subject_binding(
+    value: Optional[RuntimeReceiptSubjectBinding], field_name: str
+) -> None:
+    if value is None or not value.ura.strip():
+        raise _invalid_runtime(f"runtime receipt summary is missing {field_name}.ura")
+
+
 def _receipt_entity_ref(
     value: object, field_name: str
 ) -> Optional[RuntimeReceiptEntityRef]:
@@ -1058,6 +1267,19 @@ def _receipt_signature(
         )
         or "",
     )
+
+
+def _required_receipt_signature(
+    value: Optional[RuntimeReceiptSignature], field_name: str
+) -> None:
+    if value is None or not value.signature_base64.strip():
+        raise _invalid_runtime(
+            f"runtime receipt summary is missing {field_name}.signature_base64"
+        )
+    if not value.algorithm.strip():
+        raise _invalid_runtime(
+            f"runtime receipt summary is missing {field_name}.algorithm"
+        )
 
 
 def _receipt_failure(value: object, field_name: str) -> Optional[RuntimeReceiptFailure]:

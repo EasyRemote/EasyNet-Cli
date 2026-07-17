@@ -8,7 +8,7 @@ import easynet_sdk.runtime_ability as runtime_ability_module
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
 from easynet_sdk.errors import SDKError
 from easynet_sdk.bidi import BidiStreamDescriptor
-from easynet_sdk.runtime import RuntimeClient
+from easynet_sdk.runtime import RuntimeClient, RuntimeRecoveryRequest
 from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
 
 
@@ -19,6 +19,7 @@ class RuntimeTransportFake:
         self.seen_bidi: dict[str, object] = {}
         self.seen_streams: list[dict[str, object]] = []
         self.seen_signed: dict[str, object] = {}
+        self.seen_recovery_request: dict[str, object] = {}
         self.descriptor_requests: list[dict[str, object]] = []
         self.output_json: dict[str, object] = {"answer_kind": "positive"}
         self.seen_await_id = 0
@@ -100,6 +101,30 @@ class RuntimeTransportFake:
     def submit_signed(self, signed_json: bytes) -> bytes:
         self.seen_signed = json.loads(signed_json)
         return b'{"handle_id":7,"state":"Submitted","terminal":false}'
+
+    def recover(self, request_json: bytes) -> bytes:
+        self.seen_recovery_request = json.loads(request_json)
+        return json.dumps(
+            {
+                "bounded_scan": True,
+                "cleanup_complete": True,
+                "events": [
+                    {
+                        "invocation_id": "inv-orphan",
+                        "kind": "orphan_reaped",
+                        "receipt_ura": "easynet:///r/example/resource/agent.alice/invocation/inv-orphan/receipt",
+                        "sequence": 1,
+                        "state": "cancelled",
+                        "terminal": True,
+                    }
+                ],
+                "reaped_orphans": 1,
+                "recovered_invocations": 2,
+                "recovery_id": "ability-recovery-1",
+                "replayed_terminal_receipts": 1,
+                "state": "runtime_started",
+            }
+        ).encode()
 
     def cancel_handle(self, control, reason: str) -> bytes:
         self.seen_cancel_reason = reason
@@ -219,6 +244,28 @@ def test_runtime_ability_delegates_provider_handle_lifecycle() -> None:
     assert refreshed.state == "Submitted"
     assert transport.seen_cancel_reason == "client stop"
     assert transport.seen_free_id == 7
+
+
+def test_runtime_ability_delegates_restart_recovery() -> None:
+    client, transport = _client()
+
+    report = client.recover(
+        RuntimeRecoveryRequest(
+            recovery_id="ability-recovery-1",
+            deadline_unix_ms=1783100009999,
+            max_invocations=32,
+        )
+    )
+
+    assert transport.seen_recovery_request == {
+        "deadline_unix_ms": 1783100009999,
+        "max_invocations": 32,
+        "recovery_id": "ability-recovery-1",
+    }
+    assert report.state == "runtime_started"
+    assert report.bounded_scan
+    assert report.cleanup_complete
+    assert report.events[0].kind == "orphan_reaped"
 
 
 def test_runtime_ability_requires_runtime_descriptor_resolver() -> None:

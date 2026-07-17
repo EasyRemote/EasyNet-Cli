@@ -56,6 +56,18 @@ func submittedHandleForRuntimeTest(t *testing.T) InvocationHandle {
 	return handle
 }
 
+func runtimeRecoveryRequestForTest() RuntimeRecoveryRequest {
+	return RuntimeRecoveryRequest{
+		RecoveryID:     "recovery-1",
+		DeadlineUnixMS: 1783100009999,
+		MaxInvocations: 32,
+	}
+}
+
+func runtimeRecoveryReportJSON(recoveryID string) []byte {
+	return []byte(`{"recovery_id":` + string(mustJSON(recoveryID)) + `,"state":"runtime_started","recovered_invocations":2,"reaped_orphans":1,"replayed_terminal_receipts":1,"bounded_scan":true,"cleanup_complete":true,"events":[{"sequence":1,"kind":"orphan_reaped","invocation_id":"inv-orphan","state":"cancelled","terminal":true,"receipt_ura":"easynet:///r/example/resource/agent.alice/invocation/inv-orphan/receipt","reason":"host restart"}]}`)
+}
+
 func TestPublicInvocationHandleJSONDoesNotGrantControlAuthority(t *testing.T) {
 	handle, err := NewInvocationHandleFromJSON([]byte(`{"handle_id": 7, "state": "Submitted", "terminal": false, "events": [], "result": null}`))
 	if err != nil {
@@ -107,6 +119,66 @@ func TestPublicInvocationCancelJSONDoesNotGrantControlAuthority(t *testing.T) {
 	}
 	if cancel.ControlCapability().valid() {
 		t.Fatalf("public cancel snapshot created runtime-bound control")
+	}
+}
+
+func TestRuntimeClientRestartRecoveryProviderContract(t *testing.T) {
+	var seenRequest map[string]any
+	client, err := NewRuntimeClient(RuntimeTransportFunc{
+		RecoverFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+			if err := json.Unmarshal(raw, &seenRequest); err != nil {
+				return nil, err
+			}
+			return runtimeRecoveryReportJSON("recovery-1"), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	report, err := client.Recover(context.Background(), runtimeRecoveryRequestForTest())
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+
+	if seenRequest["recovery_id"] != "recovery-1" ||
+		seenRequest["deadline_unix_ms"] != float64(1783100009999) ||
+		seenRequest["max_invocations"] != float64(32) {
+		t.Fatalf("recovery request not sent to provider: %#v", seenRequest)
+	}
+	if report.State != "runtime_started" || !report.BoundedScan || !report.CleanupComplete {
+		t.Fatalf("recovery report did not prove ready state: %#v", report)
+	}
+	if report.RecoveredInvocations != 2 || report.ReapedOrphans != 1 || report.ReplayedTerminalReceipts != 1 {
+		t.Fatalf("recovery counters = %#v", report)
+	}
+	if len(report.Events) != 1 ||
+		report.Events[0].Kind != "orphan_reaped" ||
+		report.Events[0].ReceiptURA == "" ||
+		!report.Events[0].Terminal {
+		t.Fatalf("recovery event not projected: %#v", report.Events)
+	}
+	if _, err := NewRuntimeRecoveryReportFromJSON([]byte(`{"recovery_id":"recovery-1","state":"recovering","bounded_scan":true,"cleanup_complete":true,"events":[]}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("recovering state error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := NewRuntimeRecoveryReportFromJSON([]byte(`{"recovery_id":"recovery-1","state":"runtime_started","bounded_scan":false,"cleanup_complete":true,"events":[]}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("unbounded scan error = %v, want %s", err, ErrInvalidArgument)
+	}
+	if _, err := NewRuntimeRecoveryReportFromJSON([]byte(`{"recovery_id":"recovery-1","state":"runtime_started","bounded_scan":true,"cleanup_complete":false,"events":[]}`)); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("incomplete cleanup error = %v, want %s", err, ErrInvalidArgument)
+	}
+
+	invalidClient, err := NewRuntimeClient(RuntimeTransportFunc{
+		RecoverFunc: func(context.Context, []byte) ([]byte, error) {
+			t.Fatalf("invalid request reached provider")
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	if _, err := invalidClient.Recover(context.Background(), RuntimeRecoveryRequest{}); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("empty recovery request error = %v, want %s", err, ErrInvalidArgument)
 	}
 }
 
@@ -196,7 +268,7 @@ func TestRuntimeClientPrepareSigningMaterialUsesStatelessTransportContract(t *te
 	}
 }
 
-func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
+func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 	receipt, err := NewRuntimeReceiptFromJSON([]byte(`{
 		"index": 1,
 		"invocation_id": "inv-1",
@@ -213,6 +285,15 @@ func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
 				"receipt_ura": "easynet:///r/example/resource/agent.alice.sdk/invocation/root/receipt"
 			}
 		},
+		"caller_binding": {"ura": "easynet:///r/example/agent/alice.sdk"},
+		"callee_binding": {"ura": "easynet:///r/example/device/dev-a"},
+		"subject_binding": {"ura": "easynet:///r/example/device/dev-a"},
+		"invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
+		"callee_signature": {
+			"algorithm": "ed25519",
+			"signature_base64": "Y2FsbGVlLXNpZw=="
+		},
+		"signer_binding": {"ura": "easynet:///r/example/agent/dev-a.signer"},
 		"authority_binding_kind": "delegation",
 		"authority_binding": {
 			"kind": "delegation",
@@ -221,7 +302,26 @@ func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
 			"caller_ura": "easynet:///r/example/agent/alice.sdk",
 			"audience": "runtime",
 			"scopes": ["invoke"]
-		}
+		},
+		"ability_binding": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+		"descriptor_version": "1.0.0",
+		"schema_hash_hex": "` + strings.Repeat("11", 32) + `",
+		"impl_hash_hex": "` + strings.Repeat("22", 32) + `",
+		"runtime_env": "native",
+		"authority_proof": {
+			"proof_type": "admission",
+			"binding_kind": "delegation",
+			"proof_payload_base64": "cHJvb2Y=",
+			"proof_hash_hex": "` + strings.Repeat("33", 32) + `",
+			"issuer": {"ura": "easynet:///r/example/agent/issuer"},
+			"signature": {
+				"algorithm": "ed25519",
+				"signature_base64": "cHJvb2Ytc2ln"
+			}
+		},
+		"input_hash_hex": "` + strings.Repeat("44", 32) + `",
+		"output_hash_hex": "` + strings.Repeat("55", 32) + `",
+		"parent_receipts": []
 	}`))
 	if err != nil {
 		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
@@ -242,22 +342,30 @@ func TestRuntimeReceiptValidatesSummaryHashes(t *testing.T) {
 	if receipt.AuthorityBindingKind != "delegation" || receipt.AuthorityBinding["kind"] != "delegation" {
 		t.Fatalf("authority binding not decoded: %#v", receipt.AuthorityBinding)
 	}
+
+	if _, err := NewRuntimeReceiptFromJSON([]byte(`{
+		"index": 1,
+		"invocation_id": "inv-1",
+		"receipt_type": "completed",
+		"state": "completed",
+		"timestamp_unix_ms": 1700000000000,
+		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
+		"self_hash_hex": "` + strings.Repeat("aa", 32) + `"
+	}`)); err == nil {
+		t.Fatal("NewRuntimeReceiptFromJSON accepted receipt without proof facts")
+	}
 }
 
 func TestRuntimeReceiptRejectsMalformedSummaryHash(t *testing.T) {
-	receipt, err := NewRuntimeReceiptFromJSON([]byte(`{
+	if _, err := NewRuntimeReceiptFromJSON([]byte(`{
 		"index": 1,
 		"invocation_id": "inv-1",
 		"receipt_type": "completed",
 		"timestamp_unix_ms": 1700000000000,
 		"prev_receipt_hash_hex": "` + strings.Repeat("00", 32) + `",
 		"self_hash_hex": "aa"
-	}`))
-	if err != nil {
-		t.Fatalf("NewRuntimeReceiptFromJSON: %v", err)
-	}
-	if err := receipt.ValidateSummary(); err == nil {
-		t.Fatal("ValidateSummary accepted short self hash")
+	}`)); err == nil {
+		t.Fatal("NewRuntimeReceiptFromJSON accepted short self hash")
 	}
 }
 

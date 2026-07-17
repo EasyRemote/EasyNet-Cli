@@ -66,6 +66,7 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 	var seenInvoke map[string]any
 	var seenStream map[string]any
 	var seenBidi map[string]any
+	var seenRecovery map[string]any
 	var seenStreams []map[string]any
 	var seenCancelReason string
 	var descriptorModes []string
@@ -102,6 +103,12 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 			}
 			seenCancelReason = reason
 			return []byte(`{"handle_id":7,"request_accepted":true,"deduplicated":false,"cancelled":true,"state":"CancelRequested","terminal":false}`), nil
+		},
+		RecoverFunc: func(_ context.Context, raw []byte) ([]byte, error) {
+			if err := json.Unmarshal(raw, &seenRecovery); err != nil {
+				return nil, err
+			}
+			return runtimeRecoveryReportJSON("recovery-1"), nil
 		},
 		ResolveDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
 			var request map[string]any
@@ -143,6 +150,10 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
+	recovery, err := client.Recover(context.Background(), runtimeRecoveryRequestForTest())
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
 
 	if output["answer_kind"] != "positive" || seenInvoke["descriptor_ref"] == "" {
 		t.Fatalf("unary provider dispatch missing: output=%#v draft=%#v", output, seenInvoke)
@@ -161,6 +172,9 @@ func TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces(t *testing.T) {
 	}
 	if !cancelled.RequestAccepted() || !cancelled.Cancelled() || cancelled.Terminal() || seenCancelReason != "client stop" {
 		t.Fatalf("ability cancel = %#v reason=%q", cancelled, seenCancelReason)
+	}
+	if recovery.State != "runtime_started" || seenRecovery["recovery_id"] != "recovery-1" {
+		t.Fatalf("ability recovery did not delegate to runtime provider: recovery=%#v request=%#v", recovery, seenRecovery)
 	}
 	if got := mustJSONString(descriptorModes); got != `["rpc","stream","bidi"]` {
 		t.Fatalf("descriptor call modes = %s", got)

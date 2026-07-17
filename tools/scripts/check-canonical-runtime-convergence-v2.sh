@@ -196,6 +196,10 @@ check_daemon_tuple_route_contract() {
   bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
 }
 
+check_daemon_runtime_route_inventory_contract() {
+  bash "$ROOT/tools/scripts/check-architecture-convergence.sh" >/dev/null
+}
+
 check_key_custody_boundary_contract() {
   bash "$ROOT/tools/scripts/check-daemon-key-service-boundary.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-product-key-custody-boundary.sh" >/dev/null
@@ -1789,6 +1793,7 @@ MD
   check_active_source_contract
   check_sdk_product_neutrality_contract
   check_daemon_tuple_route_contract
+  check_daemon_runtime_route_inventory_contract
   check_key_custody_boundary_contract
   check_daemon_mission_eal_boundary_contract
   check_ura_vocabulary_contract
@@ -1814,6 +1819,7 @@ check_manifest_contract
 check_active_source_contract
 check_sdk_product_neutrality_contract
 check_daemon_tuple_route_contract
+check_daemon_runtime_route_inventory_contract
 check_key_custody_boundary_contract
 check_daemon_mission_eal_boundary_contract
 check_ura_vocabulary_contract

@@ -15,6 +15,8 @@ from .runtime import (
     InvocationCancel,
     InvocationHandle,
     InvocationResult,
+    RuntimeRecoveryReport,
+    RuntimeRecoveryRequest,
     RuntimeClient,
 )
 from .signing import SignedInvocation
@@ -124,12 +126,13 @@ class RuntimeAbilityClient:
     def submit_signed(self, signed: SignedInvocation) -> InvocationHandle:
         return self._runtime.submit_signed(signed)
 
+    def recover(self, request: RuntimeRecoveryRequest) -> RuntimeRecoveryReport:
+        return self._runtime.recover(request)
+
     def await_result(self, handle: InvocationHandle) -> InvocationResult:
         return self._runtime.await_result(handle)
 
-    def cancel(
-        self, handle: InvocationHandle, reason: str = ""
-    ) -> InvocationCancel:
+    def cancel(self, handle: InvocationHandle, reason: str = "") -> InvocationCancel:
         return self._runtime.cancel(handle, reason)
 
     def events(self, handle: InvocationHandle) -> InvocationHandle:

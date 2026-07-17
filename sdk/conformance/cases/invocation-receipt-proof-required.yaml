@@ -1,0 +1,20 @@
+id: invocation/receipt_proof_required
+profile: runtime_core
+required_for:
+  - go
+  - python
+lifecycle_actions:
+  - terminal_receipt
+description: Required runtime receipt constructors reject omitted descriptor, authority, proof, signature, hash and parent-receipt binding facts.
+steps:
+  - action: decode_complete_receipt_with_proof_facts
+    schema: invocation-receipt.schema.json
+  - action: reject_missing_authority_proof
+  - action: require_descriptor_binding
+  - action: require_parent_receipts_binding
+expect:
+  result: proof_facts_required
+  authority_proof_required: true
+  descriptor_binding_required: true
+  parent_receipts_binding_required: true
+  opaque_projection_compatibility: true

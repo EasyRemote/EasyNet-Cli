@@ -1309,6 +1309,7 @@ for path in production_files(cli_root / "src", {".rs"}):
 daemon_service = cli_root / "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
 unary_dispatcher = cli_root / "src/daemon/invocation/dispatch/unary_dispatcher.rs"
 stream_dispatcher = cli_root / "src/daemon/invocation/streams/stream_dispatcher.rs"
+bidi_dispatcher = cli_root / "src/daemon/invocation/bidi/bidi_dispatcher.rs"
 daemon_route_runtime = cli_root / "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
 boot_invocation_routes = cli_root / "src/daemon/boot/invocation/mod.rs"
 if daemon_service.exists():
@@ -1342,6 +1343,14 @@ if daemon_service.exists():
             "streams.dispatch_daemon_route_runtime(route, &inner).await",
             "exact stream route dispatch must delegate to the LocalRuntime route path",
         ),
+        (
+            "pub(crate) enum DaemonBidiRoute",
+            "exact bidi routes must be part of the daemon Invocation typed route inventory",
+        ),
+        (
+            "DAEMON_INVOCATION_BIDI_ROUTES",
+            "daemon Invocation route inventory must include bidi routes",
+        ),
     )
     for token, detail in service_requirements:
         if token not in service_text:
@@ -1358,6 +1367,33 @@ if daemon_service.exists():
                 line_number(service_text, service_text.find(token)),
                 f"daemon service must not call direct exact stream helper `{token}`",
             )
+
+if bidi_dispatcher.exists():
+    dispatcher_text = source(bidi_dispatcher)
+    dispatcher_requirements = (
+        (
+            "RUNTIME_ADMIN_BIDI_ROUTES: &[DaemonBidiRoute]",
+            "runtime-admin bidi conformance must consume the typed daemon bidi route inventory",
+        ),
+        (
+            "DaemonBidiRoute::from_function(ability_name)",
+            "BidiDispatcher exact-route classification must use the typed daemon bidi route owner",
+        ),
+        (
+            "Some(DaemonBidiRoute::SessionOpen)",
+            "session.open must be classified as a typed daemon bidi route",
+        ),
+    )
+    for token, detail in dispatcher_requirements:
+        if token not in dispatcher_text:
+            add("R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK", bidi_dispatcher, 1, detail)
+    if "match ability_name" in dispatcher_text:
+        add(
+            "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK",
+            bidi_dispatcher,
+            line_number(dispatcher_text, dispatcher_text.find("match ability_name")),
+            "BidiDispatcher must not hand-match exact ability names outside the typed route owner",
+        )
 
 if unary_dispatcher.exists():
     dispatcher_text = source(unary_dispatcher)

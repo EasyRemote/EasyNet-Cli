@@ -49,12 +49,14 @@ use crate::daemon::invocation::admission::target_gate::{
     route_negative_status, route_profile_blocked_status, signed_envelope_for_selected_route,
     TargetGate,
 };
-use crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN;
 use crate::daemon::invocation::bidi::session_wire::{
     build_carrier_v1_dispatch_frame, call_id_hex, require_canonical_dispatch_session,
     RequestOutcome, SessionContentEnvelope, SessionDispatch, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION;
+use crate::daemon::invocation::dispatch::daemon_invocation_service::{
+    DaemonBidiRoute, DAEMON_INVOCATION_BIDI_ROUTES,
+};
 use crate::daemon::invocation::dispatch::deps::{
     DirectoryPlane, IdentityPlane, RuntimePlane, SessionPlane,
 };
@@ -93,7 +95,7 @@ use crate::daemon::trust::anchor::RealmTrustAnchor;
 /// arms in `dispatch` reference the same constants, so a baseline row can
 /// never claim an `AxonRuntimeAdmin` ability the dispatcher does not
 /// actually install (SPEC §7.1 notes 6/7, §7.3 item 7, §9.1 item 13).
-pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[&str] = &[ABILITY_SESSION_OPEN];
+pub(crate) const RUNTIME_ADMIN_BIDI_ROUTES: &[DaemonBidiRoute] = DAEMON_INVOCATION_BIDI_ROUTES;
 
 /// `InvokeBidi` routing surface. Cheap per-call construction: every
 /// plane, the gate, and the composed unary dispatcher are `Arc`-shaped.
@@ -150,8 +152,8 @@ impl BidiDispatcher {
         envelope_open: &EnvelopeOpen,
         up: Streaming<InvokeBidiUp>,
     ) -> Result<Response<BoxedDownStream<InvokeBidiDown>>, Status> {
-        match ability_name {
-            ABILITY_SESSION_OPEN => {
+        match DaemonBidiRoute::from_function(ability_name) {
+            Some(DaemonBidiRoute::SessionOpen) => {
                 let caller_ura = envelope_open
                     .envelope
                     .as_ref()
@@ -167,7 +169,7 @@ impl BidiDispatcher {
                 self.dispatch_self_session_accept(caller_ura, envelope_open, contract, up)
                     .await
             }
-            other => {
+            None => {
                 let selection = self.resolve_bidi_route(envelope_open).await?;
                 let call_mode = selection.call_mode();
                 let selected_route = match selection.into_dispatch() {
@@ -188,12 +190,12 @@ impl BidiDispatcher {
                         crate::op_event!(
                             component = daemon_invocation,
                             kind = invoke_bidi_unwired_ability,
-                            ability = other,
+                            ability = ability_name,
                             dispatch_ability = selected_route.dispatch_name.as_str(),
                             route_ura = selected_route.route_ura.as_str(),
                         );
                         Status::unimplemented(format!(
-                            "InvokeBidi selected route `{}` for ability `{other}`, but dispatch \
+                            "InvokeBidi selected route `{}` for ability `{ability_name}`, but dispatch \
                              ability `{}` has no daemon bidi wire adapter",
                             selected_route.route_ura, selected_route.dispatch_name,
                         ))

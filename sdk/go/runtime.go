@@ -72,6 +72,13 @@ type RuntimeTransport interface {
 	Close(ctx context.Context) error
 }
 
+// RuntimeRecoveryTransport is an optional provider seam for restart recovery.
+// Providers that implement it own bounded orphan scans, replayed terminal
+// facts, and cleanup before returning a ready runtime state.
+type RuntimeRecoveryTransport interface {
+	Recover(ctx context.Context, requestJSON []byte) ([]byte, error)
+}
+
 // DescriptorResolverTransport is an optional provider seam for resolving
 // runtime-governed AbilityDescriptorRefs before building Invocation drafts.
 type DescriptorResolverTransport interface {
@@ -98,6 +105,7 @@ type RuntimeTransportFunc struct {
 	CancelHandleFunc         func(ctx context.Context, control InvocationControlCapability, reason string) ([]byte, error)
 	HandleEventsFunc         func(ctx context.Context, control InvocationControlCapability) ([]byte, error)
 	FreeHandleFunc           func(ctx context.Context, control InvocationControlCapability) error
+	RecoverFunc              func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	ResolveDescriptorRefFunc func(ctx context.Context, requestJSON []byte) ([]byte, error)
 	CloseFunc                func(ctx context.Context) error
 }
@@ -187,6 +195,13 @@ func (f RuntimeTransportFunc) FreeHandle(ctx context.Context, control Invocation
 		return invalidRuntimePayload("invocation control capability is required", nil)
 	}
 	return f.FreeHandleFunc(ctx, control)
+}
+
+func (f RuntimeTransportFunc) Recover(ctx context.Context, requestJSON []byte) ([]byte, error) {
+	if f.RecoverFunc == nil {
+		return nil, invalidRuntimeClient("runtime recovery transport function is required")
+	}
+	return f.RecoverFunc(ctx, requestJSON)
 }
 
 func (f RuntimeTransportFunc) ResolveDescriptorRef(ctx context.Context, requestJSON []byte) ([]byte, error) {
@@ -285,6 +300,37 @@ type PrepareOptions struct {
 	SignerID           string `json:"signer_id,omitempty"`
 	PolicyRef          string `json:"policy_ref,omitempty"`
 	LocalDaemonSigning bool   `json:"local_daemon_signing,omitempty"`
+}
+
+// RuntimeRecoveryRequest declares one bounded runtime restart-recovery scan.
+type RuntimeRecoveryRequest struct {
+	RecoveryID     string `json:"recovery_id"`
+	DeadlineUnixMS int64  `json:"deadline_unix_ms"`
+	MaxInvocations int    `json:"max_invocations"`
+}
+
+// RuntimeRecoveryEvent is an observable recovery lifecycle event.
+type RuntimeRecoveryEvent struct {
+	Sequence     uint64 `json:"sequence"`
+	Kind         string `json:"kind"`
+	InvocationID string `json:"invocation_id,omitempty"`
+	State        string `json:"state,omitempty"`
+	Terminal     bool   `json:"terminal"`
+	ReceiptURA   string `json:"receipt_ura,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// RuntimeRecoveryReport proves that the provider completed a bounded restart
+// recovery transition without fabricating successful terminal facts.
+type RuntimeRecoveryReport struct {
+	RecoveryID               string                 `json:"recovery_id"`
+	State                    string                 `json:"state"`
+	RecoveredInvocations     int                    `json:"recovered_invocations"`
+	ReapedOrphans            int                    `json:"reaped_orphans"`
+	ReplayedTerminalReceipts int                    `json:"replayed_terminal_receipts"`
+	BoundedScan              bool                   `json:"bounded_scan"`
+	CleanupComplete          bool                   `json:"cleanup_complete"`
+	Events                   []RuntimeRecoveryEvent `json:"events"`
 }
 
 // Invoke submits a complete Invocation tuple and decodes the daemon result projection.
@@ -417,6 +463,19 @@ func prepareOptionsJSON(opts PrepareOptions, materialOnly bool) ([]byte, error) 
 	}{PrepareOptions: opts, MaterialOnly: true})
 }
 
+func validateRuntimeRecoveryRequest(request RuntimeRecoveryRequest) error {
+	if strings.TrimSpace(request.RecoveryID) == "" {
+		return invalidRuntimePayload("recovery_id is required", nil)
+	}
+	if request.DeadlineUnixMS <= 0 {
+		return invalidRuntimePayload("deadline_unix_ms is required", nil)
+	}
+	if request.MaxInvocations <= 0 {
+		return invalidRuntimePayload("max_invocations is required", nil)
+	}
+	return nil
+}
+
 // PrepareBuilder inspects a complete builder, prepares canonical signing
 // material, and consumes the builder only after prepare succeeds.
 func (c *RuntimeClient) PrepareBuilder(ctx context.Context, builder *InvocationBuilder, opts PrepareOptions) (PreparedInvocation, SigningMaterial, error) {
@@ -459,6 +518,34 @@ func (c *RuntimeClient) SubmitSigned(ctx context.Context, signed SignedInvocatio
 		return InvocationHandle{}, transportRuntimeError("submit signed transport failed", err)
 	}
 	return newRuntimeInvocationHandleFromJSON(raw)
+}
+
+// Recover delegates restart recovery to the Runtime provider.
+func (c *RuntimeClient) Recover(ctx context.Context, request RuntimeRecoveryRequest) (RuntimeRecoveryReport, error) {
+	transport, err := c.runtimeTransport(ctx)
+	if err != nil {
+		return RuntimeRecoveryReport{}, err
+	}
+	recovery, ok := transport.(RuntimeRecoveryTransport)
+	if !ok {
+		return RuntimeRecoveryReport{}, invalidRuntimeClient("runtime transport does not expose restart recovery")
+	}
+	if err := validateRuntimeRecoveryRequest(request); err != nil {
+		return RuntimeRecoveryReport{}, err
+	}
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return RuntimeRecoveryReport{}, invalidRuntimePayload(fmt.Sprintf("encode runtime recovery request: %v", err), err)
+	}
+	raw, err := recovery.Recover(ctx, requestJSON)
+	if err != nil {
+		var sdkErr *SDKError
+		if errors.As(err, &sdkErr) {
+			return RuntimeRecoveryReport{}, sdkErr
+		}
+		return RuntimeRecoveryReport{}, transportRuntimeError("runtime recovery transport failed", err)
+	}
+	return NewRuntimeRecoveryReportFromJSON(raw)
 }
 
 // Await waits for a submitted invocation handle to reach a terminal result.
@@ -542,6 +629,56 @@ func (c *RuntimeClient) CloseHandle(ctx context.Context, handle InvocationHandle
 		return transportRuntimeError("free handle transport failed", err)
 	}
 	return nil
+}
+
+// NewRuntimeRecoveryReportFromJSON decodes a provider restart-recovery report.
+func NewRuntimeRecoveryReportFromJSON(raw []byte) (RuntimeRecoveryReport, error) {
+	var dto struct {
+		RecoveryID               string                 `json:"recovery_id"`
+		State                    string                 `json:"state"`
+		RecoveredInvocations     int                    `json:"recovered_invocations"`
+		ReapedOrphans            int                    `json:"reaped_orphans"`
+		ReplayedTerminalReceipts int                    `json:"replayed_terminal_receipts"`
+		BoundedScan              *bool                  `json:"bounded_scan"`
+		CleanupComplete          *bool                  `json:"cleanup_complete"`
+		Events                   []RuntimeRecoveryEvent `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return RuntimeRecoveryReport{}, invalidRuntimePayload(fmt.Sprintf("decode runtime recovery report JSON: %v", err), err)
+	}
+	if strings.TrimSpace(dto.RecoveryID) == "" {
+		return RuntimeRecoveryReport{}, invalidRuntimePayload("recovery_id is required", nil)
+	}
+	if dto.State != "runtime_started" {
+		return RuntimeRecoveryReport{}, invalidRuntimePayload("runtime recovery state must be runtime_started", nil)
+	}
+	if dto.RecoveredInvocations < 0 || dto.ReapedOrphans < 0 || dto.ReplayedTerminalReceipts < 0 {
+		return RuntimeRecoveryReport{}, invalidRuntimePayload("runtime recovery counters must be non-negative", nil)
+	}
+	if dto.BoundedScan == nil || !*dto.BoundedScan {
+		return RuntimeRecoveryReport{}, invalidRuntimePayload("bounded_scan must be true", nil)
+	}
+	if dto.CleanupComplete == nil || !*dto.CleanupComplete {
+		return RuntimeRecoveryReport{}, invalidRuntimePayload("cleanup_complete must be true", nil)
+	}
+	for _, event := range dto.Events {
+		if event.Sequence == 0 {
+			return RuntimeRecoveryReport{}, invalidRuntimePayload("recovery event sequence is required", nil)
+		}
+		if strings.TrimSpace(event.Kind) == "" {
+			return RuntimeRecoveryReport{}, invalidRuntimePayload("recovery event kind is required", nil)
+		}
+	}
+	return RuntimeRecoveryReport{
+		RecoveryID:               dto.RecoveryID,
+		State:                    dto.State,
+		RecoveredInvocations:     dto.RecoveredInvocations,
+		ReapedOrphans:            dto.ReapedOrphans,
+		ReplayedTerminalReceipts: dto.ReplayedTerminalReceipts,
+		BoundedScan:              *dto.BoundedScan,
+		CleanupComplete:          *dto.CleanupComplete,
+		Events:                   append([]RuntimeRecoveryEvent(nil), dto.Events...),
+	}, nil
 }
 
 // Close releases the Runtime Core client transport without stopping the daemon.
@@ -690,6 +827,17 @@ type RuntimeReceiptAuthorityProof struct {
 }
 
 func NewRuntimeReceiptFromJSON(raw []byte) (RuntimeReceipt, error) {
+	receipt, err := newRuntimeReceiptProjectionFromJSON(raw)
+	if err != nil {
+		return RuntimeReceipt{}, err
+	}
+	if err := receipt.ValidateSummary(); err != nil {
+		return RuntimeReceipt{}, err
+	}
+	return receipt, nil
+}
+
+func newRuntimeReceiptProjectionFromJSON(raw []byte) (RuntimeReceipt, error) {
 	var dto struct {
 		ReceiptID             string                        `json:"receipt_id"`
 		ReceiptURA            string                        `json:"receipt_ura"`
@@ -796,6 +944,84 @@ func (r RuntimeReceipt) ValidateSummary() error {
 	if _, err := r.SelfReceiptHash(); err != nil {
 		return err
 	}
+	return r.ValidateProofFacts()
+}
+
+// ValidateProofFacts rejects receipt projections that omit canonical proof
+// facts required for descriptor-bound audit and causal continuation.
+func (r RuntimeReceipt) ValidateProofFacts() error {
+	if err := requireRuntimeReceiptAgentBinding(r.CallerBinding, "caller_binding"); err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptAgentBinding(r.CalleeBinding, "callee_binding"); err != nil {
+		return err
+	}
+	if r.SubjectBinding == nil || strings.TrimSpace(r.SubjectBinding.URA) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing subject_binding.ura", nil)
+	}
+	if strings.TrimSpace(r.InvocationNonceBase64) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing invocation_nonce_base64", nil)
+	}
+	if strings.TrimSpace(r.CausalBindingKind) == "" || r.CausalBinding == nil {
+		return invalidRuntimePayload("runtime receipt summary is missing causal binding", nil)
+	}
+	if err := requireRuntimeReceiptSignature(r.CalleeSignature, "callee_signature"); err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptAgentBinding(r.SignerBinding, "signer_binding"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.AuthorityBindingKind) == "" || r.AuthorityBinding == nil {
+		return invalidRuntimePayload("runtime receipt summary is missing authority binding", nil)
+	}
+	if strings.TrimSpace(r.AbilityBinding) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing ability_binding", nil)
+	}
+	if strings.TrimSpace(r.DescriptorVersion) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing descriptor_version", nil)
+	}
+	if _, err := runtimeReceiptHash(r.SchemaHashHex, "schema_hash_hex"); err != nil {
+		return err
+	}
+	if _, err := runtimeReceiptHash(r.ImplHashHex, "impl_hash_hex"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.RuntimeEnv) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing runtime_env", nil)
+	}
+	if r.AuthorityProof == nil {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_proof", nil)
+	}
+	if strings.TrimSpace(r.AuthorityProof.ProofType) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.proof_type", nil)
+	}
+	if strings.TrimSpace(r.AuthorityProof.BindingKind) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.binding_kind", nil)
+	}
+	if strings.TrimSpace(r.AuthorityProof.ProofPayloadBase64) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing authority_proof.proof_payload_base64", nil)
+	}
+	if _, err := runtimeReceiptHash(r.AuthorityProof.ProofHashHex, "authority_proof.proof_hash_hex"); err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptAgentBinding(r.AuthorityProof.Issuer, "authority_proof.issuer"); err != nil {
+		return err
+	}
+	if err := requireRuntimeReceiptSignature(r.AuthorityProof.Signature, "authority_proof.signature"); err != nil {
+		return err
+	}
+	if _, err := runtimeReceiptHash(r.InputHashHex, "input_hash_hex"); err != nil {
+		return err
+	}
+	if _, err := runtimeReceiptHash(r.OutputHashHex, "output_hash_hex"); err != nil {
+		return err
+	}
+	if r.Raw == nil {
+		return invalidRuntimePayload("runtime receipt summary is missing raw proof projection", nil)
+	}
+	if _, ok := r.Raw["parent_receipts"]; !ok {
+		return invalidRuntimePayload("runtime receipt summary is missing parent_receipts", nil)
+	}
 	return nil
 }
 
@@ -832,6 +1058,23 @@ func runtimeReceiptHash(value string, field string) ([]byte, error) {
 		return nil, invalidRuntimePayload(field+" must be exactly 32 bytes", nil)
 	}
 	return hash, nil
+}
+
+func requireRuntimeReceiptAgentBinding(binding *RuntimeReceiptAgentBinding, field string) error {
+	if binding == nil || strings.TrimSpace(binding.URA) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing "+field+".ura", nil)
+	}
+	return nil
+}
+
+func requireRuntimeReceiptSignature(signature *RuntimeReceiptSignature, field string) error {
+	if signature == nil || strings.TrimSpace(signature.SignatureBase64) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing "+field+".signature_base64", nil)
+	}
+	if strings.TrimSpace(signature.Algorithm) == "" {
+		return invalidRuntimePayload("runtime receipt summary is missing "+field+".algorithm", nil)
+	}
+	return nil
 }
 
 // InvocationFailure is the runtime error embedded in a terminal invocation result.
@@ -1007,7 +1250,7 @@ func decodeRuntimeReceiptSummary(raw json.RawMessage) (*RuntimeReceipt, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	receipt, err := NewRuntimeReceiptFromJSON(raw)
+	receipt, err := newRuntimeReceiptProjectionFromJSON(raw)
 	if err != nil {
 		return nil, err
 	}
