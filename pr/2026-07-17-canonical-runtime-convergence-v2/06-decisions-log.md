@@ -39,3 +39,21 @@
   terminal completion. Go and Python receive `cancel` vector evidence only
   through selectors that prove the cancel acknowledgement is non-terminal and
   that terminal cancel acks are rejected by the facade.
+- Treat direct runtime provider registration as the owner of generic runtime
+  environment, connection, and lifecycle provider-backed status when the same
+  concrete selectors already prove process-root ownership and control-only
+  runtime behavior. This does not make any runtime core capability
+  cutover-ready; it only removes the seam-only modelling defect for the
+  generic runtime concepts that wrap the provider-backed native runtime.
+- Treat stream and bidi deadline ownership as provider-backed lifecycle
+  evidence only when direct runtime selectors prove typed timeout projection,
+  cleanup, and safe retry for both Go and Python. The evidence closes the
+  `deadline` action for those capabilities but keeps the cells below
+  cutover-ready while dispatch, child-dispatch, restart recovery, and complete
+  transition coverage remain open.
+- Treat stream and bidi dispatch as provider-entry evidence only when direct
+  runtime selectors prove the complete draft reached the provider, the first
+  provider output is non-terminal, and a terminal receipt follows through the
+  same session. This closes the `dispatch` action for Go and Python stream/bidi
+  cells without claiming child dispatch, restart recovery, runtime start, or
+  cutover readiness.

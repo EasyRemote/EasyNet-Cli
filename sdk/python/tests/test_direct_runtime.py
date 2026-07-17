@@ -1,6 +1,7 @@
 import concurrent.futures
 import json
 import tempfile
+import time
 import unittest
 from collections.abc import Iterator
 from dataclasses import replace
@@ -51,6 +52,8 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
         self.requests: list[Any] = []
         self.stream_requests: list[Any] = []
         self.bidi_up_frames: list[Any] = []
+        self.stream_delay_seconds = 0.0
+        self.bidi_delay_seconds = 0.0
         self.stream_chunks: list[Any] = [
             invoke_pb2.InvokeStreamChunk(
                 invocation_id="inv-stream",
@@ -106,11 +109,15 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
 
     def InvokeStream(self, request, context):
         self.stream_requests.append(request)
+        if self.stream_delay_seconds:
+            time.sleep(self.stream_delay_seconds)
         yield from self.stream_chunks
 
     def InvokeBidi(self, request_iterator, context) -> Iterator[Any]:
         first = next(request_iterator)
         self.bidi_up_frames.append(first)
+        if self.bidi_delay_seconds:
+            time.sleep(self.bidi_delay_seconds)
         yield invoke_pb2.InvokeBidiDown(
             sequence=0,
             receipt=invoke_pb2.InvocationReceipt(
@@ -684,6 +691,7 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(echoed["kind"], "data")
         self.assertEqual(echoed["stream_id"], 1)
         self.assertEqual(echoed["payload_base64"], "eyJwaW5nIjp0cnVlfQ==")
+        self.assertNotIn("admission_receipt", echoed)
         self.assertEqual(outcome["state"], "HalfClosedLocal")
         self.assertFalse(outcome["terminal"])
         self.assertEqual(terminal["sequence"], 3)
@@ -761,15 +769,56 @@ class DirectRuntimeTests(unittest.TestCase):
                 stream_transport, _ = transport.open_stream(
                     complete_draft().to_json().encode("utf-8")
                 )
-                stream_transport.recv(timeout=1)
+                raw_first = stream_transport.recv(timeout=1)
                 raw_terminal = stream_transport.recv(timeout=1)
             finally:
                 transport.close()
 
+        first = json.loads(raw_first.decode("utf-8"))
+        self.assertFalse(first["terminal"])
+        self.assertEqual(first["state"], "Running")
+        self.assertEqual(first["selected_node_id"], "node-direct")
+        self.assertEqual(first["scheduling_reason"], "fake-stream")
         terminal = json.loads(raw_terminal.decode("utf-8"))
         self.assertNotIn("receipt", terminal)
         receipt = cast(dict[str, object], terminal["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-stream")
+
+    def test_direct_runtime_stream_deadline_is_typed_timeout(self) -> None:
+        servicer = RecordingInvocationServicer()
+        servicer.stream_delay_seconds = 0.2
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=0.05,
+                identity=_identity(),
+            )
+            try:
+                stream_transport, _ = transport.open_stream(
+                    complete_draft().to_json().encode("utf-8")
+                )
+                with self.assertRaises(SDKError) as raised:
+                    stream_transport.recv(timeout=1)
+                stream_transport.close()
+
+                servicer.stream_delay_seconds = 0.0
+                retry_stream, _ = transport.open_stream(
+                    complete_draft().to_json().encode("utf-8")
+                )
+                retry_event = json.loads(retry_stream.recv(timeout=1).decode("utf-8"))
+                retry_stream.close()
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.TIMEOUT))
+        self.assertEqual(raised.exception.stage, "direct_runtime")
+        self.assertEqual(
+            raised.exception.details["grpc_status"],
+            str(grpc.StatusCode.DEADLINE_EXCEEDED),
+        )
+        self.assertGreaterEqual(len(servicer.stream_requests), 2)
+        self.assertFalse(retry_event["terminal"])
 
     def test_direct_runtime_stream_cancel_projects_non_terminal_request(
         self,
@@ -818,18 +867,73 @@ class DirectRuntimeTests(unittest.TestCase):
                     b'{"sequence":1,"kind":"data","stream_id":1,'
                     b'"payload_base64":"eyJwaW5nIjp0cnVlfQ=="}'
                 )
-                bidi_transport.recv(timeout=1)
+                raw_frame = bidi_transport.recv(timeout=1)
                 bidi_transport.close_send()
                 raw_terminal = bidi_transport.recv(timeout=1)
             finally:
                 transport.close()
 
+        frame = json.loads(raw_frame.decode("utf-8"))
+        self.assertFalse(frame["terminal"])
+        self.assertEqual(frame["kind"], "data")
+        self.assertEqual(frame["stream_id"], 1)
+        self.assertGreaterEqual(len(servicer.bidi_up_frames), 2)
+        self.assertEqual(
+            servicer.bidi_up_frames[0].WhichOneof("payload"),
+            "envelope_open",
+        )
         terminal = json.loads(raw_terminal.decode("utf-8"))
         self.assertNotIn("receipt", terminal)
         payload = cast(dict[str, object], terminal.get("payload_json") or {})
         self.assertNotIn("receipt", payload)
         receipt = cast(dict[str, object], terminal["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-bidi")
+
+    def test_direct_runtime_bidi_deadline_is_typed_timeout(self) -> None:
+        servicer = RecordingInvocationServicer()
+        servicer.bidi_delay_seconds = 0.2
+        streams_json = json.dumps(
+            [{"stream_id": 1, "content_type": "application/json"}],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        with _fake_daemon(servicer) as endpoint:
+            transport = DirectRuntimeTransport.open(
+                endpoint,
+                dial_timeout_seconds=1,
+                invoke_timeout_seconds=0.05,
+                identity=_identity(),
+            )
+            try:
+                bidi_transport, _ = transport.open_bidi(
+                    complete_draft().to_json().encode("utf-8"),
+                    streams_json,
+                )
+                with self.assertRaises(SDKError) as raised:
+                    bidi_transport.recv(timeout=1)
+                bidi_transport.close()
+
+                servicer.bidi_delay_seconds = 0.0
+                retry_bidi, _ = transport.open_bidi(
+                    complete_draft().to_json().encode("utf-8"),
+                    streams_json,
+                )
+                retry_bidi.send(
+                    b'{"sequence":1,"kind":"data","stream_id":1,'
+                    b'"payload_base64":"eyJwaW5nIjp0cnVlfQ=="}'
+                )
+                retry_frame = json.loads(retry_bidi.recv(timeout=1).decode("utf-8"))
+                retry_bidi.close()
+            finally:
+                transport.close()
+
+        self.assertTrue(is_code(raised.exception, ErrorCode.TIMEOUT))
+        self.assertEqual(raised.exception.stage, "direct_runtime")
+        self.assertEqual(
+            raised.exception.details["grpc_status"],
+            str(grpc.StatusCode.DEADLINE_EXCEEDED),
+        )
+        self.assertGreaterEqual(len(servicer.bidi_up_frames), 2)
+        self.assertFalse(retry_frame["terminal"])
 
     def test_direct_runtime_bidi_cancel_projects_non_terminal_request(
         self,

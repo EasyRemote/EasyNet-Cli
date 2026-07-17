@@ -211,6 +211,22 @@
     },
     {
       "language": "go",
+      "case_id": "bidi/deadline_owner",
+      "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout",
+      "evidence": [
+        "sdk/go/direct_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "bidi/dispatch_provider",
+      "selector": "TestDirectRuntimeTransportBidiOverUnixSocket",
+      "evidence": [
+        "sdk/go/direct_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
       "case_id": "bidi/frame0_required",
       "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry",
       "evidence": [
@@ -455,6 +471,22 @@
       "selector": "TestConformanceStreamCancelRequestIsNonTerminal",
       "evidence": [
         "sdk/go/conformance_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/deadline_owner",
+      "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout",
+      "evidence": [
+        "sdk/go/direct_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/dispatch_provider",
+      "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket",
+      "evidence": [
+        "sdk/go/direct_runtime_test.go"
       ]
     },
     {
@@ -795,6 +827,22 @@
     },
     {
       "language": "python",
+      "case_id": "bidi/deadline_owner",
+      "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout",
+      "evidence": [
+        "sdk/python/tests/test_direct_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "bidi/dispatch_provider",
+      "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt",
+      "evidence": [
+        "sdk/python/tests/test_direct_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
       "case_id": "bidi/frame0_required",
       "selector": "test_direct_bidi_rejects_missing_frame0_before_session_entry",
       "evidence": [
@@ -1039,6 +1087,22 @@
       "selector": "test_stream_cancel_request_is_non_terminal",
       "evidence": [
         "sdk/python/tests/test_conformance_gates.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/deadline_owner",
+      "selector": "test_direct_runtime_stream_deadline_is_typed_timeout",
+      "evidence": [
+        "sdk/python/tests/test_direct_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/dispatch_provider",
+      "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt",
+      "evidence": [
+        "sdk/python/tests/test_direct_runtime.py"
       ]
     },
     {

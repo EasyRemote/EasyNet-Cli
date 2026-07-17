@@ -374,9 +374,18 @@ def main() -> int:
     model["canonical_packages"] = package_manifest()
     model["dependency_revisions"] = {"easynet_axon": axon_revision}
     revision = model["dependency_revisions"]["easynet_axon"]
+    runtime_provider_capabilities = [
+        "native_runtime",
+        "runtime_environment",
+        "runtime_connection",
+        "runtime_lifecycle",
+        "unary_invoke",
+        "stream",
+        "bidi",
+    ]
     provider_specs = [
-        ("go", "direct_runtime_provider", "sdk/go/", "sdk/go/direct_runtime.go", "RuntimeConnector", "sdk/go/connection.go", ["native_runtime", "unary_invoke", "stream", "bidi"]),
-        ("python", "direct_runtime_provider", "sdk/python/easynet_sdk/", "sdk/python/easynet_sdk/direct_runtime.py", "RuntimeConnector", "sdk/python/easynet_sdk/connection.py", ["native_runtime", "unary_invoke", "stream", "bidi"]),
+        ("go", "direct_runtime_provider", "sdk/go/", "sdk/go/direct_runtime.go", "RuntimeConnector", "sdk/go/connection.go", runtime_provider_capabilities),
+        ("python", "direct_runtime_provider", "sdk/python/easynet_sdk/", "sdk/python/easynet_sdk/direct_runtime.py", "RuntimeConnector", "sdk/python/easynet_sdk/connection.py", runtime_provider_capabilities),
     ]
     model["provider_implementations"] = []
     for language, identity, owner_path, path, interface, interface_path, capabilities in provider_specs:

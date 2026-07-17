@@ -28,6 +28,10 @@ type directRuntimeFakeDaemon struct {
 
 	invokeDelay   time.Duration
 	invokeStarted chan struct{}
+	streamDelay   time.Duration
+	streamStarted chan struct{}
+	bidiDelay     time.Duration
+	bidiStarted   chan struct{}
 }
 
 func (d *directRuntimeFakeDaemon) Invoke(ctx context.Context, req *axonpb.InvokeRequest) (*axonpb.InvokeResponse, error) {
@@ -108,11 +112,23 @@ func TestDirectRuntimeInvokeDeadlineIsTypedTimeout(t *testing.T) {
 
 func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamRequest, stream grpc.ServerStreamingServer[axonpb.InvokeStreamChunk]) error {
 	d.seenStream = req
+	if d.streamStarted != nil {
+		close(d.streamStarted)
+	}
+	if d.streamDelay > 0 {
+		select {
+		case <-time.After(d.streamDelay):
+		case <-stream.Context().Done():
+			return status.Error(codes.DeadlineExceeded, "deadline elapsed")
+		}
+	}
 	if err := stream.Send(&axonpb.InvokeStreamChunk{
-		Sequence:    0,
-		State:       axonpb.InvocationState_INVOCATION_STATE_RUNNING,
-		Payload:     []byte(`{"delta":1}`),
-		ContentType: "application/json",
+		Sequence:         0,
+		State:            axonpb.InvocationState_INVOCATION_STATE_RUNNING,
+		SelectedNodeId:   "node-stream",
+		SchedulingReason: "direct-stream",
+		Payload:          []byte(`{"delta":1}`),
+		ContentType:      "application/json",
 	}); err != nil {
 		return err
 	}
@@ -139,6 +155,16 @@ func (d *directRuntimeFakeDaemon) InvokeBidi(stream grpc.BidiStreamingServer[axo
 		return err
 	}
 	d.seenBidi = append(d.seenBidi, open)
+	if d.bidiStarted != nil {
+		close(d.bidiStarted)
+	}
+	if d.bidiDelay > 0 {
+		select {
+		case <-time.After(d.bidiDelay):
+		case <-stream.Context().Done():
+			return status.Error(codes.DeadlineExceeded, "deadline elapsed")
+		}
+	}
 	if err := stream.Send(&axonpb.InvokeBidiDown{
 		Sequence: 0,
 		Payload: &axonpb.InvokeBidiDown_Receipt{Receipt: &axonpb.InvocationReceipt{
@@ -398,6 +424,9 @@ func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	if first.Sequence() != 1 || first.Kind() != "data" || first.Terminal() {
 		t.Fatalf("first = seq %d kind %s terminal %v", first.Sequence(), first.Kind(), first.Terminal())
 	}
+	if first.State() != "Running" || first.SelectedNodeID() != "node-stream" || first.SchedulingReason() != "direct-stream" {
+		t.Fatalf("first dispatch projection = state %q node %q reason %q", first.State(), first.SelectedNodeID(), first.SchedulingReason())
+	}
 	terminal, err := stream.Next(context.Background())
 	if err != nil {
 		t.Fatalf("Next terminal: %v", err)
@@ -410,6 +439,54 @@ func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	}
 	if err := stream.Close(context.Background()); err != nil {
 		t.Fatalf("Close stream: %v", err)
+	}
+}
+
+func TestDirectRuntimeStreamDeadlineIsTypedTimeout(t *testing.T) {
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+		DialTimeoutMS:   3000,
+		InvokeTimeoutMS: 50,
+	})
+	defer cleanup()
+	daemon.streamDelay = time.Second
+	daemon.streamStarted = make(chan struct{})
+
+	client, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	stream, err := client.InvokeStream(context.Background(), directRuntimeDraft(t))
+	if err != nil {
+		t.Fatalf("InvokeStream open before deadline observation: %v", err)
+	}
+	select {
+	case <-daemon.streamStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("deadline test did not dispatch the runtime stream")
+	}
+	if _, err := stream.Next(context.Background()); !IsCode(err, ErrTimeout) {
+		t.Fatalf("stream deadline = %v, want %s", err, ErrTimeout)
+	}
+	_ = stream.Close(context.Background())
+	if daemon.seenStream == nil {
+		t.Fatalf("deadline test did not dispatch the runtime stream")
+	}
+
+	daemon.streamDelay = 0
+	daemon.streamStarted = nil
+	retry, err := client.InvokeStream(context.Background(), directRuntimeDraft(t))
+	if err != nil {
+		t.Fatalf("retry stream after deadline cleanup: %v", err)
+	}
+	first, err := retry.Next(context.Background())
+	if err != nil {
+		t.Fatalf("retry stream first event: %v", err)
+	}
+	if first.Terminal() {
+		t.Fatalf("retry stream returned terminal first event: %#v", first)
+	}
+	if err := retry.Close(context.Background()); err != nil {
+		t.Fatalf("retry stream close: %v", err)
 	}
 }
 
@@ -463,6 +540,9 @@ func TestDirectRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Receive data: %v", err)
 	}
+	if len(received.AdmissionReceiptJSON()) != 0 {
+		t.Fatalf("data frame carried admission receipt: %s", received.AdmissionReceiptJSON())
+	}
 	if received.Kind() != "data" || received.StreamID() != 1 {
 		t.Fatalf("received = kind %s stream %d", received.Kind(), received.StreamID())
 	}
@@ -494,6 +574,62 @@ func TestDirectRuntimeTransportBidiOverUnixSocket(t *testing.T) {
 	}
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close bidi: %v", err)
+	}
+}
+
+func TestDirectRuntimeBidiDeadlineIsTypedTimeout(t *testing.T) {
+	transport, daemon, cleanup := openDirectRuntimeTestTransportWithOptions(t, DirectRuntimeOptions{
+		DialTimeoutMS:   3000,
+		InvokeTimeoutMS: 50,
+	})
+	defer cleanup()
+	daemon.bidiDelay = time.Second
+	daemon.bidiStarted = make(chan struct{})
+
+	client, err := NewRuntimeClient(transport)
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	session, err := client.OpenBidi(context.Background(), directRuntimeDraft(t), []BidiStreamDescriptor{{StreamID: 1, ContentType: "text/plain"}})
+	if err != nil {
+		t.Fatalf("OpenBidi before deadline observation: %v", err)
+	}
+	select {
+	case <-daemon.bidiStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("deadline test did not dispatch the runtime bidi open")
+	}
+	if _, err := session.Receive(context.Background()); !IsCode(err, ErrTimeout) {
+		t.Fatalf("bidi deadline = %v, want %s", err, ErrTimeout)
+	}
+	_ = session.Close(context.Background())
+	if len(daemon.seenBidi) == 0 || daemon.seenBidi[0].GetEnvelopeOpen() == nil {
+		t.Fatalf("deadline test did not dispatch the runtime bidi open")
+	}
+
+	daemon.bidiDelay = 0
+	daemon.bidiStarted = nil
+	retry, err := client.OpenBidi(context.Background(), directRuntimeDraft(t), []BidiStreamDescriptor{{StreamID: 1, ContentType: "text/plain"}})
+	if err != nil {
+		t.Fatalf("retry bidi after deadline cleanup: %v", err)
+	}
+	frame, err := NewBidiBinaryFrame(1, 1, []byte("ping"), "text/plain")
+	if err != nil {
+		t.Fatalf("NewBidiBinaryFrame: %v", err)
+	}
+	if _, err := retry.Send(context.Background(), frame); err != nil {
+		t.Fatalf("retry bidi send: %v", err)
+	}
+	if _, err := retry.Receive(context.Background()); err != nil {
+		t.Fatalf("retry bidi receive: %v", err)
+	}
+	if terminal, err := retry.Receive(context.Background()); err != nil {
+		t.Fatalf("retry bidi terminal: %v", err)
+	} else if !terminal.Terminal() {
+		t.Fatalf("retry bidi terminal flag = false: %#v", terminal)
+	}
+	if err := retry.Close(context.Background()); err != nil {
+		t.Fatalf("retry bidi close: %v", err)
 	}
 }
 

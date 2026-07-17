@@ -9184,6 +9184,8 @@
       "case_ids": [
         "bidi/cancel_request",
         "bidi/close_send_not_cancel",
+        "bidi/deadline_owner",
+        "bidi/dispatch_provider",
         "bidi/frame0_required",
         "stream/backpressure_bound"
       ],
@@ -9351,6 +9353,8 @@
       "case_ids": [
         "stream/backpressure_bound",
         "stream/cancel_request",
+        "stream/deadline_owner",
+        "stream/dispatch_provider",
         "stream/order_terminal"
       ]
     },
@@ -16424,6 +16428,304 @@
         ]
       }
     },
+    "runtime_environment": {
+      "go": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/direct_runtime.go",
+          "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/direct_runtime.py",
+          "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          }
+        ]
+      }
+    },
+    "runtime_connection": {
+      "go": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/direct_runtime.go",
+          "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "attach_runtime_host",
+            "selector": "TestRuntimeHealthExposesControlOnlyState"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "reject_control_socket_product_call",
+            "selector": "TestRuntimeHealthExposesControlOnlyState"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/direct_runtime.py",
+          "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "attach_runtime_host",
+            "selector": "test_reads_discovery_and_negotiates_v1"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "reject_control_socket_product_call",
+            "selector": "test_reads_discovery_and_negotiates_v1"
+          }
+        ]
+      }
+    },
+    "runtime_lifecycle": {
+      "go": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/go/",
+          "path": "sdk/go/direct_runtime.go",
+          "sha256": "a3994a2124a68e24ce9f344b95d23b7e8a66a9d6b9c7254fff9afda875427f07",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "attach_runtime_host",
+            "selector": "TestRuntimeHealthExposesControlOnlyState"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "reject_control_socket_product_call",
+            "selector": "TestRuntimeHealthExposesControlOnlyState"
+          }
+        ]
+      },
+      "python": {
+        "implementation": {
+          "identity": "direct_runtime_provider",
+          "owner_path": "sdk/python/easynet_sdk/",
+          "path": "sdk/python/easynet_sdk/direct_runtime.py",
+          "sha256": "46fa83e73ca1097a84bf48a414df58c241367d5354de2c3c343cd0c7d5a1f70a",
+          "interface": "RuntimeConnector",
+          "revision": "def78f91805209cff0a906298c740c080b36aa58"
+        },
+        "step_evidence": [
+          {
+            "case_id": "environment/process_root",
+            "action": "create_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "require_abi",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "discover_runtime_host",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "connect_local_runtime",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "close_environment",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "environment/process_root",
+            "action": "reject_after_close",
+            "selector": "test_native_runtime_owns_runtime_and_health"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "attach_runtime_host",
+            "selector": "test_reads_discovery_and_negotiates_v1"
+          },
+          {
+            "case_id": "runtime/control_only",
+            "action": "reject_control_socket_product_call",
+            "selector": "test_reads_discovery_and_negotiates_v1"
+          }
+        ]
+      }
+    },
     "stream": {
       "go": {
         "implementation": {
@@ -16469,6 +16771,41 @@
             "case_id": "stream/cancel_request",
             "action": "request_stream_cancel",
             "selector": "TestConformanceStreamCancelRequestIsNonTerminal"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "observe_stream_typed_timeout",
+            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "open_stream_with_deadline",
+            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "release_timed_out_stream",
+            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "retry_stream_after_deadline_cleanup",
+            "selector": "TestDirectRuntimeStreamDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "stream/dispatch_provider",
+            "action": "dispatch_stream_draft",
+            "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket"
+          },
+          {
+            "case_id": "stream/dispatch_provider",
+            "action": "observe_stream_runtime_selection",
+            "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket"
+          },
+          {
+            "case_id": "stream/dispatch_provider",
+            "action": "observe_stream_terminal_after_dispatch",
+            "selector": "TestDirectRuntimeTransportStreamsOverUnixSocket"
           },
           {
             "case_id": "stream/order_terminal",
@@ -16531,6 +16868,41 @@
             "case_id": "stream/cancel_request",
             "action": "request_stream_cancel",
             "selector": "test_stream_cancel_request_is_non_terminal"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "observe_stream_typed_timeout",
+            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "open_stream_with_deadline",
+            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "release_timed_out_stream",
+            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "stream/deadline_owner",
+            "action": "retry_stream_after_deadline_cleanup",
+            "selector": "test_direct_runtime_stream_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "stream/dispatch_provider",
+            "action": "dispatch_stream_draft",
+            "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt"
+          },
+          {
+            "case_id": "stream/dispatch_provider",
+            "action": "observe_stream_runtime_selection",
+            "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt"
+          },
+          {
+            "case_id": "stream/dispatch_provider",
+            "action": "observe_stream_terminal_after_dispatch",
+            "selector": "test_direct_runtime_stream_provider_json_uses_terminal_receipt"
           },
           {
             "case_id": "stream/order_terminal",
@@ -16763,6 +17135,41 @@
             "selector": "TestBidiCloseSendDiffersFromCancel"
           },
           {
+            "case_id": "bidi/deadline_owner",
+            "action": "observe_bidi_typed_timeout",
+            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "bidi/deadline_owner",
+            "action": "open_bidi_with_deadline",
+            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "bidi/deadline_owner",
+            "action": "release_timed_out_bidi",
+            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "bidi/deadline_owner",
+            "action": "retry_bidi_after_deadline_cleanup",
+            "selector": "TestDirectRuntimeBidiDeadlineIsTypedTimeout"
+          },
+          {
+            "case_id": "bidi/dispatch_provider",
+            "action": "dispatch_bidi_draft",
+            "selector": "TestDirectRuntimeTransportBidiOverUnixSocket"
+          },
+          {
+            "case_id": "bidi/dispatch_provider",
+            "action": "observe_bidi_provider_frame_after_dispatch",
+            "selector": "TestDirectRuntimeTransportBidiOverUnixSocket"
+          },
+          {
+            "case_id": "bidi/dispatch_provider",
+            "action": "observe_bidi_terminal_after_dispatch",
+            "selector": "TestDirectRuntimeTransportBidiOverUnixSocket"
+          },
+          {
             "case_id": "bidi/frame0_required",
             "action": "open_bidi_without_frame0",
             "selector": "TestDirectRuntimeBidiRejectsMissingFrame0BeforeSessionEntry"
@@ -16848,6 +17255,41 @@
             "case_id": "bidi/close_send_not_cancel",
             "action": "send_bidi_after_close_send",
             "selector": "test_close_send_differs_from_cancel"
+          },
+          {
+            "case_id": "bidi/deadline_owner",
+            "action": "observe_bidi_typed_timeout",
+            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "bidi/deadline_owner",
+            "action": "open_bidi_with_deadline",
+            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "bidi/deadline_owner",
+            "action": "release_timed_out_bidi",
+            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "bidi/deadline_owner",
+            "action": "retry_bidi_after_deadline_cleanup",
+            "selector": "test_direct_runtime_bidi_deadline_is_typed_timeout"
+          },
+          {
+            "case_id": "bidi/dispatch_provider",
+            "action": "dispatch_bidi_draft",
+            "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt"
+          },
+          {
+            "case_id": "bidi/dispatch_provider",
+            "action": "observe_bidi_provider_frame_after_dispatch",
+            "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt"
+          },
+          {
+            "case_id": "bidi/dispatch_provider",
+            "action": "observe_bidi_terminal_after_dispatch",
+            "selector": "test_direct_runtime_bidi_provider_json_uses_terminal_receipt"
           },
           {
             "case_id": "bidi/frame0_required",
@@ -23718,6 +24160,9 @@
       "interface_sha256": "8a81c30b8f3d50915a70ff45ee9d81ee363ac4a4c0a34fec50040c56c6f15e8a",
       "capability_ids": [
         "native_runtime",
+        "runtime_environment",
+        "runtime_connection",
+        "runtime_lifecycle",
         "unary_invoke",
         "stream",
         "bidi"
@@ -23738,6 +24183,9 @@
       "interface_sha256": "a398d78c51607f79260e73d3c7bb73f37243a67bbb18dd6b15d68cb3d5bb5f5a",
       "capability_ids": [
         "native_runtime",
+        "runtime_environment",
+        "runtime_connection",
+        "runtime_lifecycle",
         "unary_invoke",
         "stream",
         "bidi"
