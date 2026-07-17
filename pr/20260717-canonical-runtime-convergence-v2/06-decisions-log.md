@@ -528,3 +528,39 @@
 - The V2 RF-6 gate now rejects Swift empty authority helpers and defaulted
   authority-proof initializer parameters because source scans are the only
   reliable way to catch default-argument semantics in Swift public APIs.
+- Go `InvocationAuthorityProof{}` in receipt fixtures is an omitted
+  authority-proof construction path even though Go cannot prohibit all
+  zero-value structs at the type level.
+- The Go shared anchor may still encode an empty authority proof while the
+  cross-language anchor model is open, but the fixture must list every field
+  explicitly through `anchorAuthorityProof()`.
+- Go `bundle.go` may keep zero-value `InvocationAuthorityProof{}` in error
+  returns because those values are discarded alongside non-nil errors; the V2
+  gate therefore targets active invocation package construction sites outside
+  that decode-return path.
+- Rust `InvocationAuthorityProof: Default` is an RF-6 defect for the same
+  reason as Swift defaulted initializer parameters: it lets callers omit the
+  authority proof tail while constructing complete-looking receipt facts.
+- Rust LocalRuntime may still normalize a zero authority proof hash, but that
+  zero hash is now an explicit constructor argument rather than a side effect
+  of `Default`.
+- Rust shared anchors may continue to encode an empty authority proof while
+  the cross-language anchor model is open, but they must call
+  `InvocationAuthorityProof::new("", None, Vec::new(), [0; 32], None, None,
+  "")` explicitly.
+- The V2 RF-6 gate now rejects Rust authority-proof Default derive/calls and
+  receipt-proof struct update defaults because those patterns can survive
+  public API manifest scans while keeping omitted proof facts in active tests.
+- The runtime client SDK protobuf adapter is not allowed to keep a weaker
+  proof-fact model than the canonical Rust SDK. `ReceiptProofFacts` in that
+  adapter is transport data, but it still participates in receipt signing and
+  verification, so optional authority proof is a canonical proof fork.
+- Missing authority proof in an admission receipt is now a fail-closed
+  terminal receipt construction error, not an instruction to synthesize an
+  empty canonical proof.
+- `easynet-verify` must consume the same required proof-fact shape as the
+  runtime client adapter because offline verification is part of the receipt
+  trust boundary, not a separate compatibility model.
+- The V2 RF-6 gate now includes `core/runtime-rs/client-sdk` receipt adapter
+  scans because SDK-only Rust scans do not catch duplicate same-language proof
+  DTOs in the runtime transport package.

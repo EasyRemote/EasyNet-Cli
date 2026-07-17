@@ -668,6 +668,7 @@ check_receipt_proof_fact_contract() {
   local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
   local rust_invocation="$AXON_ROOT/sdk/rust/src/invocation"
   local rust_axiom="$AXON_ROOT/sdk/rust/src/invocation/axiom.rs"
+  local runtime_client_admission="$AXON_ROOT/core/runtime-rs/client-sdk/src/domain/admission.rs"
   [[ -d "$AXON_ROOT/sdk/java/src/main/java" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/main/java")
   [[ -d "$AXON_ROOT/sdk/java/src/test/java" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/test/java")
   [[ -d "$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/examples" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/examples")
@@ -804,9 +805,18 @@ PY
     fail "Go invocation package still exposes or uses empty receipt proof facts"
   fi
 
+  if rg -n 'InvocationAuthorityProof\{\}' "$go_invocation" --glob '!bundle.go'; then
+    fail "Go invocation package still embeds zero-value authority proof facts"
+  fi
+
   if [[ -d "$rust_invocation" ]] \
-    && rg -n 'ReceiptProofFacts::default\(\)|proof_facts:\s*Default::default\(\)' "$rust_invocation"; then
+    && rg -n 'ReceiptProofFacts::default\(\)|proof_facts:\s*Default::default\(\)|ReceiptProofFacts\s*\{[^}]*\.\.Default::default\(\)' "$rust_invocation" -U; then
     fail "Rust invocation package still constructs default receipt proof facts"
+  fi
+
+  if [[ -d "$rust_invocation" ]] \
+    && rg -n '(^|[^:])InvocationAuthorityProof::default\(\)|\.\.InvocationAuthorityProof::default\(\)|InvocationAuthorityProof\s*\{[^}]*\.\.Default::default\(\)' "$rust_invocation" -U; then
+    fail "Rust invocation package still constructs default authority proof facts"
   fi
 
   if [[ -f "$rust_axiom" ]] \
@@ -819,9 +829,17 @@ text = Path(sys.argv[1]).read_text()
 if re.search(r"#\[derive\([^\]]*\bDefault\b[^\]]*\)\]\s*pub struct ReceiptProofFacts\b", text, re.S):
     print(f"{sys.argv[1]}: ReceiptProofFacts derives Default")
     raise SystemExit(1)
+if re.search(r"#\[derive\([^\]]*\bDefault\b[^\]]*\)\]\s*pub struct InvocationAuthorityProof\b", text, re.S):
+    print(f"{sys.argv[1]}: InvocationAuthorityProof derives Default")
+    raise SystemExit(1)
 PY
   then
-    fail "Rust ReceiptProofFacts still exposes a default constructor"
+    fail "Rust receipt or authority proof facts still expose a default constructor"
+  fi
+
+  if [[ -f "$runtime_client_admission" ]] \
+    && rg -n '#\[derive\([^\]]*\bDefault\b[^\]]*\)\]\s*pub struct ReceiptProofFacts\b|authority_proof:\s*Option<|InvocationAuthorityProof::default\(\)' "$runtime_client_admission" -U; then
+    fail "Rust runtime client transport adapter still defaults or omits receipt authority proof facts"
   fi
 }
 
@@ -910,7 +928,7 @@ PY
   mkdir -p "$tmp/axon/sdk/rust/src/invocation/local_runtime"
   mkdir -p "$tmp/axon/sdk/go/easynet"
   mkdir -p "$tmp/axon/sdk/python/easynet_axon"
-  mkdir -p "$tmp/axon/core/runtime-rs" "$tmp/axon/core/runtime-rs/client-sdk"
+  mkdir -p "$tmp/axon/core/runtime-rs" "$tmp/axon/core/runtime-rs/client-sdk/src/domain"
   printf '[package]\nname = "axon-rust-test"\nversion = "0.0.0"\n\n[features]\n' \
     > "$tmp/axon/sdk/rust/Cargo.toml"
   printf 'pub mod invocation;\n' > "$tmp/axon/sdk/rust/src/lib.rs"
@@ -1007,6 +1025,12 @@ PY
   if ( AXON_ROOT="$tmp/axon-go-receipt-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Go empty proof facts helper gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-go-authority-zero"
+  printf 'func f() { _ = InvocationAuthorityProof{} }\n' \
+    > "$tmp/axon-go-authority-zero/sdk/go/easynet/invocation/authority_anchor_test.go"
+  if ( AXON_ROOT="$tmp/axon-go-authority-zero"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Go zero authority proof gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-swift-receipt-empty"
   printf 'public struct ReceiptProofFacts { public static let empty = ReceiptProofFacts() }\nlet binding = AxiomBinding(proofFacts: .empty)\n' \
     > "$tmp/axon-swift-receipt-empty/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
@@ -1042,6 +1066,24 @@ PY
     > "$tmp/axon-rust-receipt-default-derive/sdk/rust/src/invocation/axiom.rs"
   if ( AXON_ROOT="$tmp/axon-rust-receipt-default-derive"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Rust ReceiptProofFacts Default derive gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-rust-authority-default-call"
+  printf 'fn f() { let proof = InvocationAuthorityProof::default(); let proof2 = InvocationAuthorityProof { ..Default::default() }; }\n' \
+    > "$tmp/axon-rust-authority-default-call/sdk/rust/src/invocation/axiom.rs"
+  if ( AXON_ROOT="$tmp/axon-rust-authority-default-call"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Rust default authority proof call gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-rust-authority-default-derive"
+  printf '#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct InvocationAuthorityProof {}\n' \
+    > "$tmp/axon-rust-authority-default-derive/sdk/rust/src/invocation/axiom.rs"
+  if ( AXON_ROOT="$tmp/axon-rust-authority-default-derive"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Rust InvocationAuthorityProof Default derive gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-runtime-client-receipt-default"
+  printf '#[derive(Debug, Clone, Default)]\npub struct ReceiptProofFacts { pub authority_proof: Option<pb::InvocationAuthorityProof> }\nfn authority_proof() { let _ = InvocationAuthorityProof::default(); }\n' \
+    > "$tmp/axon-runtime-client-receipt-default/core/runtime-rs/client-sdk/src/domain/admission.rs"
+  if ( AXON_ROOT="$tmp/axon-runtime-client-receipt-default"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Rust runtime client receipt proof default gate to fail"
   fi
   mkdir -p "$tmp/axon/scripts/proto"
   printf '%s\n' \

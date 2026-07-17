@@ -1257,3 +1257,87 @@ authority-proof initializer parameters. This closes the Swift empty/default
 authority-proof constructor path. RF-6 remains open for Go/Rust
 authority-proof zero-struct audits, final cross-language constructor
 hardening, and descriptor proof-binding parity closure.
+
+## Current Slice: RF-6 Go Zero Authority Proof Fixture Removal
+
+Owner: EasyNet-Axon Go SDK invocation tests and EasyNet-Cli V2 convergence
+gate.
+
+Go cannot make a struct zero value unconstructable, so the root convergence
+problem is narrower than Python/Swift constructor defaults: active receipt
+fixtures must not treat `InvocationAuthorityProof{}` as the canonical way to
+represent an empty authority proof. The authority-anchor and cross-language
+verifier tests still embedded that bare zero struct inside otherwise explicit
+receipt proof facts.
+
+The Go authority-anchor suite now defines a named `anchorAuthorityProof()`
+fixture that lists proof type, binding, payload, hash, issuer, signature, and
+admission hook explicitly. Cross-language verifier fixtures reuse that value,
+preserving the current shared anchor bytes while making the omitted-authority
+state visible as test data rather than a zero-value construction shortcut.
+
+The V2 RF-6 gate now rejects bare `InvocationAuthorityProof{}` in the Go
+invocation package, excluding `bundle.go` error returns where Go convention
+uses zero values only as discarded return slots. This closes the active Go
+zero authority-proof fixture path. RF-6 remains open for Rust authority-proof
+zero-struct audit, final cross-language constructor hardening, and descriptor
+proof-binding parity closure.
+
+## Current Slice: RF-6 Rust Authority Proof Default Removal
+
+Owner: EasyNet-Axon Rust invocation model, Rust LocalRuntime/audit/verifier
+tests, and EasyNet-Cli V2 convergence gate.
+
+Rust still preserved authority-proof omission through `InvocationAuthorityProof:
+Default` and struct-update defaults. That made an empty authority proof a
+first-class SDK construction state even after receipt proof facts themselves
+became explicit. Two verifier integration tests also still used
+`ReceiptProofFacts { ..Default::default() }`, which no longer compiled after
+the receipt proof default removal.
+
+The Rust invocation model now requires explicit authority-proof construction
+through `InvocationAuthorityProof::new(...)`. Runtime-owned proof facts still
+allow a zero proof hash as an explicit "normalize this hash" input, but the
+constructor boundary requires proof type, binding, payload, hash, issuer,
+signature, and admission hook to be spelled out. Shared anchor fixtures keep
+the current empty authority proof as explicit fixture data rather than a
+defaulted SDK value.
+
+The V2 RF-6 gate now rejects Rust `InvocationAuthorityProof` Default derive,
+default constructor calls, authority-proof struct update defaults, and
+`ReceiptProofFacts { ..Default::default() }`. This closes the active Rust
+authority/proof default construction path. RF-6 remains open for final
+cross-language constructor hardening, remaining package/example audit, and
+descriptor proof-binding parity closure.
+
+## Current Slice: RF-6/RF-3 Runtime Client Receipt Proof Adapter Hardening
+
+Owner: EasyNet-Axon runtime client SDK protobuf transport adapter, runtime
+receipt emitter/admission wire conversion, offline verifier, and EasyNet-Cli
+V2 convergence gate.
+
+After the Rust canonical SDK removed `InvocationAuthorityProof: Default`, the
+runtime client transport adapter still carried its own weaker receipt proof
+model: `ReceiptProofFacts` derived `Default`, represented `authority_proof` as
+`Option<pb::InvocationAuthorityProof>`, and converted a missing proof into an
+empty canonical `InvocationAuthorityProof`. That kept a second proof-fact
+construction path alive outside the canonical SDK domain and broke
+`core/runtime-rs/client-sdk` compilation once the canonical default was
+removed.
+
+The runtime client adapter now treats authority proof as required transport
+data. Protobuf-to-canonical conversion accepts only an explicit
+`pb::InvocationAuthorityProof`, builds the canonical proof through
+`InvocationAuthorityProof::new(...)`, and fails closed when an admission
+receipt omits the authority proof. Runtime admission and terminal receipts
+emit the required proof directly from descriptor-bound proof facts, and
+offline verifier fixtures construct required proof facts without an optional
+tail.
+
+The V2 gate now scans the runtime client adapter as part of the RF-6 receipt
+proof-fact contract and rejects `ReceiptProofFacts: Default`,
+`authority_proof: Option<...>`, and `InvocationAuthorityProof::default()` in
+that adapter. This removes the duplicate transport-level omitted-proof model;
+RF-3 remains open for the broader descriptor-bound-only public proof audit,
+and RF-6 remains open for final cross-language constructor/package/vector
+closure.

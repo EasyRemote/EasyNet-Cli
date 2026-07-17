@@ -1953,3 +1953,174 @@ audits, final cross-language constructor hardening, and descriptor
 proof-binding parity still require separate closure. The full Swift suite
 also retains the `MessageInboxIdempotentTests` order-sensitive failure noted
 above.
+
+## RF-6 Go Zero Authority Proof Fixture Removal Slice
+
+Commands run on 2026-07-17:
+
+- `go test ./easynet/invocation -run 'TestAuthorityAnchor|TestCrossLanguage|TestReceiptProofFacts|TestReceiptVerbs'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed. Go receipt authority anchors and cross-language verifier fixtures
+  now use explicit `anchorAuthorityProof()` instead of bare
+  `InvocationAuthorityProof{}`.
+- `rg -n "InvocationAuthorityProof\\{\\}" sdk/go/easynet/invocation -S --glob '!bundle.go'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no
+  matches after migrating the Go anchor fixtures.
+- `gofmt -w sdk/go/easynet/invocation/authority_anchor_test.go sdk/go/easynet/invocation/cross_language_verify_test.go`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: applied
+  with no semantic changes beyond formatting the edited Go files.
+- `go test ./...`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed after
+  the manifest source revision was refreshed to the Axon Go explicit
+  authority-anchor commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects a Go `InvocationAuthorityProof{}` fixture and proves
+  the RF-6 gate rejects it.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check -- sdk/go/easynet/invocation/authority_anchor_test.go sdk/go/easynet/invocation/cross_language_verify_test.go`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Go zero authority-proof fixture removal and the
+new V2 regression coverage for Go bare authority-proof structs. It does not
+complete RF-6 globally because Rust authority-proof zero-struct audit, final
+cross-language constructor hardening, and descriptor proof-binding parity
+still require separate closure.
+
+## RF-6 Rust Authority Proof Default Removal Slice
+
+Commands run on 2026-07-17:
+
+- `cargo test --manifest-path sdk/rust/Cargo.toml --features proto --test verify_binary --test verify_end_to_end --no-run`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: initially
+  failed because `verify_binary.rs` and `verify_end_to_end.rs` still used
+  `ReceiptProofFacts { ..Default::default() }`; after migrating those tests
+  to `ReceiptProofFacts::new(...)`, passed.
+- `cargo fmt --manifest-path sdk/rust/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: initially
+  required formatting in `local_runtime/binding.rs`; after
+  `cargo fmt --manifest-path sdk/rust/Cargo.toml`, passed.
+- `rg -n "#\\[derive\\([^\\]]*Default[^\\]]*\\)\\]\\s*pub struct InvocationAuthorityProof|(^|[^:])InvocationAuthorityProof::default\\(|\\.\\.InvocationAuthorityProof::default\\(|InvocationAuthorityProof\\s*\\{[^}]*\\.\\.Default::default\\(|ReceiptProofFacts\\s*\\{[^}]*\\.\\.Default::default\\(" sdk/rust/src/invocation sdk/rust/tests -U`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after removing the Rust authority/proof default construction paths.
+- `cargo test --manifest-path sdk/rust/Cargo.toml invocation::axiom::tests::authority_proof --lib`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 2
+  tests.
+- `cargo test --manifest-path sdk/rust/Cargo.toml receipt_proof_normalization --lib`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 6
+  tests.
+- `cargo test --manifest-path sdk/rust/Cargo.toml --features proto --test verify_binary --test verify_end_to_end`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 34
+  tests.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects Rust authority-proof default call and Default derive
+  fixtures and proves the RF-6 gate rejects them.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `cargo check --manifest-path sdk/rust/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed after
+  the manifest source revision was refreshed to the Axon Rust authority-proof
+  default removal commit.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Rust authority/proof default removal and the new
+V2 regression coverage for Rust omitted authority proof defaults. It does not
+complete RF-6 globally because final cross-language constructor hardening,
+remaining package/example audit, and descriptor proof-binding parity still
+require separate closure.
+
+## RF-6/RF-3 Runtime Client Receipt Proof Adapter Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `cargo check --manifest-path core/runtime-rs/client-sdk/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: initially
+  failed because the runtime client adapter still called
+  `InvocationAuthorityProof::default()` after the canonical Rust SDK removed
+  that constructor; passed after making authority proof required transport
+  data.
+- `cargo fmt --manifest-path core/runtime-rs/client-sdk/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo fmt --manifest-path core/runtime-rs/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo fmt --manifest-path core/runtime-rs/easynet-verify/Cargo.toml -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo check --manifest-path core/runtime-rs/client-sdk/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo check --manifest-path core/runtime-rs/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo check --manifest-path core/runtime-rs/easynet-verify/Cargo.toml`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo test --manifest-path core/runtime-rs/client-sdk/Cargo.toml domain::admission::tests --lib`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 4
+  tests.
+- `cargo test --manifest-path core/runtime-rs/easynet-verify/Cargo.toml --test e2e_receipt_verify --no-run`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `cargo test --manifest-path core/runtime-rs/easynet-verify/Cargo.toml --test e2e_receipt_verify`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: initially
+  exposed stale verifier error projection after replacing the removed
+  `AxonError.detail` field; after projecting canonical signature failures back
+  to stable `AXON_CALLER_SIGNATURE_INVALID`, passed, 23 tests.
+- `rg -n "#\\[derive\\([^\\]]*Default[^\\]]*\\)\\]\\s*pub struct ReceiptProofFacts|authority_proof:\\s*Option<|InvocationAuthorityProof::default\\(" core/runtime-rs/client-sdk/src/domain/admission.rs -U`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects a runtime client receipt proof adapter with
+  `ReceiptProofFacts: Default`, optional authority proof, and
+  `InvocationAuthorityProof::default()` and proves the RF-6 gate rejects it.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+
+This evidence verifies only the runtime client receipt proof adapter
+hardening and the new V2 regression coverage for that duplicate Rust proof
+DTO. It does not complete RF-3 globally because descriptor-bound-only public
+proof still needs remaining package/vector/example audit, and it does not
+complete RF-6 globally because final cross-language constructor/package/vector
+closure remains open.

@@ -888,6 +888,63 @@
       suite `MessageInboxIdempotentTests` residual failure without claiming
       full-suite success.
 
+## RF-6 Go Zero Authority Proof Fixture Removal Slice
+
+- [x] Identify Go `InvocationAuthorityProof{}` literals in receipt authority
+      anchor and cross-language verifier tests as omitted authority-proof
+      fixtures nested inside explicit receipt proof facts.
+- [x] Replace bare zero-value authority proof literals with a named
+      test-local `anchorAuthorityProof()` fixture that spells out every
+      authority-proof field.
+- [x] Preserve current shared receipt authority anchor bytes while making the
+      empty authority fixture explicit.
+- [x] Extend the V2 gate and self-test to reject bare
+      `InvocationAuthorityProof{}` in the Go invocation package, excluding
+      JSON decode error returns in `bundle.go`.
+- [x] Verify focused Go invocation tests and V2 gate/self-test before
+      committing this slice.
+
+## RF-6 Rust Authority Proof Default Removal Slice
+
+- [x] Identify Rust `InvocationAuthorityProof: Default`,
+      `InvocationAuthorityProof::default()`, authority-proof struct update
+      defaults, and verifier `ReceiptProofFacts { ..Default::default() }`
+      as remaining omitted authority/proof-fact construction paths.
+- [x] Remove `Default` derive from Rust `InvocationAuthorityProof`.
+- [x] Add explicit `InvocationAuthorityProof::new(...)` constructor requiring
+      proof type, binding, payload, hash, issuer, signature, and admission
+      hook inputs.
+- [x] Migrate Rust audit, LocalRuntime proof normalization, wire tests,
+      axiom tests, shared anchor fixtures, and verifier integration tests to
+      explicit authority proof construction.
+- [x] Replace verifier `ReceiptProofFacts { ..Default::default() }` with
+      `ReceiptProofFacts::new(...)`.
+- [x] Extend the V2 gate and self-test to reject Rust
+      `InvocationAuthorityProof` default derive/calls and
+      `ReceiptProofFacts { ..Default::default() }`.
+- [x] Verify focused Rust authority, receipt normalization, and verifier
+      tests plus V2 gate/self-test before committing this slice.
+
+## RF-6/RF-3 Runtime Client Receipt Proof Adapter Hardening Slice
+
+- [x] Identify `core/runtime-rs/client-sdk/src/domain/admission.rs` as a
+      duplicate Rust proof adapter that still derived `ReceiptProofFacts:
+      Default`, made `authority_proof` optional, and synthesized an empty
+      canonical `InvocationAuthorityProof`.
+- [x] Make runtime client `ReceiptProofFacts.authority_proof` required
+      protobuf transport data.
+- [x] Route protobuf authority-proof conversion through canonical
+      `InvocationAuthorityProof::new(...)` instead of a default value.
+- [x] Migrate runtime admission wire, receipt emitter, offline verifier, and
+      runtime test helpers to required authority proof facts.
+- [x] Fail closed when an admission receipt lacks the authority proof used to
+      rebuild terminal receipt proof facts.
+- [x] Extend the V2 gate/self-test to reject runtime client adapter
+      `ReceiptProofFacts: Default`, `authority_proof: Option<...>`, and
+      `InvocationAuthorityProof::default()`.
+- [x] Verify client-sdk, runtime, verifier, V2 gate/self-test, and diff
+      hygiene before committing this slice.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
@@ -896,9 +953,8 @@
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
 - [ ] RF-4 shared lifecycle matrix, transition vectors, and cross-language
       provider status cutover.
-- [ ] RF-6 Go/Rust authority-proof zero-struct audit, final cross-language
-      constructor hardening, remaining package/example audit, and descriptor
-      proof-binding parity closure.
+- [ ] RF-6 final cross-language constructor hardening, remaining
+      package/example audit, and descriptor proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.
 - [ ] RF-2 Mission/EAL extraction from Axon canonical runtime.
 - [ ] RF-9 URA terminology and generated-schema ownership closure.
