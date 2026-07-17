@@ -564,3 +564,49 @@
 - The V2 RF-6 gate now includes `core/runtime-rs/client-sdk` receipt adapter
   scans because SDK-only Rust scans do not catch duplicate same-language proof
   DTOs in the runtime transport package.
+- Private Rust legacy plain proof helpers are still architecture, not harmless
+  implementation detail. A same-module plain encoder, signer, verifier, and
+  admission path preserves a second proof model even when public exports have
+  moved to descriptor-bound bytes.
+- Rust invocation tests should sign the same canonical material that
+  production admission verifies: `DescriptorBoundEnvelope` canonical bytes.
+  Historical arbitrary-string fixture behavior is removed rather than
+  simulated behind a compatibility helper.
+- Descriptor-bound tests must use valid runtime URAs for caller, callee,
+  subject, and ability descriptor refs. Invalid arbitrary URA strings are no
+  longer useful fixture data once the canonical proof boundary validates the
+  tuple before signing or verification.
+- The V2 RF-3 gate now rejects Rust legacy plain helper names in invocation
+  source. Public-manifest checks alone are insufficient because private
+  same-module helpers can still preserve and spread the obsolete proof model.
+- Package-private Java methods are still production architecture. Keeping
+  `legacyPlainInvocationBytes`, legacy plain signing, legacy plain verifier,
+  and legacy plain admission in Java production source preserves a second
+  proof model even when package-root exports have moved to descriptor-bound
+  helpers.
+- Java axiom vectors already carry descriptor-ref ability values, so their
+  Java driver should exercise descriptor-bound canonical bytes directly. Using
+  legacy plain bytes to consume those vectors hid the very RF-3 cutover the
+  vectors are meant to prove.
+- Java admission tests should enter `runDescriptorBoundAdmission` because that
+  is the runtime admission boundary used by `LocalRuntime`. A test-only
+  `runLegacyPlainAdmission` runner would be a compatibility path, not a
+  state-machine proof.
+- The V2 RF-3 gate now rejects Java production legacy plain helper names in
+  addition to public static plain helper names because Java access modifiers do
+  not make canonical-domain duplicate proof models harmless.
+- Python underscore-prefixed helpers are still production package
+  architecture when they live under `easynet_axon.invocation`. Keeping
+  `_legacy_plain_invocation_bytes`, legacy plain signing, legacy plain
+  verifier, and `_run_legacy_plain_admission` preserves a second proof and
+  admission model even though those names are private by convention.
+- Python axiom-vector drivers should exercise descriptor-bound canonical bytes
+  for relational signature and tuple-binding properties. The shared vectors
+  already carry descriptor refs, so plain-byte verification is obsolete test
+  architecture rather than necessary fixture coverage.
+- Python full-suite industrial lifecycle failures are RF-4 evidence, not RF-3
+  proof-boundary failures. They should be addressed by lifecycle facade
+  convergence rather than by retaining legacy plain admission helpers.
+- The V2 RF-3 gate now rejects Python legacy plain helper names across source,
+  tests, and examples because a private helper imported by tests is enough to
+  keep the retired proof model live.

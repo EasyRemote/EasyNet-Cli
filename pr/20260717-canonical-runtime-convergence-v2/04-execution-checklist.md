@@ -945,6 +945,67 @@
 - [x] Verify client-sdk, runtime, verifier, V2 gate/self-test, and diff
       hygiene before committing this slice.
 
+## RF-3 Rust Legacy Plain Proof Implementation Removal Slice
+
+- [x] Identify Rust `legacy_plain_invocation_bytes`,
+      `sign_legacy_plain_invocation`,
+      `verify_legacy_plain_invocation_signature`,
+      `verify_phase_legacy_plain`, and `run_legacy_plain_admission` as the
+      remaining private legacy plain proof/admission implementation path.
+- [x] Delete the private legacy plain encoder, signer, verifier, verify
+      phase, and admission runner instead of keeping test-only compatibility
+      wrappers.
+- [x] Migrate axiom, admission, and bundle tests to
+      `DescriptorBoundEnvelope` canonical bytes and descriptor-bound
+      signature helpers.
+- [x] Replace invalid arbitrary subject/callee fixture URAs with valid
+      runtime URAs so descriptor-bound validation is exercised by tests.
+- [x] Extend the V2 gate/self-test to reject Rust legacy plain
+      proof/admission helper names in invocation source.
+- [x] Verify Rust invocation tests, Rust SDK check, V2 gate/self-test, CLI
+      conformance tests, and diff hygiene before committing this slice.
+
+## RF-3 Java Legacy Plain Proof Implementation Removal Slice
+
+- [x] Identify Java package-private `legacyPlainInvocationBytes`,
+      `signLegacyPlainInvocation`,
+      `verifyLegacyPlainInvocationSignature`, and
+      `runLegacyPlainAdmission` as a production legacy plain
+      proof/admission implementation path.
+- [x] Delete the Java production legacy plain encoder, signer, verifier, and
+      admission runner instead of preserving package-private compatibility
+      fixtures.
+- [x] Migrate Java admission tests to `runDescriptorBoundAdmission` and
+      descriptor-bound signatures.
+- [x] Migrate Java axiom-vector tests to descriptor-bound canonical bytes,
+      signing, and verification.
+- [x] Extend the V2 gate/self-test to reject Java legacy plain
+      proof/admission helper names in production invocation source.
+- [x] Verify focused Java invocation tests, V2 gate/self-test, CLI
+      conformance tests, and diff hygiene before committing this slice.
+
+## RF-3 Python Legacy Plain Proof Implementation Removal Slice
+
+- [x] Identify Python `_legacy_plain_invocation_bytes`,
+      `_sign_legacy_plain_invocation`,
+      `_verify_legacy_plain_invocation_signature`,
+      `_verify_legacy_plain_signature`, and
+      `_run_legacy_plain_admission` as a production legacy plain
+      proof/admission implementation path.
+- [x] Delete the Python production legacy plain encoder, signer, verifier,
+      admission verifier, and admission runner instead of preserving private
+      compatibility fixtures.
+- [x] Migrate Python axiom-vector tests to descriptor-bound canonical bytes,
+      signing, and verification.
+- [x] Extend the V2 gate/self-test to reject Python legacy plain
+      proof/admission helper names across Python SDK source, tests, and
+      examples.
+- [x] Verify focused Python invocation tests, V2 gate/self-test, CLI
+      conformance tests, and diff hygiene before committing this slice.
+- [x] Record that full `sdk/python/tests` still has unrelated industrial
+      lifecycle failures around `core`, `children_of`, `send_message`, and
+      `cancel`; those remain RF-4 lifecycle facade debt.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

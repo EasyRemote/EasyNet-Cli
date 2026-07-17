@@ -312,7 +312,7 @@ check_axon_plain_proof_public_boundary_contract() {
     fail "Axon Rust exposes plain proof/admission helpers"
   fi
   if [[ -d "$rust_invocation" ]] \
-    && rg -n '\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b' "$rust_invocation"; then
+    && rg -n '\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission|legacy_plain_invocation_bytes|sign_legacy_plain_invocation|verify_legacy_plain_invocation_signature|verify_legacy_plain_signature|verify_phase_legacy_plain|run_legacy_plain_admission)\b|legacy_plain_invocation_bytes_empty' "$rust_invocation"; then
     fail "Axon Rust invocation source preserves retired plain proof/admission helper names"
   fi
 
@@ -323,7 +323,7 @@ check_axon_plain_proof_public_boundary_contract() {
   fi
   local python_sdk="$AXON_ROOT/sdk/python"
   if [[ -d "$python_sdk" ]] \
-    && rg -n '\b(_canonical_invocation_bytes|_sign_invocation|_verify_invocation_signature|_verify_signature|_run_admission|canonical_invocation_bytes_empty)\b' "$python_sdk"; then
+    && rg -n '\b(_canonical_invocation_bytes|_sign_invocation|_verify_invocation_signature|_verify_signature|_run_admission|_legacy_plain_invocation_bytes|_sign_legacy_plain_invocation|_verify_legacy_plain_invocation_signature|_verify_legacy_plain_signature|_run_legacy_plain_admission|canonical_invocation_bytes_empty|legacy_plain_invocation_bytes_empty)\b' "$python_sdk"; then
     fail "Axon Python source preserves retired plain proof/admission helper names"
   fi
 
@@ -367,6 +367,10 @@ check_axon_plain_proof_public_boundary_contract() {
   if [[ -d "$java_invocation" ]] \
     && rg -n 'public static [^{;=]+ (canonicalInvocationBytes|signInvocation|verifyInvocationSignature|verifySignature|runAdmission)\b' "$java_invocation"; then
     fail "Axon Java exposes plain proof/admission helpers"
+  fi
+  if [[ -d "$java_invocation" ]] \
+    && rg -n '\b(legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission|verifyPhaseLegacyPlain)\b|canonical_invocation_bytes_empty' "$java_invocation"; then
+    fail "Axon Java production invocation source preserves legacy plain proof/admission helpers"
   fi
 
   local swift_invocation="$AXON_ROOT/sdk/swift/Sources/EasyNetAxon/Invocation"
@@ -1134,11 +1138,23 @@ PY
   if ( AXON_ROOT="$tmp/axon-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon plain proof boundary gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-rust-legacy-plain-proof"
+  printf 'pub(crate) fn legacy_plain_invocation_bytes() {}\npub(crate) fn run_legacy_plain_admission() {}\n' \
+    > "$tmp/axon-rust-legacy-plain-proof/sdk/rust/src/invocation/axiom.rs"
+  if ( AXON_ROOT="$tmp/axon-rust-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Rust legacy plain proof boundary gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-python-private-plain-proof"
   printf 'def _canonical_invocation_bytes(env):\n  return b""\n' \
     > "$tmp/axon-python-private-plain-proof/sdk/python/easynet_axon/invocation/axiom.py"
   if ( AXON_ROOT="$tmp/axon-python-private-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Python private plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-python-legacy-plain-proof"
+  printf 'def _legacy_plain_invocation_bytes(env):\n  return b""\ndef _run_legacy_plain_admission(env, sig, resolver, replay, now_ms):\n  return None\n' \
+    > "$tmp/axon-python-legacy-plain-proof/sdk/python/easynet_axon/invocation/axiom.py"
+  if ( AXON_ROOT="$tmp/axon-python-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Python legacy plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-go-plain-proof"
   mkdir -p "$tmp/axon-go-plain-proof/sdk/go/easynet/invocation"
@@ -1174,6 +1190,13 @@ PY
     > "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
   if ( AXON_ROOT="$tmp/axon-java-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Java plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-java-legacy-plain-proof"
+  mkdir -p "$tmp/axon-java-legacy-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation"
+  printf 'package run.easynet.axon.invocation; final class Axiom { static byte[] legacyPlainInvocationBytes(Object env) { return new byte[0]; } }\n' \
+    > "$tmp/axon-java-legacy-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+  if ( AXON_ROOT="$tmp/axon-java-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Java legacy plain proof boundary gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-plain-proof"
   mkdir -p "$tmp/axon-swift-plain-proof/sdk/swift/Sources/EasyNetAxon/Invocation"

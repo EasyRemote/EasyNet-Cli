@@ -1341,3 +1341,81 @@ that adapter. This removes the duplicate transport-level omitted-proof model;
 RF-3 remains open for the broader descriptor-bound-only public proof audit,
 and RF-6 remains open for final cross-language constructor/package/vector
 closure.
+
+## Current Slice: RF-3 Rust Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Rust invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Rust SDK still carried a private legacy plain invocation encoder and
+legacy plain signing/verification/admission test pipeline after the public
+proof boundary moved to descriptor-bound invocation bytes. Keeping that code
+inside the invocation module preserved a second proof model even though it was
+not exported, because same-module tests and future maintenance work could
+still use plain bytes as an example for signing or admission.
+
+The Rust invocation model now has one proof path for caller signatures:
+`DescriptorBoundEnvelope` canonical bytes. Admission tests, JSON bundle
+round-trip tests, and proof-boundary tests construct descriptor-bound
+envelopes and sign/verify descriptor-bound bytes. Historical plain encoder,
+plain signer, plain verifier, legacy admission verify phase, and legacy
+admission runner implementations were deleted instead of retained as
+compatibility fixtures.
+
+The V2 RF-3 gate now rejects Rust legacy plain proof/admission helper names in
+addition to the earlier public plain helper names. This closes the Rust
+private legacy plain proof implementation path. RF-3 remains open for the
+remaining package/vector/example audit across SDK languages before the
+descriptor-bound-only proof boundary can be declared globally complete.
+
+## Current Slice: RF-3 Java Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Java invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Java SDK still kept package-private legacy plain invocation bytes,
+legacy plain signing, legacy plain signature verification, and a legacy plain
+admission runner in production invocation source. That implementation was not
+public API, but it was still a second proof/admission model inside the
+canonical SDK domain. Java admission and axiom-vector tests were also using
+those helpers, which made the obsolete path look like normal internal
+architecture.
+
+Java invocation now has one caller-signature proof path:
+`DescriptorBoundEnvelope` canonical bytes. The admission tests run the
+descriptor-bound admission pipeline, and the axiom-vector tests sign, verify,
+and compare descriptor-bound canonical bytes using the descriptor refs already
+present in the conformance vectors. The legacy plain encoder, signer,
+verifier, and admission runner were deleted instead of retained as
+package-private compatibility fixtures.
+
+The V2 RF-3 gate now rejects Java legacy plain proof/admission helper names in
+production invocation source. This closes the Java production legacy plain
+proof implementation path. RF-3 remains open for the remaining
+package/vector/example audit and any other language-local historical fixtures
+that still preserve a second proof model.
+
+## Current Slice: RF-3 Python Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Python invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Python SDK still carried `_legacy_plain_invocation_bytes`, legacy plain
+signing, legacy plain signature verification, a legacy plain admission
+verification wrapper, and `_run_legacy_plain_admission` in production
+invocation modules. Even with private names, those functions formed a second
+proof/admission implementation inside the canonical SDK package and were still
+used by the Python axiom-vector driver.
+
+Python invocation now has one caller-signature proof path:
+`DescriptorBoundEnvelope` canonical bytes. The vector driver signs, verifies,
+and compares descriptor-bound canonical bytes for the relational axiom vectors,
+using the descriptor refs already present in the shared conformance vectors.
+The production legacy plain encoder, signer, verifier, and admission runner
+were deleted rather than preserved as private compatibility fixtures.
+
+The V2 RF-3 gate now rejects Python legacy plain proof/admission helper names
+across Python SDK source, tests, and examples. This closes the Python
+production legacy plain proof implementation path. RF-3 remains open for the
+remaining package, script, historical-vector, and example audits across all
+SDKs before descriptor-bound-only proof can be declared complete.
