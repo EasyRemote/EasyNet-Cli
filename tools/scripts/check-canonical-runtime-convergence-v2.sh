@@ -306,6 +306,24 @@ check_axon_plain_proof_public_boundary_contract() {
     fail "EasyNet-Axon root not found for plain proof boundary contract: $AXON_ROOT"
   fi
 
+  local active_text_paths=()
+  for path in \
+    "$AXON_ROOT/document/rfcs/001-envelope-axiom-alignment.md" \
+    "$AXON_ROOT/document/rfcs/001-pr2-acceptance-checklist.md" \
+    "$AXON_ROOT/sdk/conformance/cases/axiom/axiom-admission-pipeline.json" \
+    "$AXON_ROOT/sdk/conformance/cases/axiom/axiom-worked-example-authenticated.json" \
+    "$AXON_ROOT/sdk/go/easynet/dendrite_bridge_signed_invoke_cgo.go" \
+    "$AXON_ROOT/sdk/go/easynet/invocation/axiom.go" \
+    "$AXON_ROOT/sdk/java/src/test/java/run/easynet/axon/invocation/AxiomWorkedExampleTest.java" \
+    "$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
+  do
+    [[ -f "$path" ]] && active_text_paths+=("$path")
+  done
+  if ((${#active_text_paths[@]} > 0)) \
+    && rg -n '\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature)\b|\bcanonicalInvocationBytes\b|plain canonical invocation|client-sdk::admission::canonical_invocation_bytes' "${active_text_paths[@]}"; then
+    fail "Axon active proof documents preserve retired plain proof/admission vocabulary"
+  fi
+
   local rust_invocation="$AXON_ROOT/sdk/rust/src/invocation"
   if [[ -d "$rust_invocation" ]] \
     && rg -n 'pub fn (canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b|pub use (admission|axiom)::\{[^}]*\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature|verify_phase|run_admission)\b' "$rust_invocation"; then
@@ -365,6 +383,12 @@ check_axon_plain_proof_public_boundary_contract() {
   if [[ -d "$node_invocation" ]] \
     && rg -n '\b(legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission)\b|canonical_invocation_bytes_empty' "$node_invocation"; then
     fail "Axon Node production invocation source preserves legacy plain proof/admission exports"
+  fi
+  local node_sdk="$AXON_ROOT/sdk/node"
+  if [[ -d "$node_sdk" ]] \
+    && rg -n '\b(legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|verifyLegacyPlainSignature|runLegacyPlainAdmission)\b|legacy_plain_invocation|canonical_invocation_bytes unexpectedly empty' "$node_sdk" \
+      --glob '!**/node_modules/**'; then
+    fail "Axon Node SDK preserves legacy plain proof/admission helper names"
   fi
 
   local java_invocation="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation"
@@ -496,15 +520,21 @@ check_axon_normative_ura_document_contract() {
   local docs=()
   for path in \
     "$AXON_ROOT/document/concepts/AXIOM.tex" \
+    "$AXON_ROOT/document/concepts/ONTOLOGY_AGENT_ABILITY.md" \
     "$AXON_ROOT/document/rfcs/001-envelope-axiom-alignment.md" \
-    "$AXON_ROOT/document/rfcs/002-keyring-and-keyresolver.md"
+    "$AXON_ROOT/document/rfcs/001-pr2-acceptance-checklist.md" \
+    "$AXON_ROOT/document/rfcs/002-keyring-and-keyresolver.md" \
+    "$AXON_ROOT/sdk/SDK_INTERFACE_SPEC.md" \
+    "$AXON_ROOT/sdk/FEDERATION_INVOKE_SCHEMAS.md" \
+    "$AXON_ROOT/sdk/conformance/cases/axiom/README.md" \
+    "$AXON_ROOT/sdk/conformance/cases/axiom/axiom-identity-composite-required.json"
   do
     [[ -f "$path" ]] && docs+=("$path")
   done
   if ((${#docs[@]} == 0)); then
     return
   fi
-  if rg -n '\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding)\.uri\b|\bstring uri\b|\bpeer_uri\b|find_peer_by_uri|uri_profile|resolver\.resolve\(uri\)|canonical URI format' "${docs[@]}"; then
+  if rg -n '\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding|axiom_binding\.caller|envelope\.caller)\.uri\b|\bstring uri\b|\bAgentUri\b|\bpeer_uri\b|find_peer_by_uri|uri_profile|resolver\.resolve\(uri\)|canonical URI format|"(uri)"|"\buri\b"\s*:' "${docs[@]}"; then
     fail "Axon active normative documents preserve URI terminology for URA identity data"
   fi
 }
@@ -1146,6 +1176,16 @@ PY
   if ( AXON_ROOT="$tmp/axon-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon plain proof boundary gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-active-plain-proof-doc"
+  mkdir -p "$tmp/axon-active-plain-proof-doc/document/rfcs" \
+    "$tmp/axon-active-plain-proof-doc/sdk/conformance/cases/axiom"
+  printf 'Reuse verify_invocation_signature from sdk/rust.\n' \
+    > "$tmp/axon-active-plain-proof-doc/document/rfcs/001-pr2-acceptance-checklist.md"
+  printf '{"overview":"step 3 calls verify_signature"}\n' \
+    > "$tmp/axon-active-plain-proof-doc/sdk/conformance/cases/axiom/axiom-admission-pipeline.json"
+  if ( AXON_ROOT="$tmp/axon-active-plain-proof-doc"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon active plain proof document gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-rust-legacy-plain-proof"
   printf 'pub(crate) fn legacy_plain_invocation_bytes() {}\npub(crate) fn run_legacy_plain_admission() {}\n' \
     > "$tmp/axon-rust-legacy-plain-proof/sdk/rust/src/invocation/axiom.rs"
@@ -1198,6 +1238,13 @@ PY
     > "$tmp/axon-node-legacy-plain-proof/sdk/node/src/invocation/axiom.ts"
   if ( AXON_ROOT="$tmp/axon-node-legacy-plain-proof"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon Node legacy plain proof boundary gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-node-legacy-plain-script"
+  mkdir -p "$tmp/axon-node-legacy-plain-script/sdk/node/scripts"
+  printf 'export function legacyPlainInvocationBytes(env) { return Buffer.alloc(0); }\n' \
+    > "$tmp/axon-node-legacy-plain-script/sdk/node/scripts/legacy-plain-fixtures.mjs"
+  if ( AXON_ROOT="$tmp/axon-node-legacy-plain-script"; check_axon_plain_proof_public_boundary_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Axon Node legacy plain proof script gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-java-plain-proof"
   mkdir -p "$tmp/axon-java-plain-proof/sdk/java/src/main/java/run/easynet/axon/invocation"
@@ -1279,8 +1326,22 @@ PY
     > "$tmp/axon-uri-docs/document/concepts/AXIOM.tex"
   printf 'caller.uri\nSystemAgent canonical URI format\n' \
     > "$tmp/axon-uri-docs/document/rfcs/001-envelope-axiom-alignment.md"
+  printf 'AgentUri owner\nEvery Agent has a URI.\n' \
+    > "$tmp/axon-uri-docs/document/concepts/ONTOLOGY_AGENT_ABILITY.md"
+  printf 'inputs.caller.uri\nempty URI\n' \
+    > "$tmp/axon-uri-docs/document/rfcs/001-pr2-acceptance-checklist.md"
   printf 'message AgentIdentity { string uri = 1; }\n{"peer_uri":"easynet:///r/example/agent/a"}\nfind_peer_by_uri(agent_ura)\n' \
     > "$tmp/axon-uri-docs/document/rfcs/002-keyring-and-keyresolver.md"
+  mkdir -p "$tmp/axon-uri-docs/sdk"
+  printf 'agents have "uri": "easynet:///r/example/agent/a"\n' \
+    > "$tmp/axon-uri-docs/sdk/SDK_INTERFACE_SPEC.md"
+  printf 'envelope.caller.uri\n' \
+    > "$tmp/axon-uri-docs/sdk/FEDERATION_INVOKE_SCHEMAS.md"
+  mkdir -p "$tmp/axon-uri-docs/sdk/conformance/cases/axiom"
+  printf 'fixed caller URIs\n' \
+    > "$tmp/axon-uri-docs/sdk/conformance/cases/axiom/README.md"
+  printf '{"description":"byte-identical URIs"}\n' \
+    > "$tmp/axon-uri-docs/sdk/conformance/cases/axiom/axiom-identity-composite-required.json"
   if ( AXON_ROOT="$tmp/axon-uri-docs"; check_axon_normative_ura_document_contract ) >/dev/null 2>&1; then
     fail "self-test expected Axon normative URI document gate to fail"
   fi

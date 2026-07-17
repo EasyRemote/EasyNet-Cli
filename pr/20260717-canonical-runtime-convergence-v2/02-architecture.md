@@ -1468,3 +1468,79 @@ across the invocation package, including test files. This closes the Go
 invocation test-fixture legacy plain proof path. RF-3 remains open for
 remaining Node scripts/tests and any broader package, historical-vector, and
 example audits before descriptor-bound-only proof can be declared complete.
+
+## Current Slice: RF-3 Node Legacy Plain Proof Script Removal
+
+Owner: EasyNet-Axon Node invocation proof/admission test and vector-runner
+model, plus the EasyNet-Cli V2 convergence gate.
+
+The Node SDK still carried `scripts/legacy-plain-fixtures.mjs`, and both the
+Node axiom-vector test and the standalone vector runner imported its plain
+encoder, signer, and verifier. That script was not production runtime code,
+but it was executable SDK package proof code and preserved a second canonical
+signature model beside descriptor-bound invocation bytes.
+
+Node tests and vector scripts now use the production descriptor-bound proof
+helpers: `canonicalDescriptorBoundInvocationBytes`,
+`signDescriptorBoundInvocation`, and
+`verifyDescriptorBoundInvocationSignature`. The old legacy fixture module was
+deleted rather than retained as a historical vector adapter.
+
+The V2 RF-3 gate now rejects Node legacy plain proof/admission helper names
+across the full Node SDK package outside `node_modules`. This closes the Node
+script/test legacy plain proof path. RF-3 remains open for broader package,
+historical-vector, and example audit before descriptor-bound-only proof can be
+declared complete.
+
+## Current Slice: RF-3/RF-9 Active Proof Vocabulary Gate
+
+Owner: EasyNet-Axon active SDK/RFC/conformance documentation and the
+EasyNet-Cli V2 convergence gate.
+
+After the executable plain proof helpers were removed, several active Axon
+documents and comments still described the old architecture as if it were the
+normal model: RFC 001 SDK impact named plain invocation bytes and plain
+sign/verify helpers, the PR2 checklist referenced `caller.uri` and
+`verify_invocation_signature`, Go/Python comments described byte parity
+against plain canonical encoders, and conformance metadata named
+`verify_signature` as the admission step. Those are architectural defects even
+when no production helper remains, because active specifications teach future
+work to reintroduce the retired proof model and retired URI vocabulary.
+
+The active materials now describe descriptor-bound canonical invocation bytes,
+descriptor-bound signing/verification, and URA identity fields. The V2 gate
+now scans the active proof documentation/comment set for retired plain
+proof/admission vocabulary and expands the active normative URA document scan
+to include the PR2 checklist plus SDK federation interface documents. The
+self-test injects both regression classes and proves the gate rejects them.
+
+This slice closes one active-text RF-3/RF-9 regression path. It does not
+complete RF-3 because final package, historical-vector, and example audits are
+still required, and it does not complete RF-9 because historical document
+classification and generated-schema ownership still need closure.
+
+## Current Slice: RF-9 Active Ontology and Axiom Vector URA Naming
+
+Owner: EasyNet-Axon active ontology/conformance vocabulary and the
+EasyNet-Cli V2 convergence gate.
+
+The active ontology document `ONTOLOGY_AGENT_ABILITY.md` was not marked
+historical and explicitly described the EasyNet-wide ontology. It still used
+`AgentUri` pseudo-types and stated that addressability means every
+`(Agent, Ability)` has a URI. The axiom conformance vector and README also
+described identity inputs as byte-identical URIs. These are RF-9 defects
+because they sit in active architecture and conformance material, not in
+archived historical notes.
+
+The ontology now uses `AgentURA` pseudo-types and states addressability in
+terms of URA. The axiom vector/README descriptions use URA for caller,
+callee, and subject identity inputs. A Java lifecycle test method that used
+`AxonUri` in its name was renamed to endpoint terminology because the tested
+value is an endpoint adapter scheme, not routable identity architecture.
+
+The V2 RF-9 active normative document gate now includes the ontology document
+and axiom conformance README/vector. Its self-test injects `AgentUri`, URI
+addressability, and conformance-vector URI wording to prove the gate rejects
+the regression. This slice closes one active ontology/conformance vocabulary
+defect. RF-9 remains open for broader historical document classification and
+schema-source ownership closure.

@@ -2354,3 +2354,125 @@ This evidence verifies only Go legacy plain proof test-fixture removal and
 the new V2 regression coverage for test-scoped Go helper names. It does not
 complete RF-3 globally because remaining Node scripts/tests and broader
 package, historical-vector, and example audits still require separate closure.
+
+## RF-3 Node Legacy Plain Proof Script Removal Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "legacyPlainInvocationBytes|signLegacyPlainInvocation|verifyLegacyPlainInvocationSignature|legacy_plain_invocation|canonical_invocation_bytes unexpectedly empty|legacy plain" sdk/node -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after deleting `scripts/legacy-plain-fixtures.mjs` and migrating Node tests
+  and vector runner to descriptor-bound proof helpers.
+- `node --test tests/axiom-vectors.test.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, 12 passed and 3 skipped.
+- `node ./scripts/run-axiom-vectors.mjs`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, `axiom vectors: 14/14 passed (Node)`.
+- `npm run axiom:vectors`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, including `npm run build` and `axiom vectors: 14/14 passed (Node)`.
+- `npm run verify`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/node`:
+  passed, including type checks, generated checks, axiom vectors, and
+  protocol-pack vectors.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects a Node `scripts/legacy-plain-fixtures.mjs` helper and
+  proves the RF-3 gate rejects script-scoped legacy plain helpers.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Node legacy plain proof script/test removal and
+the new V2 regression coverage for Node helper names. It does not complete
+RF-3 globally because broader package, historical-vector, and example audits
+still require separate closure.
+
+## RF-3/RF-9 Active Proof Vocabulary Gate Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n '\b(canonical_invocation_bytes|sign_invocation|verify_invocation_signature|verify_signature)\b|\bcanonicalInvocationBytes\b|plain canonical invocation|client-sdk::admission::canonical_invocation_bytes|\bURI \+ profile\b|\bURIs\b|\bURI\b|<uri>|\b(subject|caller|callee) URI\b|\b(caller|callee|subject|caller_binding|callee_binding|subject_binding|axiom_binding\.caller|envelope\.caller)\.uri\b|\bstring uri\b|\bpeer_uri\b|find_peer_by_uri|uri_profile|resolver\.resolve\(uri\)|canonical URI format|"(uri)"|"\buri\b"\s*:' document/rfcs/001-envelope-axiom-alignment.md document/rfcs/001-pr2-acceptance-checklist.md document/rfcs/002-keyring-and-keyresolver.md sdk/SDK_INTERFACE_SPEC.md sdk/FEDERATION_INVOKE_SCHEMAS.md sdk/conformance/cases/axiom/axiom-admission-pipeline.json sdk/conformance/cases/axiom/axiom-worked-example-authenticated.json sdk/go/easynet/dendrite_bridge_signed_invoke_cgo.go sdk/go/easynet/invocation/axiom.go sdk/java/src/test/java/run/easynet/axon/invocation/AxiomWorkedExampleTest.java sdk/python/easynet_axon/invocation/axiom.py`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after rewriting active proof and URA terminology.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects active proof-document regressions and active
+  URI-document regressions and proves both gates reject them.
+- `python3 -m json.tool sdk/conformance/cases/axiom/axiom-admission-pipeline.json >/dev/null && python3 -m json.tool sdk/conformance/cases/axiom/axiom-worked-example-authenticated.json >/dev/null`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `bash core/runtime-rs/scripts/check-canonical-invocation-boundary.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only active proof/URA vocabulary convergence and the
+new V2 regression coverage for active specification/comment drift. It does
+not complete RF-3, RF-9, or the full canonical runtime convergence SPEC.
+
+## RF-9 Active Ontology and Axiom Vector URA Naming Slice
+
+Commands run on 2026-07-17:
+
+- `rg -n "URI|URIs|Uri|uri|AgentUri" document/concepts/ONTOLOGY_AGENT_ABILITY.md sdk/conformance/cases/axiom/axiom-identity-composite-required.json sdk/conformance/cases/axiom/README.md sdk/java/src/test/java/run/easynet/axon/AbilityLifecycleStartServerTest.java`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after rewriting active ontology/conformance terminology and the Java test
+  method name.
+- `bash -n tools/scripts/check-canonical-runtime-convergence-v2.sh && bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects `AgentUri`, URI addressability, and axiom-vector URI
+  wording to prove the active-document gate rejects this RF-9 regression.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `python3 -m json.tool sdk/conformance/cases/axiom/axiom-identity-composite-required.json >/dev/null`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `mvn -q -Dtest=AbilityLifecycleStartServerTest test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh && bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only active ontology/conformance URA terminology
+convergence and the new V2 regression coverage for that active-document set.
+It does not complete RF-9 or the full canonical runtime convergence SPEC.

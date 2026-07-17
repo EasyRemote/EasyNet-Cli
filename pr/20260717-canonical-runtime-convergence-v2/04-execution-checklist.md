@@ -1043,6 +1043,51 @@
 - [x] Verify focused Go invocation tests, V2 gate/self-test, CLI conformance
       tests, and diff hygiene before committing this slice.
 
+## RF-3 Node Legacy Plain Proof Script Removal Slice
+
+- [x] Identify Node `scripts/legacy-plain-fixtures.mjs` as an executable
+      legacy plain proof/admission fixture used by tests and vector runner.
+- [x] Delete the Node legacy plain fixture script instead of keeping it as a
+      historical vector adapter.
+- [x] Migrate Node axiom-vector tests to descriptor-bound canonical bytes,
+      signing, and verification.
+- [x] Migrate Node standalone axiom-vector runner to descriptor-bound
+      canonical bytes, signing, and verification.
+- [x] Extend the V2 gate/self-test to reject Node legacy plain
+      proof/admission helper names across the Node SDK package.
+- [x] Verify Node vector tests, Node vector runner, V2 gate/self-test, CLI
+      conformance tests, and diff hygiene before committing this slice.
+
+## RF-3/RF-9 Active Proof Vocabulary Gate Slice
+
+- [x] Identify active RFC/checklist/conformance/comment references that still
+      taught plain proof helpers or URI identity vocabulary after the helper
+      implementation removals.
+- [x] Rewrite those active materials to descriptor-bound proof terminology
+      and URA identity terminology without changing conformance expected
+      values.
+- [x] Extend the V2 RF-3 gate to scan active proof documentation/comment
+      paths for retired plain proof/admission vocabulary.
+- [x] Extend the V2 RF-9 active normative document gate to include the PR2
+      checklist and SDK federation interface documents.
+- [x] Extend the V2 self-test to inject active proof-document and active
+      URA-document regressions and prove the gate rejects both.
+- [x] Run final verification commands for this slice and record the results.
+
+## RF-9 Active Ontology and Axiom Vector URA Naming Slice
+
+- [x] Identify `ONTOLOGY_AGENT_ABILITY.md` as active ontology material rather
+      than historical text.
+- [x] Replace active ontology `AgentUri`/URI addressability wording with
+      `AgentURA`/URA terminology.
+- [x] Replace axiom conformance README/vector URI wording with URA wording
+      without changing conformance expected values.
+- [x] Rename the Java lifecycle test method from endpoint `Uri` vocabulary to
+      endpoint terminology.
+- [x] Extend the V2 RF-9 active document gate and self-test to cover the
+      ontology and axiom conformance files.
+- [x] Run final verification commands for this slice and record the results.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.

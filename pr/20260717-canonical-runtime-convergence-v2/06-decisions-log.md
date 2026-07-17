@@ -634,3 +634,33 @@
 - The V2 RF-3 gate now rejects Go legacy plain helper names across the whole
   invocation package, including tests, because old vector fixture
   compatibility is not a clean-target proof model.
+- Node vector scripts are SDK proof architecture when they sign and verify
+  conformance vectors. Keeping a standalone legacy plain fixture script would
+  preserve the retired proof model even after production source converges.
+- Node axiom-vector tests and vector runners should consume the same
+  descriptor-bound helpers exported by the runtime package. Historical plain
+  vector compatibility is not a reason to keep a second signer/verifier.
+- The V2 RF-3 gate now rejects Node legacy plain helper names across the full
+  Node SDK package, excluding only dependency folders, because script/test
+  fixtures are enough to keep obsolete proof semantics live.
+- Active RFCs, checklists, conformance metadata, and SDK comments are part of
+  the canonical architecture surface. If they keep names such as
+  `verify_signature`, `canonical_invocation_bytes`, or `caller.uri`, they can
+  recreate the same root fork after the implementation has been cleaned.
+- Descriptor-bound proof terminology must be used in active specifications
+  even when a document is describing a negative boundary. The clean target is
+  to name the canonical proof model directly and avoid preserving obsolete
+  helper names as normal vocabulary.
+- URA terminology gates should include active SDK interface documents, not
+  only RFC prose. Interface examples with `"uri"` fields or
+  `envelope.caller.uri` teach downstream SDK contracts and therefore belong in
+  the same RF-9 active-document gate.
+- Active ontology documents are stronger than ordinary prose. If an ontology
+  file is not explicitly historical, pseudo-types such as `AgentUri` define
+  architecture vocabulary and must converge to `AgentURA`.
+- Axiom conformance README/vector descriptions are part of the test contract.
+  Identity examples in those files must say URA because test authors copy
+  their vocabulary into SDK assertions and driver names.
+- Endpoint adapter tests should use endpoint naming when the tested value is a
+  transport scheme. That keeps the URA rule focused on routable identity
+  architecture while avoiding retired address-token vocabulary in test names.
