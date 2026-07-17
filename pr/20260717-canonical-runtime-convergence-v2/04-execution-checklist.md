@@ -851,6 +851,43 @@
       Node SDK verification, and V2 gate/self-test before committing this
       slice.
 
+## RF-6 Java Empty Authority Proof Helper Removal Slice
+
+- [x] Identify Java `InvocationAuthorityProof.empty()` as an obsolete public
+      SDK helper after receipt proof facts moved to explicit construction.
+- [x] Delete the Java empty authority-proof factory from `Axiom`.
+- [x] Migrate the Java receipt-closure example to a file-local explicit
+      authority-proof fixture instead of calling a public empty helper.
+- [x] Migrate Java receipt authority, receipt verb, and cross-language
+      verifier tests to a package-private explicit fixture.
+- [x] Extend the V2 gate and self-test to reject
+      `InvocationAuthorityProof.empty()` anywhere under Java SDK source,
+      examples, or tests.
+- [x] Verify focused Java receipt tests and V2 gate/self-test before
+      committing this slice.
+
+## RF-6 Swift Authority Proof Constructor Hardening Slice
+
+- [x] Identify Swift `InvocationAuthorityProof.empty` and defaulted
+      `InvocationAuthorityProof(...)` parameters as omitted authority-proof
+      construction paths nested inside explicit receipt proof facts.
+- [x] Delete the Swift empty authority-proof singleton and unchecked private
+      initializer.
+- [x] Require explicit values for every Swift `InvocationAuthorityProof`
+      field at construction time.
+- [x] Migrate Swift LocalRuntime proof facts, receipt-authority example,
+      authority-method tests, bundle tests, cross-language verifier tests,
+      and authority-anchor tests to explicit authority-proof construction.
+- [x] Preserve the shared empty authority anchor only as a test-local explicit
+      fixture.
+- [x] Extend the V2 gate and self-test to reject Swift empty authority-proof
+      helpers, `.empty` receipt usage, empty construction, and defaulted
+      authority-proof initializer parameters.
+- [x] Verify focused Swift authority tests, V2 gate/self-test, and repository
+      gates before committing this slice; record the unrelated full Swift
+      suite `MessageInboxIdempotentTests` residual failure without claiming
+      full-suite success.
+
 ## Still Required Before Completion
 
 - [ ] RF-5 cross-language signer-handle and daemon KeyService convergence.
@@ -859,8 +896,9 @@
 - [ ] RF-8/RF-7 complete tuple ingress and LocalRuntime-only daemon routes.
 - [ ] RF-4 shared lifecycle matrix, transition vectors, and cross-language
       provider status cutover.
-- [ ] RF-6 final cross-language constructor hardening, remaining package/example
-      audit, and descriptor proof-binding parity closure.
+- [ ] RF-6 Go/Rust authority-proof zero-struct audit, final cross-language
+      constructor hardening, remaining package/example audit, and descriptor
+      proof-binding parity closure.
 - [ ] RF-1 product SDK surface extraction.
 - [ ] RF-2 Mission/EAL extraction from Axon canonical runtime.
 - [ ] RF-9 URA terminology and generated-schema ownership closure.

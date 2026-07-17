@@ -1205,3 +1205,55 @@ The V2 RF-6 gate now rejects `EMPTY_AUTHORITY_PROOF` anywhere under Node SDK
 source or tests. This closes the Node empty authority-proof helper path. RF-6
 remains open for Java/Swift empty authority helpers, Go/Rust authority-proof
 zero-struct audits, and descriptor proof-binding parity closure.
+
+## Current Slice: RF-6 Java Empty Authority Proof Helper Removal
+
+Owner: EasyNet-Axon Java SDK invocation model, Java receipt examples/tests,
+and EasyNet-Cli V2 convergence gate.
+
+After Java receipt bodies and proof facts became explicit, `Axiom` still
+published `InvocationAuthorityProof.empty()`. That factory preserved an
+omitted-authority construction path inside the canonical SDK public model: a
+caller could build complete-looking receipt proof facts while importing the
+authority tail from a reusable empty SDK value.
+
+The Java invocation model no longer exposes that empty authority-proof
+factory. The receipt-closure example now owns its anchor authority proof as a
+file-local explicit fixture, and receipt authority/cross-language tests use a
+package-private test fixture. This keeps shared anchor parity readable without
+teaching downstream callers that the SDK has a canonical no-authority proof
+object.
+
+The V2 RF-6 gate now rejects `InvocationAuthorityProof.empty()` anywhere under
+Java SDK source, examples, or tests. This closes the Java empty
+authority-proof helper path. RF-6 remains open for Swift empty authority
+helper removal, Go/Rust authority-proof zero-struct audits, final
+cross-language constructor hardening, and descriptor proof-binding parity
+closure.
+
+## Current Slice: RF-6 Swift Authority Proof Constructor Hardening
+
+Owner: EasyNet-Axon Swift SDK invocation model, Swift receipt
+examples/tests, and EasyNet-Cli V2 convergence gate.
+
+Swift still exposed the broadest authority-proof omission path after receipt
+proof facts became explicit: `InvocationAuthorityProof.empty` published an
+empty SDK value, and the public initializer defaulted every field. That meant
+callers could omit authority proof facts either by importing `.empty` or by
+partially constructing an authority proof while relying on default payload,
+hash, issuer, signature, and admission-hook values.
+
+The Swift invocation model now requires every authority-proof field at
+construction time. LocalRuntime proof facts, receipt examples, bundle tests,
+cross-language verifier tests, and authority-method tests pass explicit
+payload, hash, issuer, signature, and hook values. The shared authority-anchor
+suite keeps the current empty authority proof only as a test-local explicit
+fixture, so anchor parity remains visible without keeping an SDK-level empty
+object.
+
+The V2 RF-6 gate now rejects Swift empty authority-proof helpers, `.empty`
+receipt usage, zero-argument authority-proof construction, and defaulted
+authority-proof initializer parameters. This closes the Swift empty/default
+authority-proof constructor path. RF-6 remains open for Go/Rust
+authority-proof zero-struct audits, final cross-language constructor
+hardening, and descriptor proof-binding parity closure.

@@ -1844,3 +1844,112 @@ new V2 regression coverage for that helper. It does not complete RF-6
 globally because Java/Swift empty authority helpers, Go/Rust authority-proof
 zero-struct audits, and descriptor proof-binding parity still require
 separate closure.
+
+## RF-6 Java Empty Authority Proof Helper Removal Slice
+
+Commands run on 2026-07-17:
+
+- `mvn -q -Dtest=run.easynet.axon.invocation.ReceiptAuthorityAnchorTest,run.easynet.axon.invocation.ReceiptVerbsTest,run.easynet.axon.invocation.CrossLanguageVerifyTest test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed. Java receipt authority anchors, receipt verbs, and cross-language
+  verifier fixtures now use explicit authority-proof fixtures instead of the
+  removed public empty helper.
+- `rg -n "InvocationAuthorityProof\\.empty\\(" sdk/java -S`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: no matches
+  after deleting the Java helper and migrating examples/tests.
+- `mvn -q test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/java`:
+  passed.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed after
+  the manifest source revision was refreshed to the Axon Java empty authority
+  proof removal commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: initially
+  exposed that the Java helper gate caught call sites but not the nested
+  factory declaration; after widening the pattern to reject
+  `static InvocationAuthorityProof empty(...)`, passed.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Java empty authority-proof helper removal and the
+new V2 regression coverage for that helper. It does not complete RF-6
+globally because Swift empty authority helper removal, Go/Rust
+authority-proof zero-struct audits, final cross-language constructor
+hardening, and descriptor proof-binding parity still require separate
+closure.
+
+## RF-6 Swift Authority Proof Constructor Hardening Slice
+
+Commands run on 2026-07-17:
+
+- `swift test --package-path sdk/swift --filter AuthorityTailParityTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 7
+  tests. The shared authority-anchor suite now uses a test-local explicit
+  authority-proof fixture instead of `.empty`.
+- `rg -n "InvocationAuthorityProof\\(|InvocationAuthorityProof\\.empty|authorityProof: \\.empty|public static let empty\\s*=\\s*InvocationAuthorityProof|proofHashUnchecked|proofPayload: Data =|signature: CalleeSignature\\? =|proofType: String =|binding: AuthorityBinding\\? = nil|admissionHook: String =" sdk/swift/Sources sdk/swift/Tests sdk/swift/Examples -S --glob '!**/.build/**'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: only
+  explicit `InvocationAuthorityProof(...)` construction sites remain; no
+  empty helper, `.empty` usage, unchecked initializer, or defaulted authority
+  proof parameter matched.
+- `swift test --package-path sdk/swift --filter MessageInboxIdempotentTests`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 1
+  test, after the full-suite run exposed the residual inbox ordering failure.
+- `swift test --package-path sdk/swift --filter 'AuthorityMethodsTests|AuthorityTailParityTests|BundleUsageTests|CrossLanguageVerifyTests|InvokeSignedTests'`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed, 35
+  tests. This covers the Swift authority-proof construction sites touched by
+  this slice.
+- `swift test --package-path sdk/swift`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: failed on
+  two attempts with the same residual failure:
+  `IndustrialTests.MessageInboxIdempotentTests.test_dup_id_delivers_once`
+  expected counter `1` but observed `0`. The same test passed in isolation;
+  this is not counted as full Swift suite success.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 /Users/macbook.silan.tech/.local/bin/python3.12 sdk/conformance/rebuild_public_api_model.py --write`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed after
+  the manifest source revision was refreshed to the Axon Swift authority-proof
+  hardening commit.
+- `PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed. The
+  self-test now injects Swift empty authority-proof and defaulted initializer
+  fixtures and proves the RF-6 gate rejects both.
+- `EASYNET_AXON_ROOT=/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon PYTHON=/Users/macbook.silan.tech/.local/bin/python3.12 bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed
+  against the live EasyNet-Axon checkout.
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `bash tests/scripts/test_check_architecture_convergence.sh`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo fmt --all -- --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `cargo check --lib --features axon-pb`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+- `git diff --check`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon`: passed.
+- `git diff --check -- tools/scripts/check-canonical-runtime-convergence-v2.sh pr/20260717-canonical-runtime-convergence-v2/02-architecture.md pr/20260717-canonical-runtime-convergence-v2/04-execution-checklist.md pr/20260717-canonical-runtime-convergence-v2/05-verification.md pr/20260717-canonical-runtime-convergence-v2/06-decisions-log.md sdk/conformance/canonical-public-api.json sdk/conformance/sdk-parity-matrix.json`
+  from `/Users/macbook.silan.tech/Documents/GitHub/EasyNet-Cli`: passed.
+
+This evidence verifies only Swift authority-proof constructor hardening and
+the new V2 regression coverage for Swift omitted authority proof fields. It
+does not complete RF-6 globally because Go/Rust authority-proof zero-struct
+audits, final cross-language constructor hardening, and descriptor
+proof-binding parity still require separate closure. The full Swift suite
+also retains the `MessageInboxIdempotentTests` order-sensitive failure noted
+above.

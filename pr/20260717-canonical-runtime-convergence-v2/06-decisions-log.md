@@ -501,3 +501,30 @@
 - The V2 RF-6 gate now rejects `EMPTY_AUTHORITY_PROOF` anywhere under Node SDK
   source or tests because generated JS/declaration artifacts and excluded
   fixtures can otherwise keep the wrong authority model alive.
+- Java `InvocationAuthorityProof.empty()` is the same RF-6 defect as Node's
+  removed empty authority helper. It is a public SDK factory for omitted
+  authority proof facts, not a harmless convenience constructor.
+- Java examples are part of the effective SDK contract. The receipt-closure
+  example therefore keeps its shared anchor authority proof as a file-local
+  explicit fixture instead of importing a canonical empty helper.
+- Java tests may centralize the current empty authority anchor as a
+  package-private fixture, but the construction must remain explicit and
+  outside the production SDK surface.
+- The V2 RF-6 gate now rejects `InvocationAuthorityProof.empty()` anywhere
+  under Java SDK source, examples, or tests because public manifest checks do
+  not catch semantic helper factories embedded inside nested Java classes.
+- Swift `InvocationAuthorityProof.empty` and defaulted initializer parameters
+  are one RF-6 defect. Removing only `.empty` would still allow omitted
+  authority proof facts through partial constructor calls.
+- Swift `InvocationAuthorityProof` construction now mirrors the strict Python
+  authority-proof constructor: proof type, binding, payload, hash, issuer,
+  signature, and admission hook must all be spelled out by the caller.
+- Swift LocalRuntime may normalize a zero proof hash to the expected binding
+  hash, but it may not rely on defaulted proof payload, issuer, signature, or
+  admission hook values at the constructor boundary.
+- The Swift shared authority-anchor suite may retain an empty authority proof
+  while the cross-language anchor model is open, but that value belongs as a
+  test-local explicit fixture rather than a public SDK singleton.
+- The V2 RF-6 gate now rejects Swift empty authority helpers and defaulted
+  authority-proof initializer parameters because source scans are the only
+  reliable way to catch default-argument semantics in Swift public APIs.

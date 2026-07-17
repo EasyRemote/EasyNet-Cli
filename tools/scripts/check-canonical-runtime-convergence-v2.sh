@@ -655,6 +655,7 @@ check_receipt_proof_fact_contract() {
   local java_axiom="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
   local java_bundle="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/Bundle.java"
   local java_local_runtime="$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/invocation/LocalRuntime.java"
+  local java_receipt_paths=()
   local python_axiom="$AXON_ROOT/sdk/python/easynet_axon/invocation/axiom.py"
   local python_local_runtime="$AXON_ROOT/sdk/python/easynet_axon/invocation/local_runtime.py"
   local python_receipt_paths=()
@@ -667,6 +668,9 @@ check_receipt_proof_fact_contract() {
   local go_local_runtime="$AXON_ROOT/sdk/go/easynet/invocation/local_runtime.go"
   local rust_invocation="$AXON_ROOT/sdk/rust/src/invocation"
   local rust_axiom="$AXON_ROOT/sdk/rust/src/invocation/axiom.rs"
+  [[ -d "$AXON_ROOT/sdk/java/src/main/java" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/main/java")
+  [[ -d "$AXON_ROOT/sdk/java/src/test/java" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/test/java")
+  [[ -d "$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/examples" ]] && java_receipt_paths+=("$AXON_ROOT/sdk/java/src/main/java/run/easynet/axon/examples")
   [[ -d "$AXON_ROOT/sdk/python/easynet_axon" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/easynet_axon")
   [[ -d "$AXON_ROOT/sdk/python/tests" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/tests")
   [[ -d "$AXON_ROOT/sdk/python/examples" ]] && python_receipt_paths+=("$AXON_ROOT/sdk/python/examples")
@@ -682,6 +686,11 @@ check_receipt_proof_fact_contract() {
 
   if rg -n 'ReceiptProofFacts\.empty\(\)' "$java_local_runtime"; then
     fail "Java LocalRuntime still emits receipts with empty proof facts"
+  fi
+
+  if ((${#java_receipt_paths[@]} > 0)) \
+    && rg -n 'InvocationAuthorityProof\.empty\(\)|static\s+InvocationAuthorityProof\s+empty\s*\(' "${java_receipt_paths[@]}"; then
+    fail "Java SDK/tests/examples still expose or use empty authority proof facts"
   fi
 
   if rg -n 'field\(default_factory=ReceiptProofFacts\)|AuthorityBinding\.self_\(r\.caller_binding\.ura\)|proof_facts if .*else .*ReceiptProofFacts\(\)' "$python_axiom" "$AXON_ROOT/sdk/python/easynet_axon/invocation/audit.py"; then
@@ -774,6 +783,12 @@ PY
     && rg -n 'authorityBinding: AuthorityBinding\? = nil|proofFacts: ReceiptProofFacts = \.empty|\?\? \.selfAuthority|public static let empty\s*=\s*ReceiptProofFacts|ReceiptProofFacts\.empty|proofFacts:\s*\.empty|try\s+ReceiptProofFacts\(\s*\)' "${swift_receipt_paths[@]}" \
       --glob '!**/.build/**'; then
     fail "Swift receipt construction still defaults authority or proof facts"
+  fi
+
+  if ((${#swift_receipt_paths[@]} > 0)) \
+    && rg -n 'public static let empty\s*=\s*InvocationAuthorityProof|InvocationAuthorityProof\.empty|authorityProof:\s*\.empty|try\s+InvocationAuthorityProof\(\s*\)|proofType:\s*String\s*=|binding:\s*AuthorityBinding\?\s*=\s*nil|proofPayload:\s*Data\s*=|proofHash:\s*Data\s*=|signature:\s*CalleeSignature\?\s*=\s*nil|admissionHook:\s*String\s*=' "${swift_receipt_paths[@]}" \
+      --glob '!**/.build/**'; then
+    fail "Swift authority proof construction still defaults authority proof facts"
   fi
 
   if rg -n 'normaliseAuthority\(r\.AuthorityBinding|ProofFacts:\s*ReceiptProofFacts\{|return ReceiptProofFacts\{' "$go_invocation" \
@@ -930,6 +945,12 @@ PY
   if ( AXON_ROOT="$tmp/axon-receipt-runtime"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Java LocalRuntime empty proof facts gate to fail"
   fi
+  cp -R "$tmp/axon" "$tmp/axon-java-authority-helper"
+  printf 'class Axiom { static class InvocationAuthorityProof { static InvocationAuthorityProof empty() { return null; } } }\n' \
+    > "$tmp/axon-java-authority-helper/sdk/java/src/main/java/run/easynet/axon/invocation/Axiom.java"
+  if ( AXON_ROOT="$tmp/axon-java-authority-helper"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Java empty authority proof helper gate to fail"
+  fi
   cp -R "$tmp/axon" "$tmp/axon-python-receipt-runtime"
   printf 'binding = AxiomBinding(proof_facts=ReceiptProofFacts())\n' \
     > "$tmp/axon-python-receipt-runtime/sdk/python/easynet_axon/invocation/local_runtime.py"
@@ -991,6 +1012,18 @@ PY
     > "$tmp/axon-swift-receipt-empty/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
   if ( AXON_ROOT="$tmp/axon-swift-receipt-empty"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
     fail "self-test expected Swift empty proof facts helper gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-swift-authority-empty"
+  printf 'public struct InvocationAuthorityProof { public static let empty = InvocationAuthorityProof() }\nlet facts = ReceiptProofFacts(authorityProof: .empty)\n' \
+    > "$tmp/axon-swift-authority-empty/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+  if ( AXON_ROOT="$tmp/axon-swift-authority-empty"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Swift empty authority proof gate to fail"
+  fi
+  cp -R "$tmp/axon" "$tmp/axon-swift-authority-default-init"
+  printf 'public init(proofType: String = "", binding: AuthorityBinding? = nil, proofPayload: Data = Data(), proofHash: Data = Data(repeating: 0, count: 32), signature: CalleeSignature? = nil, admissionHook: String = "") {}\n' \
+    > "$tmp/axon-swift-authority-default-init/sdk/swift/Sources/EasyNetAxon/Invocation/Axiom.swift"
+  if ( AXON_ROOT="$tmp/axon-swift-authority-default-init"; check_receipt_proof_fact_contract ) >/dev/null 2>&1; then
+    fail "self-test expected Swift authority proof default initializer gate to fail"
   fi
   cp -R "$tmp/axon" "$tmp/axon-swift-receipt-default-init"
   printf 'let facts = try ReceiptProofFacts()\n' \
