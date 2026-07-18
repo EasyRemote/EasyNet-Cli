@@ -677,7 +677,6 @@ impl DaemonMissionInvocationGateway {
                 )
                 .map_err(|error| anyhow::anyhow!("project Mission child target: {error}"))?,
             ),
-            function_name: ability.to_string(),
             arguments: descriptor_request.payload().to_vec(),
             content_type: "application/json".to_string(),
             timeout_seconds,

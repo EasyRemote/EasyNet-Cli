@@ -401,14 +401,10 @@ impl DaemonRouteRuntimeAdapter {
             &self.cancellations,
         )
         .await;
-        let rate_limit = if outcome.invocation_id.is_some() {
-            product_admission.commit()?
-        } else {
-            None
-        };
-        let mut response = daemon_route_outcome_response(outcome)?;
-        response.get_mut().rate_limit = rate_limit;
-        Ok(response)
+        if outcome.invocation_id.is_some() {
+            product_admission.commit()?;
+        }
+        daemon_route_outcome_response(outcome)
     }
 
     /// Open one exact server-stream route through the descriptor-bound runtime

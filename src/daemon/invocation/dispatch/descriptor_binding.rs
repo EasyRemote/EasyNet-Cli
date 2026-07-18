@@ -769,13 +769,7 @@ mod tests {
 
     #[test]
     fn signed_descriptor_ref_ignores_legacy_target_fields() {
-        let target = InvocationTarget {
-            ability_name: format!(
-                "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
-                crate::core::ura::owner_ability_ura(CALLEE, "terminal.list").unwrap()
-            ),
-            ..InvocationTarget::default()
-        };
+        let target = InvocationTarget::default();
 
         let err = bound("terminal.list")
             .signed_descriptor_ref_from_target(

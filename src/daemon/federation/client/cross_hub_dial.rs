@@ -982,7 +982,17 @@ mod tests {
             target_hub_endpoint: &HubEndpoint,
             request: InvokeRequest,
         ) -> Result<InvokeResponse, FederationClientError> {
-            let key = (target_hub_endpoint.clone(), request.function_name);
+            let function_name =
+                crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                    "mock federation invoke",
+                    request.target.as_ref(),
+                )
+                .map_err(|status| FederationClientError::InnerInvokeFailed {
+                    endpoint: target_hub_endpoint.clone(),
+                    status: status.message().to_string(),
+                })?
+                .to_string();
+            let key = (target_hub_endpoint.clone(), function_name);
             self.canned
                 .lock()
                 .expect("mock canned map poisoned")
@@ -1001,7 +1011,13 @@ mod tests {
 
     fn sample_request(function_name: &str) -> InvokeRequest {
         InvokeRequest {
-            function_name: function_name.to_string(),
+            target: Some(
+                crate::daemon::invocation::dispatch::invocation_wire::wire_invocation_target(
+                    function_name,
+                    function_name,
+                )
+                .expect("test invocation target"),
+            ),
             ..InvokeRequest::default()
         }
     }

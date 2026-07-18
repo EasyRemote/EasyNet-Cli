@@ -1050,7 +1050,12 @@ impl SubmittedInvocationProjection {
             .ok_or_else(|| anyhow::anyhow!("{ability}: invoke request omitted its envelope"))?;
         Ok(Self {
             envelope,
-            function_name: request.function_name.clone(),
+            function_name:
+                crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                    "local daemon submitted invocation",
+                    request.target.as_ref(),
+                )?
+                .to_string(),
             input_hash: axon_sdk::invocation::sha256(&request.arguments),
         })
     }
@@ -1721,7 +1726,14 @@ mod tests {
         .expect("loopback invocation projection");
         let request = invocation.invoke_request().expect("loopback request");
 
-        assert_eq!(request.function_name, "discover");
+        assert_eq!(
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "test loopback request",
+                request.target.as_ref(),
+            )
+            .unwrap(),
+            "discover"
+        );
         let target = request.target.as_ref().expect("local typed target");
         let axon_sdk::pb::axon::v1::invocation_target::TypedTarget::Ability(ability) =
             target.typed_target.as_ref().expect("typed ability target");

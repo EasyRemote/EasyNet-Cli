@@ -133,7 +133,6 @@ impl LocalDaemonLoopbackInvocation {
                 &self.function_name,
                 &self.function_name,
             )?),
-            function_name: self.function_name.clone(),
             arguments: self.arguments.clone(),
             content_type: "application/json".to_string(),
             timeout_seconds: self.timeout_seconds(),
@@ -148,7 +147,6 @@ impl LocalDaemonLoopbackInvocation {
                 &self.function_name,
                 &self.function_name,
             )?),
-            function_name: self.function_name.clone(),
             arguments: self.arguments.clone(),
             content_type: "application/json".to_string(),
             timeout_seconds: self.timeout_seconds(),
@@ -287,7 +285,6 @@ impl ProtoEnvelope {
         Ok(InvokeRequest {
             envelope: Some(envelope),
             target: Some(wire_invocation_target(&function_name, &function_name)?),
-            function_name,
             arguments,
             ..InvokeRequest::default()
         })
@@ -323,7 +320,6 @@ impl ProtoEnvelope {
                 &descriptor_ability_ref,
                 &function_name,
             )?),
-            function_name,
             arguments,
             ..InvokeRequest::default()
         })
@@ -372,7 +368,6 @@ impl ProtoEnvelope {
                 &descriptor_ability_ref,
                 &function_name,
             )?),
-            function_name,
             arguments,
             ..InvokeRequest::default()
         })
@@ -418,7 +413,6 @@ impl ProtoEnvelope {
                 &descriptor_ability_ref,
                 &function_name,
             )?),
-            function_name,
             arguments,
             content_type: "application/json".to_string(),
             ..InvokeServerStreamRequest::default()
@@ -510,7 +504,7 @@ pub(crate) fn wire_invocation_target(
 /// Extract the canonical descriptor proof carrier from a typed invocation
 /// target. Legacy target fields and metadata are intentionally ignored.
 pub(crate) fn ability_binding_from_invocation_target<'a>(
-    surface: &'static str,
+    surface: &str,
     target: Option<&'a InvocationTarget>,
 ) -> Result<&'a str, Status> {
     let target = target.ok_or_else(|| {
@@ -535,7 +529,7 @@ pub(crate) fn ability_binding_from_invocation_target<'a>(
 }
 
 pub(crate) fn function_name_from_invocation_target<'a>(
-    surface: &'static str,
+    surface: &str,
     target: Option<&'a InvocationTarget>,
 ) -> Result<&'a str, Status> {
     let target = target.ok_or_else(|| {
@@ -559,7 +553,7 @@ pub(crate) fn function_name_from_invocation_target<'a>(
 }
 
 pub(crate) fn descriptor_ref_from_invocation_target(
-    surface: &'static str,
+    surface: &str,
     callee_ura: &str,
     target: Option<&InvocationTarget>,
 ) -> Result<String, Status> {
@@ -987,7 +981,10 @@ mod tests {
                 .kind,
             EntityRefKind::Device as i32
         );
-        assert_eq!(req.function_name, "federation.discover");
+        assert_eq!(
+            function_name_from_invocation_target("test invoke", req.target.as_ref()).unwrap(),
+            "federation.discover"
+        );
     }
 
     #[test]
@@ -1041,8 +1038,6 @@ mod tests {
             target.typed_target.expect("typed ability target");
         assert_eq!(ability.ability_name, "descriptor-ref");
         assert_eq!(ability.function_name, "demo.echo");
-        assert!(target.ability_name.is_empty());
-        assert!(target.function_name.is_empty());
 
         let err = wire_invocation_target("  ", "demo.echo").unwrap_err();
         assert!(format!("{err}").contains("ability binding must not be empty"));
@@ -1126,7 +1121,10 @@ mod tests {
             .signed_descriptor_ref_invoke_request("echo", descriptor_ref, payload, &signer)
             .unwrap();
 
-        assert_eq!(request.function_name, "echo");
+        assert_eq!(
+            function_name_from_invocation_target("test invoke", request.target.as_ref()).unwrap(),
+            "echo"
+        );
         let signature = request
             .envelope
             .unwrap()

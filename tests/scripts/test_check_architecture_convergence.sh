@@ -2372,25 +2372,18 @@ def test_direct_runtime_bidi_cancel_is_explicitly_unsupported() -> None:
     pass
 EOF
 
-  cat >"$AXON/core/runtime-rs/src/services/invocation/terminal_finalization.rs" <<'EOF'
-struct TerminalFinalizationService<'a> {
-    runtime: &'a Runtime,
-}
+  cat >"$AXON/sdk/rust/src/invocation/handle.rs" <<'EOF'
+struct InvocationCore;
 
-impl TerminalFinalizationService<'_> {
-    async fn finalize(&self, outcome: TerminalOutcome) {
-        self.runtime.emit_terminal_receipt_from_admission(outcome);
-        self.commit_side_effects().await;
+impl InvocationCore {
+    async fn emit_with(&self, input: ReceiptDraftInput) {
+        let terminal = ExecutionTerminal::new(input);
+        self.append_signed_receipt(terminal);
     }
 
-    async fn commit_side_effects(&self) {}
-}
-EOF
-  cat >"$AXON/core/runtime-rs/src/services/invocation/receipt_emitter.rs" <<'EOF'
-impl Runtime {
-    fn emit_terminal_receipt_from_admission(&self, outcome: TerminalOutcome) -> InvocationReceipt {
-        self.receipt_factory.emit(outcome)
-    }
+    fn append_signed_receipt(&self, terminal: ExecutionTerminal) {}
+
+    async fn complete_runtime_finalization(&self) {}
 }
 EOF
   cat >"$AXON/sdk/rust/src/lib.rs" <<'EOF'
@@ -2667,7 +2660,7 @@ expect_fail \
   "R6_PRODUCT_PROTOCOL_IN_AXON"
 
 make_good_fixture
-cat >"$AXON/core/runtime-rs/src/services/invocation/terminal_finalization.rs" <<'EOF'
+cat >"$AXON/sdk/rust/src/invocation/handle.rs" <<'EOF'
 struct TerminalProjection;
 EOF
 expect_fail "missing terminal owner" "R2_TERMINAL_OWNER_MISSING"

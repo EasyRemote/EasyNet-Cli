@@ -61,14 +61,12 @@ class InvokeRequest(google.protobuf.message.Message):
 
     ENVELOPE_FIELD_NUMBER: builtins.int
     TARGET_FIELD_NUMBER: builtins.int
-    FUNCTION_NAME_FIELD_NUMBER: builtins.int
     ARGUMENTS_FIELD_NUMBER: builtins.int
     CONTENT_TYPE_FIELD_NUMBER: builtins.int
     TIMEOUT_SECONDS_FIELD_NUMBER: builtins.int
     METADATA_FIELD_NUMBER: builtins.int
     PAYLOAD_REF_FIELD_NUMBER: builtins.int
     CONTENT_ENVELOPE_FIELD_NUMBER: builtins.int
-    function_name: builtins.str
     arguments: builtins.bytes
     """serialized payload (protobuf, JSON, etc.); prefer payload_ref once the encoded body exceeds ~1 MiB"""
     content_type: builtins.str
@@ -79,7 +77,7 @@ class InvokeRequest(google.protobuf.message.Message):
     def envelope(self) -> types_pb2.Envelope: ...
     @property
     def target(self) -> types_pb2.InvocationTarget:
-        """routing strategy + constraints"""
+        """descriptor-bound ability target"""
 
     @property
     def metadata(self) -> google.protobuf.internal.containers.ScalarMap[builtins.str, builtins.str]:
@@ -98,7 +96,6 @@ class InvokeRequest(google.protobuf.message.Message):
         *,
         envelope: types_pb2.Envelope | None = ...,
         target: types_pb2.InvocationTarget | None = ...,
-        function_name: builtins.str = ...,
         arguments: builtins.bytes = ...,
         content_type: builtins.str = ...,
         timeout_seconds: builtins.int = ...,
@@ -107,7 +104,7 @@ class InvokeRequest(google.protobuf.message.Message):
         content_envelope: types_pb2.ContentEnvelope | None = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["content_envelope", b"content_envelope", "envelope", b"envelope", "payload_ref", b"payload_ref", "target", b"target"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["arguments", b"arguments", "content_envelope", b"content_envelope", "content_type", b"content_type", "envelope", b"envelope", "function_name", b"function_name", "metadata", b"metadata", "payload_ref", b"payload_ref", "target", b"target", "timeout_seconds", b"timeout_seconds"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["arguments", b"arguments", "content_envelope", b"content_envelope", "content_type", b"content_type", "envelope", b"envelope", "metadata", b"metadata", "payload_ref", b"payload_ref", "target", b"target", "timeout_seconds", b"timeout_seconds"]) -> None: ...
 
 global___InvokeRequest = InvokeRequest
 
@@ -117,53 +114,24 @@ class InvokeResponse(google.protobuf.message.Message):
 
     HEADER_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
-    SELECTED_NODE_ID_FIELD_NUMBER: builtins.int
-    SCHEDULING_REASON_FIELD_NUMBER: builtins.int
     RESULT_FIELD_NUMBER: builtins.int
     RESULT_CONTENT_TYPE_FIELD_NUMBER: builtins.int
     ELAPSED_MS_FIELD_NUMBER: builtins.int
     RESULT_REF_FIELD_NUMBER: builtins.int
-    BACKPRESSURE_FIELD_NUMBER: builtins.int
-    CIRCUIT_FIELD_NUMBER: builtins.int
-    RATE_LIMIT_FIELD_NUMBER: builtins.int
-    SCHEDULING_SCORE_FIELD_NUMBER: builtins.int
-    POLICY_DECISION_ID_FIELD_NUMBER: builtins.int
     ADMISSION_RECEIPT_FIELD_NUMBER: builtins.int
     TERMINAL_RECEIPT_FIELD_NUMBER: builtins.int
     PROOF_ERROR_FIELD_NUMBER: builtins.int
     ERROR_FIELD_NUMBER: builtins.int
     state: types_pb2.InvocationState.ValueType
-    selected_node_id: builtins.str
-    """always populated on dispatch (never "unknown")"""
-    scheduling_reason: builtins.str
-    """explainable decision (human-readable)"""
     result: builtins.bytes
     """serialized result"""
     result_content_type: builtins.str
     elapsed_ms: builtins.int
-    policy_decision_id: builtins.str
-    """links to Policy.GetDecision for audit"""
     @property
     def header(self) -> types_pb2.ResponseHeader: ...
     @property
     def result_ref(self) -> types_pb2.PayloadRef:
         """large/multimedia result reference"""
-
-    @property
-    def backpressure(self) -> types_pb2.BackpressureSignal:
-        """node load signal for caller self-regulation"""
-
-    @property
-    def circuit(self) -> types_pb2.CircuitBreakerStatus:
-        """circuit state for the invoked ability"""
-
-    @property
-    def rate_limit(self) -> types_pb2.RateLimitInfo:
-        """caller's quota status"""
-
-    @property
-    def scheduling_score(self) -> types_pb2.SchedulingScore:
-        """structured scoring (replaces opaque reason)"""
 
     @property
     def admission_receipt(self) -> global___InvocationReceipt:
@@ -208,24 +176,17 @@ class InvokeResponse(google.protobuf.message.Message):
         *,
         header: types_pb2.ResponseHeader | None = ...,
         state: types_pb2.InvocationState.ValueType = ...,
-        selected_node_id: builtins.str = ...,
-        scheduling_reason: builtins.str = ...,
         result: builtins.bytes = ...,
         result_content_type: builtins.str = ...,
         elapsed_ms: builtins.int = ...,
         result_ref: types_pb2.PayloadRef | None = ...,
-        backpressure: types_pb2.BackpressureSignal | None = ...,
-        circuit: types_pb2.CircuitBreakerStatus | None = ...,
-        rate_limit: types_pb2.RateLimitInfo | None = ...,
-        scheduling_score: types_pb2.SchedulingScore | None = ...,
-        policy_decision_id: builtins.str = ...,
         admission_receipt: global___InvocationReceipt | None = ...,
         terminal_receipt: global___InvocationReceipt | None = ...,
         proof_error: types_pb2.Error | None = ...,
         error: types_pb2.Error | None = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "backpressure", b"backpressure", "circuit", b"circuit", "error", b"error", "header", b"header", "proof_error", b"proof_error", "rate_limit", b"rate_limit", "result_ref", b"result_ref", "scheduling_score", b"scheduling_score", "terminal_receipt", b"terminal_receipt"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "backpressure", b"backpressure", "circuit", b"circuit", "elapsed_ms", b"elapsed_ms", "error", b"error", "header", b"header", "policy_decision_id", b"policy_decision_id", "proof_error", b"proof_error", "rate_limit", b"rate_limit", "result", b"result", "result_content_type", b"result_content_type", "result_ref", b"result_ref", "scheduling_reason", b"scheduling_reason", "scheduling_score", b"scheduling_score", "selected_node_id", b"selected_node_id", "state", b"state", "terminal_receipt", b"terminal_receipt"]) -> None: ...
+    def HasField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "error", b"error", "header", b"header", "proof_error", b"proof_error", "result_ref", b"result_ref", "terminal_receipt", b"terminal_receipt"]) -> builtins.bool: ...
+    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "elapsed_ms", b"elapsed_ms", "error", b"error", "header", b"header", "proof_error", b"proof_error", "result", b"result", "result_content_type", b"result_content_type", "result_ref", b"result_ref", "state", b"state", "terminal_receipt", b"terminal_receipt"]) -> None: ...
 
 global___InvokeResponse = InvokeResponse
 
@@ -250,7 +211,6 @@ class InvocationEvent(google.protobuf.message.Message):
     INVOCATION_ID_FIELD_NUMBER: builtins.int
     EVENT_TYPE_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
-    SELECTED_NODE_ID_FIELD_NUMBER: builtins.int
     REASON_FIELD_NUMBER: builtins.int
     RESULT_FIELD_NUMBER: builtins.int
     RESULT_CONTENT_TYPE_FIELD_NUMBER: builtins.int
@@ -267,7 +227,6 @@ class InvocationEvent(google.protobuf.message.Message):
     event_type: builtins.str
     """see enum of values above"""
     state: types_pb2.InvocationState.ValueType
-    selected_node_id: builtins.str
     reason: builtins.str
     """scheduling / failure reason"""
     result: builtins.bytes
@@ -303,7 +262,6 @@ class InvocationEvent(google.protobuf.message.Message):
         invocation_id: builtins.str = ...,
         event_type: builtins.str = ...,
         state: types_pb2.InvocationState.ValueType = ...,
-        selected_node_id: builtins.str = ...,
         reason: builtins.str = ...,
         result: builtins.bytes = ...,
         result_content_type: builtins.str = ...,
@@ -317,7 +275,7 @@ class InvocationEvent(google.protobuf.message.Message):
         causal_context: types_pb2.CausalContext | None = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["causal_context", b"causal_context", "error", b"error", "result_ref", b"result_ref"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["causal_context", b"causal_context", "elapsed_ms", b"elapsed_ms", "error", b"error", "event_id", b"event_id", "event_type", b"event_type", "invocation_id", b"invocation_id", "payload", b"payload", "payload_content_type", b"payload_content_type", "reason", b"reason", "result", b"result", "result_content_type", b"result_content_type", "result_ref", b"result_ref", "selected_node_id", b"selected_node_id", "sequence", b"sequence", "state", b"state", "timestamp_unix_ms", b"timestamp_unix_ms"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["causal_context", b"causal_context", "elapsed_ms", b"elapsed_ms", "error", b"error", "event_id", b"event_id", "event_type", b"event_type", "invocation_id", b"invocation_id", "payload", b"payload", "payload_content_type", b"payload_content_type", "reason", b"reason", "result", b"result", "result_content_type", b"result_content_type", "result_ref", b"result_ref", "sequence", b"sequence", "state", b"state", "timestamp_unix_ms", b"timestamp_unix_ms"]) -> None: ...
 
 global___InvocationEvent = InvocationEvent
 
@@ -345,14 +303,12 @@ class InvokeServerStreamRequest(google.protobuf.message.Message):
 
     ENVELOPE_FIELD_NUMBER: builtins.int
     TARGET_FIELD_NUMBER: builtins.int
-    FUNCTION_NAME_FIELD_NUMBER: builtins.int
     ARGUMENTS_FIELD_NUMBER: builtins.int
     CONTENT_TYPE_FIELD_NUMBER: builtins.int
     TIMEOUT_SECONDS_FIELD_NUMBER: builtins.int
     METADATA_FIELD_NUMBER: builtins.int
     PAYLOAD_REF_FIELD_NUMBER: builtins.int
     CONTENT_ENVELOPE_FIELD_NUMBER: builtins.int
-    function_name: builtins.str
     arguments: builtins.bytes
     content_type: builtins.str
     timeout_seconds: builtins.int
@@ -373,7 +329,6 @@ class InvokeServerStreamRequest(google.protobuf.message.Message):
         *,
         envelope: types_pb2.Envelope | None = ...,
         target: types_pb2.InvocationTarget | None = ...,
-        function_name: builtins.str = ...,
         arguments: builtins.bytes = ...,
         content_type: builtins.str = ...,
         timeout_seconds: builtins.int = ...,
@@ -382,7 +337,7 @@ class InvokeServerStreamRequest(google.protobuf.message.Message):
         content_envelope: types_pb2.ContentEnvelope | None = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["content_envelope", b"content_envelope", "envelope", b"envelope", "payload_ref", b"payload_ref", "target", b"target"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["arguments", b"arguments", "content_envelope", b"content_envelope", "content_type", b"content_type", "envelope", b"envelope", "function_name", b"function_name", "metadata", b"metadata", "payload_ref", b"payload_ref", "target", b"target", "timeout_seconds", b"timeout_seconds"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["arguments", b"arguments", "content_envelope", b"content_envelope", "content_type", b"content_type", "envelope", b"envelope", "metadata", b"metadata", "payload_ref", b"payload_ref", "target", b"target", "timeout_seconds", b"timeout_seconds"]) -> None: ...
 
 global___InvokeServerStreamRequest = InvokeServerStreamRequest
 
@@ -392,8 +347,6 @@ class InvokeStreamChunk(google.protobuf.message.Message):
 
     HEADER_FIELD_NUMBER: builtins.int
     INVOCATION_ID_FIELD_NUMBER: builtins.int
-    SELECTED_NODE_ID_FIELD_NUMBER: builtins.int
-    SCHEDULING_REASON_FIELD_NUMBER: builtins.int
     STATE_FIELD_NUMBER: builtins.int
     PAYLOAD_FIELD_NUMBER: builtins.int
     CONTENT_TYPE_FIELD_NUMBER: builtins.int
@@ -405,8 +358,6 @@ class InvokeStreamChunk(google.protobuf.message.Message):
     PROOF_ERROR_FIELD_NUMBER: builtins.int
     ERROR_FIELD_NUMBER: builtins.int
     invocation_id: builtins.str
-    selected_node_id: builtins.str
-    scheduling_reason: builtins.str
     state: types_pb2.InvocationState.ValueType
     """RUNNING while streaming, terminal on last chunk"""
     payload: builtins.bytes
@@ -450,8 +401,6 @@ class InvokeStreamChunk(google.protobuf.message.Message):
         *,
         header: types_pb2.ResponseHeader | None = ...,
         invocation_id: builtins.str = ...,
-        selected_node_id: builtins.str = ...,
-        scheduling_reason: builtins.str = ...,
         state: types_pb2.InvocationState.ValueType = ...,
         payload: builtins.bytes = ...,
         content_type: builtins.str = ...,
@@ -464,7 +413,7 @@ class InvokeStreamChunk(google.protobuf.message.Message):
         error: types_pb2.Error | None = ...,
     ) -> None: ...
     def HasField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "error", b"error", "header", b"header", "proof_error", b"proof_error", "terminal_receipt", b"terminal_receipt"]) -> builtins.bool: ...
-    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "content_type", b"content_type", "elapsed_ms", b"elapsed_ms", "error", b"error", "header", b"header", "invocation_id", b"invocation_id", "payload", b"payload", "proof_error", b"proof_error", "scheduling_reason", b"scheduling_reason", "selected_node_id", b"selected_node_id", "sequence", b"sequence", "state", b"state", "terminal", b"terminal", "terminal_receipt", b"terminal_receipt"]) -> None: ...
+    def ClearField(self, field_name: typing.Literal["admission_receipt", b"admission_receipt", "content_type", b"content_type", "elapsed_ms", b"elapsed_ms", "error", b"error", "header", b"header", "invocation_id", b"invocation_id", "payload", b"payload", "proof_error", b"proof_error", "sequence", b"sequence", "state", b"state", "terminal", b"terminal", "terminal_receipt", b"terminal_receipt"]) -> None: ...
 
 global___InvokeStreamChunk = InvokeStreamChunk
 

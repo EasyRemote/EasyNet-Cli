@@ -169,7 +169,6 @@ impl DaemonInvocation {
         Ok(InvokeRequest {
             envelope: Some(envelope),
             target: Some(target),
-            function_name,
             arguments: self.args,
             content_type: self.content_type,
             metadata: self.metadata,
@@ -198,7 +197,6 @@ impl DaemonInvocation {
         Ok(InvokeServerStreamRequest {
             envelope: Some(envelope),
             target: Some(target),
-            function_name,
             arguments: self.args,
             content_type: self.content_type,
             metadata: self.metadata,
@@ -1384,7 +1382,14 @@ mod tests {
         let envelope = request
             .envelope
             .expect("stream request must carry envelope");
-        assert_eq!(request.function_name, "device.watch.health");
+        assert_eq!(
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "test stream request",
+                request.target.as_ref(),
+            )
+            .unwrap(),
+            "device.watch.health"
+        );
         assert_eq!(request.content_type, "application/json");
         assert_eq!(request.arguments, br#"{"interval_ms":1000}"#);
         assert_eq!(envelope.invocation_nonce, vec![0x24; 16]);

@@ -84,7 +84,6 @@ impl<'a> PeerInvokeRequest<'a> {
         Ok(InvokeRequest {
             envelope: Some(envelope),
             target: Some(target),
-            function_name: self.function_name.to_string(),
             arguments: self.arguments,
             ..InvokeRequest::default()
         })

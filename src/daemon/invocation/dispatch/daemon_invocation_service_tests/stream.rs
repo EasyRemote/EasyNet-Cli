@@ -13,7 +13,9 @@ async fn invoke_stream_dispatches_subscribe_directory_initial_frame_then_pump() 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(test_envelope()),
-            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
+            target: Some(test_invocation_target(
+                ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+            )),
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -75,7 +77,9 @@ async fn invoke_stream_subscribe_directory_closes_when_route_lifecycle_drops() {
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(test_envelope()),
-            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
+            target: Some(test_invocation_target(
+                ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY,
+            )),
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -110,7 +114,9 @@ async fn invoke_stream_dispatches_subscribe_directory_v2_emits_directory_events(
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(test_envelope()),
-            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2.to_string(),
+            target: Some(test_invocation_target(
+                ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+            )),
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -203,7 +209,9 @@ async fn invoke_stream_subscribe_directory_v2_accepts_resume_sequence() {
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(test_envelope()),
-            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2.to_string(),
+            target: Some(test_invocation_target(
+                ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+            )),
             arguments: serde_json::to_vec(&serde_json::json!({
                 "resume_sequence": 7_u64,
                 "resume_token": "directory:7",
@@ -247,7 +255,9 @@ async fn invoke_stream_subscribe_directory_v2_emits_heartbeat_when_idle() {
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(test_envelope()),
-            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2.to_string(),
+            target: Some(test_invocation_target(
+                ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+            )),
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -354,7 +364,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
                 .into_inner(&function_name, &arguments)
                 .expect("complete unsigned loopback stream tuple"),
             ),
-            function_name,
+            target: Some(test_invocation_target(&function_name)),
             arguments,
             ..InvokeServerStreamRequest::default()
         }))
@@ -378,10 +388,10 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     );
     assert!(
         first
-            .selected_node_id
-            .starts_with("route-ref::easynet:///r/test-realm/ability/device.test-daemon."),
-        "selected_node_id should carry the chosen route ref, got {}",
-        first.selected_node_id
+            .header
+            .as_ref()
+            .is_some_and(|header| header.request_id == first.invocation_id),
+        "stream chunk must project the canonical invocation id through the response header"
     );
     assert_eq!(first.sequence, 0);
     assert_eq!(
@@ -505,7 +515,7 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
                 .into_inner(ABILITY, br#"{}"#)
                 .expect("complete unsigned loopback stream tuple"),
             ),
-            function_name: ABILITY.to_string(),
+            target: Some(test_invocation_target(ABILITY)),
             arguments: br#"{}"#.to_vec(),
             ..InvokeServerStreamRequest::default()
         }))
@@ -588,7 +598,9 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
                 .into_inner(&descriptor_ref, &arguments)
                 .expect("complete descriptor-ref stream tuple"),
             ),
-            function_name: descriptor_ref,
+            target: Some(
+                wire_invocation_target(&descriptor_ref, ability).expect("typed descriptor target"),
+            ),
             arguments: arguments.clone(),
             ..InvokeServerStreamRequest::default()
         }))
@@ -641,7 +653,7 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
                 .into_inner("browser.snapshot_once", br#"{}"#)
                 .expect("complete snapshot stream tuple"),
             ),
-            function_name: "browser.snapshot_once".to_string(),
+            target: Some(test_invocation_target("browser.snapshot_once")),
             arguments: br#"{}"#.to_vec(),
             ..InvokeServerStreamRequest::default()
         }))
@@ -746,7 +758,7 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
                 .into_inner(&function_name, &arguments)
                 .expect("complete loopback stream tuple"),
             ),
-            function_name,
+            target: Some(test_invocation_target(&function_name)),
             arguments,
             ..InvokeServerStreamRequest::default()
         }))
@@ -852,7 +864,6 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             target: Some(
                 wire_invocation_target(&descriptor_ref, ABILITY).expect("typed descriptor target"),
             ),
-            function_name: ABILITY.to_string(),
             arguments: arguments.clone(),
             ..InvokeRequest::default()
         }))
@@ -924,7 +935,6 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             target: Some(
                 wire_invocation_target(&descriptor_ref, ABILITY).expect("typed descriptor target"),
             ),
-            function_name: ABILITY.to_string(),
             arguments: arguments.clone(),
             ..InvokeServerStreamRequest::default()
         }))
@@ -957,7 +967,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
                     .map(|identity| identity.ura.as_str()),
                 Some(subject_ura.as_str())
             );
-            assert_eq!(request.function_name, ABILITY);
+            assert_eq!(invocation_function_name(&request), ABILITY);
             assert_eq!(request.arguments, arguments);
             assert_eq!(
                 crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
@@ -1024,12 +1034,11 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     assert!(!first.terminal);
     assert_eq!(first.payload, br#"{"delta":"part-1"}"#);
     assert_eq!(
-        first.selected_node_id,
-        format!(
-            "route-ref::{}",
-            crate::core::ura::owner_ability_ura(TARGET_DEVICE_URA, ABILITY)
-                .expect("expected ability URA")
-        )
+        first
+            .header
+            .as_ref()
+            .map(|header| header.request_id.as_str()),
+        Some(first.invocation_id.as_str())
     );
 
     let terminal = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
@@ -1192,7 +1201,7 @@ async fn invoke_stream_unknown_function_returns_resolver_negative() {
     match svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(test_envelope()),
-            function_name: "custom.stream.ability".to_string(),
+            target: Some(test_invocation_target("custom.stream.ability")),
             ..InvokeServerStreamRequest::default()
         }))
         .await
@@ -1242,7 +1251,6 @@ async fn invoke_rejects_caller_not_in_trust_anchor() {
                 wire_invocation_target(&descriptor_ref, ABILITY_FEDERATION_HEARTBEAT)
                     .expect("typed descriptor target"),
             ),
-            function_name: ABILITY_FEDERATION_HEARTBEAT.to_string(),
             arguments,
             ..InvokeRequest::default()
         }))
@@ -1296,7 +1304,6 @@ async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
                 wire_invocation_target(&descriptor_ref, ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY)
                     .expect("typed descriptor target"),
             ),
-            function_name: ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY.to_string(),
             arguments,
             ..InvokeServerStreamRequest::default()
         }))

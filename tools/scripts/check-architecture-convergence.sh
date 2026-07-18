@@ -299,29 +299,30 @@ if re.search(r"\bCatalogMissionInvocationGateway\b", mission_gateway_text):
     )
 
 
-# Rule 2: Axon runtime owns terminal finalization. CLI and per-geometry
-# runtime surfaces may project a finalized receipt, but may not mint one.
-owner = axon_root / "core/runtime-rs/src/services/invocation/terminal_finalization.rs"
+# Rule 2: the canonical SDK LocalRuntime owns terminal finalization. CLI and
+# transport adapters may project finalized receipts, but may not mint them.
+owner = axon_root / "sdk/rust/src/invocation/handle.rs"
 owner_text = source(owner) if owner.exists() else ""
 owner_contract = (
-    re.search(r"struct\s+TerminalFinalizationService\b", owner_text),
-    re.search(r"fn\s+finalize\s*\(", owner_text),
-    re.search(r"emit_terminal_receipt_from_admission\s*\(", owner_text),
-    re.search(r"commit_side_effects\s*\(", owner_text),
+    re.search(r"struct\s+InvocationCore\b", owner_text),
+    re.search(r"fn\s+emit_with\s*\(", owner_text),
+    re.search(r"ExecutionTerminal::new\s*\(", owner_text),
+    re.search(r"append_signed_receipt\s*\(", owner_text),
+    re.search(r"fn\s+complete_runtime_finalization\s*\(", owner_text),
 )
 if not all(owner_contract):
     add(
         "R2_TERMINAL_OWNER_MISSING",
         owner,
         1,
-        "TerminalFinalizationService must own proof emission and terminal side effects",
+        "InvocationCore must own proof emission and terminal side effects",
     )
 
 axon_invocation = axon_root / "core/runtime-rs/src/services/invocation"
-receipt_factory = axon_invocation / "receipt_emitter.rs"
-terminal_scan_files = production_files(axon_invocation, {".rs"}) + production_files(
-    cli_root / "src/daemon/invocation", {".rs"}
-)
+receipt_factory = axon_root / "sdk/rust/src/invocation/receipt_provider.rs"
+terminal_scan_files = production_files(cli_root / "src/daemon/invocation", {".rs"})
+if axon_invocation.exists():
+    terminal_scan_files += production_files(axon_invocation, {".rs"})
 writer_name = re.compile(
     r"\bfn\s+(?:build|emit|mint|write|persist|commit)_[A-Za-z0-9_]*terminal[A-Za-z0-9_]*receipt[A-Za-z0-9_]*\s*\("
 )

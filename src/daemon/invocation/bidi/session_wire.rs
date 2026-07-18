@@ -236,7 +236,6 @@ mod tests {
                 )
                 .expect("typed descriptor target"),
             ),
-            function_name: "echo".into(),
             arguments: b"opaque".to_vec(),
             timeout_seconds: 17,
             ..InvokeRequest::default()

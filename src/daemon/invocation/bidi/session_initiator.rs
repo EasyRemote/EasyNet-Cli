@@ -1228,10 +1228,13 @@ mod tests {
             let request = request.into_inner();
             let body: Value = serde_json::from_slice(&request.arguments)
                 .map_err(|e| Status::invalid_argument(format!("invalid json args: {e}")))?;
-            self.invokes
-                .lock()
-                .await
-                .push((request.function_name, body));
+            let function_name =
+                crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                    "recording prelude",
+                    request.target.as_ref(),
+                )?
+                .to_string();
+            self.invokes.lock().await.push((function_name, body));
             Ok(Response::new(InvokeResponse::default()))
         }
 

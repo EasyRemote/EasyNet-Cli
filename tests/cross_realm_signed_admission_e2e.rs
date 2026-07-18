@@ -290,7 +290,6 @@ fn signed_request(
             })),
             ..InvocationTarget::default()
         }),
-        function_name: ability.to_string(),
         arguments: args.to_vec(),
         ..InvokeRequest::default()
     }

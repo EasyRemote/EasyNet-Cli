@@ -2557,12 +2557,26 @@ async fn drain_session_runtime_up_stream(
                     );
                     continue;
                 };
+                let Ok(ability) =
+                    crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                        "carrier-v1 reverse call",
+                        request.target.as_ref(),
+                    )
+                else {
+                    crate::op_event!(
+                        component = session_accept,
+                        kind = carrier_v1_reverse_call_missing_typed_target,
+                        caller = caller_ura,
+                        call_id = call_id_hex(&call_id),
+                    );
+                    continue;
+                };
                 let id_hex = call_id_hex(&call_id);
                 crate::op_event!(
                     component = daemon_invocation,
                     kind = session_accept_request_frame,
                     call_id = id_hex,
-                    ability = request.function_name,
+                    ability = ability,
                 );
                 // Same off-drain dispatch discipline as the JSON
                 // Request arm: a slow inner call must not stall
@@ -2829,7 +2843,6 @@ fn remote_bidi_forwarded_request(
             &envelope_open.initial_args,
         )?),
         target: envelope_open.target.clone(),
-        function_name: selected_route.dispatch_name.clone(),
         arguments: envelope_open.initial_args.clone(),
         metadata: envelope_open.metadata.clone(),
         ..Default::default()

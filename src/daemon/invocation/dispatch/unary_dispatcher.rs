@@ -80,8 +80,9 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ForwardedFinalizedInvocation, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
-    descriptor_ref_from_invocation_target, encode_json_payload, parse_json_args,
-    status_from_axon_invoke_error, target_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE,
+    descriptor_ref_from_invocation_target, encode_json_payload,
+    function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
+    target_ura_from_envelope, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
@@ -677,7 +678,7 @@ impl UnaryDispatcher {
         request: &InvokeRequest,
     ) -> Result<CanonicalRouteSelection, Status> {
         let target_ura = local_invoke_target_ura(request)?;
-        let ability = request.function_name.trim();
+        let ability = function_name_from_invocation_target("Invoke", request.target.as_ref())?;
         if ability.is_empty() {
             return Err(Status::invalid_argument(
                 "Invoke request missing function_name for namespace.resolve",
@@ -703,7 +704,11 @@ impl UnaryDispatcher {
         &self,
         request: &InvokeRequest,
     ) -> (Result<Response<InvokeResponse>, Status>, bool) {
-        let ability = request.function_name.trim();
+        let ability = match function_name_from_invocation_target("Invoke", request.target.as_ref())
+        {
+            Ok(ability) => ability,
+            Err(status) => return (Err(status), false),
+        };
         let arguments = request.arguments.as_slice();
         let selection = match self.resolve_canonical_rpc_route(request).await {
             Ok(selection) => selection,
@@ -873,19 +878,12 @@ impl UnaryDispatcher {
         )
         .await;
         let runtime_started = outcome.invocation_id.is_some();
-        let rate_limit = if runtime_started {
-            match product_admission.commit() {
-                Ok(rate_limit) => rate_limit,
-                Err(status) => return (Err(status), true),
+        if runtime_started {
+            if let Err(status) = product_admission.commit() {
+                return (Err(status), true);
             }
-        } else {
-            None
-        };
-        let (mut response, axon_started) = rpc_dispatch_outcome_response(outcome);
-        if let (Ok(response), Some(rate_limit)) = (&mut response, rate_limit) {
-            response.get_mut().rate_limit = Some(rate_limit);
         }
-        (response, axon_started)
+        rpc_dispatch_outcome_response(outcome)
     }
 
     pub(crate) fn dispatch_register_device_pubkey(
@@ -1740,7 +1738,8 @@ impl UnaryDispatcher {
         selected_route: &SelectedInvokeRoute,
         call_mode: CallMode,
     ) -> Result<Response<InvokeResponse>, Status> {
-        let ability = request.function_name.trim().to_string();
+        let ability =
+            function_name_from_invocation_target("Invoke", request.target.as_ref())?.to_string();
         let Some(envelope) = request.envelope.clone() else {
             return Err(Status::invalid_argument(format!(
                 "Invoke: remote-hosted ability `{ability}` requires the seven-tuple \
@@ -1823,12 +1822,7 @@ fn local_invoke_target_ura(request: &InvokeRequest) -> Result<String, Status> {
 pub(crate) fn require_complete_signed_remote_request(
     request: &InvokeRequest,
 ) -> Result<(), Status> {
-    let function_name = request.function_name.trim();
-    if function_name.is_empty() {
-        return Err(Status::invalid_argument(
-            "remote Invoke request is missing function_name",
-        ));
-    }
+    function_name_from_invocation_target("remote Invoke", request.target.as_ref())?;
     let envelope = request.envelope.as_ref().ok_or_else(|| {
         Status::invalid_argument("remote Invoke requires the complete seven-tuple envelope")
     })?;

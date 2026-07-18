@@ -771,6 +771,13 @@ fn bind_invoke_request_to_descriptor_ref(
     descriptor_ref: String,
     signing_key: &ed25519_dalek::SigningKey,
 ) {
+    let function_name =
+        crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+            "test request",
+            request.target.as_ref(),
+        )
+        .expect("test request typed target")
+        .to_string();
     request.envelope = Some(signed_test_envelope_with_descriptor_ref(
         caller_ura,
         callee_ura,
@@ -780,9 +787,24 @@ fn bind_invoke_request_to_descriptor_ref(
         signing_key,
     ));
     request.target = Some(
-        wire_invocation_target(&descriptor_ref, &request.function_name)
-            .expect("test descriptor target"),
+        wire_invocation_target(&descriptor_ref, &function_name).expect("test descriptor target"),
     );
+}
+
+fn test_invocation_target(function_name: &str) -> axon_sdk::pb::axon::v1::InvocationTarget {
+    wire_invocation_target(
+        &test_descriptor_ref(TEST_DAEMON_URA, function_name),
+        function_name,
+    )
+    .expect("test descriptor target")
+}
+
+fn invocation_function_name(request: &InvokeRequest) -> &str {
+    crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+        "test request",
+        request.target.as_ref(),
+    )
+    .expect("test request typed target")
 }
 
 async fn sync_runtime_proof_from_catalog(
@@ -974,7 +996,6 @@ fn signed_invoke_request(
         target: Some(
             wire_invocation_target(&descriptor_ref, function_name).expect("test descriptor target"),
         ),
-        function_name: function_name.to_string(),
         arguments,
         ..InvokeRequest::default()
     })

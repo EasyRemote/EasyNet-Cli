@@ -1229,7 +1229,11 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
         let inner = request.into_inner();
-        let function = inner.function_name.as_str();
+        let function =
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "Invoke",
+                inner.target.as_ref(),
+            )?;
         let route_function =
             dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
         let daemon_route = DaemonUnaryRoute::from_function(&route_function);
@@ -1275,7 +1279,11 @@ impl Invocation for DaemonInvocationService {
         request: Request<InvokeServerStreamRequest>,
     ) -> Result<Response<Self::InvokeStreamStream>, Status> {
         let inner = request.into_inner();
-        let function = inner.function_name.as_str();
+        let function =
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "InvokeStream",
+                inner.target.as_ref(),
+            )?;
         let route_function =
             dispatch_function_name_for_route_table(function, inner.envelope.as_ref());
 

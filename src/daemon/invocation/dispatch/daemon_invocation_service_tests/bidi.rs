@@ -598,7 +598,7 @@ async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
             let request = call
                 .request
                 .expect("complete InvokeRequest rides the frame");
-            assert_eq!(request.function_name, route.dispatch_key());
+            assert_eq!(invocation_function_name(&request), route.dispatch_key());
             assert_eq!(request.arguments, envelope_open.initial_args);
             assert_eq!(
                 request

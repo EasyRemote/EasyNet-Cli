@@ -232,11 +232,18 @@ impl LocalAxonSessionDispatcher {
                 .handle_carrier_v1_bidi_open(call_id, request, outbound)
                 .await;
         }
+        let function_name =
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "carrier-v1 DispatchCall",
+                request.target.as_ref(),
+            )
+            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?
+            .to_string();
         crate::op_event!(
             component = local_session_dispatcher,
             kind = received_carrier_v1_dispatch,
             call_id = call_id,
-            ability = request.function_name,
+            ability = function_name,
         );
         let Some(envelope) = request.envelope else {
             return Err(SessionDispatchError::Other(
@@ -248,7 +255,6 @@ impl LocalAxonSessionDispatcher {
                 "carrier-v1 dispatch: Axon LocalRuntime is not wired".to_string(),
             ));
         };
-        let function_name = request.function_name.clone();
         let target_ura = target_ura_from_envelope(Some(&envelope), "carrier-v1 DispatchCall")
             .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?;
         self.sync_external_signed_caller_key(&envelope).await?;
@@ -999,7 +1005,13 @@ impl LocalAxonSessionDispatcher {
         request: axon_sdk::pb::axon::v1::InvokeRequest,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        let ability = request.function_name.clone();
+        let ability =
+            crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                "carrier-v1 bidi open",
+                request.target.as_ref(),
+            )
+            .map_err(|status| SessionDispatchError::Other(status.message().to_string()))?
+            .to_string();
         crate::op_event!(
             component = local_session_dispatcher,
             kind = received_carrier_v1_bidi_open,
@@ -2050,7 +2062,6 @@ mod tests {
                 )
                 .expect("carrier-v1 typed target"),
             ),
-            function_name: request_ability.to_string(),
             arguments: args,
             ..Default::default()
         };

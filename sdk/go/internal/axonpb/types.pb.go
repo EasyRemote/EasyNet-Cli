@@ -1,12 +1,9 @@
-// EasyNet Axon for AgentNet
-// =========================
-//
 // File: core/proto/axon/v1/types.proto
-// Description: Source-of-truth shared Axon protocol types, envelopes, enums, and resource contracts.
+// Description: Source-of-truth canonical runtime envelopes, proof facts, receipts, and content contracts.
 //
 // Protocol Responsibility:
-// - Defines the foundational wire-level types reused by control, invocation, interop, identity, stream, and federation services.
-// - Preserves shared resource-addressing, content-envelope, and terminal-state semantics across the protocol.
+// - Defines the generic wire types reused by invocation and payload transfer.
+// - Preserves complete invocation-tuple, proof, content, and terminal-state semantics.
 //
 // Implementation Approach:
 // - Keeps common enums and messages in one schema so service protos compose on a stable base contract.
@@ -17,7 +14,8 @@
 // - Regenerate dependent language artifacts after updating shared types or enums.
 //
 // Architectural Position:
-// - Base protocol contract layer for the entire Axon wire surface.
+// - Canonical runtime protocol contract. Product directory, deployment, policy,
+//   and topology models are downstream concerns.
 //
 // Author: Silan.Hu
 // Email: silan.hu@u.nus.edu
@@ -45,74 +43,6 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
-
-// Exhaustive list of first-class Axon resource kinds.
-// Each kind maps to a canonical URA. `ResourceRef.ura` carries the
-// complete `EasyNet URA /r/<realm>/...` locator; do not reconstruct it
-// from fragments in application code.
-type ResourceType int32
-
-const (
-	ResourceType_RESOURCE_TYPE_UNSPECIFIED ResourceType = 0
-	ResourceType_RESOURCE_TYPE_NODE        ResourceType = 1 // EasyNet URA /r/<realm>/device/<device_id>
-	ResourceType_RESOURCE_TYPE_CAPABILITY  ResourceType = 2 // EasyNet URA /r/<realm>/ability/<owner>.<namespace>.<ability_id>
-	ResourceType_RESOURCE_TYPE_INVOCATION  ResourceType = 3 // EasyNet URA /r/<realm>/resource/<owner>/invocations/<id>
-	ResourceType_RESOURCE_TYPE_STREAM      ResourceType = 5 // EasyNet URA /r/<realm>/resource/device.<device_id>/streams/<id>
-	ResourceType_RESOURCE_TYPE_PAYLOAD     ResourceType = 6 // EasyNet URA /r/<realm>/resource/<owner>/payloads/<id>
-	ResourceType_RESOURCE_TYPE_POLICY      ResourceType = 7 // EasyNet URA /r/<realm>/resource/<owner>/policies/<id>
-	ResourceType_RESOURCE_TYPE_KEY         ResourceType = 8 // EasyNet URA /r/<realm>/resource/<owner>/keys/<key_hash>
-)
-
-// Enum value maps for ResourceType.
-var (
-	ResourceType_name = map[int32]string{
-		0: "RESOURCE_TYPE_UNSPECIFIED",
-		1: "RESOURCE_TYPE_NODE",
-		2: "RESOURCE_TYPE_CAPABILITY",
-		3: "RESOURCE_TYPE_INVOCATION",
-		5: "RESOURCE_TYPE_STREAM",
-		6: "RESOURCE_TYPE_PAYLOAD",
-		7: "RESOURCE_TYPE_POLICY",
-		8: "RESOURCE_TYPE_KEY",
-	}
-	ResourceType_value = map[string]int32{
-		"RESOURCE_TYPE_UNSPECIFIED": 0,
-		"RESOURCE_TYPE_NODE":        1,
-		"RESOURCE_TYPE_CAPABILITY":  2,
-		"RESOURCE_TYPE_INVOCATION":  3,
-		"RESOURCE_TYPE_STREAM":      5,
-		"RESOURCE_TYPE_PAYLOAD":     6,
-		"RESOURCE_TYPE_POLICY":      7,
-		"RESOURCE_TYPE_KEY":         8,
-	}
-)
-
-func (x ResourceType) Enum() *ResourceType {
-	p := new(ResourceType)
-	*p = x
-	return p
-}
-
-func (x ResourceType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (ResourceType) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[0].Descriptor()
-}
-
-func (ResourceType) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[0]
-}
-
-func (x ResourceType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use ResourceType.Descriptor instead.
-func (ResourceType) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{0}
-}
 
 // First-class execution modes implemented by the Invocation service.
 type ExecutionMode int32
@@ -151,11 +81,11 @@ func (x ExecutionMode) String() string {
 }
 
 func (ExecutionMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[1].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[0].Descriptor()
 }
 
 func (ExecutionMode) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[1]
+	return &file_axon_v1_types_proto_enumTypes[0]
 }
 
 func (x ExecutionMode) Number() protoreflect.EnumNumber {
@@ -164,17 +94,16 @@ func (x ExecutionMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ExecutionMode.Descriptor instead.
 func (ExecutionMode) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{1}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{0}
 }
 
-// Priority levels carried by every Envelope.
-// The scheduler MUST respect priority ordering: CRITICAL
-// preempts all others; BACKGROUND yields to everything.
+// Priority hint carried by every Envelope. The runtime host maps it to its
+// own bounded execution policy.
 type Priority int32
 
 const (
 	Priority_PRIORITY_UNSPECIFIED Priority = 0 // treated as NORMAL
-	Priority_PRIORITY_CRITICAL    Priority = 1 // system: heartbeat, failover, circuit-breaker probes
+	Priority_PRIORITY_CRITICAL    Priority = 1 // runtime-critical invocation work
 	Priority_PRIORITY_HIGH        Priority = 2 // interactive: LLM response, real-time sensor
 	Priority_PRIORITY_NORMAL      Priority = 3 // default: standard invocations
 	Priority_PRIORITY_LOW         Priority = 4 // deferrable: batch processing, background sync
@@ -212,11 +141,11 @@ func (x Priority) String() string {
 }
 
 func (Priority) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[2].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[1].Descriptor()
 }
 
 func (Priority) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[2]
+	return &file_axon_v1_types_proto_enumTypes[1]
 }
 
 func (x Priority) Number() protoreflect.EnumNumber {
@@ -225,59 +154,7 @@ func (x Priority) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Priority.Descriptor instead.
 func (Priority) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{2}
-}
-
-type CircuitState int32
-
-const (
-	CircuitState_CIRCUIT_STATE_UNSPECIFIED CircuitState = 0
-	CircuitState_CIRCUIT_STATE_CLOSED      CircuitState = 1 // normal: requests flow through
-	CircuitState_CIRCUIT_STATE_OPEN        CircuitState = 2 // tripped: all requests fast-fail
-	CircuitState_CIRCUIT_STATE_HALF_OPEN   CircuitState = 3 // probing: limited requests to test recovery
-)
-
-// Enum value maps for CircuitState.
-var (
-	CircuitState_name = map[int32]string{
-		0: "CIRCUIT_STATE_UNSPECIFIED",
-		1: "CIRCUIT_STATE_CLOSED",
-		2: "CIRCUIT_STATE_OPEN",
-		3: "CIRCUIT_STATE_HALF_OPEN",
-	}
-	CircuitState_value = map[string]int32{
-		"CIRCUIT_STATE_UNSPECIFIED": 0,
-		"CIRCUIT_STATE_CLOSED":      1,
-		"CIRCUIT_STATE_OPEN":        2,
-		"CIRCUIT_STATE_HALF_OPEN":   3,
-	}
-)
-
-func (x CircuitState) Enum() *CircuitState {
-	p := new(CircuitState)
-	*p = x
-	return p
-}
-
-func (x CircuitState) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (CircuitState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[3].Descriptor()
-}
-
-func (CircuitState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[3]
-}
-
-func (x CircuitState) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use CircuitState.Descriptor instead.
-func (CircuitState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{3}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{1}
 }
 
 type EncryptionAlgorithm int32
@@ -313,11 +190,11 @@ func (x EncryptionAlgorithm) String() string {
 }
 
 func (EncryptionAlgorithm) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[4].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[2].Descriptor()
 }
 
 func (EncryptionAlgorithm) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[4]
+	return &file_axon_v1_types_proto_enumTypes[2]
 }
 
 func (x EncryptionAlgorithm) Number() protoreflect.EnumNumber {
@@ -326,7 +203,7 @@ func (x EncryptionAlgorithm) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EncryptionAlgorithm.Descriptor instead.
 func (EncryptionAlgorithm) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{4}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{2}
 }
 
 // EntityRef is the normalized reference shape used when descriptor-bound
@@ -381,11 +258,11 @@ func (x EntityRefKind) String() string {
 }
 
 func (EntityRefKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[5].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[3].Descriptor()
 }
 
 func (EntityRefKind) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[5]
+	return &file_axon_v1_types_proto_enumTypes[3]
 }
 
 func (x EntityRefKind) Number() protoreflect.EnumNumber {
@@ -394,7 +271,7 @@ func (x EntityRefKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EntityRefKind.Descriptor instead.
 func (EntityRefKind) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{5}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{3}
 }
 
 type ErrorStage int32
@@ -454,11 +331,11 @@ func (x ErrorStage) String() string {
 }
 
 func (ErrorStage) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[6].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[4].Descriptor()
 }
 
 func (ErrorStage) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[6]
+	return &file_axon_v1_types_proto_enumTypes[4]
 }
 
 func (x ErrorStage) Number() protoreflect.EnumNumber {
@@ -467,7 +344,7 @@ func (x ErrorStage) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ErrorStage.Descriptor instead.
 func (ErrorStage) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{6}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{4}
 }
 
 type SecurityClass int32
@@ -521,11 +398,11 @@ func (x SecurityClass) String() string {
 }
 
 func (SecurityClass) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[7].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[5].Descriptor()
 }
 
 func (SecurityClass) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[7]
+	return &file_axon_v1_types_proto_enumTypes[5]
 }
 
 func (x SecurityClass) Number() protoreflect.EnumNumber {
@@ -534,7 +411,7 @@ func (x SecurityClass) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SecurityClass.Descriptor instead.
 func (SecurityClass) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{7}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{5}
 }
 
 type LedgerEventPayloadKind int32
@@ -573,11 +450,11 @@ func (x LedgerEventPayloadKind) String() string {
 }
 
 func (LedgerEventPayloadKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[8].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[6].Descriptor()
 }
 
 func (LedgerEventPayloadKind) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[8]
+	return &file_axon_v1_types_proto_enumTypes[6]
 }
 
 func (x LedgerEventPayloadKind) Number() protoreflect.EnumNumber {
@@ -586,195 +463,7 @@ func (x LedgerEventPayloadKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use LedgerEventPayloadKind.Descriptor instead.
 func (LedgerEventPayloadKind) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{8}
-}
-
-type NodeState int32
-
-const (
-	NodeState_NODE_STATE_UNSPECIFIED NodeState = 0
-	NodeState_NODE_STATE_JOINING     NodeState = 1
-	NodeState_NODE_STATE_PROBATION   NodeState = 2 // verified identity, trust not yet earned
-	NodeState_NODE_STATE_HEALTHY     NodeState = 3 // full trust, all workloads eligible
-	NodeState_NODE_STATE_SUSPECT     NodeState = 4 // heartbeat timeout or error spike
-	NodeState_NODE_STATE_QUARANTINED NodeState = 5 // isolated after repeated failures
-	NodeState_NODE_STATE_DRAINING    NodeState = 6 // graceful shutdown, no new dispatch
-	NodeState_NODE_STATE_REMOVED     NodeState = 7 // tombstone
-)
-
-// Enum value maps for NodeState.
-var (
-	NodeState_name = map[int32]string{
-		0: "NODE_STATE_UNSPECIFIED",
-		1: "NODE_STATE_JOINING",
-		2: "NODE_STATE_PROBATION",
-		3: "NODE_STATE_HEALTHY",
-		4: "NODE_STATE_SUSPECT",
-		5: "NODE_STATE_QUARANTINED",
-		6: "NODE_STATE_DRAINING",
-		7: "NODE_STATE_REMOVED",
-	}
-	NodeState_value = map[string]int32{
-		"NODE_STATE_UNSPECIFIED": 0,
-		"NODE_STATE_JOINING":     1,
-		"NODE_STATE_PROBATION":   2,
-		"NODE_STATE_HEALTHY":     3,
-		"NODE_STATE_SUSPECT":     4,
-		"NODE_STATE_QUARANTINED": 5,
-		"NODE_STATE_DRAINING":    6,
-		"NODE_STATE_REMOVED":     7,
-	}
-)
-
-func (x NodeState) Enum() *NodeState {
-	p := new(NodeState)
-	*p = x
-	return p
-}
-
-func (x NodeState) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (NodeState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[9].Descriptor()
-}
-
-func (NodeState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[9]
-}
-
-func (x NodeState) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use NodeState.Descriptor instead.
-func (NodeState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{9}
-}
-
-type TrustLevel int32
-
-const (
-	TrustLevel_TRUST_LEVEL_UNSPECIFIED TrustLevel = 0
-	TrustLevel_TRUST_LEVEL_UNTRUSTED   TrustLevel = 1 // rejected or revoked
-	TrustLevel_TRUST_LEVEL_PROBATION   TrustLevel = 2 // new node, low-risk workloads only
-	TrustLevel_TRUST_LEVEL_STANDARD    TrustLevel = 3 // normal operations
-	TrustLevel_TRUST_LEVEL_ELEVATED    TrustLevel = 4 // sensitive operations allowed
-	TrustLevel_TRUST_LEVEL_PRIVILEGED  TrustLevel = 5 // sensitive runtime operations allowed
-)
-
-// Enum value maps for TrustLevel.
-var (
-	TrustLevel_name = map[int32]string{
-		0: "TRUST_LEVEL_UNSPECIFIED",
-		1: "TRUST_LEVEL_UNTRUSTED",
-		2: "TRUST_LEVEL_PROBATION",
-		3: "TRUST_LEVEL_STANDARD",
-		4: "TRUST_LEVEL_ELEVATED",
-		5: "TRUST_LEVEL_PRIVILEGED",
-	}
-	TrustLevel_value = map[string]int32{
-		"TRUST_LEVEL_UNSPECIFIED": 0,
-		"TRUST_LEVEL_UNTRUSTED":   1,
-		"TRUST_LEVEL_PROBATION":   2,
-		"TRUST_LEVEL_STANDARD":    3,
-		"TRUST_LEVEL_ELEVATED":    4,
-		"TRUST_LEVEL_PRIVILEGED":  5,
-	}
-)
-
-func (x TrustLevel) Enum() *TrustLevel {
-	p := new(TrustLevel)
-	*p = x
-	return p
-}
-
-func (x TrustLevel) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (TrustLevel) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[10].Descriptor()
-}
-
-func (TrustLevel) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[10]
-}
-
-func (x TrustLevel) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use TrustLevel.Descriptor instead.
-func (TrustLevel) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{10}
-}
-
-// Runtime role of a node for scheduling purposes.
-//
-// Scheduling impact (see `core/runtime-rs/src/runtime/scheduler.rs`):
-//
-//	FULL         — serves invocations and coordination traffic.
-//	ORCHESTRATOR — coordinates control-plane traffic only; hard-excluded from invocation
-//	               target selection so the scheduler never dispatches abilities
-//	               here. Use for K8s-style control-plane nodes.
-//	WORKER       — serves invocations only. Use for edge devices that should
-//	               not accept control-plane coordination work.
-//
-// Default: `NODE_ROLE_UNSPECIFIED` is normalized to `NODE_ROLE_FULL` at
-// RegisterNode time. Descriptors observed downstream therefore never carry
-// UNSPECIFIED; treat it as an input-only sentinel.
-type NodeRole int32
-
-const (
-	NodeRole_NODE_ROLE_UNSPECIFIED  NodeRole = 0 // input-only sentinel; normalized to FULL
-	NodeRole_NODE_ROLE_FULL         NodeRole = 1
-	NodeRole_NODE_ROLE_ORCHESTRATOR NodeRole = 2
-	NodeRole_NODE_ROLE_WORKER       NodeRole = 3
-)
-
-// Enum value maps for NodeRole.
-var (
-	NodeRole_name = map[int32]string{
-		0: "NODE_ROLE_UNSPECIFIED",
-		1: "NODE_ROLE_FULL",
-		2: "NODE_ROLE_ORCHESTRATOR",
-		3: "NODE_ROLE_WORKER",
-	}
-	NodeRole_value = map[string]int32{
-		"NODE_ROLE_UNSPECIFIED":  0,
-		"NODE_ROLE_FULL":         1,
-		"NODE_ROLE_ORCHESTRATOR": 2,
-		"NODE_ROLE_WORKER":       3,
-	}
-)
-
-func (x NodeRole) Enum() *NodeRole {
-	p := new(NodeRole)
-	*p = x
-	return p
-}
-
-func (x NodeRole) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (NodeRole) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[11].Descriptor()
-}
-
-func (NodeRole) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[11]
-}
-
-func (x NodeRole) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use NodeRole.Descriptor instead.
-func (NodeRole) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{11}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{6}
 }
 
 type InvocationState int32
@@ -828,11 +517,11 @@ func (x InvocationState) String() string {
 }
 
 func (InvocationState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[12].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[7].Descriptor()
 }
 
 func (InvocationState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[12]
+	return &file_axon_v1_types_proto_enumTypes[7]
 }
 
 func (x InvocationState) Number() protoreflect.EnumNumber {
@@ -841,59 +530,7 @@ func (x InvocationState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InvocationState.Descriptor instead.
 func (InvocationState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{12}
-}
-
-type RoutingStrategy int32
-
-const (
-	RoutingStrategy_ROUTING_UNSPECIFIED   RoutingStrategy = 0
-	RoutingStrategy_ROUTING_DIRECT        RoutingStrategy = 1 // caller specifies node_id
-	RoutingStrategy_ROUTING_LOAD_BALANCED RoutingStrategy = 2 // scheduler picks best node
-	RoutingStrategy_ROUTING_BROADCAST     RoutingStrategy = 3 // all matching nodes
-)
-
-// Enum value maps for RoutingStrategy.
-var (
-	RoutingStrategy_name = map[int32]string{
-		0: "ROUTING_UNSPECIFIED",
-		1: "ROUTING_DIRECT",
-		2: "ROUTING_LOAD_BALANCED",
-		3: "ROUTING_BROADCAST",
-	}
-	RoutingStrategy_value = map[string]int32{
-		"ROUTING_UNSPECIFIED":   0,
-		"ROUTING_DIRECT":        1,
-		"ROUTING_LOAD_BALANCED": 2,
-		"ROUTING_BROADCAST":     3,
-	}
-)
-
-func (x RoutingStrategy) Enum() *RoutingStrategy {
-	p := new(RoutingStrategy)
-	*p = x
-	return p
-}
-
-func (x RoutingStrategy) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (RoutingStrategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[13].Descriptor()
-}
-
-func (RoutingStrategy) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[13]
-}
-
-func (x RoutingStrategy) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use RoutingStrategy.Descriptor instead.
-func (RoutingStrategy) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{13}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{7}
 }
 
 // Distinguishes the semantic kind of invocation target at the protocol level,
@@ -929,11 +566,11 @@ func (x InvocationTargetKind) String() string {
 }
 
 func (InvocationTargetKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[14].Descriptor()
+	return file_axon_v1_types_proto_enumTypes[8].Descriptor()
 }
 
 func (InvocationTargetKind) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[14]
+	return &file_axon_v1_types_proto_enumTypes[8]
 }
 
 func (x InvocationTargetKind) Number() protoreflect.EnumNumber {
@@ -942,606 +579,7 @@ func (x InvocationTargetKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InvocationTargetKind.Descriptor instead.
 func (InvocationTargetKind) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{14}
-}
-
-type StreamFrameType int32
-
-const (
-	StreamFrameType_STREAM_FRAME_UNSPECIFIED StreamFrameType = 0
-	StreamFrameType_STREAM_FRAME_OPEN        StreamFrameType = 1 // initiate session
-	StreamFrameType_STREAM_FRAME_DATA        StreamFrameType = 2 // payload chunk
-	StreamFrameType_STREAM_FRAME_CREDIT      StreamFrameType = 3 // flow control: grant N more frames
-	StreamFrameType_STREAM_FRAME_ACK         StreamFrameType = 4 // delivery acknowledgment
-	StreamFrameType_STREAM_FRAME_CANCEL      StreamFrameType = 5 // request cancellation
-	StreamFrameType_STREAM_FRAME_ERROR       StreamFrameType = 6 // error with retryability marker
-	StreamFrameType_STREAM_FRAME_DONE        StreamFrameType = 7 // terminal: successful completion
-	StreamFrameType_STREAM_FRAME_RESUME      StreamFrameType = 8 // resume a previously disconnected session
-	StreamFrameType_STREAM_FRAME_CHECKPOINT  StreamFrameType = 9 // producer/consumer checkpoint for replay window
-)
-
-// Enum value maps for StreamFrameType.
-var (
-	StreamFrameType_name = map[int32]string{
-		0: "STREAM_FRAME_UNSPECIFIED",
-		1: "STREAM_FRAME_OPEN",
-		2: "STREAM_FRAME_DATA",
-		3: "STREAM_FRAME_CREDIT",
-		4: "STREAM_FRAME_ACK",
-		5: "STREAM_FRAME_CANCEL",
-		6: "STREAM_FRAME_ERROR",
-		7: "STREAM_FRAME_DONE",
-		8: "STREAM_FRAME_RESUME",
-		9: "STREAM_FRAME_CHECKPOINT",
-	}
-	StreamFrameType_value = map[string]int32{
-		"STREAM_FRAME_UNSPECIFIED": 0,
-		"STREAM_FRAME_OPEN":        1,
-		"STREAM_FRAME_DATA":        2,
-		"STREAM_FRAME_CREDIT":      3,
-		"STREAM_FRAME_ACK":         4,
-		"STREAM_FRAME_CANCEL":      5,
-		"STREAM_FRAME_ERROR":       6,
-		"STREAM_FRAME_DONE":        7,
-		"STREAM_FRAME_RESUME":      8,
-		"STREAM_FRAME_CHECKPOINT":  9,
-	}
-)
-
-func (x StreamFrameType) Enum() *StreamFrameType {
-	p := new(StreamFrameType)
-	*p = x
-	return p
-}
-
-func (x StreamFrameType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (StreamFrameType) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[15].Descriptor()
-}
-
-func (StreamFrameType) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[15]
-}
-
-func (x StreamFrameType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use StreamFrameType.Descriptor instead.
-func (StreamFrameType) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{15}
-}
-
-type KeyState int32
-
-const (
-	KeyState_KEY_STATE_UNSPECIFIED KeyState = 0
-	KeyState_KEY_STATE_ACTIVE      KeyState = 1 // current key, accepting signatures
-	KeyState_KEY_STATE_ROTATED     KeyState = 2 // superseded by a newer key
-	KeyState_KEY_STATE_REVOKED     KeyState = 3 // compromised or explicitly revoked
-)
-
-// Enum value maps for KeyState.
-var (
-	KeyState_name = map[int32]string{
-		0: "KEY_STATE_UNSPECIFIED",
-		1: "KEY_STATE_ACTIVE",
-		2: "KEY_STATE_ROTATED",
-		3: "KEY_STATE_REVOKED",
-	}
-	KeyState_value = map[string]int32{
-		"KEY_STATE_UNSPECIFIED": 0,
-		"KEY_STATE_ACTIVE":      1,
-		"KEY_STATE_ROTATED":     2,
-		"KEY_STATE_REVOKED":     3,
-	}
-)
-
-func (x KeyState) Enum() *KeyState {
-	p := new(KeyState)
-	*p = x
-	return p
-}
-
-func (x KeyState) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (KeyState) Descriptor() protoreflect.EnumDescriptor {
-	return file_axon_v1_types_proto_enumTypes[16].Descriptor()
-}
-
-func (KeyState) Type() protoreflect.EnumType {
-	return &file_axon_v1_types_proto_enumTypes[16]
-}
-
-func (x KeyState) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use KeyState.Descriptor instead.
-func (KeyState) EnumDescriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{16}
-}
-
-// Typed reference to any Axon-managed resource.
-// The canonical locator is always the full URA in `ura`.
-// Example: EasyNet URA /r/acme/resource/alice.invocations/req-42
-type ResourceRef struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          ResourceType           `protobuf:"varint,1,opt,name=type,proto3,enum=axon.v1.ResourceType" json:"type,omitempty"`
-	ResourceId    string                 `protobuf:"bytes,2,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"` // primary identifier
-	SubId         string                 `protobuf:"bytes,3,opt,name=sub_id,json=subId,proto3" json:"sub_id,omitempty"`                // optional: rule_id, key_version, stream shard, etc.
-	TenantId      string                 `protobuf:"bytes,4,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	Ura           string                 `protobuf:"bytes,5,opt,name=ura,proto3" json:"ura,omitempty"` // full canonical URA supplied by the URA builder
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ResourceRef) Reset() {
-	*x = ResourceRef{}
-	mi := &file_axon_v1_types_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ResourceRef) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ResourceRef) ProtoMessage() {}
-
-func (x *ResourceRef) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ResourceRef.ProtoReflect.Descriptor instead.
-func (*ResourceRef) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *ResourceRef) GetType() ResourceType {
-	if x != nil {
-		return x.Type
-	}
-	return ResourceType_RESOURCE_TYPE_UNSPECIFIED
-}
-
-func (x *ResourceRef) GetResourceId() string {
-	if x != nil {
-		return x.ResourceId
-	}
-	return ""
-}
-
-func (x *ResourceRef) GetSubId() string {
-	if x != nil {
-		return x.SubId
-	}
-	return ""
-}
-
-func (x *ResourceRef) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
-	}
-	return ""
-}
-
-func (x *ResourceRef) GetUra() string {
-	if x != nil {
-		return x.Ura
-	}
-	return ""
-}
-
-// Returned in Invoke and InvokeStream responses so callers can self-regulate.
-// When throttled=true, callers SHOULD respect retry_after_ms from
-// RateLimitInfo.
-type BackpressureSignal struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	QueueDepth      int32                  `protobuf:"varint,1,opt,name=queue_depth,json=queueDepth,proto3" json:"queue_depth,omitempty"`                  // current queue depth on the serving node
-	EstimatedWaitMs int32                  `protobuf:"varint,2,opt,name=estimated_wait_ms,json=estimatedWaitMs,proto3" json:"estimated_wait_ms,omitempty"` // estimated wait before execution starts
-	Throttled       bool                   `protobuf:"varint,3,opt,name=throttled,proto3" json:"throttled,omitempty"`                                      // true if this request was throttled/delayed
-	LoadFactor      float64                `protobuf:"fixed64,4,opt,name=load_factor,json=loadFactor,proto3" json:"load_factor,omitempty"`                 // 0.0-1.0 current node load ratio
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *BackpressureSignal) Reset() {
-	*x = BackpressureSignal{}
-	mi := &file_axon_v1_types_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BackpressureSignal) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BackpressureSignal) ProtoMessage() {}
-
-func (x *BackpressureSignal) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BackpressureSignal.ProtoReflect.Descriptor instead.
-func (*BackpressureSignal) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *BackpressureSignal) GetQueueDepth() int32 {
-	if x != nil {
-		return x.QueueDepth
-	}
-	return 0
-}
-
-func (x *BackpressureSignal) GetEstimatedWaitMs() int32 {
-	if x != nil {
-		return x.EstimatedWaitMs
-	}
-	return 0
-}
-
-func (x *BackpressureSignal) GetThrottled() bool {
-	if x != nil {
-		return x.Throttled
-	}
-	return false
-}
-
-func (x *BackpressureSignal) GetLoadFactor() float64 {
-	if x != nil {
-		return x.LoadFactor
-	}
-	return 0
-}
-
-type CircuitBreakerConfig struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	FailureThreshold     int32                  `protobuf:"varint,1,opt,name=failure_threshold,json=failureThreshold,proto3" json:"failure_threshold,omitempty"`                // failure count before OPEN
-	SuccessThreshold     int32                  `protobuf:"varint,2,opt,name=success_threshold,json=successThreshold,proto3" json:"success_threshold,omitempty"`                // successes in HALF_OPEN before CLOSED
-	WindowSeconds        int32                  `protobuf:"varint,3,opt,name=window_seconds,json=windowSeconds,proto3" json:"window_seconds,omitempty"`                         // sliding window for failure counting
-	OpenDurationSeconds  int32                  `protobuf:"varint,4,opt,name=open_duration_seconds,json=openDurationSeconds,proto3" json:"open_duration_seconds,omitempty"`     // how long OPEN before HALF_OPEN
-	FailureRateThreshold float64                `protobuf:"fixed64,5,opt,name=failure_rate_threshold,json=failureRateThreshold,proto3" json:"failure_rate_threshold,omitempty"` // 0.0-1.0 rate-based threshold (alternative to count)
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
-}
-
-func (x *CircuitBreakerConfig) Reset() {
-	*x = CircuitBreakerConfig{}
-	mi := &file_axon_v1_types_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CircuitBreakerConfig) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CircuitBreakerConfig) ProtoMessage() {}
-
-func (x *CircuitBreakerConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CircuitBreakerConfig.ProtoReflect.Descriptor instead.
-func (*CircuitBreakerConfig) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *CircuitBreakerConfig) GetFailureThreshold() int32 {
-	if x != nil {
-		return x.FailureThreshold
-	}
-	return 0
-}
-
-func (x *CircuitBreakerConfig) GetSuccessThreshold() int32 {
-	if x != nil {
-		return x.SuccessThreshold
-	}
-	return 0
-}
-
-func (x *CircuitBreakerConfig) GetWindowSeconds() int32 {
-	if x != nil {
-		return x.WindowSeconds
-	}
-	return 0
-}
-
-func (x *CircuitBreakerConfig) GetOpenDurationSeconds() int32 {
-	if x != nil {
-		return x.OpenDurationSeconds
-	}
-	return 0
-}
-
-func (x *CircuitBreakerConfig) GetFailureRateThreshold() float64 {
-	if x != nil {
-		return x.FailureRateThreshold
-	}
-	return 0
-}
-
-type CircuitBreakerStatus struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	State                CircuitState           `protobuf:"varint,1,opt,name=state,proto3,enum=axon.v1.CircuitState" json:"state,omitempty"`
-	Scope                string                 `protobuf:"bytes,2,opt,name=scope,proto3" json:"scope,omitempty"` // "node:<id>/ability:<name>"
-	FailureCount         int32                  `protobuf:"varint,3,opt,name=failure_count,json=failureCount,proto3" json:"failure_count,omitempty"`
-	SuccessCount         int32                  `protobuf:"varint,4,opt,name=success_count,json=successCount,proto3" json:"success_count,omitempty"`
-	LastFailureUnixMs    int64                  `protobuf:"varint,5,opt,name=last_failure_unix_ms,json=lastFailureUnixMs,proto3" json:"last_failure_unix_ms,omitempty"`
-	StateChangedAtUnixMs int64                  `protobuf:"varint,6,opt,name=state_changed_at_unix_ms,json=stateChangedAtUnixMs,proto3" json:"state_changed_at_unix_ms,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
-}
-
-func (x *CircuitBreakerStatus) Reset() {
-	*x = CircuitBreakerStatus{}
-	mi := &file_axon_v1_types_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CircuitBreakerStatus) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CircuitBreakerStatus) ProtoMessage() {}
-
-func (x *CircuitBreakerStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CircuitBreakerStatus.ProtoReflect.Descriptor instead.
-func (*CircuitBreakerStatus) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *CircuitBreakerStatus) GetState() CircuitState {
-	if x != nil {
-		return x.State
-	}
-	return CircuitState_CIRCUIT_STATE_UNSPECIFIED
-}
-
-func (x *CircuitBreakerStatus) GetScope() string {
-	if x != nil {
-		return x.Scope
-	}
-	return ""
-}
-
-func (x *CircuitBreakerStatus) GetFailureCount() int32 {
-	if x != nil {
-		return x.FailureCount
-	}
-	return 0
-}
-
-func (x *CircuitBreakerStatus) GetSuccessCount() int32 {
-	if x != nil {
-		return x.SuccessCount
-	}
-	return 0
-}
-
-func (x *CircuitBreakerStatus) GetLastFailureUnixMs() int64 {
-	if x != nil {
-		return x.LastFailureUnixMs
-	}
-	return 0
-}
-
-func (x *CircuitBreakerStatus) GetStateChangedAtUnixMs() int64 {
-	if x != nil {
-		return x.StateChangedAtUnixMs
-	}
-	return 0
-}
-
-// Returned in responses so callers know their quota status.
-// When quota_remaining reaches 0, retry_after_ms indicates
-// how long to wait. Callers SHOULD implement client-side
-// exponential backoff using this signal.
-type RateLimitInfo struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	QuotaRemaining int32                  `protobuf:"varint,1,opt,name=quota_remaining,json=quotaRemaining,proto3" json:"quota_remaining,omitempty"`  // requests remaining in current window
-	QuotaLimit     int32                  `protobuf:"varint,2,opt,name=quota_limit,json=quotaLimit,proto3" json:"quota_limit,omitempty"`              // total requests allowed in window
-	ResetAtUnixMs  int64                  `protobuf:"varint,3,opt,name=reset_at_unix_ms,json=resetAtUnixMs,proto3" json:"reset_at_unix_ms,omitempty"` // when the window resets
-	RetryAfterMs   int32                  `protobuf:"varint,4,opt,name=retry_after_ms,json=retryAfterMs,proto3" json:"retry_after_ms,omitempty"`      // 0 = not throttled; >0 = wait this long
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *RateLimitInfo) Reset() {
-	*x = RateLimitInfo{}
-	mi := &file_axon_v1_types_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RateLimitInfo) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RateLimitInfo) ProtoMessage() {}
-
-func (x *RateLimitInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RateLimitInfo.ProtoReflect.Descriptor instead.
-func (*RateLimitInfo) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *RateLimitInfo) GetQuotaRemaining() int32 {
-	if x != nil {
-		return x.QuotaRemaining
-	}
-	return 0
-}
-
-func (x *RateLimitInfo) GetQuotaLimit() int32 {
-	if x != nil {
-		return x.QuotaLimit
-	}
-	return 0
-}
-
-func (x *RateLimitInfo) GetResetAtUnixMs() int64 {
-	if x != nil {
-		return x.ResetAtUnixMs
-	}
-	return 0
-}
-
-func (x *RateLimitInfo) GetRetryAfterMs() int32 {
-	if x != nil {
-		return x.RetryAfterMs
-	}
-	return 0
-}
-
-// Structured scheduling decision — replaces opaque reason strings.
-// Every field is a normalized 0.0-1.0 score; composite_score
-// is the weighted combination used for the final decision.
-type SchedulingScore struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	NodeId         string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	CompositeScore float64                `protobuf:"fixed64,2,opt,name=composite_score,json=compositeScore,proto3" json:"composite_score,omitempty"` // 0.0-1.0 overall fitness (higher = better)
-	LoadScore      float64                `protobuf:"fixed64,3,opt,name=load_score,json=loadScore,proto3" json:"load_score,omitempty"`                // resource availability
-	TrustScore     float64                `protobuf:"fixed64,4,opt,name=trust_score,json=trustScore,proto3" json:"trust_score,omitempty"`             // trust level contribution
-	AffinityScore  float64                `protobuf:"fixed64,5,opt,name=affinity_score,json=affinityScore,proto3" json:"affinity_score,omitempty"`    // affinity/locality match
-	LatencyScore   float64                `protobuf:"fixed64,6,opt,name=latency_score,json=latencyScore,proto3" json:"latency_score,omitempty"`       // estimated latency fitness
-	Reason         string                 `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`                                         // human-readable explanation
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *SchedulingScore) Reset() {
-	*x = SchedulingScore{}
-	mi := &file_axon_v1_types_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SchedulingScore) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SchedulingScore) ProtoMessage() {}
-
-func (x *SchedulingScore) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SchedulingScore.ProtoReflect.Descriptor instead.
-func (*SchedulingScore) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *SchedulingScore) GetNodeId() string {
-	if x != nil {
-		return x.NodeId
-	}
-	return ""
-}
-
-func (x *SchedulingScore) GetCompositeScore() float64 {
-	if x != nil {
-		return x.CompositeScore
-	}
-	return 0
-}
-
-func (x *SchedulingScore) GetLoadScore() float64 {
-	if x != nil {
-		return x.LoadScore
-	}
-	return 0
-}
-
-func (x *SchedulingScore) GetTrustScore() float64 {
-	if x != nil {
-		return x.TrustScore
-	}
-	return 0
-}
-
-func (x *SchedulingScore) GetAffinityScore() float64 {
-	if x != nil {
-		return x.AffinityScore
-	}
-	return 0
-}
-
-func (x *SchedulingScore) GetLatencyScore() float64 {
-	if x != nil {
-		return x.LatencyScore
-	}
-	return 0
-}
-
-func (x *SchedulingScore) GetReason() string {
-	if x != nil {
-		return x.Reason
-	}
-	return ""
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{8}
 }
 
 // Content negotiation envelope for any payload crossing
@@ -1560,7 +598,7 @@ type ContentEnvelope struct {
 
 func (x *ContentEnvelope) Reset() {
 	*x = ContentEnvelope{}
-	mi := &file_axon_v1_types_proto_msgTypes[6]
+	mi := &file_axon_v1_types_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1572,7 +610,7 @@ func (x *ContentEnvelope) String() string {
 func (*ContentEnvelope) ProtoMessage() {}
 
 func (x *ContentEnvelope) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[6]
+	mi := &file_axon_v1_types_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1585,7 +623,7 @@ func (x *ContentEnvelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContentEnvelope.ProtoReflect.Descriptor instead.
 func (*ContentEnvelope) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{6}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *ContentEnvelope) GetContentType() string {
@@ -1630,90 +668,6 @@ func (x *ContentEnvelope) GetKeyId() string {
 	return ""
 }
 
-type ChannelSecurity struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	CertFingerprint     string                 `protobuf:"bytes,1,opt,name=cert_fingerprint,json=certFingerprint,proto3" json:"cert_fingerprint,omitempty"` // SHA-256 of node's TLS certificate
-	TlsVersion          string                 `protobuf:"bytes,2,opt,name=tls_version,json=tlsVersion,proto3" json:"tls_version,omitempty"`                // "1.3"
-	CipherSuite         string                 `protobuf:"bytes,3,opt,name=cipher_suite,json=cipherSuite,proto3" json:"cipher_suite,omitempty"`             // e.g. "TLS_AES_256_GCM_SHA384"
-	MutualAuth          bool                   `protobuf:"varint,4,opt,name=mutual_auth,json=mutualAuth,proto3" json:"mutual_auth,omitempty"`               // true if mTLS handshake completed
-	CertExpiresAtUnixMs int64                  `protobuf:"varint,5,opt,name=cert_expires_at_unix_ms,json=certExpiresAtUnixMs,proto3" json:"cert_expires_at_unix_ms,omitempty"`
-	Issuer              string                 `protobuf:"bytes,6,opt,name=issuer,proto3" json:"issuer,omitempty"` // CA that issued the certificate
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
-}
-
-func (x *ChannelSecurity) Reset() {
-	*x = ChannelSecurity{}
-	mi := &file_axon_v1_types_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ChannelSecurity) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ChannelSecurity) ProtoMessage() {}
-
-func (x *ChannelSecurity) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ChannelSecurity.ProtoReflect.Descriptor instead.
-func (*ChannelSecurity) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *ChannelSecurity) GetCertFingerprint() string {
-	if x != nil {
-		return x.CertFingerprint
-	}
-	return ""
-}
-
-func (x *ChannelSecurity) GetTlsVersion() string {
-	if x != nil {
-		return x.TlsVersion
-	}
-	return ""
-}
-
-func (x *ChannelSecurity) GetCipherSuite() string {
-	if x != nil {
-		return x.CipherSuite
-	}
-	return ""
-}
-
-func (x *ChannelSecurity) GetMutualAuth() bool {
-	if x != nil {
-		return x.MutualAuth
-	}
-	return false
-}
-
-func (x *ChannelSecurity) GetCertExpiresAtUnixMs() int64 {
-	if x != nil {
-		return x.CertExpiresAtUnixMs
-	}
-	return 0
-}
-
-func (x *ChannelSecurity) GetIssuer() string {
-	if x != nil {
-		return x.Issuer
-	}
-	return ""
-}
-
 // Encrypted payload envelope. Wraps any payload that requires
 // end-to-end confidentiality across intermediary nodes.
 type EncryptedPayload struct {
@@ -1731,7 +685,7 @@ type EncryptedPayload struct {
 
 func (x *EncryptedPayload) Reset() {
 	*x = EncryptedPayload{}
-	mi := &file_axon_v1_types_proto_msgTypes[8]
+	mi := &file_axon_v1_types_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1743,7 +697,7 @@ func (x *EncryptedPayload) String() string {
 func (*EncryptedPayload) ProtoMessage() {}
 
 func (x *EncryptedPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[8]
+	mi := &file_axon_v1_types_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1756,7 +710,7 @@ func (x *EncryptedPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EncryptedPayload.ProtoReflect.Descriptor instead.
 func (*EncryptedPayload) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{8}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *EncryptedPayload) GetAlgorithm() EncryptionAlgorithm {
@@ -1827,7 +781,7 @@ type AgentIdentity struct {
 
 func (x *AgentIdentity) Reset() {
 	*x = AgentIdentity{}
-	mi := &file_axon_v1_types_proto_msgTypes[9]
+	mi := &file_axon_v1_types_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1839,7 +793,7 @@ func (x *AgentIdentity) String() string {
 func (*AgentIdentity) ProtoMessage() {}
 
 func (x *AgentIdentity) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[9]
+	mi := &file_axon_v1_types_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1852,7 +806,7 @@ func (x *AgentIdentity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentIdentity.ProtoReflect.Descriptor instead.
 func (*AgentIdentity) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{9}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AgentIdentity) GetUra() string {
@@ -1879,7 +833,7 @@ type SubjectIdentity struct {
 
 func (x *SubjectIdentity) Reset() {
 	*x = SubjectIdentity{}
-	mi := &file_axon_v1_types_proto_msgTypes[10]
+	mi := &file_axon_v1_types_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1891,7 +845,7 @@ func (x *SubjectIdentity) String() string {
 func (*SubjectIdentity) ProtoMessage() {}
 
 func (x *SubjectIdentity) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[10]
+	mi := &file_axon_v1_types_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1904,7 +858,7 @@ func (x *SubjectIdentity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubjectIdentity.ProtoReflect.Descriptor instead.
 func (*SubjectIdentity) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{10}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SubjectIdentity) GetUra() string {
@@ -1938,7 +892,7 @@ type EntityRef struct {
 
 func (x *EntityRef) Reset() {
 	*x = EntityRef{}
-	mi := &file_axon_v1_types_proto_msgTypes[11]
+	mi := &file_axon_v1_types_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1950,7 +904,7 @@ func (x *EntityRef) String() string {
 func (*EntityRef) ProtoMessage() {}
 
 func (x *EntityRef) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[11]
+	mi := &file_axon_v1_types_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1963,7 +917,7 @@ func (x *EntityRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EntityRef.ProtoReflect.Descriptor instead.
 func (*EntityRef) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{11}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *EntityRef) GetKind() EntityRefKind {
@@ -2005,7 +959,7 @@ type InvocationAuthorityProof struct {
 
 func (x *InvocationAuthorityProof) Reset() {
 	*x = InvocationAuthorityProof{}
-	mi := &file_axon_v1_types_proto_msgTypes[12]
+	mi := &file_axon_v1_types_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2017,7 +971,7 @@ func (x *InvocationAuthorityProof) String() string {
 func (*InvocationAuthorityProof) ProtoMessage() {}
 
 func (x *InvocationAuthorityProof) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[12]
+	mi := &file_axon_v1_types_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2030,7 +984,7 @@ func (x *InvocationAuthorityProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationAuthorityProof.ProtoReflect.Descriptor instead.
 func (*InvocationAuthorityProof) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{12}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *InvocationAuthorityProof) GetProofType() string {
@@ -2097,7 +1051,7 @@ type CausalContext struct {
 
 func (x *CausalContext) Reset() {
 	*x = CausalContext{}
-	mi := &file_axon_v1_types_proto_msgTypes[13]
+	mi := &file_axon_v1_types_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2109,7 +1063,7 @@ func (x *CausalContext) String() string {
 func (*CausalContext) ProtoMessage() {}
 
 func (x *CausalContext) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[13]
+	mi := &file_axon_v1_types_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2122,7 +1076,7 @@ func (x *CausalContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CausalContext.ProtoReflect.Descriptor instead.
 func (*CausalContext) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{13}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CausalContext) GetForm() isCausalContext_Form {
@@ -2204,7 +1158,7 @@ type Empty struct {
 
 func (x *Empty) Reset() {
 	*x = Empty{}
-	mi := &file_axon_v1_types_proto_msgTypes[14]
+	mi := &file_axon_v1_types_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2216,7 +1170,7 @@ func (x *Empty) String() string {
 func (*Empty) ProtoMessage() {}
 
 func (x *Empty) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[14]
+	mi := &file_axon_v1_types_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2229,7 +1183,7 @@ func (x *Empty) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Empty.ProtoReflect.Descriptor instead.
 func (*Empty) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{14}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{7}
 }
 
 type ReceiptRef struct {
@@ -2244,7 +1198,7 @@ type ReceiptRef struct {
 
 func (x *ReceiptRef) Reset() {
 	*x = ReceiptRef{}
-	mi := &file_axon_v1_types_proto_msgTypes[15]
+	mi := &file_axon_v1_types_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2256,7 +1210,7 @@ func (x *ReceiptRef) String() string {
 func (*ReceiptRef) ProtoMessage() {}
 
 func (x *ReceiptRef) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[15]
+	mi := &file_axon_v1_types_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2269,7 +1223,7 @@ func (x *ReceiptRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReceiptRef.ProtoReflect.Descriptor instead.
 func (*ReceiptRef) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{15}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ReceiptRef) GetReceiptHash() []byte {
@@ -2297,7 +1251,7 @@ type ReceiptList struct {
 
 func (x *ReceiptList) Reset() {
 	*x = ReceiptList{}
-	mi := &file_axon_v1_types_proto_msgTypes[16]
+	mi := &file_axon_v1_types_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2309,7 +1263,7 @@ func (x *ReceiptList) String() string {
 func (*ReceiptList) ProtoMessage() {}
 
 func (x *ReceiptList) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[16]
+	mi := &file_axon_v1_types_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2322,7 +1276,7 @@ func (x *ReceiptList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReceiptList.ProtoReflect.Descriptor instead.
 func (*ReceiptList) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{16}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ReceiptList) GetPrior() []*ReceiptRef {
@@ -2342,7 +1296,7 @@ type MerkleRoot struct {
 
 func (x *MerkleRoot) Reset() {
 	*x = MerkleRoot{}
-	mi := &file_axon_v1_types_proto_msgTypes[17]
+	mi := &file_axon_v1_types_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2354,7 +1308,7 @@ func (x *MerkleRoot) String() string {
 func (*MerkleRoot) ProtoMessage() {}
 
 func (x *MerkleRoot) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[17]
+	mi := &file_axon_v1_types_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2367,7 +1321,7 @@ func (x *MerkleRoot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MerkleRoot.ProtoReflect.Descriptor instead.
 func (*MerkleRoot) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{17}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *MerkleRoot) GetRoot() []byte {
@@ -2398,7 +1352,7 @@ type CallerSignature struct {
 
 func (x *CallerSignature) Reset() {
 	*x = CallerSignature{}
-	mi := &file_axon_v1_types_proto_msgTypes[18]
+	mi := &file_axon_v1_types_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2410,7 +1364,7 @@ func (x *CallerSignature) String() string {
 func (*CallerSignature) ProtoMessage() {}
 
 func (x *CallerSignature) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[18]
+	mi := &file_axon_v1_types_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2423,7 +1377,7 @@ func (x *CallerSignature) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallerSignature.ProtoReflect.Descriptor instead.
 func (*CallerSignature) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{18}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CallerSignature) GetAlgorithm() string {
@@ -2458,7 +1412,7 @@ type CalleeSignature struct {
 
 func (x *CalleeSignature) Reset() {
 	*x = CalleeSignature{}
-	mi := &file_axon_v1_types_proto_msgTypes[19]
+	mi := &file_axon_v1_types_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2470,7 +1424,7 @@ func (x *CalleeSignature) String() string {
 func (*CalleeSignature) ProtoMessage() {}
 
 func (x *CalleeSignature) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[19]
+	mi := &file_axon_v1_types_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2483,7 +1437,7 @@ func (x *CalleeSignature) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CalleeSignature.ProtoReflect.Descriptor instead.
 func (*CalleeSignature) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{19}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CalleeSignature) GetAlgorithm() string {
@@ -2524,7 +1478,7 @@ type AuthorityBinding struct {
 
 func (x *AuthorityBinding) Reset() {
 	*x = AuthorityBinding{}
-	mi := &file_axon_v1_types_proto_msgTypes[20]
+	mi := &file_axon_v1_types_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2536,7 +1490,7 @@ func (x *AuthorityBinding) String() string {
 func (*AuthorityBinding) ProtoMessage() {}
 
 func (x *AuthorityBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[20]
+	mi := &file_axon_v1_types_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2549,7 +1503,7 @@ func (x *AuthorityBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuthorityBinding.ProtoReflect.Descriptor instead.
 func (*AuthorityBinding) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{20}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AuthorityBinding) GetAuthority() isAuthorityBinding_Authority {
@@ -2667,7 +1621,7 @@ type SelfAuthority struct {
 
 func (x *SelfAuthority) Reset() {
 	*x = SelfAuthority{}
-	mi := &file_axon_v1_types_proto_msgTypes[21]
+	mi := &file_axon_v1_types_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2679,7 +1633,7 @@ func (x *SelfAuthority) String() string {
 func (*SelfAuthority) ProtoMessage() {}
 
 func (x *SelfAuthority) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[21]
+	mi := &file_axon_v1_types_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2692,7 +1646,7 @@ func (x *SelfAuthority) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelfAuthority.ProtoReflect.Descriptor instead.
 func (*SelfAuthority) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{21}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SelfAuthority) GetPrincipalUra() string {
@@ -2722,7 +1676,7 @@ type DelegationProof struct {
 
 func (x *DelegationProof) Reset() {
 	*x = DelegationProof{}
-	mi := &file_axon_v1_types_proto_msgTypes[22]
+	mi := &file_axon_v1_types_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2734,7 +1688,7 @@ func (x *DelegationProof) String() string {
 func (*DelegationProof) ProtoMessage() {}
 
 func (x *DelegationProof) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[22]
+	mi := &file_axon_v1_types_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2747,7 +1701,7 @@ func (x *DelegationProof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DelegationProof.ProtoReflect.Descriptor instead.
 func (*DelegationProof) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{22}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DelegationProof) GetIssuerUra() string {
@@ -2816,7 +1770,7 @@ type CapabilityGrant struct {
 
 func (x *CapabilityGrant) Reset() {
 	*x = CapabilityGrant{}
-	mi := &file_axon_v1_types_proto_msgTypes[23]
+	mi := &file_axon_v1_types_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2828,7 +1782,7 @@ func (x *CapabilityGrant) String() string {
 func (*CapabilityGrant) ProtoMessage() {}
 
 func (x *CapabilityGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[23]
+	mi := &file_axon_v1_types_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2841,7 +1795,7 @@ func (x *CapabilityGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityGrant.ProtoReflect.Descriptor instead.
 func (*CapabilityGrant) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{23}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CapabilityGrant) GetCapabilityUra() string {
@@ -2861,7 +1815,7 @@ type PolicyGrant struct {
 
 func (x *PolicyGrant) Reset() {
 	*x = PolicyGrant{}
-	mi := &file_axon_v1_types_proto_msgTypes[24]
+	mi := &file_axon_v1_types_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2873,7 +1827,7 @@ func (x *PolicyGrant) String() string {
 func (*PolicyGrant) ProtoMessage() {}
 
 func (x *PolicyGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[24]
+	mi := &file_axon_v1_types_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2886,7 +1840,7 @@ func (x *PolicyGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyGrant.ProtoReflect.Descriptor instead.
 func (*PolicyGrant) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{24}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *PolicyGrant) GetPolicyUra() string {
@@ -2917,7 +1871,7 @@ type SessionAuthority struct {
 
 func (x *SessionAuthority) Reset() {
 	*x = SessionAuthority{}
-	mi := &file_axon_v1_types_proto_msgTypes[25]
+	mi := &file_axon_v1_types_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2929,7 +1883,7 @@ func (x *SessionAuthority) String() string {
 func (*SessionAuthority) ProtoMessage() {}
 
 func (x *SessionAuthority) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[25]
+	mi := &file_axon_v1_types_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2942,7 +1896,7 @@ func (x *SessionAuthority) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionAuthority.ProtoReflect.Descriptor instead.
 func (*SessionAuthority) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{25}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SessionAuthority) GetBackendUra() string {
@@ -3017,7 +1971,7 @@ type BootstrapAuthority struct {
 
 func (x *BootstrapAuthority) Reset() {
 	*x = BootstrapAuthority{}
-	mi := &file_axon_v1_types_proto_msgTypes[26]
+	mi := &file_axon_v1_types_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3029,7 +1983,7 @@ func (x *BootstrapAuthority) String() string {
 func (*BootstrapAuthority) ProtoMessage() {}
 
 func (x *BootstrapAuthority) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[26]
+	mi := &file_axon_v1_types_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3042,7 +1996,7 @@ func (x *BootstrapAuthority) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BootstrapAuthority.ProtoReflect.Descriptor instead.
 func (*BootstrapAuthority) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{26}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *BootstrapAuthority) GetPrincipalUra() string {
@@ -3094,7 +2048,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_axon_v1_types_proto_msgTypes[27]
+	mi := &file_axon_v1_types_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3106,7 +2060,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[27]
+	mi := &file_axon_v1_types_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3119,7 +2073,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{27}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Envelope) GetRequestId() string {
@@ -3228,7 +2182,7 @@ type ResponseHeader struct {
 
 func (x *ResponseHeader) Reset() {
 	*x = ResponseHeader{}
-	mi := &file_axon_v1_types_proto_msgTypes[28]
+	mi := &file_axon_v1_types_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3240,7 +2194,7 @@ func (x *ResponseHeader) String() string {
 func (*ResponseHeader) ProtoMessage() {}
 
 func (x *ResponseHeader) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[28]
+	mi := &file_axon_v1_types_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3253,7 +2207,7 @@ func (x *ResponseHeader) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResponseHeader.ProtoReflect.Descriptor instead.
 func (*ResponseHeader) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{28}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ResponseHeader) GetRequestId() string {
@@ -3298,7 +2252,7 @@ type Error struct {
 
 func (x *Error) Reset() {
 	*x = Error{}
-	mi := &file_axon_v1_types_proto_msgTypes[29]
+	mi := &file_axon_v1_types_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3310,7 +2264,7 @@ func (x *Error) String() string {
 func (*Error) ProtoMessage() {}
 
 func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[29]
+	mi := &file_axon_v1_types_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3323,7 +2277,7 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Error.ProtoReflect.Descriptor instead.
 func (*Error) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{29}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Error) GetCode() string {
@@ -3383,7 +2337,7 @@ type SealedLedgerEventPayload struct {
 
 func (x *SealedLedgerEventPayload) Reset() {
 	*x = SealedLedgerEventPayload{}
-	mi := &file_axon_v1_types_proto_msgTypes[30]
+	mi := &file_axon_v1_types_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3395,7 +2349,7 @@ func (x *SealedLedgerEventPayload) String() string {
 func (*SealedLedgerEventPayload) ProtoMessage() {}
 
 func (x *SealedLedgerEventPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[30]
+	mi := &file_axon_v1_types_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3408,7 +2362,7 @@ func (x *SealedLedgerEventPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SealedLedgerEventPayload.ProtoReflect.Descriptor instead.
 func (*SealedLedgerEventPayload) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{30}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SealedLedgerEventPayload) GetAlgorithm() string {
@@ -3474,7 +2428,7 @@ type LedgerEventPayload struct {
 
 func (x *LedgerEventPayload) Reset() {
 	*x = LedgerEventPayload{}
-	mi := &file_axon_v1_types_proto_msgTypes[31]
+	mi := &file_axon_v1_types_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3486,7 +2440,7 @@ func (x *LedgerEventPayload) String() string {
 func (*LedgerEventPayload) ProtoMessage() {}
 
 func (x *LedgerEventPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[31]
+	mi := &file_axon_v1_types_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3499,7 +2453,7 @@ func (x *LedgerEventPayload) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LedgerEventPayload.ProtoReflect.Descriptor instead.
 func (*LedgerEventPayload) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{31}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *LedgerEventPayload) GetKind() LedgerEventPayloadKind {
@@ -3554,7 +2508,7 @@ type RecipientSealedLedgerEventPayload struct {
 
 func (x *RecipientSealedLedgerEventPayload) Reset() {
 	*x = RecipientSealedLedgerEventPayload{}
-	mi := &file_axon_v1_types_proto_msgTypes[32]
+	mi := &file_axon_v1_types_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3566,7 +2520,7 @@ func (x *RecipientSealedLedgerEventPayload) String() string {
 func (*RecipientSealedLedgerEventPayload) ProtoMessage() {}
 
 func (x *RecipientSealedLedgerEventPayload) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[32]
+	mi := &file_axon_v1_types_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3579,7 +2533,7 @@ func (x *RecipientSealedLedgerEventPayload) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use RecipientSealedLedgerEventPayload.ProtoReflect.Descriptor instead.
 func (*RecipientSealedLedgerEventPayload) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{32}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RecipientSealedLedgerEventPayload) GetRecipientUra() string {
@@ -3610,7 +2564,7 @@ type LedgerPayloadVisibility struct {
 
 func (x *LedgerPayloadVisibility) Reset() {
 	*x = LedgerPayloadVisibility{}
-	mi := &file_axon_v1_types_proto_msgTypes[33]
+	mi := &file_axon_v1_types_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3622,7 +2576,7 @@ func (x *LedgerPayloadVisibility) String() string {
 func (*LedgerPayloadVisibility) ProtoMessage() {}
 
 func (x *LedgerPayloadVisibility) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[33]
+	mi := &file_axon_v1_types_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3635,7 +2589,7 @@ func (x *LedgerPayloadVisibility) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LedgerPayloadVisibility.ProtoReflect.Descriptor instead.
 func (*LedgerPayloadVisibility) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{33}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *LedgerPayloadVisibility) GetPolicy() string {
@@ -3691,7 +2645,7 @@ type LedgerVisibilitySummary struct {
 
 func (x *LedgerVisibilitySummary) Reset() {
 	*x = LedgerVisibilitySummary{}
-	mi := &file_axon_v1_types_proto_msgTypes[34]
+	mi := &file_axon_v1_types_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3703,7 +2657,7 @@ func (x *LedgerVisibilitySummary) String() string {
 func (*LedgerVisibilitySummary) ProtoMessage() {}
 
 func (x *LedgerVisibilitySummary) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[34]
+	mi := &file_axon_v1_types_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3716,7 +2670,7 @@ func (x *LedgerVisibilitySummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LedgerVisibilitySummary.ProtoReflect.Descriptor instead.
 func (*LedgerVisibilitySummary) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{34}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *LedgerVisibilitySummary) GetArgs() *LedgerPayloadVisibility {
@@ -3753,7 +2707,7 @@ type LedgerErrorRecord struct {
 
 func (x *LedgerErrorRecord) Reset() {
 	*x = LedgerErrorRecord{}
-	mi := &file_axon_v1_types_proto_msgTypes[35]
+	mi := &file_axon_v1_types_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3765,7 +2719,7 @@ func (x *LedgerErrorRecord) String() string {
 func (*LedgerErrorRecord) ProtoMessage() {}
 
 func (x *LedgerErrorRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[35]
+	mi := &file_axon_v1_types_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3778,7 +2732,7 @@ func (x *LedgerErrorRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LedgerErrorRecord.ProtoReflect.Descriptor instead.
 func (*LedgerErrorRecord) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{35}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *LedgerErrorRecord) GetSource() string {
@@ -3831,7 +2785,7 @@ type LedgerDiagnosticRecord struct {
 
 func (x *LedgerDiagnosticRecord) Reset() {
 	*x = LedgerDiagnosticRecord{}
-	mi := &file_axon_v1_types_proto_msgTypes[36]
+	mi := &file_axon_v1_types_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3843,7 +2797,7 @@ func (x *LedgerDiagnosticRecord) String() string {
 func (*LedgerDiagnosticRecord) ProtoMessage() {}
 
 func (x *LedgerDiagnosticRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[36]
+	mi := &file_axon_v1_types_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3856,7 +2810,7 @@ func (x *LedgerDiagnosticRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LedgerDiagnosticRecord.ProtoReflect.Descriptor instead.
 func (*LedgerDiagnosticRecord) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{36}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *LedgerDiagnosticRecord) GetTimestampUnixMs() int64 {
@@ -3921,7 +2875,7 @@ type InvocationReceiptAnchor struct {
 
 func (x *InvocationReceiptAnchor) Reset() {
 	*x = InvocationReceiptAnchor{}
-	mi := &file_axon_v1_types_proto_msgTypes[37]
+	mi := &file_axon_v1_types_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3933,7 +2887,7 @@ func (x *InvocationReceiptAnchor) String() string {
 func (*InvocationReceiptAnchor) ProtoMessage() {}
 
 func (x *InvocationReceiptAnchor) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[37]
+	mi := &file_axon_v1_types_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3946,7 +2900,7 @@ func (x *InvocationReceiptAnchor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationReceiptAnchor.ProtoReflect.Descriptor instead.
 func (*InvocationReceiptAnchor) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{37}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *InvocationReceiptAnchor) GetReceiptUra() string {
@@ -3996,7 +2950,7 @@ type InvocationReceiptChainSummary struct {
 
 func (x *InvocationReceiptChainSummary) Reset() {
 	*x = InvocationReceiptChainSummary{}
-	mi := &file_axon_v1_types_proto_msgTypes[38]
+	mi := &file_axon_v1_types_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4008,7 +2962,7 @@ func (x *InvocationReceiptChainSummary) String() string {
 func (*InvocationReceiptChainSummary) ProtoMessage() {}
 
 func (x *InvocationReceiptChainSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[38]
+	mi := &file_axon_v1_types_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4021,7 +2975,7 @@ func (x *InvocationReceiptChainSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationReceiptChainSummary.ProtoReflect.Descriptor instead.
 func (*InvocationReceiptChainSummary) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{38}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *InvocationReceiptChainSummary) GetAnchors() []*InvocationReceiptAnchor {
@@ -4064,7 +3018,7 @@ type InvocationCausalLink struct {
 
 func (x *InvocationCausalLink) Reset() {
 	*x = InvocationCausalLink{}
-	mi := &file_axon_v1_types_proto_msgTypes[39]
+	mi := &file_axon_v1_types_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4076,7 +3030,7 @@ func (x *InvocationCausalLink) String() string {
 func (*InvocationCausalLink) ProtoMessage() {}
 
 func (x *InvocationCausalLink) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[39]
+	mi := &file_axon_v1_types_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4089,7 +3043,7 @@ func (x *InvocationCausalLink) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationCausalLink.ProtoReflect.Descriptor instead.
 func (*InvocationCausalLink) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{39}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *InvocationCausalLink) GetSourceInvocationUra() string {
@@ -4133,7 +3087,7 @@ type InvocationTraceEdge struct {
 
 func (x *InvocationTraceEdge) Reset() {
 	*x = InvocationTraceEdge{}
-	mi := &file_axon_v1_types_proto_msgTypes[40]
+	mi := &file_axon_v1_types_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4145,7 +3099,7 @@ func (x *InvocationTraceEdge) String() string {
 func (*InvocationTraceEdge) ProtoMessage() {}
 
 func (x *InvocationTraceEdge) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[40]
+	mi := &file_axon_v1_types_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4158,7 +3112,7 @@ func (x *InvocationTraceEdge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationTraceEdge.ProtoReflect.Descriptor instead.
 func (*InvocationTraceEdge) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{40}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *InvocationTraceEdge) GetFromInvocationUra() string {
@@ -4207,7 +3161,7 @@ type InvocationTraceGraph struct {
 
 func (x *InvocationTraceGraph) Reset() {
 	*x = InvocationTraceGraph{}
-	mi := &file_axon_v1_types_proto_msgTypes[41]
+	mi := &file_axon_v1_types_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4219,7 +3173,7 @@ func (x *InvocationTraceGraph) String() string {
 func (*InvocationTraceGraph) ProtoMessage() {}
 
 func (x *InvocationTraceGraph) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[41]
+	mi := &file_axon_v1_types_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4232,7 +3186,7 @@ func (x *InvocationTraceGraph) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationTraceGraph.ProtoReflect.Descriptor instead.
 func (*InvocationTraceGraph) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{41}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *InvocationTraceGraph) GetTraceId() string {
@@ -4285,7 +3239,7 @@ type InvocationLedgerRecord struct {
 
 func (x *InvocationLedgerRecord) Reset() {
 	*x = InvocationLedgerRecord{}
-	mi := &file_axon_v1_types_proto_msgTypes[42]
+	mi := &file_axon_v1_types_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4297,7 +3251,7 @@ func (x *InvocationLedgerRecord) String() string {
 func (*InvocationLedgerRecord) ProtoMessage() {}
 
 func (x *InvocationLedgerRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[42]
+	mi := &file_axon_v1_types_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4310,7 +3264,7 @@ func (x *InvocationLedgerRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationLedgerRecord.ProtoReflect.Descriptor instead.
 func (*InvocationLedgerRecord) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{42}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *InvocationLedgerRecord) GetInvocationUra() string {
@@ -4460,260 +3414,6 @@ func (x *InvocationLedgerRecord) GetAuthorityBinding() string {
 	return ""
 }
 
-type ResourceSnapshot struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	CpuUsage           float64                `protobuf:"fixed64,1,opt,name=cpu_usage,json=cpuUsage,proto3" json:"cpu_usage,omitempty"`          // 0.0 - 1.0
-	MemoryUsage        float64                `protobuf:"fixed64,2,opt,name=memory_usage,json=memoryUsage,proto3" json:"memory_usage,omitempty"` // 0.0 - 1.0
-	GpuUsage           float64                `protobuf:"fixed64,3,opt,name=gpu_usage,json=gpuUsage,proto3" json:"gpu_usage,omitempty"`          // 0.0 - 1.0
-	QueueDepth         int32                  `protobuf:"varint,4,opt,name=queue_depth,json=queueDepth,proto3" json:"queue_depth,omitempty"`
-	ActiveStreams      int32                  `protobuf:"varint,5,opt,name=active_streams,json=activeStreams,proto3" json:"active_streams,omitempty"`
-	ActiveCalls        int32                  `protobuf:"varint,6,opt,name=active_calls,json=activeCalls,proto3" json:"active_calls,omitempty"`
-	DiskAvailableBytes int64                  `protobuf:"varint,7,opt,name=disk_available_bytes,json=diskAvailableBytes,proto3" json:"disk_available_bytes,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *ResourceSnapshot) Reset() {
-	*x = ResourceSnapshot{}
-	mi := &file_axon_v1_types_proto_msgTypes[43]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ResourceSnapshot) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ResourceSnapshot) ProtoMessage() {}
-
-func (x *ResourceSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[43]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ResourceSnapshot.ProtoReflect.Descriptor instead.
-func (*ResourceSnapshot) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{43}
-}
-
-func (x *ResourceSnapshot) GetCpuUsage() float64 {
-	if x != nil {
-		return x.CpuUsage
-	}
-	return 0
-}
-
-func (x *ResourceSnapshot) GetMemoryUsage() float64 {
-	if x != nil {
-		return x.MemoryUsage
-	}
-	return 0
-}
-
-func (x *ResourceSnapshot) GetGpuUsage() float64 {
-	if x != nil {
-		return x.GpuUsage
-	}
-	return 0
-}
-
-func (x *ResourceSnapshot) GetQueueDepth() int32 {
-	if x != nil {
-		return x.QueueDepth
-	}
-	return 0
-}
-
-func (x *ResourceSnapshot) GetActiveStreams() int32 {
-	if x != nil {
-		return x.ActiveStreams
-	}
-	return 0
-}
-
-func (x *ResourceSnapshot) GetActiveCalls() int32 {
-	if x != nil {
-		return x.ActiveCalls
-	}
-	return 0
-}
-
-func (x *ResourceSnapshot) GetDiskAvailableBytes() int64 {
-	if x != nil {
-		return x.DiskAvailableBytes
-	}
-	return 0
-}
-
-type NodeDescriptor struct {
-	state       protoimpl.MessageState `protogen:"open.v1"`
-	NodeId      string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	TenantId    string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	DisplayName string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
-	State       NodeState              `protobuf:"varint,4,opt,name=state,proto3,enum=axon.v1.NodeState" json:"state,omitempty"`
-	TrustLevel  TrustLevel             `protobuf:"varint,5,opt,name=trust_level,json=trustLevel,proto3,enum=axon.v1.TrustLevel" json:"trust_level,omitempty"`
-	Abilities   []string               `protobuf:"bytes,6,rep,name=abilities,proto3" json:"abilities,omitempty"` // registered ability names
-	Functions   []string               `protobuf:"bytes,7,rep,name=functions,proto3" json:"functions,omitempty"` // registered function names
-	// Grouping tags. Key grammar (enforced by RegisterNode):
-	//
-	//	ASCII only, `[A-Za-z_][A-Za-z0-9_.-]*`. Notably this rejects the
-	//	slash-prefix form Kubernetes uses (`kubernetes.io/hostname`); fold
-	//	the prefix into the key with a dot (`kubernetes.io.hostname`) or
-	//	omit it. Max 64 labels per node, 63 chars per key, 4096 per value.
-	//
-	// Reserved prefixes with protocol semantics:
-	//
-	//	"axon.*" — reserved for internal metadata; do not set manually.
-	Labels              map[string]string `protobuf:"bytes,8,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Resources           *ResourceSnapshot `protobuf:"bytes,9,opt,name=resources,proto3" json:"resources,omitempty"`
-	RegisteredAtUnixMs  int64             `protobuf:"varint,10,opt,name=registered_at_unix_ms,json=registeredAtUnixMs,proto3" json:"registered_at_unix_ms,omitempty"`
-	LastHeartbeatUnixMs int64             `protobuf:"varint,11,opt,name=last_heartbeat_unix_ms,json=lastHeartbeatUnixMs,proto3" json:"last_heartbeat_unix_ms,omitempty"`
-	// ─── Presence ─────────────────────────────────────────
-	// online=true means the node heartbeat is within timeout window.
-	Online bool `protobuf:"varint,16,opt,name=online,proto3" json:"online,omitempty"`
-	// Last time server observed this node alive (currently heartbeat-driven).
-	LastSeenUnixMs int64 `protobuf:"varint,17,opt,name=last_seen_unix_ms,json=lastSeenUnixMs,proto3" json:"last_seen_unix_ms,omitempty"`
-	// Runtime role for scheduling. UNSPECIFIED is treated as FULL.
-	Role          NodeRole `protobuf:"varint,18,opt,name=role,proto3,enum=axon.v1.NodeRole" json:"role,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *NodeDescriptor) Reset() {
-	*x = NodeDescriptor{}
-	mi := &file_axon_v1_types_proto_msgTypes[44]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *NodeDescriptor) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*NodeDescriptor) ProtoMessage() {}
-
-func (x *NodeDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[44]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use NodeDescriptor.ProtoReflect.Descriptor instead.
-func (*NodeDescriptor) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{44}
-}
-
-func (x *NodeDescriptor) GetNodeId() string {
-	if x != nil {
-		return x.NodeId
-	}
-	return ""
-}
-
-func (x *NodeDescriptor) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
-	}
-	return ""
-}
-
-func (x *NodeDescriptor) GetDisplayName() string {
-	if x != nil {
-		return x.DisplayName
-	}
-	return ""
-}
-
-func (x *NodeDescriptor) GetState() NodeState {
-	if x != nil {
-		return x.State
-	}
-	return NodeState_NODE_STATE_UNSPECIFIED
-}
-
-func (x *NodeDescriptor) GetTrustLevel() TrustLevel {
-	if x != nil {
-		return x.TrustLevel
-	}
-	return TrustLevel_TRUST_LEVEL_UNSPECIFIED
-}
-
-func (x *NodeDescriptor) GetAbilities() []string {
-	if x != nil {
-		return x.Abilities
-	}
-	return nil
-}
-
-func (x *NodeDescriptor) GetFunctions() []string {
-	if x != nil {
-		return x.Functions
-	}
-	return nil
-}
-
-func (x *NodeDescriptor) GetLabels() map[string]string {
-	if x != nil {
-		return x.Labels
-	}
-	return nil
-}
-
-func (x *NodeDescriptor) GetResources() *ResourceSnapshot {
-	if x != nil {
-		return x.Resources
-	}
-	return nil
-}
-
-func (x *NodeDescriptor) GetRegisteredAtUnixMs() int64 {
-	if x != nil {
-		return x.RegisteredAtUnixMs
-	}
-	return 0
-}
-
-func (x *NodeDescriptor) GetLastHeartbeatUnixMs() int64 {
-	if x != nil {
-		return x.LastHeartbeatUnixMs
-	}
-	return 0
-}
-
-func (x *NodeDescriptor) GetOnline() bool {
-	if x != nil {
-		return x.Online
-	}
-	return false
-}
-
-func (x *NodeDescriptor) GetLastSeenUnixMs() int64 {
-	if x != nil {
-		return x.LastSeenUnixMs
-	}
-	return 0
-}
-
-func (x *NodeDescriptor) GetRole() NodeRole {
-	if x != nil {
-		return x.Role
-	}
-	return NodeRole_NODE_ROLE_UNSPECIFIED
-}
-
 type AbilityTarget struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AbilityName   string                 `protobuf:"bytes,1,opt,name=ability_name,json=abilityName,proto3" json:"ability_name,omitempty"`
@@ -4724,7 +3424,7 @@ type AbilityTarget struct {
 
 func (x *AbilityTarget) Reset() {
 	*x = AbilityTarget{}
-	mi := &file_axon_v1_types_proto_msgTypes[45]
+	mi := &file_axon_v1_types_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4736,7 +3436,7 @@ func (x *AbilityTarget) String() string {
 func (*AbilityTarget) ProtoMessage() {}
 
 func (x *AbilityTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[45]
+	mi := &file_axon_v1_types_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4749,7 +3449,7 @@ func (x *AbilityTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbilityTarget.ProtoReflect.Descriptor instead.
 func (*AbilityTarget) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{45}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *AbilityTarget) GetAbilityName() string {
@@ -4767,15 +3467,7 @@ func (x *AbilityTarget) GetFunctionName() string {
 }
 
 type InvocationTarget struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Strategy RoutingStrategy        `protobuf:"varint,1,opt,name=strategy,proto3,enum=axon.v1.RoutingStrategy" json:"strategy,omitempty"`
-	NodeId   string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"` // required for DIRECT
-	// Legacy wire fields kept only to preserve field numbers. Current callers
-	// MUST set typed_target.
-	AbilityName   string     `protobuf:"bytes,3,opt,name=ability_name,json=abilityName,proto3" json:"ability_name,omitempty"`
-	FunctionName  string     `protobuf:"bytes,4,opt,name=function_name,json=functionName,proto3" json:"function_name,omitempty"`
-	RequiredTags  []string   `protobuf:"bytes,5,rep,name=required_tags,json=requiredTags,proto3" json:"required_tags,omitempty"`
-	MinTrustLevel TrustLevel `protobuf:"varint,6,opt,name=min_trust_level,json=minTrustLevel,proto3,enum=axon.v1.TrustLevel" json:"min_trust_level,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
 	// Explicitly typed target required by the current invocation protocol.
 	//
 	// Types that are valid to be assigned to TypedTarget:
@@ -4788,7 +3480,7 @@ type InvocationTarget struct {
 
 func (x *InvocationTarget) Reset() {
 	*x = InvocationTarget{}
-	mi := &file_axon_v1_types_proto_msgTypes[46]
+	mi := &file_axon_v1_types_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4800,7 +3492,7 @@ func (x *InvocationTarget) String() string {
 func (*InvocationTarget) ProtoMessage() {}
 
 func (x *InvocationTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[46]
+	mi := &file_axon_v1_types_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4813,49 +3505,7 @@ func (x *InvocationTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvocationTarget.ProtoReflect.Descriptor instead.
 func (*InvocationTarget) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{46}
-}
-
-func (x *InvocationTarget) GetStrategy() RoutingStrategy {
-	if x != nil {
-		return x.Strategy
-	}
-	return RoutingStrategy_ROUTING_UNSPECIFIED
-}
-
-func (x *InvocationTarget) GetNodeId() string {
-	if x != nil {
-		return x.NodeId
-	}
-	return ""
-}
-
-func (x *InvocationTarget) GetAbilityName() string {
-	if x != nil {
-		return x.AbilityName
-	}
-	return ""
-}
-
-func (x *InvocationTarget) GetFunctionName() string {
-	if x != nil {
-		return x.FunctionName
-	}
-	return ""
-}
-
-func (x *InvocationTarget) GetRequiredTags() []string {
-	if x != nil {
-		return x.RequiredTags
-	}
-	return nil
-}
-
-func (x *InvocationTarget) GetMinTrustLevel() TrustLevel {
-	if x != nil {
-		return x.MinTrustLevel
-	}
-	return TrustLevel_TRUST_LEVEL_UNSPECIFIED
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *InvocationTarget) GetTypedTarget() isInvocationTarget_TypedTarget {
@@ -4884,198 +3534,6 @@ type InvocationTarget_Ability struct {
 
 func (*InvocationTarget_Ability) isInvocationTarget_TypedTarget() {}
 
-type KeyInfo struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	KeyHash         string                 `protobuf:"bytes,1,opt,name=key_hash,json=keyHash,proto3" json:"key_hash,omitempty"`                              // hex-encoded hash of the public key
-	Algorithm       string                 `protobuf:"bytes,2,opt,name=algorithm,proto3" json:"algorithm,omitempty"`                                         // "Ed25519" | "ECDSA-P256"
-	Version         uint32                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`                                            // monotonically increasing per node
-	ExpiresAtUnixMs int64                  `protobuf:"varint,4,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"` // 0 = no expiry
-	State           KeyState               `protobuf:"varint,5,opt,name=state,proto3,enum=axon.v1.KeyState" json:"state,omitempty"`
-	CreatedAtUnixMs int64                  `protobuf:"varint,6,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
-	RotatedAtUnixMs int64                  `protobuf:"varint,7,opt,name=rotated_at_unix_ms,json=rotatedAtUnixMs,proto3" json:"rotated_at_unix_ms,omitempty"` // 0 if still active
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *KeyInfo) Reset() {
-	*x = KeyInfo{}
-	mi := &file_axon_v1_types_proto_msgTypes[47]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *KeyInfo) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*KeyInfo) ProtoMessage() {}
-
-func (x *KeyInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[47]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use KeyInfo.ProtoReflect.Descriptor instead.
-func (*KeyInfo) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{47}
-}
-
-func (x *KeyInfo) GetKeyHash() string {
-	if x != nil {
-		return x.KeyHash
-	}
-	return ""
-}
-
-func (x *KeyInfo) GetAlgorithm() string {
-	if x != nil {
-		return x.Algorithm
-	}
-	return ""
-}
-
-func (x *KeyInfo) GetVersion() uint32 {
-	if x != nil {
-		return x.Version
-	}
-	return 0
-}
-
-func (x *KeyInfo) GetExpiresAtUnixMs() int64 {
-	if x != nil {
-		return x.ExpiresAtUnixMs
-	}
-	return 0
-}
-
-func (x *KeyInfo) GetState() KeyState {
-	if x != nil {
-		return x.State
-	}
-	return KeyState_KEY_STATE_UNSPECIFIED
-}
-
-func (x *KeyInfo) GetCreatedAtUnixMs() int64 {
-	if x != nil {
-		return x.CreatedAtUnixMs
-	}
-	return 0
-}
-
-func (x *KeyInfo) GetRotatedAtUnixMs() int64 {
-	if x != nil {
-		return x.RotatedAtUnixMs
-	}
-	return 0
-}
-
-type AuditEntry struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	EntryId         string                 `protobuf:"bytes,1,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
-	RequestId       string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	TenantId        string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	NodeId          string                 `protobuf:"bytes,4,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	Action          string                 `protobuf:"bytes,5,opt,name=action,proto3" json:"action,omitempty"`   // "ability.installed", "invoke.completed", etc.
-	Outcome         string                 `protobuf:"bytes,6,opt,name=outcome,proto3" json:"outcome,omitempty"` // "success" | "failure" | "rejected"
-	DetailJson      string                 `protobuf:"bytes,7,opt,name=detail_json,json=detailJson,proto3" json:"detail_json,omitempty"`
-	TimestampUnixMs int64                  `protobuf:"varint,8,opt,name=timestamp_unix_ms,json=timestampUnixMs,proto3" json:"timestamp_unix_ms,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
-}
-
-func (x *AuditEntry) Reset() {
-	*x = AuditEntry{}
-	mi := &file_axon_v1_types_proto_msgTypes[48]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AuditEntry) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AuditEntry) ProtoMessage() {}
-
-func (x *AuditEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[48]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AuditEntry.ProtoReflect.Descriptor instead.
-func (*AuditEntry) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{48}
-}
-
-func (x *AuditEntry) GetEntryId() string {
-	if x != nil {
-		return x.EntryId
-	}
-	return ""
-}
-
-func (x *AuditEntry) GetRequestId() string {
-	if x != nil {
-		return x.RequestId
-	}
-	return ""
-}
-
-func (x *AuditEntry) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
-	}
-	return ""
-}
-
-func (x *AuditEntry) GetNodeId() string {
-	if x != nil {
-		return x.NodeId
-	}
-	return ""
-}
-
-func (x *AuditEntry) GetAction() string {
-	if x != nil {
-		return x.Action
-	}
-	return ""
-}
-
-func (x *AuditEntry) GetOutcome() string {
-	if x != nil {
-		return x.Outcome
-	}
-	return ""
-}
-
-func (x *AuditEntry) GetDetailJson() string {
-	if x != nil {
-		return x.DetailJson
-	}
-	return ""
-}
-
-func (x *AuditEntry) GetTimestampUnixMs() int64 {
-	if x != nil {
-		return x.TimestampUnixMs
-	}
-	return 0
-}
-
 // Multimedia metadata for rich content payloads.
 // All fields are optional; populate only what applies.
 type ContentMeta struct {
@@ -5093,7 +3551,7 @@ type ContentMeta struct {
 
 func (x *ContentMeta) Reset() {
 	*x = ContentMeta{}
-	mi := &file_axon_v1_types_proto_msgTypes[49]
+	mi := &file_axon_v1_types_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5105,7 +3563,7 @@ func (x *ContentMeta) String() string {
 func (*ContentMeta) ProtoMessage() {}
 
 func (x *ContentMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[49]
+	mi := &file_axon_v1_types_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5118,7 +3576,7 @@ func (x *ContentMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContentMeta.ProtoReflect.Descriptor instead.
 func (*ContentMeta) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{49}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ContentMeta) GetWidth() uint32 {
@@ -5171,7 +3629,7 @@ func (x *ContentMeta) GetFrameRate() float64 {
 }
 
 // Reference to a large or out-of-band payload managed by the
-// Axon protocol. Addressed via EasyNet URA /r/<realm>/resource/<owner>/payloads/<payload_id>.
+// canonical runtime. Addressed by a full URA.
 //
 // Used instead of inline bytes when payload exceeds practical
 // gRPC message limits or needs independent lifecycle management.
@@ -5179,10 +3637,10 @@ func (x *ContentMeta) GetFrameRate() float64 {
 // PayloadRef over inline request/response bytes to keep RPC frames small
 // and to make retries/resume semantics independent from a single call.
 // Storage backends are an implementation detail invisible to callers —
-// the protocol only exposes the full EasyNet URA.
+// the protocol only exposes the full URA.
 type PayloadRef struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	Ura             string                 `protobuf:"bytes,1,opt,name=ura,proto3" json:"ura,omitempty"`       // EasyNet URA /r/<realm>/resource/<owner>/payloads/<payload_id>
+	Ura             string                 `protobuf:"bytes,1,opt,name=ura,proto3" json:"ura,omitempty"`       // canonical payload URA
 	Digest          string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"` // "sha256:<hex>" integrity hash
 	SizeBytes       int64                  `protobuf:"varint,3,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	Content         *ContentEnvelope       `protobuf:"bytes,4,opt,name=content,proto3" json:"content,omitempty"`                                             // content negotiation (type + encoding + schema + meta)
@@ -5194,7 +3652,7 @@ type PayloadRef struct {
 
 func (x *PayloadRef) Reset() {
 	*x = PayloadRef{}
-	mi := &file_axon_v1_types_proto_msgTypes[50]
+	mi := &file_axon_v1_types_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5206,7 +3664,7 @@ func (x *PayloadRef) String() string {
 func (*PayloadRef) ProtoMessage() {}
 
 func (x *PayloadRef) ProtoReflect() protoreflect.Message {
-	mi := &file_axon_v1_types_proto_msgTypes[50]
+	mi := &file_axon_v1_types_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5219,7 +3677,7 @@ func (x *PayloadRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PayloadRef.ProtoReflect.Descriptor instead.
 func (*PayloadRef) Descriptor() ([]byte, []int) {
-	return file_axon_v1_types_proto_rawDescGZIP(), []int{50}
+	return file_axon_v1_types_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *PayloadRef) GetUra() string {
@@ -5268,50 +3726,7 @@ var File_axon_v1_types_proto protoreflect.FileDescriptor
 
 const file_axon_v1_types_proto_rawDesc = "" +
 	"\n" +
-	"\x13axon/v1/types.proto\x12\aaxon.v1\"\x9f\x01\n" +
-	"\vResourceRef\x12)\n" +
-	"\x04type\x18\x01 \x01(\x0e2\x15.axon.v1.ResourceTypeR\x04type\x12\x1f\n" +
-	"\vresource_id\x18\x02 \x01(\tR\n" +
-	"resourceId\x12\x15\n" +
-	"\x06sub_id\x18\x03 \x01(\tR\x05subId\x12\x1b\n" +
-	"\ttenant_id\x18\x04 \x01(\tR\btenantId\x12\x10\n" +
-	"\x03ura\x18\x05 \x01(\tR\x03ura\"\xa0\x01\n" +
-	"\x12BackpressureSignal\x12\x1f\n" +
-	"\vqueue_depth\x18\x01 \x01(\x05R\n" +
-	"queueDepth\x12*\n" +
-	"\x11estimated_wait_ms\x18\x02 \x01(\x05R\x0festimatedWaitMs\x12\x1c\n" +
-	"\tthrottled\x18\x03 \x01(\bR\tthrottled\x12\x1f\n" +
-	"\vload_factor\x18\x04 \x01(\x01R\n" +
-	"loadFactor\"\x81\x02\n" +
-	"\x14CircuitBreakerConfig\x12+\n" +
-	"\x11failure_threshold\x18\x01 \x01(\x05R\x10failureThreshold\x12+\n" +
-	"\x11success_threshold\x18\x02 \x01(\x05R\x10successThreshold\x12%\n" +
-	"\x0ewindow_seconds\x18\x03 \x01(\x05R\rwindowSeconds\x122\n" +
-	"\x15open_duration_seconds\x18\x04 \x01(\x05R\x13openDurationSeconds\x124\n" +
-	"\x16failure_rate_threshold\x18\x05 \x01(\x01R\x14failureRateThreshold\"\x8c\x02\n" +
-	"\x14CircuitBreakerStatus\x12+\n" +
-	"\x05state\x18\x01 \x01(\x0e2\x15.axon.v1.CircuitStateR\x05state\x12\x14\n" +
-	"\x05scope\x18\x02 \x01(\tR\x05scope\x12#\n" +
-	"\rfailure_count\x18\x03 \x01(\x05R\ffailureCount\x12#\n" +
-	"\rsuccess_count\x18\x04 \x01(\x05R\fsuccessCount\x12/\n" +
-	"\x14last_failure_unix_ms\x18\x05 \x01(\x03R\x11lastFailureUnixMs\x126\n" +
-	"\x18state_changed_at_unix_ms\x18\x06 \x01(\x03R\x14stateChangedAtUnixMs\"\xa8\x01\n" +
-	"\rRateLimitInfo\x12'\n" +
-	"\x0fquota_remaining\x18\x01 \x01(\x05R\x0equotaRemaining\x12\x1f\n" +
-	"\vquota_limit\x18\x02 \x01(\x05R\n" +
-	"quotaLimit\x12'\n" +
-	"\x10reset_at_unix_ms\x18\x03 \x01(\x03R\rresetAtUnixMs\x12$\n" +
-	"\x0eretry_after_ms\x18\x04 \x01(\x05R\fretryAfterMs\"\xf7\x01\n" +
-	"\x0fSchedulingScore\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12'\n" +
-	"\x0fcomposite_score\x18\x02 \x01(\x01R\x0ecompositeScore\x12\x1d\n" +
-	"\n" +
-	"load_score\x18\x03 \x01(\x01R\tloadScore\x12\x1f\n" +
-	"\vtrust_score\x18\x04 \x01(\x01R\n" +
-	"trustScore\x12%\n" +
-	"\x0eaffinity_score\x18\x05 \x01(\x01R\raffinityScore\x12#\n" +
-	"\rlatency_score\x18\x06 \x01(\x01R\flatencyScore\x12\x16\n" +
-	"\x06reason\x18\a \x01(\tR\x06reason\"\xee\x01\n" +
+	"\x13axon/v1/types.proto\x12\aaxon.v1\"\xee\x01\n" +
 	"\x0fContentEnvelope\x12!\n" +
 	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x1a\n" +
 	"\bencoding\x18\x02 \x01(\tR\bencoding\x12\x1d\n" +
@@ -5321,16 +3736,7 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"encryption\x18\x05 \x01(\x0e2\x1c.axon.v1.EncryptionAlgorithmR\n" +
 	"encryption\x12\x15\n" +
-	"\x06key_id\x18\x06 \x01(\tR\x05keyId\"\xef\x01\n" +
-	"\x0fChannelSecurity\x12)\n" +
-	"\x10cert_fingerprint\x18\x01 \x01(\tR\x0fcertFingerprint\x12\x1f\n" +
-	"\vtls_version\x18\x02 \x01(\tR\n" +
-	"tlsVersion\x12!\n" +
-	"\fcipher_suite\x18\x03 \x01(\tR\vcipherSuite\x12\x1f\n" +
-	"\vmutual_auth\x18\x04 \x01(\bR\n" +
-	"mutualAuth\x124\n" +
-	"\x17cert_expires_at_unix_ms\x18\x05 \x01(\x03R\x13certExpiresAtUnixMs\x12\x16\n" +
-	"\x06issuer\x18\x06 \x01(\tR\x06issuer\"\xfa\x01\n" +
+	"\x06key_id\x18\x06 \x01(\tR\x05keyId\"\xfa\x01\n" +
 	"\x10EncryptedPayload\x12:\n" +
 	"\talgorithm\x18\x01 \x01(\x0e2\x1c.axon.v1.EncryptionAlgorithmR\talgorithm\x12\x15\n" +
 	"\x06key_id\x18\x02 \x01(\tR\x05keyId\x12\x14\n" +
@@ -5573,69 +3979,14 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"visibility\x18\x14 \x01(\v2 .axon.v1.LedgerVisibilitySummaryR\n" +
 	"visibility\x12+\n" +
-	"\x11authority_binding\x18\x15 \x01(\tR\x10authorityBinding\"\x8c\x02\n" +
-	"\x10ResourceSnapshot\x12\x1b\n" +
-	"\tcpu_usage\x18\x01 \x01(\x01R\bcpuUsage\x12!\n" +
-	"\fmemory_usage\x18\x02 \x01(\x01R\vmemoryUsage\x12\x1b\n" +
-	"\tgpu_usage\x18\x03 \x01(\x01R\bgpuUsage\x12\x1f\n" +
-	"\vqueue_depth\x18\x04 \x01(\x05R\n" +
-	"queueDepth\x12%\n" +
-	"\x0eactive_streams\x18\x05 \x01(\x05R\ractiveStreams\x12!\n" +
-	"\factive_calls\x18\x06 \x01(\x05R\vactiveCalls\x120\n" +
-	"\x14disk_available_bytes\x18\a \x01(\x03R\x12diskAvailableBytes\"\xca\x05\n" +
-	"\x0eNodeDescriptor\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1b\n" +
-	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12!\n" +
-	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12(\n" +
-	"\x05state\x18\x04 \x01(\x0e2\x12.axon.v1.NodeStateR\x05state\x124\n" +
-	"\vtrust_level\x18\x05 \x01(\x0e2\x13.axon.v1.TrustLevelR\n" +
-	"trustLevel\x12\x1c\n" +
-	"\tabilities\x18\x06 \x03(\tR\tabilities\x12\x1c\n" +
-	"\tfunctions\x18\a \x03(\tR\tfunctions\x12;\n" +
-	"\x06labels\x18\b \x03(\v2#.axon.v1.NodeDescriptor.LabelsEntryR\x06labels\x127\n" +
-	"\tresources\x18\t \x01(\v2\x19.axon.v1.ResourceSnapshotR\tresources\x121\n" +
-	"\x15registered_at_unix_ms\x18\n" +
-	" \x01(\x03R\x12registeredAtUnixMs\x123\n" +
-	"\x16last_heartbeat_unix_ms\x18\v \x01(\x03R\x13lastHeartbeatUnixMs\x12\x16\n" +
-	"\x06online\x18\x10 \x01(\bR\x06online\x12)\n" +
-	"\x11last_seen_unix_ms\x18\x11 \x01(\x03R\x0elastSeenUnixMs\x12%\n" +
-	"\x04role\x18\x12 \x01(\x0e2\x11.axon.v1.NodeRoleR\x04role\x1a9\n" +
-	"\vLabelsEntry\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\f\x10\rJ\x04\b\r\x10\x0eJ\x04\b\x0e\x10\x0fJ\x04\b\x0f\x10\x10R\bowner_idR\fdevice_groupR\x06deviceR\ba2a_card\"W\n" +
+	"\x11authority_binding\x18\x15 \x01(\tR\x10authorityBinding\"W\n" +
 	"\rAbilityTarget\x12!\n" +
 	"\fability_name\x18\x01 \x01(\tR\vabilityName\x12#\n" +
-	"\rfunction_name\x18\x02 \x01(\tR\ffunctionName\"\xf0\x02\n" +
-	"\x10InvocationTarget\x124\n" +
-	"\bstrategy\x18\x01 \x01(\x0e2\x18.axon.v1.RoutingStrategyR\bstrategy\x12\x17\n" +
-	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12!\n" +
-	"\fability_name\x18\x03 \x01(\tR\vabilityName\x12#\n" +
-	"\rfunction_name\x18\x04 \x01(\tR\ffunctionName\x12#\n" +
-	"\rrequired_tags\x18\x05 \x03(\tR\frequiredTags\x12;\n" +
-	"\x0fmin_trust_level\x18\x06 \x01(\x0e2\x13.axon.v1.TrustLevelR\rminTrustLevel\x122\n" +
+	"\rfunction_name\x18\x02 \x01(\tR\ffunctionName\"\xeb\x01\n" +
+	"\x10InvocationTarget\x122\n" +
 	"\aability\x18\n" +
 	" \x01(\v2\x16.axon.v1.AbilityTargetH\x00R\aabilityB\x0e\n" +
-	"\ftyped_targetJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\bmcp_toolR\ta2a_skill\"\x8c\x02\n" +
-	"\aKeyInfo\x12\x19\n" +
-	"\bkey_hash\x18\x01 \x01(\tR\akeyHash\x12\x1c\n" +
-	"\talgorithm\x18\x02 \x01(\tR\talgorithm\x12\x18\n" +
-	"\aversion\x18\x03 \x01(\rR\aversion\x12+\n" +
-	"\x12expires_at_unix_ms\x18\x04 \x01(\x03R\x0fexpiresAtUnixMs\x12'\n" +
-	"\x05state\x18\x05 \x01(\x0e2\x11.axon.v1.KeyStateR\x05state\x12+\n" +
-	"\x12created_at_unix_ms\x18\x06 \x01(\x03R\x0fcreatedAtUnixMs\x12+\n" +
-	"\x12rotated_at_unix_ms\x18\a \x01(\x03R\x0frotatedAtUnixMs\"\xfb\x01\n" +
-	"\n" +
-	"AuditEntry\x12\x19\n" +
-	"\bentry_id\x18\x01 \x01(\tR\aentryId\x12\x1d\n" +
-	"\n" +
-	"request_id\x18\x02 \x01(\tR\trequestId\x12\x1b\n" +
-	"\ttenant_id\x18\x03 \x01(\tR\btenantId\x12\x17\n" +
-	"\anode_id\x18\x04 \x01(\tR\x06nodeId\x12\x16\n" +
-	"\x06action\x18\x05 \x01(\tR\x06action\x12\x18\n" +
-	"\aoutcome\x18\x06 \x01(\tR\aoutcome\x12\x1f\n" +
-	"\vdetail_json\x18\a \x01(\tR\n" +
-	"detailJson\x12*\n" +
-	"\x11timestamp_unix_ms\x18\b \x01(\x03R\x0ftimestampUnixMs\"\xd0\x01\n" +
+	"\ftyped_targetJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x03\x10\x04J\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\bstrategyR\anode_idR\fability_nameR\rfunction_nameR\rrequired_tagsR\x0fmin_trust_levelR\bmcp_toolR\ta2a_skill\"\xd0\x01\n" +
 	"\vContentMeta\x12\x14\n" +
 	"\x05width\x18\x01 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x1f\n" +
@@ -5657,16 +4008,7 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x06labels\x18\x06 \x03(\v2\x1f.axon.v1.PayloadRef.LabelsEntryR\x06labels\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\xed\x01\n" +
-	"\fResourceType\x12\x1d\n" +
-	"\x19RESOURCE_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
-	"\x12RESOURCE_TYPE_NODE\x10\x01\x12\x1c\n" +
-	"\x18RESOURCE_TYPE_CAPABILITY\x10\x02\x12\x1c\n" +
-	"\x18RESOURCE_TYPE_INVOCATION\x10\x03\x12\x18\n" +
-	"\x14RESOURCE_TYPE_STREAM\x10\x05\x12\x19\n" +
-	"\x15RESOURCE_TYPE_PAYLOAD\x10\x06\x12\x18\n" +
-	"\x14RESOURCE_TYPE_POLICY\x10\a\x12\x15\n" +
-	"\x11RESOURCE_TYPE_KEY\x10\b\"\x04\b\x04\x10\x04*\xe0\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\xe0\x01\n" +
 	"\rExecutionMode\x12\x1e\n" +
 	"\x1aEXECUTION_MODE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13EXECUTION_MODE_SYNC\x10\x01\x12 \n" +
@@ -5678,12 +4020,7 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\rPRIORITY_HIGH\x10\x02\x12\x13\n" +
 	"\x0fPRIORITY_NORMAL\x10\x03\x12\x10\n" +
 	"\fPRIORITY_LOW\x10\x04\x12\x17\n" +
-	"\x13PRIORITY_BACKGROUND\x10\x05*|\n" +
-	"\fCircuitState\x12\x1d\n" +
-	"\x19CIRCUIT_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
-	"\x14CIRCUIT_STATE_CLOSED\x10\x01\x12\x16\n" +
-	"\x12CIRCUIT_STATE_OPEN\x10\x02\x12\x1b\n" +
-	"\x17CIRCUIT_STATE_HALF_OPEN\x10\x03*o\n" +
+	"\x13PRIORITY_BACKGROUND\x10\x05*o\n" +
 	"\x13EncryptionAlgorithm\x12\x1a\n" +
 	"\x16ENCRYPTION_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16ENCRYPTION_AES_256_GCM\x10\x01\x12 \n" +
@@ -5725,29 +4062,7 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"%LEDGER_EVENT_PAYLOAD_KIND_UNSPECIFIED\x10\x00\x12$\n" +
 	" LEDGER_EVENT_PAYLOAD_KIND_DIGEST\x10\x01\x12$\n" +
 	" LEDGER_EVENT_PAYLOAD_KIND_SEALED\x10\x02\x12*\n" +
-	"&LEDGER_EVENT_PAYLOAD_KIND_MULTI_SEALED\x10\x03*\xd6\x01\n" +
-	"\tNodeState\x12\x1a\n" +
-	"\x16NODE_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
-	"\x12NODE_STATE_JOINING\x10\x01\x12\x18\n" +
-	"\x14NODE_STATE_PROBATION\x10\x02\x12\x16\n" +
-	"\x12NODE_STATE_HEALTHY\x10\x03\x12\x16\n" +
-	"\x12NODE_STATE_SUSPECT\x10\x04\x12\x1a\n" +
-	"\x16NODE_STATE_QUARANTINED\x10\x05\x12\x17\n" +
-	"\x13NODE_STATE_DRAINING\x10\x06\x12\x16\n" +
-	"\x12NODE_STATE_REMOVED\x10\a*\xaf\x01\n" +
-	"\n" +
-	"TrustLevel\x12\x1b\n" +
-	"\x17TRUST_LEVEL_UNSPECIFIED\x10\x00\x12\x19\n" +
-	"\x15TRUST_LEVEL_UNTRUSTED\x10\x01\x12\x19\n" +
-	"\x15TRUST_LEVEL_PROBATION\x10\x02\x12\x18\n" +
-	"\x14TRUST_LEVEL_STANDARD\x10\x03\x12\x18\n" +
-	"\x14TRUST_LEVEL_ELEVATED\x10\x04\x12\x1a\n" +
-	"\x16TRUST_LEVEL_PRIVILEGED\x10\x05*k\n" +
-	"\bNodeRole\x12\x19\n" +
-	"\x15NODE_ROLE_UNSPECIFIED\x10\x00\x12\x12\n" +
-	"\x0eNODE_ROLE_FULL\x10\x01\x12\x1a\n" +
-	"\x16NODE_ROLE_ORCHESTRATOR\x10\x02\x12\x14\n" +
-	"\x10NODE_ROLE_WORKER\x10\x03*\xad\x02\n" +
+	"&LEDGER_EVENT_PAYLOAD_KIND_MULTI_SEALED\x10\x03*\xad\x02\n" +
 	"\x0fInvocationState\x12 \n" +
 	"\x1cINVOCATION_STATE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19INVOCATION_STATE_ACCEPTED\x10\x01\x12\x1d\n" +
@@ -5757,31 +4072,10 @@ const file_axon_v1_types_proto_rawDesc = "" +
 	"\x1aINVOCATION_STATE_COMPLETED\x10\x05\x12\x1b\n" +
 	"\x17INVOCATION_STATE_FAILED\x10\x06\x12\x1e\n" +
 	"\x1aINVOCATION_STATE_TIMED_OUT\x10\a\x12\x1e\n" +
-	"\x1aINVOCATION_STATE_CANCELLED\x10\b*p\n" +
-	"\x0fRoutingStrategy\x12\x17\n" +
-	"\x13ROUTING_UNSPECIFIED\x10\x00\x12\x12\n" +
-	"\x0eROUTING_DIRECT\x10\x01\x12\x19\n" +
-	"\x15ROUTING_LOAD_BALANCED\x10\x02\x12\x15\n" +
-	"\x11ROUTING_BROADCAST\x10\x03*\xb1\x01\n" +
+	"\x1aINVOCATION_STATE_CANCELLED\x10\b*\xb1\x01\n" +
 	"\x14InvocationTargetKind\x12&\n" +
 	"\"INVOCATION_TARGET_KIND_UNSPECIFIED\x10\x00\x12\"\n" +
-	"\x1eINVOCATION_TARGET_KIND_ABILITY\x10\x01\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\x1fINVOCATION_TARGET_KIND_MCP_TOOL* INVOCATION_TARGET_KIND_A2A_SKILL*\x8a\x02\n" +
-	"\x0fStreamFrameType\x12\x1c\n" +
-	"\x18STREAM_FRAME_UNSPECIFIED\x10\x00\x12\x15\n" +
-	"\x11STREAM_FRAME_OPEN\x10\x01\x12\x15\n" +
-	"\x11STREAM_FRAME_DATA\x10\x02\x12\x17\n" +
-	"\x13STREAM_FRAME_CREDIT\x10\x03\x12\x14\n" +
-	"\x10STREAM_FRAME_ACK\x10\x04\x12\x17\n" +
-	"\x13STREAM_FRAME_CANCEL\x10\x05\x12\x16\n" +
-	"\x12STREAM_FRAME_ERROR\x10\x06\x12\x15\n" +
-	"\x11STREAM_FRAME_DONE\x10\a\x12\x17\n" +
-	"\x13STREAM_FRAME_RESUME\x10\b\x12\x1b\n" +
-	"\x17STREAM_FRAME_CHECKPOINT\x10\t*i\n" +
-	"\bKeyState\x12\x19\n" +
-	"\x15KEY_STATE_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10KEY_STATE_ACTIVE\x10\x01\x12\x15\n" +
-	"\x11KEY_STATE_ROTATED\x10\x02\x12\x15\n" +
-	"\x11KEY_STATE_REVOKED\x10\x03b\x06proto3"
+	"\x1eINVOCATION_TARGET_KIND_ABILITY\x10\x01\"\x04\b\x02\x10\x02\"\x04\b\x03\x10\x03*\x1fINVOCATION_TARGET_KIND_MCP_TOOL* INVOCATION_TARGET_KIND_A2A_SKILLb\x06proto3"
 
 var (
 	file_axon_v1_types_proto_rawDescOnce sync.Once
@@ -5795,147 +4089,117 @@ func file_axon_v1_types_proto_rawDescGZIP() []byte {
 	return file_axon_v1_types_proto_rawDescData
 }
 
-var file_axon_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
-var file_axon_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 55)
+var file_axon_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
+var file_axon_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_axon_v1_types_proto_goTypes = []any{
-	(ResourceType)(0),                         // 0: axon.v1.ResourceType
-	(ExecutionMode)(0),                        // 1: axon.v1.ExecutionMode
-	(Priority)(0),                             // 2: axon.v1.Priority
-	(CircuitState)(0),                         // 3: axon.v1.CircuitState
-	(EncryptionAlgorithm)(0),                  // 4: axon.v1.EncryptionAlgorithm
-	(EntityRefKind)(0),                        // 5: axon.v1.EntityRefKind
-	(ErrorStage)(0),                           // 6: axon.v1.ErrorStage
-	(SecurityClass)(0),                        // 7: axon.v1.SecurityClass
-	(LedgerEventPayloadKind)(0),               // 8: axon.v1.LedgerEventPayloadKind
-	(NodeState)(0),                            // 9: axon.v1.NodeState
-	(TrustLevel)(0),                           // 10: axon.v1.TrustLevel
-	(NodeRole)(0),                             // 11: axon.v1.NodeRole
-	(InvocationState)(0),                      // 12: axon.v1.InvocationState
-	(RoutingStrategy)(0),                      // 13: axon.v1.RoutingStrategy
-	(InvocationTargetKind)(0),                 // 14: axon.v1.InvocationTargetKind
-	(StreamFrameType)(0),                      // 15: axon.v1.StreamFrameType
-	(KeyState)(0),                             // 16: axon.v1.KeyState
-	(*ResourceRef)(nil),                       // 17: axon.v1.ResourceRef
-	(*BackpressureSignal)(nil),                // 18: axon.v1.BackpressureSignal
-	(*CircuitBreakerConfig)(nil),              // 19: axon.v1.CircuitBreakerConfig
-	(*CircuitBreakerStatus)(nil),              // 20: axon.v1.CircuitBreakerStatus
-	(*RateLimitInfo)(nil),                     // 21: axon.v1.RateLimitInfo
-	(*SchedulingScore)(nil),                   // 22: axon.v1.SchedulingScore
-	(*ContentEnvelope)(nil),                   // 23: axon.v1.ContentEnvelope
-	(*ChannelSecurity)(nil),                   // 24: axon.v1.ChannelSecurity
-	(*EncryptedPayload)(nil),                  // 25: axon.v1.EncryptedPayload
-	(*AgentIdentity)(nil),                     // 26: axon.v1.AgentIdentity
-	(*SubjectIdentity)(nil),                   // 27: axon.v1.SubjectIdentity
-	(*EntityRef)(nil),                         // 28: axon.v1.EntityRef
-	(*InvocationAuthorityProof)(nil),          // 29: axon.v1.InvocationAuthorityProof
-	(*CausalContext)(nil),                     // 30: axon.v1.CausalContext
-	(*Empty)(nil),                             // 31: axon.v1.Empty
-	(*ReceiptRef)(nil),                        // 32: axon.v1.ReceiptRef
-	(*ReceiptList)(nil),                       // 33: axon.v1.ReceiptList
-	(*MerkleRoot)(nil),                        // 34: axon.v1.MerkleRoot
-	(*CallerSignature)(nil),                   // 35: axon.v1.CallerSignature
-	(*CalleeSignature)(nil),                   // 36: axon.v1.CalleeSignature
-	(*AuthorityBinding)(nil),                  // 37: axon.v1.AuthorityBinding
-	(*SelfAuthority)(nil),                     // 38: axon.v1.SelfAuthority
-	(*DelegationProof)(nil),                   // 39: axon.v1.DelegationProof
-	(*CapabilityGrant)(nil),                   // 40: axon.v1.CapabilityGrant
-	(*PolicyGrant)(nil),                       // 41: axon.v1.PolicyGrant
-	(*SessionAuthority)(nil),                  // 42: axon.v1.SessionAuthority
-	(*BootstrapAuthority)(nil),                // 43: axon.v1.BootstrapAuthority
-	(*Envelope)(nil),                          // 44: axon.v1.Envelope
-	(*ResponseHeader)(nil),                    // 45: axon.v1.ResponseHeader
-	(*Error)(nil),                             // 46: axon.v1.Error
-	(*SealedLedgerEventPayload)(nil),          // 47: axon.v1.SealedLedgerEventPayload
-	(*LedgerEventPayload)(nil),                // 48: axon.v1.LedgerEventPayload
-	(*RecipientSealedLedgerEventPayload)(nil), // 49: axon.v1.RecipientSealedLedgerEventPayload
-	(*LedgerPayloadVisibility)(nil),           // 50: axon.v1.LedgerPayloadVisibility
-	(*LedgerVisibilitySummary)(nil),           // 51: axon.v1.LedgerVisibilitySummary
-	(*LedgerErrorRecord)(nil),                 // 52: axon.v1.LedgerErrorRecord
-	(*LedgerDiagnosticRecord)(nil),            // 53: axon.v1.LedgerDiagnosticRecord
-	(*InvocationReceiptAnchor)(nil),           // 54: axon.v1.InvocationReceiptAnchor
-	(*InvocationReceiptChainSummary)(nil),     // 55: axon.v1.InvocationReceiptChainSummary
-	(*InvocationCausalLink)(nil),              // 56: axon.v1.InvocationCausalLink
-	(*InvocationTraceEdge)(nil),               // 57: axon.v1.InvocationTraceEdge
-	(*InvocationTraceGraph)(nil),              // 58: axon.v1.InvocationTraceGraph
-	(*InvocationLedgerRecord)(nil),            // 59: axon.v1.InvocationLedgerRecord
-	(*ResourceSnapshot)(nil),                  // 60: axon.v1.ResourceSnapshot
-	(*NodeDescriptor)(nil),                    // 61: axon.v1.NodeDescriptor
-	(*AbilityTarget)(nil),                     // 62: axon.v1.AbilityTarget
-	(*InvocationTarget)(nil),                  // 63: axon.v1.InvocationTarget
-	(*KeyInfo)(nil),                           // 64: axon.v1.KeyInfo
-	(*AuditEntry)(nil),                        // 65: axon.v1.AuditEntry
-	(*ContentMeta)(nil),                       // 66: axon.v1.ContentMeta
-	(*PayloadRef)(nil),                        // 67: axon.v1.PayloadRef
-	nil,                                       // 68: axon.v1.Error.ContextEntry
-	nil,                                       // 69: axon.v1.LedgerErrorRecord.ContextEntry
-	nil,                                       // 70: axon.v1.NodeDescriptor.LabelsEntry
-	nil,                                       // 71: axon.v1.PayloadRef.LabelsEntry
+	(ExecutionMode)(0),                        // 0: axon.v1.ExecutionMode
+	(Priority)(0),                             // 1: axon.v1.Priority
+	(EncryptionAlgorithm)(0),                  // 2: axon.v1.EncryptionAlgorithm
+	(EntityRefKind)(0),                        // 3: axon.v1.EntityRefKind
+	(ErrorStage)(0),                           // 4: axon.v1.ErrorStage
+	(SecurityClass)(0),                        // 5: axon.v1.SecurityClass
+	(LedgerEventPayloadKind)(0),               // 6: axon.v1.LedgerEventPayloadKind
+	(InvocationState)(0),                      // 7: axon.v1.InvocationState
+	(InvocationTargetKind)(0),                 // 8: axon.v1.InvocationTargetKind
+	(*ContentEnvelope)(nil),                   // 9: axon.v1.ContentEnvelope
+	(*EncryptedPayload)(nil),                  // 10: axon.v1.EncryptedPayload
+	(*AgentIdentity)(nil),                     // 11: axon.v1.AgentIdentity
+	(*SubjectIdentity)(nil),                   // 12: axon.v1.SubjectIdentity
+	(*EntityRef)(nil),                         // 13: axon.v1.EntityRef
+	(*InvocationAuthorityProof)(nil),          // 14: axon.v1.InvocationAuthorityProof
+	(*CausalContext)(nil),                     // 15: axon.v1.CausalContext
+	(*Empty)(nil),                             // 16: axon.v1.Empty
+	(*ReceiptRef)(nil),                        // 17: axon.v1.ReceiptRef
+	(*ReceiptList)(nil),                       // 18: axon.v1.ReceiptList
+	(*MerkleRoot)(nil),                        // 19: axon.v1.MerkleRoot
+	(*CallerSignature)(nil),                   // 20: axon.v1.CallerSignature
+	(*CalleeSignature)(nil),                   // 21: axon.v1.CalleeSignature
+	(*AuthorityBinding)(nil),                  // 22: axon.v1.AuthorityBinding
+	(*SelfAuthority)(nil),                     // 23: axon.v1.SelfAuthority
+	(*DelegationProof)(nil),                   // 24: axon.v1.DelegationProof
+	(*CapabilityGrant)(nil),                   // 25: axon.v1.CapabilityGrant
+	(*PolicyGrant)(nil),                       // 26: axon.v1.PolicyGrant
+	(*SessionAuthority)(nil),                  // 27: axon.v1.SessionAuthority
+	(*BootstrapAuthority)(nil),                // 28: axon.v1.BootstrapAuthority
+	(*Envelope)(nil),                          // 29: axon.v1.Envelope
+	(*ResponseHeader)(nil),                    // 30: axon.v1.ResponseHeader
+	(*Error)(nil),                             // 31: axon.v1.Error
+	(*SealedLedgerEventPayload)(nil),          // 32: axon.v1.SealedLedgerEventPayload
+	(*LedgerEventPayload)(nil),                // 33: axon.v1.LedgerEventPayload
+	(*RecipientSealedLedgerEventPayload)(nil), // 34: axon.v1.RecipientSealedLedgerEventPayload
+	(*LedgerPayloadVisibility)(nil),           // 35: axon.v1.LedgerPayloadVisibility
+	(*LedgerVisibilitySummary)(nil),           // 36: axon.v1.LedgerVisibilitySummary
+	(*LedgerErrorRecord)(nil),                 // 37: axon.v1.LedgerErrorRecord
+	(*LedgerDiagnosticRecord)(nil),            // 38: axon.v1.LedgerDiagnosticRecord
+	(*InvocationReceiptAnchor)(nil),           // 39: axon.v1.InvocationReceiptAnchor
+	(*InvocationReceiptChainSummary)(nil),     // 40: axon.v1.InvocationReceiptChainSummary
+	(*InvocationCausalLink)(nil),              // 41: axon.v1.InvocationCausalLink
+	(*InvocationTraceEdge)(nil),               // 42: axon.v1.InvocationTraceEdge
+	(*InvocationTraceGraph)(nil),              // 43: axon.v1.InvocationTraceGraph
+	(*InvocationLedgerRecord)(nil),            // 44: axon.v1.InvocationLedgerRecord
+	(*AbilityTarget)(nil),                     // 45: axon.v1.AbilityTarget
+	(*InvocationTarget)(nil),                  // 46: axon.v1.InvocationTarget
+	(*ContentMeta)(nil),                       // 47: axon.v1.ContentMeta
+	(*PayloadRef)(nil),                        // 48: axon.v1.PayloadRef
+	nil,                                       // 49: axon.v1.Error.ContextEntry
+	nil,                                       // 50: axon.v1.LedgerErrorRecord.ContextEntry
+	nil,                                       // 51: axon.v1.PayloadRef.LabelsEntry
 }
 var file_axon_v1_types_proto_depIdxs = []int32{
-	0,  // 0: axon.v1.ResourceRef.type:type_name -> axon.v1.ResourceType
-	3,  // 1: axon.v1.CircuitBreakerStatus.state:type_name -> axon.v1.CircuitState
-	66, // 2: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
-	4,  // 3: axon.v1.ContentEnvelope.encryption:type_name -> axon.v1.EncryptionAlgorithm
-	4,  // 4: axon.v1.EncryptedPayload.algorithm:type_name -> axon.v1.EncryptionAlgorithm
-	5,  // 5: axon.v1.EntityRef.kind:type_name -> axon.v1.EntityRefKind
-	37, // 6: axon.v1.InvocationAuthorityProof.binding:type_name -> axon.v1.AuthorityBinding
-	26, // 7: axon.v1.InvocationAuthorityProof.issuer:type_name -> axon.v1.AgentIdentity
-	36, // 8: axon.v1.InvocationAuthorityProof.signature:type_name -> axon.v1.CalleeSignature
-	31, // 9: axon.v1.CausalContext.none:type_name -> axon.v1.Empty
-	32, // 10: axon.v1.CausalContext.scalar:type_name -> axon.v1.ReceiptRef
-	33, // 11: axon.v1.CausalContext.list:type_name -> axon.v1.ReceiptList
-	34, // 12: axon.v1.CausalContext.merkle:type_name -> axon.v1.MerkleRoot
-	32, // 13: axon.v1.ReceiptList.prior:type_name -> axon.v1.ReceiptRef
-	38, // 14: axon.v1.AuthorityBinding.self_authority:type_name -> axon.v1.SelfAuthority
-	39, // 15: axon.v1.AuthorityBinding.delegated_authority:type_name -> axon.v1.DelegationProof
-	40, // 16: axon.v1.AuthorityBinding.capability_grant:type_name -> axon.v1.CapabilityGrant
-	41, // 17: axon.v1.AuthorityBinding.policy_grant:type_name -> axon.v1.PolicyGrant
-	42, // 18: axon.v1.AuthorityBinding.session_authority:type_name -> axon.v1.SessionAuthority
-	43, // 19: axon.v1.AuthorityBinding.bootstrap_authority:type_name -> axon.v1.BootstrapAuthority
-	2,  // 20: axon.v1.Envelope.priority:type_name -> axon.v1.Priority
-	26, // 21: axon.v1.Envelope.caller:type_name -> axon.v1.AgentIdentity
-	26, // 22: axon.v1.Envelope.callee:type_name -> axon.v1.AgentIdentity
-	27, // 23: axon.v1.Envelope.subject:type_name -> axon.v1.SubjectIdentity
-	30, // 24: axon.v1.Envelope.causal_context:type_name -> axon.v1.CausalContext
-	35, // 25: axon.v1.Envelope.caller_signature:type_name -> axon.v1.CallerSignature
-	68, // 26: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
-	6,  // 27: axon.v1.Error.stage:type_name -> axon.v1.ErrorStage
-	7,  // 28: axon.v1.Error.security_class:type_name -> axon.v1.SecurityClass
-	8,  // 29: axon.v1.LedgerEventPayload.kind:type_name -> axon.v1.LedgerEventPayloadKind
-	47, // 30: axon.v1.LedgerEventPayload.sealed:type_name -> axon.v1.SealedLedgerEventPayload
-	49, // 31: axon.v1.LedgerEventPayload.recipients:type_name -> axon.v1.RecipientSealedLedgerEventPayload
-	47, // 32: axon.v1.RecipientSealedLedgerEventPayload.payload:type_name -> axon.v1.SealedLedgerEventPayload
-	50, // 33: axon.v1.LedgerVisibilitySummary.args:type_name -> axon.v1.LedgerPayloadVisibility
-	50, // 34: axon.v1.LedgerVisibilitySummary.result:type_name -> axon.v1.LedgerPayloadVisibility
-	50, // 35: axon.v1.LedgerVisibilitySummary.diagnostics:type_name -> axon.v1.LedgerPayloadVisibility
-	69, // 36: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
-	48, // 37: axon.v1.LedgerDiagnosticRecord.payload:type_name -> axon.v1.LedgerEventPayload
-	54, // 38: axon.v1.InvocationReceiptChainSummary.anchors:type_name -> axon.v1.InvocationReceiptAnchor
-	59, // 39: axon.v1.InvocationTraceGraph.records:type_name -> axon.v1.InvocationLedgerRecord
-	57, // 40: axon.v1.InvocationTraceGraph.edges:type_name -> axon.v1.InvocationTraceEdge
-	48, // 41: axon.v1.InvocationLedgerRecord.args:type_name -> axon.v1.LedgerEventPayload
-	48, // 42: axon.v1.InvocationLedgerRecord.result:type_name -> axon.v1.LedgerEventPayload
-	52, // 43: axon.v1.InvocationLedgerRecord.error:type_name -> axon.v1.LedgerErrorRecord
-	53, // 44: axon.v1.InvocationLedgerRecord.diagnostics:type_name -> axon.v1.LedgerDiagnosticRecord
-	56, // 45: axon.v1.InvocationLedgerRecord.causal_links:type_name -> axon.v1.InvocationCausalLink
-	55, // 46: axon.v1.InvocationLedgerRecord.receipt_chain:type_name -> axon.v1.InvocationReceiptChainSummary
-	51, // 47: axon.v1.InvocationLedgerRecord.visibility:type_name -> axon.v1.LedgerVisibilitySummary
-	9,  // 48: axon.v1.NodeDescriptor.state:type_name -> axon.v1.NodeState
-	10, // 49: axon.v1.NodeDescriptor.trust_level:type_name -> axon.v1.TrustLevel
-	70, // 50: axon.v1.NodeDescriptor.labels:type_name -> axon.v1.NodeDescriptor.LabelsEntry
-	60, // 51: axon.v1.NodeDescriptor.resources:type_name -> axon.v1.ResourceSnapshot
-	11, // 52: axon.v1.NodeDescriptor.role:type_name -> axon.v1.NodeRole
-	13, // 53: axon.v1.InvocationTarget.strategy:type_name -> axon.v1.RoutingStrategy
-	10, // 54: axon.v1.InvocationTarget.min_trust_level:type_name -> axon.v1.TrustLevel
-	62, // 55: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
-	16, // 56: axon.v1.KeyInfo.state:type_name -> axon.v1.KeyState
-	23, // 57: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
-	71, // 58: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
-	59, // [59:59] is the sub-list for method output_type
-	59, // [59:59] is the sub-list for method input_type
-	59, // [59:59] is the sub-list for extension type_name
-	59, // [59:59] is the sub-list for extension extendee
-	0,  // [0:59] is the sub-list for field type_name
+	47, // 0: axon.v1.ContentEnvelope.meta:type_name -> axon.v1.ContentMeta
+	2,  // 1: axon.v1.ContentEnvelope.encryption:type_name -> axon.v1.EncryptionAlgorithm
+	2,  // 2: axon.v1.EncryptedPayload.algorithm:type_name -> axon.v1.EncryptionAlgorithm
+	3,  // 3: axon.v1.EntityRef.kind:type_name -> axon.v1.EntityRefKind
+	22, // 4: axon.v1.InvocationAuthorityProof.binding:type_name -> axon.v1.AuthorityBinding
+	11, // 5: axon.v1.InvocationAuthorityProof.issuer:type_name -> axon.v1.AgentIdentity
+	21, // 6: axon.v1.InvocationAuthorityProof.signature:type_name -> axon.v1.CalleeSignature
+	16, // 7: axon.v1.CausalContext.none:type_name -> axon.v1.Empty
+	17, // 8: axon.v1.CausalContext.scalar:type_name -> axon.v1.ReceiptRef
+	18, // 9: axon.v1.CausalContext.list:type_name -> axon.v1.ReceiptList
+	19, // 10: axon.v1.CausalContext.merkle:type_name -> axon.v1.MerkleRoot
+	17, // 11: axon.v1.ReceiptList.prior:type_name -> axon.v1.ReceiptRef
+	23, // 12: axon.v1.AuthorityBinding.self_authority:type_name -> axon.v1.SelfAuthority
+	24, // 13: axon.v1.AuthorityBinding.delegated_authority:type_name -> axon.v1.DelegationProof
+	25, // 14: axon.v1.AuthorityBinding.capability_grant:type_name -> axon.v1.CapabilityGrant
+	26, // 15: axon.v1.AuthorityBinding.policy_grant:type_name -> axon.v1.PolicyGrant
+	27, // 16: axon.v1.AuthorityBinding.session_authority:type_name -> axon.v1.SessionAuthority
+	28, // 17: axon.v1.AuthorityBinding.bootstrap_authority:type_name -> axon.v1.BootstrapAuthority
+	1,  // 18: axon.v1.Envelope.priority:type_name -> axon.v1.Priority
+	11, // 19: axon.v1.Envelope.caller:type_name -> axon.v1.AgentIdentity
+	11, // 20: axon.v1.Envelope.callee:type_name -> axon.v1.AgentIdentity
+	12, // 21: axon.v1.Envelope.subject:type_name -> axon.v1.SubjectIdentity
+	15, // 22: axon.v1.Envelope.causal_context:type_name -> axon.v1.CausalContext
+	20, // 23: axon.v1.Envelope.caller_signature:type_name -> axon.v1.CallerSignature
+	49, // 24: axon.v1.Error.context:type_name -> axon.v1.Error.ContextEntry
+	4,  // 25: axon.v1.Error.stage:type_name -> axon.v1.ErrorStage
+	5,  // 26: axon.v1.Error.security_class:type_name -> axon.v1.SecurityClass
+	6,  // 27: axon.v1.LedgerEventPayload.kind:type_name -> axon.v1.LedgerEventPayloadKind
+	32, // 28: axon.v1.LedgerEventPayload.sealed:type_name -> axon.v1.SealedLedgerEventPayload
+	34, // 29: axon.v1.LedgerEventPayload.recipients:type_name -> axon.v1.RecipientSealedLedgerEventPayload
+	32, // 30: axon.v1.RecipientSealedLedgerEventPayload.payload:type_name -> axon.v1.SealedLedgerEventPayload
+	35, // 31: axon.v1.LedgerVisibilitySummary.args:type_name -> axon.v1.LedgerPayloadVisibility
+	35, // 32: axon.v1.LedgerVisibilitySummary.result:type_name -> axon.v1.LedgerPayloadVisibility
+	35, // 33: axon.v1.LedgerVisibilitySummary.diagnostics:type_name -> axon.v1.LedgerPayloadVisibility
+	50, // 34: axon.v1.LedgerErrorRecord.context:type_name -> axon.v1.LedgerErrorRecord.ContextEntry
+	33, // 35: axon.v1.LedgerDiagnosticRecord.payload:type_name -> axon.v1.LedgerEventPayload
+	39, // 36: axon.v1.InvocationReceiptChainSummary.anchors:type_name -> axon.v1.InvocationReceiptAnchor
+	44, // 37: axon.v1.InvocationTraceGraph.records:type_name -> axon.v1.InvocationLedgerRecord
+	42, // 38: axon.v1.InvocationTraceGraph.edges:type_name -> axon.v1.InvocationTraceEdge
+	33, // 39: axon.v1.InvocationLedgerRecord.args:type_name -> axon.v1.LedgerEventPayload
+	33, // 40: axon.v1.InvocationLedgerRecord.result:type_name -> axon.v1.LedgerEventPayload
+	37, // 41: axon.v1.InvocationLedgerRecord.error:type_name -> axon.v1.LedgerErrorRecord
+	38, // 42: axon.v1.InvocationLedgerRecord.diagnostics:type_name -> axon.v1.LedgerDiagnosticRecord
+	41, // 43: axon.v1.InvocationLedgerRecord.causal_links:type_name -> axon.v1.InvocationCausalLink
+	40, // 44: axon.v1.InvocationLedgerRecord.receipt_chain:type_name -> axon.v1.InvocationReceiptChainSummary
+	36, // 45: axon.v1.InvocationLedgerRecord.visibility:type_name -> axon.v1.LedgerVisibilitySummary
+	45, // 46: axon.v1.InvocationTarget.ability:type_name -> axon.v1.AbilityTarget
+	9,  // 47: axon.v1.PayloadRef.content:type_name -> axon.v1.ContentEnvelope
+	51, // 48: axon.v1.PayloadRef.labels:type_name -> axon.v1.PayloadRef.LabelsEntry
+	49, // [49:49] is the sub-list for method output_type
+	49, // [49:49] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_axon_v1_types_proto_init() }
@@ -5943,13 +4207,13 @@ func file_axon_v1_types_proto_init() {
 	if File_axon_v1_types_proto != nil {
 		return
 	}
-	file_axon_v1_types_proto_msgTypes[13].OneofWrappers = []any{
+	file_axon_v1_types_proto_msgTypes[6].OneofWrappers = []any{
 		(*CausalContext_None)(nil),
 		(*CausalContext_Scalar)(nil),
 		(*CausalContext_List)(nil),
 		(*CausalContext_Merkle)(nil),
 	}
-	file_axon_v1_types_proto_msgTypes[20].OneofWrappers = []any{
+	file_axon_v1_types_proto_msgTypes[13].OneofWrappers = []any{
 		(*AuthorityBinding_SelfAuthority)(nil),
 		(*AuthorityBinding_DelegatedAuthority)(nil),
 		(*AuthorityBinding_CapabilityGrant)(nil),
@@ -5957,7 +4221,7 @@ func file_axon_v1_types_proto_init() {
 		(*AuthorityBinding_SessionAuthority)(nil),
 		(*AuthorityBinding_BootstrapAuthority)(nil),
 	}
-	file_axon_v1_types_proto_msgTypes[46].OneofWrappers = []any{
+	file_axon_v1_types_proto_msgTypes[37].OneofWrappers = []any{
 		(*InvocationTarget_Ability)(nil),
 	}
 	type x struct{}
@@ -5965,8 +4229,8 @@ func file_axon_v1_types_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_axon_v1_types_proto_rawDesc), len(file_axon_v1_types_proto_rawDesc)),
-			NumEnums:      17,
-			NumMessages:   55,
+			NumEnums:      9,
+			NumMessages:   43,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -1818,7 +1818,14 @@ mod tests {
                 self.function_names
                     .lock()
                     .unwrap()
-                    .push(request.function_name);
+                    .push(
+                        crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                            "capture subscribe request",
+                            request.target.as_ref(),
+                        )
+                        .expect("typed stream target")
+                        .to_string(),
+                    );
                 Ok(Box::pin(futures::stream::pending::<DirectoryEvent>()))
             }
         }

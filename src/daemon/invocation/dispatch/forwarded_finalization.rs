@@ -490,7 +490,6 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            function_name: "job.run".to_string(),
             arguments: b"{}".to_vec(),
             ..InvokeRequest::default()
         }

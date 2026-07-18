@@ -54,8 +54,8 @@ use crate::daemon::invocation::dispatch::forwarded_finalization::{
     ForwardedFinalizationVerifier, ForwardedInvocationBinding,
 };
 use crate::daemon::invocation::dispatch::invocation_wire::{
-    status_from_axon_invoke_error, target_ura_from_envelope, BoxedDownStream,
-    FEDERATION_RESULT_CONTENT_TYPE,
+    function_name_from_invocation_target, status_from_axon_invoke_error, target_ura_from_envelope,
+    BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
@@ -124,15 +124,7 @@ impl StreamDispatcher {
             .open_stream(route, request, local_system_ingress)
             .await?;
         let initial_sequence = daemon_route_initial_sequence(route, request)?;
-        project_local_runtime_stream(
-            handle,
-            route.name(),
-            route.name().to_string(),
-            "local-runtime",
-            initial_sequence,
-            lifecycle,
-        )
-        .await
+        project_local_runtime_stream(handle, route.name(), initial_sequence, lifecycle).await
     }
 
     /// RFC-005 resolve-first dispatch for every other server-stream
@@ -177,7 +169,8 @@ impl StreamDispatcher {
         selected_route: SelectedInvokeRoute,
         call_mode: CallMode,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        let ability = request.function_name.trim();
+        let ability =
+            function_name_from_invocation_target("InvokeStream", request.target.as_ref())?;
         let Some(runtime) = self.runtime.local_runtime() else {
             return Err(Status::failed_precondition(format!(
                 "InvokeStream: ability `{ability}` cannot run because Axon LocalRuntime \
@@ -282,15 +275,7 @@ impl StreamDispatcher {
                 .await;
             return Err(error);
         }
-        project_local_runtime_stream(
-            handle,
-            ability,
-            selected_route.route_ura.clone(),
-            "local-runtime",
-            0,
-            lifecycle,
-        )
-        .await
+        project_local_runtime_stream(handle, ability, 0, lifecycle).await
     }
 
     async fn dispatch_remote_selected_route(
@@ -299,7 +284,9 @@ impl StreamDispatcher {
         selected_route: SelectedInvokeRoute,
         call_mode: CallMode,
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        let ability = request.function_name.trim().to_string();
+        let ability =
+            function_name_from_invocation_target("InvokeStream", request.target.as_ref())?
+                .to_string();
         let Some(envelope) = request.envelope.clone() else {
             return Err(Status::invalid_argument(format!(
                 "InvokeStream: remote-hosted ability `{ability}` requires the seven-tuple \
@@ -335,7 +322,6 @@ impl StreamDispatcher {
         let forwarded_request = axon_sdk::pb::axon::v1::InvokeRequest {
             envelope: request.envelope.clone(),
             target: request.target.clone(),
-            function_name: request.function_name.clone(),
             arguments: request.arguments.clone(),
             content_type: request.content_type.clone(),
             content_envelope: request.content_envelope.clone(),
@@ -382,7 +368,6 @@ impl StreamDispatcher {
         );
 
         let (tx, rx) = mpsc::channel::<Result<InvokeStreamChunk, Status>>(16);
-        let route_ura = selected_route.route_ura.clone();
         tokio::spawn(async move {
             let mut sequence = 0_u64;
             let mut canonical_invocation_id = None::<String>;
@@ -399,7 +384,6 @@ impl StreamDispatcher {
                         canonical_invocation_id = Some(receipt.invocation_id.clone());
                         let chunk = remote_stream_chunk(RemoteStreamChunkParts {
                             invocation_id: receipt.invocation_id.clone(),
-                            selected_node_id: route_ura.clone(),
                             state: axon_sdk::invocation::InvocationState::Running,
                             payload: Vec::new(),
                             sequence,
@@ -428,7 +412,6 @@ impl StreamDispatcher {
                         };
                         let chunk = remote_stream_chunk(RemoteStreamChunkParts {
                             invocation_id,
-                            selected_node_id: route_ura.clone(),
                             state: axon_sdk::invocation::InvocationState::Running,
                             payload,
                             sequence,
@@ -477,7 +460,6 @@ impl StreamDispatcher {
                             };
                         let chunk = remote_stream_chunk(RemoteStreamChunkParts {
                             invocation_id: finalized.terminal_receipt.invocation_id.clone(),
-                            selected_node_id: route_ura.clone(),
                             state: finalized.terminal_state,
                             payload: finalized.output,
                             sequence,
@@ -502,8 +484,6 @@ impl StreamDispatcher {
 async fn project_local_runtime_stream(
     mut handle: StreamingInvocationHandle,
     ability: &str,
-    selected_node_id: String,
-    scheduling_reason: &'static str,
     initial_sequence: u64,
     lifecycle: RegisteredInvocationLifecycle,
 ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
@@ -641,8 +621,6 @@ async fn project_local_runtime_stream(
                             ..ResponseHeader::default()
                         }),
                         invocation_id: invocation_id.clone(),
-                        selected_node_id: selected_node_id.clone(),
-                        scheduling_reason: scheduling_reason.to_string(),
                         state: state.to_wire_i32(),
                         content_type,
                         payload,
@@ -702,8 +680,6 @@ async fn project_local_runtime_stream(
                             ..ResponseHeader::default()
                         }),
                         invocation_id: invocation_id.clone(),
-                        selected_node_id: selected_node_id.clone(),
-                        scheduling_reason: scheduling_reason.to_string(),
                         state: finalized.terminal_state.to_wire_i32(),
                         sequence,
                         terminal: true,
@@ -785,12 +761,8 @@ impl StreamDispatcher {
         request: &InvokeServerStreamRequest,
     ) -> Result<CanonicalRouteSelection, Status> {
         let target_ura = local_stream_target_ura(request)?;
-        let ability = request.function_name.trim();
-        if ability.is_empty() {
-            return Err(Status::invalid_argument(
-                "InvokeStream request missing function_name for namespace.resolve",
-            ));
-        }
+        let ability =
+            function_name_from_invocation_target("InvokeStream", request.target.as_ref())?;
 
         let selection = self
             .gate
@@ -1057,7 +1029,6 @@ fn local_stream_target_ura(request: &InvokeServerStreamRequest) -> Result<String
 
 struct RemoteStreamChunkParts {
     invocation_id: String,
-    selected_node_id: String,
     state: axon_sdk::invocation::InvocationState,
     payload: Vec<u8>,
     sequence: u64,
@@ -1075,8 +1046,6 @@ fn remote_stream_chunk(parts: RemoteStreamChunkParts) -> InvokeStreamChunk {
             ..ResponseHeader::default()
         }),
         invocation_id: parts.invocation_id,
-        selected_node_id: parts.selected_node_id,
-        scheduling_reason: "remote-presence-session".to_string(),
         state: parts.state.to_wire_i32(),
         content_type: FEDERATION_RESULT_CONTENT_TYPE.to_string(),
         payload: parts.payload,

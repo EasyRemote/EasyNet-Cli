@@ -51,8 +51,9 @@ async fn signed_invocation_cancel_command_replay_is_rejected() {
     .expect("complete cancellation tuple");
     let request = InvokeRequest {
         envelope: Some(envelope),
-        function_name: crate::daemon::invocation::dispatch::cancellation::ABILITY_INVOCATION_CANCEL
-            .to_string(),
+        target: Some(test_invocation_target(
+            crate::daemon::invocation::dispatch::cancellation::ABILITY_INVOCATION_CANCEL,
+        )),
         arguments,
         ..InvokeRequest::default()
     };
@@ -445,7 +446,6 @@ async fn invoke_dispatches_federation_advertise_agent() {
             )
             .expect("typed descriptor target"),
         ),
-        function_name: ABILITY_FEDERATION_ADVERTISE_AGENT.to_string(),
         arguments: arguments.to_vec(),
         ..InvokeRequest::default()
     });
@@ -1084,7 +1084,6 @@ async fn invoke_dispatches_federation_list_user_devices_rejects_non_hub_caller()
             )
             .expect("typed descriptor target"),
         ),
-        function_name: function_name.to_string(),
         arguments,
         ..InvokeRequest::default()
     });
@@ -1158,7 +1157,6 @@ async fn identity_register_pubkey_rejects_device_caller_for_user_role_before_wri
             )
             .expect("typed descriptor target"),
         ),
-        function_name: function_name.to_string(),
         arguments,
         ..InvokeRequest::default()
     });
@@ -1251,7 +1249,6 @@ async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
             )
             .expect("typed descriptor target"),
         ),
-        function_name: function_name.to_string(),
         arguments,
         ..InvokeRequest::default()
     });
@@ -1358,7 +1355,6 @@ async fn identity_revoke_user_pubkey_removes_matching_presence_after_write() {
                 )
                 .expect("typed descriptor target"),
             ),
-            function_name: function_name.to_string(),
             arguments,
             ..InvokeRequest::default()
         }))
@@ -1502,7 +1498,6 @@ async fn identity_revoke_user_pubkey_removes_user_hosted_agents_and_host_presenc
                 )
                 .expect("typed descriptor target"),
             ),
-            function_name: function_name.to_string(),
             arguments,
             ..InvokeRequest::default()
         }))
@@ -1618,7 +1613,6 @@ async fn identity_revoke_user_pubkey_idempotent_miss_keeps_presence() {
                 )
                 .expect("typed descriptor target"),
             ),
-            function_name: function_name.to_string(),
             arguments,
             ..InvokeRequest::default()
         }))
@@ -1700,7 +1694,7 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_fans_out_and_stamp
     assert_eq!(calls.len(), 1, "exactly one peer request captured");
     assert_eq!(calls[0].0, peer_hub_url);
     assert_eq!(
-        calls[0].1.function_name,
+        invocation_function_name(&calls[0].1),
         ABILITY_FEDERATION_LIST_USER_DEVICES
     );
     let peer_args: federation_wrappers::ListUserDevicesRequest =
@@ -1826,7 +1820,6 @@ async fn invoke_dispatches_federation_proxy_list_user_devices_rejects_hub_role_c
             )
             .expect("typed descriptor target"),
         ),
-        function_name: ABILITY_FEDERATION_PROXY_LIST_USER_DEVICES.to_string(),
         arguments: args.to_vec(),
         ..InvokeRequest::default()
     };
@@ -1952,7 +1945,10 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
     let calls = recorder.calls();
     assert_eq!(calls.len(), 1, "exactly one peer request captured");
     assert_eq!(calls[0].0, peer_hub_url);
-    assert_eq!(calls[0].1.function_name, ABILITY_NAMESPACE_RESOLVE);
+    assert_eq!(
+        invocation_function_name(&calls[0].1),
+        ABILITY_NAMESPACE_RESOLVE
+    );
     let peer_args: serde_json::Value =
         serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
     assert_eq!(peer_args["query_name"], "easynet:///r/peer-realm/device/");
@@ -2078,7 +2074,10 @@ async fn invoke_dispatches_federation_resolve_key_uses_federated_resolver_on_loc
     let calls = recorder.calls();
     assert_eq!(calls.len(), 1, "local miss must dial the peer hub once");
     assert_eq!(calls[0].0, peer_hub_url);
-    assert_eq!(calls[0].1.function_name, ABILITY_FEDERATION_RESOLVE_KEY);
+    assert_eq!(
+        invocation_function_name(&calls[0].1),
+        ABILITY_FEDERATION_RESOLVE_KEY
+    );
     let peer_args: federation_wrappers::ResolveKeyRequest =
         serde_json::from_slice(&calls[0].1.arguments).expect("peer args decode");
     assert_eq!(peer_args.agent_ura, peer_caller_ura);
@@ -2496,9 +2495,9 @@ async fn dispatch_remote_rpc_rejects_missing_signed_descriptor_ref() {
         .expect_err("missing typed descriptor target must fail before carrier dispatch");
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
     assert!(
-        err.message().contains("SIGNED_DESCRIPTOR_REF_MISSING")
-            && err.message().contains("typed descriptor target"),
-        "expected typed descriptor target denial, got: {}",
+        err.message()
+            .contains("invocation requires InvocationTarget.typed_target"),
+        "expected canonical typed-target denial, got: {}",
         err.message()
     );
     assert!(
@@ -2559,7 +2558,7 @@ async fn dispatch_remote_rpc_carrier_v1_preserves_signed_canonical_material() {
         other => panic!("expected carrier-v1 DispatchCall, got {other:?}"),
     };
     let request = call.request.expect("carrier-v1 request");
-    assert_eq!(request.function_name, "shell.run");
+    assert_eq!(invocation_function_name(&request), "shell.run");
     assert_eq!(
         crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
             "test forwarded unary",

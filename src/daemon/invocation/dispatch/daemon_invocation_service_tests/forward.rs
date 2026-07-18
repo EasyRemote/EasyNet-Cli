@@ -36,7 +36,6 @@ fn complete_request() -> InvokeRequest {
         target: Some(
             wire_invocation_target(&descriptor_ref, "echo").expect("typed descriptor target"),
         ),
-        function_name: "echo".to_string(),
         arguments: br#"{"value":1}"#.to_vec(),
         ..InvokeRequest::default()
     }

@@ -89,7 +89,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::AUTHORITY_PROOF_METADA
 use crate::daemon::persistence::access_control::{AccessControlStore, AccessControlStoreRegistry};
 use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
 use crate::daemon::trust::cell::SharedTrustAnchor;
-use axon_sdk::pb::axon::v1::{Envelope, RateLimitInfo};
+use axon_sdk::pb::axon::v1::Envelope;
 
 const REASON_AUTHORITY_REQUIRED: &str = "AUTHORITY_REQUIRED";
 const REASON_AUTHORITY_SIGNATURE_INVALID: &str = "AUTHORITY_SIGNATURE_INVALID";
@@ -372,7 +372,6 @@ struct ProductAdmissionInput {
 
 struct ProductAdmissionReservation {
     quota: Option<QuotaReservation>,
-    rate_limit: Option<RateLimitInfo>,
 }
 
 struct ProductAdmissionDecision {
@@ -601,12 +600,7 @@ impl DaemonProductAdmissionCoordinator {
         }
     }
 
-    fn finish(
-        &self,
-        envelope_key: [u8; 32],
-        id: u64,
-        commit: bool,
-    ) -> Result<Option<RateLimitInfo>, Status> {
+    fn finish(&self, envelope_key: [u8; 32], id: u64, commit: bool) -> Result<(), Status> {
         let state = {
             let mut registry = self.registry.lock().map_err(|_| {
                 Status::internal("daemon product admission registry lock poisoned while finishing")
@@ -638,9 +632,9 @@ impl DaemonProductAdmissionCoordinator {
                 if let Some(quota) = reservation.quota {
                     quota.commit();
                 }
-                Ok(reservation.rate_limit)
+                Ok(())
             }
-            (false, _) => Ok(None),
+            (false, _) => Ok(()),
             (true, ProductAdmissionState::Denied) => Err(Status::permission_denied(
                 "daemon product admission was denied before runtime launch",
             )),
@@ -662,7 +656,7 @@ pub(crate) struct DaemonProductAdmissionLease {
 }
 
 impl DaemonProductAdmissionLease {
-    pub(crate) fn commit(mut self) -> Result<Option<RateLimitInfo>, Status> {
+    pub(crate) fn commit(mut self) -> Result<(), Status> {
         let id = self
             .id
             .take()
@@ -1015,10 +1009,7 @@ impl AdmissionFacade {
                 return product_admission_decision(
                     admitted_envelope,
                     VerifiedProductAuthority::self_authority(caller_ura),
-                    ProductAdmissionReservation {
-                        quota: None,
-                        rate_limit: None,
-                    },
+                    ProductAdmissionReservation { quota: None },
                 );
             }
             ProductAdmissionIngress::ProvisionalBootstrap => {
@@ -1041,10 +1032,7 @@ impl AdmissionFacade {
                 return product_admission_decision(
                     admitted_envelope,
                     VerifiedProductAuthority::bootstrap(admitted_envelope.envelope(), None)?,
-                    ProductAdmissionReservation {
-                        quota: None,
-                        rate_limit: None,
-                    },
+                    ProductAdmissionReservation { quota: None },
                 );
             }
             ProductAdmissionIngress::CallerSigned => {}
@@ -1090,10 +1078,7 @@ impl AdmissionFacade {
             return product_admission_decision(
                 admitted_envelope,
                 authority,
-                ProductAdmissionReservation {
-                    quota: None,
-                    rate_limit: None,
-                },
+                ProductAdmissionReservation { quota: None },
             );
         }
         let Some(quota) = self
@@ -1103,10 +1088,7 @@ impl AdmissionFacade {
             return product_admission_decision(
                 admitted_envelope,
                 authority,
-                ProductAdmissionReservation {
-                    quota: None,
-                    rate_limit: None,
-                },
+                ProductAdmissionReservation { quota: None },
             );
         };
         let decision = quota.decision();
@@ -1118,15 +1100,7 @@ impl AdmissionFacade {
         product_admission_decision(
             admitted_envelope,
             authority,
-            ProductAdmissionReservation {
-                quota: Some(quota),
-                rate_limit: Some(RateLimitInfo {
-                    quota_remaining: decision.quota_remaining,
-                    quota_limit: decision.quota_limit,
-                    reset_at_unix_ms: decision.reset_at_unix_ms,
-                    retry_after_ms: decision.retry_after_ms,
-                }),
-            },
+            ProductAdmissionReservation { quota: Some(quota) },
         )
     }
 

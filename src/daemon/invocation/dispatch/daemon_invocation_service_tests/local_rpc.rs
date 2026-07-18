@@ -516,6 +516,12 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
     .await;
 
     let arguments = br#"{"k":"v"}"#.to_vec();
+    let descriptor_ref = catalog_test_descriptor_ref(
+        svc.directory.local_ability_catalog.as_ref().unwrap(),
+        TEST_DAEMON_URA,
+        "demo.loopback_unsigned",
+        crate::daemon::ability::CallMode::Rpc,
+    );
     let request = InvokeRequest {
         envelope: Some(
             ProtoEnvelope::from_target(
@@ -528,11 +534,9 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_loopback_request() {
             .into_inner("demo.loopback_unsigned", &arguments)
             .expect("complete loopback tuple"),
         ),
-        function_name: catalog_test_descriptor_ref(
-            svc.directory.local_ability_catalog.as_ref().unwrap(),
-            TEST_DAEMON_URA,
-            "demo.loopback_unsigned",
-            crate::daemon::ability::CallMode::Rpc,
+        target: Some(
+            wire_invocation_target(&descriptor_ref, "demo.loopback_unsigned")
+                .expect("typed descriptor target"),
         ),
         arguments,
         ..InvokeRequest::default()
@@ -651,7 +655,7 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
                         .into_inner(ability, &arguments)
                         .expect("complete concurrency probe tuple"),
                     ),
-                    function_name: ability.to_string(),
+                    target: Some(test_invocation_target(ability)),
                     arguments,
                     ..InvokeRequest::default()
                 }))
@@ -828,7 +832,7 @@ async fn simple_uds_invocation_concurrency_probe() {
                         .into_inner(ability, &arguments)
                         .expect("complete UDS concurrency probe tuple"),
                     ),
-                    function_name: ability.to_string(),
+                    target: Some(test_invocation_target(ability)),
                     arguments,
                     ..InvokeRequest::default()
                 }))

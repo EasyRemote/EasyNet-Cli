@@ -45,19 +45,14 @@ class InvocationStub:
     """─────────────────────────────────────────────────────────
     Invocation Plane: All execution modes with guarantees.
 
-    Every call carries a full Envelope (request_id, idempotency_key,
-    tenant_id, deadline, trace_id, priority). No exceptions.
+    Every call carries a complete signed descriptor-bound Envelope. No
+    exceptions.
 
     Every call terminates in a decidable state:
     Completed | Failed | TimedOut | Cancelled
 
-    The scheduler decision is always explainable:
-    SchedulingScore provides structured, weighted scoring.
-
-    Unary and server-stream responses carry BackpressureSignal + RateLimitInfo
-    so callers can self-regulate under load. InvokeBidi carries realtime flow
-    control in its ordered frame/control stream instead of response-envelope
-    quota fields.
+    Product routing, scheduling, quota, and policy projections belong to the
+    downstream host. Axon transports only canonical invocation lifecycle facts.
     ─────────────────────────────────────────────────────────
 
     RFC-001 P1.2.g: Invocation service collapsed to the active invocation
@@ -128,19 +123,14 @@ class InvocationAsyncStub:
     """─────────────────────────────────────────────────────────
     Invocation Plane: All execution modes with guarantees.
 
-    Every call carries a full Envelope (request_id, idempotency_key,
-    tenant_id, deadline, trace_id, priority). No exceptions.
+    Every call carries a complete signed descriptor-bound Envelope. No
+    exceptions.
 
     Every call terminates in a decidable state:
     Completed | Failed | TimedOut | Cancelled
 
-    The scheduler decision is always explainable:
-    SchedulingScore provides structured, weighted scoring.
-
-    Unary and server-stream responses carry BackpressureSignal + RateLimitInfo
-    so callers can self-regulate under load. InvokeBidi carries realtime flow
-    control in its ordered frame/control stream instead of response-envelope
-    quota fields.
+    Product routing, scheduling, quota, and policy projections belong to the
+    downstream host. Axon transports only canonical invocation lifecycle facts.
     ─────────────────────────────────────────────────────────
 
     RFC-001 P1.2.g: Invocation service collapsed to the active invocation
@@ -210,19 +200,14 @@ class InvocationServicer(metaclass=abc.ABCMeta):
     """─────────────────────────────────────────────────────────
     Invocation Plane: All execution modes with guarantees.
 
-    Every call carries a full Envelope (request_id, idempotency_key,
-    tenant_id, deadline, trace_id, priority). No exceptions.
+    Every call carries a complete signed descriptor-bound Envelope. No
+    exceptions.
 
     Every call terminates in a decidable state:
     Completed | Failed | TimedOut | Cancelled
 
-    The scheduler decision is always explainable:
-    SchedulingScore provides structured, weighted scoring.
-
-    Unary and server-stream responses carry BackpressureSignal + RateLimitInfo
-    so callers can self-regulate under load. InvokeBidi carries realtime flow
-    control in its ordered frame/control stream instead of response-envelope
-    quota fields.
+    Product routing, scheduling, quota, and policy projections belong to the
+    downstream host. Axon transports only canonical invocation lifecycle facts.
     ─────────────────────────────────────────────────────────
 
     RFC-001 P1.2.g: Invocation service collapsed to the active invocation
