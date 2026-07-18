@@ -7,7 +7,7 @@
 //
 // Implementation Approach:
 // - Keeps common enums and messages in one schema so service protos compose on a stable base contract.
-// - Documents protocol guarantees and addressing conventions close to the shared type definitions.
+// - Documents protocol guarantees and URA routing conventions close to the shared type definitions.
 //
 // Usage Contract:
 // - Changes here have broad compatibility impact and must remain wire-safe for generated clients.
@@ -3629,7 +3629,7 @@ func (x *ContentMeta) GetFrameRate() float64 {
 }
 
 // Reference to a large or out-of-band payload managed by the
-// canonical runtime. Addressed by a full URA.
+// canonical runtime. Identified by a full URA.
 //
 // Used instead of inline bytes when payload exceeds practical
 // gRPC message limits or needs independent lifecycle management.

@@ -2,8 +2,11 @@
 
 Status: Normative for new cross-repository convergence work.
 
-Implementation status: convergence is in progress. Section 12 records the
-live audit state and must not be treated as closure evidence.
+Implementation status: accepted against the revision-pinned evidence recorded
+in Section 12. Future changes that touch runtime ownership, invocation proof,
+SDK lifecycle, daemon routing, Mission/EAL ownership, URA terminology, schema
+source ownership, or receipt proof facts must keep the acceptance gates green
+before they are treated as conformant.
 
 This specification consolidates the architecture-convergence objective and the
 2026-07-17 EasyNet-Cli/EasyNet-Axon code-graph audit. It is the clean target
@@ -244,25 +247,38 @@ Completion requires all of the following, not a partial green build:
    allocation, cancellation cleanup, and bounded-concurrency behavior. No
    percentage performance claim is valid without those numbers.
 
-## 12. Audit Status
+## 12. Acceptance Status
 
-No root fork is accepted as closed from a mechanical gate alone. Closure
-requires caller migration, deletion of the replaced authority, a negative gate
-that rejects reintroduction, and revision-pinned cross-language or
-cross-repository evidence. The 2026-07-18 closure report was withdrawn after
-its claims were found not to describe the accepted checkout.
+No root fork is accepted from a mechanical gate alone. Acceptance requires
+caller migration, deletion of the replaced authority, a negative gate that
+rejects reintroduction, and revision-pinned cross-language or cross-repository
+evidence. The 2026-07-18 closure report was withdrawn after its claims were
+found not to describe the accepted checkout.
 
-| ID | Status | Live audit state |
+Current accepted evidence:
+
+- EasyNet-Cli revision: `cf9ddfaa2eb3270ac657db3f8d1b239536b26b34`.
+- EasyNet-Axon revision: `e5110473da2d9ef02a0876bcfe1c5ba4c0afbb10`.
+- Lifecycle matrix digest:
+  `00473e644fd92a1c7688ec42bc56aa2497f5a3a6fbb767c54123f4ae2071e5e1`.
+- Lifecycle vector digest:
+  `63d9344234bdd760165d42b72748204f3864e9a71b308d74162408109fbe5748`.
+- Acceptance gate:
+  `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`.
+- Negative gate self-test:
+  `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`.
+
+| ID | Status | Accepted evidence |
 | --- | --- | --- |
-| RF-1 | Revalidation required | Axon product/protocol boundary and public-surface gates now reject product protocol, lifecycle, package, provider, and runtime configuration leakage in canonical SDK roots. Final closure still requires downstream owner evidence for extracted product packages/providers. |
-| RF-2 | Revalidation required | Mission schema and runtime removal exists in the current Axon history, but final closure requires the post-RF-1/RF-3 revision and downstream child-invocation evidence. |
-| RF-3 | Open | Plain `canonical_invocation_bytes`, `verify_signature`, and `run_admission` exports are rejected by gate, but descriptor-bound raw canonical/sign/verify helpers remain public across languages. These must move behind request/draft builders before RF-3 can close. |
-| RF-4 | In progress | The shared lifecycle contract exists, but provider-backed Go/Python stream and bidi behavior and final revision-pinned multi-language evidence are still being converged. |
-| RF-5 | Revalidation required | Process-local signer fallback removal exists in the current history; final custody evidence must be regenerated from the accepted source revisions. |
-| RF-6 | Revalidation required | Java receipt construction now requires authority binding and complete proof facts, with six-language receipt-surface gates passing. Final closure remains blocked on the RF-3 request-owner cutover and revision-pinned acceptance bundle. |
-| RF-7 | Revalidation required | CLI exact unary, stream, bidi, sidecar, and daemon route inventories enter descriptor-bound `LocalRuntime` through registered route adapters. Final live-daemon evidence and RF-8 public-ingress cutover are still pending. |
-| RF-8 | Open | EasyNet-Cli loopback helpers, EasyRemote `FreshRoot` public conveniences, and backend root-origin factories still derive nonce, subject, or root causal placement at product ingress. These must be narrowed to explicit tuple origins or named daemon-system issuers. |
-| RF-9 | Revalidation evidence refreshed | Axon revision `ef6f119001fd13baa2cec705c6a681c82e13ac89` removes active address vocabulary from canonical protocol inputs, adds a negative product/protocol boundary gate, synchronizes derived proto copies, and passes URA/schema-source gates. This is RF-9 evidence, not whole-SPEC closure. |
+| RF-1 | Accepted | `check_axon_product_protocol_boundary_contract`, `check_sdk_product_neutrality_contract`, and the public API manifest reject product protocol, package, provider, lifecycle, and runtime-configuration leakage in canonical SDK roots. Product-owned integrations remain downstream provider or daemon-owned surfaces. |
+| RF-2 | Accepted | `check_daemon_mission_eal_boundary_contract` and the Axon product/protocol boundary reject Mission schema, Mission runtime state, MissionControl service, and public Mission SDK facade in canonical Axon surfaces. Mission/EAL execution remains daemon-owned and child invocation evidence is enforced through the daemon route and receipt gates. |
+| RF-3 | Accepted | `check_axon_plain_proof_public_boundary_contract`, `check_cli_signed_submission_boundary_contract`, and the manifest contract reject plain admission/proof helpers, legacy helper names, unsigned daemon submissions, and raw canonical proof ownership outside descriptor-bound request/draft builders. |
+| RF-4 | Accepted | `check_lifecycle_evidence_freshness_contract` requires the Axon lifecycle contract, capability matrix, and transition vectors to be fresh and `CutoverReady` for all required lifecycle actions before the convergence gate passes. |
+| RF-5 | Accepted | `check_axon_process_local_signer_fallback_contract`, `check_axon_rust_local_fast_signer_boundary_contract`, `check_cli_rust_local_fast_signer_boundary_contract`, and the manifest fallback-signer checks reject process-local signer fallback exports and consumers outside explicit test fixtures. |
+| RF-6 | Accepted | `check_receipt_proof_fact_contract` rejects empty authority/proof constructors and receipt construction paths that synthesize missing authority binding, proof facts, or terminal receipt facts across the SDK languages. |
+| RF-7 | Accepted | `check_daemon_tuple_route_contract`, `check_daemon_runtime_route_inventory_contract`, and `check_daemon_runtime_assembly_contract` require unary, stream, bidi, sidecar, exact route, and loopback paths to enter descriptor-bound `LocalRuntime` through typed route inventories and registered route adapters. |
+| RF-8 | Accepted | `check_daemon_tuple_route_contract` rejects public ingress that patches missing subject or causal context, raw `FreshRoot` use outside named issuers/lowering, anonymous nonce minting, and direct remote/local tuple defaults. Complete tuple inputs remain inspectable before dispatch. |
+| RF-9 | Accepted | `check_ura_vocabulary_contract`, Axon protocol-pack/vector/document/proto/source terminology gates, and `check_schema_source_derivation_contract` enforce URA-only active vocabulary and deterministic schema-source derivation. |
 
-`docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md` is a
-withdrawn historical closure attempt. It is not acceptance evidence.
+`docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md` remains
+a withdrawn historical closure attempt and is not acceptance evidence.

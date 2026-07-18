@@ -82522,6 +82522,10 @@
           "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
         },
         {
+          "item": "DescriptorBoundInvocationDraft",
+          "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+        },
+        {
           "item": "DescriptorBoundInvocationRequest",
           "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
         },
@@ -82574,10 +82578,6 @@
           "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
         },
         {
-          "item": "canonical_descriptor_bound_invocation_bytes",
-          "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-        },
-        {
           "item": "canonical_entity_ref",
           "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
         },
@@ -82594,20 +82594,8 @@
           "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
         },
         {
-          "item": "sign_descriptor_bound_invocation",
-          "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-        },
-        {
           "item": "to_jcs_bytes",
           "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-        },
-        {
-          "item": "try_canonical_descriptor_bound_invocation_bytes",
-          "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-        },
-        {
-          "item": "verify_descriptor_bound_invocation_signature",
-          "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
         },
         {
           "item": "audit.DirectCausalTrace",
@@ -82654,28 +82642,12 @@
           "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
         },
         {
-          "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-          "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-        },
-        {
           "item": "axiom.canonical_entity_ref",
           "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
         },
         {
           "item": "axiom.fresh_nonce",
           "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-        },
-        {
-          "item": "axiom.sign_descriptor_bound_invocation",
-          "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-        },
-        {
-          "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-          "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-        },
-        {
-          "item": "axiom.verify_descriptor_bound_invocation_signature",
-          "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
         },
         {
           "item": "axon_sdk.canonical_json",
@@ -82761,6 +82733,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -82813,10 +82789,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -82833,20 +82805,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -82893,28 +82853,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -83000,6 +82944,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -83052,10 +83000,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -83072,20 +83016,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -83132,28 +83064,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -83239,6 +83155,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -83291,10 +83211,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -83311,20 +83227,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -83371,28 +83275,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -83478,6 +83366,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -83530,10 +83422,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -83550,20 +83438,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -83610,28 +83486,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -83717,6 +83577,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -83769,10 +83633,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -83789,20 +83649,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -83849,28 +83697,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -83956,6 +83788,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -84008,10 +83844,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -84028,20 +83860,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -84088,28 +83908,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -84195,6 +83999,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -84247,10 +84055,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -84267,20 +84071,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -84327,28 +84119,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -84434,6 +84210,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -84486,10 +84266,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -84506,20 +84282,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -84566,28 +84330,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -84673,6 +84421,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -84725,10 +84477,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -84745,20 +84493,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -84805,28 +84541,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -84912,6 +84632,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -84964,10 +84688,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -84984,20 +84704,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -85044,28 +84752,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -85151,6 +84843,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -85203,10 +84899,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -85223,20 +84915,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -85283,28 +84963,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -85390,6 +85054,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -85442,10 +85110,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -85462,20 +85126,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -85522,28 +85174,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -85629,6 +85265,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -85681,10 +85321,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -85701,20 +85337,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -85761,28 +85385,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -85868,6 +85476,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -85920,10 +85532,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -85940,20 +85548,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -86000,28 +85596,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -86107,6 +85687,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -86159,10 +85743,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -86179,20 +85759,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -86239,28 +85807,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -86346,6 +85898,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -86398,10 +85954,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -86418,20 +85970,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -86478,28 +86018,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -86585,6 +86109,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -86637,10 +86165,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -86657,20 +86181,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -86717,28 +86229,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -86824,6 +86320,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -86876,10 +86376,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -86896,20 +86392,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -86956,28 +86440,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -87063,6 +86531,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -87115,10 +86587,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -87135,20 +86603,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -87195,28 +86651,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",
@@ -87302,6 +86742,10 @@
               "sha256": "cbd4472c02bd6d6081301fef9753a8d689e75356a23ceae3c536427d0dc928e3"
             },
             {
+              "item": "DescriptorBoundInvocationDraft",
+              "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
               "item": "DescriptorBoundInvocationRequest",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
             },
@@ -87354,10 +86798,6 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
@@ -87374,20 +86814,8 @@
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
             },
             {
-              "item": "sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
               "item": "to_jcs_bytes",
               "sha256": "e55c19a93cefdfc768f110c09f0fc7f6cceb3952e45013319a013633d3b21fb2"
-            },
-            {
-              "item": "try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "audit.DirectCausalTrace",
@@ -87434,28 +86862,12 @@
               "sha256": "abeb6652eb770480903f94cfa3f66bc336446e37ac1970950acfa4437ae34169"
             },
             {
-              "item": "axiom.canonical_descriptor_bound_invocation_bytes",
-              "sha256": "675fb728da0f37c59015510deef95e5f983b231d671fcbd43282232ea253b107"
-            },
-            {
               "item": "axiom.canonical_entity_ref",
               "sha256": "98bb9c4d74b1efa602bf6b3fdb6e27fd4c4a32051a3d3a831f27313d389f2ae1"
             },
             {
               "item": "axiom.fresh_nonce",
               "sha256": "a7acbd1723870f49828fe869ef037d8f767c2d1a29bfeabba09e65433ddbd4b8"
-            },
-            {
-              "item": "axiom.sign_descriptor_bound_invocation",
-              "sha256": "deb3797faff02f8c4f99c122f009e4293d4ec8b284a3f1bfb7aba67502883c8a"
-            },
-            {
-              "item": "axiom.try_canonical_descriptor_bound_invocation_bytes",
-              "sha256": "ec8da4ec90e7fd1ca4e0978b28816bcead3693058c6c3be0745efbbbb820a7de"
-            },
-            {
-              "item": "axiom.verify_descriptor_bound_invocation_signature",
-              "sha256": "e8c31ff0a258c759876287b9c2f2382c3c5acdbaa4c1f66746e47a11fd3c6b9b"
             },
             {
               "item": "axon_sdk.canonical_json",

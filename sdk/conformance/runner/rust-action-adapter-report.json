@@ -8,7 +8,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "fc5d49c365e8c861bd578e051a1992a04fe336eb8a33150731d7d374b58fee37"
+          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
         }
       ],
       "profile": "runtime_core"
@@ -30,7 +30,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs",
-          "sha256": "fe39a5490e8cd2fb36c5acde4ca28806d26395b4331d5aa8aa8f55be51db364a"
+          "sha256": "aa8245444b58328f6860578f34bf9a109b3ca4f0da612b14f85965c47ca89cad"
         }
       ],
       "profile": "runtime_core"
@@ -63,7 +63,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "fc5d49c365e8c861bd578e051a1992a04fe336eb8a33150731d7d374b58fee37"
+          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
         }
       ],
       "profile": "health"
@@ -74,7 +74,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "fc5d49c365e8c861bd578e051a1992a04fe336eb8a33150731d7d374b58fee37"
+          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
         }
       ],
       "profile": "runtime_core"
@@ -85,7 +85,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/request.rs",
-          "sha256": "bf2a0f908e13260e417209efd0afe0372aeb0b39bef2cd5b0ff3160c75fcc5e5"
+          "sha256": "43991d4d8c9c01e9a09653475c0c89aba7f67d0ebabc812e9645e764b703169a"
         }
       ],
       "profile": "runtime_core"
@@ -96,7 +96,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "fc5d49c365e8c861bd578e051a1992a04fe336eb8a33150731d7d374b58fee37"
+          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
         }
       ],
       "profile": "runtime_core"
@@ -107,7 +107,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/request.rs",
-          "sha256": "bf2a0f908e13260e417209efd0afe0372aeb0b39bef2cd5b0ff3160c75fcc5e5"
+          "sha256": "43991d4d8c9c01e9a09653475c0c89aba7f67d0ebabc812e9645e764b703169a"
         }
       ],
       "profile": "runtime_core"
@@ -118,7 +118,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "fc5d49c365e8c861bd578e051a1992a04fe336eb8a33150731d7d374b58fee37"
+          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
         }
       ],
       "profile": "runtime_core"
@@ -129,7 +129,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/daemon/invocation/dispatch/request.rs",
-          "sha256": "bf2a0f908e13260e417209efd0afe0372aeb0b39bef2cd5b0ff3160c75fcc5e5"
+          "sha256": "43991d4d8c9c01e9a09653475c0c89aba7f67d0ebabc812e9645e764b703169a"
         }
       ],
       "profile": "runtime_core"
@@ -140,7 +140,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "fc5d49c365e8c861bd578e051a1992a04fe336eb8a33150731d7d374b58fee37"
+          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
         }
       ],
       "profile": "runtime_core"
@@ -162,7 +162,7 @@
         {
           "kind": "rust_test",
           "ref_path": "src/ffi/invocation/mod.rs",
-          "sha256": "fc5d49c365e8c861bd578e051a1992a04fe336eb8a33150731d7d374b58fee37"
+          "sha256": "608643ff6a17a5c5624591475fa96fd094bc874594f37ae6f5882e5401ac487c"
         }
       ],
       "profile": "runtime_core"

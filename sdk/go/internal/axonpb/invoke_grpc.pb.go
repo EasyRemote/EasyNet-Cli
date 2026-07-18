@@ -6,11 +6,11 @@
 //
 // Protocol Responsibility:
 // - Defines the foundational wire-level types reused by control, invocation, interop, identity, stream, and federation services.
-// - Preserves shared resource-addressing, content-envelope, and terminal-state semantics across the protocol.
+// - Preserves shared resource URA binding, content-envelope, and terminal-state semantics across the protocol.
 //
 // Implementation Approach:
 // - Keeps common enums and messages in one schema so service protos compose on a stable base contract.
-// - Documents protocol guarantees and addressing conventions close to the shared type definitions.
+// - Documents protocol guarantees and URA routing conventions close to the shared type definitions.
 //
 // Usage Contract:
 // - Changes here have broad compatibility impact and must remain wire-safe for generated clients.

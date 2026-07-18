@@ -10,7 +10,7 @@ Protocol Responsibility:
 
 Implementation Approach:
 - Keeps common enums and messages in one schema so service protos compose on a stable base contract.
-- Documents protocol guarantees and addressing conventions close to the shared type definitions.
+- Documents protocol guarantees and URA routing conventions close to the shared type definitions.
 
 Usage Contract:
 - Changes here have broad compatibility impact and must remain wire-safe for generated clients.
