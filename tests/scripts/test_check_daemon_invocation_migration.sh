@@ -103,6 +103,35 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "generic builder completion path should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+cat >"$SB/src/__tuple_patch_probe.rs" <<'RS'
+pub fn probe(mut target: crate::daemon::invocation::routing::target::InvocationTarget) {
+    target = target.with_subject("easynet:///r/acme/resource/r1");
+    let _ = target.with_causal_context(axon_sdk::invocation::CausalContext::None);
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "production InvocationTarget tuple patching should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e \
+    's/for route in DaemonBidiRoute::ALL\.iter\(\)\.copied\(\)/for route in [].iter().copied()/' \
+    "$SB/src/daemon/invocation/dispatch/daemon_route_runtime.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "partial bidi exact-route registration should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's/SystemInvocationIssuer::request_for_descriptor_ref/LocalRuntimeRequestFactory::request_for/' \
+    "$SB/src/daemon/invocation/dispatch/local_runtime_invoker.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "local daemon-system calls must use SystemInvocationIssuer (got $rc)"
+
+SB="$(make_sandbox)"
 printf '\nNote: Requires a local or remote Axon runtime. The easynet runtime start command auto-spawns one.\n' \
     >>"$SB/README.md"
 rc=0

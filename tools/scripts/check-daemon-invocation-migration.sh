@@ -206,6 +206,135 @@ Use the InvocationArgsUnset -> InvocationArgsSet type-state transition; only the
     fi
 fi
 
+if require_file "src/daemon/invocation/routing/target.rs" \
+    && require_file "src/daemon/invocation/dispatch/local_runtime_invoker.rs" \
+    && require_file "src/daemon/invocation/dispatch/daemon_route_runtime.rs" \
+    && require_file "src/daemon/axon_bridge/dispatch_shim.rs" \
+    && require_file "src/daemon/axon_bridge/local_runtime_request.rs" \
+    && require_file "src/daemon/invocation/dispatch/daemon_invocation_service.rs"; then
+    bad_route_tuple_ownership="$(
+        python3 - <<'PY'
+from pathlib import Path
+import re
+
+root = Path(".")
+violations: list[str] = []
+
+def read(path: str) -> str:
+    return (root / path).read_text(encoding="utf-8", errors="replace")
+
+def require(path: str, token: str, detail: str) -> None:
+    if token not in read(path):
+        violations.append(f"{path}: missing {detail}: {token}")
+
+def production_prefix(text: str) -> str:
+    match = re.search(r"(?m)^\s*#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*$", text)
+    return text if match is None else text[:match.start()]
+
+target = "src/daemon/invocation/routing/target.rs"
+target_text = read(target)
+for token, detail in (
+    ("pub enum InvocationPlanIngress", "explicit ingress authority state"),
+    ("DaemonSystem", "named daemon-system tuple derivation state"),
+    ("PublicIngress", "public-ingress explicit tuple state"),
+    ("plan.ingress.into_target_bindings()?", "resolver tuple handoff"),
+    ("InvocationSubject::daemon_system_derived()", "named system subject policy"),
+    ("InvocationCausalContext::daemon_system_root()", "named system causal policy"),
+    ("InvocationSubject::explicit(subject)", "public subject preservation"),
+    ("InvocationCausalContext::explicit(causal_context)", "public causal context preservation"),
+):
+    if token not in target_text:
+        violations.append(f"{target}: missing {detail}: {token}")
+
+for path in sorted((root / "src").rglob("*.rs")):
+    rel = path.relative_to(root).as_posix()
+    if path.name in {"real_invoke_tests.rs", "tests.rs"} or path.name.endswith("_tests.rs"):
+        continue
+    if "/tests/" in f"/{rel}/":
+        continue
+    production = production_prefix(path.read_text(encoding="utf-8", errors="replace"))
+    for match in re.finditer(r"\.with_(?:subject|causal_context)\s*\(", production):
+        violations.append(
+            f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: production InvocationTarget tuple patching is forbidden"
+        )
+
+local_invoker = "src/daemon/invocation/dispatch/local_runtime_invoker.rs"
+for token, detail in (
+    ("SystemInvocationIssuer::request_for_descriptor_ref", "local daemon-system descriptor-bound issuer"),
+    ("invoke_descriptor_bound_request_async(request)", "local RPC descriptor-bound LocalRuntime call"),
+    ("invoke_descriptor_bound_stream_request_async(request)", "local stream descriptor-bound LocalRuntime call"),
+    ("invoke_descriptor_bound_bidi_request_async(request)", "local bidi descriptor-bound LocalRuntime call"),
+    ("resolved_subject_ura(callee_ura)", "single subject resolution point"),
+    ("resolved_causal_context()", "single causal context resolution point"),
+):
+    require(local_invoker, token, detail)
+
+runtime = "src/daemon/invocation/dispatch/daemon_route_runtime.rs"
+for token, detail in (
+    ("pub(crate) struct DaemonRouteRuntimeAdapter", "exact route adapter owner"),
+    ("pub(crate) async fn register_for_owners", "unary exact route registration API"),
+    ("for route in DaemonUnaryRoute::ALL.iter().copied()", "complete unary route inventory registration"),
+    ("pub(crate) async fn register_streams", "stream exact route registration API"),
+    ("for route in DaemonStreamRoute::ALL.iter().copied()", "complete stream route inventory registration"),
+    ("pub(crate) async fn register_bidis", "bidi exact route registration API"),
+    ("for route in DaemonBidiRoute::ALL.iter().copied()", "complete bidi route inventory registration"),
+    ("self.runtime.register_many(registrations).await", "atomic LocalRuntime route install"),
+    ("dispatch_rpc_admitted", "exact unary adapter enters admitted LocalRuntime dispatch"),
+    ("open_stream_admitted", "exact stream adapter enters admitted LocalRuntime dispatch"),
+    ("open_bidi_external_signed", "exact bidi adapter enters admitted LocalRuntime dispatch"),
+):
+    require(runtime, token, detail)
+
+shim = "src/daemon/axon_bridge/dispatch_shim.rs"
+for token, detail in (
+    ("descriptor_bound_from_wire_parts", "wire tuple reassembly through Axon descriptor-bound parser"),
+    ("LocalRuntimeRequestFactory::request_for", "external signed request factory"),
+    ("SystemInvocationIssuer::request_for_complete_envelope", "trusted-local system issuer"),
+    ("invoke_descriptor_bound_request_async(prepared.request)", "RPC LocalRuntime descriptor-bound dispatch"),
+    ("invoke_descriptor_bound_stream_request_async(prepared.request)", "stream LocalRuntime descriptor-bound dispatch"),
+    ("invoke_descriptor_bound_bidi_request_async(prepared.request)", "bidi LocalRuntime descriptor-bound dispatch"),
+):
+    require(shim, token, detail)
+
+factory = "src/daemon/axon_bridge/local_runtime_request.rs"
+for token, detail in (
+    ("enum LocalRuntimeIngress", "typed LocalRuntime ingress classification"),
+    ("DescriptorBoundInvocationRequest::externally_signed", "Axon public descriptor-bound constructor"),
+    ("pub(crate) struct SystemInvocationIssuer", "named daemon system issuer"),
+    ("request_for_descriptor_ref", "complete descriptor-ref system request"),
+    ("request_for_complete_envelope", "already-complete system envelope request"),
+    ("LOCAL_SYSTEM_AGENT_URA", "single local system caller authority"),
+):
+    require(factory, token, detail)
+
+service = "src/daemon/invocation/dispatch/daemon_invocation_service.rs"
+for token, detail in (
+    ("pub(crate) enum DaemonUnaryRoute", "typed unary route inventory"),
+    ("pub(crate) const DAEMON_INVOCATION_UNARY_ROUTES", "unary inventory export"),
+    ("pub(crate) enum DaemonStreamRoute", "typed stream route inventory"),
+    ("pub(crate) const DAEMON_INVOCATION_STREAM_ROUTES", "stream inventory export"),
+    ("pub(crate) enum DaemonBidiRoute", "typed bidi route inventory"),
+    ("pub(crate) const DAEMON_INVOCATION_BIDI_ROUTES", "bidi inventory export"),
+    ("register_daemon_unary_routes_for_owners", "unary route registration lifecycle"),
+    ("register_daemon_stream_routes", "stream route registration lifecycle"),
+    ("register_daemon_bidi_routes", "bidi route registration lifecycle"),
+    (".dispatch_daemon_route_runtime(route, request, ingress)", "unary route adapter dispatch"),
+    ("streams.dispatch_daemon_route_runtime(route, &inner).await", "stream route adapter dispatch"),
+    (".dispatch_daemon_route_runtime(route, envelope_open, up)", "bidi route adapter dispatch"),
+):
+    require(service, token, detail)
+
+if violations:
+    print("\n".join(violations))
+PY
+    )"
+    if [[ -n "$bad_route_tuple_ownership" ]]; then
+        record_violation "RF-7/RF-8 route tuple ownership gate failed" \
+            "$bad_route_tuple_ownership
+Ability routes must enter descriptor-bound LocalRuntime through the typed route inventories, and production public ingress must not patch missing subject or causal_context after target construction."
+    fi
+fi
+
 if [[ -e "src/daemon/invocation/receipts/runtime_record.rs" ]]; then
     record_violation "obsolete daemon runtime-record authority remains" \
         "src/daemon/invocation/receipts/runtime_record.rs

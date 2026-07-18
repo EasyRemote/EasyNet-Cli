@@ -378,24 +378,46 @@ def check_easyremote() -> None:
         "easyremote/invocation.py",
         "easyremote:invocation_addressing",
     )
-    require_contains(
-        invocation,
-        "easynet_sdk.project_descriptor_ref",
-        "easyremote:invocation_addressing",
-    )
-
-    receipts = require_file(easyremote, "easyremote/receipts.py", "easyremote:receipt")
-    for required in [
-        "easynet_sdk.InvocationLifecycleState",
-        "easynet_sdk.RuntimeReceipt.from_required_mapping",
-        "easynet_sdk.ReceiptReference.from_runtime_receipt",
-    ]:
-        require_contains(receipts, required, "easyremote:receipt")
+    require_contains(invocation, "easynet_sdk.InvocationDraft", "easyremote:invocation")
     for forbidden in [
-        "class InvocationState",
-        "def parse_receipt_hash",
+        "class InvocationTuple",
+        "InvocationWireProjector",
+        "project_descriptor_ref",
+        "def with_subject",
+        "def with_causal",
     ]:
-        forbid_contains(receipts, forbidden, "easyremote:receipt")
+        forbid_contains(invocation, forbidden, "easyremote:invocation")
+
+    if (easyremote / "easyremote/receipts.py").exists():
+        violations.append("easyremote:canonical_receipt_model_present")
+    context_dispatch = require_file(
+        easyremote,
+        "easyremote/_context_dispatch.py",
+        "easyremote:receipt_reference",
+    )
+    require_contains(
+        context_dispatch,
+        "easynet_sdk.ReceiptReference.from_runtime_receipt",
+        "easyremote:receipt_reference",
+    )
+    host_server = require_file(
+        easyremote,
+        "easyremote/_host/server.py",
+        "easyremote:runtime_receipt",
+    )
+    require_contains(
+        host_server,
+        "easynet_sdk.RuntimeReceipt.from_required_mapping",
+        "easyremote:runtime_receipt",
+    )
+    package_init = require_file(easyremote, "easyremote/__init__.py", "easyremote:exports")
+    for forbidden in [
+        '"InvocationTuple"',
+        '"InvocationState"',
+        '"Receipt"',
+        '"ReceiptChain"',
+    ]:
+        forbid_contains(package_init, forbidden, "easyremote:exports")
 
     runtime_provider = require_file(
         easyremote,
@@ -657,14 +679,22 @@ EOF
   cat >"$good_remote/easyremote/invocation.py" <<'EOF'
 import easynet_sdk
 
-_ = easynet_sdk.project_descriptor_ref
+def prepare(draft: easynet_sdk.InvocationDraft):
+    return draft
 EOF
-  cat >"$good_remote/easyremote/receipts.py" <<'EOF'
+  cat >"$good_remote/easyremote/_context_dispatch.py" <<'EOF'
 import easynet_sdk
 
-InvocationState = easynet_sdk.InvocationLifecycleState
-RuntimeReceipt = easynet_sdk.RuntimeReceipt.from_required_mapping
-ReceiptReference = easynet_sdk.ReceiptReference.from_runtime_receipt
+_ = easynet_sdk.ReceiptReference.from_runtime_receipt
+EOF
+  mkdir -p "$good_remote/easyremote/_host"
+  cat >"$good_remote/easyremote/_host/server.py" <<'EOF'
+import easynet_sdk
+
+_ = easynet_sdk.RuntimeReceipt.from_required_mapping
+EOF
+  cat >"$good_remote/easyremote/__init__.py" <<'EOF'
+__all__ = []
 EOF
   cat >"$good_remote/easyremote/runtime_provider.py" <<'EOF'
 import easynet_sdk

@@ -79,8 +79,16 @@ func ProjectDescriptorRef() {}
 EOF
   cat >"$tmp/Frontend/src/lib/api/easynet-abilities.ts" <<'EOF'
 const signed = { prepared: { descriptor_ref: "descriptor" } }
+const descriptorRef = requiredPreparedString(
+  signed.prepared.descriptor_ref,
+)
 export const submission = {
-  descriptor_ref: signed.prepared.descriptor_ref,
+  descriptor_ref: descriptorRef,
+}
+
+function requiredPreparedString(value: unknown): string {
+  if (typeof value !== "string") throw new Error("missing descriptor_ref")
+  return value
 }
 EOF
   "$0" "$tmp" >/dev/null
@@ -500,6 +508,36 @@ def require_boundary_pattern(
         )
 
 
+def require_boundary_dataflow_pattern(
+    root: Path,
+    relative: str,
+    pattern: str,
+    detail: str,
+) -> None:
+    path = root / relative
+    if not path.is_file():
+        violations.append(
+            (
+                relative,
+                1,
+                "signed_invocation_descriptor_ref_boundary",
+                f"required boundary file is missing: {detail}",
+            )
+        )
+        return
+    text = path.read_text(encoding="utf-8", errors="replace")
+    match = re.search(pattern, text, flags=re.MULTILINE)
+    if match is None:
+        violations.append(
+            (
+                relative,
+                1,
+                "signed_invocation_descriptor_ref_boundary",
+                detail,
+            )
+        )
+
+
 def scan_go_mod(path: Path) -> None:
     in_require_block = False
     for index, raw_line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
@@ -745,10 +783,10 @@ require_boundary_pattern(
     "explicit descriptor_ref must be projected instead of reselected",
 )
 if frontend.exists():
-    require_boundary_pattern(
+    require_boundary_dataflow_pattern(
         backend.parent,
         "Frontend/src/lib/api/easynet-abilities.ts",
-        r"(?:const\s+descriptorRef\s*=\s*signed\.prepared\.descriptor_ref|descriptor_ref:\s*signed\.prepared\.descriptor_ref)",
+        r"const\s+descriptorRef\s*=\s*(?:requiredPreparedString\s*\(\s*)?signed\.prepared\.descriptor_ref",
         "Frontend signed submission must source descriptor_ref from the prepare response",
     )
     require_boundary_pattern(
