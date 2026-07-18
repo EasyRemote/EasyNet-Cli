@@ -98,6 +98,11 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q -- "--format json" "$0"
   grep -q "provider.ability" "$0"
   grep -q "nativeer.native_echo" "$0"
+  grep -q "Client.functions(scope=\"user\")" "$0"
+  grep -q "canonical_ura_call" "$0"
+  grep -q "canonical_ura_stream" "$0"
+  grep -q "easyremote_sdk_consumer_boundary" "$0"
+  grep -q "forbidden_easyremote_authority" "$0"
   grep -q "caller-invocation-list-native-after-easyremote" "$0"
   grep -q "native_easynet_receipt_chains_projected" "$0"
   grep -q "caller_observed_native_easynet_ability_removed" "$0"
@@ -639,8 +644,10 @@ caller_cli "invocation list --ability-ura '$ADD_URA' --format json" \
 
 echo "==> calling EasyRemote provider from caller device with @remote syntax matrix"
 cat >"$SHARED_DIR/easyremote_caller.py" <<'PY'
+import ast
 import json
 import os
+from pathlib import Path
 
 from easyremote import Client, FreshRoot, ResolvedTargetSubject, remote
 
@@ -650,6 +657,66 @@ native_ability_ura = os.environ["NATIVE_ABILITY_URA"]
 client = Client(invocation_policy=FreshRoot(ResolvedTargetSubject()))
 provider = client.device(provider_node)
 native = provider.ability("nativeer.native_echo")
+
+FORBIDDEN_DEFINITIONS = {
+    "AdmissionAuthority",
+    "CanonicalReceipt",
+    "DaemonLifecycle",
+    "HubLifecycle",
+    "LifecycleAuthority",
+    "ReceiptCanonicalizer",
+    "ReceiptChain",
+    "RouteAuthority",
+}
+FORBIDDEN_FUNCTIONS = {
+    "admit_invocation",
+    "canonicalize_receipt",
+    "finalize_receipt",
+    "rebuild_receipt",
+    "route_invocation",
+    "sign_receipt",
+    "start_hub",
+    "stop_hub",
+    "verify_receipt",
+}
+
+
+def audit_easyremote_sdk_consumer_boundary() -> dict[str, object]:
+    """Allow SDK projections; reject EasyRemote-owned runtime authority."""
+    package = Path("/work/EasyRemote/easyremote")
+    violations: list[str] = []
+    for source in sorted(package.rglob("*.py")):
+        rel = source.relative_to(package).as_posix()
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name in FORBIDDEN_DEFINITIONS:
+                violations.append(f"{rel}:{node.lineno}:forbidden_easyremote_authority:{node.name}")
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in FORBIDDEN_FUNCTIONS:
+                violations.append(f"{rel}:{node.lineno}:forbidden_easyremote_authority:{node.name}")
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in {"ctypes", "cffi"}:
+                        violations.append(f"{rel}:{node.lineno}:raw_runtime_binding_import:{alias.name}")
+            if isinstance(node, ast.ImportFrom) and node.module in {"ctypes", "cffi"}:
+                violations.append(f"{rel}:{node.lineno}:raw_runtime_binding_import:{node.module}")
+    return {
+        "package": str(package),
+        "violations": violations,
+        "ok": not violations,
+    }
+
+
+def function_info_to_dict(info) -> dict[str, object]:
+    return {
+        "name": info.name,
+        "qualified_name": info.qualified_name,
+        "ability_ura": info.ability_ura,
+        "owner": info.owner,
+        "description": info.description,
+        "input_schema": info.input_schema,
+        "visibility": info.visibility,
+        "score": info.score,
+    }
 
 @remote(client=client, owner_ura=provider_ura, name="add")
 def remote_add(a: int, b: int) -> dict[str, object]: ...
@@ -678,10 +745,19 @@ def whoami(note: str) -> dict[str, object]: ...
 @native.remote
 def native_echo(text: str, times: int = 1) -> dict[str, object]: ...
 
+# Product contract: Client.functions(scope="user") must discover EasyNet abilities.
+functions_user = [function_info_to_dict(info) for info in client.functions(scope="user")]
+native_discovery = [
+    info for info in functions_user if info.get("ability_ura") == native_ability_ura
+]
+
 results = {
     "decorators": ["@remote", "RemoteOwner.remote"],
     "provider_node": provider_node,
     "provider_ura": provider_ura,
+    "easyremote_sdk_consumer_boundary": audit_easyremote_sdk_consumer_boundary(),
+    "functions_scope_user": functions_user,
+    "native_easynet_discovery": native_discovery,
     "add": remote_add(2, 3),
     "total_varargs": total(1, 2, 3, 4),
     "merge_kwargs": merge(10, x=1, y=2),
@@ -693,7 +769,11 @@ results = {
     "native_easynet": {
         "ability_ura": native_ability_ura,
         "handle_call": native.call(text="from-handle", times=2),
+        "handle_stream": list(native.stream(text="from-stream", times=2)),
+        "canonical_ura_call": client.call(native_ability_ura, text="from-ura", times=1),
+        "canonical_ura_stream": list(client.stream(native_ability_ura, text="from-ura-stream", times=1)),
         "typed_stub": native_echo("from-stub", times=3),
+        "typed_stub_stream": list(native_echo.stream("from-stub-stream", times=1)),
     },
 }
 print(json.dumps(results, indent=2, sort_keys=True))
@@ -798,7 +878,7 @@ receipt_chains_verified = (
     and len(cli_add_records[0]["receipt_chain"]["anchors"]) > 0
 )
 native_receipt_chains_verified = (
-    len(native_records) == 2
+    len(native_records) == 6
     and all(str(record.get("state", "")).lower() == "completed" for record in native_records)
     and all(isinstance(record.get("receipt_chain"), dict) for record in native_records)
     and all(record["receipt_chain"].get("verified") is True for record in native_records)
@@ -810,7 +890,18 @@ native_receipt_chains_verified = (
 )
 native_results = remote_results.get("native_easynet") or {}
 native_handle = native_results.get("handle_call") or {}
+native_handle_stream = native_results.get("handle_stream") or []
+native_ura_call = native_results.get("canonical_ura_call") or {}
+native_ura_stream = native_results.get("canonical_ura_stream") or []
 native_stub = native_results.get("typed_stub") or {}
+native_stub_stream = native_results.get("typed_stub_stream") or []
+native_discovery = remote_results.get("native_easynet_discovery") or []
+functions_scope_user = remote_results.get("functions_scope_user") or []
+easyremote_boundary = remote_results.get("easyremote_sdk_consumer_boundary") or {}
+native_invocation_ids = [
+    str(record.get("invocation_id") or "")
+    for record in native_records
+]
 
 report = {
     "topology": {
@@ -890,11 +981,58 @@ report = {
             and remote_results["whoami_context"].get("caller") == caller_ura
             and bool(remote_results["whoami_context"].get("invocation_id"))
         ),
+        "easyremote_sdk_consumer_boundary": (
+            easyremote_boundary.get("ok") is True
+            and easyremote_boundary.get("violations") == []
+        ),
+        "caller_easyremote_functions_scope_user_discovered_native_easynet_ability": (
+            isinstance(functions_scope_user, list)
+            and len(functions_scope_user) > 0
+            and len(native_discovery) == 1
+            and native_discovery[0].get("ability_ura") == native_ability_ura
+            and native_discovery[0].get("owner") == provider_ura
+        ),
         "caller_remote_called_easynet_native_handle": (
             native_handle.get("source") == "easynet-cli-deploy"
             and native_handle.get("joined") == "from-handlefrom-handle"
             and native_handle.get("caller") == caller_ura
             and bool(native_handle.get("invocation_id"))
+        ),
+        "caller_remote_streamed_easynet_native_handle": (
+            native_handle_stream == [
+                {
+                    "source": "easynet-cli-deploy",
+                    "text": "from-stream",
+                    "times": 2,
+                    "joined": "from-streamfrom-stream",
+                    "caller": caller_ura,
+                    "invocation_id": native_handle_stream[0].get("invocation_id")
+                    if native_handle_stream and isinstance(native_handle_stream[0], dict)
+                    else "",
+                }
+            ]
+            and bool(native_handle_stream[0].get("invocation_id"))
+        ),
+        "caller_remote_called_easynet_native_canonical_ura": (
+            native_ura_call.get("source") == "easynet-cli-deploy"
+            and native_ura_call.get("joined") == "from-ura"
+            and native_ura_call.get("caller") == caller_ura
+            and bool(native_ura_call.get("invocation_id"))
+        ),
+        "caller_remote_streamed_easynet_native_canonical_ura": (
+            native_ura_stream == [
+                {
+                    "source": "easynet-cli-deploy",
+                    "text": "from-ura-stream",
+                    "times": 1,
+                    "joined": "from-ura-stream",
+                    "caller": caller_ura,
+                    "invocation_id": native_ura_stream[0].get("invocation_id")
+                    if native_ura_stream and isinstance(native_ura_stream[0], dict)
+                    else "",
+                }
+            ]
+            and bool(native_ura_stream[0].get("invocation_id"))
         ),
         "caller_remote_called_easynet_native_typed_stub": (
             native_stub.get("source") == "easynet-cli-deploy"
@@ -902,14 +1040,34 @@ report = {
             and native_stub.get("caller") == caller_ura
             and bool(native_stub.get("invocation_id"))
         ),
+        "caller_remote_streamed_easynet_native_typed_stub": (
+            native_stub_stream == [
+                {
+                    "source": "easynet-cli-deploy",
+                    "text": "from-stub-stream",
+                    "times": 1,
+                    "joined": "from-stub-stream",
+                    "caller": caller_ura,
+                    "invocation_id": native_stub_stream[0].get("invocation_id")
+                    if native_stub_stream and isinstance(native_stub_stream[0], dict)
+                    else "",
+                }
+            ]
+            and bool(native_stub_stream[0].get("invocation_id"))
+        ),
         "one_cli_add_invocation_record": (
             len(cli_add_records) == 1
             and ability_uras["add"] in json.dumps(cli_add_records[0])
         ),
         "cli_add_receipt_chain_projected": receipt_chains_verified,
-        "two_native_easynet_invocation_records": (
-            len(native_records) == 2
+        "six_native_easynet_invocation_records": (
+            len(native_records) == 6
             and all(native_ability_ura in json.dumps(record) for record in native_records)
+        ),
+        "native_easynet_one_daemon_record_per_easyremote_dispatch": (
+            len(native_invocation_ids) == 6
+            and all(native_invocation_ids)
+            and len(set(native_invocation_ids)) == 6
         ),
         "native_easynet_receipt_chains_projected": native_receipt_chains_verified,
         "caller_observed_provider_ability_removed": add_removed,
@@ -946,11 +1104,18 @@ jq -e '
   and .assertions.caller_remote_list_dict_payload
   and .assertions.caller_remote_generator_stream
   and .assertions.caller_remote_context_function
+  and .assertions.easyremote_sdk_consumer_boundary
+  and .assertions.caller_easyremote_functions_scope_user_discovered_native_easynet_ability
   and .assertions.caller_remote_called_easynet_native_handle
+  and .assertions.caller_remote_streamed_easynet_native_handle
+  and .assertions.caller_remote_called_easynet_native_canonical_ura
+  and .assertions.caller_remote_streamed_easynet_native_canonical_ura
   and .assertions.caller_remote_called_easynet_native_typed_stub
+  and .assertions.caller_remote_streamed_easynet_native_typed_stub
   and .assertions.one_cli_add_invocation_record
   and .assertions.cli_add_receipt_chain_projected
-  and .assertions.two_native_easynet_invocation_records
+  and .assertions.six_native_easynet_invocation_records
+  and .assertions.native_easynet_one_daemon_record_per_easyremote_dispatch
   and .assertions.native_easynet_receipt_chains_projected
   and .assertions.caller_observed_provider_ability_removed
   and .assertions.provider_other_abilities_remained_after_delete

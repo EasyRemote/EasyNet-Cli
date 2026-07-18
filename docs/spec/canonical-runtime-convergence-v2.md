@@ -254,15 +254,15 @@ its claims were found not to describe the accepted checkout.
 
 | ID | Status | Live audit state |
 | --- | --- | --- |
-| RF-1 | Open | Axon still contains product protocol and lifecycle authority, and product-named provider/package surfaces remain in canonical SDK roots. |
+| RF-1 | Revalidation required | Axon product/protocol boundary and public-surface gates now reject product protocol, lifecycle, package, provider, and runtime configuration leakage in canonical SDK roots. Final closure still requires downstream owner evidence for extracted product packages/providers. |
 | RF-2 | Revalidation required | Mission schema and runtime removal exists in the current Axon history, but final closure requires the post-RF-1/RF-3 revision and downstream child-invocation evidence. |
-| RF-3 | Open | Axon core still owns a second admission flow beside `DescriptorBoundInvocationRequest`; callers and Dendrite entry points must migrate before that authority is deleted. |
+| RF-3 | Open | Plain `canonical_invocation_bytes`, `verify_signature`, and `run_admission` exports are rejected by gate, but descriptor-bound raw canonical/sign/verify helpers remain public across languages. These must move behind request/draft builders before RF-3 can close. |
 | RF-4 | In progress | The shared lifecycle contract exists, but provider-backed Go/Python stream and bidi behavior and final revision-pinned multi-language evidence are still being converged. |
 | RF-5 | Revalidation required | Process-local signer fallback removal exists in the current history; final custody evidence must be regenerated from the accepted source revisions. |
-| RF-6 | In progress | Java receipt facts remain mutable or defaultable and must become mandatory, immutable, and fail-closed before the receipt surface can be accepted. |
-| RF-7 | In progress | CLI route ownership is being converged on one registered descriptor-bound lifecycle owner; final route inventory and live-daemon evidence are pending. |
-| RF-8 | Open | EasyNet and EasyRemote public ingress still derive members of the seven-field Invocation tuple, and backend directory forwarding still bypasses canonical tuple ownership. |
-| RF-9 | Revalidation required | URA and deterministic schema-source gates exist, but final evidence must be regenerated after protocol extraction and accepted revision pinning. |
+| RF-6 | Revalidation required | Java receipt construction now requires authority binding and complete proof facts, with six-language receipt-surface gates passing. Final closure remains blocked on the RF-3 request-owner cutover and revision-pinned acceptance bundle. |
+| RF-7 | Revalidation required | CLI exact unary, stream, bidi, sidecar, and daemon route inventories enter descriptor-bound `LocalRuntime` through registered route adapters. Final live-daemon evidence and RF-8 public-ingress cutover are still pending. |
+| RF-8 | Open | EasyNet-Cli loopback helpers, EasyRemote `FreshRoot` public conveniences, and backend root-origin factories still derive nonce, subject, or root causal placement at product ingress. These must be narrowed to explicit tuple origins or named daemon-system issuers. |
+| RF-9 | Revalidation evidence refreshed | Axon revision `ef6f119001fd13baa2cec705c6a681c82e13ac89` removes active address vocabulary from canonical protocol inputs, adds a negative product/protocol boundary gate, synchronizes derived proto copies, and passes URA/schema-source gates. This is RF-9 evidence, not whole-SPEC closure. |
 
 `docs/reviews/canonical-runtime-convergence-v2-closure-2026-07-18.md` is a
 withdrawn historical closure attempt. It is not acceptance evidence.

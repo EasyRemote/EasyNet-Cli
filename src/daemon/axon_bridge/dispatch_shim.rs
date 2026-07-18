@@ -591,11 +591,12 @@ mod tests {
 
     use crate::daemon::axon_bridge::descriptor_ref::descriptor_binding_for_wire;
 
+    use axon_sdk::invocation::axiom::sign_descriptor_bound_invocation;
     use axon_sdk::invocation::{
-        fresh_nonce, make_ability, sha256, sign_descriptor_bound_invocation,
-        signing_key_from_bytes, AbilityCallModes, AbilityOptions, AgentIdentity, AxonError,
-        CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts, InvocationLedger,
-        KeyResolver, LocalRuntime, SubjectIdentity, UraProfile,
+        fresh_nonce, make_ability, sha256, signing_key_from_bytes, AbilityCallModes,
+        AbilityOptions, AgentIdentity, AxonError, CausalContext, DescriptorBoundEnvelope,
+        DescriptorBoundEnvelopeParts, InvocationLedger, KeyResolver, LocalRuntime, SubjectIdentity,
+        UraProfile,
     };
 
     /// RPC options carrying the descriptor proof the receipt-proof
