@@ -113,8 +113,9 @@ impl TargetGate {
     /// Three valid shapes per RFC-001 + RFC-006-C v0.1:
     ///   (1) `easynet:///r/<realm>/device/<deviceID>` — the daemon's
     ///       device identity from credentials.json. Standard.
-    ///   (2) `easynet:///r/<realm>/hub` — the canonical Hub URA;
-    ///       hub-mode daemons answer to this in addition to (1).
+    ///   (2) `easynet:///r/<realm>/authority` — the product Hub projected onto
+    ///       Axon's canonical Authority URA; hub-mode daemons answer to this in
+    ///       addition to (1).
     ///   (3) `easynet:///r/<realm>/agent/<userID>.<agentID>` — the
     ///       agent URA of an agent the daemon currently hosts. v4.1.5
     ///       §9 callee ∈ {hub, device, agent}; RFC-006-C §INV-2 +
@@ -384,7 +385,7 @@ fn local_runtime_authority_ura(
         if let Some(hub_realm) = crate::core::ura::parse_ura(daemon_ura)
             .ok()
             .and_then(|parsed| {
-                (parsed.kind == crate::core::ura::URAKind::Hub).then_some(parsed.realm)
+                (parsed.kind == crate::core::ura::URAKind::Authority).then_some(parsed.realm)
             })
         {
             let local_device_ura = crate::daemon::identity::local_invocation::local_device_ura();

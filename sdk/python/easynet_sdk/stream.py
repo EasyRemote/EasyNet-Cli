@@ -51,8 +51,6 @@ class StreamEvent:
     payload_content_type: str = ""
     payload_base64: str = ""
     payload_json: Any = None
-    selected_node_id: str = ""
-    scheduling_reason: str = ""
     elapsed_ms: int = 0
     error: Any = None
     admission_receipt: Any = None
@@ -91,14 +89,6 @@ class StreamEvent:
             )
             or "",
             payload_json=decoded.get("payload_json"),
-            selected_node_id=_optional_string(
-                decoded.get("selected_node_id"), "selected_node_id"
-            )
-            or "",
-            scheduling_reason=_optional_string(
-                decoded.get("scheduling_reason"), "scheduling_reason"
-            )
-            or "",
             elapsed_ms=_optional_non_negative_int(
                 decoded.get("elapsed_ms"), "elapsed_ms"
             ),

@@ -16,16 +16,16 @@
 //   device    easynet:///r/<realm>/device/<device-id>
 //   agent     easynet:///r/<realm>/agent/<user-id>.<agent-id>
 //   ability   easynet:///r/<realm>/ability/<owner>.<namespace>.<ability-id>
-//   hub       easynet:///r/<realm>/hub
+//   hub       easynet:///r/<realm>/authority
 //   resource  easynet:///r/<realm>/resource/<owner-id>/<path>
 //
 // Examples:
 //
 //   easynet:///r/localhost/device/8315ea5c-7cfd-473e-8fef-95340af6d971
 //   easynet:///r/localhost/agent/u-9f4.frontend-engineer
-//   easynet:///r/localhost/hub
+//   easynet:///r/localhost/authority
 //   easynet:///r/localhost/ability/u-9f4.frontend-engineer.chat
-//   easynet:///r/localhost/ability/hub.federation.resolve
+//   easynet:///r/localhost/ability/authority.federation.resolve
 //   easynet:///r/localhost/resource/agent.u-9f4.frontend-engineer/skill/alive-video
 //
 // CLI-specific rule:
@@ -40,6 +40,25 @@ pub use axon_sdk::ura::*;
 
 pub mod provisional;
 
+/// EasyNet product default realm.
+///
+/// This policy default is intentionally owned by the CLI facade rather than
+/// Axon's product-neutral URA grammar.
+pub const REALM_EASYNET: &str = "easynet.run";
+
+/// Product-facing Hub identity projected onto Axon's generic authority URA.
+///
+/// Hub policy and lifecycle remain CLI-owned; Axon sees only the canonical
+/// system-authority owner kind.
+pub fn hub_ura(realm: &str) -> String {
+    authority_ura(realm)
+}
+
+/// Product-facing Hub ability projected onto Axon's generic authority owner.
+pub fn hub_ability_ura(realm: &str, ability_name: &str) -> String {
+    authority_ability_ura(realm, ability_name)
+}
+
 /// Synthetic system Agent URA for daemon-internal LocalRuntime calls.
 ///
 /// This is a CLI-owned identity layered on top of Axon's URA grammar: it is
@@ -52,12 +71,12 @@ pub(crate) const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_sys
 ///
 /// Directory queries use prefix matching instead of a concrete role URA.
 /// Axon exposes canonical role builders, so the CLI derives the prefix
-/// from the canonical Hub URA here instead of letting callers assemble
+/// from the product Hub facade here instead of letting callers assemble
 /// scheme fragments.
 pub fn realm_prefix_ura(realm: &str) -> anyhow::Result<String> {
     let hub = hub_ura(realm);
-    let prefix = hub.strip_suffix("/hub").ok_or_else(|| {
-        anyhow::anyhow!("Axon hub_ura returned unexpected hub identity shape: {hub:?}")
+    let prefix = hub.strip_suffix("/authority").ok_or_else(|| {
+        anyhow::anyhow!("Axon authority_ura returned unexpected identity shape: {hub:?}")
     })?;
     Ok(format!("{prefix}/"))
 }
@@ -109,7 +128,7 @@ impl AbilitySelector {
                 let owner_ura = device_ura(&parsed.realm, &device_id);
                 (owner_ura.clone(), "device", owner_ura)
             }
-            AbilityOwner::Hub => {
+            AbilityOwner::Authority => {
                 let owner_ura = hub_ura(&parsed.realm);
                 (owner_ura.clone(), "hub", owner_ura)
             }
@@ -253,7 +272,11 @@ pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
                 .to_string()
         }
         URAKind::Device => name.strip_prefix("device.").unwrap_or(name).to_string(),
-        URAKind::Hub => name.strip_prefix("hub.").unwrap_or(name).to_string(),
+        URAKind::Authority => name
+            .strip_prefix("authority.")
+            .or_else(|| name.strip_prefix("hub."))
+            .unwrap_or(name)
+            .to_string(),
         _ => name.to_string(),
     }
 }
@@ -317,7 +340,7 @@ pub fn local_dispatch_ability_key(target_ura: &str, ability: &str) -> String {
                 format!("{agent_id}.{public_name}")
             }
         }
-        URAKind::Device | URAKind::Hub => owner_local_ability_name(target_ura, name),
+        URAKind::Device | URAKind::Authority => owner_local_ability_name(target_ura, name),
         _ => name.to_string(),
     }
 }
@@ -329,8 +352,8 @@ mod tests {
     #[test]
     fn cli_uses_axon_sdk_ura_builder() {
         assert_eq!(
-            ability_ura("localhost", "hub", "federation", "resolve"),
-            "easynet:///r/localhost/ability/hub.federation.resolve"
+            hub_ability_ura("localhost", "federation.resolve"),
+            "easynet:///r/localhost/ability/authority.federation.resolve"
         );
         assert_eq!(
             resource_dot_ura(
@@ -361,7 +384,7 @@ mod tests {
             "fs.read"
         );
         assert_eq!(
-            owner_local_ability_name("easynet:///r/localhost/hub", "hub.openai.chat"),
+            owner_local_ability_name("easynet:///r/localhost/authority", "hub.openai.chat"),
             "openai.chat"
         );
         assert_eq!(

@@ -1051,7 +1051,7 @@ fn build_registry_with_services_result_inner(
         let reflection_realm = pages_identity
             .realm
             .clone()
-            .unwrap_or_else(|| axon_sdk::ura::REALM_EASYNET.to_string());
+            .unwrap_or_else(|| crate::core::ura::REALM_EASYNET.to_string());
         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
             crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env(),
             pages_identity.user.as_deref(),

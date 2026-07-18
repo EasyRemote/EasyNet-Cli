@@ -317,9 +317,10 @@ fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
         crate::core::ura::URAKind::Agent => {
             crate::core::ura::owner_local_ability_name(callee_ura, ability)
         }
-        crate::core::ura::URAKind::Hub => {
-            ability.strip_prefix("hub.").unwrap_or(ability).to_string()
-        }
+        crate::core::ura::URAKind::Authority => ability
+            .strip_prefix("authority.")
+            .unwrap_or(ability)
+            .to_string(),
         crate::core::ura::URAKind::Device => ability.to_string(),
         _ => ability.to_string(),
     }
@@ -337,7 +338,9 @@ pub(crate) fn catalog_owner_kind_for_wire(
         crate::core::ura::URAKind::Device => {
             Ok(crate::daemon::ability::dispatch::OwnerKind::Device)
         }
-        crate::core::ura::URAKind::Hub => Ok(crate::daemon::ability::dispatch::OwnerKind::Hub),
+        crate::core::ura::URAKind::Authority => {
+            Ok(crate::daemon::ability::dispatch::OwnerKind::Hub)
+        }
         crate::core::ura::URAKind::Agent => {
             let Some((_, agent_id)) = parsed.agent_ids().or_else(|| parsed.device_agent_ids())
             else {
@@ -476,7 +479,7 @@ mod tests {
         );
         assert!(
             hub_ref.starts_with(&format!(
-                "{}/ability/hub.{ability}@",
+                "{}/ability/authority.{ability}@",
                 "easynet:///r/localhost"
             )),
             "{hub_ref}"
@@ -542,7 +545,7 @@ mod tests {
 
         assert_eq!(
             ability_ura,
-            "easynet:///r/localhost/ability/hub.openai.list_models"
+            "easynet:///r/localhost/ability/authority.openai.list_models"
         );
     }
 }

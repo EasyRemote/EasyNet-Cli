@@ -81,7 +81,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         draft = ability.build(
             RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/alice.client",
-                callee_ura="easynet:///r/example/hub",
+                callee_ura="easynet:///r/example/authority",
                 subject_ura="easynet:///r/example/user/alice",
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -91,7 +91,7 @@ class SdkEnvironmentTests(unittest.TestCase):
         )
         self.assertEqual(
             draft.descriptor_ref,
-            "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+            "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#"
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
         )
         self.assertEqual(

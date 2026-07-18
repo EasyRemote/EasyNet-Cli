@@ -282,11 +282,12 @@ impl InvocationSubject {
 
 /// Explicit causal-context binding state for a daemon-local runtime dispatch.
 ///
-/// `DaemonSystemRoot` is a named derivation policy for system/root calls; it is
-/// not a hidden default at public ingress.
+/// `PublicRootDerived` and `DaemonSystemRoot` are named derivation policies for
+/// root calls; neither may be represented as absence at ingress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvocationCausalContext {
     Explicit(CausalContext),
+    PublicRootDerived,
     DaemonSystemRoot,
 }
 
@@ -294,6 +295,11 @@ impl InvocationCausalContext {
     #[must_use]
     pub fn explicit(causal_context: CausalContext) -> Self {
         Self::Explicit(causal_context)
+    }
+
+    #[must_use]
+    pub fn public_root_derived() -> Self {
+        Self::PublicRootDerived
     }
 
     #[must_use]
@@ -305,7 +311,7 @@ impl InvocationCausalContext {
     pub fn as_axon(&self) -> CausalContext {
         match self {
             Self::Explicit(causal_context) => causal_context.clone(),
-            Self::DaemonSystemRoot => CausalContext::None,
+            Self::PublicRootDerived | Self::DaemonSystemRoot => CausalContext::None,
         }
     }
 }

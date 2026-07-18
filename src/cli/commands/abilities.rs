@@ -236,7 +236,7 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
         .map(str::to_string)
         .unwrap_or_else(|| match parsed.as_ref().map(|p| p.kind) {
             Some(URAKind::Device) => "system".to_string(),
-            Some(URAKind::Hub) => "hub".to_string(),
+            Some(URAKind::Authority) => "hub".to_string(),
             Some(URAKind::Agent) => "agent".to_string(),
             Some(URAKind::User) => "user".to_string(),
             _ => "-".to_string(),
@@ -259,7 +259,7 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
                 dash(),
                 p.user_id().map(str::to_string).unwrap_or_else(dash),
             ),
-            URAKind::Hub => (dash(), "hub".to_string(), dash()),
+            URAKind::Authority => (dash(), "hub".to_string(), dash()),
             _ => (dash(), dash(), dash()),
         },
         // Unparseable owner URA. We do not invent owner kinds from
@@ -327,7 +327,7 @@ fn group_for(entry: &Value) -> GroupKey {
     let owner_ura = entry.get("owner_ura").and_then(Value::as_str).unwrap_or("");
     match parse_ura(owner_ura) {
         Ok(p) => match p.kind {
-            URAKind::Hub => GroupKey::Hub(owner_ura.to_string()),
+            URAKind::Authority => GroupKey::Hub(owner_ura.to_string()),
             URAKind::Agent => {
                 let Some((user_id, agent_id)) = p.agent_ids() else {
                     return GroupKey::Other;

@@ -878,7 +878,8 @@ mod tests {
             Some(Arc::clone(&ledger)),
         );
 
-        let callee_ura = "easynet:///r/hub-a.local/device/be2146d3-2afe-4977-9f9a-245982b79db4";
+        let callee_ura =
+            "easynet:///r/authority-a.local/device/be2146d3-2afe-4977-9f9a-245982b79db4";
         let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, "shell.run").unwrap();
         rt.register_ability_with_options(
             ability_ura,
@@ -889,12 +890,12 @@ mod tests {
         .unwrap();
 
         let caller_sdk = AgentIdentity::new(
-            "easynet:///r/hub-a.local/user/ad5a2619-4c49-459d-a862-a41111cc646d",
+            "easynet:///r/authority-a.local/user/ad5a2619-4c49-459d-a862-a41111cc646d",
             UraProfile::StrictV2,
         );
         let callee_sdk = AgentIdentity::new(callee_ura, UraProfile::StrictV2);
         let subject_sdk = SubjectIdentity::new(
-            "easynet:///r/hub-a.local/resource/user.ad5a2619-4c49-459d-a862-a41111cc646d/invoke/shell.run",
+            "easynet:///r/authority-a.local/resource/user.ad5a2619-4c49-459d-a862-a41111cc646d/invoke/shell.run",
             UraProfile::StrictV2,
         );
         let ability_ref = ability_descriptor_ref_for_wire(

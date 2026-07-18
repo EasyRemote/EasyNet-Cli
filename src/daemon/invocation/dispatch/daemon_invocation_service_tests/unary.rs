@@ -1924,7 +1924,7 @@ async fn invoke_dispatches_namespace_proxy_resolve_to_typed_peer_surface() {
                 "peer_hub_urls":["https://peer-hub.example:50443"],
                 "query_name":"easynet:///r/peer-realm/device/",
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
-                "caller_ura":"easynet:///r/local-realm/hub",
+                "caller_ura":"easynet:///r/local-realm/authority",
                 "subject_ura":"easynet:///r/local-realm/user/alice",
                 "realm_hint":"peer-realm"
             }"#,
@@ -1966,7 +1966,7 @@ async fn invoke_rejects_namespace_proxy_resolve_legacy_camel_case_input_aliases(
                 "peer_hub_urls":[],
                 "queryName":"easynet:///r/peer-realm/device/",
                 "qtype":"RESOLVE_TYPE_DIRECTORY_LISTING",
-                "callerUra":"easynet:///r/local-realm/hub",
+                "callerUra":"easynet:///r/local-realm/authority",
                 "subjectUra":"easynet:///r/local-realm/user/alice",
                 "realmHint":"peer-realm"
             }"#,

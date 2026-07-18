@@ -2386,12 +2386,11 @@
       "InvocationResult.ElapsedMS",
       "InvocationResult.Failure",
       "InvocationResult.InvocationID",
+      "InvocationResult.LifecycleState",
       "InvocationResult.OK",
       "InvocationResult.OutputBase64",
       "InvocationResult.OutputContentType",
       "InvocationResult.OutputJSON",
-      "InvocationResult.SchedulingReason",
-      "InvocationResult.SelectedNodeID",
       "InvocationResult.TerminalReceipt",
       "InvocationResult.TerminalReceiptSummary",
       "InvocationResult.TerminalState",
@@ -2421,7 +2420,6 @@
       "InvokeResponse.InvocationID",
       "InvokeResponse.ResultContentType",
       "InvokeResponse.ResultJSON",
-      "InvokeResponse.SelectedNodeID",
       "InvokeResponse.State",
       "InvokeResponse.TerminalReceipt",
       "IpcVersionRange.Max",
@@ -3129,8 +3127,6 @@
       "StreamEvent.PayloadBase64",
       "StreamEvent.PayloadContentType",
       "StreamEvent.PayloadJSON",
-      "StreamEvent.SchedulingReason",
-      "StreamEvent.SelectedNodeID",
       "StreamEvent.Sequence",
       "StreamEvent.State",
       "StreamEvent.Terminal",
@@ -4060,12 +4056,11 @@
       "InvocationResult.elapsed_ms",
       "InvocationResult.error",
       "InvocationResult.from_json",
+      "InvocationResult.lifecycle_state",
       "InvocationResult.ok",
       "InvocationResult.output_base64",
       "InvocationResult.output_content_type",
       "InvocationResult.output_json",
-      "InvocationResult.scheduling_reason",
-      "InvocationResult.selected_node_id",
       "InvocationResult.terminal_receipt",
       "InvocationResult.terminal_receipt_summary",
       "InvocationResult.terminal_state",
@@ -4815,8 +4810,6 @@
       "StreamEvent.payload_base64",
       "StreamEvent.payload_content_type",
       "StreamEvent.payload_json",
-      "StreamEvent.scheduling_reason",
-      "StreamEvent.selected_node_id",
       "StreamEvent.sequence",
       "StreamEvent.state",
       "StreamEvent.terminal",
@@ -11682,7 +11675,6 @@
           "InvokeResponse.InvocationID",
           "InvokeResponse.ResultContentType",
           "InvokeResponse.ResultJSON",
-          "InvokeResponse.SelectedNodeID",
           "InvokeResponse.State",
           "InvokeResponse.TerminalReceipt",
           "PresignedCallerSignature.Signature",
@@ -14974,8 +14966,6 @@
           "StreamEvent.PayloadBase64",
           "StreamEvent.PayloadContentType",
           "StreamEvent.PayloadJSON",
-          "StreamEvent.SchedulingReason",
-          "StreamEvent.SelectedNodeID",
           "StreamEvent.Sequence",
           "StreamEvent.State",
           "StreamEvent.Terminal",
@@ -15041,8 +15031,6 @@
           "StreamEvent.payload_base64",
           "StreamEvent.payload_content_type",
           "StreamEvent.payload_json",
-          "StreamEvent.scheduling_reason",
-          "StreamEvent.selected_node_id",
           "StreamEvent.sequence",
           "StreamEvent.state",
           "StreamEvent.terminal",
@@ -15964,12 +15952,11 @@
           "InvocationResult.ElapsedMS",
           "InvocationResult.Failure",
           "InvocationResult.InvocationID",
+          "InvocationResult.LifecycleState",
           "InvocationResult.OK",
           "InvocationResult.OutputBase64",
           "InvocationResult.OutputContentType",
           "InvocationResult.OutputJSON",
-          "InvocationResult.SchedulingReason",
-          "InvocationResult.SelectedNodeID",
           "InvocationResult.TerminalState",
           "InvocationResult.Tuple",
           "RuntimeAbilityClient.Build",
@@ -16074,12 +16061,11 @@
           "InvocationResult.admission_receipt_summary",
           "InvocationResult.elapsed_ms",
           "InvocationResult.error",
+          "InvocationResult.lifecycle_state",
           "InvocationResult.ok",
           "InvocationResult.output_base64",
           "InvocationResult.output_content_type",
           "InvocationResult.output_json",
-          "InvocationResult.scheduling_reason",
-          "InvocationResult.selected_node_id",
           "InvocationResult.terminal_receipt",
           "InvocationResult.terminal_receipt_summary",
           "InvocationResult.terminal_state",
@@ -16326,9 +16312,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
+          "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16378,9 +16364,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
+          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16432,9 +16418,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
+          "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16474,9 +16460,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
+          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16518,9 +16504,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
+          "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16570,9 +16556,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
+          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16624,9 +16610,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
+          "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16701,9 +16687,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
+          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16782,7 +16768,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
           "interface": "CABIRuntimeTransport",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16879,7 +16865,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
           "interface": "CABIRuntimeTransport",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -16976,9 +16962,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
+          "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -17053,9 +17039,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
+          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -17134,7 +17120,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "ab6620f6a7b30aaddec6f85144c498bdfae916fe9cab71d01155267f3fa92914",
           "interface": "CABIRuntimeTransport",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -17256,7 +17242,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e10e75ad1961e48007168884420d4c82a6beb5beb93a1fcbeea86f039bbfca66",
           "interface": "CABIRuntimeTransport",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -17380,7 +17366,7 @@
           "path": "sdk/go/runtime_ability.go",
           "sha256": "3941a5b9fd90830c48855e39d3d21dfb7e8b25ae75127643b7958cfdd822ce1e",
           "interface": "RuntimeAbilityClient",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -17507,7 +17493,7 @@
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
           "sha256": "c72ee40799da0c664b1ab06405b9f3f114db0d17db0713883e666759523e8f90",
           "interface": "AbilityInvocationClient",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -17634,9 +17620,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/go/",
           "path": "sdk/go/direct_runtime.go",
-          "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
+          "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -17676,9 +17662,9 @@
           "identity": "direct_runtime_provider",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/direct_runtime.py",
-          "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
+          "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
           "interface": "RuntimeConnector",
-          "revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+          "revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
         },
         "step_evidence": [
           {
@@ -19373,12 +19359,11 @@
       "InvocationResult.ElapsedMS": "a0a866696557025c285023d15caf1c3d5c67cc3958ddd2d11604661cbe903190",
       "InvocationResult.Failure": "cc683435cac1a8b58d0480006ad62271caf61d1d0809f3bc61ab060165f8a9f5",
       "InvocationResult.InvocationID": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
+      "InvocationResult.LifecycleState": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302",
       "InvocationResult.OK": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a",
       "InvocationResult.OutputBase64": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "InvocationResult.OutputContentType": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "InvocationResult.OutputJSON": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b",
-      "InvocationResult.SchedulingReason": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
-      "InvocationResult.SelectedNodeID": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "InvocationResult.TerminalReceipt": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b",
       "InvocationResult.TerminalReceiptSummary": "dacd9b7d16687f0bb750b9745841b7752f7b9db8a54e02473cf66e64c495f023",
       "InvocationResult.TerminalState": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
@@ -19408,13 +19393,12 @@
       "InvokeRequest.IdempotencyKey": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "InvokeRequest.SessionAuthority": "5a06bc24f3f1639c29753de54bb1a0ca7fbce6a7c2552b0b1c3495184fd5ca70",
       "InvokeRequest.TimeoutMS": "6da88c34ba124c41f977db66a4fc5c1a951708d285c81bb0d47c3206f4c27ca8",
-      "InvokeResponse": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76",
+      "InvokeResponse": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121",
       "InvokeResponse.AdmissionReceipt": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e",
       "InvokeResponse.Error": "79b09688632a8cd8e46497c7800fd4b7702eb4bb64f7c33d74a43d0b659fee3c",
       "InvokeResponse.InvocationID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "InvokeResponse.ResultContentType": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "InvokeResponse.ResultJSON": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e",
-      "InvokeResponse.SelectedNodeID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "InvokeResponse.State": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "InvokeResponse.TerminalReceipt": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e",
       "IpcVersionRange": "c084676a8dcfbaf35fa29e100865deabaadb6147cc5da1fad74e05dce7bd40c9",
@@ -20457,8 +20441,6 @@
       "StreamEvent.PayloadBase64": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "StreamEvent.PayloadContentType": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "StreamEvent.PayloadJSON": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b",
-      "StreamEvent.SchedulingReason": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
-      "StreamEvent.SelectedNodeID": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "StreamEvent.Sequence": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2",
       "StreamEvent.State": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "StreamEvent.Terminal": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a",
@@ -21009,9 +20991,9 @@
       "AuthorizationGrant.issuer_ura": "2dbf4ec1625b0a23fd152bec985f620c08b25e4aa3f5dade232bd9acd007a5b4",
       "AuthorizationGrant.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
       "AuthorizationGrant.revoked_unix_ms": "852fa48be57ad994d6de32c2283e4c6614aa1c389d2fcd9519d1aeb34e57a511",
-      "AxonAddressingTransport": "536bc4533166f47dab9029033c067373e783b55d79d7aa95637265b1cf892955",
+      "AxonAddressingTransport": "8a34daf14bda8fb464112953a527c3b458eac771c8060844963bbe4f03298a46",
       "AxonAddressingTransport.build_descriptor_ref": "123bbcafebad6921ba3719ecfd773e3638254f5bc48ff6092e414c3077703dcf",
-      "AxonAddressingTransport.build_ura": "462ecf116ec1fe72e05192f48979d2b18753a8af7fe0d062ba2f27baacc04788",
+      "AxonAddressingTransport.build_ura": "2fb810c0f0b551f7893780454d17e7d502bcb0521dab957daba0175bf6a3fef3",
       "AxonAddressingTransport.close": "a5cbc63f606a2f1d00d0ddd107d98a028930221ccb5e3eff66763a0d57c98832",
       "AxonAddressingTransport.project_descriptor_ref": "a5b444e506fe22532cd7c7fcf756486765bcde7f52d9b5f167a241cd61ed6cdb",
       "AxonAddressingTransport.project_identity": "ff08338a24825d18ba2aa0700e6970b8dea4568d0763f199b7b188965c328c6a",
@@ -21601,18 +21583,17 @@
       "InvocationReceiptChainSummary.to_dict": "0996e163c508c1428c0161569d94d1b75584b850f3f890d653c2f794120d165c",
       "InvocationReceiptChainSummary.verification_detail": "18bde4a53bc283523f6e154b76bc8c3a0f151ed68dc9d54fead8bab61267bba0",
       "InvocationReceiptChainSummary.verified": "0a389494ce433da9a0e31c7fe1c3558bffeacbf12fcdc47d2d9cdf3629cc28c7",
-      "InvocationResult": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd",
+      "InvocationResult": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886",
       "InvocationResult.admission_receipt": "26ecfa2772129e1127167ad4df3e997f9947225c86203b98dd9474b3b9ff21c4",
       "InvocationResult.admission_receipt_summary": "7560438cc5077f080a226991fcd30aab6f332e505a6dd297cd592d6a63d98872",
       "InvocationResult.elapsed_ms": "45bf7a4ed59a2a907ec13c17aa7be7ef99167ee6a11b7adfcc67d3b36d638a2a",
       "InvocationResult.error": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c",
-      "InvocationResult.from_json": "2a2db5e6d49e3ecb62f2a1906a603d58ba4464920e3c8a95a1080b534d97a63d",
+      "InvocationResult.from_json": "3300ce6354d612bc4db7b83ab8ec2590f312f57eeb700ddd73d197aa7cf187e5",
+      "InvocationResult.lifecycle_state": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080",
       "InvocationResult.ok": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421",
       "InvocationResult.output_base64": "66c1c11ce8ddb9e5e34d1dc178990ffbc85d19706ea1e07334c0d7b2e650fe91",
       "InvocationResult.output_content_type": "b58c650ba00143ffe5dadf87b29b5a0628709e0cabcaa6b95b685d6de07cf420",
       "InvocationResult.output_json": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f",
-      "InvocationResult.scheduling_reason": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835",
-      "InvocationResult.selected_node_id": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d",
       "InvocationResult.terminal_receipt": "8d9a0f88bcdb67ce717a85440350491c54d0fb724d48791b9f4d5e42f3f8c96d",
       "InvocationResult.terminal_receipt_summary": "365860c4165f7da9c208c44c362f46df65b50738dce0bdb95eeb19e42893c0ce",
       "InvocationResult.terminal_state": "581e74ca679636d7050aad38d0b30ed5bf3722be174304aed98e1eb0f4a8c4a5",
@@ -22507,17 +22488,15 @@
       "StreamCancel.state": "b7447e35dd38a1849b1b1466a07e64dcb93de4090966a3b0fbd80ffcb27cc30a",
       "StreamCancel.stream_id": "eb1cc7c438d6ba3be2d98e5eb4ff4f33a66a803abf6a5663bf5caff806f6df04",
       "StreamCancel.terminal": "30d72b0cb2f24a12f30ebba7243c1137c081850d6a42a5c74e4261146f1b237f",
-      "StreamEvent": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c",
+      "StreamEvent": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a",
       "StreamEvent.admission_receipt": "92fc2e6cbdb1f12a79a25639d988feb16636a34645ffc4370c06465a323a8d9c",
       "StreamEvent.elapsed_ms": "45bf7a4ed59a2a907ec13c17aa7be7ef99167ee6a11b7adfcc67d3b36d638a2a",
       "StreamEvent.error": "fc90c13aa9d1a8e62aa0c22bc616fa565cd33889c24325a2be600fa70fb7ae87",
-      "StreamEvent.from_json": "6f21336ba5872edf417778f4181f6b8704682cbacacf225fcbacd6cadcdc1ba3",
+      "StreamEvent.from_json": "427a7feade396be8f4f17db2e78f2383e6a0cddd6d68e1b1877d731690d748fd",
       "StreamEvent.kind": "eda84406693a852952103dec4c5270b1b429826e061c1f5f52a4e448d3f10fba",
       "StreamEvent.payload_base64": "39e76cc264da30b447020388afcfe415f433282d2dc033cdda34d59b02f5a22f",
       "StreamEvent.payload_content_type": "ccd6badd7e579f346f8f7324584030fa838bb5453073bba75dbdbff1976a51df",
       "StreamEvent.payload_json": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97",
-      "StreamEvent.scheduling_reason": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835",
-      "StreamEvent.selected_node_id": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d",
       "StreamEvent.sequence": "89a45a44cf02ec1e16ec1a8391a1e347c435aac02b04a74ca1b3a0a9c938f4cd",
       "StreamEvent.state": "0180f4a5578e01e54733caf078d73d201ee70a931e8146b9fd1097e9373f1fbc",
       "StreamEvent.terminal": "49bf11e88f0575ba2774194666bb3011b8e2936217f1c28a77770390c390a672",
@@ -24388,7 +24367,7 @@
       "item": "InvocationResult.from_json",
       "parent_capability": "unary_invoke",
       "role": "serialization_projection",
-      "shape_sha256": "2a2db5e6d49e3ecb62f2a1906a603d58ba4464920e3c8a95a1080b534d97a63d",
+      "shape_sha256": "3300ce6354d612bc4db7b83ab8ec2590f312f57eeb700ddd73d197aa7cf187e5",
       "shape_group": "serialization_projection:invocationresult.deserializejson"
     },
     {
@@ -24496,7 +24475,7 @@
       "item": "StreamEvent.from_json",
       "parent_capability": "stream",
       "role": "serialization_projection",
-      "shape_sha256": "6f21336ba5872edf417778f4181f6b8704682cbacacf225fcbacd6cadcdc1ba3",
+      "shape_sha256": "427a7feade396be8f4f17db2e78f2383e6a0cddd6d68e1b1877d731690d748fd",
       "shape_group": "serialization_projection:streamevent.deserializejson"
     },
     {
@@ -24636,7 +24615,7 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+    "axon_sdk": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
   },
   "provider_implementations": [
     {
@@ -24645,7 +24624,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/go/",
       "path": "sdk/go/direct_runtime.go",
-      "sha256": "ed676483121a7637265e7b7271781890e6f93e11c879b44fc8d96d1f10fa3732",
+      "sha256": "46399d4bade59d8909936d70bc5cc74d347fdc211c13e7ada040bba49fe64196",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/go/connection.go",
       "interface_sha256": "8a81c30b8f3d50915a70ff45ee9d81ee363ac4a4c0a34fec50040c56c6f15e8a",
@@ -24657,7 +24636,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
     },
     {
       "language": "python",
@@ -24665,7 +24644,7 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/direct_runtime.py",
-      "sha256": "661e9e7f5b6334d7fa17753a5152008747e3b5c875317a9d541ce3231704a942",
+      "sha256": "f6bb7f93c6e5f232d87d4cf80dd6f59586d9b814442a18b3894e3a0a518c834d",
       "interface": "RuntimeConnector",
       "interface_path": "sdk/python/easynet_sdk/connection.py",
       "interface_sha256": "a398d78c51607f79260e73d3c7bb73f37243a67bbb18dd6b15d68cb3d5bb5f5a",
@@ -24677,7 +24656,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
     },
     {
       "language": "go",
@@ -24693,7 +24672,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
     },
     {
       "language": "python",
@@ -24709,7 +24688,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
     },
     {
       "language": "go",
@@ -24724,7 +24703,7 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
     },
     {
       "language": "python",
@@ -24739,14 +24718,14 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "9752a8c57b05b0def9c42104d034cfce5cdd64a3"
+      "axon_revision": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "9752a8c57b05b0def9c42104d034cfce5cdd64a3",
+    "rust": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "9752a8c57b05b0def9c42104d034cfce5cdd64a3",
+    "python": "working_tree:cef4ab1202cef8c869c34ef436755d1b4e7aba4a93f7352de2a28169e96b20cd",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"
@@ -25700,7 +25679,7 @@
           "language": "python",
           "section": "members",
           "item": "InvocationResult.from_json",
-          "shape_sha256": "2a2db5e6d49e3ecb62f2a1906a603d58ba4464920e3c8a95a1080b534d97a63d"
+          "shape_sha256": "3300ce6354d612bc4db7b83ab8ec2590f312f57eeb700ddd73d197aa7cf187e5"
         }
       ],
       "present_languages": [
@@ -25982,7 +25961,7 @@
           "language": "python",
           "section": "members",
           "item": "StreamEvent.from_json",
-          "shape_sha256": "6f21336ba5872edf417778f4181f6b8704682cbacacf225fcbacd6cadcdc1ba3"
+          "shape_sha256": "427a7feade396be8f4f17db2e78f2383e6a0cddd6d68e1b1877d731690d748fd"
         }
       ],
       "present_languages": [

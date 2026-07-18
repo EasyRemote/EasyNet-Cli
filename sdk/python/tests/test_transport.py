@@ -69,8 +69,6 @@ class DaemonInvocationTransportTests(unittest.TestCase):
                         "output_content_type": "application/json",
                         "output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
                         "output_json": {"ready": True},
-                        "selected_node_id": "dev-a",
-                        "scheduling_reason": "direct",
                         "elapsed_ms": 12,
                     }
                 )
@@ -91,8 +89,6 @@ class DaemonInvocationTransportTests(unittest.TestCase):
         self.assertEqual(result["result_json"], {"ready": True})
         self.assertEqual(result["result_base64"], "eyJyZWFkeSI6dHJ1ZX0=")
         self.assertEqual(result["result_content_type"], "application/json")
-        self.assertEqual(result["selected_node_id"], "dev-a")
-        self.assertEqual(result["scheduling_reason"], "direct")
         self.assertEqual(result["elapsed_ms"], 12)
         self.assertEqual(result["admission_receipt"]["invocation_id"], "inv-runtime-1")
         self.assertEqual(result["terminal_receipt"]["invocation_id"], "inv-runtime-1")

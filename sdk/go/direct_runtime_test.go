@@ -57,8 +57,6 @@ func (d *directRuntimeFakeDaemon) Invoke(ctx context.Context, req *axonpb.Invoke
 	admissionReceipt, terminalReceipt := canonicalDirectRuntimeReceiptPair("inv-1")
 	return &axonpb.InvokeResponse{
 		State:             axonpb.InvocationState_INVOCATION_STATE_COMPLETED,
-		SelectedNodeId:    "node-a",
-		SchedulingReason:  "direct-test",
 		Result:            []byte(`{"ok":true}`),
 		ResultContentType: "application/json",
 		ElapsedMs:         7,
@@ -221,12 +219,10 @@ func (d *directRuntimeFakeDaemon) InvokeStream(req *axonpb.InvokeServerStreamReq
 		}
 	}
 	if err := stream.Send(&axonpb.InvokeStreamChunk{
-		Sequence:         0,
-		State:            axonpb.InvocationState_INVOCATION_STATE_RUNNING,
-		SelectedNodeId:   "node-stream",
-		SchedulingReason: "direct-stream",
-		Payload:          []byte(`{"delta":1}`),
-		ContentType:      "application/json",
+		Sequence:    0,
+		State:       axonpb.InvocationState_INVOCATION_STATE_RUNNING,
+		Payload:     []byte(`{"delta":1}`),
+		ContentType: "application/json",
 		AdmissionReceipt: &axonpb.InvocationReceipt{
 			Index:        0,
 			InvocationId: "inv-stream",
@@ -366,8 +362,8 @@ func TestDirectRuntimeTransportInvokesOverUnixSocket(t *testing.T) {
 	if daemon.seenInvoke == nil || daemon.seenInvoke.GetEnvelope().GetCaller().GetUra() != "easynet:///r/example/agent/alice" {
 		t.Fatalf("daemon did not receive caller envelope: %#v", daemon.seenInvoke)
 	}
-	if daemon.seenInvoke.GetFunctionName() != "er.weather" {
-		t.Fatalf("function name = %q, want er.weather", daemon.seenInvoke.GetFunctionName())
+	if daemon.seenInvoke.GetTarget().GetAbility().GetFunctionName() != "er.weather" {
+		t.Fatalf("function name = %q, want er.weather", daemon.seenInvoke.GetTarget().GetAbility().GetFunctionName())
 	}
 	if got := daemon.seenInvoke.GetTarget().GetAbility().GetAbilityName(); got != directRuntimeDraft(t).DescriptorRef() {
 		t.Fatalf("descriptor-bound target = %q", got)
@@ -477,7 +473,7 @@ func TestDirectRuntimeTransportUsesAxonCanonicalPublicRoute(t *testing.T) {
 	if _, err := client.Invoke(context.Background(), directRuntimeDraft(t)); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}
-	if daemon.seenInvoke == nil || daemon.seenInvoke.GetFunctionName() != "er.weather" {
+	if daemon.seenInvoke == nil || daemon.seenInvoke.GetTarget().GetAbility().GetFunctionName() != "er.weather" {
 		t.Fatalf("daemon function name = %#v", daemon.seenInvoke)
 	}
 }
@@ -567,8 +563,8 @@ func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 	if first.Sequence() != 1 || first.Kind() != "data" || first.Terminal() {
 		t.Fatalf("first = seq %d kind %s terminal %v", first.Sequence(), first.Kind(), first.Terminal())
 	}
-	if first.State() != "Running" || first.SelectedNodeID() != "node-stream" || first.SchedulingReason() != "direct-stream" {
-		t.Fatalf("first dispatch projection = state %q node %q reason %q", first.State(), first.SelectedNodeID(), first.SchedulingReason())
+	if first.State() != "Running" {
+		t.Fatalf("first lifecycle state = %q", first.State())
 	}
 	terminal, err := stream.Next(context.Background())
 	if err != nil {
@@ -584,7 +580,7 @@ func TestDirectRuntimeTransportStreamsOverUnixSocket(t *testing.T) {
 			terminal.TerminalReceiptJSON(),
 		)
 	}
-	if daemon.seenStream == nil || daemon.seenStream.GetFunctionName() != "er.weather" {
+	if daemon.seenStream == nil || daemon.seenStream.GetTarget().GetAbility().GetFunctionName() != "er.weather" {
 		t.Fatalf("daemon did not receive stream request")
 	}
 	if err := stream.Close(context.Background()); err != nil {

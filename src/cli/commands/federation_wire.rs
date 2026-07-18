@@ -1208,7 +1208,7 @@ added_at_unix_ms = 1
         assert_eq!(
             hub_row.get("agent_ura").and_then(|v| v.as_str()),
             Some(crate::core::ura::hub_ura("tenant-a").as_str()),
-            "hub URA must use Axon's canonical /hub identity shape; admits backend's federation.* dispatches",
+            "hub URA must use Axon's canonical /authority identity shape; admits backend's federation.* dispatches",
         );
 
         assert_eq!(

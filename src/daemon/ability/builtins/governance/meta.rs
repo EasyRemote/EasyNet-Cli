@@ -470,7 +470,7 @@ impl AbilitySubjectScope {
             }),
             crate::core::ura::URAKind::Agent
             | crate::core::ura::URAKind::Device
-            | crate::core::ura::URAKind::Hub
+            | crate::core::ura::URAKind::Authority
             | crate::core::ura::URAKind::User => Ok(Self {
                 owner_ura: Some(subject_ura.to_string()),
                 ability_ura: None,
@@ -498,7 +498,7 @@ fn parse_owner_scope(field: &str, ura: &str) -> anyhow::Result<()> {
     match parsed.kind {
         crate::core::ura::URAKind::Agent
         | crate::core::ura::URAKind::Device
-        | crate::core::ura::URAKind::Hub
+        | crate::core::ura::URAKind::Authority
         | crate::core::ura::URAKind::User => Ok(()),
         other => anyhow::bail!(
             "meta.list_abilities: {field} must be an owner URA, got {:?}",

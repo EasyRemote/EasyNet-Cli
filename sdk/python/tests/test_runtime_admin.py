@@ -110,7 +110,7 @@ class RuntimeAdminTransportFake:
         return json.dumps(
             {
                 "descriptor_ref": (
-                    f"easynet:///r/example/ability/hub.{request['ability']}@1.0.0"
+                    f"easynet:///r/example/ability/authority.{request['ability']}@1.0.0"
                 )
             }
         ).encode()
@@ -184,7 +184,7 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
                 "kind": "terminal",
                 "session_id": "session-a",
                 "device_ura": "easynet:///r/example/device/laptop",
-                "hub_ura": "easynet:///r/example/hub",
+                "hub_ura": "easynet:///r/example/authority",
                 "state": "active",
                 "session_kind": "pty",
                 "created_unix_ms": 1714492800000,
@@ -201,7 +201,7 @@ def test_runtime_admin_ability_client_lists_sessions() -> None:
     assert len(page.sessions) == 1
     assert page.sessions[0].session_id == "session-a"
     assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/hub.session.list@1.0.0"
+        "easynet:///r/example/ability/authority.session.list@1.0.0"
     )
     assert transport.seen["args"]["include_terminated"] is False
     assert transport.seen["metadata"]["sdk_profile"] == _RUNTIME_ADMIN_PROFILE
@@ -259,7 +259,7 @@ def test_runtime_admin_ability_client_revokes_device() -> None:
     assert result.ack is False
     assert result.runtime_not_ready is True
     assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/hub.federation.revoke@1.0.0"
+        "easynet:///r/example/ability/authority.federation.revoke@1.0.0"
     )
     assert result.system_ability == _RUNTIME_ADMIN_DEVICE_REVOKE_ABILITY
     assert transport.seen["args"] == {
@@ -334,7 +334,7 @@ def _ability_client() -> tuple[RuntimeAdminAbilityClient, RuntimeAdminTransportF
 def _call() -> RuntimeCallContext:
     return RuntimeCallContext(
         caller_ura="easynet:///r/example/agent/backend",
-        callee_ura="easynet:///r/example/hub",
+        callee_ura="easynet:///r/example/authority",
         subject_ura="easynet:///r/example/resource/device.laptop/invoke/backend.admin",
         descriptor_version="1.0.0",
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",

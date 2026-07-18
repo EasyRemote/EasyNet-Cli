@@ -298,11 +298,11 @@ fn verify_hub_link_resolve_key(args: &[u8], hub_ura: &str) -> Option<()> {
     let agent_ura = request.agent_ura.trim();
     let hub = parse_ura(hub_ura).ok()?;
     let agent = parse_ura(agent_ura).ok()?;
-    if hub.kind != URAKind::Hub || agent.realm != hub.realm {
+    if hub.kind != URAKind::Authority || agent.realm != hub.realm {
         return None;
     }
     match agent.kind {
-        URAKind::User | URAKind::Agent | URAKind::Device | URAKind::Hub => Some(()),
+        URAKind::User | URAKind::Agent | URAKind::Device | URAKind::Authority => Some(()),
         _ => None,
     }
 }
@@ -315,7 +315,7 @@ fn is_device_ura(ura: &str) -> bool {
 
 fn is_hub_ura(ura: &str) -> bool {
     parse_ura(ura)
-        .map(|parsed| parsed.kind == URAKind::Hub)
+        .map(|parsed| parsed.kind == URAKind::Authority)
         .unwrap_or(false)
 }
 
@@ -324,7 +324,7 @@ fn callee_is_current_hub(callee_ura: &str, daemon_ura: Option<&str>) -> bool {
         return false;
     }
     parse_ura(callee_ura)
-        .map(|callee| callee.kind == URAKind::Hub)
+        .map(|callee| callee.kind == URAKind::Authority)
         .unwrap_or(false)
 }
 
@@ -338,7 +338,7 @@ fn callee_is_selected_hub(callee_ura: &str, caller_ura: &str, daemon_ura: Option
     let Ok(caller) = parse_ura(caller_ura) else {
         return false;
     };
-    callee.kind == URAKind::Hub && callee.realm == caller.realm
+    callee.kind == URAKind::Authority && callee.realm == caller.realm
 }
 
 fn bootstrap_authority_id(caller_ura: &str, ability: &str, owner_user_id: &str) -> String {
@@ -435,7 +435,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
             ABILITY_FEDERATION_ADVERTISE_ABILITIES,
@@ -443,7 +443,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -464,7 +464,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
             ABILITY_FEDERATION_ADVERTISE_ABILITIES,
@@ -472,7 +472,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
@@ -491,7 +491,7 @@ mod tests {
             &[],
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -510,7 +510,7 @@ mod tests {
             &[],
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
@@ -526,7 +526,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
             ABILITY_FEDERATION_HEARTBEAT,
@@ -534,7 +534,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -550,7 +550,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
             ABILITY_FEDERATION_HEARTBEAT,
@@ -558,7 +558,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
@@ -577,7 +577,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
             ABILITY_FEDERATION_JOIN,
@@ -585,7 +585,7 @@ mod tests {
             &args,
             &RealmTrustAnchor::default(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
@@ -594,11 +594,11 @@ mod tests {
     #[test]
     fn ownerless_joined_device_can_resolve_selected_hub_key_during_bootstrap() {
         let args = serde_json::to_vec(&serde_json::json!({
-            "agent_ura": "easynet:///r/test/hub",
+            "agent_ura": "easynet:///r/test/authority",
         }))
         .expect("args");
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
@@ -606,7 +606,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
@@ -614,7 +614,7 @@ mod tests {
             &args,
             &RealmTrustAnchor::default(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -627,7 +627,7 @@ mod tests {
         }))
         .expect("args");
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
@@ -635,7 +635,7 @@ mod tests {
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
@@ -643,7 +643,7 @@ mod tests {
             &args,
             &RealmTrustAnchor::default(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
@@ -652,19 +652,19 @@ mod tests {
     #[test]
     fn paired_device_can_resolve_selected_hub_key_during_bootstrap() {
         let args = serde_json::to_vec(&serde_json::json!({
-            "agent_ura": "easynet:///r/test/hub",
+            "agent_ura": "easynet:///r/test/authority",
         }))
         .expect("args");
 
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
@@ -672,7 +672,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -686,14 +686,14 @@ mod tests {
         .expect("args");
 
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
@@ -701,7 +701,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -717,14 +717,14 @@ mod tests {
         }))
         .expect("args");
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_IDENTITY_REGISTER_PUBKEY,
         )
         .expect("subject");
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 &subject,
             ),
             ABILITY_IDENTITY_REGISTER_PUBKEY,
@@ -732,7 +732,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
 
@@ -745,7 +745,7 @@ mod tests {
         let rejected = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 &subject,
             ),
             ABILITY_IDENTITY_REGISTER_PUBKEY,
@@ -753,7 +753,7 @@ mod tests {
             &other_args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
         assert_eq!(rejected, BootstrapAuthorityDecision::NotApplicable);
     }
@@ -766,14 +766,14 @@ mod tests {
         .expect("args");
 
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
         let got = BootstrapAuthorityVerifier::verify(
             &envelope(
                 "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/hub",
+                "easynet:///r/test/authority",
                 &subject,
             ),
             ABILITY_FEDERATION_RESOLVE_KEY,
@@ -781,7 +781,7 @@ mod tests {
             &args,
             &anchor(),
             TrustedAgentRole::Device,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
@@ -795,18 +795,22 @@ mod tests {
         .expect("args");
 
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
         let got = BootstrapAuthorityVerifier::verify(
-            &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
+            &envelope(
+                "easynet:///r/peer/authority",
+                "easynet:///r/test/authority",
+                &subject,
+            ),
             ABILITY_FEDERATION_RESOLVE_KEY,
             AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Hub,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -820,18 +824,22 @@ mod tests {
         .expect("args");
 
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
         let got = BootstrapAuthorityVerifier::verify(
-            &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
+            &envelope(
+                "easynet:///r/peer/authority",
+                "easynet:///r/test/authority",
+                &subject,
+            ),
             ABILITY_FEDERATION_RESOLVE_KEY,
             AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Hub,
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
@@ -845,18 +853,22 @@ mod tests {
         .expect("args");
 
         let subject = crate::core::ura::owner_ability_ura(
-            "easynet:///r/test/hub",
+            "easynet:///r/test/authority",
             ABILITY_FEDERATION_RESOLVE_KEY,
         )
         .expect("subject");
         let got = BootstrapAuthorityVerifier::verify(
-            &envelope("easynet:///r/peer/hub", "easynet:///r/test/hub", &subject),
+            &envelope(
+                "easynet:///r/peer/authority",
+                "easynet:///r/test/authority",
+                &subject,
+            ),
             ABILITY_FEDERATION_RESOLVE_KEY,
             AccessAction::Read,
             &args,
             &anchor(),
             TrustedAgentRole::Hub,
-            Some("easynet:///r/other/hub"),
+            Some("easynet:///r/other/authority"),
         );
 
         assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);

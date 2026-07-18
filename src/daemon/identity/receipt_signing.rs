@@ -438,7 +438,7 @@ fn strict_self_signed_identity(ura: &str) -> Result<AgentIdentity, AxonError> {
     })?;
     if !matches!(
         parsed.kind,
-        crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Hub
+        crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
     ) {
         return Err(AxonError::permission_denied(
             "daemon_receipt_self_signed_owner_kind_invalid",
@@ -612,7 +612,7 @@ mod tests {
     #[tokio::test]
     async fn hosted_receipt_provider_rejects_non_agent_substitution() {
         let provider = test_device_provider();
-        let unowned_hub = strict_identity("easynet:///r/acme/hub").unwrap();
+        let unowned_hub = strict_identity("easynet:///r/acme/authority").unwrap();
         let error = match CanonicalReceiptProvider::resolve_signing_authority(
             &provider,
             &unowned_hub,

@@ -761,7 +761,7 @@ impl VoiceCallAggregate {
         let authority = crate::core::ura::parse_ura(&self.authority_ura).map_err(|error| {
             anyhow::anyhow!("invalid voice authority {:?}: {error}", self.authority_ura)
         })?;
-        if authority.kind != crate::core::ura::URAKind::Hub {
+        if authority.kind != crate::core::ura::URAKind::Authority {
             anyhow::bail!(
                 "voice aggregate authority must be Hub, got {:?}",
                 self.authority_ura
@@ -1172,7 +1172,7 @@ mod tests {
 
     #[test]
     fn repository_compare_and_swap_rejects_a_stale_revision() {
-        const HUB: &str = "easynet:///r/voice-cas/hub";
+        const HUB: &str = "easynet:///r/voice-cas/authority";
         let repository = TestVoiceCallRepository::default();
         repository
             .insert_if_absent(VoiceCallAggregate::new(
@@ -1222,7 +1222,7 @@ mod tests {
 
     #[test]
     fn repository_rejects_a_non_advancing_cas_replacement() {
-        const HUB: &str = "easynet:///r/voice-cas/hub";
+        const HUB: &str = "easynet:///r/voice-cas/authority";
         let repository = TestVoiceCallRepository::default();
         let aggregate =
             VoiceCallAggregate::new(HUB.to_string(), "call-same-revision".to_string(), None, 10);
@@ -1237,7 +1237,7 @@ mod tests {
 
     #[test]
     fn maximum_revision_fails_recovery_and_mutation_closed() {
-        const HUB: &str = "easynet:///r/voice-revision/hub";
+        const HUB: &str = "easynet:///r/voice-revision/authority";
         let aggregate = VoiceCallAggregate::new(HUB.to_string(), "call-max".to_string(), None, 10);
         let mut encoded = serde_json::to_value(aggregate).expect("serialize aggregate");
         encoded["revision"] = json!(u64::MAX);
@@ -1263,7 +1263,7 @@ mod tests {
 
     #[test]
     fn recovery_rejects_cardinality_time_and_event_sequence_corruption() {
-        const HUB: &str = "easynet:///r/voice-recovery/hub";
+        const HUB: &str = "easynet:///r/voice-recovery/authority";
         let base = VoiceCallAggregate::new(
             HUB.to_string(),
             "call-corrupt".to_string(),

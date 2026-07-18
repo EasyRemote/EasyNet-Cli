@@ -4,17 +4,17 @@
 // File: src/cli/commands/join.rs
 // Description: `easynet device join <token-or-hub-ura>` — join this device to
 //              an EasyNet Hub via the staged HTTP pairing facade or the
-//              canonical Hub URA federation path.
+//              product Hub URA federation path.
 //
 // Protocol Responsibility:
 // - Preserves the historical Backend HTTP pairing path while the staged
 //   product facade remains.
-// - Supports Hub URA joins through Axon `federation.join`.
+// - Supports product Hub URA joins through Axon `federation.join`.
 // - Carries optional product-neutral PrincipalLifecycle proof for Hub URA joins.
 // - Creates ~/.easynet/credentials.json; other commands consume it.
 //
 // Implementation Approach:
-// - Routes `easynet:///r/<realm>/hub` through the daemon federation client.
+// - Routes `easynet:///r/<realm>/authority` through the daemon federation client.
 // - Routes legacy tokens through synchronous HTTP until the SPEC authorizes
 //   irreversible deletion.
 // - Lowers PrincipalLifecycle proof without product account fields.
@@ -89,7 +89,7 @@ struct ValidatePairingPayload {
 
 #[derive(Debug, Args)]
 pub struct JoinArgs {
-    /// One-time pairing token or hub URA (easynet:///r/<realm>/hub).
+    /// One-time pairing token or hub URA (easynet:///r/<realm>/authority).
     pub token: String,
     /// Hub API base URL for self-hosted Hubs.
     // No `(default: ...)` in the doc-comment — clap already renders
@@ -213,7 +213,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
             || args.principal_enrollment_id.is_some()
         {
             anyhow::bail!(
-                "principal enrollment proof is supported only for hub URA joins; use easynet:///r/<realm>/hub"
+                "principal enrollment proof is supported only for hub URA joins; use easynet:///r/<realm>/authority"
             );
         }
         let hub_api_override = args
@@ -288,7 +288,7 @@ impl HubUraTarget {
         let value = value.trim();
         let parsed = crate::core::ura::parse_ura(value)
             .map_err(|err| anyhow::anyhow!("invalid hub URA `{value}`: {err}"))?;
-        if parsed.kind != crate::core::ura::URAKind::Hub {
+        if parsed.kind != crate::core::ura::URAKind::Authority {
             anyhow::bail!("join target URA must identify a hub, got {:?}", parsed.kind);
         }
         require_ura_join_trust_policy(&parsed.realm, hub_ca)?;
@@ -1417,22 +1417,22 @@ mod tests {
 
     #[test]
     fn hub_ura_target_derives_endpoint_for_public_realm() {
-        let target =
-            HubUraTarget::parse("easynet:///r/easynet.run/hub", None, None).expect("public realm");
+        let target = HubUraTarget::parse("easynet:///r/easynet.run/authority", None, None)
+            .expect("public realm");
         assert_eq!(target.realm, "easynet.run");
         assert_eq!(target.hub_endpoint, "https://easynet.run:50443");
     }
 
     #[test]
     fn hub_ura_target_requires_ca_for_private_realm() {
-        let err = HubUraTarget::parse("easynet:///r/localhost/hub", None, None)
+        let err = HubUraTarget::parse("easynet:///r/localhost/authority", None, None)
             .expect_err("localhost requires CA");
         assert!(err.to_string().contains("--hub-ca"));
 
         let target = HubUraTarget::parse(
-            "easynet:///r/localhost/hub",
+            "easynet:///r/localhost/authority",
             Some(55443),
-            Some(Path::new("/tmp/hub-ca.pem")),
+            Some(Path::new("/tmp/authority-ca.pem")),
         )
         .expect("private realm with CA");
         assert_eq!(target.hub_endpoint, "https://127.0.0.1:55443");
@@ -1530,7 +1530,7 @@ mod tests {
         let creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1549,7 +1549,7 @@ mod tests {
         let creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1587,7 +1587,7 @@ mod tests {
         let mut creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1609,7 +1609,7 @@ mod tests {
         let mut creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1621,9 +1621,9 @@ mod tests {
         };
         assert!(!rewrite_local_docker_session_endpoint(
             &mut creds,
-            "http://hub:8080"
+            "http://authority:8080"
         ));
-        assert_eq!(creds.hub_endpoint, "https://hub:50443");
+        assert_eq!(creds.hub_endpoint, "https://authority:50443");
     }
 
     #[test]
@@ -1750,7 +1750,7 @@ mod tests {
             Some("alice")
         );
         assert_eq!(
-            user_id_from_principal_ura("easynet:///r/tenant-a/hub"),
+            user_id_from_principal_ura("easynet:///r/tenant-a/authority"),
             None
         );
     }

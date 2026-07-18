@@ -65,21 +65,21 @@ RS
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "Axon hub-with-tail generation should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "Axon Hub generation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/daemon/invocation/routing/remote_invoke.rs"
+perl -0pi -e 's#whose canonical protocol identity is `easynet:///r/<realm>/authority`#whose canonical protocol identity is `easynet:///r/<realm>/hub`#' "$SB/src/daemon/invocation/routing/remote_invoke.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "stale parse_node_ura docs should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "stale parse_node_ura /hub docs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#assert!\(!facade\.is_federated_caller\("easynet:///r/peer-realm/hub/extra"\)\);#assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));#' "$SB/src/daemon/invocation/admission/admission_facade.rs"
+perl -0pi -e 's#assert!\(!facade\.is_federated_caller\("easynet:///r/peer-realm/authority/extra"\)\);#assert!(facade.is_federated_caller("easynet:///r/peer-realm/authority/extra"));#' "$SB/src/daemon/invocation/admission/admission_facade.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "admission hub-with-tail acceptance should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "admission authority-with-tail acceptance should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/docs/stale"

@@ -316,7 +316,7 @@ func principalCommandFixture() PrincipalCommand {
 func principalCallFixture() RuntimeCallContext {
 	return RuntimeCallContext{
 		CallerURA:     "easynet:///r/example/user/admin",
-		CalleeURA:     "easynet:///r/example/hub",
+		CalleeURA:     "easynet:///r/example/authority",
 		SubjectURA:    "easynet:///r/example/user/alice",
 		NonceBase64:   "bm9uY2U=",
 		CausalContext: map[string]any{"kind": "none"},

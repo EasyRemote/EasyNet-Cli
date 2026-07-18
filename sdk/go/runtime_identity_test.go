@@ -16,7 +16,7 @@ import (
 func TestRuntimeSigningIdentityRequiresExplicitDaemonEndpoint(t *testing.T) {
 	for _, socketPath := range []string{"", " \t\n "} {
 		_, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-			OwnerURA:   "easynet:///r/acme/hub",
+			OwnerURA:   "easynet:///r/acme/authority",
 			SocketPath: socketPath,
 		})
 		if !IsCode(err, ErrInvalidArgument) {
@@ -24,7 +24,7 @@ func TestRuntimeSigningIdentityRequiresExplicitDaemonEndpoint(t *testing.T) {
 		}
 
 		_, err = EnsureRuntimeSigningIdentity(EnsureRuntimeSigningIdentityRequest{
-			OwnerURA:   "easynet:///r/acme/hub",
+			OwnerURA:   "easynet:///r/acme/authority",
 			SocketPath: socketPath,
 		})
 		if !IsCode(err, ErrInvalidArgument) {
@@ -36,7 +36,7 @@ func TestRuntimeSigningIdentityRequiresExplicitDaemonEndpoint(t *testing.T) {
 func TestLoadRuntimeSigningIdentityUsesDaemonKeyringProjection(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
-		if request["method"] != "derive_pubkey" || request["self_ura"] != "easynet:///r/acme/hub" {
+		if request["method"] != "derive_pubkey" || request["self_ura"] != "easynet:///r/acme/authority" {
 			t.Fatalf("unexpected request: %#v", request)
 		}
 		if _, containsVaultField := request["vault_path"]; containsVaultField {
@@ -49,7 +49,7 @@ func TestLoadRuntimeSigningIdentityUsesDaemonKeyringProjection(t *testing.T) {
 	})
 
 	identity, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA:   "easynet:///r/acme/hub",
+		OwnerURA:   "easynet:///r/acme/authority",
 		SocketPath: socketPath,
 	})
 	if err != nil {
@@ -74,7 +74,7 @@ func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
 				"public_key_b64": base64.StdEncoding.EncodeToString(publicKey),
 			}
 		case 2:
-			if request["method"] != "sign" || request["self_ura"] != "easynet:///r/acme/hub" {
+			if request["method"] != "sign" || request["self_ura"] != "easynet:///r/acme/authority" {
 				t.Fatalf("unexpected signing request: %#v", request)
 			}
 			if request["canonical_bytes_b64"] != base64.StdEncoding.EncodeToString(message) {
@@ -82,7 +82,7 @@ func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
 			}
 			publicKeyBase64 := base64.StdEncoding.EncodeToString(publicKey)
 			if request["public_key_b64"] != publicKeyBase64 ||
-				request["signer_policy_ref"] != identitySignerPolicyRef("easynet:///r/acme/hub", "easynet:///r/acme/hub", publicKeyBase64) {
+				request["signer_policy_ref"] != identitySignerPolicyRef("easynet:///r/acme/authority", "easynet:///r/acme/authority", publicKeyBase64) {
 				t.Fatalf("signing request is not bound to the runtime projection: %#v", request)
 			}
 			return map[string]any{
@@ -94,7 +94,7 @@ func TestRuntimeSigningIdentitySignsThroughDaemonKeyring(t *testing.T) {
 			return nil
 		}
 	})
-	identity, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{OwnerURA: "easynet:///r/acme/hub", SocketPath: socketPath})
+	identity, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{OwnerURA: "easynet:///r/acme/authority", SocketPath: socketPath})
 	if err != nil {
 		t.Fatalf("LoadRuntimeSigningIdentity: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestRuntimeSigningIdentityRejectsSignatureFromAnotherKey(t *testing.T) {
 		}
 	})
 	identity, err := LoadRuntimeSigningIdentity(RuntimeSigningIdentityRequest{
-		OwnerURA: "easynet:///r/acme/hub", SocketPath: socketPath,
+		OwnerURA: "easynet:///r/acme/authority", SocketPath: socketPath,
 	})
 	if err != nil {
 		t.Fatalf("LoadRuntimeSigningIdentity: %v", err)
@@ -137,7 +137,7 @@ func TestRuntimeSigningIdentityRejectsSignatureFromAnotherKey(t *testing.T) {
 func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
 	publicKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)).Public().(ed25519.PublicKey)
 	socketPath := startRuntimeKeyringTestServer(t, func(request map[string]any) map[string]any {
-		if request["method"] != "ensure" || request["primary_self"] != "easynet:///r/acme/hub" {
+		if request["method"] != "ensure" || request["primary_self"] != "easynet:///r/acme/authority" {
 			t.Fatalf("unexpected ensure request: %#v", request)
 		}
 		if _, containsSeed := request["seed_hex"]; containsSeed {
@@ -152,7 +152,7 @@ func TestEnsureRuntimeSigningIdentityDelegatesKeyGeneration(t *testing.T) {
 		}
 	})
 	identity, err := EnsureRuntimeSigningIdentity(EnsureRuntimeSigningIdentityRequest{
-		OwnerURA:   "easynet:///r/acme/hub",
+		OwnerURA:   "easynet:///r/acme/authority",
 		SocketPath: socketPath,
 	})
 	if err != nil {

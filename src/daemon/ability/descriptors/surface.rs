@@ -800,7 +800,7 @@ impl AbilityDescriptor {
             crate::core::ura::URAKind::Device => parsed
                 .device_id()
                 .map(|device_id| crate::core::ura::device_ura(&parsed.realm, device_id)),
-            crate::core::ura::URAKind::Hub => Some(crate::core::ura::hub_ura(&parsed.realm)),
+            crate::core::ura::URAKind::Authority => Some(crate::core::ura::hub_ura(&parsed.realm)),
             _ => None,
         };
         if canonical.as_deref() == Some(owner_ura) {

@@ -153,7 +153,7 @@ pub(crate) fn local_device_ura() -> String {
 /// Hub mode has no device credentials, so `local_device_ura()` intentionally
 /// falls back to `r/default/device/local`. CLI loopback calls that target the
 /// running daemon itself must not use that fallback: a Hub daemon owns
-/// `easynet:///r/<realm>/hub`, while a Device/Both daemon owns its device URA.
+/// `easynet:///r/<realm>/authority`, while a Device/Both daemon owns its device URA.
 pub(crate) fn local_daemon_ura() -> String {
     if let Some(ura) = control_discovery_daemon_ura() {
         return ura;

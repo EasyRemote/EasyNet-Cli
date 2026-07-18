@@ -1832,7 +1832,7 @@ mod tests {
         let request = PermissionRequest {
             request_id: "req-1".to_string(),
             owner_user_id: "alice".to_string(),
-            caller_ura: "easynet:///r/test/hub".to_string(),
+            caller_ura: "easynet:///r/test/authority".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
@@ -1874,7 +1874,7 @@ mod tests {
         let root = default_policy_store_dir();
         let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
         let pending = store
-            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
         let mut approved = pending.clone();
         approved.status = PermissionRequestStatus::Approved;
@@ -1906,7 +1906,7 @@ mod tests {
         let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
             .expect("store");
         let pending = store
-            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
         let mut approved = pending;
         approved.status = PermissionRequestStatus::Approved;
@@ -1927,7 +1927,7 @@ mod tests {
         let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
             .expect("store");
         let pending = store
-            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
         let mut approved = pending;
         approved.status = PermissionRequestStatus::Approved;
@@ -1950,7 +1950,7 @@ mod tests {
         let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
             .expect("store");
         let pending = store
-            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
         let mut approved = pending;
         approved.status = PermissionRequestStatus::Approved;
@@ -1978,7 +1978,7 @@ mod tests {
         let root = default_policy_store_dir();
         let mut store = AccessControlStore::open_or_create_at(&root, "alice").expect("store");
         let pending = store
-            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
         let mut approved = pending;
         approved.status = PermissionRequestStatus::Approved;
@@ -2016,7 +2016,7 @@ mod tests {
         let mut no_lifetimes = pending_request();
         no_lifetimes.requested_lifetimes.clear();
         let err = store
-            .upsert_permission_request(no_lifetimes, "easynet:///r/test/hub")
+            .upsert_permission_request(no_lifetimes, "easynet:///r/test/authority")
             .expect_err("prompt must expose requested lifetimes");
         assert!(err
             .to_string()
@@ -2026,7 +2026,7 @@ mod tests {
         no_invocation_binding.nonce = None;
         no_invocation_binding.canonical_hash = None;
         let err = store
-            .upsert_permission_request(no_invocation_binding, "easynet:///r/test/hub")
+            .upsert_permission_request(no_invocation_binding, "easynet:///r/test/authority")
             .expect_err("prompt must bind invocation identity");
         assert!(err
             .to_string()
@@ -2035,7 +2035,7 @@ mod tests {
         let mut invalid_expiry = pending_request();
         invalid_expiry.expires_at = invalid_expiry.created_at.clone();
         let err = store
-            .upsert_permission_request(invalid_expiry, "easynet:///r/test/hub")
+            .upsert_permission_request(invalid_expiry, "easynet:///r/test/authority")
             .expect_err("prompt expiry must be bounded");
         assert!(err
             .to_string()
@@ -2048,7 +2048,7 @@ mod tests {
         let mut store = AccessControlStore::open_or_create_at(default_policy_store_dir(), "alice")
             .expect("store");
         let pending = store
-            .upsert_permission_request(pending_request(), "easynet:///r/test/hub")
+            .upsert_permission_request(pending_request(), "easynet:///r/test/authority")
             .expect("create pending request");
 
         let pending_edit = pending.clone();
@@ -2084,7 +2084,7 @@ mod tests {
         let mut request = PermissionRequest {
             request_id: "req-1".to_string(),
             owner_user_id: "alice".to_string(),
-            caller_ura: "easynet:///r/test/hub".to_string(),
+            caller_ura: "easynet:///r/test/authority".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),

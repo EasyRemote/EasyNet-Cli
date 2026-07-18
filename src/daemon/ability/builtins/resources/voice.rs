@@ -263,7 +263,7 @@ fn hub_authority(envelope: &EnvelopeContext) -> anyhow::Result<&str> {
             envelope.callee()
         )
     })?;
-    if authority.kind != crate::core::ura::URAKind::Hub {
+    if authority.kind != crate::core::ura::URAKind::Authority {
         anyhow::bail!(
             "{}: voice signaling requires a Hub authority callee, got {:?}",
             envelope.ability(),
@@ -723,7 +723,7 @@ mod tests {
     };
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    const HUB_AUTHORITY: &str = "easynet:///r/voice-test/hub";
+    const HUB_AUTHORITY: &str = "easynet:///r/voice-test/authority";
 
     fn fresh_call_id(prefix: &str) -> String {
         format!("{prefix}-{:x}", now_ms())
@@ -1187,7 +1187,7 @@ mod tests {
             1,
         );
         let foreign = VoiceCallAggregate::new(
-            "easynet:///r/foreign-voice/hub".to_string(),
+            "easynet:///r/foreign-voice/authority".to_string(),
             "foreign-call".to_string(),
             Some("mallory".to_string()),
             1,
@@ -1379,14 +1379,14 @@ mod tests {
             .unwrap();
         service
             .create_call(
-                "easynet:///r/other-voice-test/hub",
+                "easynet:///r/other-voice-test/authority",
                 json!({"call_id": call_id}),
             )
             .expect("another Hub authority may use the same local call id");
 
         let primary = service.list_calls(HUB_AUTHORITY, json!({})).unwrap();
         let secondary = service
-            .list_calls("easynet:///r/other-voice-test/hub", json!({}))
+            .list_calls("easynet:///r/other-voice-test/authority", json!({}))
             .unwrap();
         assert_eq!(primary["items"].as_array().map(Vec::len), Some(1));
         assert_eq!(secondary["items"].as_array().map(Vec::len), Some(1));

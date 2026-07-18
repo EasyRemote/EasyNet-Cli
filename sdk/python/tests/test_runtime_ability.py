@@ -40,7 +40,7 @@ class RuntimeTransportFake:
         return json.dumps(
             {
                 "descriptor_ref": (
-                    "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+                    "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#"
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                     f"!{action}"
                 )
@@ -169,7 +169,7 @@ def _client() -> tuple[RuntimeAbilityClient, RuntimeTransportFake]:
 def _call() -> RuntimeCallContext:
     return RuntimeCallContext(
         caller_ura="easynet:///r/example/agent/alice.client",
-        callee_ura="easynet:///r/example/hub",
+        callee_ura="easynet:///r/example/authority",
         subject_ura="easynet:///r/example/user/alice",
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
         causal_context={"form": "none"},
@@ -181,7 +181,7 @@ def test_runtime_ability_builds_complete_canonical_draft() -> None:
     client, transport = _client()
     draft = client.build(_call(), "namespace.resolve", {"name": "alice"})
     assert draft.descriptor_ref == (
-        "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+        "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#"
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
     )
     assert transport.descriptor_requests == [
@@ -203,7 +203,7 @@ def test_runtime_ability_invokes_object_result() -> None:
         "answer_kind": "positive"
     }
     assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+        "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#"
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
     )
 
@@ -317,7 +317,7 @@ def _complete_draft_json() -> dict[str, object]:
         "caller_ura": _call().caller_ura,
         "callee_ura": _call().callee_ura,
         "descriptor_ref": (
-            "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#"
+            "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#"
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
         ),
         "subject_ura": "easynet:///r/example/resource/user.alice/invoke/namespace.resolve",

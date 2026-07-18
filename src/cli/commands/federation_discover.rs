@@ -37,7 +37,7 @@
 // Default plain output:
 //
 //   AGENT_URA                                  NODE_ID    STATUS  ORIGIN_REALM  HUB_ENDPOINT
-//   easynet:///r/realm-a/agent/device-X        device-X   active  realm-a       https://hub-a.example:50443
+//   easynet:///r/realm-a/agent/device-X        device-X   active  realm-a       https://authority-a.example:50443
 //   ...
 //
 // `--json` emits a structured payload:

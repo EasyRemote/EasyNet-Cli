@@ -70,9 +70,11 @@ pub enum AbilityControlPlaneError {
         authority_root: String,
         reason: String,
     },
-    /// A hub-scoped authority context was constructed with a non-Hub URA or
-    /// a value that could not be parsed as a canonical URA.
-    #[error("hub authority root must be a canonical Hub URA: {authority_root:?}: {reason}")]
+    /// A hub-scoped authority context was constructed with a non-authority URA
+    /// or a value that could not be parsed as a canonical URA.
+    #[error(
+        "hub authority root must be the product Hub Authority URA: {authority_root:?}: {reason}"
+    )]
     InvalidHubAuthorityRoot {
         authority_root: String,
         reason: String,

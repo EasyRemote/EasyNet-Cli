@@ -82211,7 +82211,7 @@
         },
         {
           "item": "AxonAddressingTransport",
-          "sha256": "536bc4533166f47dab9029033c067373e783b55d79d7aa95637265b1cf892955"
+          "sha256": "8a34daf14bda8fb464112953a527c3b458eac771c8060844963bbe4f03298a46"
         },
         {
           "item": "agent_ura",
@@ -82459,7 +82459,7 @@
         },
         {
           "item": "AxonAddressingTransport.build_ura",
-          "sha256": "462ecf116ec1fe72e05192f48979d2b18753a8af7fe0d062ba2f27baacc04788"
+          "sha256": "2fb810c0f0b551f7893780454d17e7d502bcb0521dab957daba0175bf6a3fef3"
         },
         {
           "item": "AxonAddressingTransport.close",
@@ -82502,7 +82502,7 @@
             },
             {
               "item": "AxonAddressingTransport",
-              "sha256": "536bc4533166f47dab9029033c067373e783b55d79d7aa95637265b1cf892955"
+              "sha256": "8a34daf14bda8fb464112953a527c3b458eac771c8060844963bbe4f03298a46"
             },
             {
               "item": "agent_ura",
@@ -82750,7 +82750,7 @@
             },
             {
               "item": "AxonAddressingTransport.build_ura",
-              "sha256": "462ecf116ec1fe72e05192f48979d2b18753a8af7fe0d062ba2f27baacc04788"
+              "sha256": "2fb810c0f0b551f7893780454d17e7d502bcb0521dab957daba0175bf6a3fef3"
             },
             {
               "item": "AxonAddressingTransport.close",
@@ -88125,7 +88125,7 @@
         },
         {
           "item": "InvokeResponse",
-          "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+          "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
         },
         {
           "item": "NewInvocationBuilder",
@@ -88436,10 +88436,6 @@
           "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
         },
         {
-          "item": "InvokeResponse.SelectedNodeID",
-          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
-        },
-        {
           "item": "InvokeResponse.State",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -88560,7 +88556,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -88869,10 +88865,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -88995,7 +88987,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -89304,10 +89296,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -89430,7 +89418,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -89739,10 +89727,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -89865,7 +89849,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -90174,10 +90158,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -90300,7 +90280,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -90609,10 +90589,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -90735,7 +90711,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -91044,10 +91020,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -91170,7 +91142,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -91479,10 +91451,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -91605,7 +91573,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -91914,10 +91882,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -92040,7 +92004,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -92349,10 +92313,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -92475,7 +92435,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -92784,10 +92744,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -92910,7 +92866,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -93219,10 +93175,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -93345,7 +93297,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -93654,10 +93606,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -93780,7 +93728,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -94089,10 +94037,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -94215,7 +94159,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -94524,10 +94468,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -94650,7 +94590,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -94959,10 +94899,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -95085,7 +95021,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -95394,10 +95330,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -95520,7 +95452,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -95829,10 +95761,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -95955,7 +95883,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -96264,10 +96192,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -96390,7 +96314,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -96699,10 +96623,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -96825,7 +96745,7 @@
             },
             {
               "item": "InvokeResponse",
-              "sha256": "75223a6e9f49de3ec1c8e40cb88c1803bc46cd0ea4714de5013bc39f0e7faa76"
+              "sha256": "74264b673c1289d0cf606925963bbe50d70b6b2ffef81a3725ab326b9c1e4121"
             },
             {
               "item": "NewInvocationBuilder",
@@ -97134,10 +97054,6 @@
             {
               "item": "InvokeResponse.ResultJSON",
               "sha256": "874612457cdc8d7319303305c10492405e8dd6f1b85c024df63dbfb73046fa1e"
-            },
-            {
-              "item": "InvokeResponse.SelectedNodeID",
-              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "InvokeResponse.State",
@@ -206292,14 +206208,6 @@
           "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
         },
         {
-          "item": "StreamEvent.SchedulingReason",
-          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-        },
-        {
-          "item": "StreamEvent.SelectedNodeID",
-          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-        },
-        {
           "item": "StreamEvent.Sequence",
           "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
         },
@@ -206555,14 +206463,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -206816,14 +206716,6 @@
             {
               "item": "StreamEvent.PayloadJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "StreamEvent.Sequence",
@@ -207081,14 +206973,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -207344,14 +207228,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -207605,14 +207481,6 @@
             {
               "item": "StreamEvent.PayloadJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "StreamEvent.Sequence",
@@ -207870,14 +207738,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -208131,14 +207991,6 @@
             {
               "item": "StreamEvent.PayloadJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "StreamEvent.Sequence",
@@ -208396,14 +208248,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -208657,14 +208501,6 @@
             {
               "item": "StreamEvent.PayloadJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "StreamEvent.Sequence",
@@ -208922,14 +208758,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -209183,14 +209011,6 @@
             {
               "item": "StreamEvent.PayloadJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "StreamEvent.Sequence",
@@ -209448,14 +209268,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -209709,14 +209521,6 @@
             {
               "item": "StreamEvent.PayloadJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "StreamEvent.Sequence",
@@ -209974,14 +209778,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -210235,14 +210031,6 @@
             {
               "item": "StreamEvent.PayloadJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "StreamEvent.Sequence",
@@ -210500,14 +210288,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -210763,14 +210543,6 @@
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
             },
             {
-              "item": "StreamEvent.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "StreamEvent.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
               "item": "StreamEvent.Sequence",
               "sha256": "6eaf89a2aa816ae75475dee70f3e31b2468253c09768a85b7ed768ea8189e0d2"
             },
@@ -210920,7 +210692,7 @@
         },
         {
           "item": "StreamEvent",
-          "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+          "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
         },
         {
           "item": "StreamHandle",
@@ -211025,14 +210797,6 @@
         {
           "item": "StreamEvent.payload_json",
           "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-        },
-        {
-          "item": "StreamEvent.scheduling_reason",
-          "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-        },
-        {
-          "item": "StreamEvent.selected_node_id",
-          "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
         },
         {
           "item": "StreamEvent.sequence",
@@ -211195,7 +210959,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -211300,14 +211064,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -211470,7 +211226,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -211575,14 +211331,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -211745,7 +211493,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -211850,14 +211598,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -212020,7 +211760,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -212125,14 +211865,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -212295,7 +212027,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -212400,14 +212132,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -212570,7 +212294,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -212675,14 +212399,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -212845,7 +212561,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -212950,14 +212666,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -213120,7 +212828,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -213225,14 +212933,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -213395,7 +213095,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -213500,14 +213200,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -213670,7 +213362,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -213775,14 +213467,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -213945,7 +213629,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -214050,14 +213734,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -214220,7 +213896,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -214325,14 +214001,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -214495,7 +214163,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -214600,14 +214268,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -214770,7 +214430,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -214875,14 +214535,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -215045,7 +214697,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -215150,14 +214802,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -215320,7 +214964,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -215425,14 +215069,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -215595,7 +215231,7 @@
             },
             {
               "item": "StreamEvent",
-              "sha256": "484e90d2b2e805efde09e1042b082b085ca3d2a458ed5b3e7bcb85d1cb5cae9c"
+              "sha256": "bc3aea893fa668fa50fbe1f99e199b458a4a3ba92b25b8eb22289a0cecc9ee1a"
             },
             {
               "item": "StreamHandle",
@@ -215700,14 +215336,6 @@
             {
               "item": "StreamEvent.payload_json",
               "sha256": "cc0cba3ac7c431de258f60c30f24191263687a05ceb73a228eccde982c604c97"
-            },
-            {
-              "item": "StreamEvent.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "StreamEvent.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "StreamEvent.sequence",
@@ -258779,6 +258407,10 @@
           "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
         },
         {
+          "item": "InvocationResult.LifecycleState",
+          "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+        },
+        {
           "item": "InvocationResult.OK",
           "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
         },
@@ -258793,14 +258425,6 @@
         {
           "item": "InvocationResult.OutputJSON",
           "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-        },
-        {
-          "item": "InvocationResult.SchedulingReason",
-          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-        },
-        {
-          "item": "InvocationResult.SelectedNodeID",
-          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
         },
         {
           "item": "InvocationResult.TerminalState",
@@ -259158,6 +258782,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -259172,14 +258800,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -259537,6 +259157,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -259551,14 +259175,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -259916,6 +259532,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -259930,14 +259550,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -260295,6 +259907,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -260309,14 +259925,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -260674,6 +260282,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -260688,14 +260300,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -261053,6 +260657,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -261067,14 +260675,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -261432,6 +261032,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -261446,14 +261050,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -261811,6 +261407,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -261825,14 +261425,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -262190,6 +261782,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -262204,14 +261800,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -262569,6 +262157,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -262583,14 +262175,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -262948,6 +262532,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -262962,14 +262550,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -263327,6 +262907,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -263341,14 +262925,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -263706,6 +263282,10 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "InvocationResult.LifecycleState",
+              "sha256": "45326111e9329f4ac8cdb2200f845e5aa7cdf5d139d21daa4e451e5f92b60302"
+            },
+            {
               "item": "InvocationResult.OK",
               "sha256": "bf0469cde6f429f97a88752904491336cba4a35437321b636edd966fbb801b0a"
             },
@@ -263720,14 +263300,6 @@
             {
               "item": "InvocationResult.OutputJSON",
               "sha256": "7d343ee9a24006ca2039d148b1f3e1fd8696013f39e02e208bec23a2332a191b"
-            },
-            {
-              "item": "InvocationResult.SchedulingReason",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
-            },
-            {
-              "item": "InvocationResult.SelectedNodeID",
-              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "InvocationResult.TerminalState",
@@ -263945,7 +263517,7 @@
         },
         {
           "item": "InvocationResult",
-          "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+          "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
         },
         {
           "item": "InvocationResultAdapter",
@@ -264140,6 +263712,10 @@
           "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
         },
         {
+          "item": "InvocationResult.lifecycle_state",
+          "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+        },
+        {
           "item": "InvocationResult.ok",
           "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
         },
@@ -264154,14 +263730,6 @@
         {
           "item": "InvocationResult.output_json",
           "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-        },
-        {
-          "item": "InvocationResult.scheduling_reason",
-          "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-        },
-        {
-          "item": "InvocationResult.selected_node_id",
-          "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
         },
         {
           "item": "InvocationResult.terminal_receipt",
@@ -264376,7 +263944,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -264571,6 +264139,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -264585,14 +264157,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -264807,7 +264371,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -265002,6 +264566,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -265016,14 +264584,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -265238,7 +264798,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -265433,6 +264993,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -265447,14 +265011,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -265669,7 +265225,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -265864,6 +265420,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -265878,14 +265438,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -266100,7 +265652,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -266295,6 +265847,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -266309,14 +265865,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -266531,7 +266079,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -266726,6 +266274,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -266740,14 +266292,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -266962,7 +266506,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -267157,6 +266701,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -267171,14 +266719,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -267393,7 +266933,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -267588,6 +267128,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -267602,14 +267146,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -267824,7 +267360,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -268019,6 +267555,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -268033,14 +267573,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -268255,7 +267787,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -268450,6 +267982,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -268464,14 +268000,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -268686,7 +268214,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -268881,6 +268409,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -268895,14 +268427,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -269117,7 +268641,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -269312,6 +268836,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -269326,14 +268854,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",
@@ -269548,7 +269068,7 @@
             },
             {
               "item": "InvocationResult",
-              "sha256": "a6a0c194e00b124c6017ce1b4854a26e6bcf164fa3745c272ad9c77c8a78b0dd"
+              "sha256": "b6d59ba6a88c2c5cd0fad6afe7d5bfe5c22db2e326af092478ba40656d3e5886"
             },
             {
               "item": "InvocationResultAdapter",
@@ -269743,6 +269263,10 @@
               "sha256": "e1e7b982345834ad065ef121ba2458ed7332031fd22fe56a4e0a3fb7169bbc0c"
             },
             {
+              "item": "InvocationResult.lifecycle_state",
+              "sha256": "c869eaf246575655a57bff6dcfc12e5be59ef107175794459e639c8b02975080"
+            },
+            {
               "item": "InvocationResult.ok",
               "sha256": "76d5472a8f698268a8d3884e9740523345cae9175a964d274ebd7cc89ca79421"
             },
@@ -269757,14 +269281,6 @@
             {
               "item": "InvocationResult.output_json",
               "sha256": "af3351efdcfffd2750251f55ab3637578901b0509153dea713f59f22b48b859f"
-            },
-            {
-              "item": "InvocationResult.scheduling_reason",
-              "sha256": "20decab9f06ac8ddabd980e4f098cebc3aa4fc5176c1fec0672f033632822835"
-            },
-            {
-              "item": "InvocationResult.selected_node_id",
-              "sha256": "db109f334b4cb04b56d1ed7cc80fb7a8892da15e4521303166c00913588a6a4d"
             },
             {
               "item": "InvocationResult.terminal_receipt",

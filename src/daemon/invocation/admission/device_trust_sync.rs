@@ -622,7 +622,11 @@ mod tests {
         }
         let dir = tempfile::tempdir().expect("tmp");
         let sync = sync_with(resolver, &dir);
-        assert!(!sync.ensure_caller_key("easynet:///r/test-realm/hub").await);
+        assert!(
+            !sync
+                .ensure_caller_key("easynet:///r/test-realm/authority")
+                .await
+        );
         assert!(
             !sync
                 .ensure_caller_key_with_presented_pubkey(

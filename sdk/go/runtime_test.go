@@ -742,8 +742,6 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 				"output_content_type": "application/json",
 				"output_base64":       "eyJyZWFkeSI6dHJ1ZX0=",
 				"output_json":         map[string]any{"ready": true},
-				"selected_node_id":    "node-a",
-				"scheduling_reason":   "direct",
 				"elapsed_ms":          12,
 				"admission_receipt":   admission,
 				"terminal_receipt":    terminal,
@@ -769,6 +767,13 @@ func TestRuntimeClientInvokeReturnsTypedResult(t *testing.T) {
 	}
 	if !result.OK() || result.TerminalState() != "Completed" {
 		t.Fatalf("unexpected result: %#v", result)
+	}
+	lifecycleState, err := result.LifecycleState()
+	if err != nil {
+		t.Fatalf("LifecycleState: %v", err)
+	}
+	if lifecycleState != InvocationLifecycleCompleted {
+		t.Fatalf("LifecycleState = %q, want %q", lifecycleState, InvocationLifecycleCompleted)
 	}
 	if result.Tuple().CallerURA() != "easynet:///r/example/agent/alice.sdk" {
 		t.Fatalf("tuple not decoded: %#v", result.Tuple())

@@ -212,8 +212,6 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
             invoke_pb2.InvokeStreamChunk(
                 invocation_id="inv-stream",
                 state=types_pb2.INVOCATION_STATE_RUNNING,
-                selected_node_id="node-direct",
-                scheduling_reason="fake-stream",
                 payload=b'{"chunk":1}',
                 content_type="application/json",
                 sequence=0,
@@ -222,8 +220,6 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
             invoke_pb2.InvokeStreamChunk(
                 invocation_id="inv-stream",
                 state=types_pb2.INVOCATION_STATE_COMPLETED,
-                selected_node_id="node-direct",
-                scheduling_reason="fake-stream",
                 payload=b'{"done":true}',
                 content_type="application/json",
                 sequence=1,
@@ -245,8 +241,6 @@ class RecordingInvocationServicer(invoke_pb2_grpc.InvocationServicer):
             time.sleep(self.invoke_delay_seconds)
         return invoke_pb2.InvokeResponse(
             state=types_pb2.INVOCATION_STATE_COMPLETED,
-            selected_node_id="node-direct",
-            scheduling_reason="fake-daemon",
             result=b'{"ready":true}',
             result_content_type="application/json",
             elapsed_ms=9,
@@ -534,15 +528,12 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(result["ok"], True)
         self.assertEqual(result["terminal_state"], "Completed")
         self.assertEqual(result["output_json"], {"ready": True})
-        self.assertEqual(result["selected_node_id"], "node-direct")
         receipt = cast(dict[str, object], result["terminal_receipt"])
         self.assertEqual(receipt["invocation_id"], "inv-direct")
         _assert_complete_receipt_projection(self, receipt)
 
         self.assertEqual(len(servicer.requests), 1)
         request = servicer.requests[0]
-        self.assertEqual(request.function_name, ABILITY_PUBLIC_NAME)
-        self.assertEqual(request.target.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.WhichOneof("typed_target"), "ability")
         self.assertEqual(request.target.ability.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.ability.function_name, ABILITY_PUBLIC_NAME)
@@ -743,10 +734,8 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(request.arguments, b"\x00\x01\x02")
         self.assertEqual(request.envelope.caller_signature.signature, signature)
         self.assertEqual(request.envelope.caller_signature.key_id_hint, "caller-key")
-        self.assertEqual(request.target.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.ability.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.ability.function_name, "observe.health")
-        self.assertEqual(request.function_name, "observe.health")
         self.assertNotIn("x-easynet-signed-descriptor-ref", request.metadata)
         tuple_projection = cast(dict[str, object], result["tuple"])
         self.assertEqual(tuple_projection, draft.to_json_dict())
@@ -878,10 +867,6 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertEqual(servicer.requests[0].metadata["shape"], '{"a":1,"b":2}')
         self.assertNotIn("empty", servicer.requests[0].metadata)
         self.assertEqual(
-            servicer.requests[0].target.ability_name,
-            DESCRIPTOR_REF,
-        )
-        self.assertEqual(
             servicer.requests[0].target.ability.function_name,
             "observe.health",
         )
@@ -921,8 +906,6 @@ class DirectRuntimeTests(unittest.TestCase):
         self.assertTrue(terminal["terminal"])
         self.assertEqual(len(servicer.stream_requests), 1)
         request = servicer.stream_requests[0]
-        self.assertEqual(request.function_name, ABILITY_PUBLIC_NAME)
-        self.assertEqual(request.target.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.WhichOneof("typed_target"), "ability")
         self.assertEqual(request.target.ability.ability_name, DESCRIPTOR_REF)
         self.assertEqual(request.target.ability.function_name, ABILITY_PUBLIC_NAME)
@@ -1037,7 +1020,6 @@ class DirectRuntimeTests(unittest.TestCase):
             envelope_open.envelope.subject.ura,
             "easynet:///r/example/device/dev-a",
         )
-        self.assertEqual(envelope_open.target.ability_name, DESCRIPTOR_REF)
         self.assertEqual(envelope_open.target.WhichOneof("typed_target"), "ability")
         self.assertEqual(envelope_open.target.ability.ability_name, DESCRIPTOR_REF)
         self.assertEqual(
@@ -1773,8 +1755,6 @@ class DirectRuntimeTests(unittest.TestCase):
         first = json.loads(raw_first.decode("utf-8"))
         self.assertFalse(first["terminal"])
         self.assertEqual(first["state"], "Running")
-        self.assertEqual(first["selected_node_id"], "node-direct")
-        self.assertEqual(first["scheduling_reason"], "fake-stream")
         terminal = json.loads(raw_terminal.decode("utf-8"))
         self.assertNotIn("receipt", terminal)
         receipt = cast(dict[str, object], terminal["terminal_receipt"])

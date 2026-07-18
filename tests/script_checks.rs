@@ -190,8 +190,8 @@ fn credentials_username_contract_script_holds() {
 
 #[test]
 fn canonical_hub_ura_boundary_script_holds() {
-    // Pins realm Hub identity to Axon's canonical /hub builder/parser
-    // and keeps Hub identities singleton-only.
+    // Pins product Hub identity to Axon's canonical /authority builder/parser
+    // and keeps the projected identity singleton-only.
     run_bash_script("tests/scripts/test_check_canonical_hub_ura_boundary.sh");
 }
 

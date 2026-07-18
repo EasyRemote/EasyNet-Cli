@@ -762,7 +762,7 @@ impl FederatedDirectorySubscriptionIssuer {
         let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
             anyhow::anyhow!("directory subscription signer URA is invalid: {error}")
         })?;
-        if parsed.kind != crate::core::ura::URAKind::Hub {
+        if parsed.kind != crate::core::ura::URAKind::Authority {
             anyhow::bail!(
                 "directory subscription signer must be bound to a Hub URA; got `{owner_ura}`"
             );

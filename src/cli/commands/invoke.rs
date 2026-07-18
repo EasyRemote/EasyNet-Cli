@@ -57,7 +57,7 @@ pub struct InvokeArgs {
     pub ability_ura: String,
     /// Pin the invocation to a remote node: a canonical Device URA
     /// (`easynet:///r/<realm>/device/<node_id>`) or Hub URA
-    /// (`easynet:///r/<realm>/hub`). The call routes through the
+    /// (`easynet:///r/<realm>/authority`). The call routes through the
     /// local daemon's canonical `Invocation::Invoke` RPC — the
     /// cross-device main channel. Requires the `axon-pb` feature
     /// (production builds always enable it); minimal builds reject
@@ -154,29 +154,38 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             let caller_ura =
                 crate::support::platform::remote_device::caller_device_ura(&credentials)?;
             let target_call = ability_ref.remote_target(target)?;
-            let subject = invoke_args
+            let subject = if let Some(subject) = invoke_args
                 .subject
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(str::to_string)
-                .or_else(|| default_owner_invoke_subject(&credentials, ability_selector))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "remote ability invoke requires --subject when paired credentials do not \
-                         identify an owner user"
-                    )
-                })?;
-            let request =
-                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
-                    &target_call,
-                    caller_ura,
+            {
+                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject::Explicit(
                     subject,
-                    axon_sdk::invocation::fresh_nonce(),
-                    axon_sdk::invocation::CausalContext::None,
-                    arguments,
-                    timeout,
-                )?;
+                )
+            } else {
+                let subject =
+                    default_owner_invoke_subject(&credentials, ability_selector).ok_or_else(
+                        || {
+                            anyhow::anyhow!(
+                                "remote ability invoke requires --subject when paired credentials do not \
+                                 identify an owner user"
+                            )
+                        },
+                    )?;
+                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationSubject::PairedOwnerDerived(
+                    subject,
+                )
+            };
+            let request = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_root(
+                &target_call,
+                caller_ura,
+                subject,
+                arguments,
+                timeout,
+            )?
+            .into_request()?;
             let value =
                 crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request)?;
             (value, format!("canonical Invoke target={target}"))
@@ -434,7 +443,7 @@ mod tests {
         let credentials = crate::daemon::persistence::config::Credentials {
             node_id: "node-a".to_string(),
             credential_token: "token".to_string(),
-            hub_endpoint: "https://hub.example".to_string(),
+            hub_endpoint: "https://authority.example".to_string(),
             realm: "easynet.run".to_string(),
             deploy_signature: String::new(),
             hub_api_base: None,

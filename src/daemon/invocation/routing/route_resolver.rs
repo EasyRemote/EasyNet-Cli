@@ -768,7 +768,7 @@ impl<'a> DaemonRouteResolver<'a> {
 
             let is_hub_owner = crate::core::ura::parse_ura(&selector.owner_ura)
                 .ok()
-                .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Hub);
+                .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Authority);
             if is_hub_owner
                 && device_local
                     .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
@@ -1404,7 +1404,7 @@ fn selected_execution_for_owner(
     advertised_agents: Option<&AdvertisedAgentStore>,
 ) -> Result<(SelectedRouteKind, String, String, Option<String>), ResolveRouteFailure> {
     match crate::core::ura::parse_ura(owner_ura).map(|parsed| parsed.kind) {
-        Ok(crate::core::ura::URAKind::Hub) => {
+        Ok(crate::core::ura::URAKind::Authority) => {
             let realm = crate::core::ura::parse_ura(owner_ura)
                 .ok()
                 .map(|parsed| parsed.realm)
@@ -1584,7 +1584,7 @@ fn device_id_from_device_ura(device_ura: &str) -> Option<String> {
 fn local_authority_route_kind(local_authority_ura: &str) -> SelectedRouteKind {
     if crate::core::ura::parse_ura(local_authority_ura)
         .ok()
-        .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Hub)
+        .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Authority)
     {
         SelectedRouteKind::HubOwned
     } else {
@@ -1816,7 +1816,7 @@ fn cache_policy_json() -> Value {
 
 fn ura_kind_name(ura: &str) -> &'static str {
     match crate::core::ura::parse_ura(ura).map(|parsed| parsed.kind) {
-        Ok(crate::core::ura::URAKind::Hub) => UraKind::Hub.as_str_name(),
+        Ok(crate::core::ura::URAKind::Authority) => UraKind::Hub.as_str_name(),
         Ok(crate::core::ura::URAKind::Device) => UraKind::Device.as_str_name(),
         Ok(crate::core::ura::URAKind::User) => UraKind::User.as_str_name(),
         Ok(crate::core::ura::URAKind::Agent) => UraKind::Agent.as_str_name(),

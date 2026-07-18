@@ -529,16 +529,16 @@ mod tests {
     #[test]
     fn local_ability_target_uses_ability_subject_for_hub_owner() {
         let selector = crate::core::ura::AbilitySelector::parse(
-            "easynet:///r/acme/ability/hub.federation.resolve",
+            "easynet:///r/acme/ability/authority.federation.resolve",
         )
         .expect("hub ability selector");
         let target = LocalAbilityTarget::from_selector(&selector);
 
         assert_eq!(target.dispatch_name(), "federation.resolve");
-        assert_eq!(target.callee_ura(), "easynet:///r/acme/hub");
+        assert_eq!(target.callee_ura(), "easynet:///r/acme/authority");
         assert_eq!(
             target.default_subject_ura(),
-            "easynet:///r/acme/ability/hub.federation.resolve"
+            "easynet:///r/acme/ability/authority.federation.resolve"
         );
     }
 

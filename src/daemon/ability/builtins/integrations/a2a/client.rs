@@ -64,6 +64,10 @@ use crate::daemon::ability::builtins::agents::discover::{
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
 use crate::daemon::ability::dispatch::OwnerKind;
+#[cfg(feature = "axon-pb")]
+use crate::daemon::invocation::routing::remote_invoke::{
+    RemoteInvocationSubject, RemoteInvocationTuplePlan,
+};
 pub const ABILITY_SEND_TASK: &str =
     crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK;
 
@@ -257,23 +261,23 @@ fn send_task_handler(
                 )))
             }
         };
-        let request =
-            match crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
-                &target_call,
-                _env.callee(),
-                target_call.callee_ura(),
-                axon_sdk::invocation::fresh_nonce(),
-                causal_context,
-                task_args,
-                Duration::from_secs(30),
-            ) {
-                Ok(request) => request,
-                Err(error) => {
-                    return Ok(error_response(&format!(
-                        "build canonical remote invocation: {error}"
-                    )))
-                }
-            };
+        let request = match RemoteInvocationTuplePlan::public_with_causal_context(
+            &target_call,
+            _env.callee(),
+            RemoteInvocationSubject::Explicit(target_call.callee_ura().to_string()),
+            causal_context,
+            task_args,
+            Duration::from_secs(30),
+        )
+        .and_then(|plan| plan.into_request())
+        {
+            Ok(request) => request,
+            Err(error) => {
+                return Ok(error_response(&format!(
+                    "build canonical remote invocation: {error}"
+                )))
+            }
+        };
         match crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request) {
             Ok(value) => Ok(json!({ "ok": true, "result": value })),
             Err(e) => Ok(error_response(&format!("{e}"))),
@@ -402,7 +406,7 @@ fn a2a_agent_matches_target(
         crate::core::ura::URAKind::Device => target
             .device_id()
             .is_some_and(|target_node_id| agent.host_node_id.as_deref() == Some(target_node_id)),
-        crate::core::ura::URAKind::Hub => agent_ura.realm == target.realm,
+        crate::core::ura::URAKind::Authority => agent_ura.realm == target.realm,
         _ => false,
     }
 }

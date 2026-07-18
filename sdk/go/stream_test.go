@@ -98,7 +98,7 @@ func (m *memoryStreamTransport) Close(ctx context.Context) error {
 
 func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	transport := &memoryStreamTransport{events: []string{
-		`{"sequence":1,"kind":"data","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"step":1},"selected_node_id":"node-a","scheduling_reason":"direct","elapsed_ms":11}`,
+		`{"sequence":1,"kind":"data","state":"Open","terminal":false,"payload_content_type":"application/json","payload_json":{"step":1},"elapsed_ms":11}`,
 		`{"sequence":2,"kind":"terminal","state":"Completed","terminal":true,"payload_content_type":"application/json","payload_json":{"ok":true}}`,
 	}}
 	stream, err := NewStreamHandleFromJSON(transport, []byte(`{"stream_id":"stream-1","state":"Opening","max_buffered_events":4}`))
@@ -113,8 +113,8 @@ func TestStreamHandleOrdersEventsAndClosesAfterTerminal(t *testing.T) {
 	if first.Sequence() != 1 || stream.State() != StreamOpen {
 		t.Fatalf("unexpected first event/state: %#v state=%s", first, stream.State())
 	}
-	if first.SelectedNodeID() != "node-a" || first.SchedulingReason() != "direct" || first.ElapsedMS() != 11 {
-		t.Fatalf("stream routing metadata not preserved: node=%q reason=%q elapsed=%d", first.SelectedNodeID(), first.SchedulingReason(), first.ElapsedMS())
+	if first.ElapsedMS() != 11 {
+		t.Fatalf("stream elapsed time = %d, want 11", first.ElapsedMS())
 	}
 	terminal, err := stream.Next(context.Background())
 	if err != nil {

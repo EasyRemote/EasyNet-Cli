@@ -31,12 +31,6 @@
       "type": "string"
     },
     "output_json": true,
-    "selected_node_id": {
-      "type": "string"
-    },
-    "scheduling_reason": {
-      "type": "string"
-    },
     "elapsed_ms": {
       "type": "integer",
       "minimum": 0

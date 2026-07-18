@@ -300,7 +300,7 @@ func TestAuthorityClientMintsSessionAuthorityThroughTransport(t *testing.T) {
 
 func TestAuthorityClientProjectsCanonicalPrincipalURAsToCurrentSessionWire(t *testing.T) {
 	payload := sessionAuthorityPayloadFixture()
-	payload["creator_principal_id"] = "easynet:///r/example/hub"
+	payload["creator_principal_id"] = "easynet:///r/example/authority"
 	value := authorityMetadataFixture(t, payload, []byte("session-signature"))
 	transport := &memoryAuthorityTransport{
 		sessionJSON: []byte(`{"metadata":{"` + SessionAuthorityMetadataKey + `":"` + value + `"}}`),
@@ -314,7 +314,7 @@ func TestAuthorityClientProjectsCanonicalPrincipalURAsToCurrentSessionWire(t *te
 		IssuerURA:                "easynet:///r/example/agent/backend",
 		SessionID:                "session-1",
 		SessionOwnerURA:          "easynet:///r/example/user/alice",
-		CreatorPrincipalURA:      "easynet:///r/example/hub",
+		CreatorPrincipalURA:      "easynet:///r/example/authority",
 		CalleeURA:                "easynet:///r/example/device/dev-a",
 		SubjectURA:               "easynet:///r/example/resource/user.alice/session/session-1",
 		Audience:                 "easynet:///r/example/device/dev-a",
@@ -327,10 +327,10 @@ func TestAuthorityClientProjectsCanonicalPrincipalURAsToCurrentSessionWire(t *te
 	if err != nil {
 		t.Fatalf("MintSessionAuthority: %v", err)
 	}
-	if authority.SessionOwnerURA != "easynet:///r/example/user/alice" || authority.CreatorPrincipalURA != "easynet:///r/example/hub" {
+	if authority.SessionOwnerURA != "easynet:///r/example/user/alice" || authority.CreatorPrincipalURA != "easynet:///r/example/authority" {
 		t.Fatalf("canonical authority principals not projected: %#v", authority)
 	}
-	if transport.seenSession["session_owner_user_id"] != "alice" || transport.seenSession["creator_principal_id"] != "easynet:///r/example/hub" {
+	if transport.seenSession["session_owner_user_id"] != "alice" || transport.seenSession["creator_principal_id"] != "easynet:///r/example/authority" {
 		t.Fatalf("canonical principals not lowered to current wire: %#v", transport.seenSession)
 	}
 	if _, ok := transport.seenSession["session_owner_ura"]; ok {

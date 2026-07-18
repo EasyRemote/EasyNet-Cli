@@ -148,11 +148,11 @@ impl MissionInvocationRequest {
     ) -> anyhow::Result<Self> {
         let target_ura = target_ura.into();
         let target_ura = target_ura.trim();
-        let parsed = axon_sdk::ura::parse_ura(target_ura)
+        let parsed = crate::core::ura::parse_ura(target_ura)
             .map_err(|error| anyhow::anyhow!("invalid remote Mission target URA: {error}"))?;
         if !matches!(
             parsed.kind,
-            axon_sdk::ura::URAKind::Device | axon_sdk::ura::URAKind::Hub
+            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
         ) {
             anyhow::bail!(
                 "remote Mission target must be a Device or Hub URA, got {}",
@@ -270,7 +270,7 @@ impl MissionInvocationRecord {
         let subject =
             SubjectIdentity::new("easynet:///r/test/resource/mission", UraProfile::StrictV2);
         let invocation_id = format!("mission-test-{marker:02x}");
-        let invocation_ura = axon_sdk::ura::invocation_record_ura_for_binding(
+        let invocation_ura = crate::core::ura::invocation_record_ura_for_binding(
             &subject.ura,
             &callee.ura,
             &caller.ura,
@@ -791,7 +791,7 @@ fn canonical_invocation_ura(
     invocation_id: &str,
     envelope: &axon_sdk::invocation::InvocationEnvelope,
 ) -> anyhow::Result<String> {
-    axon_sdk::ura::invocation_record_ura_for_binding(
+    crate::core::ura::invocation_record_ura_for_binding(
         &envelope.subject.ura,
         &envelope.callee.ura,
         &envelope.caller.ura,

@@ -725,8 +725,6 @@ type InvocationResult struct {
 	outputContentType       string
 	outputBase64            string
 	outputJSON              json.RawMessage
-	selectedNodeID          string
-	schedulingReason        string
 	elapsedMS               int64
 	admissionReceipt        json.RawMessage
 	terminalReceipt         json.RawMessage
@@ -1701,6 +1699,21 @@ func (r InvocationResult) TerminalState() string {
 	return r.terminalState
 }
 
+// LifecycleState returns the fail-closed canonical terminal lifecycle state.
+func (r InvocationResult) LifecycleState() (InvocationLifecycleState, error) {
+	state, err := ParseInvocationLifecycleState(r.terminalState)
+	if err != nil {
+		return InvocationLifecycleUnspecified, err
+	}
+	if !state.IsTerminal() {
+		return InvocationLifecycleUnspecified, invalidRuntimePayload(
+			"invocation result lifecycle state must be terminal",
+			nil,
+		)
+	}
+	return state, nil
+}
+
 func (r InvocationResult) OutputContentType() string {
 	return r.outputContentType
 }
@@ -1711,14 +1724,6 @@ func (r InvocationResult) OutputBase64() string {
 
 func (r InvocationResult) OutputJSON() json.RawMessage {
 	return append(json.RawMessage(nil), r.outputJSON...)
-}
-
-func (r InvocationResult) SelectedNodeID() string {
-	return r.selectedNodeID
-}
-
-func (r InvocationResult) SchedulingReason() string {
-	return r.schedulingReason
 }
 
 func (r InvocationResult) ElapsedMS() int64 {
@@ -1778,8 +1783,6 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		OutputContentType string          `json:"output_content_type"`
 		OutputBase64      string          `json:"output_base64"`
 		OutputJSON        json.RawMessage `json:"output_json"`
-		SelectedNodeID    string          `json:"selected_node_id"`
-		SchedulingReason  string          `json:"scheduling_reason"`
 		ElapsedMS         int64           `json:"elapsed_ms"`
 		AdmissionReceipt  json.RawMessage `json:"admission_receipt"`
 		TerminalReceipt   json.RawMessage `json:"terminal_receipt"`
@@ -1853,8 +1856,6 @@ func NewInvocationResultFromJSON(raw []byte) (InvocationResult, error) {
 		outputContentType:       dto.OutputContentType,
 		outputBase64:            dto.OutputBase64,
 		outputJSON:              append(json.RawMessage(nil), dto.OutputJSON...),
-		selectedNodeID:          dto.SelectedNodeID,
-		schedulingReason:        dto.SchedulingReason,
 		elapsedMS:               dto.ElapsedMS,
 		admissionReceipt:        admissionReceipt,
 		terminalReceipt:         terminalReceipt,

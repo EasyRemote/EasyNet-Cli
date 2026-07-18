@@ -35,7 +35,7 @@ func TestManagedSigningClientConformsToDaemonKeyServiceProtocol(t *testing.T) {
 		keyID2     = "managed-key-2"
 		subjectURA = "easynet:///r/acme/agent/signer.main"
 		peerURA    = "easynet:///r/peer/agent/verifier.main"
-		viaHubURA  = "easynet:///r/acme/hub"
+		viaHubURA  = "easynet:///r/acme/authority"
 	)
 
 	requestCount := 0

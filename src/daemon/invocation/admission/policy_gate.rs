@@ -240,11 +240,11 @@ fn owner_fact_from_ura(
                     daemon_ura,
                 )
             }),
-            AbilityOwner::Hub => {
+            AbilityOwner::Authority => {
                 owner_fact_from_local_device(&crate::core::ura::hub_ura(&parsed.realm), daemon_ura)
             }
         }),
-        URAKind::Device | URAKind::Hub => owner_fact_from_trust_anchor(ura, trust_anchor)
+        URAKind::Device | URAKind::Authority => owner_fact_from_trust_anchor(ura, trust_anchor)
             .or_else(|| owner_fact_from_local_device(ura, daemon_ura)),
         URAKind::Resource => resource_owner_user_id(&parsed).map(|user_id| {
             OwnerFact::user(
@@ -274,7 +274,7 @@ fn owner_fact_from_local_device(ura: &str, daemon_ura: Option<&str>) -> Option<O
                     .device_id()
                     .is_some_and(|device_id| device_id == credentials.node_id.as_str())
         }
-        URAKind::Hub => Some(ura) == daemon_ura || parsed.realm == credentials.realm,
+        URAKind::Authority => Some(ura) == daemon_ura || parsed.realm == credentials.realm,
         _ => Some(ura) == daemon_ura,
     };
     if !is_local_identity {
@@ -318,7 +318,7 @@ fn remote_owner_forward_allowed(
     let Ok(local) = parse_ura(daemon_ura) else {
         return false;
     };
-    if local.kind != URAKind::Hub {
+    if local.kind != URAKind::Authority {
         return false;
     }
     let Ok(caller) = parse_ura(caller_ura) else {
@@ -423,7 +423,7 @@ mod tests {
     fn anchor_with_peer_realm() -> RealmTrustAnchor {
         RealmTrustAnchor::from_parts_with_principal_owners(
             vec![TrustedAgent {
-                agent_ura: "easynet:///r/peer/hub".to_string(),
+                agent_ura: "easynet:///r/peer/authority".to_string(),
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1,
@@ -442,8 +442,8 @@ mod tests {
         let anchor = anchor_with_device_owner();
         let owner = resolve_owner(
             "easynet:///r/test/device/dev-1",
-            "easynet:///r/test/hub",
-            Some("easynet:///r/test/hub"),
+            "easynet:///r/test/authority",
+            Some("easynet:///r/test/authority"),
             &anchor,
         );
 
@@ -461,8 +461,8 @@ mod tests {
         let anchor = empty_anchor();
         let owner = resolve_owner(
             "easynet:///r/test/device/dev-1",
-            "easynet:///r/test/hub",
-            Some("easynet:///r/test/hub"),
+            "easynet:///r/test/authority",
+            Some("easynet:///r/test/authority"),
             &anchor,
         );
 
@@ -480,8 +480,8 @@ mod tests {
         let anchor = empty_anchor();
         let owner = resolve_owner(
             "easynet:///r/test/ability/device.dev-1.federation.advertise_abilities",
-            "easynet:///r/test/hub",
-            Some("easynet:///r/test/hub"),
+            "easynet:///r/test/authority",
+            Some("easynet:///r/test/authority"),
             &anchor,
         );
 
@@ -524,7 +524,7 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let stores = AccessControlStoreRegistry::ephemeral();
         let envelope = Envelope {
-            caller: Some(identity("easynet:///r/test/hub")),
+            caller: Some(identity("easynet:///r/test/authority")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
             subject: Some(SubjectIdentity {
                 ura: "easynet:///r/test/user/alice".to_string(),
@@ -550,7 +550,10 @@ mod tests {
         assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
         assert_eq!(decision.reason, PolicyDecisionReason::HubTokenReadAllow);
         assert_eq!(decision.principal_kind, PrincipalKind::Token);
-        assert_eq!(decision.token_id.as_deref(), Some("easynet:///r/test/hub"));
+        assert_eq!(
+            decision.token_id.as_deref(),
+            Some("easynet:///r/test/authority")
+        );
     }
 
     #[test]
@@ -558,7 +561,7 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let stores = AccessControlStoreRegistry::ephemeral();
         let envelope = Envelope {
-            caller: Some(identity("easynet:///r/test/hub")),
+            caller: Some(identity("easynet:///r/test/authority")),
             callee: Some(identity("easynet:///r/test/agent/alice.worker")),
             subject: Some(SubjectIdentity {
                 ura: "easynet:///r/test/user/alice".to_string(),
@@ -608,13 +611,13 @@ mod tests {
             action: AccessAction::Invoke,
             safe_read: false,
             trusted_role: TrustedAgentRole::Device,
-            daemon_ura: Some("easynet:///r/local/hub"),
+            daemon_ura: Some("easynet:///r/local/authority"),
             trust_anchor: &anchor_with_peer_realm(),
             access_control_stores: &stores,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
             verified_authority_id: None,
-            rejector_ura: Some("easynet:///r/local/hub".to_string()),
+            rejector_ura: Some("easynet:///r/local/authority".to_string()),
         })
         .expect("local hub may forward to an operator-pinned peer realm");
 
@@ -626,7 +629,7 @@ mod tests {
         assert_eq!(decision.owner_user_id.as_deref(), Some("bob"));
         assert_eq!(
             decision.rejector_ura.as_deref(),
-            Some("easynet:///r/local/hub")
+            Some("easynet:///r/local/authority")
         );
     }
 
@@ -649,13 +652,13 @@ mod tests {
             action: AccessAction::Invoke,
             safe_read: false,
             trusted_role: TrustedAgentRole::Device,
-            daemon_ura: Some("easynet:///r/local/hub"),
+            daemon_ura: Some("easynet:///r/local/authority"),
             trust_anchor: &empty_anchor(),
             access_control_stores: &stores,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: None,
             verified_authority_id: None,
-            rejector_ura: Some("easynet:///r/local/hub".to_string()),
+            rejector_ura: Some("easynet:///r/local/authority".to_string()),
         })
         .expect_err("untrusted remote realm cannot use the forward allow state");
 
@@ -670,7 +673,7 @@ mod tests {
 
     #[test]
     fn policy_ability_projection_accepts_descriptor_ref_without_rewrapping() {
-        let callee = "easynet:///r/test/hub";
+        let callee = "easynet:///r/test/authority";
         let ability_ura = crate::core::ura::owner_ability_ura(callee, "identity.register_pubkey")
             .expect("hub ability URA");
         let descriptor_binding =

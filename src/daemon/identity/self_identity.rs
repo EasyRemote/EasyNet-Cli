@@ -75,7 +75,7 @@ pub enum SelfIdentityError {
 }
 
 /// The minimal contract every callsite needs. Caller passes a
-/// `self_ura` (e.g. `easynet:///r/<realm>/hub` or
+/// `self_ura` (e.g. `easynet:///r/<realm>/authority` or
 /// `easynet:///r/<realm>/device/<uuid>`) and the canonical bytes
 /// to sign; gets back a 64-byte ed25519 signature.
 pub trait SelfIdentity: Send + Sync {

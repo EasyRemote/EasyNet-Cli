@@ -859,7 +859,7 @@ fn validate_join_tuple(
             "federation.join bootstrap subject is invalid: {error}"
         ))
     })?;
-    if callee.kind != crate::core::ura::URAKind::Hub
+    if callee.kind != crate::core::ura::URAKind::Authority
         || subject_parsed.kind != crate::core::ura::URAKind::Device
         || join.membership_ura != subject
         || join.realm != callee.realm

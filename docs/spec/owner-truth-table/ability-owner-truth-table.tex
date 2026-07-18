@@ -147,7 +147,7 @@ shapes below. Other "URA-shaped" tokens that have appeared in practice
   \code{device}   & \codew{easynet:///r/<realm>/device/<device-uuid>}                       & device-uuid is bare \\
   \code{agent}    & \codew{easynet:///r/<realm>/agent/<user-uuid>.<agent-id>}               & exactly one \code{.} in tail; both segments non-empty; agent-id has no \code{.} \\
   \code{ability}  & \codew{easynet:///r/<realm>/ability/<user-uuid>.<agent-id>.<ability-id>} & exactly two leading \code{.}s; ability-id may itself contain \code{.}s (e.g.\ \code{fs.read}) \\
-  \code{hub}      & \codew{easynet:///r/<realm>/hub}                                        & realm-singleton; no tail; no sub-id; extra tail segments are invalid \\
+  \code{hub}      & \codew{easynet:///r/<realm>/authority}                                  & realm-singleton; no tail; no sub-id; extra tail segments are invalid \\
   \code{resource} & \codew{easynet:///r/<realm>/resource/<user-uuid>/<ns>/<path>}           & \code{<ns>}~$\in$~\{\code{fs}, \code{process}, \code{pty}, \code{shell}, \code{http}\}; v4.1.5 also accepts \codew{resource/<user>.<owner-tail>/<path>} for content-addressed owners \\
   \bottomrule
 \end{tabularx}
@@ -267,7 +267,7 @@ authoritative source for the owner per~P2.
       \codew{profiles::consent}; \codew{profiles::policy}; \codew{profiles::mcp} \\
 
   9 & \code{voice.*}, \codew{hub.openai.*}, \codew{hub.<namespace>.*} &
-      \code{hub} (\codew{easynet:///r/<r>/hub}, realm-singleton) &
+      \code{hub} (\codew{easynet:///r/<r>/authority}, realm-singleton) &
       \code{=callee} or per-verb resource URA &
       \codew{voice::register}; \codew{media::register}; \codew{openai_compat_ability::register} \\
 
@@ -665,7 +665,7 @@ fixture --- they are re-exported per agent, not device-wide.
 Microphone and speaker handles remain Device-owned resources under
 \codew{mic.*} and \codew{speaker.*}.  The \code{voice.*} namespace is
 realm-shared state and therefore has one canonical owner:
-\codew{easynet:///r/<r>/hub}.  The call registry is keyed by the pair
+\codew{easynet:///r/<r>/authority}.  The call registry is keyed by the pair
 \code{(hub authority URA, call\_id)}; Device and LLM profiles must not
 re-export these descriptors, and there is no Device proxy alias.
 

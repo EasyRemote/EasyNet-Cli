@@ -60,8 +60,6 @@ class MemoryRuntimeTransport:
                 "output_content_type": "application/json",
                 "output_base64": "eyJyZWFkeSI6dHJ1ZX0=",
                 "output_json": {"ready": True},
-                "selected_node_id": "node-a",
-                "scheduling_reason": "direct",
                 "elapsed_ms": 12,
                 "admission_receipt": admission,
                 "terminal_receipt": terminal,
@@ -662,12 +660,12 @@ class RuntimeTests(unittest.TestCase):
                 "output_content_type",
                 "output_base64",
                 "output_json",
-                "selected_node_id",
-                "scheduling_reason",
                 "elapsed_ms",
                 "error",
                 "admission_receipt",
                 "admission_receipt_summary",
+                "terminal_receipt",
+                "terminal_receipt_summary",
             ],
         )
 
@@ -692,6 +690,10 @@ class RuntimeTests(unittest.TestCase):
             terminal_receipt_summary=RuntimeReceipt.from_mapping(terminal),
         )
         self.assertTrue(result.ok)
+        self.assertIs(
+            result.lifecycle_state,
+            InvocationLifecycleState.COMPLETED,
+        )
 
         with self.assertRaises(SDKError):
             InvocationResult(

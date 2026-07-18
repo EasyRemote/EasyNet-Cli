@@ -147,10 +147,39 @@ pub(crate) struct LocalDaemonAbilityClient;
 
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum LocalDaemonSubjectPolicy {
+enum LocalDaemonLoopbackCalleePolicy {
+    LocalDaemon,
     Explicit(String),
-    DeclaredDefault(String),
-    SelfTarget,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalDaemonLoopbackSubjectPolicy {
+    Explicit(String),
+    CallerDeclaredSubject(String),
+    TargetSelf,
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, PartialEq)]
+enum LocalDaemonLoopbackDerivationPolicy {
+    FreshRoot,
+    ExplicitCausal {
+        invocation_nonce: [u8; 16],
+        causal_context: axon_sdk::pb::axon::v1::CausalContext,
+    },
+}
+
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone)]
+struct LocalDaemonLoopbackTuplePlan {
+    function_name: String,
+    payload_json: serde_json::Value,
+    caller_ura: String,
+    callee_policy: LocalDaemonLoopbackCalleePolicy,
+    subject_policy: LocalDaemonLoopbackSubjectPolicy,
+    derivation_policy: LocalDaemonLoopbackDerivationPolicy,
+    timeout: Duration,
 }
 
 pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
@@ -165,31 +194,61 @@ pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
 }
 
 #[cfg(feature = "axon-pb")]
-impl LocalDaemonSubjectPolicy {
-    fn explicit_or_self_target(subject: Option<String>) -> anyhow::Result<Self> {
+impl LocalDaemonLoopbackCalleePolicy {
+    fn local_daemon() -> Self {
+        Self::LocalDaemon
+    }
+
+    fn explicit(callee_ura: &str) -> anyhow::Result<Self> {
+        Ok(Self::Explicit(normalized_local_daemon_ura(
+            callee_ura,
+            "callee_ura",
+        )?))
+    }
+
+    fn resolve(&self) -> anyhow::Result<String> {
+        match self {
+            Self::LocalDaemon => Ok(local_daemon_default_callee_ura()),
+            Self::Explicit(callee_ura) => normalized_local_daemon_ura(callee_ura, "callee_ura"),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl LocalDaemonLoopbackSubjectPolicy {
+    fn required_explicit(subject_ura: &str) -> anyhow::Result<Self> {
+        Ok(Self::Explicit(normalized_local_daemon_ura(
+            subject_ura,
+            "subject_ura",
+        )?))
+    }
+
+    fn explicit_or_target_self(subject: Option<String>) -> anyhow::Result<Self> {
         match Self::explicit(subject)? {
             Some(subject) => Ok(subject),
-            None => Ok(Self::SelfTarget),
+            None => Ok(Self::TargetSelf),
         }
     }
 
-    fn explicit_or_declared_default(
-        default_subject_ura: &str,
+    fn explicit_or_caller_declared(
+        caller_declared_subject_ura: &str,
         subject: Option<String>,
     ) -> anyhow::Result<Self> {
         match Self::explicit(subject)? {
             Some(subject) => Ok(subject),
-            None => Ok(Self::DeclaredDefault(Self::normalized_ura(
-                default_subject_ura,
-                "default_subject_ura",
+            None => Ok(Self::CallerDeclaredSubject(normalized_local_daemon_ura(
+                caller_declared_subject_ura,
+                "caller_declared_subject_ura",
             )?)),
         }
     }
 
     fn resolve(&self, callee_ura: &str) -> anyhow::Result<String> {
         match self {
-            Self::Explicit(subject) | Self::DeclaredDefault(subject) => Ok(subject.clone()),
-            Self::SelfTarget => Self::normalized_ura(callee_ura, "callee_ura"),
+            Self::Explicit(subject) | Self::CallerDeclaredSubject(subject) => {
+                normalized_local_daemon_ura(subject, "subject_ura")
+            }
+            Self::TargetSelf => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
 
@@ -198,50 +257,165 @@ impl LocalDaemonSubjectPolicy {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|subject| Self::normalized_ura(subject, "subject_ura").map(Self::Explicit))
+            .map(|subject| normalized_local_daemon_ura(subject, "subject_ura").map(Self::Explicit))
             .transpose()
     }
+}
 
-    fn normalized_ura(value: &str, field: &str) -> anyhow::Result<String> {
-        let value = value.trim();
-        if value.is_empty() {
-            anyhow::bail!("{field} must not be empty");
+#[cfg(feature = "axon-pb")]
+impl LocalDaemonLoopbackDerivationPolicy {
+    fn fresh_root() -> Self {
+        Self::FreshRoot
+    }
+
+    fn explicit_causal(
+        invocation_nonce: [u8; 16],
+        causal_context: axon_sdk::pb::axon::v1::CausalContext,
+    ) -> anyhow::Result<Self> {
+        if invocation_nonce == [0; 16] {
+            anyhow::bail!("invocation_nonce must not be all-zero");
         }
-        crate::core::ura::parse_ura(value)
-            .map_err(|err| anyhow::anyhow!("{field} is not a valid URA: {err}"))?;
-        Ok(value.to_string())
+        InvocationDerivationPolicy::try_explicit_from_wire_causal_context(
+            invocation_nonce,
+            causal_context.clone(),
+        )
+        .map_err(|error| anyhow::anyhow!("invalid explicit causal context: {error}"))?;
+        Ok(Self::ExplicitCausal {
+            invocation_nonce,
+            causal_context,
+        })
+    }
+
+    fn as_axon(&self) -> anyhow::Result<InvocationDerivationPolicy> {
+        match self {
+            Self::FreshRoot => Ok(InvocationDerivationPolicy::FreshRoot),
+            Self::ExplicitCausal {
+                invocation_nonce,
+                causal_context,
+            } => InvocationDerivationPolicy::try_explicit_from_wire_causal_context(
+                *invocation_nonce,
+                causal_context.clone(),
+            )
+            .map_err(|error| anyhow::anyhow!("invalid explicit causal context: {error}")),
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl LocalDaemonLoopbackTuplePlan {
+    fn local_root(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        subject: Option<String>,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        Self::new(
+            function_name,
+            payload_json,
+            LocalDaemonLoopbackCalleePolicy::local_daemon(),
+            LocalDaemonLoopbackSubjectPolicy::explicit_or_target_self(subject)?,
+            LocalDaemonLoopbackDerivationPolicy::fresh_root(),
+            timeout,
+        )
+    }
+
+    fn targeted_root_with_declared_subject(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        callee_ura: &str,
+        caller_declared_subject_ura: &str,
+        subject: Option<String>,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        Self::new(
+            function_name,
+            payload_json,
+            LocalDaemonLoopbackCalleePolicy::explicit(callee_ura)?,
+            LocalDaemonLoopbackSubjectPolicy::explicit_or_caller_declared(
+                caller_declared_subject_ura,
+                subject,
+            )?,
+            LocalDaemonLoopbackDerivationPolicy::fresh_root(),
+            timeout,
+        )
+    }
+
+    fn targeted_explicit_causal(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        callee_ura: &str,
+        subject_ura: &str,
+        invocation_nonce: [u8; 16],
+        causal_context: axon_sdk::pb::axon::v1::CausalContext,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        Self::new(
+            function_name,
+            payload_json,
+            LocalDaemonLoopbackCalleePolicy::explicit(callee_ura)?,
+            LocalDaemonLoopbackSubjectPolicy::required_explicit(subject_ura)?,
+            LocalDaemonLoopbackDerivationPolicy::explicit_causal(invocation_nonce, causal_context)?,
+            timeout,
+        )
+    }
+
+    fn new(
+        function_name: &str,
+        payload_json: serde_json::Value,
+        callee_policy: LocalDaemonLoopbackCalleePolicy,
+        subject_policy: LocalDaemonLoopbackSubjectPolicy,
+        derivation_policy: LocalDaemonLoopbackDerivationPolicy,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let function_name = function_name.trim();
+        if function_name.is_empty() {
+            anyhow::bail!("function_name must not be empty");
+        }
+        if timeout.is_zero() {
+            anyhow::bail!("{function_name}: timeout must be greater than zero");
+        }
+        Ok(Self {
+            function_name: function_name.to_string(),
+            payload_json,
+            caller_ura: local_daemon_loopback_caller_ura()?,
+            callee_policy,
+            subject_policy,
+            derivation_policy,
+            timeout,
+        })
+    }
+
+    fn into_invocation(self) -> anyhow::Result<LocalDaemonLoopbackInvocation> {
+        let callee_ura = self.callee_policy.resolve()?;
+        let subject_ura = self.subject_policy.resolve(&callee_ura)?;
+        LocalDaemonLoopbackInvocation::from_target(
+            &self.function_name,
+            self.payload_json,
+            self.caller_ura,
+            callee_ura,
+            subject_ura,
+            self.derivation_policy.as_axon()?,
+            self.timeout,
+        )
     }
 }
 
 #[cfg(feature = "axon-pb")]
 fn normalized_local_daemon_ura(value: &str, field: &str) -> anyhow::Result<String> {
-    LocalDaemonSubjectPolicy::normalized_ura(value, field)
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("{field} must not be empty");
+    }
+    crate::core::ura::parse_ura(value)
+        .map_err(|err| anyhow::anyhow!("{field} is not a valid URA: {err}"))?;
+    Ok(value.to_string())
 }
 
 #[cfg(feature = "axon-pb")]
-fn local_daemon_loopback_invocation_from_subject_policy(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    callee_override: Option<&str>,
-    subject_policy: LocalDaemonSubjectPolicy,
-    timeout: Duration,
+fn local_daemon_loopback_invocation_from_tuple_plan(
+    tuple_plan: LocalDaemonLoopbackTuplePlan,
 ) -> anyhow::Result<LocalDaemonLoopbackInvocation> {
-    let default_callee_ura = local_daemon_default_callee_ura();
-    let callee_ura = callee_override
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(default_callee_ura.as_str())
-        .to_string();
-    let subject_ura = subject_policy.resolve(&callee_ura)?;
-    LocalDaemonLoopbackInvocation::from_target(
-        function_name,
-        payload_json,
-        local_daemon_loopback_caller_ura()?,
-        callee_ura,
-        subject_ura,
-        InvocationDerivationPolicy::FreshRoot,
-        timeout,
-    )
+    tuple_plan.into_invocation()
 }
 
 #[cfg(feature = "axon-pb")]
@@ -285,11 +459,10 @@ impl LocalDaemonAbilityClient {
         payload_json: serde_json::Value,
         subject: Option<String>,
     ) -> anyhow::Result<serde_json::Value> {
-        let subject_policy = LocalDaemonSubjectPolicy::explicit_or_self_target(subject)?;
         self.invoke_with_subject_and_timeout(
             function_name,
             payload_json,
-            subject_policy,
+            subject,
             Duration::from_secs(30),
         )
     }
@@ -298,25 +471,16 @@ impl LocalDaemonAbilityClient {
         &self,
         function_name: &str,
         payload_json: serde_json::Value,
-        subject_policy: LocalDaemonSubjectPolicy,
+        subject: Option<String>,
         timeout: Duration,
     ) -> anyhow::Result<serde_json::Value> {
-        self.invoke_with_subject_policy(function_name, payload_json, subject_policy, timeout)
-    }
-
-    fn invoke_with_subject_policy(
-        &self,
-        function_name: &str,
-        payload_json: serde_json::Value,
-        subject_policy: LocalDaemonSubjectPolicy,
-        timeout: Duration,
-    ) -> anyhow::Result<serde_json::Value> {
-        invoke_local_daemon_ability_with_subject_policy(
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::local_root(
             function_name,
             payload_json,
-            subject_policy,
+            subject,
             timeout,
-        )
+        )?;
+        invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
     }
 
     fn validate_socket() -> anyhow::Result<()> {
@@ -391,14 +555,9 @@ pub(crate) fn invoke_local_daemon_ability_with_subject_timeout(
     subject: Option<String>,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    let subject_policy = LocalDaemonSubjectPolicy::explicit_or_self_target(subject)?;
-    invoke_local_daemon_ability_with_callee_and_subject(
-        function_name,
-        payload_json,
-        None,
-        subject_policy,
-        timeout,
-    )
+    let tuple_plan =
+        LocalDaemonLoopbackTuplePlan::local_root(function_name, payload_json, subject, timeout)?;
+    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -410,15 +569,15 @@ pub(crate) fn invoke_local_daemon_ability_targeted_timeout(
     subject: Option<String>,
     timeout: Duration,
 ) -> anyhow::Result<serde_json::Value> {
-    let subject_policy =
-        LocalDaemonSubjectPolicy::explicit_or_declared_default(default_subject_ura, subject)?;
-    invoke_local_daemon_ability_with_callee_and_subject(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
         function_name,
         payload_json,
-        Some(callee_ura),
-        subject_policy,
+        callee_ura,
+        default_subject_ura,
+        subject,
         timeout,
-    )
+    )?;
+    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
 }
 
 /// Invoke a daemon-hosted server-stream ability through Axon's local
@@ -439,16 +598,15 @@ pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_subject(
     timeout: Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
-    let subject_policy =
-        LocalDaemonSubjectPolicy::explicit_or_declared_default(default_subject_ura, subject)?;
-    invoke_local_daemon_ability_stream_with_target(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
         function_name,
         payload_json,
-        Some(callee_ura),
-        subject_policy,
+        callee_ura,
+        default_subject_ura,
+        subject,
         timeout,
-        max_frames,
-    )
+    )?;
+    invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
 }
 
 /// Open a daemon-hosted bidirectional ability through Axon's local
@@ -467,29 +625,28 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject
         input_frames,
         max_frames,
     } = request;
-    let subject_policy =
-        LocalDaemonSubjectPolicy::explicit_or_declared_default(default_subject_ura, subject)?;
-    invoke_local_daemon_ability_bidi_json_frames_with_target(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
         function_name,
         payload_json,
-        Some(callee_ura),
-        subject_policy,
+        callee_ura,
+        default_subject_ura,
+        subject,
         timeout,
+    )?;
+    invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
+        tuple_plan,
         input_frames,
         max_frames,
     )
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_local_daemon_ability_stream_with_target(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    callee_override: Option<&str>,
-    subject_policy: LocalDaemonSubjectPolicy,
-    timeout: Duration,
+fn invoke_local_daemon_ability_stream_with_tuple_plan(
+    tuple_plan: LocalDaemonLoopbackTuplePlan,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
     use anyhow::Context;
+    let timeout = tuple_plan.timeout;
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
@@ -502,13 +659,7 @@ fn invoke_local_daemon_ability_stream_with_target(
         ));
     }
 
-    let invocation = local_daemon_loopback_invocation_from_subject_policy(
-        function_name,
-        payload_json,
-        callee_override,
-        subject_policy,
-        timeout,
-    )?;
+    let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
     let request = invocation.stream_request()?;
 
@@ -559,12 +710,8 @@ fn invoke_local_daemon_ability_stream_with_target(
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_local_daemon_ability_bidi_json_frames_with_target(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    callee_override: Option<&str>,
-    subject_policy: LocalDaemonSubjectPolicy,
-    timeout: Duration,
+fn invoke_local_daemon_ability_bidi_json_frames_with_tuple_plan(
+    tuple_plan: LocalDaemonLoopbackTuplePlan,
     input_frames: Vec<serde_json::Value>,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
@@ -576,6 +723,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
+    let timeout = tuple_plan.timeout;
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
@@ -588,13 +736,7 @@ fn invoke_local_daemon_ability_bidi_json_frames_with_target(
         ));
     }
 
-    let invocation = local_daemon_loopback_invocation_from_subject_policy(
-        function_name,
-        payload_json,
-        callee_override,
-        subject_policy,
-        timeout,
-    )?;
+    let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
     let envelope_open = EnvelopeOpen {
         envelope: Some(invocation.envelope()?),
@@ -778,30 +920,11 @@ pub(crate) fn invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject
 }
 
 #[cfg(feature = "axon-pb")]
-fn invoke_local_daemon_ability_with_subject_policy(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    subject_policy: LocalDaemonSubjectPolicy,
-    timeout: Duration,
-) -> anyhow::Result<serde_json::Value> {
-    invoke_local_daemon_ability_with_callee_and_subject(
-        function_name,
-        payload_json,
-        None,
-        subject_policy,
-        timeout,
-    )
-}
-
-#[cfg(feature = "axon-pb")]
-fn invoke_local_daemon_ability_with_callee_and_subject(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    callee_override: Option<&str>,
-    subject_policy: LocalDaemonSubjectPolicy,
-    timeout: Duration,
+fn invoke_local_daemon_ability_with_tuple_plan(
+    tuple_plan: LocalDaemonLoopbackTuplePlan,
 ) -> anyhow::Result<serde_json::Value> {
     use anyhow::Context;
+    let timeout = tuple_plan.timeout;
 
     let socket_path = resolve_socket_path();
     if !probe_accepting(&socket_path) {
@@ -814,13 +937,7 @@ fn invoke_local_daemon_ability_with_callee_and_subject(
         ));
     }
 
-    let invocation = local_daemon_loopback_invocation_from_subject_policy(
-        function_name,
-        payload_json,
-        callee_override,
-        subject_policy,
-        timeout,
-    )?;
+    let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?;
     let function_name = invocation.function_name().to_string();
     let request = invocation.invoke_request()?;
 
@@ -1438,14 +1555,6 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         );
     }
 
-    let callee_ura = normalized_local_daemon_ura(callee_ura, "callee_ura")?;
-    let subject_ura = normalized_local_daemon_ura(subject_ura, "subject_ura")?;
-    if invocation_nonce == [0; 16] {
-        bail!("{function_name}: invocation_nonce must not be all-zero");
-    }
-    if step_timeout.is_zero() {
-        bail!("{function_name}: step_timeout must be greater than zero");
-    }
     let receipt_refs = verified_receipt_refs_from_causal_parents(causal_parents)?;
     let mut refs = receipt_refs;
     let causal_form = match refs.len() {
@@ -1453,22 +1562,22 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         1 => pb::causal_context::Form::Scalar(refs.remove(0)),
         _ => pb::causal_context::Form::List(pb::ReceiptList { prior: refs }),
     };
-    let invocation = LocalDaemonLoopbackInvocation::from_target(
+    let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_explicit_causal(
         &function_name,
         payload_json,
-        local_daemon_loopback_caller_ura()?,
-        callee_ura.clone(),
-        subject_ura.clone(),
-        InvocationDerivationPolicy::try_explicit_from_wire_causal_context(
-            invocation_nonce,
-            pb::CausalContext {
-                form: Some(causal_form),
-            },
-        )
-        .map_err(|error| anyhow!("invalid causal context for {function_name}: {error}"))?,
+        callee_ura,
+        subject_ura,
+        invocation_nonce,
+        pb::CausalContext {
+            form: Some(causal_form),
+        },
         step_timeout,
-    )?
-    .with_trace_id(trace_id);
+    )
+    .map_err(|error| anyhow!("{function_name}: {error}"))?;
+    let submitted_callee_ura = tuple_plan.callee_policy.resolve()?;
+    let submitted_subject_ura = tuple_plan.subject_policy.resolve(&submitted_callee_ura)?;
+    let invocation =
+        local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)?.with_trace_id(trace_id);
     let mut request = invocation.invoke_request()?;
     let wire_caller_ura = invocation.caller_ura().to_string();
     let nonce_hex = request
@@ -1546,8 +1655,8 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         "callee_ura": terminal.callee_ura,
         "subject_ura": terminal.subject_ura,
         "submitted_caller_ura": wire_caller_ura,
-        "submitted_callee_ura": callee_ura,
-        "submitted_subject_ura": subject_ura,
+        "submitted_callee_ura": submitted_callee_ura,
+        "submitted_subject_ura": submitted_subject_ura,
         "ability": function_name,
         "nonce": nonce_hex,
         "causal_context": { "parents": causal_parents },
@@ -1716,14 +1825,18 @@ mod tests {
 
     #[test]
     fn loopback_invoke_request_does_not_pre_resolve_descriptor_ref() {
-        let invocation = local_daemon_loopback_invocation_from_subject_policy(
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::new(
             "discover",
             serde_json::json!({"query": "capabilities"}),
-            Some("easynet:///r/default/agent/dev.worker"),
-            LocalDaemonSubjectPolicy::SelfTarget,
+            LocalDaemonLoopbackCalleePolicy::explicit("easynet:///r/default/agent/dev.worker")
+                .expect("callee policy"),
+            LocalDaemonLoopbackSubjectPolicy::TargetSelf,
+            LocalDaemonLoopbackDerivationPolicy::fresh_root(),
             Duration::from_secs(5),
         )
-        .expect("loopback invocation projection");
+        .expect("tuple plan");
+        let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)
+            .expect("loopback invocation projection");
         let request = invocation.invoke_request().expect("loopback request");
 
         assert_eq!(
@@ -1752,6 +1865,128 @@ mod tests {
             envelope.callee.as_ref().map(|callee| callee.ura.as_str()),
             Some("easynet:///r/default/agent/dev.worker")
         );
+        assert_eq!(
+            envelope
+                .subject
+                .as_ref()
+                .map(|subject| subject.ura.as_str()),
+            Some("easynet:///r/default/agent/dev.worker")
+        );
+    }
+
+    #[test]
+    fn loopback_tuple_plan_names_declared_subject_and_rejects_hidden_defaults() {
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
+            "job.run",
+            serde_json::json!({"job": 1}),
+            "easynet:///r/acme/device/edge-1",
+            "easynet:///r/acme/resource/user.jobs/job-1",
+            None,
+            Duration::from_secs(5),
+        )
+        .expect("tuple plan");
+        assert_eq!(
+            tuple_plan.subject_policy,
+            LocalDaemonLoopbackSubjectPolicy::CallerDeclaredSubject(
+                "easynet:///r/acme/resource/user.jobs/job-1".to_string()
+            )
+        );
+
+        let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)
+            .expect("loopback invocation");
+        let request = invocation.invoke_request().expect("invoke request");
+        let envelope = request.envelope.as_ref().expect("request envelope");
+        assert_eq!(
+            envelope.callee.as_ref().map(|callee| callee.ura.as_str()),
+            Some("easynet:///r/acme/device/edge-1")
+        );
+        assert_eq!(
+            envelope
+                .subject
+                .as_ref()
+                .map(|subject| subject.ura.as_str()),
+            Some("easynet:///r/acme/resource/user.jobs/job-1")
+        );
+
+        assert!(
+            LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
+                "job.run",
+                serde_json::json!({"job": 1}),
+                "easynet:///r/acme/device/edge-1",
+                "",
+                None,
+                Duration::from_secs(5),
+            )
+            .is_err()
+        );
+        assert!(LocalDaemonLoopbackTuplePlan::local_root(
+            "job.run",
+            serde_json::json!({"job": 1}),
+            None,
+            Duration::ZERO,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn loopback_tuple_plan_preserves_explicit_causal_context() {
+        let parent = axon_sdk::pb::axon::v1::ReceiptRef {
+            receipt_ura: "easynet:///r/acme/resource/user.jobs/job-1/invocation/i1/receipt/1"
+                .to_string(),
+            receipt_hash: [7_u8; 32].to_vec(),
+        };
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_explicit_causal(
+            "job.run",
+            serde_json::json!({"job": 1}),
+            "easynet:///r/acme/device/edge-1",
+            "easynet:///r/acme/resource/user.jobs/job-1",
+            [9_u8; 16],
+            axon_sdk::pb::axon::v1::CausalContext {
+                form: Some(axon_sdk::pb::axon::v1::causal_context::Form::Scalar(
+                    parent.clone(),
+                )),
+            },
+            Duration::from_secs(5),
+        )
+        .expect("tuple plan");
+
+        let LocalDaemonLoopbackDerivationPolicy::ExplicitCausal {
+            invocation_nonce, ..
+        } = &tuple_plan.derivation_policy
+        else {
+            panic!("expected explicit causal derivation");
+        };
+        assert_eq!(*invocation_nonce, [9_u8; 16]);
+
+        let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)
+            .expect("loopback invocation");
+        let request = invocation.invoke_request().expect("invoke request");
+        let envelope = request.envelope.as_ref().expect("request envelope");
+        assert_eq!(envelope.invocation_nonce, [9_u8; 16].to_vec());
+        assert_eq!(
+            envelope
+                .causal_context
+                .as_ref()
+                .and_then(|context| context.form.as_ref()),
+            Some(&axon_sdk::pb::axon::v1::causal_context::Form::Scalar(
+                parent
+            ))
+        );
+
+        assert!(LocalDaemonLoopbackTuplePlan::targeted_explicit_causal(
+            "job.run",
+            serde_json::json!({"job": 1}),
+            "easynet:///r/acme/device/edge-1",
+            "easynet:///r/acme/resource/user.jobs/job-1",
+            [0_u8; 16],
+            axon_sdk::pb::axon::v1::CausalContext {
+                form: Some(axon_sdk::pb::axon::v1::causal_context::Form::None(
+                    axon_sdk::pb::axon::v1::Empty {},
+                )),
+            },
+            Duration::from_secs(5),
+        )
+        .is_err());
     }
 
     fn completed_receipt_response_fixture(
@@ -1767,16 +2002,17 @@ mod tests {
         };
         use axon_sdk::pb::axon::v1::InvokeResponse;
 
-        let invocation = local_daemon_loopback_invocation_from_subject_policy(
+        let tuple_plan = LocalDaemonLoopbackTuplePlan::targeted_root_with_declared_subject(
             "job.run",
             serde_json::json!({"job": 1}),
-            Some("easynet:///r/acme/device/edge-1"),
-            LocalDaemonSubjectPolicy::Explicit(
-                "easynet:///r/acme/resource/user.jobs/job-1".to_string(),
-            ),
+            "easynet:///r/acme/device/edge-1",
+            "easynet:///r/acme/resource/user.jobs/job-1",
+            Some("easynet:///r/acme/resource/user.jobs/job-1".to_string()),
             Duration::from_secs(5),
         )
-        .expect("loopback invocation");
+        .expect("tuple plan");
+        let invocation = local_daemon_loopback_invocation_from_tuple_plan(tuple_plan)
+            .expect("loopback invocation");
         let request = invocation.invoke_request().expect("invoke request");
         let submitted =
             SubmittedInvocationProjection::from_request(&request, "job.run").expect("submitted");

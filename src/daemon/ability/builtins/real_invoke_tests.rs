@@ -2437,7 +2437,7 @@ fn real_authority_binding_grant_list_check_and_revoke_round_trip() {
             "authority.binding.check",
             json!({
                 "owner_ura": owner_ura,
-                "caller_ura": "easynet:///r/test/hub",
+                "caller_ura": "easynet:///r/test/authority",
                 "principal_kind": "token",
                 "token_id": "token-1",
                 "token_class": "hub_link",
@@ -2470,7 +2470,7 @@ fn real_policy_request_create_list_and_resolve_round_trip() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
     let owner_ura = "easynet:///r/test/user/rfc014-request-owner";
-    let actor_ura = "easynet:///r/test/hub";
+    let actor_ura = "easynet:///r/test/authority";
     let pending = json!({
         "request_id": "req-real-001",
         "caller_ura": actor_ura,

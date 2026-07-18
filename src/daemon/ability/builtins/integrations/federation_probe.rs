@@ -33,6 +33,10 @@ use serde_json::{json, Value};
 use crate::daemon::ability::builtins::agents::discover::DiscoverFederationResolver;
 use crate::daemon::ability::names::{federation, governance};
 use crate::daemon::federation::client::ability_contract::ResolvedAgent;
+#[cfg(feature = "axon-pb")]
+use crate::daemon::invocation::routing::remote_invoke::{
+    RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteInvocationTuplePlan,
+};
 use crate::daemon::persistence::config;
 
 const DEVICE_HEALTH_ABILITY: &str = governance::OBSERVE_HEALTH;
@@ -476,23 +480,21 @@ fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
 
     #[cfg(feature = "axon-pb")]
     let result = (|| {
-        let target = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
             agent_ura,
             DEVICE_HEALTH_ABILITY,
         )?;
-        let request =
-            crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
-                &target,
-                crate::daemon::identity::local_invocation::local_daemon_ura(),
-                target.callee_ura(),
-                axon_sdk::invocation::fresh_nonce(),
-                axon_sdk::invocation::CausalContext::None,
-                json!({
-                    "source": "node.list",
-                    "probe": "alive",
-                }),
-                Duration::from_secs(30),
-            )?;
+        let request = RemoteInvocationTuplePlan::daemon_system_root(
+            &target,
+            crate::daemon::identity::local_invocation::local_daemon_ura(),
+            RemoteInvocationSubject::TargetOwnedSystem(target.callee_ura().to_string()),
+            json!({
+                "source": "node.list",
+                "probe": "alive",
+            }),
+            Duration::from_secs(30),
+        )?
+        .into_request()?;
         crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request)
     })();
     #[cfg(feature = "axon-pb")]

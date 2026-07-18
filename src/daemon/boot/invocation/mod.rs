@@ -1721,20 +1721,20 @@ mod tests {
         let identity = test_daemon_identity("easynet:///r/cli/device/local");
         assert_eq!(
             transport_daemon_ura(DaemonMode::Hub, "hub-a.local", Some(&identity)).as_deref(),
-            Some("easynet:///r/hub-a.local/hub"),
+            Some("easynet:///r/authority-a.local/authority"),
         );
         assert_eq!(
             transport_daemon_ura(DaemonMode::Both, "hub-a.local", Some(&identity)).as_deref(),
-            Some("easynet:///r/hub-a.local/hub"),
+            Some("easynet:///r/authority-a.local/authority"),
         );
     }
 
     #[test]
     fn device_mode_transport_identity_uses_device_credentials() {
-        let identity = test_daemon_identity("easynet:///r/hub-a.local/device/dev-1");
+        let identity = test_daemon_identity("easynet:///r/authority-a.local/device/dev-1");
         assert_eq!(
             transport_daemon_ura(DaemonMode::Device, "hub-a.local", Some(&identity)).as_deref(),
-            Some("easynet:///r/hub-a.local/device/dev-1"),
+            Some("easynet:///r/authority-a.local/device/dev-1"),
         );
         assert_eq!(
             transport_daemon_ura(DaemonMode::Device, "hub-a.local", None),

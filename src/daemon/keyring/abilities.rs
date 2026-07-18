@@ -790,7 +790,7 @@ mod tests {
             json!({
                 "peer_ura": "easynet:///r/alice.localhost/agent/alice.node",
                 "public_key": pk,
-                "via_hub": "easynet:///r/alice.localhost/hub"
+                "via_hub": "easynet:///r/alice.localhost/authority"
             }),
         )
         .unwrap();

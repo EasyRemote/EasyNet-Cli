@@ -5806,8 +5806,6 @@ fn invocation_outcome_json_with_tuple(
         "output_content_type": result.output_content_type,
         "output_base64": base64::engine::general_purpose::STANDARD.encode(&result.output),
         "output_json": output_json,
-        "selected_node_id": result.selected_node_id,
-        "scheduling_reason": result.scheduling_reason,
         "elapsed_ms": result.elapsed_ms,
         "admission_receipt": stages.admission.map(receipt_summary_dto_json),
         "terminal_receipt": terminal_receipt.map(receipt_summary_dto_json),
@@ -5934,8 +5932,6 @@ fn stream_chunk_json(
         "ok": chunk.error.is_none(),
         "kind": if proven_terminal { "terminal" } else { "data" },
         "invocation_id": chunk.invocation_id,
-        "selected_node_id": "",
-        "scheduling_reason": "",
         "state": chunk.state,
         "sequence": chunk.sequence,
         "terminal": proven_terminal,
@@ -8441,7 +8437,7 @@ mod tests {
         assert!(principal_create["descriptor_ref"]
             .as_str()
             .is_some_and(|descriptor_ref| descriptor_ref.starts_with(&format!(
-                "{}/ability/hub.principal.lifecycle.create@",
+                "{}/ability/authority.principal.lifecycle.create@",
                 "easynet:///r/localhost"
             )) && descriptor_ref.ends_with("!invoke")));
 
@@ -8459,7 +8455,7 @@ mod tests {
         assert!(runtime_bootstrap["descriptor_ref"]
             .as_str()
             .is_some_and(|descriptor_ref| descriptor_ref.starts_with(&format!(
-                "{}/ability/hub.runtime.bootstrap_self_identity@",
+                "{}/ability/authority.runtime.bootstrap_self_identity@",
                 "easynet:///r/localhost"
             )) && descriptor_ref.ends_with("!manage")));
     }

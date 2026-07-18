@@ -207,6 +207,8 @@ Use the InvocationArgsUnset -> InvocationArgsSet type-state transition; only the
 fi
 
 if require_file "src/daemon/invocation/routing/target.rs" \
+    && require_file "src/daemon/invocation/routing/remote_invoke.rs" \
+    && require_file "src/support/platform/local_daemon_grpc.rs" \
     && require_file "src/daemon/invocation/dispatch/local_runtime_invoker.rs" \
     && require_file "src/daemon/invocation/dispatch/daemon_route_runtime.rs" \
     && require_file "src/daemon/axon_bridge/dispatch_shim.rs" \
@@ -228,8 +230,14 @@ def require(path: str, token: str, detail: str) -> None:
         violations.append(f"{path}: missing {detail}: {token}")
 
 def production_prefix(text: str) -> str:
-    match = re.search(r"(?m)^\s*#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*$", text)
+    match = re.search(r"(?m)^\s*#\s*\[\s*cfg\s*\([^\]]*\btest\b[^\]]*\)\s*\]\s*$", text)
     return text if match is None else text[:match.start()]
+
+def enclosing_function_name(text: str, offset: int):
+    found = None
+    for match in re.finditer(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", text[:offset]):
+        found = match.group(1)
+    return found
 
 target = "src/daemon/invocation/routing/target.rs"
 target_text = read(target)
@@ -239,6 +247,7 @@ for token, detail in (
     ("PublicIngress", "public-ingress explicit tuple state"),
     ("plan.ingress.into_target_bindings()?", "resolver tuple handoff"),
     ("InvocationSubject::daemon_system_derived()", "named system subject policy"),
+    ("pub fn public_root_derived()", "named public root causal policy"),
     ("InvocationCausalContext::daemon_system_root()", "named system causal policy"),
     ("InvocationSubject::explicit(subject)", "public subject preservation"),
     ("InvocationCausalContext::explicit(causal_context)", "public causal context preservation"),
@@ -256,6 +265,74 @@ for path in sorted((root / "src").rglob("*.rs")):
     for match in re.finditer(r"\.with_(?:subject|causal_context)\s*\(", production):
         violations.append(
             f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: production InvocationTarget tuple patching is forbidden"
+        )
+    if rel != "src/daemon/invocation/routing/remote_invoke.rs":
+        for match in re.finditer(r"RemoteInvocationRequest::new\s*\(", production):
+            violations.append(
+                f"{rel}:{production.count(chr(10), 0, match.start()) + 1}: production remote invocation ingress must use RemoteInvocationTuplePlan"
+            )
+
+remote = "src/daemon/invocation/routing/remote_invoke.rs"
+remote_text = read(remote)
+for token, detail in (
+    ("pub(crate) enum RemoteInvocationSubject", "named remote subject derivation state"),
+    ("PairedOwnerDerived", "public omitted-subject derivation policy"),
+    ("TargetOwnedSystem", "daemon system subject derivation policy"),
+    ("pub(crate) enum RemoteInvocationNonce", "named remote nonce derivation state"),
+    ("pub(crate) struct RemoteInvocationTuplePlan", "inspectable remote tuple plan"),
+    ("pub(crate) fn public_root", "public remote root tuple constructor"),
+    ("pub(crate) fn public_with_causal_context", "public remote child tuple constructor"),
+    ("pub(crate) fn daemon_system_root", "daemon-system remote root tuple constructor"),
+    ("InvocationCausalContext::public_root_derived()", "shared public root causal policy"),
+    ("InvocationCausalContext::daemon_system_root()", "shared daemon-system causal policy"),
+):
+    if token not in remote_text:
+        violations.append(f"{remote}: missing {detail}: {token}")
+
+for path in (
+    "src/cli/commands/invoke.rs",
+    "src/cli/daemon_client/remote_system_ability.rs",
+):
+    production = production_prefix(read(path))
+    for token in (
+        "RemoteInvocationRequest::new",
+        "axon_sdk::invocation::fresh_nonce()",
+        "axon_sdk::invocation::CausalContext::None",
+    ):
+        if token in production:
+            violations.append(
+                f"{path}: public/daemon remote ingress may not use anonymous tuple default: {token}"
+            )
+
+local_loopback = "src/support/platform/local_daemon_grpc.rs"
+local_text = read(local_loopback)
+for token, detail in (
+    ("struct LocalDaemonLoopbackTuplePlan", "inspectable local loopback tuple plan"),
+    ("enum LocalDaemonLoopbackDerivationPolicy", "named local loopback derivation state"),
+    ("targeted_explicit_causal", "local explicit-causal tuple constructor"),
+    ("local_daemon_loopback_invocation_from_tuple_plan", "single local loopback lowering helper"),
+):
+    if token not in local_text:
+        violations.append(f"{local_loopback}: missing {detail}: {token}")
+
+local_production = production_prefix(local_text)
+for token in (
+    "LocalDaemonSubjectPolicy",
+    "local_daemon_loopback_invocation_from_subject_policy",
+):
+    if token in local_production:
+        violations.append(f"{local_loopback}: obsolete local loopback subject-only policy remains: {token}")
+
+for match in re.finditer(r"LocalDaemonLoopbackInvocation::from_target\s*\(", local_production):
+    if enclosing_function_name(local_production, match.start()) != "into_invocation":
+        violations.append(
+            f"{local_loopback}:{local_production.count(chr(10), 0, match.start()) + 1}: local loopback ingress must lower through LocalDaemonLoopbackTuplePlan"
+        )
+
+for match in re.finditer(r"InvocationDerivationPolicy::FreshRoot", local_production):
+    if enclosing_function_name(local_production, match.start()) != "as_axon":
+        violations.append(
+            f"{local_loopback}:{local_production.count(chr(10), 0, match.start()) + 1}: anonymous FreshRoot derivation must be owned by LocalDaemonLoopbackDerivationPolicy"
         )
 
 local_invoker = "src/daemon/invocation/dispatch/local_runtime_invoker.rs"

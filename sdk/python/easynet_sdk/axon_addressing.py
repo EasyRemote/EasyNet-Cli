@@ -320,7 +320,7 @@ class AxonAddressingTransport:
             parsed = self._addressing.parse_ura(raw)
         except ParseError as exc:
             _invalid_addressing(f"build {kind} URA: {exc}", exc)
-        if parsed.kind != kind:
+        if _product_ura_kind(parsed.kind) != kind:
             _invalid_addressing(
                 f"built URA kind {parsed.kind!r} does not match {kind!r}"
             )
@@ -357,7 +357,7 @@ class AxonAddressingTransport:
                 ))
             raise ParseError(f"unsupported agent owner_kind {owner_kind!r}")
         if kind == "hub":
-            return cast(str, self._addressing.hub_ura(
+            return cast(str, self._addressing.authority_ura(
                 _required_string(request, "realm")
             ))
         if kind == "ability":
@@ -396,7 +396,7 @@ def _descriptor_projection(
                 "ability_ura": ref.ability_ura,
                 "descriptor_version": ref.version,
                 "owner_ura": owner_ura,
-                "owner_kind": ability.owner.kind,
+                "owner_kind": _product_ability_owner_kind(ability.owner.kind),
                 "public_name": public_name,
                 "local_registry_ability": public_name,
             },
@@ -410,7 +410,7 @@ def _ura_projection(
 ) -> bytes:
     components: dict[str, object] = {"realm": parsed.realm}
     projection: dict[str, object] = {
-        "kind": parsed.kind,
+        "kind": _product_ura_kind(parsed.kind),
         "valid": True,
         "ura": parsed.raw,
         "realm": parsed.realm,
@@ -425,7 +425,7 @@ def _ura_projection(
         components.update(
             {
                 "owner_ura": addressing.owner_ura_for_ability(parsed.raw),
-                "owner_kind": ability.owner.kind,
+                "owner_kind": _product_ability_owner_kind(ability.owner.kind),
                 "ability_name": public_name,
                 "public_name": public_name,
                 "local_registry_ability": public_name,
@@ -457,6 +457,14 @@ def _ura_projection(
             }
         )
     return _json_bytes(projection)
+
+
+def _product_ura_kind(canonical_kind: str) -> str:
+    return "hub" if canonical_kind == "authority" else canonical_kind
+
+
+def _product_ability_owner_kind(canonical_kind: str) -> str:
+    return "hub" if canonical_kind == "authority" else canonical_kind
 
 
 def _required_ability(parsed: ParsedURA) -> Any:

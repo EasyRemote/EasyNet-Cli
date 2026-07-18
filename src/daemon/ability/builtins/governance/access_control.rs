@@ -1313,7 +1313,7 @@ mod tests {
         let check_error = check_handler(
             json!({
                 "owner_user_id": "alice",
-                "caller_ura": "easynet:///r/example/hub",
+                "caller_ura": "easynet:///r/example/authority",
                 "principal_kind": "token",
                 "token_id": "token-1",
                 "callee_ura": "easynet:///r/example/device/dev-a",
@@ -1349,7 +1349,7 @@ mod tests {
                     .request_id("req-1")
                     .trace_id("trace-1")
                     .span_id("span-1")
-                    .caller_ura("easynet:///r/test/hub")
+                    .caller_ura("easynet:///r/test/authority")
                     .callee_ura("easynet:///r/test/device/dev-a")
                     .subject_ura("easynet:///r/test/user/alice")
                     .ability_ura("easynet:///r/test/ability/device.dev-a.terminal.create")
@@ -1369,7 +1369,7 @@ mod tests {
                                 "reason": "TOKEN_SCOPE_DENIED",
                                 "owner_user_id": "alice",
                                 "owner_source": "subject",
-                                "caller_ura": "easynet:///r/test/hub",
+                                "caller_ura": "easynet:///r/test/authority",
                                 "principal_kind": "token",
                                 "principal_id": "token-1",
                                 "callee_ura": "easynet:///r/test/device/dev-a",
@@ -1480,8 +1480,8 @@ mod tests {
                         .trace_id(format!("trace-{request_id}"))
                         .span_id(format!("span-{request_id}"))
                         .caller_ura("easynet:///r/test/user/alice")
-                        .callee_ura("easynet:///r/test/hub")
-                        .subject_ura("easynet:///r/test/resource/hub.voice-call/call-1")
+                        .callee_ura("easynet:///r/test/authority")
+                        .subject_ura("easynet:///r/test/resource/authority.voice-call/call-1")
                         .ability_ura(ability_ura)
                         .ability_name(ability_name)
                         .descriptor_ref(descriptor_ref)
@@ -1658,7 +1658,7 @@ mod tests {
                 "request": {
                     "request_id": "req-scalar",
                     "owner_user_id": "bob",
-                    "caller_ura": "easynet:///r/example/hub",
+                    "caller_ura": "easynet:///r/example/authority",
                     "principal_kind": "user",
                     "principal_id": "bob",
                     "callee_ura": "easynet:///r/example/device/dev-a",
@@ -1810,7 +1810,7 @@ mod tests {
         );
         json!({
             "request_id": request_id,
-            "caller_ura": "easynet:///r/example/hub",
+            "caller_ura": "easynet:///r/example/authority",
             "principal_kind": "token",
             "token_id": "token-1",
             "token_class": "hub_link",

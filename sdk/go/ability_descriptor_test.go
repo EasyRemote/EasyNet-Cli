@@ -101,14 +101,14 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 			return nil, err
 		}
 		args := seen["args"].(map[string]any)
-		if args["agent_ura"] != "easynet:///r/example/hub" || args["scope"] != "realm" {
+		if args["agent_ura"] != "easynet:///r/example/authority" || args["scope"] != "realm" {
 			t.Fatalf("provider did not lower filters to daemon catalog args: %#v", args)
 		}
 		return runtimeAbilityResultJSON(true, `{"abilities":[{
 			"name":"namespace.resolve",
-			"ability_ura":"easynet:///r/example/ability/hub.namespace.resolve",
-			"descriptor_ref":"easynet:///r/example/ability/hub.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
-			"owner_ura":"easynet:///r/example/hub",
+			"ability_ura":"easynet:///r/example/ability/authority.namespace.resolve",
+			"descriptor_ref":"easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+			"owner_ura":"easynet:///r/example/authority",
 			"descriptor_version":"1.0.0",
 			"schema_hash":"sha256:abc",
 			"descriptor_hash":"sha256:def",
@@ -138,20 +138,20 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 	page, err := provider.List(context.Background(), AbilityDescriptorListRequest{
 		Call:     runtimeAbilityTestContext(),
 		Scope:    "realm",
-		OwnerURA: "easynet:///r/example/hub",
+		OwnerURA: "easynet:///r/example/authority",
 	})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if seen["descriptor_ref"] != "easynet:///r/example/ability/hub.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
+	if seen["descriptor_ref"] != "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
 		t.Fatalf("descriptor_ref = %q", seen["descriptor_ref"])
 	}
 	if len(page.Descriptors) != 1 {
 		t.Fatalf("descriptor count = %d", len(page.Descriptors))
 	}
 	got := page.Descriptors[0]
-	if got.AbilityURA != "easynet:///r/example/ability/hub.namespace.resolve" ||
-		got.DescriptorRef != "easynet:///r/example/ability/hub.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" ||
+	if got.AbilityURA != "easynet:///r/example/ability/authority.namespace.resolve" ||
+		got.DescriptorRef != "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" ||
 		got.Version != "1.0.0" ||
 		got.Class != "runtime" ||
 		got.SchemaHash != "sha256:abc" ||
@@ -167,8 +167,8 @@ func TestRuntimeAbilityDescriptorProviderListsDaemonDescriptors(t *testing.T) {
 func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		return runtimeAbilityResultJSON(true, `{"abilities":[
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/hub.observe.health","owner_ura":"easynet:///r/example/hub","version":"1.0.0","call_mode":"rpc"},
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/hub.observe.health","owner_ura":"easynet:///r/example/hub","version":"2.0.0","call_mode":"rpc"}
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","version":"1.0.0","call_mode":"rpc"},
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","owner_ura":"easynet:///r/example/authority","version":"2.0.0","call_mode":"rpc"}
 		]}`, "", false), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)
@@ -177,7 +177,7 @@ func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testi
 
 	_, err := provider.Get(context.Background(), AbilityDescriptorGetRequest{
 		Call:       runtimeAbilityTestContext(),
-		AbilityURA: "easynet:///r/example/ability/hub.observe.health",
+		AbilityURA: "easynet:///r/example/ability/authority.observe.health",
 	})
 	if !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("ambiguous descriptor error = %v", err)
@@ -185,7 +185,7 @@ func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testi
 
 	got, err := provider.Get(context.Background(), AbilityDescriptorGetRequest{
 		Call:              runtimeAbilityTestContext(),
-		AbilityURA:        "easynet:///r/example/ability/hub.observe.health",
+		AbilityURA:        "easynet:///r/example/ability/authority.observe.health",
 		DescriptorVersion: "2.0.0",
 	})
 	if err != nil {

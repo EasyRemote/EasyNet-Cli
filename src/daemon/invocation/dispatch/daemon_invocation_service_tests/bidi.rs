@@ -706,11 +706,11 @@ fn parse_realm_from_ura_extracts_realm_component() {
         Some("peer-realm".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/peer-realm/hub"),
+        parse_realm_from_ura("easynet:///r/peer-realm/authority"),
         Some("peer-realm".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/peer-realm/hub/extra"),
+        parse_realm_from_ura("easynet:///r/peer-realm/authority/extra"),
         None
     );
 }

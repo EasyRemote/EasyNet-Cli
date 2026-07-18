@@ -477,12 +477,8 @@ pub struct InvocationResult {
     pub terminal_state: String,
     pub output_content_type: String,
     pub output: Vec<u8>,
-    pub selected_node_id: String,
-    pub scheduling_reason: String,
     pub elapsed_ms: u64,
-    /// Terminal execution receipt. The field is retained for source
-    /// compatibility; admission and terminal checkpoints are available
-    /// together through [`InvocationHandle::stages`].
+    /// Terminal execution receipt.
     pub receipt: Option<ReceiptSummary>,
     pub error: Option<RuntimeErrorSummary>,
 }
@@ -509,9 +505,7 @@ impl InvocationReceiptStages {
 
 /// Immutable unary Invocation outcome.
 ///
-/// `InvocationResult` remains the source-compatible terminal result DTO.
-/// This additive aggregate owns the two-checkpoint receipt model so callers
-/// do not have to overload or extend that established DTO.
+/// This aggregate owns the two-checkpoint receipt model.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct InvocationOutcome {
     result: InvocationResult,
@@ -580,8 +574,6 @@ impl InvocationOutcome {
             terminal_state: invocation_state_name(response.state),
             output_content_type: response.result_content_type,
             output: response.result,
-            selected_node_id: String::new(),
-            scheduling_reason: String::new(),
             elapsed_ms: response.elapsed_ms.max(0) as u64,
             receipt: stages.terminal.clone(),
             error,

@@ -559,7 +559,7 @@ impl DiscoverLadderTarget {
 fn discover_subject_for_owner(owner_ura: &str, ability: &str) -> anyhow::Result<String> {
     let owner = crate::core::ura::parse_ura(owner_ura)
         .map_err(|error| anyhow::anyhow!("discover owner URA is invalid: {error}"))?;
-    if owner.kind == crate::core::ura::URAKind::Hub {
+    if owner.kind == crate::core::ura::URAKind::Authority {
         let public_name = crate::core::ura::owner_local_ability_name(owner_ura, ability);
         return crate::core::ura::owner_ability_ura(owner_ura, &public_name).ok_or_else(|| {
             anyhow::anyhow!(

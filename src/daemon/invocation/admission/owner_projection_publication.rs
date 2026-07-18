@@ -101,7 +101,7 @@ impl OwnerProjectionPublicationAuthority {
         let callee = parse_ura(callee_ura).map_err(|_| {
             OwnerProjectionPublicationError::InvalidIdentity("callee must be a canonical hub URA")
         })?;
-        if callee.kind != URAKind::Hub
+        if callee.kind != URAKind::Authority
             || callee.realm != caller.realm
             || daemon_ura.is_some_and(|daemon| daemon != callee_ura)
         {
@@ -146,10 +146,10 @@ impl OwnerProjectionPublicationAuthority {
                 }
                 _ => Err(OwnerProjectionPublicationError::OwnerMismatch),
             },
-            URAKind::Hub
+            URAKind::Authority
                 if caller_ura == callee_ura
                     && publication.owner_ura == caller_ura
-                    && owner.kind == URAKind::Hub =>
+                    && owner.kind == URAKind::Authority =>
             {
                 Ok(())
             }
@@ -187,7 +187,7 @@ mod tests {
 
     const DEVICE_URA: &str = "easynet:///r/test/device/dev-1";
     const AGENT_URA: &str = "easynet:///r/test/agent/dev.chat";
-    const HUB_URA: &str = "easynet:///r/test/hub";
+    const HUB_URA: &str = "easynet:///r/test/authority";
     const USER_ID: &str = "16567c49-7621-468e-8ed0-273825299cc2";
     const USER_URA: &str = "easynet:///r/test/user/16567c49-7621-468e-8ed0-273825299cc2";
 

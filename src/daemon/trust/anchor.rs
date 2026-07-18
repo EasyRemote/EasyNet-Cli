@@ -50,7 +50,7 @@
 // # /etc/easynet/realm-trust.toml
 //
 // [[trusted_agent]]
-// agent_ura        = "easynet:///r/realm/hub"
+// agent_ura        = "easynet:///r/realm/authority"
 // public_key_b64   = "..."
 // role             = "backend"      # or "device" / "hub"
 // added_at_unix_ms = 1714492800000
@@ -166,9 +166,9 @@ pub enum TrustedAgentRole {
 pub struct TrustedAgent {
     /// Canonical caller URA per spec §5.1. The expected role→shape
     /// mapping is:
-    /// - Backend => `easynet:///r/{realm}/hub`
+    /// - Backend => `easynet:///r/{realm}/authority`
     /// - Device  => `easynet:///r/{realm}/device/{device_id}`
-    /// - Hub     => `easynet:///r/{realm}/hub`
+    /// - Hub     => `easynet:///r/{realm}/authority`
     pub agent_ura: String,
     /// Ed25519 verifying key, base64-encoded (32 raw bytes →
     /// 44 chars with padding). Validated by the admission gate
@@ -189,7 +189,7 @@ pub struct TrustedAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_realm: Option<String>,
     /// **PR-N1 schema-B**. Concrete dial URL for the peer hub,
-    /// e.g. `"https://hub-b.example.com:50443"`. `Endpoint::
+    /// e.g. `"https://authority-b.example.com:50443"`. `Endpoint::
     /// from_shared(hub_endpoint)` is the only place this string is
     /// parsed — keep it operator-pasteable, not a structured URA.
     /// `None` ⇒ peer is not dial-eligible (not a federation peer
@@ -350,7 +350,10 @@ fn canonical_ura_for_role(
 
     match (role, parsed.kind) {
         (TrustedAgentRole::Device, crate::core::ura::URAKind::Device)
-        | (TrustedAgentRole::Backend | TrustedAgentRole::Hub, crate::core::ura::URAKind::Hub)
+        | (
+            TrustedAgentRole::Backend | TrustedAgentRole::Hub,
+            crate::core::ura::URAKind::Authority,
+        )
         | (TrustedAgentRole::User, crate::core::ura::URAKind::User) => Ok(agent_ura.to_string()),
         (_, kind) => Err(RealmTrustError::InvalidUraForRole {
             agent_ura: agent_ura.to_string(),
@@ -417,7 +420,7 @@ fn canonical_ura_for_runtime_principal(agent_ura: &str) -> Result<String, RealmT
     match parsed.kind {
         crate::core::ura::URAKind::Agent
         | crate::core::ura::URAKind::Device
-        | crate::core::ura::URAKind::Hub
+        | crate::core::ura::URAKind::Authority
         | crate::core::ura::URAKind::User => Ok(agent_ura.to_string()),
         kind => Err(RealmTrustError::InvalidPrincipalOwner {
             principal_ura: agent_ura.to_string(),
@@ -1136,7 +1139,7 @@ mod tests {
     fn single_entry_loads_and_lookups() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/authority"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1146,7 +1149,9 @@ added_at_unix_ms = 1714492800000
         let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("Ok");
         assert_eq!(anchor.len(), 1);
 
-        let entry = anchor.lookup("easynet:///r/realm/hub").expect("present");
+        let entry = anchor
+            .lookup("easynet:///r/realm/authority")
+            .expect("present");
         assert_eq!(entry.role, TrustedAgentRole::Backend);
         assert_eq!(entry.added_at_unix_ms, 1_714_492_800_000);
     }
@@ -1155,7 +1160,7 @@ added_at_unix_ms = 1714492800000
     fn multiple_entries_with_distinct_uras_load() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/authority"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1170,7 +1175,7 @@ added_at_unix_ms = 1714492801234
         let file = write_temp(toml_content);
         let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("Ok");
         assert_eq!(anchor.len(), 2);
-        assert!(anchor.lookup("easynet:///r/realm/hub").is_some());
+        assert!(anchor.lookup("easynet:///r/realm/authority").is_some());
         assert!(anchor
             .lookup("easynet:///r/realm/device/laptop-1")
             .is_some());
@@ -1275,7 +1280,7 @@ added_at_unix_ms = 1714492800000
         let mut anchor = RealmTrustAnchor::default();
         anchor
             .append_agent(TrustedAgent {
-                agent_ura: "easynet:///r/realm/hub".to_string(),
+                agent_ura: "easynet:///r/realm/authority".to_string(),
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Backend,
                 added_at_unix_ms: 1_714_492_800_000,
@@ -1301,7 +1306,9 @@ added_at_unix_ms = 1714492800000
         let loaded = RealmTrustAnchor::try_load_strict(&path).expect("strict load Ok");
         assert_eq!(loaded.len(), 2);
         assert_eq!(
-            loaded.lookup("easynet:///r/realm/hub").map(|e| e.role),
+            loaded
+                .lookup("easynet:///r/realm/authority")
+                .map(|e| e.role),
             Some(TrustedAgentRole::Backend),
         );
         assert_eq!(
@@ -1400,7 +1407,7 @@ added_at_unix_ms = 1714492800000
         // default to `None`.
         let toml_content = r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/realm/hub"
+agent_ura = "easynet:///r/realm/authority"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "backend"
 added_at_unix_ms = 1714492800000
@@ -1409,7 +1416,7 @@ added_at_unix_ms = 1714492800000
         let anchor = RealmTrustAnchor::load_or_empty(file.path())
             .expect("schema-A toml must load on a PR-N1 daemon");
         let entry = anchor
-            .lookup("easynet:///r/realm/hub")
+            .lookup("easynet:///r/realm/authority")
             .expect("schema-A entry present");
         assert_eq!(entry.origin_realm, None);
         assert_eq!(entry.hub_endpoint, None);
@@ -1420,7 +1427,7 @@ added_at_unix_ms = 1714492800000
     fn schema_b_hub_entry_loads_with_all_three_fields() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/peer-realm/hub"
+agent_ura = "easynet:///r/peer-realm/authority"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = 1714492800000
@@ -1431,7 +1438,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
         let file = write_temp(toml_content);
         let anchor = RealmTrustAnchor::load_or_empty(file.path()).expect("schema-B loads");
         let entry = anchor
-            .lookup("easynet:///r/peer-realm/hub")
+            .lookup("easynet:///r/peer-realm/authority")
             .expect("schema-B entry present");
         assert_eq!(entry.origin_realm.as_deref(), Some("peer-realm"));
         assert_eq!(
@@ -1448,7 +1455,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
     fn schema_b_rejects_unknown_hub_endpoint_field_alias() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/peer-realm/hub"
+agent_ura = "easynet:///r/peer-realm/authority"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = 1714492800000
@@ -1474,7 +1481,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
     fn schema_b_rejects_retired_origin_tenant_id_field() {
         let toml_content = r#"
 [[trusted_agent]]
-agent_ura = "easynet:///r/peer-realm/hub"
+agent_ura = "easynet:///r/peer-realm/authority"
 public_key_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 role = "hub"
 added_at_unix_ms = 1714492800000
@@ -1499,7 +1506,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
     #[test]
     fn lookup_peer_hub_finds_matching_federation_entry() {
         let target_hub_endpoint = "https://peer-hub.example:50443";
-        let mut entry = entry("easynet:///r/peer-realm/hub");
+        let mut entry = entry("easynet:///r/peer-realm/authority");
         entry.role = TrustedAgentRole::Hub;
         entry.origin_realm = Some("peer-realm".to_string());
         entry.hub_endpoint = Some(target_hub_endpoint.to_string());
@@ -1516,7 +1523,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
     #[test]
     fn lookup_peer_hub_skips_non_hub_role() {
         let target_hub_endpoint = "https://peer-hub.example:50443";
-        let mut entry = entry("easynet:///r/peer-realm/hub");
+        let mut entry = entry("easynet:///r/peer-realm/authority");
         // Backend role with a hub_endpoint set — operator typo. Must
         // not be returned by `lookup_peer_hub`.
         entry.role = TrustedAgentRole::Backend;
@@ -1531,7 +1538,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
     #[test]
     fn lookup_peer_hub_skips_entry_missing_origin_realm() {
         let target_hub_endpoint = "https://peer-hub.example:50443";
-        let mut entry = entry("easynet:///r/peer-realm/hub");
+        let mut entry = entry("easynet:///r/peer-realm/authority");
         entry.role = TrustedAgentRole::Hub;
         entry.origin_realm = None;
         entry.hub_endpoint = Some(target_hub_endpoint.to_string());
@@ -1543,7 +1550,7 @@ tls_ca_pem_path = "/etc/easynet/peer-hub-ca.pem"
 
     #[test]
     fn lookup_peer_hub_returns_none_when_hub_endpoint_does_not_match() {
-        let mut entry = entry("easynet:///r/peer-realm/hub");
+        let mut entry = entry("easynet:///r/peer-realm/authority");
         entry.role = TrustedAgentRole::Hub;
         entry.origin_realm = Some("peer-realm".to_string());
         entry.hub_endpoint = Some("https://peer-hub.example:50443".to_string());
@@ -1597,7 +1604,7 @@ added_at_unix_ms = 1714492800000
         // error; canonicalisation must refuse so it never lands
         // in the trust set silently.
         let bad = TrustedAgent {
-            agent_ura: "easynet:///r/realm/hub".to_string(),
+            agent_ura: "easynet:///r/realm/authority".to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             role: TrustedAgentRole::User,
             added_at_unix_ms: 1_714_492_800_000,
@@ -2004,7 +2011,7 @@ added_at_unix_ms = 1714492800000
         let mut anchor = RealmTrustAnchor::default();
         anchor
             .append_agent(TrustedAgent {
-                agent_ura: "easynet:///r/peer-realm/hub".to_string(),
+                agent_ura: "easynet:///r/peer-realm/authority".to_string(),
                 public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
                 role: TrustedAgentRole::Hub,
                 added_at_unix_ms: 1_714_492_800_000,
@@ -2017,7 +2024,7 @@ added_at_unix_ms = 1714492800000
         anchor.save(&path).expect("save Ok");
         let loaded = RealmTrustAnchor::try_load_strict(&path).expect("load Ok");
         let entry = loaded
-            .lookup("easynet:///r/peer-realm/hub")
+            .lookup("easynet:///r/peer-realm/authority")
             .expect("hub entry present");
         assert_eq!(entry.origin_realm.as_deref(), Some("peer-realm"));
         assert_eq!(

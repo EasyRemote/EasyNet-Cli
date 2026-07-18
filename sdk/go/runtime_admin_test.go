@@ -130,7 +130,7 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 			"kind": "terminal",
 			"session_id": "session-a",
 			"device_ura": "easynet:///r/example/device/laptop",
-			"hub_ura": "easynet:///r/example/hub",
+			"hub_ura": "easynet:///r/example/authority",
 			"state": "active",
 			"session_kind": "pty",
 			"created_unix_ms": 1714492800000,
@@ -150,7 +150,7 @@ func TestRuntimeAdminAbilityClientListsSessions(t *testing.T) {
 	if len(page.Sessions) != 1 || page.Sessions[0].SessionID != "session-a" {
 		t.Fatalf("unexpected session page: %#v", page)
 	}
-	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/hub.session.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"; got != want {
+	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/authority.session.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"; got != want {
 		t.Fatalf("descriptor_ref = %#v, want %q", got, want)
 	}
 	args := capture.args(t)
@@ -223,7 +223,7 @@ func TestRuntimeAdminAbilityClientRevokesDevice(t *testing.T) {
 	if result.Ack || !result.RuntimeNotReady || result.DeviceURA != "easynet:///r/example/device/laptop" {
 		t.Fatalf("unexpected revoke result: %#v", result)
 	}
-	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/hub.federation.revoke@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"; got != want {
+	if got, want := capture.draft["descriptor_ref"], "easynet:///r/example/ability/authority.federation.revoke@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"; got != want {
 		t.Fatalf("descriptor_ref = %#v, want %q", got, want)
 	}
 	args := capture.args(t)
@@ -353,7 +353,7 @@ func newRuntimeAdminAbilityTestClient(t *testing.T, capture *runtimeAdminInvokeC
 func runtimeAdminTestCall() RuntimeCallContext {
 	return RuntimeCallContext{
 		CallerURA:         "easynet:///r/example/agent/backend",
-		CalleeURA:         "easynet:///r/example/hub",
+		CalleeURA:         "easynet:///r/example/authority",
 		SubjectURA:        "easynet:///r/example/resource/device.laptop/invoke/backend.admin",
 		DescriptorVersion: "1.0.0",
 		NonceBase64:       "AQIDBAUGBwgJCgsMDQ4PEA==",

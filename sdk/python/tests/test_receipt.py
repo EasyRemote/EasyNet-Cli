@@ -182,7 +182,7 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
                 trace_id="trace-1",
             ),
             exclude_ability_uras=(
-                "easynet:///r/example/ability/hub.invocation.history.list",
+                "easynet:///r/example/ability/authority.invocation.history.list",
             ),
         )
     )
@@ -208,7 +208,7 @@ def test_runtime_receipt_list_projects_typed_query_and_axon_record() -> None:
         },
         "limit": DEFAULT_RECEIPT_PAGE_LIMIT,
         "exclude_ability_uras": [
-            "easynet:///r/example/ability/hub.invocation.history.list"
+            "easynet:///r/example/ability/authority.invocation.history.list"
         ],
     }
 
@@ -288,8 +288,8 @@ def test_runtime_receipt_list_rejects_noncanonical_and_duplicate_ura_filters() -
             ReceiptListRequest(
                 call=_call(),
                 exclude_ability_uras=(
-                    "easynet:///r/example/ability/hub.observe.health",
-                    "easynet:///r/example/ability/hub.observe.health",
+                    "easynet:///r/example/ability/authority.observe.health",
+                    "easynet:///r/example/ability/authority.observe.health",
                 ),
             )
         )

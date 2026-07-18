@@ -767,7 +767,7 @@ type AgentIdentity struct {
 	// URA canonical form per URA §3. Examples:
 	//
 	//	"EasyNet URA /r/silan/agent/alice.quote-bot"
-	//	"EasyNet URA /r/silan/hub/research-hub"
+	//	"EasyNet URA /r/silan/authority/research-authority"
 	//	"EasyNet URA /r/silan/device/macbook-pro"
 	Ura string `protobuf:"bytes,1,opt,name=ura,proto3" json:"ura,omitempty"`
 	// URA profile selector. Known values:
@@ -2173,7 +2173,7 @@ type ResponseHeader struct {
 	TraceId   string                 `protobuf:"bytes,2,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
 	Status    string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"` // "accepted" | "completed" | "rejected"
 	// When true, the status represents a permanent rejection — the client should
-	// disconnect rather than retry. Allows the Hub to introduce new rejection
+	// disconnect rather than retry. Allows the Authority to introduce new rejection
 	// statuses without requiring client-side string matching updates.
 	Permanent     bool `protobuf:"varint,4,opt,name=permanent,proto3" json:"permanent,omitempty"`
 	unknownFields protoimpl.UnknownFields

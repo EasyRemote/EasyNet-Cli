@@ -413,7 +413,7 @@ class AgentIdentity(google.protobuf.message.Message):
 
     URA composite identity carrier. `AgentIdentity` is the compatibility
     wire name for the actor/owner slots: caller is an initiating agent
-    identity; callee is owner-general and may be a hub, agent, or device
+    identity; callee is owner-general and may be an authority, agent, or device
     URA after RFC-005 namespace resolution. The `profile` selector is
     structurally bound to the URA it profiles — see AXIOM.tex §5.4 Axis B.
 
@@ -429,7 +429,7 @@ class AgentIdentity(google.protobuf.message.Message):
     ura: builtins.str
     """URA canonical form per URA §3. Examples:
       "EasyNet URA /r/silan/agent/alice.quote-bot"
-      "EasyNet URA /r/silan/hub/research-hub"
+      "EasyNet URA /r/silan/authority/research-authority"
       "EasyNet URA /r/silan/device/macbook-pro"
     """
     profile: builtins.str
@@ -1071,7 +1071,7 @@ class ResponseHeader(google.protobuf.message.Message):
     """"accepted" | "completed" | "rejected" """
     permanent: builtins.bool
     """When true, the status represents a permanent rejection — the client should
-    disconnect rather than retry. Allows the Hub to introduce new rejection
+    disconnect rather than retry. Allows the Authority to introduce new rejection
     statuses without requiring client-side string matching updates.
     """
     def __init__(

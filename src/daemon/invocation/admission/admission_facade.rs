@@ -1329,7 +1329,7 @@ impl AdmissionFacade {
         let callee = crate::core::ura::parse_ura(callee_ura).map_err(|err| {
             Status::invalid_argument(format!("federation.join callee is not a hub URA: {err}"))
         })?;
-        if callee.kind != crate::core::ura::URAKind::Hub {
+        if callee.kind != crate::core::ura::URAKind::Authority {
             return Err(Status::invalid_argument(format!(
                 "federation.join callee must identify a hub, got {:?}",
                 callee.kind
@@ -1935,7 +1935,7 @@ fn federated_caller_role(caller_ura: &str) -> Option<TrustedAgentRole> {
     match parsed.kind {
         URAKind::Device => Some(TrustedAgentRole::Device),
         URAKind::User => Some(TrustedAgentRole::User),
-        URAKind::Hub => Some(TrustedAgentRole::Hub),
+        URAKind::Authority => Some(TrustedAgentRole::Hub),
         _ => None,
     }
 }
@@ -2673,7 +2673,7 @@ mod tests {
 
     #[test]
     fn session_admission_produces_complete_non_self_receipt_policy() {
-        let caller_ura = "easynet:///r/policy/hub";
+        let caller_ura = "easynet:///r/policy/authority";
         let callee_ura = "easynet:///r/policy/agent/service.worker";
         let subject_ura = "easynet:///r/policy/resource/user.alice/session/session-42";
         let payload = SessionAuthorityPayload {
@@ -2763,20 +2763,20 @@ mod tests {
     fn federated_caller_classification_accepts_only_canonical_peer_identities() {
         let facade = federated_facade();
 
-        assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub"));
-        assert!(!facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));
-        assert!(!facade.is_federated_caller("easynet:///r/self-realm/hub"));
-        assert!(!facade.is_federated_caller("easynet:///r/unknown-realm/hub"));
+        assert!(facade.is_federated_caller("easynet:///r/peer-realm/authority"));
+        assert!(!facade.is_federated_caller("easynet:///r/peer-realm/authority/extra"));
+        assert!(!facade.is_federated_caller("easynet:///r/self-realm/authority"));
+        assert!(!facade.is_federated_caller("easynet:///r/unknown-realm/authority"));
     }
 
     #[test]
     fn admission_realm_extraction_uses_the_canonical_ura_parser() {
         assert_eq!(
-            parse_realm_from_ura("easynet:///r/peer-realm/hub"),
+            parse_realm_from_ura("easynet:///r/peer-realm/authority"),
             Some("peer-realm".to_string())
         );
         assert_eq!(
-            parse_realm_from_ura("easynet:///r/peer-realm/hub/extra"),
+            parse_realm_from_ura("easynet:///r/peer-realm/authority/extra"),
             None
         );
     }

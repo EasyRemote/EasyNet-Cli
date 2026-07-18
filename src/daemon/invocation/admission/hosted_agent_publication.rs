@@ -74,7 +74,7 @@ impl HostedAgentPublication {
         let callee = parse_ura(callee_ura).map_err(|_| {
             HostedAgentPublicationError::InvalidIdentity("callee must be a canonical hub URA")
         })?;
-        if callee.kind != URAKind::Hub || callee.realm != caller.realm {
+        if callee.kind != URAKind::Authority || callee.realm != caller.realm {
             return Err(HostedAgentPublicationError::InvalidIdentity(
                 "callee must be the caller realm hub",
             ));
@@ -241,7 +241,7 @@ mod tests {
                 profile: String::new(),
             }),
             callee: Some(AgentIdentity {
-                ura: "easynet:///r/test/hub".to_string(),
+                ura: "easynet:///r/test/authority".to_string(),
                 profile: String::new(),
             }),
             subject: Some(SubjectIdentity {
@@ -288,7 +288,7 @@ mod tests {
             &envelope(agent_ura),
             &request(agent_ura),
             &anchor(Some("dev")),
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         )
         .expect("verified publication");
 
@@ -308,7 +308,7 @@ mod tests {
             &envelope(agent_ura),
             &request(agent_ura),
             &anchor(Some("dev")),
-            Some("easynet:///r/test/hub"),
+            Some("easynet:///r/test/authority"),
         )
         .expect_err("alias mismatch must reject");
 

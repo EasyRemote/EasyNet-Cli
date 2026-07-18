@@ -112,7 +112,6 @@ func (r directDescriptorBoundRequest) unary() (*axonpb.InvokeRequest, error) {
 	return &axonpb.InvokeRequest{
 		Envelope:        envelope,
 		Target:          directInvocationTarget(r.projection.DescriptorRef(), r.projection.RouteName()),
-		FunctionName:    r.projection.RouteName(),
 		Arguments:       r.projection.Payload(),
 		ContentType:     r.projection.ContentType(),
 		TimeoutSeconds:  r.projection.TimeoutSeconds(),
@@ -132,7 +131,6 @@ func (r directDescriptorBoundRequest) stream() (*axonpb.InvokeServerStreamReques
 	return &axonpb.InvokeServerStreamRequest{
 		Envelope:        envelope,
 		Target:          directInvocationTarget(r.projection.DescriptorRef(), r.projection.RouteName()),
-		FunctionName:    r.projection.RouteName(),
 		Arguments:       r.projection.Payload(),
 		ContentType:     r.projection.ContentType(),
 		TimeoutSeconds:  r.projection.TimeoutSeconds(),
@@ -220,8 +218,6 @@ func (r directDescriptorBoundRequest) requireCallMode(expected axoninv.CallMode)
 
 func directInvocationTarget(descriptorRef string, routeName string) *axonpb.InvocationTarget {
 	return &axonpb.InvocationTarget{
-		AbilityName:  descriptorRef,
-		FunctionName: routeName,
 		TypedTarget: &axonpb.InvocationTarget_Ability{
 			Ability: &axonpb.AbilityTarget{
 				AbilityName:  descriptorRef,

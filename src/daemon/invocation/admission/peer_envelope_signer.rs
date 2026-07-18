@@ -344,7 +344,7 @@ mod tests {
 
     fn peer_discover_descriptor_ref() -> String {
         crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
-            "easynet:///r/peer/hub",
+            "easynet:///r/peer/authority",
             "federation.discover",
             crate::daemon::ability::CallMode::Rpc,
         )
@@ -397,7 +397,8 @@ mod tests {
     #[tokio::test]
     async fn peer_request_normalizes_hub_and_user_provenance_before_signing() {
         let signer = test_hub_signer("local");
-        let expected_subject = "easynet:///r/peer/ability/hub.federation.discover".to_string();
+        let expected_subject =
+            "easynet:///r/peer/ability/authority.federation.discover".to_string();
         let expected_descriptor_ref = peer_discover_descriptor_ref();
 
         for provenance_ura in [
@@ -413,7 +414,7 @@ mod tests {
             };
             let request = PeerInvokeRequest::new(
                 Some(&caller_envelope),
-                "easynet:///r/peer/hub",
+                "easynet:///r/peer/authority",
                 "federation.discover",
                 br#"{"q":"chat"}"#.to_vec(),
                 Some("local"),

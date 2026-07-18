@@ -517,7 +517,7 @@ fn normalize_daemon_route_owners(
         })?;
         if !matches!(
             parsed.kind,
-            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Hub
+            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
         ) {
             return Err(axon_sdk::invocation::AxonError::invalid_argument(
                 "daemon unary route owner must be a canonical Device or Hub URA",
@@ -791,7 +791,7 @@ impl DaemonInvocationService {
                 "daemon bidi route owner URA is invalid: {error}"
             ))
         })?;
-        if parsed.kind != crate::core::ura::URAKind::Hub {
+        if parsed.kind != crate::core::ura::URAKind::Authority {
             return Err(axon_sdk::invocation::AxonError::invalid_argument(
                 "daemon exact bidi routes require the canonical realm Hub owner",
             ));

@@ -24,7 +24,7 @@
 // ------
 //   {
 //     "agent_ura":      "easynet:///r/{realm}/device/{device_id}"
-//                       | "easynet:///r/{realm}/hub",
+//                       | "easynet:///r/{realm}/authority",
 //     "public_key_b64": "<base64 standard, 32-byte ed25519 vk>",
 //     "role":           "device" | "backend" | "hub"
 //   }
@@ -656,10 +656,13 @@ mod tests {
             Some("abc".to_string())
         );
         assert_eq!(
-            parse_realm_from_ura("easynet:///r/abc/hub"),
+            parse_realm_from_ura("easynet:///r/abc/authority"),
             Some("abc".to_string())
         );
-        assert_eq!(parse_realm_from_ura("easynet:///r/abc/hub/extra"), None);
+        assert_eq!(
+            parse_realm_from_ura("easynet:///r/abc/authority/extra"),
+            None
+        );
         assert_eq!(parse_realm_from_ura("easynet:///r//device/n1"), None);
         assert_eq!(parse_realm_from_ura("https://example.com"), None);
         assert_eq!(parse_realm_from_ura("easynet://r/x/device/n1"), None); // missing third slash

@@ -155,7 +155,6 @@ class StreamTests(unittest.TestCase):
             [
                 b'{"sequence":1,"kind":"terminal","state":"Completed",'
                 b'"terminal":true,"payload_json":{"ok":true},'
-                b'"selected_node_id":"node-a","scheduling_reason":"local",'
                 b'"elapsed_ms":12,"terminal_receipt":{"receipt_ura":'
                 b'"easynet:///r/example/resource/agent.alice.sdk/invocation/r1/receipt"}}'
             ]
@@ -168,8 +167,6 @@ class StreamTests(unittest.TestCase):
         event = stream.next()
         terminal = stream.terminal_event()
 
-        self.assertEqual(event.selected_node_id, "node-a")
-        self.assertEqual(event.scheduling_reason, "local")
         self.assertEqual(event.elapsed_ms, 12)
         self.assertEqual(
             terminal.terminal_receipt,

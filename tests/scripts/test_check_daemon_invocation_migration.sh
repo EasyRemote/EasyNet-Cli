@@ -103,6 +103,123 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "generic builder completion path should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+python3 - "$SB/src/cli/commands/invoke.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+probe = '''
+#[allow(dead_code)]
+fn anonymous_remote_request_probe(target: &crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget) {
+    let _ = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
+        target,
+        "easynet:///r/acme/device/caller",
+        "easynet:///r/acme/resource/r1",
+        [1; 16],
+        axon_sdk::invocation::CausalContext::None,
+        serde_json::Value::Null,
+        std::time::Duration::from_secs(1),
+    );
+}
+
+'''
+path.write_text(probe + text, encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "public remote ingress direct request construction should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >"$SB/src/cli/commands/__remote_request_probe.rs" <<'RS'
+#[allow(dead_code)]
+fn anonymous_remote_request_probe(target: &crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget) {
+    let _ = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationRequest::new(
+        target,
+        "easynet:///r/acme/device/caller",
+        "easynet:///r/acme/resource/r1",
+        [1; 16],
+        axon_sdk::invocation::CausalContext::None,
+        serde_json::Value::Null,
+        std::time::Duration::from_secs(1),
+    );
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "production remote request construction outside tuple plan should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+cat >>"$SB/src/cli/daemon_client/remote_system_ability.rs" <<'RS'
+
+#[allow(dead_code)]
+fn anonymous_remote_system_nonce_probe() {
+    let _ = axon_sdk::invocation::fresh_nonce();
+}
+RS
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "remote system anonymous nonce derivation should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+python3 - "$SB/src/support/platform/local_daemon_grpc.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+probe = '''
+#[cfg(feature = "axon-pb")]
+#[allow(dead_code)]
+fn anonymous_local_loopback_probe() -> anyhow::Result<()> {
+    let _ = crate::daemon::invocation::dispatch::invocation_wire::LocalDaemonLoopbackInvocation::from_target(
+        "job.run",
+        serde_json::Value::Null,
+        "easynet:///r/acme/device/local",
+        "easynet:///r/acme/device/local",
+        "easynet:///r/acme/device/local",
+        crate::daemon::invocation::dispatch::invocation_wire::InvocationDerivationPolicy::FreshRoot,
+        std::time::Duration::from_secs(1),
+    )?;
+    Ok(())
+}
+
+'''
+marker = '#[cfg(all(test, feature = "axon-pb"))]'
+path.write_text(text.replace(marker, probe + marker, 1), encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "local loopback direct invocation construction should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+python3 - "$SB/src/support/platform/local_daemon_grpc.rs" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+probe = '''
+#[cfg(feature = "axon-pb")]
+#[allow(dead_code)]
+enum LocalDaemonSubjectPolicy {
+    SelfTarget,
+}
+
+'''
+marker = '#[cfg(all(test, feature = "axon-pb"))]'
+path.write_text(text.replace(marker, probe + marker, 1), encoding="utf-8")
+PY
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "obsolete local loopback subject policy should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 cat >"$SB/src/__tuple_patch_probe.rs" <<'RS'
 pub fn probe(mut target: crate::daemon::invocation::routing::target::InvocationTarget) {
     target = target.with_subject("easynet:///r/acme/resource/r1");

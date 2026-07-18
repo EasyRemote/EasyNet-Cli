@@ -1348,7 +1348,7 @@ fn validate_hub_ura(value: &str, field: &str) -> Result<String, VaultError> {
     let value = validate_managed_ura(value, field)?;
     let parsed = crate::core::ura::parse_ura(&value)
         .map_err(|error| VaultError::Policy(format!("{field} is not a canonical URA: {error}")))?;
-    if parsed.kind != crate::core::ura::URAKind::Hub {
+    if parsed.kind != crate::core::ura::URAKind::Authority {
         return Err(VaultError::Policy(format!("{field} must be a Hub URA")));
     }
     Ok(value)
@@ -2037,7 +2037,7 @@ mod tests {
     fn runtime_signing_requires_exact_public_projection_and_policy() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("keyring.enc");
-        let owner = "easynet:///r/test.local/hub";
+        let owner = "easynet:///r/test.local/authority";
         let mut vault = Vault::open_or_init(&path, &explicit_pass()).unwrap();
         vault.ensure(owner).unwrap();
         let public_key_b64 = encode_b64(&vault.derive_pubkey(owner).unwrap().to_bytes());

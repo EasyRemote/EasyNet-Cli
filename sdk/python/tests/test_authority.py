@@ -234,7 +234,7 @@ class AuthorityTests(unittest.TestCase):
 
     def test_authority_client_projects_canonical_principal_uras_to_current_session_wire(self) -> None:
         payload = _session_authority_payload()
-        payload["creator_principal_id"] = "easynet:///r/example/hub"
+        payload["creator_principal_id"] = "easynet:///r/example/authority"
         value = _authority_metadata(payload, b"session-signature")
         transport = _MemoryAuthorityTransport(
             session_json=json.dumps(
@@ -250,7 +250,7 @@ class AuthorityTests(unittest.TestCase):
                 session_owner_user_id="",
                 creator_principal_id="",
                 session_owner_ura="easynet:///r/example/user/alice",
-                creator_principal_ura="easynet:///r/example/hub",
+                creator_principal_ura="easynet:///r/example/authority",
                 callee_ura="easynet:///r/example/device/dev-a",
                 subject_ura="easynet:///r/example/resource/user.alice/session/session-1",
                 audience="easynet:///r/example/device/dev-a",
@@ -264,12 +264,12 @@ class AuthorityTests(unittest.TestCase):
 
         self.assertEqual(authority.session_owner_ura, "easynet:///r/example/user/alice")
         self.assertEqual(
-            authority.creator_principal_ura, "easynet:///r/example/hub"
+            authority.creator_principal_ura, "easynet:///r/example/authority"
         )
         self.assertEqual(transport.seen_session["session_owner_user_id"], "alice")
         self.assertEqual(
             transport.seen_session["creator_principal_id"],
-            "easynet:///r/example/hub",
+            "easynet:///r/example/authority",
         )
         self.assertNotIn("session_owner_ura", transport.seen_session)
 

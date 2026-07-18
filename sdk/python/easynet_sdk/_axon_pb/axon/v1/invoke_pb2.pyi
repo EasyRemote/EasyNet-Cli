@@ -489,12 +489,12 @@ class InvokeBidiUp(google.protobuf.message.Message):
         """Carrier-unification (dispatch-frame mini-RFC, T2.1): session
         business frames travel as canonical protocol shapes, not
         JSON-in-BinaryChunk.
-        device → hub
+        device → authority
         """
 
     @property
     def reverse_dispatch_call(self) -> global___ReverseDispatchCall:
-        """device → hub"""
+        """device → authority"""
 
     def __init__(
         self,
@@ -540,12 +540,12 @@ class InvokeBidiDown(google.protobuf.message.Message):
     @property
     def dispatch_call(self) -> global___DispatchCall:
         """Carrier-unification (T2.1), mirror of the up-direction pair.
-        hub → device
+        authority → device
         """
 
     @property
     def reverse_dispatch_result(self) -> global___ReverseDispatchResult:
-        """hub → device"""
+        """authority → device"""
 
     def __init__(
         self,
@@ -864,22 +864,22 @@ class DispatchCall(google.protobuf.message.Message):
 
     The session channel's business frames in canonical protocol shape.
     DispatchCall carries the ORIGINAL caller's Envelope verbatim — the
-    hub forwards, never mints or rewrites (a rewrite would destroy the
+    authority forwards, never mints or rewrites (a rewrite would destroy the
     caller signature). DispatchResult closes the receipt chain at the
-    hub hop: the terminal frame carries the callee-signed execution
-    receipt. DEC-F004 fixed the three review points: the hub stays OFF
-    the receipt chain (forwarding fact goes to the hub-local ledger),
-    reverse call_ids stay 16-byte nonces (they cross hub boundaries),
+    authority hop: the terminal frame carries the callee-signed execution
+    receipt. DEC-F004 fixed the three review points: the authority stays OFF
+    the receipt chain (forwarding fact goes to the authority-local ledger),
+    reverse call_ids stay 16-byte nonces (they cross authority boundaries),
     and failures reuse axon.v1.Error single-track.
 
-    Hub → device: run one complete Invocation on the target.
+    Authority → device: run one complete Invocation on the target.
 
     Erratum 2 (DEC-F004 landing audit): the RFC draft mapped
     `Dispatch.ability → envelope.ability`, but the Envelope does not
     carry ability — ability/args live on the surrounding request per
     the split wire shape. Rather than re-inventing that split here,
     the frame carries the complete canonical InvokeRequest verbatim:
-    zero unpack/repack at the hub (a rewrite would destroy the caller
+    zero unpack/repack at the authority (a rewrite would destroy the caller
     signature), one message shape shared with the unary wire, and
     future InvokeRequest fields (timeout_seconds, payload_ref, ...)
     inherited for free.
@@ -914,7 +914,7 @@ global___DispatchCall = DispatchCall
 
 @typing.final
 class DispatchResult(google.protobuf.message.Message):
-    """Device → hub: result + finalized receipt checkpoints."""
+    """Device → authority: result + finalized receipt checkpoints."""
 
     DESCRIPTOR: google.protobuf.descriptor.Descriptor
 
@@ -965,8 +965,8 @@ global___DispatchResult = DispatchResult
 
 @typing.final
 class ReverseDispatchCall(google.protobuf.message.Message):
-    """Device → hub reverse request (the former Request/RequestResult):
-    same shape, 16-byte nonce call_id — it crosses hub boundaries
+    """Device → authority reverse request (the former Request/RequestResult):
+    same shape, 16-byte nonce call_id — it crosses authority boundaries
     where a u64 session counter would have a collision surface.
     """
 
@@ -1159,7 +1159,7 @@ class InvocationReceipt(google.protobuf.message.Message):
 
     @property
     def callee_binding(self) -> types_pb2.AgentIdentity:
-        """RFC-005 D45/D62: owner-general callee identity — the URA the call targeted; kind MAY be hub/agent/device. AgentIdentity is the owner-general identity alias, not agent-only."""
+        """RFC-005 D45/D62: owner-general callee identity — the URA the call targeted; kind MAY be authority/agent/device. AgentIdentity is the owner-general identity alias, not agent-only."""
 
     @property
     def subject_binding(self) -> types_pb2.SubjectIdentity:

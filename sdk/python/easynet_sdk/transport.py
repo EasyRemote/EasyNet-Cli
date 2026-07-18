@@ -1322,8 +1322,6 @@ def _invocation_result_dict(result: InvocationResult) -> dict[str, object]:
         "output_content_type": result.output_content_type,
         "output_base64": result.output_base64,
         "output_json": result.output_json,
-        "selected_node_id": result.selected_node_id,
-        "scheduling_reason": result.scheduling_reason,
         "elapsed_ms": result.elapsed_ms,
         "admission_receipt": (
             dict(result.admission_receipt)
@@ -1377,8 +1375,6 @@ def _result_response_dict(result: Mapping[str, object]) -> dict[str, object]:
         "result_content_type": _string_or_empty(result.get("output_content_type")),
         "result_base64": _string_or_empty(result.get("output_base64")),
         "result_json": result.get("output_json"),
-        "selected_node_id": _string_or_empty(result.get("selected_node_id")),
-        "scheduling_reason": _string_or_empty(result.get("scheduling_reason")),
         "elapsed_ms": _non_negative_int(result.get("elapsed_ms")),
         "admission_receipt": (
             dict(admission_receipt) if isinstance(admission_receipt, Mapping) else None

@@ -1844,7 +1844,7 @@ impl CanonicalHubAuthority {
                 reason: error.to_string(),
             }
         })?;
-        if parsed.kind != crate::core::ura::URAKind::Hub {
+        if parsed.kind != crate::core::ura::URAKind::Authority {
             return Err(AbilityControlPlaneError::InvalidHubAuthorityRoot {
                 authority_root: ura,
                 reason: format!("expected /hub URA, got {:?}", parsed.kind),
@@ -6358,7 +6358,7 @@ mod tests {
 
     #[test]
     fn fixed_authority_context_rejects_non_device_ura() {
-        let err = AbilityAuthorityContext::for_device_authority_root("easynet:///r/acme/hub")
+        let err = AbilityAuthorityContext::for_device_authority_root("easynet:///r/acme/authority")
             .unwrap_err();
 
         assert!(matches!(

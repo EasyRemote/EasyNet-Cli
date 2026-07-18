@@ -81,7 +81,7 @@ fn owner_ura_from_ability_ura(ability_ura: &str) -> Option<String> {
     }
     let ability = parsed.ability()?;
     match ability.owner {
-        crate::core::ura::AbilityOwner::Hub => Some(crate::core::ura::hub_ura(&parsed.realm)),
+        crate::core::ura::AbilityOwner::Authority => Some(crate::core::ura::hub_ura(&parsed.realm)),
         crate::core::ura::AbilityOwner::Agent { user_id, agent_id } => Some(
             crate::core::ura::agent_ura(&parsed.realm, &user_id, &agent_id),
         ),

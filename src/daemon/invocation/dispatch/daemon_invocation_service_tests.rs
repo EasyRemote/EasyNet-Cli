@@ -285,7 +285,7 @@ fn test_trust_anchor_with_entries(entries: Vec<TrustedAgent>) -> RealmTrustAncho
 fn test_admission_daemon_ura_for_route_owner(route_owner_ura: &str) -> Option<String> {
     let parsed = crate::core::ura::parse_ura(route_owner_ura).ok()?;
     match parsed.kind {
-        crate::core::ura::URAKind::Hub => Some(route_owner_ura.to_string()),
+        crate::core::ura::URAKind::Authority => Some(route_owner_ura.to_string()),
         _ => Some(TEST_DAEMON_URA.to_string()),
     }
 }
@@ -318,7 +318,7 @@ fn test_authority_context_for_route_owner(
     let parsed = crate::core::ura::parse_ura(route_owner_ura)
         .unwrap_or_else(|err| panic!("route owner URA must parse: {route_owner_ura}: {err}"));
     match parsed.kind {
-        crate::core::ura::URAKind::Hub => {
+        crate::core::ura::URAKind::Authority => {
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_hub_authority_root(
                 route_owner_ura,
             )
@@ -533,7 +533,7 @@ fn local_test_owner_kind(
             .daemon_ura()
             .is_some_and(|daemon_ura| daemon_ura == owner_ura)
             .then_some(crate::daemon::ability::dispatch::OwnerKind::Device),
-        crate::core::ura::URAKind::Hub => svc
+        crate::core::ura::URAKind::Authority => svc
             .identity
             .session_realm
             .as_deref()

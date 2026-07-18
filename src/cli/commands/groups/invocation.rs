@@ -609,7 +609,7 @@ fn short_ura(ura: &str) -> String {
             crate::core::ura::URAKind::Agent => parsed
                 .agent_ids()
                 .map(|(user_id, agent_id)| format!("agent/{user_id}.{agent_id}")),
-            crate::core::ura::URAKind::Hub => Some(format!("hub/{}", parsed.realm)),
+            crate::core::ura::URAKind::Authority => Some(format!("hub/{}", parsed.realm)),
             _ => None,
         })
         .unwrap_or_else(|| ura.to_string())

@@ -28,7 +28,7 @@ class RuntimeTransportFake:
         return json.dumps(
             {
                 "descriptor_ref": (
-                    "easynet:///r/example/ability/hub."
+                    "easynet:///r/example/ability/authority."
                     f"{request['ability']}@1.0.0"
                 )
             }
@@ -65,7 +65,7 @@ def _provider() -> tuple[RuntimeAbilityDescriptorProvider, RuntimeTransportFake]
 def _call() -> RuntimeCallContext:
     return RuntimeCallContext(
         caller_ura="easynet:///r/example/agent/alice.client",
-        callee_ura="easynet:///r/example/hub",
+        callee_ura="easynet:///r/example/authority",
         subject_ura="easynet:///r/example/user/alice",
         nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
         causal_context={"form": "none"},
@@ -101,9 +101,9 @@ def test_runtime_ability_descriptor_provider_lists_daemon_descriptors() -> None:
         "abilities": [
             {
                 "name": "namespace.resolve",
-                "ability_ura": "easynet:///r/example/ability/hub.namespace.resolve",
-                "descriptor_ref": "easynet:///r/example/ability/hub.namespace.resolve@1.0.0",
-                "owner_ura": "easynet:///r/example/hub",
+                "ability_ura": "easynet:///r/example/ability/authority.namespace.resolve",
+                "descriptor_ref": "easynet:///r/example/ability/authority.namespace.resolve@1.0.0",
+                "owner_ura": "easynet:///r/example/authority",
                 "descriptor_version": "1.0.0",
                 "schema_hash": "sha256:abc",
                 "descriptor_hash": "sha256:def",
@@ -124,23 +124,23 @@ def test_runtime_ability_descriptor_provider_lists_daemon_descriptors() -> None:
         AbilityDescriptorListRequest(
             call=_call(),
             scope="realm",
-            owner_ura="easynet:///r/example/hub",
+            owner_ura="easynet:///r/example/authority",
         )
     )
 
     assert transport.seen["descriptor_ref"] == (
-        "easynet:///r/example/ability/hub.meta.list_abilities@1.0.0"
+        "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0"
     )
     assert transport.seen["args"] == {
         "scope": "realm",
-        "agent_ura": "easynet:///r/example/hub",
+        "agent_ura": "easynet:///r/example/authority",
     }
     assert len(page.descriptors) == 1
     descriptor = page.descriptors[0]
-    assert descriptor.ability_ura == "easynet:///r/example/ability/hub.namespace.resolve"
+    assert descriptor.ability_ura == "easynet:///r/example/ability/authority.namespace.resolve"
     assert (
         descriptor.descriptor_ref
-        == "easynet:///r/example/ability/hub.namespace.resolve@1.0.0"
+        == "easynet:///r/example/ability/authority.namespace.resolve@1.0.0"
     )
     assert descriptor.version == "1.0.0"
     assert descriptor.class_ == "runtime"
@@ -158,15 +158,15 @@ def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors()
         "abilities": [
             {
                 "name": "observe.health",
-                "ability_ura": "easynet:///r/example/ability/hub.observe.health",
-                "owner_ura": "easynet:///r/example/hub",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "owner_ura": "easynet:///r/example/authority",
                 "version": "1.0.0",
                 "call_mode": "rpc",
             },
             {
                 "name": "observe.health",
-                "ability_ura": "easynet:///r/example/ability/hub.observe.health",
-                "owner_ura": "easynet:///r/example/hub",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "owner_ura": "easynet:///r/example/authority",
                 "version": "2.0.0",
                 "call_mode": "rpc",
             },
@@ -177,7 +177,7 @@ def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors()
         provider.get(
             AbilityDescriptorGetRequest(
                 call=_call(),
-                ability_ura="easynet:///r/example/ability/hub.observe.health",
+                ability_ura="easynet:///r/example/ability/authority.observe.health",
             )
         )
     assert is_code(caught.value, ErrorCode.INVALID_ARGUMENT)
@@ -185,7 +185,7 @@ def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors()
     descriptor = provider.get(
         AbilityDescriptorGetRequest(
             call=_call(),
-            ability_ura="easynet:///r/example/ability/hub.observe.health",
+            ability_ura="easynet:///r/example/ability/authority.observe.health",
             descriptor_version="2.0.0",
         )
     )

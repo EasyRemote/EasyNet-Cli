@@ -4,8 +4,9 @@ Status: production provider available; assembly remains deployment-conditional (
 
 ## Ownership
 
-Any live `voice.*` descriptor and receipt has one owner: the canonical realm
-Hub URA. Device authority does not publish or execute a voice route.
+Any live `voice.*` descriptor and receipt has one owner: the product realm Hub
+projected to Axon's canonical Authority URA. Device authority does not publish
+or execute a voice route.
 `voice.subscribe` is Stream, `voice.transcribe` is Bidi, and the call signaling
 verbs are RPC. Geometry and authorization action are separate descriptor facts:
 inspection uses `read`, media carriers use `stream`, and every signaling
@@ -92,7 +93,8 @@ production qualification evidence. Supplying it to assembly leaves Voice in
 6. Missing records are the only implicit empty state; corrupt state fails closed.
 7. Recovered open calls carry no terminal facts; recovered ended calls carry
    both `ended_at_ms` and `end_reason`.
-8. Aggregate authority is a canonical Hub URA and never a Device URA.
+8. Aggregate authority is the canonical Authority URA for the product Hub and
+   never a Device URA.
 9. Every loaded aggregate must exactly match the requested Hub/call key. List
    rows expose their repository key separately, and the embedded aggregate must
    match both parts before it is returned.

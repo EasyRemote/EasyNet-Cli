@@ -163,7 +163,7 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
             crate::core::ura::AbilityOwner::Device { device_id } => {
                 Some(format!("device/{device_id}"))
             }
-            crate::core::ura::AbilityOwner::Hub => Some("hub".to_string()),
+            crate::core::ura::AbilityOwner::Authority => Some("hub".to_string()),
         },
         crate::core::ura::URAKind::User => {
             parsed.user_id().map(|user_id| format!("user/{user_id}"))
@@ -171,7 +171,7 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
         crate::core::ura::URAKind::Device => parsed
             .device_id()
             .map(|device_id| format!("device/{device_id}")),
-        crate::core::ura::URAKind::Hub => Some("hub".to_string()),
+        crate::core::ura::URAKind::Authority => Some("hub".to_string()),
         _ => None,
     }
 }

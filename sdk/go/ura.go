@@ -166,11 +166,11 @@ func AbilityURA(realm, userID, agentID, abilityID string) string {
 }
 
 func HubURA(realm string) string {
-	return axonsdk.HubURA(realm)
+	return axonsdk.AuthorityURA(realm)
 }
 
 func HubAbilityURA(realm, abilityName string) string {
-	return axonsdk.HubAbilityURA(realm, abilityName)
+	return axonsdk.AuthorityAbilityURA(realm, abilityName)
 }
 
 func ResourceDotURA(realm, ownerID, path string) string {
@@ -252,10 +252,14 @@ func ParseURAParts(raw string) (ParsedURA, error) {
 
 func parsedURAFromAxon(parts axonsdk.ParsedURA) ParsedURA {
 	resourceNamespace, resourcePath := projectProductResourcePath(parts.Kind, parts.Path)
+	kind := URAKind(string(parts.Kind))
+	if parts.Kind == axonsdk.URAKindAuthority {
+		kind = URAKindHub
+	}
 	return ParsedURA{
 		Raw:               parts.Raw,
 		Realm:             parts.Realm,
-		Kind:              URAKind(string(parts.Kind)),
+		Kind:              kind,
 		UserID:            parts.UserID,
 		DeviceID:          parts.DeviceID,
 		AgentID:           parts.AgentID,
@@ -278,8 +282,12 @@ func parsedAbilityFromAxon(ability axonsdk.ParsedAbility) ParsedAbility {
 }
 
 func abilityOwnerFromAxon(owner axonsdk.AbilityOwner) AbilityOwner {
+	kind := AbilityOwnerKind(string(owner.Kind))
+	if owner.Kind == axonsdk.AbilityOwnerAuthority {
+		kind = AbilityOwnerHub
+	}
 	return AbilityOwner{
-		Kind:     AbilityOwnerKind(string(owner.Kind)),
+		Kind:     kind,
 		UserID:   owner.UserID,
 		AgentID:  owner.AgentID,
 		DeviceID: owner.DeviceID,

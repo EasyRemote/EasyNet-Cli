@@ -623,8 +623,6 @@ class InvocationResult:
     output_content_type: str = ""
     output_base64: str = ""
     output_json: Any = None
-    selected_node_id: str = ""
-    scheduling_reason: str = ""
     elapsed_ms: int = 0
     error: Optional[InvocationFailure] = None
     admission_receipt: Optional[Mapping[str, object]] = None
@@ -667,6 +665,25 @@ class InvocationResult:
             admission=admission,
             terminal=terminal,
         )
+
+    @property
+    def lifecycle_state(self) -> InvocationLifecycleState:
+        """Return the fail-closed canonical terminal lifecycle state."""
+
+        try:
+            state = InvocationLifecycleState.from_wire_name(self.terminal_state)
+        except ValueError as error:
+            raise _invalid_runtime(
+                str(error),
+                error,
+                details={"reason": "invalid_lifecycle_state"},
+            ) from error
+        if not state.is_terminal:
+            raise _invalid_runtime(
+                "invocation result lifecycle state must be terminal",
+                details={"reason": "invalid_lifecycle_state"},
+            )
+        return state
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "InvocationResult":
@@ -730,14 +747,6 @@ class InvocationResult:
             )
             or "",
             output_json=decoded.get("output_json"),
-            selected_node_id=_optional_string(
-                decoded.get("selected_node_id"), "selected_node_id"
-            )
-            or "",
-            scheduling_reason=_optional_string(
-                decoded.get("scheduling_reason"), "scheduling_reason"
-            )
-            or "",
             elapsed_ms=elapsed_ms,
             error=failure,
             admission_receipt=admission_receipt,

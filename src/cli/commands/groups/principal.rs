@@ -1437,10 +1437,10 @@ mod tests {
             .expect("principal target");
 
         assert_eq!(target.dispatch_name(), routes::PRINCIPAL_ABILITY_CREATE);
-        assert_eq!(target.callee_ura(), "easynet:///r/realm/hub");
+        assert_eq!(target.callee_ura(), "easynet:///r/realm/authority");
         assert_eq!(
             target.default_subject_ura(),
-            "easynet:///r/realm/ability/hub.principal.lifecycle.create"
+            "easynet:///r/realm/ability/authority.principal.lifecycle.create"
         );
     }
 

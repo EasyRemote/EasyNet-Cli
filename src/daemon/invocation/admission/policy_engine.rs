@@ -214,7 +214,7 @@ mod tests {
                 audit_warnings: vec![],
             },
             caller_user_id: None,
-            caller_ura: "easynet:///r/test/hub".to_string(),
+            caller_ura: "easynet:///r/test/authority".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),

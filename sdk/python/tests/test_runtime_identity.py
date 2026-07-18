@@ -19,14 +19,14 @@ class RuntimeIdentityTests(unittest.TestCase):
             with self.subTest(socket_path=socket_path):
                 with self.assertRaises(SDKError) as caught:
                     load_runtime_signing_identity(
-                        "easynet:///r/acme/hub", socket_path=socket_path
+                        "easynet:///r/acme/authority", socket_path=socket_path
                     )
                 self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
                 self.assertEqual(caught.exception.stage, "key_service")
 
                 with self.assertRaises(SDKError) as caught:
                     ensure_runtime_signing_identity(
-                        "easynet:///r/acme/hub", socket_path=socket_path
+                        "easynet:///r/acme/authority", socket_path=socket_path
                     )
                 self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
                 self.assertEqual(caught.exception.stage, "key_service")
@@ -52,19 +52,19 @@ class RuntimeIdentityTests(unittest.TestCase):
             ]
         ) as server:
             identity = load_runtime_signing_identity(
-                "easynet:///r/acme/hub", socket_path=server.socket_path
+                "easynet:///r/acme/authority", socket_path=server.socket_path
             )
             self.assertEqual(identity.public_key, public_key)
             self.assertEqual(identity.sign_canonical(b"canonical"), signature)
             requests.extend(server.requests)
         self.assertEqual(
             requests[0],
-            {"method": "derive_pubkey", "self_ura": "easynet:///r/acme/hub"},
+            {"method": "derive_pubkey", "self_ura": "easynet:///r/acme/authority"},
         )
         self.assertEqual(requests[1]["method"], "sign")
         public_key_b64 = base64.b64encode(public_key).decode("ascii")
         expected_policy = hashlib.sha256(
-            b"easynet:///r/acme/hub\0easynet:///r/acme/hub\0"
+            b"easynet:///r/acme/authority\0easynet:///r/acme/authority\0"
             + public_key_b64.encode("ascii")
         ).hexdigest()[:32]
         self.assertEqual(requests[1]["public_key_b64"], public_key_b64)
@@ -87,14 +87,14 @@ class RuntimeIdentityTests(unittest.TestCase):
             ]
         ) as server:
             identity = ensure_runtime_signing_identity(
-                "easynet:///r/acme/hub",
+                "easynet:///r/acme/authority",
                 socket_path=server.socket_path,
             )
             requests.extend(server.requests)
         self.assertEqual(identity.public_key, public_key)
         self.assertEqual(
             requests[0],
-            {"method": "ensure", "primary_self": "easynet:///r/acme/hub"},
+            {"method": "ensure", "primary_self": "easynet:///r/acme/authority"},
         )
         self.assertNotIn("seed_hex", requests[0])
 
@@ -120,7 +120,7 @@ class RuntimeIdentityTests(unittest.TestCase):
             ]
         ) as server:
             identity = load_runtime_signing_identity(
-                "easynet:///r/acme/hub", socket_path=server.socket_path
+                "easynet:///r/acme/authority", socket_path=server.socket_path
             )
             with self.assertRaises(SDKError) as caught:
                 identity.sign_canonical(b"canonical")
@@ -132,7 +132,7 @@ class RuntimeIdentityTests(unittest.TestCase):
         ) as server:
             with self.assertRaises(SDKError) as caught:
                 load_runtime_signing_identity(
-                    "easynet:///r/acme/hub", socket_path=server.socket_path
+                    "easynet:///r/acme/authority", socket_path=server.socket_path
                 )
         self.assertEqual(caught.exception.code, ErrorCode.PROTOCOL)
         self.assertEqual(caught.exception.stage, "runtime_identity")
@@ -156,7 +156,7 @@ class RuntimeIdentityTests(unittest.TestCase):
                 ) as server:
                     with self.assertRaises(SDKError) as caught:
                         load_runtime_signing_identity(
-                            "easynet:///r/acme/hub", socket_path=server.socket_path
+                            "easynet:///r/acme/authority", socket_path=server.socket_path
                         )
                 self.assertEqual(caught.exception.code, expected_code)
                 self.assertEqual(caught.exception.stage, "runtime_identity")
@@ -173,7 +173,7 @@ class RuntimeIdentityTests(unittest.TestCase):
         ) as server:
             with self.assertRaises(SDKError) as caught:
                 load_runtime_signing_identity(
-                    "easynet:///r/acme/hub", socket_path=server.socket_path
+                    "easynet:///r/acme/authority", socket_path=server.socket_path
                 )
         self.assertEqual(caught.exception.code, ErrorCode.PROTOCOL)
         self.assertEqual(caught.exception.stage, "runtime_identity")

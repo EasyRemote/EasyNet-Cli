@@ -73,14 +73,14 @@ func TestDirectDescriptorBoundCodecPreservesInvocationAcrossCallModes(t *testing
 	if got := string(bidi.GetEnvelopeOpen().GetInitialArgs()); got != string(unary.GetArguments()) {
 		t.Fatalf("bidi arguments = %q, want unary %q", got, unary.GetArguments())
 	}
-	if unary.GetFunctionName() != "er.weather" ||
-		stream.GetFunctionName() != "er.weather" ||
-		bidi.GetEnvelopeOpen().GetTarget().GetFunctionName() != "er.weather" {
+	if unary.GetTarget().GetAbility().GetFunctionName() != "er.weather" ||
+		stream.GetTarget().GetAbility().GetFunctionName() != "er.weather" ||
+		bidi.GetEnvelopeOpen().GetTarget().GetAbility().GetFunctionName() != "er.weather" {
 		t.Fatalf(
 			"public route drift: unary=%q stream=%q bidi=%q",
-			unary.GetFunctionName(),
-			stream.GetFunctionName(),
-			bidi.GetEnvelopeOpen().GetTarget().GetFunctionName(),
+			unary.GetTarget().GetAbility().GetFunctionName(),
+			stream.GetTarget().GetAbility().GetFunctionName(),
+			bidi.GetEnvelopeOpen().GetTarget().GetAbility().GetFunctionName(),
 		)
 	}
 	for mode, target := range map[string]*axonpb.InvocationTarget{

@@ -72,7 +72,7 @@ use tonic::Request;
 const REALM: &str = "test-realm";
 const DEVICE_URA: &str = "easynet:///r/test-realm/device/device-a";
 const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/device-b";
-const HUB_URA: &str = "easynet:///r/test-realm/hub";
+const HUB_URA: &str = "easynet:///r/test-realm/authority";
 const ABILITY_PUBLIC_NAME: &str = "observe.health";
 const UNBOUND_ABILITY_PUBLIC_NAME: &str = "observe.network_health";
 const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-a.observe.health";
@@ -357,7 +357,7 @@ fn catalog_owner_kind_for(callee_ura: &str) -> OwnerKind {
         .unwrap_or_else(|err| panic!("fixture callee URA must parse: {callee_ura}: {err}"));
     match parsed.kind {
         easynet_cli::core::ura::URAKind::Device => OwnerKind::Device,
-        easynet_cli::core::ura::URAKind::Hub => OwnerKind::Hub,
+        easynet_cli::core::ura::URAKind::Authority => OwnerKind::Hub,
         other => panic!("fixture callee owner kind must be Device or Hub, got {other:?}"),
     }
 }

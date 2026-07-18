@@ -839,11 +839,11 @@ type InvokeBidiUp_DispatchResult struct {
 	// Carrier-unification (dispatch-frame mini-RFC, T2.1): session
 	// business frames travel as canonical protocol shapes, not
 	// JSON-in-BinaryChunk.
-	DispatchResult *DispatchResult `protobuf:"bytes,13,opt,name=dispatch_result,json=dispatchResult,proto3,oneof"` // device → hub
+	DispatchResult *DispatchResult `protobuf:"bytes,13,opt,name=dispatch_result,json=dispatchResult,proto3,oneof"` // device → authority
 }
 
 type InvokeBidiUp_ReverseDispatchCall struct {
-	ReverseDispatchCall *ReverseDispatchCall `protobuf:"bytes,14,opt,name=reverse_dispatch_call,json=reverseDispatchCall,proto3,oneof"` // device → hub
+	ReverseDispatchCall *ReverseDispatchCall `protobuf:"bytes,14,opt,name=reverse_dispatch_call,json=reverseDispatchCall,proto3,oneof"` // device → authority
 }
 
 func (*InvokeBidiUp_EnvelopeOpen) isInvokeBidiUp_Payload() {}
@@ -989,11 +989,11 @@ type InvokeBidiDown_Control struct {
 
 type InvokeBidiDown_DispatchCall struct {
 	// Carrier-unification (T2.1), mirror of the up-direction pair.
-	DispatchCall *DispatchCall `protobuf:"bytes,13,opt,name=dispatch_call,json=dispatchCall,proto3,oneof"` // hub → device
+	DispatchCall *DispatchCall `protobuf:"bytes,13,opt,name=dispatch_call,json=dispatchCall,proto3,oneof"` // authority → device
 }
 
 type InvokeBidiDown_ReverseDispatchResult struct {
-	ReverseDispatchResult *ReverseDispatchResult `protobuf:"bytes,14,opt,name=reverse_dispatch_result,json=reverseDispatchResult,proto3,oneof"` // hub → device
+	ReverseDispatchResult *ReverseDispatchResult `protobuf:"bytes,14,opt,name=reverse_dispatch_result,json=reverseDispatchResult,proto3,oneof"` // authority → device
 }
 
 func (*InvokeBidiDown_Receipt) isInvokeBidiDown_Payload() {}
@@ -1638,14 +1638,14 @@ func (x *MediaTimestamp) GetPts() uint64 {
 	return 0
 }
 
-// Hub → device: run one complete Invocation on the target.
+// Authority → device: run one complete Invocation on the target.
 //
 // Erratum 2 (DEC-F004 landing audit): the RFC draft mapped
 // `Dispatch.ability → envelope.ability`, but the Envelope does not
 // carry ability — ability/args live on the surrounding request per
 // the split wire shape. Rather than re-inventing that split here,
 // the frame carries the complete canonical InvokeRequest verbatim:
-// zero unpack/repack at the hub (a rewrite would destroy the caller
+// zero unpack/repack at the authority (a rewrite would destroy the caller
 // signature), one message shape shared with the unary wire, and
 // future InvokeRequest fields (timeout_seconds, payload_ref, ...)
 // inherited for free.
@@ -1713,7 +1713,7 @@ func (x *DispatchCall) GetOpenBidi() bool {
 	return false
 }
 
-// Device → hub: result + finalized receipt checkpoints.
+// Device → authority: result + finalized receipt checkpoints.
 type DispatchResult struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	CallId   uint64                 `protobuf:"varint,1,opt,name=call_id,json=callId,proto3" json:"call_id,omitempty"`
@@ -1807,8 +1807,8 @@ func (x *DispatchResult) GetTerminalReceipt() *InvocationReceipt {
 	return nil
 }
 
-// Device → hub reverse request (the former Request/RequestResult):
-// same shape, 16-byte nonce call_id — it crosses hub boundaries
+// Device → authority reverse request (the former Request/RequestResult):
+// same shape, 16-byte nonce call_id — it crosses authority boundaries
 // where a u64 session counter would have a collision surface.
 type ReverseDispatchCall struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
@@ -2036,7 +2036,7 @@ type InvocationReceipt struct {
 	// For child invocation events: the child's invocation_id.
 	ChildInvocationId string           `protobuf:"bytes,12,opt,name=child_invocation_id,json=childInvocationId,proto3" json:"child_invocation_id,omitempty"`
 	CallerBinding     *AgentIdentity   `protobuf:"bytes,20,opt,name=caller_binding,json=callerBinding,proto3" json:"caller_binding,omitempty"`       // echoes Envelope.caller
-	CalleeBinding     *AgentIdentity   `protobuf:"bytes,21,opt,name=callee_binding,json=calleeBinding,proto3" json:"callee_binding,omitempty"`       // RFC-005 D45/D62: owner-general callee identity — the URA the call targeted; kind MAY be hub/agent/device. AgentIdentity is the owner-general identity alias, not agent-only.
+	CalleeBinding     *AgentIdentity   `protobuf:"bytes,21,opt,name=callee_binding,json=calleeBinding,proto3" json:"callee_binding,omitempty"`       // RFC-005 D45/D62: owner-general callee identity — the URA the call targeted; kind MAY be authority/agent/device. AgentIdentity is the owner-general identity alias, not agent-only.
 	SubjectBinding    *SubjectIdentity `protobuf:"bytes,22,opt,name=subject_binding,json=subjectBinding,proto3" json:"subject_binding,omitempty"`    // echoes Envelope.subject
 	InvocationNonce   []byte           `protobuf:"bytes,23,opt,name=invocation_nonce,json=invocationNonce,proto3" json:"invocation_nonce,omitempty"` // echoes Envelope.invocation_nonce
 	CausalBinding     *CausalContext   `protobuf:"bytes,24,opt,name=causal_binding,json=causalBinding,proto3" json:"causal_binding,omitempty"`       // echoes Envelope.causal_context

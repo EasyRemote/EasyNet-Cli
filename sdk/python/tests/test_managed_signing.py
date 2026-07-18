@@ -72,7 +72,7 @@ class ManagedSigningTests(unittest.TestCase):
         key_id_2 = "managed-key-2"
         subject_ura = "easynet:///r/acme/agent/signer.main"
         peer_ura = "easynet:///r/peer/agent/verifier.main"
-        via_hub_ura = "easynet:///r/acme/hub"
+        via_hub_ura = "easynet:///r/acme/authority"
         responses = [
             {
                 "result": "inventory_key",

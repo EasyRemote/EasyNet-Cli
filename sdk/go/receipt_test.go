@@ -254,8 +254,8 @@ func TestRuntimeReceiptProviderProjectsMultipleAbilityURAsAsOneSet(t *testing.T)
 	_, err := provider.List(context.Background(), ReceiptListRequest{
 		Call: runtimeAbilityTestContext(),
 		Filter: ReceiptFilter{AbilityURAs: []string{
-			"easynet:///r/example/ability/hub.observe.health",
-			"easynet:///r/example/ability/hub.observe.metrics",
+			"easynet:///r/example/ability/authority.observe.health",
+			"easynet:///r/example/ability/authority.observe.metrics",
 		}},
 	})
 	if err != nil {
@@ -305,7 +305,7 @@ func TestRuntimeReceiptProviderRejectsNonCanonicalURAFilters(t *testing.T) {
 	}
 	_, err = provider.List(context.Background(), ReceiptListRequest{
 		Call:               runtimeAbilityTestContext(),
-		ExcludeAbilityURAs: []string{"easynet:///r/example/ability/hub.observe.health", "easynet:///r/example/ability/hub.observe.health"},
+		ExcludeAbilityURAs: []string{"easynet:///r/example/ability/authority.observe.health", "easynet:///r/example/ability/authority.observe.health"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "must not contain duplicates") {
 		t.Fatalf("duplicate ability filter error = %v", err)
@@ -354,9 +354,9 @@ func receiptLedgerRecordFixture() map[string]any {
 		"trace_id":          "trace-1",
 		"span_id":           "span-1",
 		"caller_ura":        "easynet:///r/example/agent/alice.client",
-		"callee_ura":        "easynet:///r/example/hub",
+		"callee_ura":        "easynet:///r/example/authority",
 		"subject_ura":       "easynet:///r/example/device/dev-a",
-		"ability_ura":       "easynet:///r/example/ability/hub.observe.health",
+		"ability_ura":       "easynet:///r/example/ability/authority.observe.health",
 		"ability_name":      "observe.health",
 		"state":             "completed",
 		"started_unix_ms":   1,

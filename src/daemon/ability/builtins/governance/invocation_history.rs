@@ -1055,7 +1055,7 @@ mod tests {
                 "caller_ura": "easynet:///r/test/device/caller",
                 "agent_ura": "easynet:///r/test/device/callee",
                 "subject_ura": "easynet:///r/test/user/alice",
-                "ability_ura": "easynet:///r/test/ability/hub.observe.health",
+                "ability_ura": "easynet:///r/test/ability/authority.observe.health",
                 "state": "completed"
             }
         }))
@@ -1075,7 +1075,7 @@ mod tests {
         assert!(query.subject_uras.contains("easynet:///r/test/user/alice"));
         assert_eq!(
             query.ability_ura.as_deref(),
-            Some("easynet:///r/test/ability/hub.observe.health")
+            Some("easynet:///r/test/ability/authority.observe.health")
         );
     }
 
@@ -1181,7 +1181,7 @@ mod tests {
             .caller_ura("easynet:///r/test/device/caller".to_string())
             .callee_ura("easynet:///r/test/device/callee".to_string())
             .subject_ura("easynet:///r/test/user/alice".to_string())
-            .ability_ura("easynet:///r/test/ability/hub.observe.health".to_string())
+            .ability_ura("easynet:///r/test/ability/authority.observe.health".to_string())
             .ability_name("observe.health".to_string())
             .authority_form("self".to_string())
             .state("completed".to_string())

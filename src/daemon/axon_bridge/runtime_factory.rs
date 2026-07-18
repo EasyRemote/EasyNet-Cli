@@ -487,14 +487,18 @@ pub fn install_ledger_sink(runtime: &Arc<LocalRuntime>, ledger: Option<Arc<Invoc
 }
 
 fn ledger_invocation_ura(invocation_id: &str, binding: &AxiomBinding) -> String {
-    axon_sdk::ura::invocation_record_ura_for_binding(
+    crate::core::ura::invocation_record_ura_for_binding(
         &binding.subject.ura,
         &binding.callee.ura,
         &binding.caller.ura,
         invocation_id,
     )
     .unwrap_or_else(|| {
-        axon_sdk::ura::invocation_history_resource_ura("_system", "hub.invocations", invocation_id)
+        crate::core::ura::invocation_history_resource_ura(
+            "_system",
+            "authority.invocations",
+            invocation_id,
+        )
     })
 }
 
@@ -510,10 +514,10 @@ fn ledger_route_ura(ability_name: &str, binding: &AxiomBinding) -> String {
     let caller_public_name =
         crate::core::ura::owner_local_ability_name(&binding.caller.ura, ability_name);
 
-    axon_sdk::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
-        .or_else(|| axon_sdk::ura::published_route_ura(&binding.caller.ura, &caller_public_name))
+    crate::core::ura::published_route_ura(&binding.callee.ura, &callee_public_name)
+        .or_else(|| crate::core::ura::published_route_ura(&binding.caller.ura, &caller_public_name))
         .unwrap_or_else(|| {
-            axon_sdk::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
+            crate::core::ura::hub_ability_ura("_system", &format!("system.{ability_name}"))
         })
 }
 
@@ -588,7 +592,7 @@ mod tests {
         // now names a hub-owned system ability URA.
         assert_eq!(
             ledger_route_ura("chat", &fallback_binding),
-            "easynet:///r/_system/ability/hub.system.chat"
+            "easynet:///r/_system/ability/authority.system.chat"
         );
     }
 }

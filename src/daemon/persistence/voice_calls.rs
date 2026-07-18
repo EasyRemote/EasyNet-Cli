@@ -162,7 +162,7 @@ impl HubRealmVoiceCallRepository {
 
     fn validate_authority(&self, authority_ura: &str) -> anyhow::Result<()> {
         let authority = crate::core::ura::parse_ura(authority_ura)?;
-        if authority.kind != crate::core::ura::URAKind::Hub || authority.realm != self.realm {
+        if authority.kind != crate::core::ura::URAKind::Authority || authority.realm != self.realm {
             anyhow::bail!(
                 "Voice repository for realm {:?} rejects authority {authority_ura:?}",
                 self.realm

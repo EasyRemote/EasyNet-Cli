@@ -273,7 +273,7 @@ def _command() -> PrincipalCommand:
 def _call() -> RuntimeCallContext:
     return RuntimeCallContext(
         caller_ura="easynet:///r/example/user/admin",
-        callee_ura="easynet:///r/example/hub",
+        callee_ura="easynet:///r/example/authority",
         subject_ura="easynet:///r/example/user/alice",
         nonce_base64="bm9uY2U=",
         causal_context={"kind": "none"},

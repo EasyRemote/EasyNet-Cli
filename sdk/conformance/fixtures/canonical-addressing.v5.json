@@ -29,7 +29,7 @@
     {
       "name": "hub",
       "request": {"kind": "hub", "realm": "example"},
-      "ura": "easynet:///r/example/hub",
+      "ura": "easynet:///r/example/authority",
       "components": {"realm": "example"}
     },
     {
@@ -48,6 +48,21 @@
       }
     },
     {
+      "name": "hub_ability",
+      "request": {"kind": "ability", "owner_ura": "easynet:///r/example/authority", "ability_name": "federation.resolve"},
+      "ura": "easynet:///r/example/ability/authority.federation.resolve",
+      "components": {
+        "realm": "example",
+        "owner_ura": "easynet:///r/example/authority",
+        "owner_kind": "hub",
+        "ability_name": "federation.resolve",
+        "public_name": "federation.resolve",
+        "local_registry_ability": "federation.resolve",
+        "namespace": "federation",
+        "local_name": "resolve"
+      }
+    },
+    {
       "name": "user_resource",
       "request": {"kind": "resource", "owner_ura": "easynet:///r/example/user/alice", "path": "invoke/observe.health"},
       "ura": "easynet:///r/example/resource/user.alice/invoke/observe.health",
@@ -55,14 +70,14 @@
     }
   ],
   "descriptor": {
-    "raw": "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0",
+    "raw": "easynet:///r/example/ability/authority.federation.resolve@1.0.0",
     "components": {
-      "ability_ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+      "ability_ura": "easynet:///r/example/ability/authority.federation.resolve",
       "descriptor_version": "1.0.0",
-      "owner_ura": "easynet:///r/example/device/dev-a",
-      "owner_kind": "device",
-      "public_name": "observe.health",
-      "local_registry_ability": "observe.health"
+      "owner_ura": "easynet:///r/example/authority",
+      "owner_kind": "hub",
+      "public_name": "federation.resolve",
+      "local_registry_ability": "federation.resolve"
     }
   },
   "invalid_uras": [
@@ -71,6 +86,6 @@
     "easynet:///r/example/agent/alice.extra.agent",
     "easynet:///r/example/agent/device.justone",
     "easynet:///r/example/agent/device.dev-a.terminal.extra",
-    "easynet:///r/example/agent/hub.assistant"
+    "easynet:///r/example/agent/authority.assistant"
   ]
 }

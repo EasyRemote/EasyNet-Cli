@@ -960,7 +960,6 @@ class _AxonGrpcInvocation:
         envelope = self.request.envelope.envelope
         content_type = self.draft.sdk_draft.content_type
         target = _types_pb2.InvocationTarget(
-            ability_name=self.draft.sdk_draft.descriptor_ref,
             ability=_types_pb2.AbilityTarget(
                 ability_name=self.draft.sdk_draft.descriptor_ref,
                 function_name=self.draft.ability.public_name,
@@ -986,7 +985,6 @@ class _AxonGrpcInvocation:
                 caller_signature=self._caller_signature_to_wire(),
             ),
             "target": target,
-            "function_name": self.draft.ability.public_name,
             "arguments": self.request.payload,
             "content_type": content_type,
             "metadata": dict(self.draft.metadata),
@@ -1197,8 +1195,6 @@ def _invoke_response_json(
         "output_content_type": output_content_type,
         "output_base64": output_base64,
         "output_json": _output_json(response.result, output_content_type),
-        "selected_node_id": response.selected_node_id,
-        "scheduling_reason": response.scheduling_reason,
         "elapsed_ms": response.elapsed_ms,
         "admission_receipt": checkpoints.admission,
         "terminal_receipt": checkpoints.terminal,
@@ -1338,10 +1334,6 @@ def _stream_chunk_json(chunk: Any) -> bytes:
     }
     if chunk.invocation_id:
         event["invocation_id"] = chunk.invocation_id
-    if chunk.selected_node_id:
-        event["selected_node_id"] = chunk.selected_node_id
-    if chunk.scheduling_reason:
-        event["scheduling_reason"] = chunk.scheduling_reason
     if chunk.elapsed_ms:
         event["elapsed_ms"] = chunk.elapsed_ms
     if chunk.HasField("admission_receipt"):

@@ -951,8 +951,6 @@ func directInvokeResponseJSON(draft InvocationDraft, response *axonpb.InvokeResp
 		"output_content_type": response.GetResultContentType(),
 		"output_base64":       base64.StdEncoding.EncodeToString(response.GetResult()),
 		"output_json":         directOutputJSON(response.GetResult(), response.GetResultContentType()),
-		"selected_node_id":    response.GetSelectedNodeId(),
-		"scheduling_reason":   response.GetSchedulingReason(),
 		"elapsed_ms":          response.GetElapsedMs(),
 		"admission_receipt":   admissionReceipt,
 		"terminal_receipt":    terminalReceipt,
@@ -1053,12 +1051,6 @@ func directStreamChunkJSONWithAdmission(
 	}
 	if chunk.GetInvocationId() != "" {
 		value["invocation_id"] = chunk.GetInvocationId()
-	}
-	if chunk.GetSelectedNodeId() != "" {
-		value["selected_node_id"] = chunk.GetSelectedNodeId()
-	}
-	if chunk.GetSchedulingReason() != "" {
-		value["scheduling_reason"] = chunk.GetSchedulingReason()
 	}
 	if chunk.GetElapsedMs() != 0 {
 		value["elapsed_ms"] = chunk.GetElapsedMs()

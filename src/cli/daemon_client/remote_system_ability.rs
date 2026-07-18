@@ -12,7 +12,7 @@ use anyhow::Context;
 
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::routing::remote_invoke::{
-    self, RemoteAbilityInvocationTarget, RemoteInvocationRequest,
+    self, RemoteAbilityInvocationTarget, RemoteInvocationSubject, RemoteInvocationTuplePlan,
 };
 
 #[cfg(feature = "axon-pb")]
@@ -84,15 +84,14 @@ fn invoke_target_owned_system_ability(
     let target_call =
         RemoteAbilityInvocationTarget::for_target_owned_selector(execution_target_ura, selector)?;
     let subject_ura = target_owned_system_subject_ura(&target_call)?;
-    let request = RemoteInvocationRequest::new(
+    let request = RemoteInvocationTuplePlan::daemon_system_root(
         &target_call,
         caller_ura,
-        subject_ura,
-        axon_sdk::invocation::fresh_nonce(),
-        axon_sdk::invocation::CausalContext::None,
+        RemoteInvocationSubject::TargetOwnedSystem(subject_ura),
         args,
         std::time::Duration::from_secs(30),
-    )?;
+    )?
+    .into_request()?;
     remote_invoke::invoke_remote_target(request)
 }
 
@@ -104,7 +103,7 @@ fn target_owned_system_subject_ura(
         .map_err(|error| anyhow::anyhow!("remote system callee URA is invalid: {error}"))?;
     match callee.kind {
         crate::core::ura::URAKind::Device => Ok(target.callee_ura().to_string()),
-        crate::core::ura::URAKind::Hub => Ok(target.as_str().to_string()),
+        crate::core::ura::URAKind::Authority => Ok(target.as_str().to_string()),
         other => anyhow::bail!(
             "target-owned remote system ability requires Device or Hub callee, got {other}"
         ),

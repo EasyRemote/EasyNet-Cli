@@ -84,8 +84,6 @@ type StreamEvent struct {
 	payloadContentType   string
 	payloadBase64        string
 	payloadJSON          json.RawMessage
-	selectedNodeID       string
-	schedulingReason     string
 	elapsedMS            int64
 	errorJSON            json.RawMessage
 	admissionReceiptJSON json.RawMessage
@@ -469,14 +467,6 @@ func (e StreamEvent) PayloadJSON() json.RawMessage {
 	return append(json.RawMessage(nil), e.payloadJSON...)
 }
 
-func (e StreamEvent) SelectedNodeID() string {
-	return e.selectedNodeID
-}
-
-func (e StreamEvent) SchedulingReason() string {
-	return e.schedulingReason
-}
-
 func (e StreamEvent) ElapsedMS() int64 {
 	return e.elapsedMS
 }
@@ -589,8 +579,6 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		PayloadContentType string          `json:"payload_content_type"`
 		PayloadBase64      string          `json:"payload_base64"`
 		PayloadJSON        json.RawMessage `json:"payload_json"`
-		SelectedNodeID     string          `json:"selected_node_id"`
-		SchedulingReason   string          `json:"scheduling_reason"`
 		ElapsedMS          int64           `json:"elapsed_ms"`
 		Error              json.RawMessage `json:"error"`
 		AdmissionReceipt   json.RawMessage `json:"admission_receipt"`
@@ -620,8 +608,6 @@ func NewStreamEventFromJSON(raw []byte) (StreamEvent, error) {
 		payloadContentType:   dto.PayloadContentType,
 		payloadBase64:        dto.PayloadBase64,
 		payloadJSON:          append(json.RawMessage(nil), dto.PayloadJSON...),
-		selectedNodeID:       dto.SelectedNodeID,
-		schedulingReason:     dto.SchedulingReason,
 		elapsedMS:            dto.ElapsedMS,
 		errorJSON:            append(json.RawMessage(nil), dto.Error...),
 		admissionReceiptJSON: append(json.RawMessage(nil), dto.AdmissionReceipt...),

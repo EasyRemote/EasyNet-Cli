@@ -27,7 +27,7 @@ use rcgen::{
 use serde_json::Value;
 
 const REALM: &str = "localhost";
-const HUB_URA: &str = "easynet:///r/localhost/hub";
+const HUB_URA: &str = "easynet:///r/localhost/authority";
 const ADMIN_URA: &str = "easynet:///r/localhost/user/admin";
 const ALICE_URA: &str = "easynet:///r/localhost/user/alice";
 const BOB_URA: &str = "easynet:///r/localhost/user/bob";

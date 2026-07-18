@@ -147,7 +147,7 @@ asserts dispatcher classification for every exported route.
 
 ---
 
-## §3. `--hub` URA addressing — drop `http://`, dial by `easynet:///r/<realm>/hub`
+## §3. `--hub` URA addressing — drop `http://`, dial by `easynet:///r/<realm>/authority`
 
 **Status: DONE for Phase 1** — URA-shaped `--hub` now takes the Axon
 `federation.join` path; HTTP URL join is retained for the staged account-binding
@@ -160,7 +160,7 @@ the old HTTP flow, nothing is deleted yet.
 
 ### Background & the thesis
 
-The hub is a network Agent with a URA (`easynet:///r/<realm>/hub`), not an HTTP
+The hub is a network Agent with a URA (`easynet:///r/<realm>/authority`), not an HTTP
 endpoint. Today `device join` addresses it as `--hub https://easynet.run`
 (an HTTP URL), then runs an HTTP `preflight`/`validate` handshake against the
 backend's `/api/v1/devices/pairing/...` REST surface. The wrapper→CLI thesis
@@ -268,7 +268,7 @@ value → existing HTTP flow (kept until Phase 3).
 
 ### Acceptance (Phase 1)
 
-- `easynet device join easynet:///r/<realm>/hub [--hub-ca …]` joins a hub over
+- `easynet device join easynet:///r/<realm>/authority [--hub-ca …]` joins a hub over
   TLS + `federation.join` with no HTTP call; device becomes a member, advertises,
   and inbound dispatch works with an empty `credential_token`.
 - `easynet device join https://…` still works (HTTP path untouched).
