@@ -122,3 +122,38 @@ pub fn run(args: DeployArgs) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::OutputFormat;
+    use crate::cli::commands::groups::ability::AbilityAction;
+    use crate::cli::{App, Command};
+
+    #[test]
+    fn deploy_json_format_is_a_stable_machine_surface() {
+        let app = App::parse_from([
+            "easynet",
+            "ability",
+            "deploy",
+            "/tmp/native-ability",
+            "--node",
+            "local",
+            "--format",
+            "json",
+        ]);
+
+        match app.command {
+            Command::Ability(args) => match args.action {
+                AbilityAction::Deploy(deploy) => {
+                    assert_eq!(deploy.path, "/tmp/native-ability");
+                    assert_eq!(deploy.node, "local");
+                    assert_eq!(deploy.format, OutputFormat::Json);
+                }
+                other => panic!("expected ability deploy, got {other:?}"),
+            },
+            other => panic!("expected ability command, got {other:?}"),
+        }
+    }
+}
